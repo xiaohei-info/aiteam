@@ -61,6 +61,7 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 - **新能力优先落新模块**：`app/team-panel/`、`app/agent-gateway/`
 - **基座文件只做挂接**：`server.py`、`api/routes.py`、`api/streaming.py` 只允许挂接性改造
 - **禁止复制平行维护**：不复制整份基座文件再平行维护
+- **运行时入口统一走 `app/.env`**：凡涉及 Python 解释器、Hermes CLI、Hermes Home 或 config 的运行入口，必须优先复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，禁止裸用其他 Python/Hermes 环境作为主路径
 
 ### 3.3 业务口径与运行口径分离
 

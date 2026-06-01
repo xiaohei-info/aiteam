@@ -141,6 +141,8 @@ Hermes Agent 外部源码仓库。
 一个重要原则是：
 
 > AI Team 不自建复杂任务编排内核，而是做业务任务与 Hermes 既有运行机制之间的转换、翻译和包装。
+>
+> 凡涉及 Python 解释器、Hermes CLI、Hermes Home 或 config 的运行入口，必须优先复用 `app/.env` 中的 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，禁止裸用其他 Python/Hermes 环境作为主路径。
 
 ## 历史命名与当前目录映射
 

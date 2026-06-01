@@ -173,6 +173,14 @@ def discover_launcher_python(agent_dir: Path | None) -> str:
     return shutil.which("python3") or shutil.which("python") or sys.executable
 
 
+def _build_hermes_cli_args() -> list[str]:
+    """Return a Hermes CLI launcher that follows the configured app Python env."""
+    env_python = (os.getenv("HERMES_WEBUI_PYTHON") or "").strip()
+    if env_python:
+        return [env_python, "-m", "hermes_cli"]
+    return ["hermes"]
+
+
 def _python_can_run_webui_and_agent(python_exe: str, agent_dir: Path | None = None) -> bool:
     script = "import yaml\nfrom run_agent import AIAgent\n"
     env = os.environ.copy()
@@ -266,6 +274,8 @@ def ensure_python_has_webui_deps(python_exe: str, agent_dir: Path | None = None)
 
 
 def hermes_command_exists() -> bool:
+    if (os.getenv("HERMES_WEBUI_PYTHON") or "").strip():
+        return True
     return shutil.which("hermes") is not None
 
 

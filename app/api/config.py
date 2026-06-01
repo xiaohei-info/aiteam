@@ -159,7 +159,7 @@ def _discover_python(agent_dir: Path) -> str:
     Locate a Python executable that has the Hermes agent dependencies installed.
 
     Priority:
-      1. HERMES_WEBUI_PYTHON env var
+      1. HERMES_WEBUI_PYTHON env var from app/.env / process env
       2. Agent venv at <agent_dir>/venv/bin/python
       3. Local .venv inside this repo
       4. System python3

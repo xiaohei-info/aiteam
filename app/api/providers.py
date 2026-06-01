@@ -1231,7 +1231,7 @@ def _agent_fetch_account_usage_for_home(provider: str, home: Path, *, api_key: s
     try:
         from api.config import PYTHON_EXE
     except Exception:
-        PYTHON_EXE = sys.executable or "python3"
+        PYTHON_EXE = (os.getenv("HERMES_WEBUI_PYTHON") or sys.executable or "python3")
 
     try:
         # On POSIX (Linux/macOS), wire parent-death signal so the child dies

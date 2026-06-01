@@ -1,7 +1,21 @@
 """Profile provisioner — ensures every active employee has a Hermes profile."""
 
+import os
 import subprocess
 from pathlib import Path
+
+
+def _build_hermes_cli(profile_home: str | Path) -> list[str]:
+    """Return the Hermes CLI command honoring the configured app Python env.
+
+    Preference order:
+    1. HERMES_WEBUI_PYTHON from app/.env / process env
+    2. plain `hermes` on PATH as a compatibility fallback
+    """
+    python_exe = (os.getenv("HERMES_WEBUI_PYTHON") or "").strip()
+    if python_exe:
+        return [python_exe, "-m", "hermes_cli"]
+    return ["hermes"]
 
 
 def ensure_profile(
@@ -19,8 +33,12 @@ def ensure_profile(
     if profile_dir.exists():
         return False
     cmd = [
-        "hermes", "profile", "create", profile_name,
-        "--home", str(profile_home),
+        *_build_hermes_cli(profile_home),
+        "profile",
+        "create",
+        profile_name,
+        "--home",
+        str(profile_home),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

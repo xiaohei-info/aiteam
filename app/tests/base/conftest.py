@@ -116,8 +116,8 @@ def _discover_python(agent_dir) -> str:
 HERMES_AGENT = _discover_agent_dir()
 VENV_PYTHON  = _discover_python(HERMES_AGENT)
 
-# Work dir: agent dir if found, else repo root
-WORKDIR = str(HERMES_AGENT) if HERMES_AGENT else str(REPO_ROOT)
+# Work dir: keep tests rooted in app/ so they follow the repo-local env/config
+WORKDIR = str(REPO_ROOT)
 
 # ── Agent availability detection ─────────────────────────────────────────────
 # Tests that require hermes-agent modules (cron, skills, approval, chat/stream)

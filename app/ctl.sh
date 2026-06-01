@@ -71,6 +71,22 @@ _find_python() {
   fi
 }
 
+_json_python() {
+  if [[ -n "${HERMES_WEBUI_PYTHON:-}" ]]; then
+    printf '%s\n' "${HERMES_WEBUI_PYTHON}"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+  return 1
+}
+
 _parse_launch_binding() {
   CTL_HOST="${HERMES_WEBUI_HOST:-127.0.0.1}"
   CTL_PORT="${HERMES_WEBUI_PORT:-8787}"
@@ -274,8 +290,9 @@ _health_line() {
   url="http://${host}:${port}/health"
   if command -v curl >/dev/null 2>&1; then
     if result="$(curl -fsS --max-time 2 "${url}" 2>/dev/null)"; then
-      if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "${result}" | python3 -c 'import json,sys
+      local json_python
+      if json_python="$(_json_python 2>/dev/null)"; then
+        printf '%s' "${result}" | "${json_python}" -c 'import json,sys
 try:
     data=json.load(sys.stdin)
     sessions=data.get("sessions", data.get("session_count", "?"))
