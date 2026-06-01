@@ -3,10 +3,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERMES_HOME="${HERMES_HOME:-${HOME}/.hermes}"
-PID_FILE="${HERMES_WEBUI_PID_FILE:-${HERMES_HOME}/webui.pid}"
-LOG_FILE="${HERMES_WEBUI_LOG_FILE:-${HERMES_HOME}/webui.log}"
-STATE_FILE="${HERMES_WEBUI_CTL_STATE_FILE:-${HERMES_HOME}/webui.ctl.env}"
-DEFAULT_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HERMES_HOME}/webui}"
+PID_FILE="${HERMES_WEBUI_PID_FILE:-${REPO_ROOT}/.state/aiteam.pid}"
+LOG_FILE="${HERMES_WEBUI_LOG_FILE:-${REPO_ROOT}/logs/aiteam.log}"
+STATE_FILE="${HERMES_WEBUI_CTL_STATE_FILE:-${REPO_ROOT}/.state/aiteam.ctl.env}"
+DEFAULT_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${REPO_ROOT}/.state}"
 
 usage() {
   cat <<'EOF'
@@ -23,7 +23,7 @@ EOF
 }
 
 ensure_home() {
-  mkdir -p "${HERMES_HOME}" "${DEFAULT_STATE_DIR}"
+  mkdir -p "${DEFAULT_STATE_DIR}" "${REPO_ROOT}/logs"
 }
 
 _load_repo_dotenv_preserving_env() {
