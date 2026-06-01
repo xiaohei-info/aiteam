@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Team 业务解决方案架构图</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'JetBrains Mono', monospace; background: #020617; min-height: 100vh; padding: 2rem; color: white; }
+    .container { max-width: 1580px; margin: 0 auto; }
+    .header { margin-bottom: 1.5rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #22d3ee; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.45;} }
+    h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.92rem; margin-left: 1.75rem; line-height: 1.6; }
+    .diagram-container { background: rgba(15, 23, 42, 0.55); border-radius: 1rem; border: 1px solid #1e293b; padding: 1.5rem; overflow-x: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+    svg { width: 100%; min-width: 1480px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+    .card { background: rgba(15, 23, 42, 0.55); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.1rem 1.15rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .cyan { background: #22d3ee; } .emerald { background: #34d399; } .amber { background: #fbbf24; }
+    .card h3 { font-size: 0.9rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.76rem; line-height: 1.7; }
+    .footer { text-align: center; margin-top: 1.25rem; color: #475569; font-size: 0.74rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-row"><div class="pulse-dot"></div><h1>AI Team 业务解决方案架构图</h1></div>
+      <p class="subtitle">面向个人与企业的 AI 数字员工团队平台：以人才市场 / 行业方案为入口，以数字员工为核心单元，通过私聊 / 群聊 / Loop 触发任务，由多智能体协作编排协议统一调度执行；图中显式区分 AI Team 自身边界与 Hermes、LightRAG、SkillHub、AI Relay 等外部复用基座。</p>
+    </div>
+    <div class="diagram-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1220" role="img" aria-label="AI Team business solution architecture diagram">
+<defs>
+  <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" /></marker>
+  <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#34d399" /></marker>
+  <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" /></marker>
+  <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24" /></marker>
+  <marker id="arrow-slate" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" /></marker>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.25"/></filter>
+</defs>
+<rect width="100%" height="100%" fill="url(#grid)"/>
+<path d="M 190,244.0 L 260,244.0 L 260,177 L 330,177" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="215" y="200" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >成员使用</text>
+<path d="M 190,384.0 L 260,384.0 L 260,177 L 930,177" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="215" y="340" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >配置治理</text>
+<path d="M 190,524.0 L 260,524.0 L 260,177 L 1040,177" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="215" y="480" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >平台经营</text>
+<path d="M 450.0,209 L 450.0,260 L 500,260 L 500,315" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="450" y="244" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >进入空间后配置员工</text>
+<path d="M 750.0,209 L 750,260 L 860,260 L 860,315" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="760" y="244" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >招募 / 一键应用</text>
+<path d="M 500.0,415 L 500,460 L 445,460 L 445,515" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="445" y="448" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >私聊承接单任务</text>
+<path d="M 860.0,415 L 860,460 L 750,460 L 750,515" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="760" y="448" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >群聊承接多角色协作</text>
+<path d="M 1050,209 L 1050,460 L 1055,460 L 1055,515" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+<text x="1070" y="430" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >后台配置 Loop 任务</text>
+<path d="M 445.0,599 L 445,640" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+<text x="471" y="628" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >任务发起</text>
+<path d="M 750.0,599 L 750,640" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+<text x="776" y="628" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >协作触发</text>
+<path d="M 1055.0,599 L 1055,640" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+<text x="1081" y="628" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >定时触发</text>
+<path d="M 445,640 L 790,640 L 790,700" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+<text x="835" y="665" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >统一调度执行</text>
+<path d="M 550,756.0 L 605,756.0 L 605,756 L 640,756" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+<text x="570" y="745" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >RAG / 记忆注入</text>
+<path d="M 1030,756.0 L 980,756.0 L 980,756 L 940,756" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrow-amber)"/>
+<text x="1022" y="745" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >技能 / 工具调用</text>
+<path d="M 790.0,812 L 790,860 L 790,900" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+<text x="870" y="848" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >结果沉淀 / 成本回收</text>
+<path d="M 940,756.0 L 980,756 L 980,650 L 1320,650 L 1320,222 L 1360,222" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrow-slate)"/>
+<text x="1288" y="242" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="middle" >Hermes runtime</text>
+<path d="M 550,756.0 L 605,756 L 605,680 L 1320,680 L 1320,382 L 1360,382" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrow-slate)"/>
+<text x="1288" y="402" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="middle" >RAG 基座</text>
+<path d="M 1250,756.0 L 1320,756 L 1320,542 L 1360,542" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrow-slate)"/>
+<text x="1288" y="562" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="middle" >技能市场接入</text>
+<path d="M 1090,936.0 L 1320,936 L 1320,702 L 1360,702" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrow-slate)"/>
+<text x="1280" y="722" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="middle" >计费 / 外部系统集成</text>
+<rect x="30" y="210" width="160" height="68" rx="8" fill="#0f172a"/>
+<rect x="30" y="210" width="160" height="68" rx="8" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="110.0" y="234" fill="white" font-size="12" font-weight="600" text-anchor="middle" >企业成员</text>
+<text x="110.0" y="254" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >个人用户 / 企业员工</text>
+<rect x="30" y="350" width="160" height="68" rx="8" fill="#0f172a"/>
+<rect x="30" y="350" width="160" height="68" rx="8" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="110.0" y="374" fill="white" font-size="12" font-weight="600" text-anchor="middle" >企业管理员</text>
+<text x="110.0" y="394" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >员工 / 知识 / 权限 / 成本</text>
+<rect x="30" y="490" width="160" height="68" rx="8" fill="#0f172a"/>
+<rect x="30" y="490" width="160" height="68" rx="8" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="110.0" y="514" fill="white" font-size="12" font-weight="600" text-anchor="middle" >平台运营</text>
+<text x="110.0" y="534" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >模板 / 行业方案 / 财务</text>
+<rect x="260" y="70" width="1020" height="930" rx="16" fill="rgba(251, 191, 36, 0.05)" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="8,4"/>
+<text x="284" y="92" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="start" >AI Team 平台边界（业务装配型平台）</text>
+<rect x="285" y="120" width="950" height="92" rx="12" fill="rgba(34, 211, 238, 0.05)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="305" y="144" fill="#22d3ee" font-size="10" font-weight="600" text-anchor="start" >业务入口层</text>
+<rect x="285" y="290" width="950" height="150" rx="12" fill="rgba(34, 211, 238, 0.04)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="305" y="314" fill="#22d3ee" font-size="10" font-weight="600" text-anchor="start" >员工获取与配置层</text>
+<rect x="285" y="490" width="950" height="150" rx="12" fill="rgba(52, 211, 153, 0.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="305" y="514" fill="#34d399" font-size="10" font-weight="600" text-anchor="start" >任务入口与执行触发层</text>
+<rect x="285" y="680" width="950" height="170" rx="12" fill="rgba(52, 211, 153, 0.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="305" y="704" fill="#34d399" font-size="10" font-weight="600" text-anchor="start" >协议执行与能力支撑层</text>
+<rect x="285" y="880" width="950" height="110" rx="12" fill="rgba(52, 211, 153, 0.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="305" y="904" fill="#34d399" font-size="10" font-weight="600" text-anchor="start" >治理运营层</text>
+<rect x="330" y="145" width="240" height="64" rx="10" fill="#0f172a"/>
+<rect x="330" y="145" width="240" height="64" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="450.0" y="172" fill="white" font-size="12" font-weight="600" text-anchor="middle" >企业 / 个人工作空间</text>
+<text x="450.0" y="194" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >注册、登录、企业空间、成员进入统一入口</text>
+<rect x="620" y="145" width="260" height="64" rx="10" fill="#0f172a"/>
+<rect x="620" y="145" width="260" height="64" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="750.0" y="172" fill="white" font-size="12" font-weight="600" text-anchor="middle" >人才市场 / 行业方案</text>
+<text x="750.0" y="194" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >招募数字员工、行业模板预览、一键应用</text>
+<rect x="930" y="145" width="240" height="64" rx="10" fill="#0f172a"/>
+<rect x="930" y="145" width="240" height="64" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="1050.0" y="172" fill="white" font-size="12" font-weight="600" text-anchor="middle" >企业后台 / 系统后台</text>
+<text x="1050.0" y="194" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >治理入口与经营入口</text>
+<rect x="360" y="315" width="280" height="100" rx="10" fill="#0f172a"/>
+<rect x="360" y="315" width="280" height="100" rx="10" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="500.0" y="342" fill="white" font-size="12" font-weight="600" text-anchor="middle" >数字员工配置与管理</text>
+<text x="500.0" y="364" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >模型 / Prompt / Skill / KB / Memory / Connector</text>
+<text x="500.0" y="401" fill="#34d399" font-size="8" font-weight="600" text-anchor="middle" >企业实例化核心单元</text>
+<rect x="720" y="315" width="280" height="100" rx="10" fill="#0f172a"/>
+<rect x="720" y="315" width="280" height="100" rx="10" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="860.0" y="342" fill="white" font-size="12" font-weight="600" text-anchor="middle" >员工模板与团队实例化</text>
+<text x="860.0" y="364" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >角色模板、Team 组合、企业复制、方案落地</text>
+<text x="860.0" y="401" fill="#34d399" font-size="8" font-weight="600" text-anchor="middle" >连接人才市场与实际执行对象</text>
+<rect x="320" y="515" width="250" height="84" rx="10" fill="#0f172a"/>
+<rect x="320" y="515" width="250" height="84" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="445.0" y="542" fill="white" font-size="12" font-weight="600" text-anchor="middle" >私聊工作台</text>
+<text x="445.0" y="564" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >单员工对话、文件上传、RAG 问答、图像触发</text>
+<text x="445.0" y="585" fill="#22d3ee" font-size="8" font-weight="600" text-anchor="middle" >面向单任务的最直观入口</text>
+<rect x="625" y="515" width="250" height="84" rx="10" fill="#0f172a"/>
+<rect x="625" y="515" width="250" height="84" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="750.0" y="542" fill="white" font-size="12" font-weight="600" text-anchor="middle" >群聊协作工作间</text>
+<text x="750.0" y="564" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >@ 激活员工、多智能体并发响应、项目持久化空间</text>
+<text x="750.0" y="585" fill="#22d3ee" font-size="8" font-weight="600" text-anchor="middle" >面向多角色协作的主场景</text>
+<rect x="930" y="515" width="250" height="84" rx="10" fill="#0f172a"/>
+<rect x="930" y="515" width="250" height="84" rx="10" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="1055.0" y="542" fill="white" font-size="12" font-weight="600" text-anchor="middle" >Loop / 定时任务</text>
+<text x="1055.0" y="564" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >Goal 配置、PDAR 循环、启动/暂停/恢复/停止</text>
+<text x="1055.0" y="585" fill="#22d3ee" font-size="8" font-weight="600" text-anchor="middle" >面向自主执行与持续任务</text>
+<rect x="330" y="715" width="220" height="82" rx="10" fill="#0f172a"/>
+<rect x="330" y="715" width="220" height="82" rx="10" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="440.0" y="742" fill="white" font-size="12" font-weight="600" text-anchor="middle" >知识库 / 记忆 / 上下文</text>
+<text x="440.0" y="764" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >RAG、跨会话上下文、偏好与任务记忆注入</text>
+<rect x="640" y="700" width="300" height="112" rx="10" fill="#0f172a"/>
+<rect x="640" y="700" width="300" height="112" rx="10" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="790.0" y="727" fill="white" font-size="13" font-weight="700" text-anchor="middle" >多智能体协作编排执行层</text>
+<text x="790.0" y="749" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >协作语义解释、任务分发、依赖排序、主持汇总</text>
+<text x="790.0" y="798" fill="#34d399" font-size="8" font-weight="600" text-anchor="middle" >统一协作执行主轴</text>
+<rect x="1030" y="715" width="220" height="82" rx="10" fill="#0f172a"/>
+<rect x="1030" y="715" width="220" height="82" rx="10" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="1140.0" y="742" fill="white" font-size="12" font-weight="600" text-anchor="middle" >Skills / 连接器 / 工具</text>
+<text x="1140.0" y="764" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >Skill 授权、OAuth / API Key / MCP、外部工具调用</text>
+<rect x="470" y="900" width="620" height="72" rx="10" fill="#0f172a"/>
+<rect x="470" y="900" width="620" height="72" rx="10" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.6" filter="url(#shadow)"/>
+<text x="780.0" y="927" fill="white" font-size="12" font-weight="600" text-anchor="middle" >日志 / 消耗 / 统计 / 企业后台 / 系统后台</text>
+<text x="780.0" y="949" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >执行记录、记忆沉淀、成本治理、模板治理、经营数据闭环</text>
+<rect x="1360" y="180" width="210" height="84" rx="10" fill="#0f172a"/>
+<rect x="1360" y="180" width="210" height="84" rx="10" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1465.0" y="207" fill="white" font-size="12" font-weight="600" text-anchor="middle" >Hermes</text>
+<text x="1465.0" y="229" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >subagent、kanban、cron、memory、skills runtime</text>
+<text x="1465.0" y="248" fill="#94a3b8" font-size="8" font-weight="600" text-anchor="middle" >选择性复用 / 执行基座</text>
+<rect x="1360" y="340" width="210" height="84" rx="10" fill="#0f172a"/>
+<rect x="1360" y="340" width="210" height="84" rx="10" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1465.0" y="367" fill="white" font-size="12" font-weight="600" text-anchor="middle" >LightRAG</text>
+<text x="1465.0" y="389" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >文档切块、向量化、检索、引用命中</text>
+<text x="1465.0" y="408" fill="#94a3b8" font-size="8" font-weight="600" text-anchor="middle" >直接采用 / 知识引擎</text>
+<rect x="1360" y="500" width="210" height="84" rx="10" fill="#0f172a"/>
+<rect x="1360" y="500" width="210" height="84" rx="10" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1465.0" y="527" fill="white" font-size="12" font-weight="600" text-anchor="middle" >SkillHub / 技能生态</text>
+<text x="1465.0" y="549" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >技能市场浏览、安装源、企业安装视图</text>
+<text x="1465.0" y="568" fill="#94a3b8" font-size="8" font-weight="600" text-anchor="middle" >接口层接入</text>
+<rect x="1360" y="660" width="210" height="84" rx="10" fill="#0f172a"/>
+<rect x="1360" y="660" width="210" height="84" rx="10" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="1465.0" y="687" fill="white" font-size="12" font-weight="600" text-anchor="middle" >AI Relay / 外部企业系统</text>
+<text x="1465.0" y="709" fill="#94a3b8" font-size="9" font-weight="500" text-anchor="middle" >模型计费、余额统计、第三方 API、企业数据系统</text>
+<text x="1465.0" y="728" fill="#94a3b8" font-size="8" font-weight="600" text-anchor="middle" >直接接入 / 商业化与集成依赖</text>
+<circle cx="390" cy="138" r="12" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="390" y="142" fill="#22d3ee" font-size="10" font-weight="700" text-anchor="middle" >1</text>
+<text x="408" y="141" fill="#64748b" font-size="8" font-weight="500" text-anchor="start" >① 进入工作空间</text>
+<circle cx="675" cy="138" r="12" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="675" y="142" fill="#22d3ee" font-size="10" font-weight="700" text-anchor="middle" >2</text>
+<text x="693" y="141" fill="#64748b" font-size="8" font-weight="500" text-anchor="start" >② 招募 / 应用团队模板</text>
+<circle cx="300" cy="615" r="12" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="300" y="619" fill="#22d3ee" font-size="10" font-weight="700" text-anchor="middle" >3</text>
+<text x="318" y="618" fill="#64748b" font-size="8" font-weight="500" text-anchor="start" >③ 通过私聊 / 群聊 / Loop 发起任务</text>
+<circle cx="620" cy="693" r="12" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+<text x="620" y="697" fill="#34d399" font-size="10" font-weight="700" text-anchor="middle" >4</text>
+<text x="638" y="696" fill="#64748b" font-size="8" font-weight="500" text-anchor="start" >④ 协作编排统一调度执行</text>
+<circle cx="470" cy="893" r="12" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+<text x="470" y="897" fill="#34d399" font-size="10" font-weight="700" text-anchor="middle" >5</text>
+<text x="488" y="896" fill="#64748b" font-size="8" font-weight="500" text-anchor="start" >⑤ 结果、记忆、费用与治理数据沉淀回平台</text>
+<text x="310" y="1050" fill="white" font-size="11" font-weight="600" text-anchor="start" >Legend</text>
+<rect x="310" y="1065" width="18" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+<text x="336" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >入口 / 交互层</text>
+<rect x="455" y="1065" width="18" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+<text x="481" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >平台业务服务 / 执行层</text>
+<rect x="675" y="1065" width="18" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+<text x="701" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >知识 / 记忆 / 上下文</text>
+<rect x="865" y="1065" width="18" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+<text x="891" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >Skills / 连接器 / 工具</text>
+<rect x="1065" y="1065" width="18" height="10" rx="2" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1"/>
+<text x="1091" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >外部成熟基座 / 第三方依赖</text>
+<line x1="1360" y1="1070" x2="1382" y2="1070" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4,4"/>
+<text x="1390" y="1074" fill="#94a3b8" font-size="8" font-weight="500" text-anchor="start" >选择性复用 / 接口接入</text>
+</svg></div>
+    <div class="cards">
+      <div class="card"><div class="card-header"><div class="card-dot cyan"></div><h3>这次重画的重点</h3></div><ul><li>• 主链路全部改为直角走线，连线不再直接穿过组件框体。</li><li>• 入口层、配置层、触发层、执行层、治理层分别留出独立走线通道。</li><li>• 右侧外部基座统一通过右侧 gutter 接入，避免斜线穿越主体内容。</li></ul></div>
+      <div class="card"><div class="card-header"><div class="card-dot amber"></div><h3>平台边界</h3></div><ul><li>• AI Team 自身负责工作空间、员工配置、任务入口、协议执行与治理运营。</li><li>• Hermes、LightRAG、SkillHub、AI Relay 保持在平台边界外侧。</li><li>• 图上表达的是业务解决方案边界，不下沉到 API 字段或部署细节。</li></ul></div>
+      <div class="card"><div class="card-header"><div class="card-dot emerald"></div><h3>验证路径</h3></div><ul><li>• 检查用户能否一眼读懂 ①入口 → ②招募配置 → ③任务发起 → ④执行 → ⑤治理回流。</li><li>• 检查所有连线是否在通道中可见，而不是被节点遮挡。</li><li>• 检查右侧外部基座与平台主边界之间是否保留明确留白。</li></ul></div>
+    </div>
+    <p class="footer">AI Team • Business Solution Architecture • orthogonal-line revision</p>
+  </div>
+</body>
+</html>

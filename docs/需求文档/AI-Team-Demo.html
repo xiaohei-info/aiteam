@@ -1,0 +1,2237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Team — 企业智能体协作平台 Demo</title>
+<style>
+  :root {
+    --bg: #0D1117;
+    --bg2: #161B22;
+    --bg3: #1C2333;
+    --bg4: #21262D;
+    --border: #30363D;
+    --border2: #3D444E;
+    --text: #E6EDF3;
+    --text2: #8B949E;
+    --text3: #656D76;
+    --brand: #2F81F7;
+    --brand2: #388BFD;
+    --brand-dim: rgba(47,129,247,0.15);
+    --brand-dim2: rgba(47,129,247,0.08);
+    --accent: #58A6FF;
+    --green: #3FB950;
+    --green-dim: rgba(63,185,80,0.15);
+    --orange: #F0883E;
+    --orange-dim: rgba(240,136,62,0.15);
+    --purple: #BC8CFF;
+    --purple-dim: rgba(188,140,255,0.15);
+    --red: #F85149;
+    --red-dim: rgba(248,81,73,0.15);
+    --cyan: #39C5CF;
+    --cyan-dim: rgba(57,197,207,0.15);
+    --yellow: #E3B341;
+    --yellow-dim: rgba(227,179,65,0.15);
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', monospace;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ===== TITLE BAR ===== */
+  .title-bar {
+    height: 38px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+    position: relative;
+    -webkit-app-region: drag;
+  }
+  .traffic-lights { display: flex; gap: 6px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; cursor: pointer; }
+  .tl.red { background: #FF5F57; }
+  .tl.yellow { background: #FFBD2E; }
+  .tl.green { background: #28C840; }
+  .title-bar-title {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: var(--text2); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .title-bar-title .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ===== MAIN LAYOUT ===== */
+  .app {
+    display: flex;
+    height: calc(100vh - 38px);
+  }
+
+  /* ===== LEFT NAV ===== */
+  .nav-rail {
+    width: 56px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .nav-logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--brand), var(--cyan));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 900; color: white; margin-bottom: 12px;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(47,129,247,0.4);
+  }
+  .nav-item {
+    width: 40px; height: 40px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer; position: relative;
+    transition: all 0.15s;
+    color: var(--text2);
+  }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active {
+    background: var(--brand-dim);
+    color: var(--brand);
+    box-shadow: 0 0 8px rgba(47,129,247,0.2);
+  }
+  .nav-item .badge {
+    position: absolute; top: 6px; right: 6px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--red); color: white;
+    font-size: 9px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid var(--bg2);
+  }
+  .nav-spacer { flex: 1; }
+  .nav-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--orange), var(--yellow));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; cursor: pointer;
+    border: 2px solid var(--border);
+  }
+  .nav-tooltip {
+    position: absolute; left: 52px; top: 50%; transform: translateY(-50%);
+    background: var(--bg4); border: 1px solid var(--border);
+    color: var(--text); font-size: 12px; padding: 4px 10px;
+    border-radius: 6px; white-space: nowrap;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 200;
+  }
+  .nav-item:hover .nav-tooltip { opacity: 1; }
+
+  /* ===== LEFT PANEL ===== */
+  .left-panel {
+    width: 260px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: width 0.2s;
+  }
+  .left-panel.hidden { width: 0; overflow: hidden; }
+
+  .panel-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-title { font-size: 13px; font-weight: 700; color: var(--text); }
+  .panel-action {
+    width: 26px; height: 26px; border-radius: 6px;
+    background: var(--bg3); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 14px; color: var(--text2);
+    transition: all 0.15s;
+  }
+  .panel-action:hover { background: var(--brand-dim); color: var(--brand); border-color: var(--brand); }
+
+  .search-box {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .search-input {
+    width: 100%;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px 6px 30px;
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s;
+    position: relative;
+  }
+  .search-wrap { position: relative; }
+  .search-wrap::before {
+    content: '🔍';
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 11px; pointer-events: none;
+  }
+  .search-input:focus { border-color: var(--brand); }
+  .search-input::placeholder { color: var(--text3); }
+
+  .panel-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .panel-list::-webkit-scrollbar { width: 4px; }
+  .panel-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .panel-section-label {
+    padding: 8px 16px 4px;
+    font-size: 10px; font-weight: 700;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1px;
+  }
+
+  .agent-item {
+    padding: 8px 16px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer; border-radius: 0;
+    transition: all 0.12s;
+    position: relative;
+  }
+  .agent-item:hover { background: var(--bg3); }
+  .agent-item.active {
+    background: var(--brand-dim2);
+    border-right: 2px solid var(--brand);
+  }
+  .agent-avatar {
+    width: 34px; height: 34px; min-width: 34px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+    position: relative;
+  }
+  .agent-avatar .status-dot {
+    position: absolute; bottom: -1px; right: -1px;
+    width: 9px; height: 9px; border-radius: 50%;
+    border: 2px solid var(--bg2);
+  }
+  .status-dot.online { background: var(--green); }
+  .status-dot.busy { background: var(--orange); }
+  .status-dot.offline { background: var(--text3); }
+  .agent-info { flex: 1; min-width: 0; }
+  .agent-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agent-role { font-size: 11px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agent-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .agent-time { font-size: 10px; color: var(--text3); }
+  .agent-unread {
+    background: var(--brand); color: white;
+    font-size: 9px; font-weight: 700;
+    padding: 1px 5px; border-radius: 8px;
+  }
+
+  /* ===== MAIN CONTENT ===== */
+  .main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg);
+  }
+
+  /* ===== CHAT HEADER ===== */
+  .chat-header {
+    height: 52px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    display: flex; align-items: center; gap: 12px;
+    flex-shrink: 0;
+  }
+  .chat-agent-avatar {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .chat-agent-info { flex: 1; }
+  .chat-agent-name { font-size: 14px; font-weight: 700; color: var(--text); }
+  .chat-agent-status { font-size: 11px; color: var(--green); display: flex; align-items: center; gap: 4px; }
+  .chat-agent-status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .chat-actions { display: flex; gap: 6px; }
+  .chat-action-btn {
+    width: 30px; height: 30px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 14px; color: var(--text2);
+    transition: all 0.15s;
+  }
+  .chat-action-btn:hover { background: var(--bg3); color: var(--text); border-color: var(--border2); }
+
+  /* ===== CHAT MESSAGES ===== */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .chat-messages::-webkit-scrollbar { width: 4px; }
+  .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .msg-group { display: flex; gap: 10px; }
+  .msg-group.user { flex-direction: row-reverse; }
+
+  .msg-avatar-wrap {
+    display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0;
+  }
+  .msg-avatar {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; flex-shrink: 0;
+  }
+
+  .msg-body { max-width: 72%; display: flex; flex-direction: column; gap: 6px; }
+  .msg-group.user .msg-body { align-items: flex-end; }
+
+  .msg-meta { display: flex; align-items: center; gap: 8px; }
+  .msg-sender { font-size: 12px; font-weight: 600; color: var(--text2); }
+  .msg-time { font-size: 10px; color: var(--text3); }
+
+  .msg-bubble {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text);
+  }
+  .msg-group.user .msg-bubble {
+    background: var(--brand-dim);
+    border-color: var(--brand);
+    border-radius: 12px 2px 12px 12px;
+  }
+
+  /* Thinking bubble */
+  .thinking-bubble {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text2);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .thinking-dots { display: flex; gap: 4px; }
+  .thinking-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--brand);
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); opacity: 0.4; }
+    50% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  /* Tool call card */
+  .tool-card {
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--purple);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Consolas', monospace;
+    color: var(--text2);
+    max-width: 480px;
+  }
+  .tool-card-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    color: var(--purple); font-weight: 700; font-size: 11px;
+  }
+  .tool-card-body { color: var(--text2); }
+  .tool-key { color: var(--cyan); }
+  .tool-val { color: var(--green); }
+
+  /* Loop card */
+  .loop-card {
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--orange);
+    border-radius: 10px;
+    padding: 14px 16px;
+    max-width: 500px;
+  }
+  .loop-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700; color: var(--orange); margin-bottom: 10px;
+  }
+  .loop-steps { display: flex; flex-direction: column; gap: 6px; }
+  .loop-step {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--text2);
+    padding: 6px 10px; background: var(--bg3);
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  .loop-step-icon { font-size: 13px; flex-shrink: 0; }
+  .loop-step.done { color: var(--green); }
+  .loop-step.running { color: var(--brand); border-color: var(--brand); background: var(--brand-dim2); }
+  .loop-step.pending { color: var(--text3); }
+  .step-status {
+    margin-left: auto; font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .step-status.done { background: var(--green-dim); color: var(--green); }
+  .step-status.running { background: var(--brand-dim); color: var(--brand); }
+  .step-status.pending { background: var(--bg4); color: var(--text3); }
+
+  /* ===== CHAT INPUT ===== */
+  .chat-input-area {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    flex-shrink: 0;
+  }
+  .input-box {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .input-box:focus-within {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(47,129,247,0.12);
+  }
+  .input-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    resize: none;
+    max-height: 120px;
+    line-height: 1.6;
+  }
+  .input-textarea::placeholder { color: var(--text3); }
+  .input-toolbar {
+    padding: 8px 12px;
+    display: flex; align-items: center; gap: 6px;
+    border-top: 1px solid var(--border);
+  }
+  .input-tool-btn {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 13px; color: var(--text2);
+    transition: all 0.12s;
+  }
+  .input-tool-btn:hover { background: var(--bg4); color: var(--text); }
+  .input-spacer { flex: 1; }
+  .model-tag {
+    display: flex; align-items: center; gap: 5px;
+    background: var(--bg4); border: 1px solid var(--border);
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; color: var(--text2);
+    cursor: pointer;
+  }
+  .model-tag:hover { border-color: var(--brand); color: var(--brand); }
+  .model-tag .model-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+  .send-btn {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: var(--brand); border: none;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 14px; color: white;
+    transition: all 0.15s;
+    box-shadow: 0 0 10px rgba(47,129,247,0.3);
+  }
+  .send-btn:hover { background: var(--brand2); transform: scale(1.05); }
+  .send-btn:active { transform: scale(0.95); }
+
+  /* ===== RIGHT PANEL ===== */
+  .right-panel {
+    width: 280px;
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: width 0.2s;
+  }
+  .right-panel.hidden { width: 0; overflow: hidden; }
+
+  .rp-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 700; color: var(--text);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .rp-close {
+    width: 22px; height: 22px; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--text3); font-size: 12px;
+    transition: all 0.12s;
+  }
+  .rp-close:hover { background: var(--bg3); color: var(--text); }
+
+  .rp-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .rp-section-title {
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .rp-agent-card {
+    text-align: center; padding: 16px 0;
+  }
+  .rp-agent-avatar {
+    width: 56px; height: 56px; border-radius: 14px;
+    margin: 0 auto 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+    box-shadow: 0 0 20px rgba(47,129,247,0.25);
+  }
+  .rp-agent-name { font-size: 15px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+  .rp-agent-role {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--brand-dim); border: 1px solid var(--brand);
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; color: var(--brand);
+  }
+  .stat-row { display: flex; gap: 8px; }
+  .stat-item {
+    flex: 1;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px; text-align: center;
+  }
+  .stat-val { font-size: 18px; font-weight: 900; color: var(--text); }
+  .stat-val.green { color: var(--green); }
+  .stat-val.brand { color: var(--brand); }
+  .stat-val.purple { color: var(--purple); }
+  .stat-label { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+  .skill-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .skill-tag {
+    background: var(--bg3); border: 1px solid var(--border);
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; color: var(--text2);
+  }
+
+  .mem-item {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+    font-size: 11px; color: var(--text2); margin-bottom: 6px;
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  .mem-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+  /* ===== TABS (secondary pages) ===== */
+  .page { display: none; flex: 1; flex-direction: column; min-width: 0; }
+  .page.active { display: flex; }
+
+  /* ===== TALENT MARKET ===== */
+  .talent-page {
+    flex: 1; overflow-y: auto; padding: 24px;
+    background: var(--bg);
+  }
+  .talent-page::-webkit-scrollbar { width: 4px; }
+  .talent-page::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .page-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .page-title { font-size: 20px; font-weight: 900; color: var(--text); }
+  .page-subtitle { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .btn {
+    padding: 7px 16px; border-radius: 8px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; border: none; transition: all 0.15s;
+  }
+  .btn-primary {
+    background: var(--brand); color: white;
+    box-shadow: 0 0 12px rgba(47,129,247,0.3);
+  }
+  .btn-primary:hover { background: var(--brand2); transform: translateY(-1px); }
+  .btn-outline {
+    background: transparent; color: var(--text2);
+    border: 1px solid var(--border);
+  }
+  .btn-outline:hover { border-color: var(--brand); color: var(--brand); }
+
+  .filter-bar {
+    display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .filter-chip {
+    padding: 5px 14px; border-radius: 20px;
+    background: var(--bg3); border: 1px solid var(--border);
+    font-size: 12px; color: var(--text2);
+    cursor: pointer; transition: all 0.12s;
+  }
+  .filter-chip:hover { border-color: var(--brand); color: var(--brand); }
+  .filter-chip.active {
+    background: var(--brand-dim); border-color: var(--brand);
+    color: var(--brand); font-weight: 600;
+  }
+
+  .expert-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .expert-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    cursor: pointer; transition: all 0.2s;
+    position: relative; overflow: hidden;
+  }
+  .expert-card:hover {
+    border-color: var(--brand);
+    box-shadow: 0 0 20px rgba(47,129,247,0.15);
+    transform: translateY(-2px);
+  }
+  .expert-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--brand), var(--cyan));
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .expert-card:hover::before { opacity: 1; }
+  .ec-avatar {
+    width: 44px; height: 44px; border-radius: 12px;
+    margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+  }
+  .ec-name { font-size: 14px; font-weight: 800; color: var(--text); margin-bottom: 3px; }
+  .ec-title { font-size: 11px; color: var(--text2); margin-bottom: 10px; }
+  .ec-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  .ec-tag {
+    padding: 2px 8px; border-radius: 12px;
+    font-size: 10px; font-weight: 600;
+  }
+  .ec-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .ec-rating { font-size: 11px; color: var(--yellow); font-weight: 700; }
+  .ec-price { font-size: 12px; font-weight: 800; color: var(--text); }
+  .ec-price span { font-size: 10px; color: var(--text3); font-weight: 400; }
+  .hire-btn {
+    padding: 4px 12px; border-radius: 6px;
+    background: var(--brand-dim); border: 1px solid var(--brand);
+    color: var(--brand); font-size: 11px; font-weight: 700;
+    cursor: pointer; transition: all 0.12s;
+  }
+  .hire-btn:hover { background: var(--brand); color: white; }
+
+  /* ===== ORG CHART ===== */
+  .org-page { flex: 1; overflow: auto; padding: 24px; background: var(--bg); }
+  .org-tree { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .org-level { display: flex; gap: 20px; justify-content: center; position: relative; margin-bottom: 0; }
+  .org-connector {
+    width: 100%; height: 24px; position: relative;
+    display: flex; justify-content: center;
+  }
+  .org-node {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer; transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .org-node:hover { border-color: var(--brand); box-shadow: 0 0 12px rgba(47,129,247,0.2); }
+  .org-node.root {
+    background: linear-gradient(135deg, rgba(47,129,247,0.2), rgba(57,197,207,0.2));
+    border-color: var(--brand); font-weight: 800;
+  }
+  .org-node-avatar {
+    width: 28px; height: 28px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .org-node-name { font-size: 12px; font-weight: 700; color: var(--text); }
+  .org-node-role { font-size: 10px; color: var(--text2); }
+  .org-line-v {
+    width: 2px; background: var(--border); margin: 0 auto;
+    height: 24px;
+  }
+  .org-line-h {
+    height: 2px; background: var(--border);
+    position: absolute; top: 12px;
+    transition: background 0.15s;
+  }
+
+  /* ===== LOBBY (5A Office Canvas) ===== */
+  .lobby-page {
+    flex: 1; overflow: hidden; display: flex; flex-direction: column;
+    background: var(--bg);
+  }
+  .lobby-canvas-wrap {
+    flex: 1; position: relative; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 30%, #1a2540 0%, var(--bg) 70%);
+  }
+  .lobby-canvas-wrap canvas {
+    display: block; cursor: grab;
+  }
+  .lobby-canvas-wrap canvas:active { cursor: grabbing; }
+
+  /* Lobby bottom panel */
+  .lobby-bottom {
+    height: 180px; background: var(--bg2);
+    border-top: 1px solid var(--border);
+    display: flex; flex-shrink: 0;
+  }
+  .lb-col {
+    flex: 1; padding: 12px 14px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .lb-col:last-child { border-right: none; }
+  .lb-col::-webkit-scrollbar { width: 3px; }
+  .lb-col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .lb-col-title {
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 8px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Task cards */
+  .lb-task {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 6px;
+    font-size: 11px; display: flex; align-items: center; gap: 8px;
+    transition: all 0.15s; cursor: pointer;
+  }
+  .lb-task:hover { border-color: var(--brand); }
+  .lb-task-avatar {
+    width: 24px; height: 24px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; flex-shrink: 0;
+  }
+  .lb-task-info { flex: 1; min-width: 0; }
+  .lb-task-name { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lb-task-desc { color: var(--text3); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lb-task-bar { width: 56px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+  .lb-task-bar-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg,var(--brand),var(--cyan)); transition: width 0.5s ease; }
+  .lb-task-tag { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+  .lb-task-tag.run { background: var(--brand-dim); color: var(--brand); }
+  .lb-task-tag.done { background: var(--green-dim); color: var(--green); }
+
+  /* Stats */
+  .lb-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; flex: 1; }
+  .lb-stat {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px; text-align: center;
+  }
+  .lb-stat-val { font-size: 16px; font-weight: 900; }
+  .lb-stat-val.b { color: var(--brand); }
+  .lb-stat-val.g { color: var(--green); }
+  .lb-stat-val.p { color: var(--purple); }
+  .lb-stat-val.y { color: var(--yellow); }
+  .lb-stat-lbl { font-size: 9px; color: var(--text3); margin-top: 2px; }
+
+  /* Feed in bottom panel */
+  .lb-log { font-size: 10px; color: var(--text2); padding: 3px 0; border-bottom: 1px solid var(--border); display: flex; gap: 5px; align-items: flex-start; }
+  .lb-log:last-child { border-bottom: none; }
+  .lb-log-t { color: var(--text3); flex-shrink: 0; }
+  .lb-log-a { color: var(--brand); font-weight: 600; flex-shrink: 0; }
+  .lb-log-x { flex: 1; }
+
+  /* Agent hover tooltip on canvas */
+  .lobby-tooltip {
+    position: absolute; pointer-events: none; opacity: 0;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px;
+    z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    transition: opacity 0.15s; min-width: 180px;
+  }
+  .lobby-tooltip.show { opacity: 1; }
+  .ltt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .ltt-avatar {
+    width: 30px; height: 30px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .ltt-name { font-size: 13px; font-weight: 800; color: var(--text); }
+  .ltt-role { font-size: 10px; color: var(--text2); }
+  .ltt-stats { display: flex; gap: 10px; }
+  .ltt-s { text-align: center; }
+  .ltt-sv { font-size: 14px; font-weight: 900; color: var(--brand); }
+  .ltt-sl { font-size: 8px; color: var(--text3); }
+  .ltt-task { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text2); }
+
+  /* Scale hint */
+  .lobby-scale-hint {
+    position: absolute; bottom: 12px; right: 16px;
+    font-size: 10px; color: var(--text3);
+    background: var(--bg2); padding: 4px 10px; border-radius: 12px;
+    border: 1px solid var(--border);
+    pointer-events: none; opacity: 0.6;
+  }
+
+  /* Old feed/online panel styles preserved for base page compatibility */
+  .activity-feed, .online-panel, .online-list { /* reused in bottom panel */ }
+  .feed-item, .online-item, .feed-avatar, .online-avatar { /* kept for ref */ }
+  .feed-header, .feed-title, .online-header, .online-count { /* kept */ }
+  .feed-items, .feed-live, .feed-live-dot { /* kept */ }
+  .feed-content, .feed-text, .feed-time, .feed-tag { /* kept */ }
+  .online-info, .online-name, .online-task, .online-status-badge { /* kept */ }
+
+  /* ===== MODAL ===== */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 500;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px;
+    width: 460px; max-width: 90vw;
+    transform: scale(0.95) translateY(8px);
+    transition: transform 0.2s;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+  }
+  .modal-overlay.open .modal { transform: scale(1) translateY(0); }
+  .modal-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+  }
+  .modal-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0;
+  }
+  .modal-title { font-size: 18px; font-weight: 800; color: var(--text); }
+  .modal-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+  .modal-body { margin-bottom: 20px; }
+  .modal-field { margin-bottom: 14px; }
+  .modal-label { font-size: 11px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .modal-input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 12px;
+    color: var(--text); font-size: 13px; font-family: inherit;
+    outline: none; transition: border-color 0.15s;
+  }
+  .modal-input:focus { border-color: var(--brand); }
+  .modal-footer { display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* ===== NOTIFICATION TOAST ===== */
+  .toast-container {
+    position: fixed; bottom: 24px; right: 24px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 1000;
+  }
+  .toast {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    transform: translateX(110%);
+    transition: transform 0.3s cubic-bezier(0.16,1,0.3,1);
+    max-width: 320px;
+    border-left: 3px solid var(--green);
+  }
+  .toast.show { transform: translateX(0); }
+  .toast.error { border-left-color: var(--red); }
+  .toast.warning { border-left-color: var(--orange); }
+  .toast.info { border-left-color: var(--brand); }
+  .toast-icon { font-size: 16px; flex-shrink: 0; }
+  .toast-text { flex: 1; }
+  .toast-close { cursor: pointer; color: var(--text3); font-size: 14px; }
+
+  /* ===== KNOWLEDGE BASE PAGE ===== */
+  .kb-page { flex: 1; overflow: auto; padding: 24px; background: var(--bg); }
+  .kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .kb-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .kb-card:hover { border-color: var(--brand); transform: translateY(-2px); }
+  .kb-icon { font-size: 28px; margin-bottom: 8px; }
+  .kb-name { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .kb-meta { font-size: 11px; color: var(--text3); }
+  .kb-bar {
+    height: 3px; border-radius: 2px; background: var(--border);
+    margin-top: 10px; overflow: hidden;
+  }
+  .kb-bar-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--brand), var(--cyan)); }
+
+  /* ===== SCROLL ANIMATIONS ===== */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeInUp 0.3s ease forwards; }
+
+  /* ===== TYPING CURSOR ===== */
+  .typing-cursor {
+    display: inline-block;
+    width: 2px; height: 14px;
+    background: var(--brand);
+    margin-left: 2px;
+    animation: blink 1s step-end infinite;
+    vertical-align: middle;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Responsive hint */
+  @media (max-width: 900px) {
+    .right-panel { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TITLE BAR -->
+<div class="title-bar">
+  <div class="traffic-lights">
+    <div class="tl red"></div>
+    <div class="tl yellow"></div>
+    <div class="tl green"></div>
+  </div>
+  <div class="title-bar-title">
+    <div class="dot"></div>
+    AI Team — 企业智能体协作平台 v0.4.0
+  </div>
+</div>
+
+<!-- APP LAYOUT -->
+<div class="app">
+
+  <!-- NAV RAIL -->
+  <div class="nav-rail">
+    <div class="nav-logo" title="AI Team">A</div>
+    <div class="nav-item active" onclick="switchPage('chat')" data-page="chat">
+      💬<div class="badge">3</div>
+      <div class="nav-tooltip">消息中心</div>
+    </div>
+    <div class="nav-item" onclick="switchPage('talent')" data-page="talent">
+      🤝<div class="nav-tooltip">人才市场</div>
+    </div>
+    <div class="nav-item" onclick="switchPage('org')" data-page="org">
+      🌐<div class="nav-tooltip">组织架构</div>
+    </div>
+    <div class="nav-item" onclick="switchPage('kb')" data-page="kb">
+      📚<div class="nav-tooltip">知识库</div>
+    </div>
+    <div class="nav-item" onclick="switchPage('lobby')" data-page="lobby">
+      🏢<div class="nav-tooltip">办公室动态</div>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-item" onclick="showToast('设置功能开发中...', 'info', '⚙️')">
+      ⚙️<div class="nav-tooltip">设置</div>
+    </div>
+    <div class="nav-avatar" onclick="showToast('荆超 · CEO · 杭州太乙知行', 'info', '👤')" title="我的资料">荆</div>
+  </div>
+
+  <!-- CHAT PAGE -->
+  <div class="page active" id="page-chat" style="flex-direction:row;">
+
+    <!-- LEFT PANEL: Agent List -->
+    <div class="left-panel" id="left-panel">
+      <div class="panel-header">
+        <span class="panel-title">🤖 数字员工</span>
+        <div class="panel-action" onclick="openModal('add-agent')">＋</div>
+      </div>
+      <div class="search-box">
+        <div class="search-wrap">
+          <input class="search-input" type="text" placeholder="搜索智能体..." oninput="filterAgents(this.value)">
+        </div>
+      </div>
+      <div class="panel-list" id="agent-list">
+        <div class="panel-section-label">📌 置顶</div>
+        <div class="agent-item active" onclick="selectAgent(this, 'luna')" data-agent="luna">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠<div class="status-dot online"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">Luna · 策略分析师</div>
+            <div class="agent-role">正在分析市场数据...</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">刚刚</div>
+            <div class="agent-unread">2</div>
+          </div>
+        </div>
+        <div class="agent-item" onclick="selectAgent(this, 'rex')" data-agent="rex">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8CFF)">⚡<div class="status-dot busy"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">Rex · 代码工程师</div>
+            <div class="agent-role">执行中：自动化测试</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">2分钟</div>
+            <div class="agent-unread">1</div>
+          </div>
+        </div>
+        <div class="panel-section-label">💼 工作群组</div>
+        <div class="agent-item" onclick="selectAgent(this, 'group')" data-agent="group">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#F59E0B,#F0883E)">👥<div class="status-dot online"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">产品研发组</div>
+            <div class="agent-role">5位智能体 · 2个任务运行中</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">5分钟</div>
+          </div>
+        </div>
+        <div class="panel-section-label">🤖 其他智能体</div>
+        <div class="agent-item" onclick="selectAgent(this, 'nova')" data-agent="nova">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">📊<div class="status-dot online"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">Nova · 数据科学家</div>
+            <div class="agent-role">空闲 · 等待任务</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">1小时</div>
+          </div>
+        </div>
+        <div class="agent-item" onclick="selectAgent(this, 'iris')" data-agent="iris">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#EC4899,#F472B6)">✍️<div class="status-dot offline"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">Iris · 内容创作师</div>
+            <div class="agent-role">已下线</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">昨天</div>
+          </div>
+        </div>
+        <div class="agent-item" onclick="selectAgent(this, 'orion')" data-agent="orion">
+          <div class="agent-avatar" style="background:linear-gradient(135deg,#0891B2,#06B6D4)">🔍<div class="status-dot online"></div></div>
+          <div class="agent-info">
+            <div class="agent-name">Orion · 研究员</div>
+            <div class="agent-role">在线 · 查阅文献中</div>
+          </div>
+          <div class="agent-meta">
+            <div class="agent-time">30分钟</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAIN CONTENT: Chat -->
+    <div class="main-content">
+      <div class="chat-header">
+        <div class="chat-agent-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+        <div class="chat-agent-info">
+          <div class="chat-agent-name" id="chat-agent-name">Luna · 策略分析师</div>
+          <div class="chat-agent-status" id="chat-agent-status">在线 · GPT-4o · 响应时间 &lt; 2s</div>
+        </div>
+        <div class="chat-actions">
+          <div class="chat-action-btn" onclick="toggleLoopPanel()" title="任务编排">🦞</div>
+          <div class="chat-action-btn" onclick="toggleRightPanel()" title="智能体详情">ℹ️</div>
+          <div class="chat-action-btn" onclick="showToast('语音通话功能开发中', 'info', '🎙️')" title="语音">🎙️</div>
+          <div class="chat-action-btn" onclick="showToast('更多选项', 'info', '⋯')" title="更多">⋯</div>
+        </div>
+      </div>
+
+      <div class="chat-messages" id="chat-messages">
+        <!-- Welcome message -->
+        <div class="msg-group fade-in">
+          <div class="msg-avatar-wrap">
+            <div class="msg-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+          </div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-sender">Luna</span>
+              <span class="msg-time">09:00</span>
+            </div>
+            <div class="msg-bubble">你好！我是 Luna，你的专属策略分析师。今天有什么需要分析的任务？我可以帮你做市场调研、竞品分析、数据洞察或商业策略规划。😊</div>
+          </div>
+        </div>
+
+        <!-- User message -->
+        <div class="msg-group user fade-in">
+          <div class="msg-avatar-wrap">
+            <div class="msg-avatar" style="background:linear-gradient(135deg,#F59E0B,#F0883E)">荆</div>
+          </div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-time">09:15</span>
+              <span class="msg-sender">荆超</span>
+            </div>
+            <div class="msg-bubble">帮我分析一下AI培训市场的现状和未来趋势，重点关注企业级客户需求</div>
+          </div>
+        </div>
+
+        <!-- Agent thinking -->
+        <div class="msg-group fade-in">
+          <div class="msg-avatar-wrap">
+            <div class="msg-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+          </div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-sender">Luna</span>
+              <span class="msg-time">09:15</span>
+            </div>
+            <!-- Tool call card -->
+            <div class="tool-card">
+              <div class="tool-card-header">⚡ 调用工具</div>
+              <div class="tool-card-body">
+                <span class="tool-key">web_search</span>(<span class="tool-val">"AI培训市场 2024-2025 企业客户"</span>)<br>
+                <span class="tool-key">data_analyzer</span>(<span class="tool-val">"市场规模 + 增长率 + 竞品"</span>)
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent response with loop -->
+        <div class="msg-group fade-in">
+          <div class="msg-avatar-wrap">
+            <div class="msg-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+          </div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-sender">Luna</span>
+              <span class="msg-time">09:16</span>
+            </div>
+            <div class="msg-bubble">
+              收到！我已启动深度分析任务，以下是初步洞察：<br><br>
+              📊 <strong>市场规模</strong>：2024年中国企业AI培训市场约 <strong style="color:var(--cyan)">180亿元</strong>，预计2027年突破 600亿元，CAGR ~50%<br><br>
+              🎯 <strong>核心需求</strong>：<br>
+              • 实操型培训（占比62%）&gt; 理论讲座<br>
+              • 定制化内训方案需求增长 240%<br>
+              • AI工具集成能力培训最热门<br><br>
+              ⚠️ <strong>竞争格局</strong>：头部3家占40%市场，中小机构高度分散，差异化突破口在<strong style="color:var(--yellow)">行业垂直化+Agent实战</strong>
+            </div>
+            <!-- Loop execution card -->
+            <div class="loop-card">
+              <div class="loop-title">🦞 龙虾编排 · 并行执行中</div>
+              <div class="loop-steps">
+                <div class="loop-step done">
+                  <span class="loop-step-icon">🌐</span>
+                  市场数据采集（Tavily Search）
+                  <span class="step-status done">✓ 完成</span>
+                </div>
+                <div class="loop-step done">
+                  <span class="loop-step-icon">📈</span>
+                  竞品列表抓取（10家机构）
+                  <span class="step-status done">✓ 完成</span>
+                </div>
+                <div class="loop-step running">
+                  <span class="loop-step-icon">🧮</span>
+                  财务数据建模与预测
+                  <span class="step-status running">● 进行中</span>
+                </div>
+                <div class="loop-step pending">
+                  <span class="loop-step-icon">📄</span>
+                  生成结构化报告（Markdown）
+                  <span class="step-status pending">○ 等待</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- CHAT INPUT -->
+      <div class="chat-input-area">
+        <div class="input-box">
+          <textarea
+            class="input-textarea"
+            id="chat-input"
+            placeholder="@ 召唤智能体，/ 使用技能，发送消息..."
+            rows="2"
+            onkeydown="handleInputKey(event)"
+          ></textarea>
+          <div class="input-toolbar">
+            <div class="input-tool-btn" onclick="showToast('文件上传功能', 'info', '📎')" title="附件">📎</div>
+            <div class="input-tool-btn" onclick="showToast('@召唤其他智能体', 'info', '🤖')" title="@提及">@</div>
+            <div class="input-tool-btn" onclick="showToast('技能市场', 'info', '⚡')" title="技能">/</div>
+            <div class="input-tool-btn" onclick="showToast('截图工具', 'info', '📷')" title="截图">📷</div>
+            <div class="input-spacer"></div>
+            <div class="model-tag" onclick="showToast('当前模型：GPT-4o | 点击切换', 'info', '🤖')">
+              <div class="model-dot"></div>GPT-4o
+            </div>
+            <button class="send-btn" onclick="sendMessage()" title="发送 (Enter)">➤</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL: Agent Detail -->
+    <div class="right-panel" id="right-panel">
+      <div class="rp-header">
+        <span>智能体详情</span>
+        <div class="rp-close" onclick="toggleRightPanel()">✕</div>
+      </div>
+
+      <div class="rp-section">
+        <div class="rp-agent-card">
+          <div class="rp-agent-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+          <div class="rp-agent-name">Luna</div>
+          <div class="rp-agent-role">🎯 策略分析师</div>
+        </div>
+      </div>
+
+      <div class="rp-section">
+        <div class="rp-section-title">运行统计</div>
+        <div class="stat-row">
+          <div class="stat-item">
+            <div class="stat-val green">156</div>
+            <div class="stat-label">完成任务</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-val brand">98.7%</div>
+            <div class="stat-label">成功率</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-val purple">1.8s</div>
+            <div class="stat-label">平均响应</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rp-section">
+        <div class="rp-section-title">技能标签</div>
+        <div class="skill-tags">
+          <span class="skill-tag">市场分析</span>
+          <span class="skill-tag">竞品研究</span>
+          <span class="skill-tag">财务建模</span>
+          <span class="skill-tag">数据可视化</span>
+          <span class="skill-tag">报告撰写</span>
+          <span class="skill-tag">搜索增强</span>
+        </div>
+      </div>
+
+      <div class="rp-section">
+        <div class="rp-section-title">记忆片段</div>
+        <div class="mem-item">
+          <span class="mem-icon">💡</span>
+          用户偏好：深度量化分析，附数据来源
+        </div>
+        <div class="mem-item">
+          <span class="mem-icon">🏢</span>
+          公司：杭州太乙知行 · 主营AI培训咨询
+        </div>
+        <div class="mem-item">
+          <span class="mem-icon">🎯</span>
+          关注赛道：AI Agent、具身智能、企业服务
+        </div>
+      </div>
+
+      <div class="rp-section">
+        <div class="rp-section-title">使用模型</div>
+        <div style="font-size:12px;color:var(--text2);display:flex;gap:8px;align-items:center;">
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--green)"></div>
+          GPT-4o (OpenAI)
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px;">
+          本月消耗：12,480 Tokens<br>
+          费用：¥ 2.50
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end chat page -->
+
+  <!-- TALENT MARKET PAGE -->
+  <div class="page" id="page-talent">
+    <div class="talent-page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">🤝 人才市场</div>
+          <div class="page-subtitle">发现并雇用专业 AI 智能体，扩充你的数字员工团队</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline" onclick="showToast('发布需求功能', 'info', '📝')">发布需求</button>
+          <button class="btn btn-primary" onclick="showToast('成为专家 — 发布你的智能体', 'info', '🚀')">+ 上架我的智能体</button>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="filter-chip active">全部</div>
+        <div class="filter-chip" onclick="filterTalent(this)">💼 商业策略</div>
+        <div class="filter-chip" onclick="filterTalent(this)">💻 软件开发</div>
+        <div class="filter-chip" onclick="filterTalent(this)">📊 数据分析</div>
+        <div class="filter-chip" onclick="filterTalent(this)">✍️ 内容创作</div>
+        <div class="filter-chip" onclick="filterTalent(this)">🎨 设计创意</div>
+        <div class="filter-chip" onclick="filterTalent(this)">🔬 科研助手</div>
+        <div class="filter-chip" onclick="filterTalent(this)">🌐 跨境电商</div>
+      </div>
+
+      <div class="expert-grid">
+        <!-- Expert cards -->
+        <div class="expert-card" onclick="showToast('Nova · 数据科学家 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">📊</div>
+          <div class="ec-name">Nova · 数据科学家</div>
+          <div class="ec-title">BI报表 · 预测建模 · Python</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--green-dim);color:var(--green)">数据分析</span>
+            <span class="ec-tag" style="background:var(--brand-dim);color:var(--brand)">机器学习</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.9 (312)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+        <div class="expert-card" onclick="showToast('Kai · 全栈工程师 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8CFF)">⚡</div>
+          <div class="ec-name">Kai · 全栈工程师</div>
+          <div class="ec-title">React · Node.js · 系统架构</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--purple-dim);color:var(--purple)">前端</span>
+            <span class="ec-tag" style="background:var(--cyan-dim);color:var(--cyan)">后端</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.8 (289)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+        <div class="expert-card" onclick="showToast('Zoe · 法务顾问 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#F59E0B,#FBBF24)">⚖️</div>
+          <div class="ec-name">Zoe · 法务顾问</div>
+          <div class="ec-title">合同审查 · 合规咨询</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--orange-dim);color:var(--orange)">法律</span>
+            <span class="ec-tag" style="background:var(--yellow-dim);color:var(--yellow)">合规</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.95 (156)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+        <div class="expert-card" onclick="showToast('Atlas · 市场营销师 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#EC4899,#F472B6)">📣</div>
+          <div class="ec-name">Atlas · 营销策略师</div>
+          <div class="ec-title">增长黑客 · 内容营销 · SEO</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--red-dim);color:var(--red)">营销</span>
+            <span class="ec-tag" style="background:var(--purple-dim);color:var(--purple)">增长</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.7 (421)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+        <div class="expert-card" onclick="showToast('Echo · 多语翻译官 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#0891B2,#06B6D4)">🌍</div>
+          <div class="ec-name">Echo · 多语翻译官</div>
+          <div class="ec-title">中英日韩 · 本地化 · 外贸</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--cyan-dim);color:var(--cyan)">翻译</span>
+            <span class="ec-tag" style="background:var(--green-dim);color:var(--green)">外贸</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.85 (198)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+        <div class="expert-card" onclick="showToast('Sage · 财务分析师 — 已发起对话', 'success', '✅')">
+          <div class="ec-avatar" style="background:linear-gradient(135deg,#059669,#10B981)">💹</div>
+          <div class="ec-name">Sage · 财务分析师</div>
+          <div class="ec-title">财务建模 · 估值 · 投资分析</div>
+          <div class="ec-tags">
+            <span class="ec-tag" style="background:var(--green-dim);color:var(--green)">财务</span>
+            <span class="ec-tag" style="background:var(--brand-dim);color:var(--brand)">投研</span>
+          </div>
+          <div class="ec-footer">
+            <span class="ec-rating">⭐ 4.9 (267)</span>
+            <button class="hire-btn">+ 雇用</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ORG CHART PAGE -->
+  <div class="page" id="page-org">
+    <div class="org-page">
+      <div class="page-header" style="margin-bottom:32px;">
+        <div>
+          <div class="page-title">🌐 组织架构</div>
+          <div class="page-subtitle">太乙知行 AI 智能体团队结构</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline" onclick="showToast('导出为 PNG', 'info', '📤')">导出</button>
+          <button class="btn btn-primary" onclick="openModal('add-agent')">+ 添加成员</button>
+        </div>
+      </div>
+
+      <div class="org-tree">
+        <!-- Root -->
+        <div class="org-level">
+          <div class="org-node root" onclick="showToast('荆超 · CEO · 太乙知行AI', 'info', '👤')">
+            <div class="org-node-avatar">👤</div>
+            <div>
+              <div class="org-node-name" style="color:var(--brand)">荆超 · CEO</div>
+              <div class="org-node-role">太乙知行 AI</div>
+            </div>
+          </div>
+        </div>
+        <div class="org-line-v"></div>
+        <!-- Level 2 -->
+        <div style="display:flex;position:relative;gap:60px;">
+          <div style="position:absolute;top:0;left:20%;right:20%;height:2px;background:var(--border);top:0"></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+            <div class="org-line-v"></div>
+            <div class="org-node" onclick="showToast('Luna — 策略分析师 · 在线', 'success', '🧠')">
+              <div class="org-node-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+              <div>
+                <div class="org-node-name">Luna</div>
+                <div class="org-node-role">策略分析师</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+            <div class="org-line-v"></div>
+            <div class="org-node" onclick="showToast('Rex — 代码工程师 · 执行中', 'warning', '⚡')">
+              <div class="org-node-avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8CFF)">⚡</div>
+              <div>
+                <div class="org-node-name">Rex</div>
+                <div class="org-node-role">代码工程师</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+            <div class="org-line-v"></div>
+            <div class="org-node" onclick="showToast('Nova — 数据科学家 · 空闲', 'info', '📊')">
+              <div class="org-node-avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">📊</div>
+              <div>
+                <div class="org-node-name">Nova</div>
+                <div class="org-node-role">数据科学家</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+            <div class="org-line-v"></div>
+            <div class="org-node" onclick="showToast('Iris — 内容创作师 · 离线', 'info', '✍️')">
+              <div class="org-node-avatar" style="background:linear-gradient(135deg,#EC4899,#F472B6)">✍️</div>
+              <div>
+                <div class="org-node-name">Iris</div>
+                <div class="org-node-role">内容创作师</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="org-line-v"></div>
+        <!-- Level 3 -->
+        <div class="org-level">
+          <div class="org-node" onclick="showToast('Orion — 研究员 · 查阅文献中', 'info', '🔍')">
+            <div class="org-node-avatar" style="background:linear-gradient(135deg,#0891B2,#06B6D4)">🔍</div>
+            <div>
+              <div class="org-node-name">Orion · 研究员</div>
+              <div class="org-node-role">挂靠 Luna 组</div>
+            </div>
+          </div>
+          <div class="org-node" onclick="showToast('Sage — 财务分析师', 'info', '💹')">
+            <div class="org-node-avatar" style="background:linear-gradient(135deg,#059669,#10B981)">💹</div>
+            <div>
+              <div class="org-node-name">Sage · 财务师</div>
+              <div class="org-node-role">挂靠 Nova 组</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- KNOWLEDGE BASE PAGE -->
+  <div class="page" id="page-kb">
+    <div class="kb-page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">📚 知识库</div>
+          <div class="page-subtitle">AI 智能体的专属知识仓库，支持向量检索与增量更新</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline" onclick="showToast('导入文档 (PDF/Word/URL)', 'info', '📥')">导入文档</button>
+          <button class="btn btn-primary" onclick="showToast('新建知识库', 'info', '📂')">+ 新建知识库</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;">
+        <div class="stat-item" style="text-align:left;padding:14px 16px;">
+          <div class="stat-val brand" style="font-size:24px;">8</div>
+          <div class="stat-label">知识库数量</div>
+        </div>
+        <div class="stat-item" style="text-align:left;padding:14px 16px;">
+          <div class="stat-val green" style="font-size:24px;">1,234</div>
+          <div class="stat-label">文档总数</div>
+        </div>
+        <div class="stat-item" style="text-align:left;padding:14px 16px;">
+          <div class="stat-val purple" style="font-size:24px;">48.6K</div>
+          <div class="stat-label">向量分片</div>
+        </div>
+        <div class="stat-item" style="text-align:left;padding:14px 16px;">
+          <div class="stat-val" style="font-size:24px;color:var(--yellow);">2.1GB</div>
+          <div class="stat-label">存储占用</div>
+        </div>
+      </div>
+
+      <div class="kb-grid">
+        <div class="kb-card" onclick="showToast('打开：AI培训资料库', 'info', '📚')">
+          <div class="kb-icon">📋</div>
+          <div class="kb-name">AI培训资料库</div>
+          <div class="kb-meta">342 文档 · 更新于今天</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:85%"></div></div>
+        </div>
+        <div class="kb-card" onclick="showToast('打开：太乙知行公司资料', 'info', '🏢')">
+          <div class="kb-icon">🏢</div>
+          <div class="kb-name">公司内部资料</div>
+          <div class="kb-meta">156 文档 · 更新于昨天</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:62%"></div></div>
+        </div>
+        <div class="kb-card" onclick="showToast('打开：市场竞品分析库', 'info', '📊')">
+          <div class="kb-icon">📊</div>
+          <div class="kb-name">竞品分析资料</div>
+          <div class="kb-meta">89 文档 · 更新于3天前</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:45%"></div></div>
+        </div>
+        <div class="kb-card" onclick="showToast('打开：行业研究报告', 'info', '🔬')">
+          <div class="kb-icon">🔬</div>
+          <div class="kb-name">行业研究报告</div>
+          <div class="kb-meta">234 文档 · 更新于1周前</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:70%"></div></div>
+        </div>
+        <div class="kb-card" onclick="showToast('打开：客户合同模板库', 'info', '📝')">
+          <div class="kb-icon">📝</div>
+          <div class="kb-name">合同模板库</div>
+          <div class="kb-meta">67 文档 · 更新于2天前</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:35%"></div></div>
+        </div>
+        <div class="kb-card" onclick="showToast('打开：技术文档库', 'info', '⚡')">
+          <div class="kb-icon">⚡</div>
+          <div class="kb-name">技术文档</div>
+          <div class="kb-meta">346 文档 · 更新于今天</div>
+          <div class="kb-bar"><div class="kb-bar-fill" style="width:90%"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOBBY PAGE — 5A级智能体办公室等距场景 -->
+  <div class="page" id="page-lobby">
+    <div class="lobby-page">
+      <!-- Canvas Viewport -->
+      <div class="lobby-canvas-wrap" id="lobby-canvas-wrap">
+        <canvas id="lobby-canvas"></canvas>
+        <div class="lobby-tooltip" id="lobby-tooltip">
+          <div class="ltt-head">
+            <div class="ltt-avatar" id="ltt-avatar"></div>
+            <div>
+              <div class="ltt-name" id="ltt-name"></div>
+              <div class="ltt-role" id="ltt-role"></div>
+            </div>
+          </div>
+          <div class="ltt-stats">
+            <div class="ltt-s"><div class="ltt-sv" id="ltt-tasks"></div><div class="ltt-sl">任务数</div></div>
+            <div class="ltt-s"><div class="ltt-sv" id="ltt-rate"></div><div class="ltt-sl">成功率</div></div>
+            <div class="ltt-s"><div class="ltt-sv" id="ltt-resp"></div><div class="ltt-sl">响应</div></div>
+          </div>
+          <div class="ltt-task" id="ltt-task"></div>
+        </div>
+        <div class="lobby-scale-hint">🖱 拖拽平移 · 滚轮缩放</div>
+      </div>
+
+      <!-- Bottom Panel -->
+      <div class="lobby-bottom">
+        <!-- 龙虾编排任务队列 -->
+        <div class="lb-col" id="lb-tasks">
+          <div class="lb-col-title">🦞 任务队列</div>
+          <div class="lb-task"><div class="lb-task-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🐴</div><div class="lb-task-info"><div class="lb-task-name">AI培训市场调研</div><div class="lb-task-desc">Luna · 搜索→分析→报告</div></div><div class="lb-task-bar"><div class="lb-task-bar-fill" style="width:78%"></div></div><div class="lb-task-tag run">78%</div></div>
+          <div class="lb-task"><div class="lb-task-avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8CFF)">🐴</div><div class="lb-task-info"><div class="lb-task-name">自动化测试套件</div><div class="lb-task-desc">Rex · 执行→验证</div></div><div class="lb-task-bar"><div class="lb-task-bar-fill" style="width:45%"></div></div><div class="lb-task-tag run">45%</div></div>
+          <div class="lb-task"><div class="lb-task-avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">🐴</div><div class="lb-task-info"><div class="lb-task-name">用户增长数据看板</div><div class="lb-task-desc">Nova · 清洗→可视化</div></div><div class="lb-task-bar"><div class="lb-task-bar-fill" style="width:100%"></div></div><div class="lb-task-tag done">完成</div></div>
+        </div>
+
+        <!-- 今日统计 -->
+        <div class="lb-col">
+          <div class="lb-col-title">📊 今日统计</div>
+          <div class="lb-stats">
+            <div class="lb-stat"><div class="lb-stat-val b">12</div><div class="lb-stat-lbl">完成任务</div></div>
+            <div class="lb-stat"><div class="lb-stat-val g">5</div><div class="lb-stat-lbl">在线Agent</div></div>
+            <div class="lb-stat"><div class="lb-stat-val p">48K</div><div class="lb-stat-lbl">Token消耗</div></div>
+            <div class="lb-stat"><div class="lb-stat-val y">2.5s</div><div class="lb-stat-lbl">平均响应</div></div>
+          </div>
+        </div>
+
+        <!-- 实时日志 -->
+        <div class="lb-col" id="lb-logs">
+          <div class="lb-col-title">📡 实时日志</div>
+          <div class="lb-log"><span class="lb-log-t">23:10</span><span class="lb-log-a">Luna</span><span class="lb-log-x">完成竞品分析报告，覆盖8家机构</span></div>
+          <div class="lb-log"><span class="lb-log-t">23:08</span><span class="lb-log-a">Rex</span><span class="lb-log-x">修复3个代码Bug，提交PR #247</span></div>
+          <div class="lb-log"><span class="lb-log-t">23:05</span><span class="lb-log-a">Nova</span><span class="lb-log-x">导出月度增长报告数据集</span></div>
+          <div class="lb-log"><span class="lb-log-t">22:58</span><span class="lb-log-a">Orion</span><span class="lb-log-x">新增23篇论文到知识库</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- MODAL: Add Agent -->
+<div class="modal-overlay" id="modal-add-agent">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-icon" style="background:linear-gradient(135deg,var(--brand),var(--cyan))">🤖</div>
+      <div>
+        <div class="modal-title">添加数字员工</div>
+        <div class="modal-sub">创建一个新的 AI 智能体加入你的团队</div>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <div class="modal-label">智能体名称</div>
+        <input class="modal-input" type="text" placeholder="例如：Max · 销售顾问" id="agent-name-input">
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">职能角色</div>
+        <select class="modal-input" id="agent-role-select">
+          <option>策略分析师</option>
+          <option>代码工程师</option>
+          <option>数据科学家</option>
+          <option>内容创作师</option>
+          <option>法务顾问</option>
+          <option>客服专员</option>
+          <option>研究员</option>
+          <option>财务分析师</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">底层模型</div>
+        <select class="modal-input">
+          <option>GPT-4o (推荐)</option>
+          <option>Claude 3.5 Sonnet</option>
+          <option>Gemini 1.5 Pro</option>
+          <option>DeepSeek V3</option>
+          <option>Qwen 2.5 Max</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <div class="modal-label">系统 Prompt（可选）</div>
+        <textarea class="modal-input" style="resize:none;" rows="3" placeholder="描述该智能体的专业背景、行为规范和特殊指令..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="createAgent()">✨ 创建智能体</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+  // ===== STATE =====
+  const agentData = {
+    luna: { name: 'Luna · 策略分析师', status: '在线 · GPT-4o · 响应时间 < 2s', avatar: '🧠', bg: 'linear-gradient(135deg,#2563EB,#0EA5E9)' },
+    rex:  { name: 'Rex · 代码工程师', status: '忙碌 · Claude 3.5 · 执行任务中', avatar: '⚡', bg: 'linear-gradient(135deg,#7C3AED,#BC8CFF)' },
+    nova: { name: 'Nova · 数据科学家', status: '在线 · GPT-4o · 等待任务', avatar: '📊', bg: 'linear-gradient(135deg,#10B981,#34D399)' },
+    iris: { name: 'Iris · 内容创作师', status: '离线', avatar: '✍️', bg: 'linear-gradient(135deg,#EC4899,#F472B6)' },
+    orion:{ name: 'Orion · 研究员', status: '在线 · Gemini Pro · 查阅文献', avatar: '🔍', bg: 'linear-gradient(135deg,#0891B2,#06B6D4)' },
+    group:{ name: '产品研发组', status: '5位成员 · 2个任务运行中', avatar: '👥', bg: 'linear-gradient(135deg,#F59E0B,#F0883E)' },
+  };
+  let currentAgent = 'luna';
+  let rightPanelOpen = true;
+  let toastQueue = 0;
+
+  // ===== PAGE SWITCH =====
+  function switchPage(page) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.remove('active'));
+    const navItem = document.querySelector('.nav-item[data-page="' + page + '"]');
+    if (navItem) navItem.classList.add('active');
+  }
+
+  // ===== AGENT SELECT =====
+  function selectAgent(el, agentId) {
+    document.querySelectorAll('.agent-item').forEach(a => a.classList.remove('active'));
+    el.classList.add('active');
+    currentAgent = agentId;
+    const data = agentData[agentId];
+    if (data) {
+      document.getElementById('chat-agent-name').textContent = data.name;
+      document.getElementById('chat-agent-status').textContent = data.status;
+      const header = document.querySelector('.chat-agent-avatar');
+      header.textContent = data.avatar;
+      header.style.background = data.bg;
+      // Clear unread
+      const badge = el.querySelector('.agent-unread');
+      if (badge) badge.remove();
+    }
+  }
+
+  function selectAgentById(id) {
+    const el = document.querySelector('.agent-item[data-agent="' + id + '"]');
+    if (el) selectAgent(el, id);
+  }
+
+  // ===== RIGHT PANEL =====
+  function toggleRightPanel() {
+    rightPanelOpen = !rightPanelOpen;
+    document.getElementById('right-panel').classList.toggle('hidden', !rightPanelOpen);
+  }
+
+  // ===== LOOP PANEL TOGGLE =====
+  function toggleLoopPanel() {
+    showToast('龙虾编排器 — 任务流程设计器开发中', 'info', '🦞');
+  }
+
+  // ===== SEND MESSAGE =====
+  function handleInputKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    const msgs = document.getElementById('chat-messages');
+
+    // User message
+    const userMsg = document.createElement('div');
+    userMsg.className = 'msg-group user fade-in';
+    userMsg.innerHTML = `
+      <div class="msg-avatar-wrap">
+        <div class="msg-avatar" style="background:linear-gradient(135deg,#F59E0B,#F0883E)">荆</div>
+      </div>
+      <div class="msg-body">
+        <div class="msg-meta">
+          <span class="msg-time">${getTime()}</span>
+          <span class="msg-sender">荆超</span>
+        </div>
+        <div class="msg-bubble">${escapeHtml(text)}</div>
+      </div>
+    `;
+    msgs.appendChild(userMsg);
+    msgs.scrollTop = msgs.scrollHeight;
+
+    // Thinking indicator
+    setTimeout(() => {
+      const agent = agentData[currentAgent] || agentData.luna;
+      const thinkEl = document.createElement('div');
+      thinkEl.className = 'msg-group fade-in';
+      thinkEl.id = 'thinking-msg';
+      thinkEl.innerHTML = `
+        <div class="msg-avatar-wrap">
+          <div class="msg-avatar" style="background:${agent.bg}">${agent.avatar}</div>
+        </div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-sender">${agent.name.split('·')[0].trim()}</span>
+            <span class="msg-time">${getTime()}</span>
+          </div>
+          <div class="thinking-bubble">
+            <div class="thinking-dots">
+              <div class="thinking-dot"></div>
+              <div class="thinking-dot"></div>
+              <div class="thinking-dot"></div>
+            </div>
+            正在思考中...
+          </div>
+        </div>
+      `;
+      msgs.appendChild(thinkEl);
+      msgs.scrollTop = msgs.scrollHeight;
+    }, 400);
+
+    // AI Response
+    setTimeout(() => {
+      const thinkEl = document.getElementById('thinking-msg');
+      if (thinkEl) thinkEl.remove();
+      const agent = agentData[currentAgent] || agentData.luna;
+      const response = generateResponse(text, currentAgent);
+      const aiMsg = document.createElement('div');
+      aiMsg.className = 'msg-group fade-in';
+      aiMsg.innerHTML = `
+        <div class="msg-avatar-wrap">
+          <div class="msg-avatar" style="background:${agent.bg}">${agent.avatar}</div>
+        </div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-sender">${agent.name.split('·')[0].trim()}</span>
+            <span class="msg-time">${getTime()}</span>
+          </div>
+          <div class="msg-bubble">${response}</div>
+        </div>
+      `;
+      msgs.appendChild(aiMsg);
+      msgs.scrollTop = msgs.scrollHeight;
+    }, 1800 + Math.random() * 800);
+  }
+
+  function generateResponse(text, agent) {
+    const responses = {
+      luna: [
+        `收到！我正在处理你的请求：「${escapeHtml(text)}」<br><br>📊 初步分析已就绪，正在生成详细报告...`,
+        `这是个很好的问题！基于我的分析：<br><br>• 关键洞察 1：数据表明趋势向好<br>• 关键洞察 2：市场存在明显差异化机会<br>• 建议：聚焦细分赛道，快速验证`,
+        `我已搜索了最新的相关资料，主要发现：<br><br>1️⃣ 短期内仍有较大增长空间<br>2️⃣ 头部效应在加剧<br>3️⃣ 你的切入角度<span style="color:var(--cyan)">非常有竞争力</span>，建议继续深入`,
+      ],
+      rex: [
+        `收到代码任务！我来看一下：「${escapeHtml(text)}」<br><br>🔧 正在分析代码库结构，预计 30 秒内完成...`,
+        `代码审查完成。发现以下问题：<br><br>⚠️ 第 42 行：可能存在空指针异常<br>✅ 整体架构：良好<br>💡 建议：添加错误处理逻辑`,
+        `任务已执行完毕！生成了 <strong>3 个新文件</strong>，修改了 <strong>5 个现有文件</strong>。<br><br>所有测试通过 ✓ (12/12)`,
+      ],
+      nova: [
+        `数据分析中：「${escapeHtml(text)}」<br><br>📈 正在处理 128,000 条数据记录，ETA 15 秒...`,
+        `分析完成！关键指标：<br><br>• 日活增长 <strong style="color:var(--green)">+23%</strong> WoW<br>• 留存率 <strong style="color:var(--cyan)">68.4%</strong> (行业均值 45%)<br>• 核心用户贡献 <strong>78%</strong> 的 GMV`,
+      ],
+    };
+    const pool = responses[agent] || responses.luna;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // ===== FILTER AGENTS =====
+  function filterAgents(query) {
+    document.querySelectorAll('.agent-item').forEach(item => {
+      const name = item.querySelector('.agent-name')?.textContent?.toLowerCase() || '';
+      item.style.display = name.includes(query.toLowerCase()) ? '' : 'none';
+    });
+  }
+
+  // ===== FILTER TALENT =====
+  function filterTalent(el) {
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    showToast('筛选：' + el.textContent, 'info', '🔍');
+  }
+
+  // ===== MODAL =====
+  function openModal(id) {
+    document.getElementById('modal-' + id).classList.add('open');
+  }
+  function closeModal() {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
+  }
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  });
+
+  function createAgent() {
+    const name = document.getElementById('agent-name-input').value || '新智能体';
+    const role = document.getElementById('agent-role-select').value;
+    closeModal();
+    setTimeout(() => {
+      showToast(`✨ ${name} 已成功创建并上线！`, 'success', '🤖');
+      // Add to list
+      const list = document.getElementById('agent-list');
+      const newItem = document.createElement('div');
+      newItem.className = 'agent-item';
+      const colors = ['#2563EB,#0EA5E9','#7C3AED,#BC8CFF','#10B981,#34D399','#0891B2,#06B6D4','#F59E0B,#F0883E'];
+      const emojis = ['🤖','💼','🎯','🔮','✨'];
+      const ri = Math.floor(Math.random() * 5);
+      newItem.onclick = function() { selectAgent(this, 'new-' + Date.now()); };
+      newItem.innerHTML = `
+        <div class="agent-avatar" style="background:linear-gradient(135deg,${colors[ri]})">
+          ${emojis[ri]}<div class="status-dot online"></div>
+        </div>
+        <div class="agent-info">
+          <div class="agent-name">${escapeHtml(name)}</div>
+          <div class="agent-role">${role} · 刚刚上线</div>
+        </div>
+        <div class="agent-meta">
+          <div class="agent-time">刚刚</div>
+        </div>
+      `;
+      list.appendChild(newItem);
+    }, 200);
+  }
+
+  // ===== TOAST =====
+  function showToast(message, type = 'success', icon = '✅') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+      <span class="toast-icon">${icon}</span>
+      <span class="toast-text">${message}</span>
+      <span class="toast-close" onclick="this.parentElement.remove()">✕</span>
+    `;
+    container.appendChild(toast);
+    requestAnimationFrame(() => { requestAnimationFrame(() => { toast.classList.add('show'); }); });
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 350);
+    }, 3500);
+  }
+
+  // ===== CANVAS: 5A级办公室等距场景 =====
+  let lobbyAnimTime = 0, lobbyScale = 1, lobbyOffX = 0, lobbyOffY = 0;
+  let lobbyDragging = false, lobbyDragSX = 0, lobbyDragSY = 0, lobbyDragOX = 0, lobbyDragOY = 0;
+  let lobbyHover = null;
+  const LOBBY_AGENTS = [
+    { id:'luna',name:'Luna',role:'策略分析师',color:'#2563EB',color2:'#0EA5E9',accent:'#2F81F7',col:4,row:2,dir:1,status:'working',prog:0.78,tasks:156,rate:'98%',resp:'1.8s',cur:'分析AI培训市场趋势',sc:'#1a3050',st:'ANALYZING...'},
+    { id:'rex',name:'Rex',role:'代码工程师',color:'#7C3AED',color2:'#BC8CFF',accent:'#8B5CF6',col:10,row:2,dir:-1,status:'working',prog:0.45,tasks:234,rate:'96%',resp:'2.1s',cur:'执行自动化测试套件',sc:'#251840',st:'TESTING...'},
+    { id:'nova',name:'Nova',role:'数据科学家',color:'#10B981',color2:'#34D399',accent:'#3FB950',col:4,row:6,dir:1,status:'idle',prog:1.0,tasks:189,rate:'99%',resp:'1.5s',cur:'空闲，等待任务',sc:'#0d3020',st:'READY'},
+    { id:'iris',name:'Iris',role:'内容创作师',color:'#EC4899',color2:'#F472B6',accent:'#F472B6',col:10,row:6,dir:-1,status:'offline',prog:0,tasks:98,rate:'97%',resp:'2.3s',cur:'已离线',sc:'#1f1418',st:'OFFLINE'},
+    { id:'orion',name:'Orion',role:'研究员',color:'#0891B2',color2:'#06B6D4',accent:'#39C5CF',col:1,row:4,dir:1,status:'working',prog:0.62,tasks:145,rate:'95%',resp:'2.0s',cur:'查阅学术文献数据库',sc:'#0a2830',st:'SEARCHING...'},
+    { id:'sage',name:'Sage',role:'财务分析师',color:'#059669',color2:'#10B981',accent:'#10B981',col:13,row:4,dir:-1,status:'working',prog:0.28,tasks:112,rate:'99%',resp:'1.6s',cur:'财务建模与预测',sc:'#0a3020',st:'MODELING...'}
+  ];
+
+  const TW = 64, TH = 32;
+  let lCtx, lCanvas;
+
+  function lobbyIso(c, r) {
+    const cx = lCanvas.width/2 + lobbyOffX + lobbyDragOX;
+    const cy = lCanvas.height*0.28 + lobbyOffY + lobbyDragOY;
+    return { x: cx + (c - r) * TW * lobbyScale, y: cy + (c + r) * TH * lobbyScale };
+  }
+
+  function lobbyScreenToIso(sx, sy) {
+    const cx = lCanvas.width/2 + lobbyOffX + lobbyDragOX;
+    const cy = lCanvas.height*0.28 + lobbyOffY + lobbyDragOY;
+    const dx = (sx - cx) / (TW * lobbyScale), dy = (sy - cy) / (TH * lobbyScale);
+    return { col: (dx + dy) / 2, row: (dy - dx) / 2 };
+  }
+
+  function drawFloorTile(c, r, color) {
+    const p = lobbyIso(c, r), w = TW * lobbyScale, h = TH * lobbyScale;
+    lCtx.beginPath(); lCtx.moveTo(p.x, p.y); lCtx.lineTo(p.x + w, p.y + h); lCtx.lineTo(p.x, p.y + h * 2); lCtx.lineTo(p.x - w, p.y + h); lCtx.closePath();
+    lCtx.fillStyle = color; lCtx.fill();
+    lCtx.strokeStyle = 'rgba(40,48,58,0.5)'; lCtx.lineWidth = 0.5; lCtx.stroke();
+  }
+
+  function drawHorse(x, y, a, s) {
+    lCtx.save(); lCtx.translate(x, y);
+    if (a.dir === -1) lCtx.scale(-1, 1);
+    const sz = s * lobbyScale;
+    // Body
+    lCtx.beginPath();
+    lCtx.ellipse(0, sz*2, sz*7, sz*4, 0, 0, Math.PI*2);
+    lCtx.fillStyle = a.color + '35'; lCtx.fill();
+    lCtx.strokeStyle = a.accent; lCtx.lineWidth = 1.5; lCtx.stroke();
+    // Neck
+    lCtx.beginPath(); lCtx.moveTo(sz*5, -sz*2); lCtx.quadraticCurveTo(sz*10, -sz*12, sz*8, -sz*16); lCtx.lineTo(sz*4, -sz*14); lCtx.lineTo(sz*3, -sz*6);
+    lCtx.closePath();
+    lCtx.fillStyle = a.color + '30'; lCtx.fill();
+    lCtx.strokeStyle = a.accent; lCtx.lineWidth = 1.5; lCtx.stroke();
+    // Head
+    lCtx.beginPath(); lCtx.moveTo(sz*6, -sz*14); lCtx.quadraticCurveTo(sz*12, -sz*18, sz*12, -sz*10); lCtx.lineTo(sz*6, -sz*10);
+    lCtx.closePath();
+    lCtx.fillStyle = a.color + '45'; lCtx.fill();
+    lCtx.strokeStyle = a.accent; lCtx.lineWidth = 1.5; lCtx.stroke();
+    // Mane
+    lCtx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      lCtx.moveTo(sz*(6-i*0.5), -sz*(13-i*1.2));
+      lCtx.quadraticCurveTo(sz*(8-i*0.5), -sz*(15-i*1.2), sz*(7-i*0.5), -sz*(11-i*1.2));
+    }
+    lCtx.strokeStyle = a.accent; lCtx.lineWidth = 1.2; lCtx.stroke();
+    // Eye
+    lCtx.beginPath(); lCtx.arc(sz*9, -sz*13, sz*1.8, 0, Math.PI*2);
+    lCtx.fillStyle = a.accent;
+    lCtx.fill();
+    if (a.status === 'working') { lCtx.shadowColor = a.accent; lCtx.shadowBlur = 6*lobbyScale; lCtx.fill(); lCtx.shadowBlur = 0; }
+    // Legs
+    lCtx.strokeStyle = a.accent; lCtx.lineWidth = 1.2;
+    for (let lx of [-5, -2, 2, 5]) {
+      lCtx.beginPath(); lCtx.moveTo(sz*lx, sz*4); lCtx.lineTo(sz*(lx*0.8), sz*12); lCtx.stroke();
+    }
+    // Name
+    lCtx.font = `700 ${Math.max(10,sz*2)}px -apple-system,sans-serif`;
+    lCtx.textAlign = 'center';
+    lCtx.fillStyle = a.status === 'offline' ? '#656D76' : '#E6EDF3';
+    lCtx.fillText(a.name, 0, sz*16);
+    // Status dot
+    const sd = a.status === 'working' ? a.accent : (a.status === 'idle' ? '#3FB950' : '#656D76');
+    lCtx.beginPath(); lCtx.arc(0, sz*20, sz*1.5, 0, Math.PI*2);
+    lCtx.fillStyle = sd; lCtx.fill();
+    if (a.status === 'working') { lCtx.shadowColor = sd; lCtx.shadowBlur = 4*lobbyScale; lCtx.fill(); lCtx.shadowBlur = 0; }
+    lCtx.restore();
+  }
+
+  function drawPremiumDesk(col, row, a) {
+    const p = lobbyIso(col, row), s = lobbyScale;
+    const dw = TW*s*2.4, dh = TH*s*2.4, dd = 10*s;
+    // Shadow
+    lCtx.beginPath(); lCtx.moveTo(p.x-dw*0.3, p.y+dh*0.5); lCtx.lineTo(p.x+dw*0.3, p.y+dh*0.5); lCtx.lineTo(p.x+dw*0.5, p.y+dh*0.9); lCtx.lineTo(p.x-dw*0.5, p.y+dh*0.9); lCtx.closePath();
+    lCtx.fillStyle = 'rgba(0,0,0,0.4)'; lCtx.fill();
+    // Desk top (glass/marble)
+    lCtx.beginPath(); lCtx.moveTo(p.x-dw*0.5, p.y); lCtx.lineTo(p.x+dw*0.15, p.y-dh*0.3); lCtx.lineTo(p.x+dw*0.5, p.y); lCtx.lineTo(p.x, p.y+dh*0.3); lCtx.closePath();
+    const dg = lCtx.createLinearGradient(p.x, p.y-dh*0.3, p.x, p.y+dh*0.3);
+    dg.addColorStop(0, '#3a4450'); dg.addColorStop(0.5, '#2d3540'); dg.addColorStop(1, '#1e2530');
+    lCtx.fillStyle = dg; lCtx.fill();
+    lCtx.strokeStyle = '#4a5568'; lCtx.lineWidth = 0.8; lCtx.stroke();
+    // Desk front
+    lCtx.beginPath(); lCtx.moveTo(p.x-dw*0.5, p.y); lCtx.lineTo(p.x, p.y+dh*0.3); lCtx.lineTo(p.x, p.y+dh*0.3+dd); lCtx.lineTo(p.x-dw*0.5, p.y+dd); lCtx.closePath();
+    lCtx.fillStyle = '#1c2330'; lCtx.fill(); lCtx.strokeStyle = '#303848'; lCtx.stroke();
+    // Desk side
+    lCtx.beginPath(); lCtx.moveTo(p.x, p.y+dh*0.3); lCtx.lineTo(p.x+dw*0.5, p.y); lCtx.lineTo(p.x+dw*0.5, p.y+dd); lCtx.lineTo(p.x, p.y+dh*0.3+dd); lCtx.closePath();
+    lCtx.fillStyle = '#162030'; lCtx.fill(); lCtx.stroke();
+    // Large Monitor
+    const mx = a.dir===1 ? p.x-dw*0.12 : p.x+dw*0.12, my = p.y-dh*0.12;
+    const mw = dw*0.42, mh = dh*0.32;
+    // Stand
+    lCtx.beginPath(); lCtx.moveTo(mx, my+mh); lCtx.lineTo(mx+4*s, my+mh+10*s); lCtx.lineTo(mx-4*s, my+mh+10*s); lCtx.closePath();
+    lCtx.fillStyle = '#555e6b'; lCtx.fill();
+    // Screen bezel
+    lCtx.beginPath(); lCtx.moveTo(mx-mw*0.5-2*s, my-2*s); lCtx.lineTo(mx+mw*0.5+2*s, my-2*s); lCtx.lineTo(mx+mw*0.5+2*s, my+mh+2*s); lCtx.lineTo(mx-mw*0.5-2*s, my+mh+2*s); lCtx.closePath();
+    lCtx.fillStyle = '#1a1a2e'; lCtx.fill();
+    // Screen
+    lCtx.beginPath(); lCtx.moveTo(mx-mw*0.5, my); lCtx.lineTo(mx+mw*0.5, my); lCtx.lineTo(mx+mw*0.5, my+mh); lCtx.lineTo(mx-mw*0.5, my+mh); lCtx.closePath();
+    lCtx.fillStyle = a.sc; lCtx.fill();
+    // Screen glow
+    const sg = lCtx.createRadialGradient(mx, my+mh*0.25, 0, mx, my+mh*0.25, mw*0.8);
+    sg.addColorStop(0, a.accent+'30'); sg.addColorStop(1, 'transparent');
+    lCtx.fillStyle = sg; lCtx.fill();
+    // Screen text
+    lCtx.fillStyle = a.accent+'aa'; lCtx.font = `700 ${Math.max(11,s*13)}px 'SF Mono',monospace`; lCtx.textAlign = 'center';
+    lCtx.fillText(a.st, mx, my+mh*0.55);
+    // Progress bar
+    if (a.status === 'working') {
+      const bw = mw*0.75, bh = 4*s, bx = mx-bw*0.5, by = my+mh*0.75;
+      lCtx.fillStyle = '#0a0a14'; lCtx.fillRect(bx, by, bw, bh);
+      lCtx.fillStyle = a.accent; lCtx.fillRect(bx, by, bw*a.prog, bh);
+    }
+    // Keyboard
+    const kx = a.dir===1 ? p.x-dw*0.3 : p.x+dw*0.1, ky = p.y+dh*0.1;
+    lCtx.beginPath(); lCtx.moveTo(kx, ky); lCtx.lineTo(kx+dw*0.22, ky-dh*0.08); lCtx.lineTo(kx+dw*0.28, ky+dh*0.03); lCtx.lineTo(kx+dw*0.06, ky+dh*0.11); lCtx.closePath();
+    lCtx.fillStyle = '#4a5568'; lCtx.fill();
+    // Chair
+    const chx = a.dir===1 ? p.x-dw*0.7 : p.x+dw*0.5, chy = p.y+dh*0.05;
+    drawOfficeChair(chx, chy, a, s);
+    // Horse agent
+    const hx = a.dir===1 ? p.x-dw*0.65 : p.x+dw*0.45, hy = p.y-dh*0.15;
+    drawHorse(hx, hy, a, 7.5);
+  }
+
+  function drawOfficeChair(x, y, a, s) {
+    const cw = 18*s, ch = 14*s;
+    // Base
+    lCtx.beginPath(); lCtx.moveTo(x, y+ch); lCtx.lineTo(x+cw*0.3, y+ch+6*s); lCtx.lineTo(x-cw*0.3, y+ch+6*s); lCtx.closePath();
+    lCtx.fillStyle = '#2d333b'; lCtx.fill();
+    // Seat
+    lCtx.beginPath(); lCtx.moveTo(x-cw*0.5, y+ch*0.5); lCtx.lineTo(x+cw*0.5, y+ch*0.5); lCtx.lineTo(x+cw*0.4, y+ch); lCtx.lineTo(x-cw*0.4, y+ch); lCtx.closePath();
+    lCtx.fillStyle = '#3d444e'; lCtx.fill(); lCtx.strokeStyle = '#505a66'; lCtx.lineWidth = 0.5; lCtx.stroke();
+    // Backrest
+    lCtx.beginPath(); lCtx.moveTo(x-cw*0.4, y+ch*0.5); lCtx.lineTo(x-cw*0.35, y-ch*0.3); lCtx.lineTo(x+cw*0.35, y-ch*0.3); lCtx.lineTo(x+cw*0.4, y+ch*0.5); lCtx.closePath();
+    lCtx.fillStyle = '#4a5568'; lCtx.fill(); lCtx.stroke();
+  }
+
+  function drawLobbyScene() {
+    // Floor (polished marble checker)
+    for (let r=0; r<10; r++) for (let c=0; c<16; c++) {
+      const hasDesk = LOBBY_AGENTS.some(a=>a.col===c&&a.row===r);
+      const clr = hasDesk ? '#1a2435' : ((c+r)%2===0?'#131e2a':'#101820');
+      drawFloorTile(c, r, clr);
+    }
+    // Back wall
+    const bl = lobbyIso(0,0), br = lobbyIso(15,0), wh = 120*lobbyScale;
+    lCtx.beginPath(); lCtx.moveTo(bl.x, bl.y); lCtx.lineTo(br.x+TW*lobbyScale, br.y); lCtx.lineTo(br.x+TW*lobbyScale, br.y-wh); lCtx.lineTo(bl.x, bl.y-wh); lCtx.closePath();
+    const wg = lCtx.createLinearGradient(0, bl.y-wh, 0, bl.y);
+    wg.addColorStop(0, '#0a1628'); wg.addColorStop(0.5, '#0d1a30'); wg.addColorStop(1, '#111d35');
+    lCtx.fillStyle = wg; lCtx.fill(); lCtx.strokeStyle = '#1e2d45'; lCtx.lineWidth = 1; lCtx.stroke();
+    // Floor-to-ceiling windows (5A grade)
+    const winY = bl.y - wh*0.92, winH = wh*0.65;
+    for (let wi = 0; wi < 4; wi++) {
+      const wx = bl.x + TW*lobbyScale*(2+wi*3.5), ww = TW*lobbyScale*2.8;
+      // Window frame
+      lCtx.fillStyle = '#0a1a30'; lCtx.fillRect(wx, winY, ww, winH);
+      // City skyline in window
+      const wg2 = lCtx.createLinearGradient(0, winY, 0, winY+winH);
+      wg2.addColorStop(0, '#0d1425'); wg2.addColorStop(0.3, '#151f40'); wg2.addColorStop(0.7, '#1a3055'); wg2.addColorStop(1, '#203860');
+      lCtx.fillStyle = wg2; lCtx.fillRect(wx+4*lobbyScale, winY+4*lobbyScale, ww-8*lobbyScale, winH-8*lobbyScale);
+      // Skyline silhouette
+      lCtx.fillStyle = '#060d18';
+      lCtx.fillRect(wx+6*lobbyScale, winY+winH*0.35, ww*0.15, winH*0.65);
+      lCtx.fillRect(wx+ww*0.2, winY+winH*0.5, ww*0.12, winH*0.5);
+      lCtx.fillRect(wx+ww*0.38, winY+winH*0.25, ww*0.18, winH*0.75);
+      lCtx.fillRect(wx+ww*0.6, winY+winH*0.45, ww*0.1, winH*0.55);
+      lCtx.fillRect(wx+ww*0.75, winY+winH*0.3, ww*0.14, winH*0.7);
+      // Window lights (city glow)
+      for (let li=0; li<12; li++) {
+        const lx = wx+ww*0.12+Math.random()*ww*0.76, ly = winY+winH*0.4+Math.random()*winH*0.5;
+        lCtx.beginPath(); lCtx.arc(lx, ly, 1.5*lobbyScale, 0, Math.PI*2);
+        lCtx.fillStyle = `rgba(255,220,120,${0.2+Math.random()*0.3})`; lCtx.fill();
+      }
+      // Window dividers
+      lCtx.strokeStyle = '#152540'; lCtx.lineWidth = 3*lobbyScale;
+      lCtx.strokeRect(wx, winY, ww, winH);
+      lCtx.beginPath(); lCtx.moveTo(wx+ww*0.5, winY); lCtx.lineTo(wx+ww*0.5, winY+winH); lCtx.stroke();
+    }
+    // Wall bottom ledge
+    lCtx.fillStyle = '#1a2c45'; lCtx.fillRect(bl.x, bl.y-wh+winH+10*lobbyScale, br.x-bl.x+TW*lobbyScale, wh-winH-10*lobbyScale);
+    // Ceiling lights
+    for (let ci=2; ci<14; ci+=3) {
+      const clp = lobbyIso(ci, 0);
+      lCtx.beginPath(); lCtx.ellipse(clp.x, clp.y-wh-15*lobbyScale, 20*lobbyScale, 6*lobbyScale, 0, 0, Math.PI*2);
+      lCtx.fillStyle = 'rgba(60,80,120,0.15)'; lCtx.fill();
+      lCtx.beginPath(); lCtx.ellipse(clp.x, clp.y-wh-15*lobbyScale, 6*lobbyScale, 2*lobbyScale, 0, 0, Math.PI*2);
+      lCtx.fillStyle = 'rgba(180,200,255,0.4)'; lCtx.fill();
+    }
+    // Left wall
+    const lw1 = lobbyIso(0,0), lw2 = lobbyIso(0,9);
+    lCtx.beginPath(); lCtx.moveTo(lw1.x, lw1.y); lCtx.lineTo(lw2.x-TW*lobbyScale, lw2.y+TH*lobbyScale); lCtx.lineTo(lw2.x-TW*lobbyScale, lw2.y+TH*lobbyScale-wh); lCtx.lineTo(lw1.x, lw1.y-wh); lCtx.closePath();
+    lCtx.fillStyle = '#0c1525'; lCtx.fill(); lCtx.strokeStyle = '#162030'; lCtx.stroke();
+    // Potted plants
+    for (let pi of [{c:0,r:3},{c:0,r:7},{c:15,r:3}]) {
+      const pp = lobbyIso(pi.c, pi.r);
+      // Pot
+      lCtx.beginPath(); lCtx.moveTo(pp.x-6*lobbyScale, pp.y+6*lobbyScale); lCtx.lineTo(pp.x+6*lobbyScale, pp.y+6*lobbyScale); lCtx.lineTo(pp.x+8*lobbyScale, pp.y+14*lobbyScale); lCtx.lineTo(pp.x-8*lobbyScale, pp.y+14*lobbyScale); lCtx.closePath();
+      lCtx.fillStyle = '#4a3520'; lCtx.fill(); lCtx.strokeStyle = '#5a4530'; lCtx.stroke();
+      // Plant
+      lCtx.beginPath(); lCtx.arc(pp.x, pp.y+2*lobbyScale, 10*lobbyScale, 0, Math.PI*2);
+      lCtx.fillStyle = 'rgba(63,185,80,0.5)'; lCtx.fill();
+      lCtx.beginPath(); lCtx.arc(pp.x+3*lobbyScale, pp.y-2*lobbyScale, 6*lobbyScale, 0, Math.PI*2);
+      lCtx.fillStyle = 'rgba(63,185,80,0.6)'; lCtx.fill();
+    }
+    // Desks sorted by row for depth
+    const sorted = [...LOBBY_AGENTS].sort((a,b)=>a.row-b.row);
+    for (const a of sorted) drawPremiumDesk(a.col, a.row, a);
+    // Hover highlight
+    if (lobbyHover) {
+      const hp = lobbyIso(lobbyHover.col, lobbyHover.row);
+      lCtx.beginPath(); lCtx.arc(hp.x, hp.y+TH*lobbyScale*0.5, 40*lobbyScale, 0, Math.PI*2);
+      lCtx.strokeStyle = lobbyHover.accent; lCtx.lineWidth = 2; lCtx.setLineDash([4,4]); lCtx.stroke(); lCtx.setLineDash([]);
+    }
+  }
+
+  function lobbyAnimate() {
+    lobbyAnimTime += 0.016;
+    if (!lCtx) return;
+    lCtx.clearRect(0, 0, lCanvas.width, lCanvas.height);
+    const bg = lCtx.createLinearGradient(0, 0, 0, lCanvas.height);
+    bg.addColorStop(0, '#080d15'); bg.addColorStop(0.6, '#0d1520'); bg.addColorStop(1, '#0d1117');
+    lCtx.fillStyle = bg; lCtx.fillRect(0, 0, lCanvas.width, lCanvas.height);
+    drawLobbyScene();
+    // Ambient particles
+    for (let i=0;i<10;i++) {
+      lCtx.beginPath(); lCtx.arc(lCanvas.width*0.3+Math.sin(lobbyAnimTime*0.4+i)*120, lCanvas.height*0.15+Math.cos(lobbyAnimTime*0.25+i*0.7)*60, 1.5, 0, Math.PI*2);
+      lCtx.fillStyle = `rgba(47,129,247,${0.08+Math.sin(lobbyAnimTime+i)*0.04})`; lCtx.fill();
+    }
+    // Screen text animation
+    for (const a of LOBBY_AGENTS) {
+      if (a.status === 'working') { const dots='.'.repeat(Math.floor(lobbyAnimTime*2.5)%4); a.st = a.st.replace(/\.*$/,'')+dots; }
+    }
+    requestAnimationFrame(lobbyAnimate);
+  }
+
+  function lobbyResize() {
+    const wrap = document.getElementById('lobby-canvas-wrap');
+    if (!wrap || !lCanvas) return;
+    lCanvas.width = wrap.clientWidth;
+    lCanvas.height = wrap.clientHeight;
+  }
+
+  let lobbyInited = false;
+  function initLobbyCanvas() {
+    if (lobbyInited) return;
+    lCanvas = document.getElementById('lobby-canvas');
+    if (!lCanvas) return;
+    lCtx = lCanvas.getContext('2d');
+    lobbyInited = true;
+    lobbyResize();
+    window.addEventListener('resize', lobbyResize);
+    // Mouse events
+    lCanvas.addEventListener('mousedown', e => { lobbyDragging=true; lobbyDragSX=e.clientX; lobbyDragSY=e.clientY; });
+    lCanvas.addEventListener('mousemove', e => {
+      const r = lCanvas.getBoundingClientRect(), mx = e.clientX-r.left, my = e.clientY-r.top;
+      if (lobbyDragging) { lobbyDragOX=e.clientX-lobbyDragSX; lobbyDragOY=e.clientY-lobbyDragSY; }
+      let found = null;
+      for (const a of LOBBY_AGENTS) {
+        const p = lobbyIso(a.col, a.row);
+        if (Math.hypot(mx-p.x, my-(p.y+TH*lobbyScale*0.3)) < 50*lobbyScale) { found=a; break; }
+      }
+      lobbyHover = found; lCanvas.style.cursor = found?'pointer':(lobbyDragging?'grabbing':'grab');
+      const tt = document.getElementById('lobby-tooltip');
+      if (found) {
+        document.getElementById('ltt-avatar').textContent='🐴'; document.getElementById('ltt-avatar').style.background=`linear-gradient(135deg,${found.color},${found.color2})`;
+        document.getElementById('ltt-name').textContent=found.name; document.getElementById('ltt-role').textContent=found.role;
+        document.getElementById('ltt-tasks').textContent=found.tasks; document.getElementById('ltt-rate').textContent=found.rate;
+        document.getElementById('ltt-resp').textContent=found.resp; document.getElementById('ltt-task').textContent=found.cur;
+        tt.style.left=(e.clientX+20)+'px'; tt.style.top=(e.clientY-20)+'px'; tt.classList.add('show');
+      } else tt.classList.remove('show');
+    });
+    lCanvas.addEventListener('mouseup', () => { if(lobbyDragging){lobbyOffX+=lobbyDragOX;lobbyOffY+=lobbyDragOY;lobbyDragOX=0;lobbyDragOY=0;} lobbyDragging=false; });
+    lCanvas.addEventListener('mouseleave', () => { lobbyDragging=false; document.getElementById('lobby-tooltip').classList.remove('show'); });
+    lCanvas.addEventListener('click', () => { if(lobbyHover) { showToast(lobbyHover.name+' · '+lobbyHover.cur,'info','🐴'); switchPage('chat'); selectAgentById(lobbyHover.id); } });
+    lCanvas.addEventListener('wheel', e => { e.preventDefault(); lobbyScale=Math.max(0.5,Math.min(2.2,lobbyScale*(e.deltaY>0?0.92:1.08))); });
+    lobbyAnimate();
+  }
+
+  // Init canvas when lobby page becomes active
+  const origSwitchPage = switchPage;
+  switchPage = function(page) {
+    origSwitchPage(page);
+    if (page === 'lobby') setTimeout(initLobbyCanvas, 100);
+  };
+  // Also init once on load if lobby is default
+  document.addEventListener('DOMContentLoaded', () => { if (document.getElementById('page-lobby')?.classList.contains('active')) setTimeout(initLobbyCanvas, 200); });
+
+  // Live log updates (for bottom panel)
+  const lobbyLogMsgs = [
+    {a:'Luna',t:'完成竞品分析报告，覆盖8家机构'},{a:'Rex',t:'修复3个代码Bug，提交PR #247'},
+    {a:'Nova',t:'导出月度增长报告数据集'},{a:'Orion',t:'新增23篇论文到知识库'},
+    {a:'Sage',t:'完成Q3财务预测模型'},{a:'Luna',t:'生成AI培训市场趋势报告'},
+    {a:'Rex',t:'自动化测试套件通过率98%'},{a:'Nova',t:'构建用户留存预测模型'}
+  ];
+  let logI = 0;
+  setInterval(() => {
+    const el = document.getElementById('lb-logs');
+    if (!el) return;
+    const m = lobbyLogMsgs[logI%lobbyLogMsgs.length]; logI++;
+    const d = new Date(), t = d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+    const it = document.createElement('div'); it.className = 'lb-log fade-in';
+    it.innerHTML = `<span class="lb-log-t">${t}</span><span class="lb-log-a">${m.a}</span><span class="lb-log-x">${m.t}</span>`;
+    el.insertBefore(it, el.firstChild);
+    while (el.children.length > 5) el.removeChild(el.lastChild);
+  }, 5000);
+
+  // Task progress animation
+  setInterval(() => {
+    for (const a of LOBBY_AGENTS) {
+      if (a.status === 'working') { a.prog = Math.min(1, a.prog+0.015); if (a.prog>=1) { a.prog=0; a.status='idle'; a.st='READY'; setTimeout(()=>{a.status='working';a.st='WORKING';},2000+Math.random()*4000); } }
+    }
+    // Sync with bottom task panel
+    const tasks = ['luna','rex','nova'];
+    const el = document.getElementById('lb-tasks'); if (!el) return;
+    const items = el.querySelectorAll('.lb-task');
+    items.forEach((it,i)=>{
+      const ag = LOBBY_AGENTS.find(a=>a.id===tasks[i]);
+      if (ag) {
+        const bar = it.querySelector('.lb-task-bar-fill'), tag = it.querySelector('.lb-task-tag');
+        if (bar) bar.style.width = (ag.prog*100)+'%';
+        if (tag) { if (ag.prog>=1) { tag.textContent='完成'; tag.className='lb-task-tag done'; } else { tag.textContent=Math.round(ag.prog*100)+'%'; tag.className='lb-task-tag run'; } }
+      }
+    });
+  }, 2500);
+
+  // ===== UTILS =====
+  function getTime() {
+    const now = new Date();
+    return now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+  }
+  function escapeHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // Init
+  showToast('AI Team 已就绪 — 6位数字员工在线', 'success', '🚀');
+</script>
+</body>
+</html>

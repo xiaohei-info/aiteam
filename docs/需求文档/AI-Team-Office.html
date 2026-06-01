@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Team — 办公室动态</title>
+<style>
+  :root {
+    --bg: #0D1117;
+    --bg2: #161B22;
+    --bg3: #1C2333;
+    --border: #30363D;
+    --text: #E6EDF3;
+    --text2: #8B949E;
+    --text3: #656D76;
+    --brand: #2F81F7;
+    --brand2: #388BFD;
+    --green: #3FB950;
+    --orange: #F0883E;
+    --purple: #BC8CFF;
+    --red: #F85149;
+    --cyan: #39C5CF;
+    --yellow: #E3B341;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ===== TITLE BAR ===== */
+  .title-bar {
+    height: 38px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .traffic-lights { display: flex; gap: 6px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; }
+  .tl.red { background: #FF5F57; }
+  .tl.yellow { background: #FFBD2E; }
+  .tl.green { background: #28C840; }
+  .title-bar-title {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: var(--text2); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ===== MAIN LAYOUT ===== */
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ===== LEFT SIDEBAR ===== */
+  .sidebar {
+    width: 260px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--brand), var(--cyan));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 900; color: white;
+    box-shadow: 0 0 12px rgba(47,129,247,0.4);
+  }
+  .logo-text { font-size: 14px; font-weight: 800; color: var(--text); }
+  .logo-sub { font-size: 11px; color: var(--text2); }
+
+  .nav-list { padding: 8px 0; }
+  .nav-item {
+    padding: 10px 16px; display: flex; align-items: center; gap: 10px;
+    cursor: pointer; font-size: 13px; color: var(--text2);
+    transition: all 0.12s; border-right: 2px solid transparent;
+  }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active {
+    background: rgba(47,129,247,0.08); color: var(--brand);
+    border-right-color: var(--brand); font-weight: 600;
+  }
+  .nav-item .icon { font-size: 16px; width: 22px; text-align: center; }
+
+  .agent-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .agent-list::-webkit-scrollbar { width: 3px; }
+  .agent-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .agent-section-label {
+    padding: 8px 16px 4px;
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .agent-row {
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px;
+    cursor: pointer; transition: all 0.12s;
+  }
+  .agent-row:hover { background: var(--bg3); }
+  .agent-row.active { background: rgba(47,129,247,0.08); }
+  .agent-row .avatar {
+    width: 30px; height: 30px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0;
+  }
+  .agent-row .info { flex: 1; }
+  .agent-row .name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .agent-row .status-text { font-size: 10px; color: var(--text3); }
+  .agent-row .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .agent-row .status-dot.online { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  .agent-row .status-dot.busy { background: var(--orange); box-shadow: 0 0 4px var(--orange); }
+  .agent-row .status-dot.idle { background: var(--text3); }
+
+  /* ===== OFFICE SCENE ===== */
+  .scene-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .scene-toolbar {
+    height: 44px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 16px; gap: 8px;
+    flex-shrink: 0;
+  }
+  .scene-title { font-size: 13px; font-weight: 700; color: var(--text); flex: 1; }
+  .scene-badge {
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .scene-badge.green { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .scene-badge.orange { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange); }
+
+  .scene-viewport {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, var(--bg) 0%, #0a0e14 100%);
+    position: relative;
+  }
+
+  /* ===== CANVAS ===== */
+  #office-canvas {
+    display: block;
+    cursor: grab;
+  }
+  #office-canvas:active { cursor: grabbing; }
+
+  /* ===== BOTTOM PANEL ===== */
+  .bottom-panel {
+    height: 200px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-shrink: 0;
+  }
+  .bp-section {
+    flex: 1;
+    border-right: 1px solid var(--border);
+    padding: 14px 16px;
+    overflow-y: auto;
+  }
+  .bp-section:last-child { border-right: none; }
+  .bp-title {
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+  }
+
+  .task-item {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 6px;
+    font-size: 11px; display: flex; align-items: center; gap: 8px;
+    transition: all 0.15s; cursor: pointer;
+  }
+  .task-item:hover { border-color: var(--brand); }
+  .task-agent-avatar {
+    width: 24px; height: 24px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; flex-shrink: 0;
+  }
+  .task-content { flex: 1; }
+  .task-name { font-weight: 600; color: var(--text); }
+  .task-desc { color: var(--text3); font-size: 10px; }
+  .task-progress {
+    width: 60px; height: 4px; background: var(--border); border-radius: 2px;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .task-progress-fill {
+    height: 100%; border-radius: 2px;
+    background: linear-gradient(90deg, var(--brand), var(--cyan));
+    transition: width 0.5s ease;
+  }
+  .task-status {
+    font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .task-status.done { background: var(--green-dim); color: var(--green); }
+  .task-status.running { background: var(--brand-dim); color: var(--brand); }
+  .task-status.pending { background: var(--bg4); color: var(--text3); }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-box {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px; text-align: center;
+  }
+  .stat-val { font-size: 18px; font-weight: 900; }
+  .stat-val.brand { color: var(--brand); }
+  .stat-val.green { color: var(--green); }
+  .stat-val.purple { color: var(--purple); }
+  .stat-label { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+  .log-item {
+    font-size: 11px; color: var(--text2); padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  .log-item:last-child { border-bottom: none; }
+  .log-time { color: var(--text3); font-size: 10px; flex-shrink: 0; }
+  .log-agent { color: var(--brand); font-weight: 600; flex-shrink: 0; }
+  .log-text { flex: 1; }
+
+  /* ===== TOOLTIP ===== */
+  .agent-tooltip {
+    position: absolute;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 180px;
+  }
+  .agent-tooltip.show { opacity: 1; }
+  .tooltip-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }
+  .tooltip-avatar {
+    width: 36px; height: 36px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .tooltip-name { font-size: 14px; font-weight: 800; color: var(--text); }
+  .tooltip-role { font-size: 11px; color: var(--text2); }
+  .tooltip-stats { display: flex; gap: 12px; }
+  .tooltip-stat { text-align: center; }
+  .tooltip-stat-val { font-size: 16px; font-weight: 900; color: var(--brand); }
+  .tooltip-stat-label { font-size: 9px; color: var(--text3); }
+  .tooltip-task {
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text2);
+  }
+
+  /* Toast */
+  .toast-container {
+    position: fixed; bottom: 20px; right: 20px;
+    display: flex; flex-direction: column; gap: 6px;
+    z-index: 1000;
+  }
+  .toast {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    transform: translateX(120%);
+    transition: transform 0.3s cubic-bezier(0.16,1,0.3,1);
+    border-left: 3px solid var(--green);
+  }
+  .toast.show { transform: translateX(0); }
+  .toast.info { border-left-color: var(--brand); }
+
+  /* Animations */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeInUp 0.3s ease forwards; }
+</style>
+</head>
+<body>
+
+<!-- TITLE BAR -->
+<div class="title-bar">
+  <div class="traffic-lights">
+    <div class="tl red"></div>
+    <div class="tl yellow"></div>
+    <div class="tl green"></div>
+  </div>
+  <div class="title-bar-title">
+    <div class="live-dot"></div>
+    AI Team — 办公室动态 v0.4.0
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">A</div>
+      <div>
+        <div class="logo-text">AI Team</div>
+        <div class="logo-sub">太乙知行 · 智能体办公室</div>
+      </div>
+    </div>
+
+    <div class="nav-list">
+      <div class="nav-item" onclick="window.location='AI-Team-Demo.html'">
+        <span class="icon">💬</span> 消息中心
+      </div>
+      <div class="nav-item" onclick="window.location='AI-Team-Demo.html'">
+        <span class="icon">🤝</span> 人才市场
+      </div>
+      <div class="nav-item active">
+        <span class="icon">🏢</span> 办公室动态
+      </div>
+      <div class="nav-item" onclick="window.location='AI-Team-Demo.html'">
+        <span class="icon">📚</span> 知识库
+      </div>
+      <div class="nav-item" onclick="window.location='AI-Team-Demo.html'">
+        <span class="icon">🌐</span> 组织架构
+      </div>
+    </div>
+
+    <div class="agent-section-label">🤖 数字员工</div>
+    <div class="agent-list" id="agent-list">
+      <div class="agent-row active" data-agent="luna" onclick="focusAgent('luna')">
+        <div class="avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+        <div class="info">
+          <div class="name">Luna · 策略分析师</div>
+          <div class="status-text">分析AI培训市场...</div>
+        </div>
+        <div class="status-dot online"></div>
+      </div>
+      <div class="agent-row" data-agent="rex" onclick="focusAgent('rex')">
+        <div class="avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8CFF)">⚡</div>
+        <div class="info">
+          <div class="name">Rex · 代码工程师</div>
+          <div class="status-text">执行自动化测试</div>
+        </div>
+        <div class="status-dot busy"></div>
+      </div>
+      <div class="agent-row" data-agent="nova" onclick="focusAgent('nova')">
+        <div class="avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">📊</div>
+        <div class="info">
+          <div class="name">Nova · 数据科学家</div>
+          <div class="status-text">空闲等待任务</div>
+        </div>
+        <div class="status-dot online"></div>
+      </div>
+      <div class="agent-row" data-agent="iris" onclick="focusAgent('iris')">
+        <div class="avatar" style="background:linear-gradient(135deg,#EC4899,#F472B6)">✍️</div>
+        <div class="info">
+          <div class="name">Iris · 内容创作师</div>
+          <div class="status-text">已离线</div>
+        </div>
+        <div class="status-dot idle"></div>
+      </div>
+      <div class="agent-row" data-agent="orion" onclick="focusAgent('orion')">
+        <div class="avatar" style="background:linear-gradient(135deg,#0891B2,#06B6D4)">🔍</div>
+        <div class="info">
+          <div class="name">Orion · 研究员</div>
+          <div class="status-text">查阅文献数据库</div>
+        </div>
+        <div class="status-dot online"></div>
+      </div>
+      <div class="agent-row" data-agent="sage" onclick="focusAgent('sage')">
+        <div class="avatar" style="background:linear-gradient(135deg,#059669,#10B981)">💹</div>
+        <div class="info">
+          <div class="name">Sage · 财务分析师</div>
+          <div class="status-text">财务建模中</div>
+        </div>
+        <div class="status-dot busy"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE -->
+  <div class="scene-container">
+    <div class="scene-toolbar">
+      <div class="scene-title">🏢 太乙知行 AI 智能体办公室</div>
+      <div class="scene-badge green">
+        <div class="live-dot"></div> 5 位在线
+      </div>
+      <div class="scene-badge orange">
+        <div class="live-dot"></div> 2 个任务执行中
+      </div>
+      <div style="flex:1"></div>
+      <div style="font-size:11px;color:var(--text3);">拖拽平移 · 滚轮缩放</div>
+    </div>
+
+    <div class="scene-viewport" id="scene-viewport">
+      <canvas id="office-canvas"></canvas>
+      <!-- Tooltip -->
+      <div class="agent-tooltip" id="agent-tooltip">
+        <div class="tooltip-header">
+          <div class="tooltip-avatar" id="tt-avatar">🧠</div>
+          <div>
+            <div class="tooltip-name" id="tt-name">Luna</div>
+            <div class="tooltip-role" id="tt-role">策略分析师</div>
+          </div>
+        </div>
+        <div class="tooltip-stats">
+          <div class="tooltip-stat">
+            <div class="tooltip-stat-val" id="tt-tasks">156</div>
+            <div class="tooltip-stat-label">任务</div>
+          </div>
+          <div class="tooltip-stat">
+            <div class="tooltip-stat-val" id="tt-rate">98%</div>
+            <div class="tooltip-stat-label">成功率</div>
+          </div>
+          <div class="tooltip-stat">
+            <div class="tooltip-stat-val" id="tt-time">1.8s</div>
+            <div class="tooltip-stat-label">响应</div>
+          </div>
+        </div>
+        <div class="tooltip-task" id="tt-task">正在分析：AI培训市场趋势报告</div>
+      </div>
+    </div>
+
+    <!-- BOTTOM PANEL -->
+    <div class="bottom-panel">
+      <div class="bp-section">
+        <div class="bp-title">🦞 龙虾编排 · 任务队列</div>
+        <div id="task-list">
+          <div class="task-item">
+            <div class="task-agent-avatar" style="background:linear-gradient(135deg,#2563EB,#0EA5E9)">🧠</div>
+            <div class="task-content">
+              <div class="task-name">AI培训市场调研</div>
+              <div class="task-desc">Luna · 数据搜索 → 分析 → 报告</div>
+            </div>
+            <div class="task-progress"><div class="task-progress-fill" style="width:78%"></div></div>
+            <div class="task-status running">78%</div>
+          </div>
+          <div class="task-item">
+            <div class="task-agent-avatar" style="background:linear-gradient(135deg,#7C3AED,#BC8F3)">⚡</div>
+            <div class="task-content">
+              <div class="task-name">自动化测试套件</div>
+              <div class="task-desc">Rex · 代码执行 → 验证</div>
+            </div>
+            <div class="task-progress"><div class="task-progress-fill" style="width:45%"></div></div>
+            <div class="task-status running">45%</div>
+          </div>
+          <div class="task-item">
+            <div class="task-agent-avatar" style="background:linear-gradient(135deg,#10B981,#34D399)">📊</div>
+            <div class="task-content">
+              <div class="task-name">用户增长数据看板</div>
+              <div class="task-desc">Nova · 数据清洗 → 可视化</div>
+            </div>
+            <div class="task-progress"><div class="task-progress-fill" style="width:100%"></div></div>
+            <div class="task-status done">✓ 完成</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-section">
+        <div class="bp-title">📊 今日统计</div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-val brand">12</div>
+            <div class="stat-label">完成任务</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val green">5</div>
+            <div class="stat-label">在线智能体</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val purple">48K</div>
+            <div class="stat-label">Token消耗</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" style="color:var(--yellow)">2.5s</div>
+            <div class="stat-label">平均响应</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-section">
+        <div class="bp-title">📡 实时日志</div>
+        <div id="log-list">
+          <div class="log-item">
+            <span class="log-time">23:10</span>
+            <span class="log-agent">Luna</span>
+            <span class="log-text">完成竞品分析报告，覆盖8家机构</span>
+          </div>
+          <div class="log-item">
+            <span class="log-time">23:08</span>
+            <span class="log-agent">Rex</span>
+            <span class="log-text">修复3个代码Bug，提交PR #247</span>
+          </div>
+          <div class="log-item">
+            <span class="log-time">23:05</span>
+            <span class="log-agent">Nova</span>
+            <span class="log-text">导出月度增长报告数据集</span>
+          </div>
+          <div class="log-item">
+            <span class="log-time">22:58</span>
+            <span class="log-agent">Orion</span>
+            <span class="log-text">新增23篇论文到知识库</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ===== CANVAS OFFICE SCENE =====
+const canvas = document.getElementById('office-canvas');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('agent-tooltip');
+
+// Scene config
+const TILE_W = 48;
+const TILE_H = 24;
+const GRID_COLS = 14;
+const GRID_ROWS = 10;
+let scale = 1;
+let offsetX = 0;
+let offsetY = 0;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+
+// Agent definitions (knight chess piece style)
+const agents = [
+  {
+    id: 'luna', name: 'Luna', role: '策略分析师', emoji: '🧠',
+    color: '#2563EB', color2: '#0EA5E9', accent: '#2F81F7',
+    deskCol: 4, deskRow: 2, direction: 'right',
+    status: 'working', progress: 0.78,
+    tasks: 156, rate: '98%', resp: '1.8s',
+    currentTask: '分析AI培训市场趋势',
+    screenColor: '#1a3a5c', screenText: 'ANALYZING...'
+  },
+  {
+    id: 'rex', name: 'Rex', role: '代码工程师', emoji: '⚡',
+    color: '#7C3AED', color2: '#BC8CFF', accent: '#8B5CF6',
+    deskCol: 9, deskRow: 2, direction: 'left',
+    status: 'working', progress: 0.45,
+    tasks: 234, rate: '96%', resp: '2.1s',
+    currentTask: '执行自动化测试套件',
+    screenColor: '#2d1b4e', screenText: 'TESTING...'
+  },
+  {
+    id: 'nova', name: 'Nova', role: '数据科学家', emoji: '📊',
+    color: '#10B981', color2: '#34D399', accent: '#3FB950',
+    deskCol: 4, deskRow: 6, direction: 'right',
+    status: 'idle', progress: 1.0,
+    tasks: 189, rate: '99%', resp: '1.5s',
+    currentTask: '空闲，等待任务分配',
+    screenColor: '#0d3d2a', screenText: 'READY'
+  },
+  {
+    id: 'iris', name: 'Iris', role: '内容创作师', emoji: '✍️',
+    color: '#EC4899', color2: '#F472B6', accent: '#F472B6',
+    deskCol: 9, deskRow: 6, direction: 'left',
+    status: 'offline', progress: 0,
+    tasks: 98, rate: '97%', resp: '2.3s',
+    currentTask: '已离线',
+    screenColor: '#2a1a1a', screenText: 'OFFLINE'
+  },
+  {
+    id: 'orion', name: 'Orion', role: '研究员', emoji: '🔍',
+    color: '#0891B2', color2: '#06B6D4', accent: '#39C5CF',
+    deskCol: 2, deskRow: 4, direction: 'right',
+    status: 'working', progress: 0.62,
+    tasks: 145, rate: '95%', resp: '2.0s',
+    currentTask: '查阅学术文献数据库',
+    screenColor: '#0a2d3d', screenText: 'SEARCHING...'
+  },
+  {
+    id: 'sage', name: 'Sage', role: '财务分析师', emoji: '💹',
+    color: '#059669', color2: '#10B981', accent: '#10B981',
+    deskCol: 11, deskRow: 4, direction: 'left',
+    status: 'working', progress: 0.35,
+    tasks: 112, rate: '99%', resp: '1.6s',
+    currentTask: '财务建模与预测',
+    screenColor: '#0a3d2a', screenText: 'MODELING...'
+  },
+];
+
+// Animation state
+let animTime = 0;
+let hoveredAgent = null;
+
+// Isometric helpers
+function isoToScreen(col, row) {
+  const cx = canvas.width / 2 + offsetX + dragOffsetX;
+  const cy = canvas.height / 3 + offsetY + dragOffsetY;
+  const x = cx + (col - row) * TILE_W * scale;
+  const y = cy + (col + row) * TILE_H * scale;
+  return { x, y };
+}
+
+function screenToIso(sx, sy) {
+  const cx = canvas.width / 2 + offsetX + dragOffsetX;
+  const cy = canvas.height / 3 + offsetY + dragOffsetY;
+  const dx = (sx - cx) / (TILE_W * scale);
+  const dy = (sy - cy) / (TILE_H * scale);
+  const col = (dx + dy) / 2;
+  const row = (dy - dx) / 2;
+  return { col, row };
+}
+
+// Resize
+function resize() {
+  const viewport = document.getElementById('scene-viewport');
+  canvas.width = viewport.clientWidth;
+  canvas.height = viewport.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===== DRAW FUNCTIONS =====
+
+function drawFloorTile(col, row, color) {
+  const p = isoToScreen(col, row);
+  const w = TILE_W * scale;
+  const h = TILE_H * scale;
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x + w, p.y + h);
+  ctx.lineTo(p.x, p.y + h * 2);
+  ctx.lineTo(p.x - w, p.y + h);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(48,54,61,0.5)';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+}
+
+function drawDesk(col, row, direction, screenColor, screenText, agent) {
+  const p = isoToScreen(col, row);
+  const w = TILE_W * scale * 1.8;
+  const h = TILE_H * scale * 1.8;
+  const d = 8 * scale; // depth
+
+  // Desk shadow
+  ctx.beginPath();
+  ctx.moveTo(p.x - w * 0.3, p.y + h * 0.5);
+  ctx.lineTo(p.x + w * 0.3, p.y + h * 0.5);
+  ctx.lineTo(p.x + w * 0.5, p.y + h * 0.8);
+  ctx.lineTo(p.x - w * 0.5, p.y + h * 0.8);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fill();
+
+  // Desk top
+  ctx.beginPath();
+  ctx.moveTo(p.x - w * 0.5, p.y);
+  ctx.lineTo(p.x + w * 0.1, p.y - h * 0.3);
+  ctx.lineTo(p.x + w * 0.5, p.y);
+  ctx.lineTo(p.x, p.y + h * 0.3);
+  ctx.closePath();
+  ctx.fillStyle = '#2d333b';
+  ctx.fill();
+  ctx.strokeStyle = '#3d444e';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Desk front face
+  ctx.beginPath();
+  ctx.moveTo(p.x - w * 0.5, p.y);
+  ctx.lineTo(p.x, p.y + h * 0.3);
+  ctx.lineTo(p.x, p.y + h * 0.3 + d);
+  ctx.lineTo(p.x - w * 0.5, p.y + d);
+  ctx.closePath();
+  ctx.fillStyle = '#22262d';
+  ctx.fill();
+  ctx.strokeStyle = '#30363d';
+  ctx.stroke();
+
+  // Desk side face
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y + h * 0.3);
+  ctx.lineTo(p.x + w * 0.5, p.y);
+  ctx.lineTo(p.x + w * 0.5, p.y + d);
+  ctx.lineTo(p.x, p.y + h * 0.3 + d);
+  ctx.closePath();
+  ctx.fillStyle = '#1c2128';
+  ctx.fill();
+  ctx.strokeStyle = '#30363d';
+  ctx.stroke();
+
+  // Monitor
+  const mx = direction === 'right' ? p.x - w * 0.15 : p.x + w * 0.15;
+  const my = p.y - h * 0.15;
+  const mw = w * 0.35;
+  const mh = h * 0.25;
+
+  // Monitor stand
+  ctx.beginPath();
+  ctx.moveTo(mx, my + mh);
+  ctx.lineTo(mx + 3, my + mh + 8);
+  ctx.lineTo(mx - 3, my + mh + 8);
+  ctx.closePath();
+  ctx.fillStyle = '#444c56';
+  ctx.fill();
+
+  // Monitor screen (back)
+  ctx.beginPath();
+  ctx.moveTo(mx - mw * 0.5, my);
+  ctx.lineTo(mx + mw * 0.5, my);
+  ctx.lineTo(mx + mw * 0.5, my + mh);
+  ctx.lineTo(mx - mw * 0.5, my + mh);
+  ctx.closePath();
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fill();
+
+  // Screen glow
+  const screenGlow = ctx.createRadialGradient(mx, my + mh * 0.3, 0, mx, my + mh * 0.3, mw);
+  screenGlow.addColorStop(0, screenColor + '40');
+  screenGlow.addColorStop(1, 'transparent');
+  ctx.fillStyle = screenGlow;
+  ctx.fill();
+
+  // Screen content
+  ctx.fillStyle = screenColor;
+  ctx.font = `${Math.max(8, 9 * scale)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText(screenText, mx, my + mh * 0.6);
+
+  // Screen border
+  ctx.strokeStyle = '#3d444e';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Screen progress bar for working agents
+  if (agent.status === 'working') {
+    const pw = mw * 0.7;
+    const ph = 3 * scale;
+    const px = mx - pw * 0.5;
+    const py = my + mh * 0.75;
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(px, py, pw, ph);
+    ctx.fillStyle = agent.accent;
+    ctx.fillRect(px, py, pw * agent.progress, ph);
+  }
+
+  // Keyboard
+  const kx = direction === 'right' ? p.x - w * 0.25 : p.x + w * 0.05;
+  const ky = p.y + h * 0.1;
+  ctx.beginPath();
+  ctx.moveTo(kx, ky);
+  ctx.lineTo(kx + w * 0.2, ky - h * 0.08);
+  ctx.lineTo(kx + w * 0.25, ky + h * 0.02);
+  ctx.lineTo(kx + w * 0.05, ky + h * 0.1);
+  ctx.closePath();
+  ctx.fillStyle = '#3d444e';
+  ctx.fill();
+
+  // Chair
+  const chairX = direction === 'right' ? p.x - w * 0.6 : p.x + w * 0.4;
+  const chairY = p.y + h * 0.1;
+  drawChair(chairX, chairY, direction, agent);
+
+  // Agent (Knight piece)
+  const agentX = direction === 'right' ? p.x - w * 0.55 : p.x + w * 0.35;
+  const agentY = p.y - h * 0.1;
+  drawKnight(agentX, agentY, agent, direction);
+}
+
+function drawChair(x, y, direction, agent) {
+  const s = scale;
+  const w = 14 * s;
+  const h = 10 * s;
+
+  // Chair base
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x + w * 0.3, y + h + 4 * s);
+  ctx.lineTo(x - w * 0.3, y + h + 4 * s);
+  ctx.closePath();
+  ctx.fillStyle = '#2d333b';
+  ctx.fill();
+
+  // Chair seat
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.5, y + h * 0.5);
+  ctx.lineTo(x + w * 0.5, y + h * 0.5);
+  ctx.lineTo(x + w * 0.4, y + h);
+  ctx.lineTo(x - w * 0.4, y + h);
+  ctx.closePath();
+  ctx.fillStyle = '#3d444e';
+  ctx.fill();
+  ctx.strokeStyle = '#484f58';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Chair back
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.4, y + h * 0.5);
+  ctx.lineTo(x - w * 0.35, y);
+  ctx.lineTo(x + w * 0.35, y);
+  ctx.lineTo(x + w * 0.4, y + h * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = '#444c56';
+  ctx.fill();
+  ctx.stroke();
+
+  // Status indicator on chair
+  const statusColor = agent.status === 'working' ? agent.accent :
+                      agent.status === 'idle' ? '#3FB950' : '#656D76';
+  ctx.beginPath();
+  ctx.arc(x, y - 2 * s, 3 * s, 0, Math.PI * 2);
+  ctx.fillStyle = statusColor;
+  ctx.fill();
+  if (agent.status === 'working') {
+    ctx.shadowColor = statusColor;
+    ctx.shadowBlur = 8 * s;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawKnight(x, y, agent, direction) {
+  const s = scale;
+  const baseW = 16 * s;
+  const baseH = 8 * s;
+
+  // Knight body (simplified chess piece shape)
+  ctx.save();
+  ctx.translate(x, y);
+  if (direction === 'left') ctx.scale(-1, 1);
+
+  // Base
+  ctx.beginPath();
+  ctx.moveTo(-baseW * 0.5, baseH);
+  ctx.lineTo(baseW * 0.5, baseH);
+  ctx.lineTo(baseW * 0.4, baseH + 3 * s);
+  ctx.lineTo(-baseW * 0.4, baseH + 3 * s);
+  ctx.closePath();
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fill();
+  ctx.strokeStyle = agent.accent;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(-baseW * 0.3, baseH);
+  ctx.lineTo(baseW * 0.3, baseH);
+  ctx.lineTo(baseW * 0.25, -baseH * 0.5);
+  ctx.lineTo(-baseW * 0.25, -baseH * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = agent.color + '30';
+  ctx.fill();
+  ctx.strokeStyle = agent.accent;
+  ctx.stroke();
+
+  // Head (horse shape simplified)
+  ctx.beginPath();
+  ctx.moveTo(-baseW * 0.2, -baseH * 0.5);
+  ctx.lineTo(baseW * 0.3, -baseH * 0.8);
+  ctx.lineTo(baseW * 0.4, -baseH * 1.2);
+  ctx.lineTo(baseW * 0.2, -baseH * 1.4);
+  ctx.lineTo(-baseW * 0.1, -baseH * 1.2);
+  ctx.lineTo(-baseW * 0.25, -baseH * 0.8);
+  ctx.closePath();
+  ctx.fillStyle = agent.color + '50';
+  ctx.fill();
+  ctx.strokeStyle = agent.accent;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Eye glow
+  ctx.beginPath();
+  ctx.arc(baseW * 0.15, -baseH * 1.1, 2 * s, 0, Math.PI * 2);
+  ctx.fillStyle = agent.accent;
+  ctx.fill();
+  if (agent.status === 'working') {
+    ctx.shadowColor = agent.accent;
+    ctx.shadowBlur = 6 * s;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  // Emoji label
+  ctx.font = `${Math.max(10, 12 * s)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(agent.emoji, 0, -baseH * 1.6);
+
+  // Name label
+  ctx.font = `${Math.max(8, 9 * s)}px sans-serif`;
+  ctx.fillStyle = agent.status === 'offline' ? '#656D76' : '#E6EDF3';
+  ctx.fillText(agent.name, 0, baseH + 12 * s);
+
+  // Status label
+  ctx.font = `${Math.max(7, 8 * s)}px sans-serif`;
+  ctx.fillStyle = agent.status === 'working' ? agent.accent :
+                  agent.status === 'idle' ? '#3FB950' : '#656D76';
+  const statusText = agent.status === 'working' ? '● 工作中' :
+                     agent.status === 'idle' ? '○ 空闲' : '○ 离线';
+  ctx.fillText(statusText, 0, baseH + 20 * s);
+
+  ctx.restore();
+}
+
+function drawRoom() {
+  // Floor grid
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) {
+      const isDesk = agents.some(a => a.deskCol === c && a.deskRow === r);
+      const color = isDesk ? '#1c2333' : ((c + r) % 2 === 0 ? '#131820' : '#11161d');
+      drawFloorTile(c, r, color);
+    }
+  }
+
+  // Walls (back)
+  const backLeft = isoToScreen(0, 0);
+  const backRight = isoToScreen(GRID_COLS - 1, 0);
+  const wallH = 80 * scale;
+
+  ctx.beginPath();
+  ctx.moveTo(backLeft.x, backLeft.y);
+  ctx.lineTo(backRight.x + TILE_W * scale, backRight.y);
+  ctx.lineTo(backRight.x + TILE_W * scale, backRight.y - wallH);
+  ctx.lineTo(backLeft.x, backLeft.y - wallH);
+  ctx.closePath();
+  ctx.fillStyle = '#0d1117';
+  ctx.fill();
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Wall decorations - window
+  const winX = (backLeft.x + backRight.x) / 2 + TILE_W * scale * 0.5;
+  const winY = backLeft.y - wallH * 0.5;
+  const winW = 60 * scale;
+  const winH = 40 * scale;
+
+  ctx.fillStyle = '#0a2540';
+  ctx.fillRect(winX - winW * 0.5, winY - winH * 0.5, winW, winH);
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(winX - winW * 0.5, winY - winH * 0.5, winW, winH);
+
+  // Window glow (night city)
+  const winGlow = ctx.createRadialGradient(winX, winY, 0, winX, winY, winW);
+  winGlow.addColorStop(0, 'rgba(47,129,247,0.15)');
+  winGlow.addColorStop(1, 'transparent');
+  ctx.fillStyle = winGlow;
+  ctx.fillRect(winX - winW * 0.5, winY - winH * 0.5, winW, winH);
+
+  // Wall - left side
+  const leftBack = isoToScreen(0, 0);
+  const leftFront = isoToScreen(0, GRID_ROWS - 1);
+  ctx.beginPath();
+  ctx.moveTo(leftBack.x, leftBack.y);
+  ctx.lineTo(leftFront.x - TILE_W * scale, leftFront.y + TILE_H * scale);
+  ctx.lineTo(leftFront.x - TILE_W * scale, leftFront.y + TILE_H * scale - wallH);
+  ctx.lineTo(leftBack.x, leftBack.y - wallH);
+  ctx.closePath();
+  ctx.fillStyle = '#0a0e14';
+  ctx.fill();
+  ctx.strokeStyle = '#1c2128';
+  ctx.stroke();
+
+  // Desks (sorted by row for proper depth)
+  const sortedAgents = [...agents].sort((a, b) => a.deskRow - b.deskRow);
+  for (const agent of sortedAgents) {
+    drawDesk(agent.deskCol, agent.deskRow, agent.direction, agent.screenColor, agent.screenText, agent);
+  }
+
+  // Hover effect
+  if (hoveredAgent) {
+    const p = isoToScreen(hoveredAgent.deskCol, hoveredAgent.deskRow);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y + TILE_H * scale, 30 * scale, 0, Math.PI * 2);
+    ctx.strokeStyle = hoveredAgent.accent;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// ===== ANIMATION LOOP =====
+function animate() {
+  animTime += 0.016;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background gradient
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  bgGrad.addColorStop(0, '#0a0e14');
+  bgGrad.addColorStop(1, '#0d1117');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawRoom();
+
+  // Animated particles (ambient)
+  for (let i = 0; i < 8; i++) {
+    const px = canvas.width * 0.3 + Math.sin(animTime * 0.5 + i) * 100;
+    const py = canvas.height * 0.2 + Math.cos(animTime * 0.3 + i * 0.7) * 50;
+    ctx.beginPath();
+    ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(47,129,247,${0.1 + Math.sin(animTime + i) * 0.05})`;
+    ctx.fill();
+  }
+
+  // Screen text animation
+  for (const agent of agents) {
+    if (agent.status === 'working') {
+      const dots = '.'.repeat(Math.floor(animTime * 2) % 4);
+      agent.screenText = agent.screenText.replace(/\.*$/, '') + dots;
+    }
+  }
+
+  requestAnimationFrame(animate);
+}
+
+// ===== INTERACTION =====
+
+// Mouse events
+canvas.addEventListener('mousedown', e => {
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+});
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  if (isDragging) {
+    dragOffsetX = e.clientX - dragStartX;
+    dragOffsetY = e.clientY - dragStartY;
+  }
+
+  // Hover detection
+  let found = null;
+  for (const agent of agents) {
+    const p = isoToScreen(agent.deskCol, agent.deskRow);
+    const dx = mx - p.x;
+    const dy = my - (p.y + TILE_H * scale);
+    if (Math.sqrt(dx * dx + dy * dy) < 40 * scale) {
+      found = agent;
+      break;
+    }
+  }
+  hoveredAgent = found;
+  canvas.style.cursor = found ? 'pointer' : (isDragging ? 'grabbing' : 'grab');
+
+  // Update tooltip
+  if (found) {
+    updateTooltip(found, mx + rect.left, my + rect.top);
+  } else {
+    tooltip.classList.remove('show');
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (isDragging) {
+    offsetX += dragOffsetX;
+    offsetY += dragOffsetY;
+    dragOffsetX = 0;
+    dragOffsetY = 0;
+    isDragging = false;
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  isDragging = false;
+  tooltip.classList.remove('show');
+});
+
+canvas.addEventListener('click', e => {
+  if (hoveredAgent) {
+    showToast(`${hoveredAgent.name} · ${hoveredAgent.currentTask}`, 'info', hoveredAgent.emoji);
+    focusAgent(hoveredAgent.id);
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  scale = Math.max(0.5, Math.min(2.0, scale * delta));
+});
+
+function updateTooltip(agent, x, y) {
+  document.getElementById('tt-avatar').textContent = agent.emoji;
+  document.getElementById('tt-avatar').style.background = `linear-gradient(135deg,${agent.color},${agent.color2})`;
+  document.getElementById('tt-name').textContent = agent.name;
+  document.getElementById('tt-role').textContent = agent.role;
+  document.getElementById('tt-tasks').textContent = agent.tasks;
+  document.getElementById('tt-rate').textContent = agent.rate;
+  document.getElementById('tt-time').textContent = agent.resp;
+  document.getElementById('tt-task').textContent = agent.currentTask;
+
+  tooltip.style.left = (x + 20) + 'px';
+  tooltip.style.top = (y - 20) + 'px';
+  tooltip.classList.add('show');
+}
+
+// ===== SIDEBAR FOCUS =====
+function focusAgent(id) {
+  document.querySelectorAll('.agent-row').forEach(r => r.classList.remove('active'));
+  const row = document.querySelector(`.agent-row[data-agent="${id}"]`);
+  if (row) row.classList.add('active');
+}
+
+// ===== TOAST =====
+function showToast(message, type = 'info', icon) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span>${icon || 'ℹ️'}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  requestAnimationFrame(() => requestAnimationFrame(() => toast.classList.add('show')));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 350);
+  }, 3000);
+}
+
+// ===== AUTO LOG UPDATES =====
+const logMessages = [
+  { agent: 'Luna', text: '完成竞品分析报告，覆盖8家机构' },
+  { agent: 'Rex', text: '修复3个代码Bug，提交PR #247' },
+  { agent: 'Nova', text: '导出月度增长报告数据集' },
+  { agent: 'Orion', text: '新增23篇论文到知识库' },
+  { agent: 'Sage', text: '完成Q3财务预测模型' },
+  { agent: 'Luna', text: '生成AI培训市场趋势报告' },
+];
+let logIdx = 0;
+setInterval(() => {
+  const logList = document.getElementById('log-list');
+  const msg = logMessages[logIdx % logMessages.length];
+  logIdx++;
+  const item = document.createElement('div');
+  item.className = 'log-item fade-in';
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+  item.innerHTML = `<span class="log-time">${time}</span><span class="log-agent">${msg.agent}</span><span class="log-text">${msg.text}</span>`;
+  logList.insertBefore(item, logList.firstChild);
+  while (logList.children.length > 6) logList.removeChild(logList.lastChild);
+}, 5000);
+
+// ===== TASK PROGRESS ANIMATION =====
+setInterval(() => {
+  for (const agent of agents) {
+    if (agent.status === 'working') {
+      agent.progress = Math.min(1, agent.progress + 0.02);
+      if (agent.progress >= 1) {
+        agent.progress = 0;
+        agent.status = 'idle';
+        agent.screenText = 'READY';
+        setTimeout(() => {
+          agent.status = 'working';
+          agent.screenText = 'WORKING';
+        }, 3000 + Math.random() * 5000);
+      }
+    }
+  }
+
+  // Update task list UI
+  const tasks = [
+    { id: 'luna', name: 'AI培训市场调研', desc: 'Luna · 数据搜索 → 分析 → 报告' },
+    { id: 'rex', name: '自动化测试套件', desc: 'Rex · 代码执行 → 验证' },
+    { id: 'nova', name: '用户增长数据看板', desc: 'Nova · 数据清洗 → 可视化' },
+  ];
+  const taskList = document.getElementById('task-list');
+  if (taskList) {
+    const items = taskList.querySelectorAll('.task-item');
+    items.forEach((item, i) => {
+      const agent = agents.find(a => a.id === tasks[i]?.id);
+      if (agent) {
+        const fill = item.querySelector('.task-progress-fill');
+        const status = item.querySelector('.task-status');
+        if (fill) fill.style.width = (agent.progress * 100) + '%';
+        if (status) {
+          if (agent.progress >= 1) {
+            status.textContent = '✓ 完成';
+            status.className = 'task-status done';
+          } else {
+            status.textContent = Math.round(agent.progress * 100) + '%';
+            status.className = 'task-status running';
+          }
+        }
+      }
+    });
+  }
+}, 2000);
+
+// Start
+animate();
+showToast('AI Team 办公室已就绪 — 6位数字员工在线', 'info', '🏢');
+</script>
+</body>
+</html>

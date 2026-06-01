@@ -1,0 +1,1994 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Team — 产品需求文档 PRD v2.0</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #1c2330;
+    --border: #30363d;
+    --blue: #1B6FD8;
+    --blue-light: #58a6ff;
+    --cyan: #39d0d0;
+    --green: #3fb950;
+    --orange: #e3b341;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --text-dim: #484f58;
+    --radius: 8px;
+    --shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 14px; line-height: 1.7; }
+
+  /* ── NAV ── */
+  nav { position: fixed; top: 0; left: 0; right: 0; height: 56px; background: rgba(13,17,23,.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); z-index: 1000; display: flex; align-items: center; padding: 0 24px; gap: 12px; }
+  .nav-logo { font-size: 17px; font-weight: 700; color: var(--blue-light); letter-spacing: .5px; }
+  .nav-badge { background: var(--blue); color: #fff; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .nav-info { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+
+  /* ── LAYOUT ── */
+  .sidebar { position: fixed; top: 56px; left: 0; bottom: 0; width: 240px; background: var(--bg2); border-right: 1px solid var(--border); overflow-y: auto; padding: 20px 0; z-index: 100; }
+  .sidebar::-webkit-scrollbar { width: 4px; } .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .sidebar-group { margin-bottom: 8px; }
+  .sidebar-group-title { padding: 6px 20px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); }
+  .sidebar-item { display: block; padding: 7px 20px; color: var(--text-muted); text-decoration: none; font-size: 13px; border-left: 2px solid transparent; transition: all .15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sidebar-item:hover { color: var(--text); background: var(--bg3); }
+  .sidebar-item.active { color: var(--blue-light); border-left-color: var(--blue-light); background: rgba(88,166,255,.08); }
+  .sidebar-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); margin-right: 8px; vertical-align: middle; }
+  .sidebar-dot.pc { background: var(--blue-light); }
+  .sidebar-dot.app { background: var(--green); }
+  .sidebar-dot.web { background: var(--orange); }
+
+  main { margin-left: 240px; padding: 80px 40px 60px; max-width: 1100px; }
+
+  /* ── SECTIONS ── */
+  .section { margin-bottom: 64px; }
+  .section-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 6px; padding-bottom: 12px; border-bottom: 2px solid var(--blue); display: flex; align-items: center; gap: 10px; }
+  .section-title .icon { font-size: 20px; }
+  .subsection { margin: 32px 0; }
+  .subsection-title { font-size: 16px; font-weight: 700; color: var(--blue-light); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .subsection-title::before { content: ''; display: inline-block; width: 3px; height: 16px; background: var(--blue-light); border-radius: 2px; }
+  h4 { font-size: 14px; font-weight: 600; color: var(--cyan); margin: 16px 0 8px; }
+
+  /* ── BREADCRUMB ── */
+  .breadcrumb { font-size: 12px; color: var(--text-dim); margin-bottom: 24px; }
+  .breadcrumb span { color: var(--text-muted); }
+
+  /* ── PAGE SPEC CARD ── */
+  .page-spec { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 40px; overflow: hidden; }
+  .page-spec-header { background: var(--bg3); padding: 16px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+  .page-spec-header .page-id { font-size: 11px; font-weight: 700; background: var(--blue); color: #fff; padding: 2px 8px; border-radius: 4px; letter-spacing: .5px; }
+  .page-spec-header .page-name { font-size: 16px; font-weight: 700; color: var(--text); }
+  .page-spec-header .page-desc { font-size: 13px; color: var(--text-muted); margin-left: auto; }
+  .page-spec-body { padding: 20px; }
+  .spec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+  .spec-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  .spec-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .spec-box-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; }
+  .spec-box-title.interaction { color: var(--cyan); }
+  .spec-box-title.data { color: var(--orange); }
+  .spec-box-title.fields { color: var(--purple); }
+  .spec-box-title.state { color: var(--green); }
+  .spec-box-title.anim { color: var(--red); }
+  .spec-box-title.api { color: var(--blue-light); }
+  ul.spec-list { list-style: none; }
+  ul.spec-list li { padding: 4px 0; padding-left: 14px; position: relative; color: var(--text-muted); font-size: 13px; border-bottom: 1px solid var(--border); }
+  ul.spec-list li:last-child { border-bottom: none; }
+  ul.spec-list li::before { content: '›'; position: absolute; left: 0; color: var(--text-dim); }
+  ul.spec-list li strong { color: var(--text); }
+
+  /* ── WIREFRAME ── */
+  .wireframe-wrap { background: #0a0e14; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin: 16px 0; overflow: auto; }
+  .wireframe-label { font-size: 11px; color: var(--text-dim); text-align: center; margin-bottom: 8px; letter-spacing: .5px; }
+  svg text { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+
+  /* ── TABLE ── */
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0; }
+  .data-table th { background: var(--bg3); color: var(--text-muted); font-weight: 600; padding: 8px 12px; text-align: left; border: 1px solid var(--border); font-size: 12px; }
+  .data-table td { padding: 7px 12px; border: 1px solid var(--border); color: var(--text-muted); }
+  .data-table tr:hover td { background: var(--bg3); color: var(--text); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .tag.req { background: rgba(27,111,216,.2); color: var(--blue-light); }
+  .tag.opt { background: rgba(63,185,80,.15); color: var(--green); }
+  .tag.sys { background: rgba(188,140,255,.15); color: var(--purple); }
+  .tag.p0 { background: rgba(248,81,73,.2); color: var(--red); }
+  .tag.p1 { background: rgba(227,179,65,.2); color: var(--orange); }
+  .tag.p2 { background: rgba(63,185,80,.15); color: var(--green); }
+
+  /* ── FLOW STEP ── */
+  .flow-steps { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .flow-step { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 5px 14px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .flow-step .num { background: var(--blue); color: #fff; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .flow-arrow { color: var(--text-dim); font-size: 16px; align-self: center; }
+
+  /* ── STATE TAG ── */
+  .state-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .state-tag { padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .state-tag.info { background: rgba(88,166,255,.15); color: var(--blue-light); }
+  .state-tag.success { background: rgba(63,185,80,.15); color: var(--green); }
+  .state-tag.warn { background: rgba(227,179,65,.15); color: var(--orange); }
+  .state-tag.danger { background: rgba(248,81,73,.15); color: var(--red); }
+  .state-tag.purple { background: rgba(188,140,255,.15); color: var(--purple); }
+
+  /* ── NOTE ── */
+  .note { background: rgba(27,111,216,.08); border-left: 3px solid var(--blue-light); padding: 10px 14px; border-radius: 0 4px 4px 0; font-size: 13px; color: var(--text-muted); margin: 12px 0; }
+  .note.warn { background: rgba(227,179,65,.08); border-left-color: var(--orange); }
+  .note.success { background: rgba(63,185,80,.08); border-left-color: var(--green); }
+
+  /* ── OVERVIEW HERO ── */
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1c2330 100%); border: 1px solid var(--border); border-radius: 12px; padding: 32px 36px; margin-bottom: 40px; position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; top: -60px; right: -60px; width: 200px; height: 200px; background: radial-gradient(circle, rgba(27,111,216,.15) 0%, transparent 70%); }
+  .hero h1 { font-size: 28px; font-weight: 800; color: var(--text); margin-bottom: 8px; }
+  .hero p { color: var(--text-muted); font-size: 14px; max-width: 600px; line-height: 1.6; }
+  .hero-meta { display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; }
+  .hero-meta-item { text-align: center; }
+  .hero-meta-item .val { font-size: 22px; font-weight: 800; color: var(--blue-light); }
+  .hero-meta-item .label { font-size: 11px; color: var(--text-dim); }
+
+  /* ── PLATFORM BADGE ── */
+  .platform-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; margin-bottom: 20px; }
+  .platform-badge.pc { background: rgba(88,166,255,.1); color: var(--blue-light); border: 1px solid rgba(88,166,255,.2); }
+  .platform-badge.app { background: rgba(63,185,80,.1); color: var(--green); border: 1px solid rgba(63,185,80,.2); }
+  .platform-badge.web { background: rgba(227,179,65,.1); color: var(--orange); border: 1px solid rgba(227,179,65,.2); }
+  .platform-badge.mgr { background: rgba(188,140,255,.1); color: var(--purple); border: 1px solid rgba(188,140,255,.2); }
+
+  /* ── TOC ── */
+  .toc { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 40px; }
+  .toc-title { font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 14px; text-transform: uppercase; letter-spacing: .5px; }
+  .toc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .toc-item { padding: 6px 10px; border-radius: 4px; color: var(--text-muted); font-size: 12px; text-decoration: none; transition: all .15s; display: flex; align-items: center; gap: 6px; }
+  .toc-item:hover { background: var(--bg3); color: var(--text); }
+  .toc-num { color: var(--text-dim); font-size: 11px; font-weight: 600; min-width: 20px; }
+
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    main { margin-left: 0; padding: 70px 16px 40px; }
+    .spec-grid { grid-template-columns: 1fr; }
+    .spec-grid.three { grid-template-columns: 1fr; }
+    .toc-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">AI Team</div>
+  <div class="nav-badge">PRD v2.0</div>
+  <div class="nav-info">企业AI数字员工平台 · 2026-05-24</div>
+</nav>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">概览</div>
+    <a href="#overview" class="sidebar-item active">📋 产品总览</a>
+    <a href="#structure" class="sidebar-item">🗂️ 页面结构</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">企业前台（PC）</div>
+    <a href="#p01" class="sidebar-item"><span class="sidebar-dot pc"></span>登录页</a>
+    <a href="#p02" class="sidebar-item"><span class="sidebar-dot pc"></span>主界面·私聊入口</a>
+    <a href="#p03" class="sidebar-item"><span class="sidebar-dot pc"></span>人才市场</a>
+    <a href="#p04" class="sidebar-item"><span class="sidebar-dot pc"></span>专家详情页</a>
+    <a href="#p05" class="sidebar-item"><span class="sidebar-dot pc"></span>单聊对话页</a>
+    <a href="#p06" class="sidebar-item"><span class="sidebar-dot pc"></span>群聊页面</a>
+    <a href="#p07" class="sidebar-item"><span class="sidebar-dot pc"></span>组织架构</a>
+    <a href="#p08" class="sidebar-item"><span class="sidebar-dot pc"></span>知识库</a>
+    <a href="#p09" class="sidebar-item"><span class="sidebar-dot pc"></span>办公室动态</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">企业后台（PC）</div>
+    <a href="#b01" class="sidebar-item"><span class="sidebar-dot app"></span>数字员工管理</a>
+    <a href="#b02" class="sidebar-item"><span class="sidebar-dot app"></span>技能市场</a>
+    <a href="#b03" class="sidebar-item"><span class="sidebar-dot app"></span>人才市场（后台）</a>
+    <a href="#b04" class="sidebar-item"><span class="sidebar-dot app"></span>工资管理</a>
+    <a href="#b05" class="sidebar-item"><span class="sidebar-dot app"></span>连接器</a>
+    <a href="#b06" class="sidebar-item"><span class="sidebar-dot app"></span>行业AI解决方案</a>
+    <a href="#b07" class="sidebar-item"><span class="sidebar-dot app"></span>记忆管理</a>
+    <a href="#b08" class="sidebar-item"><span class="sidebar-dot app"></span>设置</a>
+    <a href="#b09" class="sidebar-item"><span class="sidebar-dot app"></span>充值与消耗</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">系统后台（Web）</div>
+    <a href="#s01" class="sidebar-item"><span class="sidebar-dot web"></span>账号管理</a>
+    <a href="#s02" class="sidebar-item"><span class="sidebar-dot web"></span>专家管理</a>
+    <a href="#s03" class="sidebar-item"><span class="sidebar-dot web"></span>行业方案管理</a>
+    <a href="#s04" class="sidebar-item"><span class="sidebar-dot web"></span>财务管理</a>
+  </div>
+</aside>
+
+<main>
+
+<!-- ── HERO ── -->
+<div class="hero" id="overview">
+  <h1>AI Team — 产品需求文档</h1>
+  <p>企业AI数字员工平台，通过"人才市场招募→配置组织→协作对话→自动化执行"完整闭环，帮助企业实现智能化转型。本文档覆盖企业前台、企业后台、系统管理后台三端所有页面的原型设计、交互逻辑、数据逻辑与字段规范。</p>
+  <div class="hero-meta">
+    <div class="hero-meta-item"><div class="val">3</div><div class="label">端平台</div></div>
+    <div class="hero-meta-item"><div class="val">22</div><div class="label">核心页面</div></div>
+    <div class="hero-meta-item"><div class="val">9</div><div class="label">企业前台</div></div>
+    <div class="hero-meta-item"><div class="val">9</div><div class="label">企业后台</div></div>
+    <div class="hero-meta-item"><div class="val">4</div><div class="label">系统后台</div></div>
+  </div>
+</div>
+
+<!-- ── TOC ── -->
+<div class="toc">
+  <div class="toc-title">页面目录</div>
+  <div class="toc-grid">
+    <a href="#p01" class="toc-item"><span class="toc-num">P01</span>登录页</a>
+    <a href="#p02" class="toc-item"><span class="toc-num">P02</span>主界面私聊入口</a>
+    <a href="#p03" class="toc-item"><span class="toc-num">P03</span>人才市场</a>
+    <a href="#p04" class="toc-item"><span class="toc-num">P04</span>专家详情页</a>
+    <a href="#p05" class="toc-item"><span class="toc-num">P05</span>单聊对话页</a>
+    <a href="#p06" class="toc-item"><span class="toc-num">P06</span>群聊页面</a>
+    <a href="#p07" class="toc-item"><span class="toc-num">P07</span>组织架构</a>
+    <a href="#p08" class="toc-item"><span class="toc-num">P08</span>知识库</a>
+    <a href="#p09" class="toc-item"><span class="toc-num">P09</span>办公室动态</a>
+    <a href="#b01" class="toc-item"><span class="toc-num">B01</span>数字员工管理</a>
+    <a href="#b02" class="toc-item"><span class="toc-num">B02</span>技能市场</a>
+    <a href="#b03" class="toc-item"><span class="toc-num">B03</span>人才市场(后台)</a>
+    <a href="#b04" class="toc-item"><span class="toc-num">B04</span>工资管理</a>
+    <a href="#b05" class="toc-item"><span class="toc-num">B05</span>连接器</a>
+    <a href="#b06" class="toc-item"><span class="toc-num">B06</span>行业AI方案</a>
+    <a href="#b07" class="toc-item"><span class="toc-num">B07</span>记忆管理</a>
+    <a href="#b08" class="toc-item"><span class="toc-num">B08</span>设置</a>
+    <a href="#b09" class="toc-item"><span class="toc-num">B09</span>充值与消耗</a>
+    <a href="#s01" class="toc-item"><span class="toc-num">S01</span>账号管理</a>
+    <a href="#s02" class="toc-item"><span class="toc-num">S02</span>专家管理</a>
+    <a href="#s03" class="toc-item"><span class="toc-num">S03</span>行业方案管理</a>
+    <a href="#s04" class="toc-item"><span class="toc-num">S04</span>财务管理</a>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<!-- 一、企业前台（PC 客户端）                -->
+<!-- ════════════════════════════════════════ -->
+<div class="section" id="structure">
+  <div class="section-title"><span class="icon">🖥️</span>一、企业前台（PC 客户端）</div>
+  <div class="note">企业员工日常使用端，核心功能为「招募数字员工 → 对话协作 → 查看组织」。深色主题，双栏布局。</div>
+</div>
+
+<!-- P01 登录页 -->
+<div class="page-spec" id="p01">
+  <div class="page-spec-header">
+    <span class="page-id">P01</span>
+    <span class="page-name">登录页</span>
+    <span class="page-desc">企业前台 · PC客户端 · 入口页</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+
+    <!-- 原型图 -->
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P01 · 登录页原型图</div>
+      <svg width="760" height="400" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="400" fill="#0a0e14" rx="8"/>
+        <!-- 背景装饰 -->
+        <circle cx="580" cy="80" r="120" fill="rgba(27,111,216,.06)"/>
+        <circle cx="150" cy="300" r="80" fill="rgba(57,208,208,.04)"/>
+        <!-- 中心卡片 -->
+        <rect x="230" y="60" width="300" height="280" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <!-- logo区 -->
+        <rect x="320" y="88" width="120" height="32" rx="6" fill="#1B6FD8"/>
+        <text x="380" y="108" fill="white" font-size="13" font-weight="700" text-anchor="middle">AI TEAM</text>
+        <text x="380" y="136" fill="#8b949e" font-size="12" text-anchor="middle">企业AI数字员工平台</text>
+        <!-- tabs -->
+        <rect x="255" y="152" width="120" height="28" rx="4" fill="#1B6FD8"/>
+        <text x="315" y="170" fill="white" font-size="12" text-anchor="middle" font-weight="600">微信扫码登录</text>
+        <rect x="385" y="152" width="120" height="28" rx="4" fill="#1c2330"/>
+        <text x="445" y="170" fill="#8b949e" font-size="12" text-anchor="middle">手机号登录</text>
+        <!-- 微信二维码区域 -->
+        <rect x="295" y="192" width="170" height="80" rx="6" fill="#fff" opacity=".07"/>
+        <rect x="315" y="202" width="130" height="60" rx="4" fill="#fff" opacity=".1"/>
+        <text x="380" y="236" fill="#8b949e" font-size="11" text-anchor="middle">📱</text>
+        <text x="380" y="252" fill="#8b949e" font-size="10" text-anchor="middle">打开微信扫描二维码</text>
+        <!-- 刷新提示 -->
+        <text x="380" y="290" fill="#484f58" font-size="10" text-anchor="middle">二维码有效期 3 分钟 · 点击刷新</text>
+        <!-- 协议 -->
+        <text x="380" y="316" fill="#484f58" font-size="10" text-anchor="middle">登录即同意《服务协议》与《隐私政策》</text>
+        <!-- 版本 -->
+        <text x="380" y="360" fill="#30363d" font-size="10" text-anchor="middle">AI Team Desktop v1.0.0</text>
+      </svg>
+    </div>
+
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>默认展示<strong>微信扫码</strong>Tab，加载时自动请求二维码</li>
+          <li>点击「手机号登录」Tab：切换为手机号+验证码表单</li>
+          <li>扫码后App出现「确认登录」按钮，客户端轮询（3s/次）状态</li>
+          <li>二维码到期（180s）后自动灰化并显示「点击刷新」按钮</li>
+          <li>手机号发送验证码：60s冷却，提交后校验有效期（5min）</li>
+          <li>登录成功→动效淡出→进入主界面（新用户→引导招募首个员工）</li>
+          <li>记住登录状态（token刷新机制），下次启动自动登录</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>微信登录：接入微信开放平台OAuth2，获取 <strong>unionid</strong></li>
+          <li>手机号登录：短信验证码，关联用户表 phone 字段</li>
+          <li>首次登录自动创建企业账号（orgId），绑定owner角色</li>
+          <li>JWT token：<strong>access_token</strong>（2h）+ <strong>refresh_token</strong>（30d）</li>
+          <li>Token 存储在本地 Keychain（加密）</li>
+          <li>并发登录：同一账号最多3个设备，超出踢掉最早设备</li>
+        </ul>
+      </div>
+    </div>
+
+    <h4>字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>手机号</td><td>string(11)</td><td><span class="tag req">必填</span></td><td>国内11位，正则校验 /^1[3-9]\d{9}$/</td></tr>
+        <tr><td>验证码</td><td>string(6)</td><td><span class="tag req">必填</span></td><td>6位数字，5min内有效</td></tr>
+        <tr><td>微信code</td><td>string</td><td><span class="tag sys">系统</span></td><td>扫码回调，服务端换取 unionid/openid</td></tr>
+        <tr><td>device_id</td><td>string</td><td><span class="tag sys">系统</span></td><td>客户端硬件指纹，随请求自动携带</td></tr>
+        <tr><td>remember_me</td><td>bool</td><td><span class="tag opt">可选</span></td><td>默认 true，控制 refresh_token 有效期</td></tr>
+      </tbody>
+    </table>
+    <div class="note warn">⚠ 手机号登录需做频率限制：同一手机号 60s 内只能发送1次验证码；同一IP每分钟最多10次请求。</div>
+  </div>
+</div>
+
+<!-- P02 主界面私聊入口 -->
+<div class="page-spec" id="p02">
+  <div class="page-spec-header">
+    <span class="page-id">P02</span>
+    <span class="page-name">主界面·私聊入口</span>
+    <span class="page-desc">企业前台 · PC客户端 · 核心主页</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P02 · 主界面原型图（新用户空态）</div>
+      <svg width="760" height="460" viewBox="0 0 760 460" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="460" fill="#0a0e14" rx="4"/>
+        <!-- 左侧图标栏 48px -->
+        <rect x="0" y="0" width="48" height="460" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <rect x="8" y="16" width="32" height="32" rx="8" fill="#1B6FD8"/>
+        <text x="24" y="36" fill="white" font-size="14" text-anchor="middle">⚡</text>
+        <rect x="10" y="68" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="86" fill="#8b949e" font-size="12" text-anchor="middle">💬</text>
+        <rect x="10" y="106" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="124" fill="#8b949e" font-size="12" text-anchor="middle">👥</text>
+        <rect x="10" y="144" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="162" fill="#8b949e" font-size="12" text-anchor="middle">🏢</text>
+        <rect x="10" y="182" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="200" fill="#8b949e" font-size="12" text-anchor="middle">📚</text>
+        <rect x="10" y="220" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="238" fill="#8b949e" font-size="12" text-anchor="middle">🏪</text>
+        <rect x="10" y="410" width="28" height="28" rx="6" fill="#1c2330"/>
+        <text x="24" y="428" fill="#8b949e" font-size="12" text-anchor="middle">⚙</text>
+        <!-- 左侧列表区 220px -->
+        <rect x="48" y="0" width="220" height="460" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="68" y="28" fill="#e6edf3" font-size="13" font-weight="700">私聊</text>
+        <rect x="48" y="38" width="220" height="1" fill="#1c2330"/>
+        <!-- 空态插图区 -->
+        <rect x="68" y="60" width="180" height="280" rx="8" fill="#161b22" stroke="#1c2330" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="158" y="180" fill="#484f58" font-size="30" text-anchor="middle">🤖</text>
+        <text x="158" y="210" fill="#484f58" font-size="12" text-anchor="middle">暂无数字员工</text>
+        <text x="158" y="230" fill="#30363d" font-size="11" text-anchor="middle">前往人才市场招募</text>
+        <rect x="88" y="250" width="140" height="32" rx="16" fill="#1B6FD8"/>
+        <text x="158" y="270" fill="white" font-size="12" text-anchor="middle" font-weight="600">+ 前往人才市场</text>
+        <!-- 右侧空内容区 -->
+        <rect x="268" y="0" width="492" height="460" fill="#161b22"/>
+        <text x="514" y="220" fill="#30363d" font-size="14" text-anchor="middle">← 从左侧选择员工开始对话</text>
+        <text x="514" y="244" fill="#484f58" font-size="12" text-anchor="middle">或前往人才市场招募你的第一个数字员工</text>
+        <!-- 顶部标题栏 -->
+        <rect x="268" y="0" width="492" height="44" fill="#0d1117" stroke="#1c2330" stroke-width="0" stroke-dasharray="0"/>
+        <rect x="268" y="43" width="492" height="1" fill="#1c2330"/>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li><strong>新用户空态</strong>：左侧列表显示虚线占位区+「前往人才市场」按钮，右侧显示引导文案</li>
+          <li>有员工后：左侧列表展示员工头像、名称、最后一条消息摘要、未读数角标</li>
+          <li>左侧图标栏：私聊/群聊/组织/知识库/人才市场/设置，Tooltip 悬停提示</li>
+          <li>点击员工→右侧展示对话区（P05），高亮选中态</li>
+          <li>员工列表支持搜索（顶部搜索框），实时过滤名称/角色</li>
+          <li>右键员工项→快捷菜单：查看详情/设置为星标/解雇</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/org/agents</code> 获取当前企业已招募员工列表</li>
+          <li>员工列表按「最近交互时间」倒序排列，星标置顶</li>
+          <li>未读消息数：本地存储已读游标（last_read_msg_id），服务端返回 unread_count</li>
+          <li>员工状态字段：<strong>online/busy/idle/offline</strong>，头像右下角小圆点显示</li>
+          <li>首次加载：骨架屏 → 数据渲染（≤500ms），离线缓存7天</li>
+        </ul>
+      </div>
+    </div>
+    <h4>员工列表项字段</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>agent_id</td><td>string(uuid)</td><td>员工唯一ID</td></tr>
+        <tr><td>name</td><td>string(50)</td><td>员工名称</td></tr>
+        <tr><td>avatar_url</td><td>string</td><td>头像图片地址</td></tr>
+        <tr><td>role_title</td><td>string(50)</td><td>岗位名称（如：营销分析师）</td></tr>
+        <tr><td>status</td><td>enum</td><td>online/busy/idle/offline</td></tr>
+        <tr><td>last_msg_preview</td><td>string(100)</td><td>最后一条消息摘要</td></tr>
+        <tr><td>unread_count</td><td>int</td><td>未读消息数，0时不显示角标</td></tr>
+        <tr><td>last_active_at</td><td>timestamp</td><td>最近活跃时间，用于排序</td></tr>
+        <tr><td>is_starred</td><td>bool</td><td>是否星标，星标员工置顶显示</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- P03 人才市场 -->
+<div class="page-spec" id="p03">
+  <div class="page-spec-header">
+    <span class="page-id">P03</span>
+    <span class="page-name">人才市场</span>
+    <span class="page-desc">企业前台 · PC客户端 · 发现与招募</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P03 · 人才市场原型图</div>
+      <svg width="760" height="480" viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="480" fill="#0a0e14" rx="4"/>
+        <!-- 顶部搜索与筛选 -->
+        <rect x="0" y="0" width="760" height="56" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <rect x="20" y="12" width="420" height="32" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="48" y="32" fill="#484f58" font-size="12">🔍 搜索专家名称、技能...</text>
+        <!-- 分类Tab -->
+        <rect x="20" y="60" width="760" height="40" fill="#0d1117"/>
+        <rect x="20" y="72" width="60" height="24" rx="12" fill="#1B6FD8"/>
+        <text x="50" y="88" fill="white" font-size="11" text-anchor="middle" font-weight="600">全部</text>
+        <rect x="90" y="72" width="72" height="24" rx="12" fill="#1c2330"/>
+        <text x="126" y="88" fill="#8b949e" font-size="11" text-anchor="middle">市场营销</text>
+        <rect x="172" y="72" width="60" height="24" rx="12" fill="#1c2330"/>
+        <text x="202" y="88" fill="#8b949e" font-size="11" text-anchor="middle">财务分析</text>
+        <rect x="242" y="72" width="60" height="24" rx="12" fill="#1c2330"/>
+        <text x="272" y="88" fill="#8b949e" font-size="11" text-anchor="middle">技术研发</text>
+        <rect x="312" y="72" width="60" height="24" rx="12" fill="#1c2330"/>
+        <text x="342" y="88" fill="#8b949e" font-size="11" text-anchor="middle">客户服务</text>
+        <rect x="382" y="72" width="60" height="24" rx="12" fill="#1c2330"/>
+        <text x="412" y="88" fill="#8b949e" font-size="11" text-anchor="middle">人力资源</text>
+        <!-- 卡片网格 -->
+        <!-- Row1 -->
+        <rect x="20" y="108" width="168" height="160" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <circle cx="56" cy="148" r="24" fill="#1B6FD8" opacity=".7"/>
+        <text x="56" y="156" fill="white" font-size="18" text-anchor="middle">🎯</text>
+        <text x="116" y="136" fill="#e6edf3" font-size="13" font-weight="700">营销分析师</text>
+        <text x="116" y="152" fill="#8b949e" font-size="11">GPT-4o · 10 Skills</text>
+        <rect x="40" y="192" width="130" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="105" y="210" fill="white" font-size="12" text-anchor="middle" font-weight="600">招募</text>
+        <text x="105" y="240" fill="#484f58" font-size="10" text-anchor="middle">已有 1,234 家企业招募</text>
+
+        <rect x="200" y="108" width="168" height="160" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <circle cx="236" cy="148" r="24" fill="#39d0d0" opacity=".5"/>
+        <text x="236" y="156" fill="white" font-size="18" text-anchor="middle">📊</text>
+        <text x="296" y="136" fill="#e6edf3" font-size="13" font-weight="700">财务顾问</text>
+        <text x="296" y="152" fill="#8b949e" font-size="11">Claude-3.5 · 8 Skills</text>
+        <rect x="220" y="192" width="130" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="285" y="210" fill="white" font-size="12" text-anchor="middle" font-weight="600">招募</text>
+        <text x="285" y="240" fill="#484f58" font-size="10" text-anchor="middle">已有 987 家企业招募</text>
+
+        <rect x="380" y="108" width="168" height="160" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <circle cx="416" cy="148" r="24" fill="#bc8cff" opacity=".5"/>
+        <text x="416" y="156" fill="white" font-size="18" text-anchor="middle">💻</text>
+        <text x="476" y="136" fill="#e6edf3" font-size="13" font-weight="700">技术架构师</text>
+        <text x="476" y="152" fill="#8b949e" font-size="11">DeepSeek · 12 Skills</text>
+        <rect x="400" y="192" width="130" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="465" y="210" fill="white" font-size="12" text-anchor="middle" font-weight="600">招募</text>
+        <text x="465" y="240" fill="#484f58" font-size="10" text-anchor="middle">已有 756 家企业招募</text>
+
+        <rect x="560" y="108" width="168" height="160" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <circle cx="596" cy="148" r="24" fill="#3fb950" opacity=".5"/>
+        <text x="596" y="156" fill="white" font-size="18" text-anchor="middle">🎧</text>
+        <text x="656" y="136" fill="#e6edf3" font-size="13" font-weight="700">客服专员</text>
+        <text x="656" y="152" fill="#8b949e" font-size="11">Qwen · 6 Skills</text>
+        <rect x="580" y="192" width="130" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="645" y="210" fill="white" font-size="12" text-anchor="middle" font-weight="600">招募</text>
+        <text x="645" y="240" fill="#484f58" font-size="10" text-anchor="middle">已有 2,108 家企业招募</text>
+
+        <!-- Row2 partial -->
+        <rect x="20" y="280" width="168" height="160" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <circle cx="56" cy="320" r="24" fill="#e3b341" opacity=".5"/>
+        <text x="56" y="328" fill="white" font-size="18" text-anchor="middle">⚖️</text>
+        <text x="116" y="308" fill="#e6edf3" font-size="13" font-weight="700">法务顾问</text>
+        <text x="116" y="324" fill="#8b949e" font-size="11">GPT-4o · 7 Skills</text>
+        <rect x="40" y="362" width="130" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="105" y="380" fill="white" font-size="12" text-anchor="middle" font-weight="600">招募</text>
+
+        <rect x="200" y="280" width="168" height="160" rx="8" fill="#161b22" stroke="#1B6FD8" stroke-width="2"/>
+        <text x="284" y="365" fill="#30363d" font-size="11" text-anchor="middle">新品招募中...</text>
+        <rect x="584" y="460" width="160" height="8" rx="4" fill="#1c2330"/>
+        <!-- 分页 -->
+        <text x="380" y="468" fill="#484f58" font-size="11" text-anchor="middle">第 1 / 12 页 · 共 142 位专家</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>顶部搜索栏：输入实时触发模糊搜索（debounce 300ms），搜索范围：专家名称、标签、技能名</li>
+          <li>分类 Tab：单选，选中后过滤专家卡片（前端过滤或后端搜索视数量而定）</li>
+          <li>每张卡片展示：头像、岗位名、底层大模型、Skills数量、招募企业数</li>
+          <li>「招募」按钮：点击弹出确认弹窗，确认后触发招募动画（卡片飞入侧边栏）</li>
+          <li>已招募的专家：按钮变为「已招募」灰色禁用态，卡片右上角显示绿色✓</li>
+          <li>点击卡片主体区域（非按钮）→ 跳转专家详情页（P04）</li>
+          <li>无限滚动加载（或分页），每次加载20条</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/marketplace/agents?category=&keyword=&page=</code></li>
+          <li>排序：默认按「热度」（招募数）降序，可切换「最新上架」</li>
+          <li>招募接口：<code>POST /api/org/recruit</code>，body: { agent_template_id }</li>
+          <li>招募后服务端复制模板创建实例agent_id，初始化记忆/知识库关联</li>
+          <li>每个企业同一岗位类型限制招募3人（可配置），超出提示升级套餐</li>
+        </ul>
+      </div>
+    </div>
+    <h4>专家卡片字段</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>template_id</td><td>string(uuid)</td><td>专家模板ID（系统管理后台创建）</td></tr>
+        <tr><td>name</td><td>string(50)</td><td>岗位名称</td></tr>
+        <tr><td>avatar_url</td><td>string</td><td>专家头像</td></tr>
+        <tr><td>category</td><td>string</td><td>分类标签（市场营销/财务分析/…）</td></tr>
+        <tr><td>model_name</td><td>string</td><td>底层大模型（GPT-4o/Claude/DeepSeek等）</td></tr>
+        <tr><td>skills_count</td><td>int</td><td>技能数量</td></tr>
+        <tr><td>recruit_count</td><td>int</td><td>累计招募企业数（展示用）</td></tr>
+        <tr><td>is_recruited</td><td>bool</td><td>当前企业是否已招募</td></tr>
+        <tr><td>tags</td><td>string[]</td><td>技能标签列表（如：数据分析/PPT/Excel）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- P04 专家详情页 -->
+<div class="page-spec" id="p04">
+  <div class="page-spec-header">
+    <span class="page-id">P04</span>
+    <span class="page-name">专家详情页</span>
+    <span class="page-desc">企业前台 · PC客户端 · 招募前查看</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P04 · 专家详情页原型图（抽屉/侧边面板）</div>
+      <svg width="760" height="440" viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="440" fill="#0a0e14" rx="4" opacity=".6"/>
+        <!-- 蒙层 -->
+        <rect x="0" y="0" width="760" height="440" fill="rgba(0,0,0,.5)" rx="4"/>
+        <!-- 侧边抽屉 420px from right -->
+        <rect x="340" y="0" width="420" height="440" fill="#161b22" rx="0"/>
+        <rect x="340" y="0" width="1" height="440" fill="#30363d"/>
+        <!-- 头部 -->
+        <rect x="340" y="0" width="420" height="72" fill="#1c2330"/>
+        <circle cx="388" cy="36" r="24" fill="#1B6FD8" opacity=".7"/>
+        <text x="388" y="44" fill="white" font-size="20" text-anchor="middle">🎯</text>
+        <text x="430" y="28" fill="#e6edf3" font-size="16" font-weight="700">营销分析师 · 李明</text>
+        <text x="430" y="48" fill="#8b949e" font-size="12">市场营销 · GPT-4o · 10 Skills</text>
+        <text x="740" y="30" fill="#484f58" font-size="18" text-anchor="middle">✕</text>
+        <!-- Tabs -->
+        <rect x="340" y="72" width="420" height="36" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="390" y="94" fill="#58a6ff" font-size="12" text-anchor="middle" font-weight="600">基本信息</text>
+        <rect x="389" y="104" width="2" height="3" rx="1" fill="#58a6ff"/>
+        <text x="460" y="94" fill="#8b949e" font-size="12" text-anchor="middle">技能列表</text>
+        <text x="530" y="94" fill="#8b949e" font-size="12" text-anchor="middle">知识库</text>
+        <text x="600" y="94" fill="#8b949e" font-size="12" text-anchor="middle">初始记忆</text>
+        <!-- 正文 -->
+        <rect x="360" y="120" width="380" height="60" rx="6" fill="#0d1117"/>
+        <text x="374" y="142" fill="#8b949e" font-size="11">岗位描述</text>
+        <text x="374" y="160" fill="#e6edf3" font-size="12">专注于市场数据分析、竞品研究、营销策略制定，能帮你</text>
+        <text x="374" y="175" fill="#e6edf3" font-size="12">完成数据报告、洞察提炼和方案撰写。</text>
+        <!-- 技能标签 -->
+        <rect x="360" y="194" width="80" height="22" rx="11" fill="rgba(88,166,255,.15)"/>
+        <text x="400" y="209" fill="#58a6ff" font-size="11" text-anchor="middle">数据分析</text>
+        <rect x="450" y="194" width="60" height="22" rx="11" fill="rgba(188,140,255,.15)"/>
+        <text x="480" y="209" fill="#bc8cff" font-size="11" text-anchor="middle">PPT生成</text>
+        <rect x="520" y="194" width="60" height="22" rx="11" fill="rgba(63,185,80,.15)"/>
+        <text x="550" y="209" fill="#3fb950" font-size="11" text-anchor="middle">Excel分析</text>
+        <rect x="590" y="194" width="70" height="22" rx="11" fill="rgba(227,179,65,.15)"/>
+        <text x="625" y="209" fill="#e3b341" font-size="11" text-anchor="middle">竞品研究</text>
+        <!-- 模型信息 -->
+        <text x="360" y="240" fill="#484f58" font-size="11">底层大模型</text>
+        <rect x="440" y="228" width="80" height="20" rx="4" fill="rgba(27,111,216,.2)"/>
+        <text x="480" y="242" fill="#58a6ff" font-size="11" text-anchor="middle">GPT-4o</text>
+        <!-- 统计 -->
+        <rect x="360" y="260" width="110" height="56" rx="6" fill="#0d1117"/>
+        <text x="415" y="284" fill="#58a6ff" font-size="18" font-weight="700" text-anchor="middle">1,234</text>
+        <text x="415" y="304" fill="#484f58" font-size="11" text-anchor="middle">企业已招募</text>
+        <rect x="480" y="260" width="110" height="56" rx="6" fill="#0d1117"/>
+        <text x="535" y="284" fill="#3fb950" font-size="18" font-weight="700" text-anchor="middle">4.8</text>
+        <text x="535" y="304" fill="#484f58" font-size="11" text-anchor="middle">用户评分</text>
+        <rect x="600" y="260" width="110" height="56" rx="6" fill="#0d1117"/>
+        <text x="655" y="284" fill="#bc8cff" font-size="18" font-weight="700" text-anchor="middle">10</text>
+        <text x="655" y="304" fill="#484f58" font-size="11" text-anchor="middle">配置技能数</text>
+        <!-- 招募按钮 -->
+        <rect x="360" y="372" width="200" height="40" rx="20" fill="#1B6FD8"/>
+        <text x="460" y="396" fill="white" font-size="14" text-anchor="middle" font-weight="700">🚀 立即招募</text>
+        <rect x="576" y="372" width="120" height="40" rx="20" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="636" y="396" fill="#8b949e" font-size="13" text-anchor="middle">稍后再说</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>以<strong>右侧抽屉</strong>形式从右滑入（动效：translateX 420→0，300ms ease），背景蒙层</li>
+          <li>4个Tab切换：基本信息 / 技能列表 / 知识库 / 初始记忆</li>
+          <li>「立即招募」按钮：点击后显示加载状态（旋转icon），成功后触发招募成功动画</li>
+          <li><strong>招募成功动画</strong>：专家头像从详情页飞出→缩放进入左侧员工列表，同时播放粒子爆炸效果</li>
+          <li>点击蒙层或 ✕ 关闭抽屉（反向动画）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/marketplace/agents/:id</code> 获取专家完整信息</li>
+          <li>技能列表：展示 skill_name / skill_description / skill_source（clawhub/skillhub）</li>
+          <li>知识库：展示模板关联的知识库文件列表（企业招募后可替换）</li>
+          <li>初始记忆：展示 system prompt 中预置的 memory 条目</li>
+          <li>招募：复制模板数据，创建专属实例，关联当前 org_id</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- P05 单聊对话页 -->
+<div class="page-spec" id="p05">
+  <div class="page-spec-header">
+    <span class="page-id">P05</span>
+    <span class="page-name">单聊对话页</span>
+    <span class="page-desc">企业前台 · PC客户端 · 核心使用场景</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P05 · 单聊对话页原型图（三栏布局）</div>
+      <svg width="760" height="480" viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="480" fill="#0a0e14" rx="4"/>
+        <!-- 左图标栏 48px -->
+        <rect x="0" y="0" width="48" height="480" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <rect x="8" y="16" width="32" height="32" rx="8" fill="#1B6FD8"/>
+        <text x="24" y="36" fill="white" font-size="14" text-anchor="middle">⚡</text>
+        <rect x="10" y="68" width="28" height="28" rx="6" fill="#1B6FD8" opacity=".3"/>
+        <text x="24" y="86" fill="#58a6ff" font-size="12" text-anchor="middle">💬</text>
+        <!-- 左列表 220px -->
+        <rect x="48" y="0" width="220" height="480" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="68" y="28" fill="#e6edf3" font-size="13" font-weight="700">私聊</text>
+        <!-- 搜索框 -->
+        <rect x="60" y="38" width="196" height="28" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="78" y="56" fill="#484f58" font-size="11">搜索员工...</text>
+        <!-- 员工列表项 -->
+        <rect x="48" y="74" width="220" height="52" fill="#1c2330"/>
+        <circle cx="80" cy="100" r="18" fill="#1B6FD8" opacity=".7"/>
+        <text x="80" y="108" fill="white" font-size="14" text-anchor="middle">🎯</text>
+        <text x="110" y="94" fill="#e6edf3" font-size="13" font-weight="600">营销分析师</text>
+        <text x="110" y="112" fill="#484f58" font-size="11">最新数据报告已完成...</text>
+        <circle cx="252" cy="92" r="8" fill="#1B6FD8"/>
+        <text x="252" y="96" fill="white" font-size="9" text-anchor="middle">3</text>
+        <circle cx="72" cy="116" r="4" fill="#3fb950"/>
+        <rect x="48" y="126" width="220" height="52" fill="transparent"/>
+        <circle cx="80" cy="152" r="18" fill="#39d0d0" opacity=".4"/>
+        <text x="80" y="160" fill="white" font-size="14" text-anchor="middle">📊</text>
+        <text x="110" y="146" fill="#8b949e" font-size="13">财务顾问</text>
+        <text x="110" y="164" fill="#484f58" font-size="11">好的，我来帮你分析...</text>
+        <!-- 对话主区 -->
+        <rect x="268" y="0" width="370" height="480" fill="#161b22"/>
+        <!-- 顶部栏 -->
+        <rect x="268" y="0" width="370" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <circle cx="300" cy="24" r="16" fill="#1B6FD8" opacity=".7"/>
+        <text x="300" y="32" fill="white" font-size="12" text-anchor="middle">🎯</text>
+        <text x="330" y="18" fill="#e6edf3" font-size="14" font-weight="700">营销分析师</text>
+        <text x="330" y="36" fill="#3fb950" font-size="11">● 在线</text>
+        <text x="600" y="28" fill="#8b949e" font-size="18" text-anchor="middle">⋮</text>
+        <!-- 消息气泡 -->
+        <rect x="290" y="64" width="240" height="52" rx="8" fill="#1c2330"/>
+        <text x="305" y="82" fill="#e6edf3" font-size="12">帮我分析Q1的营销数据，</text>
+        <text x="305" y="100" fill="#e6edf3" font-size="12">找出增长点</text>
+        <text x="420" y="124" fill="#484f58" font-size="10">10:24 · 已读</text>
+        <!-- AI回复 -->
+        <rect x="278" y="136" width="260" height="80" rx="8" fill="#0d1117" stroke="#1B6FD8" stroke-width="1" opacity=".6"/>
+        <text x="290" y="156" fill="#8b949e" font-size="11">营销分析师</text>
+        <text x="290" y="174" fill="#e6edf3" font-size="12">好的！我已分析Q1数据，</text>
+        <text x="290" y="192" fill="#e6edf3" font-size="12">核心增长点为：直播渠道+42%</text>
+        <text x="290" y="210" fill="#8b949e" font-size="11">正在生成详细报告...</text>
+        <!-- 打字动效 -->
+        <circle cx="300" cy="232" r="3" fill="#58a6ff" opacity=".8"/>
+        <circle cx="312" cy="232" r="3" fill="#58a6ff" opacity=".5"/>
+        <circle cx="324" cy="232" r="3" fill="#58a6ff" opacity=".3"/>
+        <!-- 输入区 -->
+        <rect x="268" y="408" width="370" height="72" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <rect x="280" y="416" width="290" height="48" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="295" y="444" fill="#484f58" font-size="12">输入消息... @提及员工</text>
+        <rect x="582" y="420" width="44" height="40" rx="6" fill="#1B6FD8"/>
+        <text x="604" y="444" fill="white" font-size="18" text-anchor="middle">↑</text>
+        <!-- 右侧配置面板 122px -->
+        <rect x="638" y="0" width="122" height="480" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="699" y="24" fill="#8b949e" font-size="11" text-anchor="middle">员工信息</text>
+        <circle cx="699" cy="60" r="24" fill="#1B6FD8" opacity=".6"/>
+        <text x="699" y="68" fill="white" font-size="20" text-anchor="middle">🎯</text>
+        <text x="699" y="100" fill="#e6edf3" font-size="12" text-anchor="middle">营销分析师</text>
+        <rect x="660" y="108" width="78" height="20" rx="4" fill="rgba(63,185,80,.15)"/>
+        <text x="699" y="122" fill="#3fb950" font-size="11" text-anchor="middle">● 在线</text>
+        <text x="655" y="150" fill="#484f58" font-size="10">模型</text>
+        <rect x="652" y="156" width="94" height="20" rx="4" fill="rgba(27,111,216,.15)"/>
+        <text x="699" y="170" fill="#58a6ff" font-size="11" text-anchor="middle">GPT-4o</text>
+        <text x="655" y="192" fill="#484f58" font-size="10">技能</text>
+        <text x="699" y="208" fill="#8b949e" font-size="11" text-anchor="middle">10 个已启用</text>
+        <text x="655" y="228" fill="#484f58" font-size="10">记忆</text>
+        <text x="699" y="244" fill="#8b949e" font-size="11" text-anchor="middle">12 条</text>
+        <rect x="655" y="424" width="90" height="28" rx="6" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="700" y="442" fill="#8b949e" font-size="11" text-anchor="middle">⚙ 配置员工</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li><strong>三栏布局</strong>：图标栏(48px) + 员工列表(220px) + 对话区(flex) + 配置面板(122px，可折叠)</li>
+          <li>消息发送：Enter发送 / Shift+Enter换行 / Ctrl+Enter发送（可配置）</li>
+          <li>AI回复：流式输出（SSE），逐字打印动效（cursor闪烁），完成后消失</li>
+          <li>消息操作：悬停气泡 → 出现工具栏（复制/引用/点赞/重新生成/删除）</li>
+          <li>支持 <strong>@提及</strong>：输入 @ 弹出员工选择菜单，群聊中可 @特定员工</li>
+          <li>消息类型：文本/图片/文件（拖拽上传）/Markdown代码块/工具调用卡片</li>
+          <li>右侧面板「配置员工」：跳转至后台 B01 页面进行深度配置</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>消息协议：SSE（Server-Sent Events）实时流式输出</li>
+          <li>消息存储：SQLite本地 + 服务端同步，离线可查历史</li>
+          <li>上下文窗口：默认最近20轮，超出时自动截断（保留系统提示词）</li>
+          <li>工具调用显示：tool_call 消息显示为「卡片」，展示工具名称、参数、执行结果</li>
+          <li>文件上传：图片(≤20MB)、PDF/Word(≤50MB)，OSS存储，生成临时访问URL</li>
+          <li>Token消耗：每次对话完成后异步更新 agent_token_usage 表</li>
+        </ul>
+      </div>
+    </div>
+    <h4>消息数据字段</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>message_id</td><td>string(uuid)</td><td>消息唯一ID</td></tr>
+        <tr><td>conversation_id</td><td>string(uuid)</td><td>会话ID</td></tr>
+        <tr><td>role</td><td>enum</td><td>user / assistant / tool / system</td></tr>
+        <tr><td>content</td><td>text</td><td>消息文本（Markdown格式）</td></tr>
+        <tr><td>tool_calls</td><td>json[]</td><td>工具调用列表（id/name/arguments）</td></tr>
+        <tr><td>attachments</td><td>json[]</td><td>附件列表（type/url/filename/size）</td></tr>
+        <tr><td>token_count</td><td>int</td><td>本条消息消耗token数</td></tr>
+        <tr><td>created_at</td><td>timestamp</td><td>消息时间（精确到毫秒）</td></tr>
+        <tr><td>status</td><td>enum</td><td>sending/sent/delivered/error</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- P06 群聊 -->
+<div class="page-spec" id="p06">
+  <div class="page-spec-header">
+    <span class="page-id">P06</span>
+    <span class="page-name">群聊页面</span>
+    <span class="page-desc">企业前台 · PC客户端 · 多员工协作</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="note">群聊允许用户同时与多个数字员工对话，员工之间可相互协作、接续回复，实现多角色业务讨论。</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>「新建群聊」按钮：弹窗选择多个员工（最多10人），填写群名称</li>
+          <li>发送消息后，系统根据消息内容自动路由给最匹配的员工回复</li>
+          <li><strong>@提及</strong>指定员工：强制触发该员工优先回复</li>
+          <li>每条AI回复前显示员工头像+名称气泡区分发言者</li>
+          <li>员工可「接力」：一个员工回复后，可触发另一员工补充</li>
+          <li>群聊头像：取前4名员工头像拼成2×2宫格</li>
+          <li>支持解散群聊（不删除历史记录）、踢出员工、新增员工</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>群聊表：group_chat（id/name/org_id/agent_ids[]）</li>
+          <li>路由逻辑：消息发出后服务端调用 <strong>Router Agent</strong> 分析意图，返回最匹配的 agent_id</li>
+          <li>同一消息最多触发3个员工回复（防止死循环）</li>
+          <li>群聊消息与单聊消息共用 messages 表，通过 chat_type 区分</li>
+          <li>成员变更（加入/退出）记录到 group_member_log 表</li>
+        </ul>
+      </div>
+    </div>
+    <h4>群聊数据字段</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>group_id</td><td>string(uuid)</td><td>群聊ID</td></tr>
+        <tr><td>group_name</td><td>string(50)</td><td>群聊名称</td></tr>
+        <tr><td>org_id</td><td>string</td><td>所属企业</td></tr>
+        <tr><td>members</td><td>json[]</td><td>成员列表：[{agent_id, join_time}]</td></tr>
+        <tr><td>owner_user_id</td><td>string</td><td>创建人用户ID</td></tr>
+        <tr><td>created_at</td><td>timestamp</td><td>创建时间</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- P07 组织架构 -->
+<div class="page-spec" id="p07">
+  <div class="page-spec-header">
+    <span class="page-id">P07</span>
+    <span class="page-name">组织架构</span>
+    <span class="page-desc">企业前台 · PC客户端 · 人员结构管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P07 · 组织架构页原型图</div>
+      <svg width="760" height="420" viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="420" fill="#0a0e14" rx="4"/>
+        <!-- 顶部 -->
+        <rect x="0" y="0" width="760" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="24" y="28" fill="#e6edf3" font-size="15" font-weight="700">组织架构</text>
+        <rect x="620" y="10" width="120" height="28" rx="6" fill="#1B6FD8"/>
+        <text x="680" y="28" fill="white" font-size="12" text-anchor="middle" font-weight="600">+ 新建部门</text>
+        <!-- 树形结构 -->
+        <!-- CEO -->
+        <rect x="330" y="72" width="100" height="52" rx="8" fill="#1c2330" stroke="#1B6FD8" stroke-width="1.5"/>
+        <circle cx="355" cy="88" r="12" fill="#1B6FD8" opacity=".8"/>
+        <text x="355" y="96" fill="white" font-size="10" text-anchor="middle">CEO</text>
+        <text x="390" y="100" fill="#e6edf3" font-size="12" font-weight="600">荆超</text>
+        <text x="390" y="116" fill="#484f58" font-size="10">管理员 · 真实用户</text>
+        <!-- 连线 -->
+        <line x1="380" y1="124" x2="380" y2="148" stroke="#30363d" stroke-width="1.5"/>
+        <line x1="180" y1="148" x2="580" y2="148" stroke="#30363d" stroke-width="1.5"/>
+        <!-- 市场部 -->
+        <line x1="180" y1="148" x2="180" y2="172" stroke="#30363d" stroke-width="1.5"/>
+        <rect x="120" y="172" width="120" height="52" rx="8" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="180" y="196" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">市场部</text>
+        <text x="180" y="212" fill="#484f58" font-size="10" text-anchor="middle">2 位数字员工</text>
+        <!-- 市场部成员 -->
+        <line x1="140" y1="224" x2="140" y2="244" stroke="#30363d" stroke-width="1"/>
+        <line x1="220" y1="224" x2="220" y2="244" stroke="#30363d" stroke-width="1"/>
+        <circle cx="140" cy="260" r="20" fill="#1B6FD8" opacity=".5"/>
+        <text x="140" y="268" fill="white" font-size="14" text-anchor="middle">🎯</text>
+        <text x="140" y="290" fill="#8b949e" font-size="10" text-anchor="middle">营销分析师</text>
+        <circle cx="220" cy="260" r="20" fill="#39d0d0" opacity=".4"/>
+        <text x="220" y="268" fill="white" font-size="14" text-anchor="middle">📢</text>
+        <text x="220" y="290" fill="#8b949e" font-size="10" text-anchor="middle">内容策划</text>
+        <!-- 技术部 -->
+        <line x1="380" y1="148" x2="380" y2="172" stroke="#30363d" stroke-width="1.5"/>
+        <rect x="320" y="172" width="120" height="52" rx="8" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="380" y="196" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">技术部</text>
+        <text x="380" y="212" fill="#484f58" font-size="10" text-anchor="middle">1 位数字员工</text>
+        <line x1="380" y1="224" x2="380" y2="244" stroke="#30363d" stroke-width="1"/>
+        <circle cx="380" cy="260" r="20" fill="#bc8cff" opacity=".5"/>
+        <text x="380" y="268" fill="white" font-size="14" text-anchor="middle">💻</text>
+        <text x="380" y="290" fill="#8b949e" font-size="10" text-anchor="middle">技术架构师</text>
+        <!-- 财务部 -->
+        <line x1="580" y1="148" x2="580" y2="172" stroke="#30363d" stroke-width="1.5"/>
+        <rect x="520" y="172" width="120" height="52" rx="8" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="580" y="196" fill="#e6edf3" font-size="12" font-weight="600" text-anchor="middle">财务部</text>
+        <text x="580" y="212" fill="#484f58" font-size="10" text-anchor="middle">1 位数字员工</text>
+        <line x1="580" y1="224" x2="580" y2="244" stroke="#30363d" stroke-width="1"/>
+        <circle cx="580" cy="260" r="20" fill="#e3b341" opacity=".5"/>
+        <text x="580" y="268" fill="white" font-size="14" text-anchor="middle">📊</text>
+        <text x="580" y="290" fill="#8b949e" font-size="10" text-anchor="middle">财务顾问</text>
+        <!-- 底部说明 -->
+        <text x="380" y="370" fill="#484f58" font-size="11" text-anchor="middle">● 绿色圆点 = 在线 ● 灰色圆点 = 离线 · 拖拽节点可调整层级</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>树形图展示，可缩放（鼠标滚轮）、平移（拖拽空白区域）</li>
+          <li>点击员工节点：右侧弹出员工详情面板（查看/配置）</li>
+          <li><strong>拖拽节点</strong>：可调整员工所属部门（拖拽到目标部门节点上松开）</li>
+          <li>新建部门：弹窗填写部门名称，连线自动生成</li>
+          <li>员工节点显示状态圆点（在线/离线/繁忙）</li>
+          <li>右键部门→重命名/删除部门（员工自动归到未分配）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/org/structure</code> 返回树形组织数据</li>
+          <li>数据结构：递归 parent_id 关系（department表）</li>
+          <li>权限控制：只有管理员/owner可编辑结构，普通用户只读</li>
+          <li>员工移动：<code>PATCH /api/org/agents/:id</code> 更新 department_id</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- P08 知识库 -->
+<div class="page-spec" id="p08">
+  <div class="page-spec-header">
+    <span class="page-id">P08</span>
+    <span class="page-name">知识库</span>
+    <span class="page-desc">企业前台 · PC客户端 · 企业级知识管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>知识库列表：显示公司级知识库 + 各部门/员工级知识库</li>
+          <li>创建知识库：填写名称/描述，选择权限（全员可见/部门可见/仅指定员工）</li>
+          <li>上传文档：支持拖拽、批量上传，格式：PDF/Word/TXT/Markdown/Excel/CSV</li>
+          <li>第三方接入：点击「连接外部文档」→ 弹窗选择腾讯文档/钉钉文档/Notion等</li>
+          <li>文档处理状态：上传→解析中（进度条）→向量化→就绪</li>
+          <li>知识库与员工关联：在员工配置页选择使用哪个知识库</li>
+          <li>搜索：在知识库内搜索文档内容（语义搜索，非关键词）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>文档上传→服务端进行文本切块（chunk_size: 512 tokens）</li>
+          <li>向量化：调用 embedding API，存储到向量数据库（Qdrant）</li>
+          <li>RAG检索：每次对话时，自动从关联知识库检索 topK=5 相关片段</li>
+          <li>第三方同步：OAuth授权后，定时（每小时）拉取文档更新</li>
+          <li>权限字段：visibility（public/department/private）+ allowed_agent_ids</li>
+        </ul>
+      </div>
+    </div>
+    <h4>知识库字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>kb_id</td><td>string(uuid)</td><td><span class="tag sys">系统</span></td><td>知识库唯一ID</td></tr>
+        <tr><td>name</td><td>string(50)</td><td><span class="tag req">必填</span></td><td>知识库名称</td></tr>
+        <tr><td>description</td><td>string(200)</td><td><span class="tag opt">可选</span></td><td>用途说明</td></tr>
+        <tr><td>visibility</td><td>enum</td><td><span class="tag req">必填</span></td><td>public/department/private</td></tr>
+        <tr><td>doc_count</td><td>int</td><td><span class="tag sys">系统</span></td><td>文档数量（自动统计）</td></tr>
+        <tr><td>size_kb</td><td>int</td><td><span class="tag sys">系统</span></td><td>存储大小KB</td></tr>
+        <tr><td>source_type</td><td>enum</td><td><span class="tag req">必填</span></td><td>upload/tencent_doc/dingtalk/notion</td></tr>
+        <tr><td>sync_status</td><td>enum</td><td><span class="tag sys">系统</span></td><td>idle/syncing/error</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- P09 办公室动态 -->
+<div class="page-spec" id="p09">
+  <div class="page-spec-header">
+    <span class="page-id">P09</span>
+    <span class="page-name">办公室动态</span>
+    <span class="page-desc">企业前台 · PC客户端 · 员工工作状态可视化</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge pc">🖥️ PC 客户端</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">P09 · 办公室页面原型图（Marvis风格等距立体图）</div>
+      <svg width="760" height="400" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="floorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#1c2330"/>
+            <stop offset="100%" stop-color="#161b22"/>
+          </linearGradient>
+        </defs>
+        <rect width="760" height="400" fill="#0a0e14" rx="4"/>
+        <!-- 地板 -->
+        <polygon points="80,220 380,100 680,220 380,340" fill="url(#floorGrad)" stroke="#30363d" stroke-width="1"/>
+        <!-- 网格线 -->
+        <line x1="80" y1="220" x2="380" y2="340" stroke="#1c2330" stroke-width="1"/>
+        <line x1="180" y1="180" x2="430" y2="300" stroke="#1c2330" stroke-width="1" opacity=".4"/>
+        <line x1="280" y1="140" x2="480" y2="260" stroke="#1c2330" stroke-width="1" opacity=".4"/>
+        <line x1="680" y1="220" x2="380" y2="340" stroke="#1c2330" stroke-width="1"/>
+        <line x1="580" y1="180" x2="330" y2="300" stroke="#1c2330" stroke-width="1" opacity=".4"/>
+        <!-- 工位1 - 营销分析师（繁忙中） -->
+        <rect x="170" y="168" width="56" height="36" rx="4" fill="#1c2330" stroke="#1B6FD8" stroke-width="1.5"/>
+        <rect x="174" y="172" width="48" height="22" rx="2" fill="#0d1117"/>
+        <text x="198" y="187" fill="#58a6ff" font-size="9" text-anchor="middle">■ ■ ■</text>
+        <circle cx="198" cy="210" r="12" fill="#1B6FD8" opacity=".8"/>
+        <text x="198" y="218" fill="white" font-size="10" text-anchor="middle">🎯</text>
+        <rect x="170" y="228" width="56" height="16" rx="4" fill="#1c2330"/>
+        <text x="198" y="240" fill="#e3b341" font-size="9" text-anchor="middle">⚡ 工作中</text>
+        <!-- 浮动任务气泡 -->
+        <rect x="155" y="140" width="86" height="24" rx="12" fill="#1c2330" stroke="#1B6FD8" stroke-width="1" opacity=".8"/>
+        <text x="198" y="156" fill="#58a6ff" font-size="10" text-anchor="middle">分析Q1数据报告</text>
+        <!-- 工位2 - 财务顾问（待机） -->
+        <rect x="340" y="200" width="56" height="36" rx="4" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <rect x="344" y="204" width="48" height="22" rx="2" fill="#0d1117"/>
+        <circle cx="368" cy="245" r="12" fill="#39d0d0" opacity=".5"/>
+        <text x="368" y="253" fill="white" font-size="10" text-anchor="middle">📊</text>
+        <rect x="340" y="263" width="56" height="16" rx="4" fill="#1c2330"/>
+        <text x="368" y="275" fill="#3fb950" font-size="9" text-anchor="middle">● 就绪</text>
+        <!-- 工位3 - 技术架构师（离线） -->
+        <rect x="510" y="168" width="56" height="36" rx="4" fill="#1c2330" stroke="#30363d" stroke-width="1" opacity=".6"/>
+        <circle cx="538" cy="210" r="12" fill="#484f58" opacity=".5"/>
+        <text x="538" y="218" fill="#8b949e" font-size="10" text-anchor="middle">💻</text>
+        <rect x="510" y="228" width="56" height="16" rx="4" fill="#1c2330"/>
+        <text x="538" y="240" fill="#484f58" font-size="9" text-anchor="middle">○ 离线</text>
+        <!-- 标题 -->
+        <text x="380" y="30" fill="#e6edf3" font-size="15" font-weight="700" text-anchor="middle">企业办公室</text>
+        <text x="380" y="50" fill="#484f58" font-size="11" text-anchor="middle">3 位数字员工 · 1 位工作中 · 1 位就绪 · 1 位离线</text>
+        <!-- 图例 -->
+        <circle cx="50" cy="360" r="5" fill="#e3b341"/>
+        <text x="62" y="364" fill="#8b949e" font-size="11">工作中</text>
+        <circle cx="120" cy="360" r="5" fill="#3fb950"/>
+        <text x="132" y="364" fill="#8b949e" font-size="11">就绪</text>
+        <circle cx="175" cy="360" r="5" fill="#484f58"/>
+        <text x="187" y="364" fill="#8b949e" font-size="11">离线</text>
+        <circle cx="230" cy="360" r="5" fill="#f85149"/>
+        <text x="242" y="364" fill="#8b949e" font-size="11">异常</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>等距立体（Isometric）办公室视图，每个员工对应一个工位</li>
+          <li>工位节点有动效：工作中→键盘打字动画；繁忙→思考气泡飘动；就绪→呼吸光效</li>
+          <li>悬停工位→浮现当前任务气泡（显示正在执行的任务名称）</li>
+          <li>点击工位→右侧弹出员工详情（当前任务/最近对话/历史任务列表）</li>
+          <li>支持全屏模式（快捷键 F）</li>
+          <li>实时刷新（WebSocket推送状态变更）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title anim">动效规范</div>
+        <ul class="spec-list">
+          <li><strong>工作中</strong>：工位屏幕闪烁 + 顶部思考气泡（浮动 loop 动画，周期3s）</li>
+          <li><strong>就绪</strong>：工位节点呼吸灯（绿色脉冲，周期4s，scale 1→1.05）</li>
+          <li><strong>状态切换</strong>：工位节点颜色渐变过渡（duration 600ms）</li>
+          <li><strong>新任务开始</strong>：任务气泡从下方弹出（translateY 20→0，opacity 0→1，200ms）</li>
+          <li><strong>离线</strong>：工位灰化（opacity 0.4），无动效</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<!-- 二、企业后台（PC 客户端）                -->
+<!-- ════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title" id="b01"><span class="icon">⚙️</span>二、企业后台（PC 客户端）</div>
+  <div class="note success">管理员/Owner专属后台，用于深度配置数字员工、管理成本、接入外部系统。与前台共用同一客户端，通过顶部「切换后台」按钮进入。</div>
+</div>
+
+<!-- B01 数字员工管理 -->
+<div class="page-spec" id="b01" style="margin-top:0">
+  <div class="page-spec-header">
+    <span class="page-id">B01</span>
+    <span class="page-name">数字员工管理</span>
+    <span class="page-desc">企业后台 · PC客户端 · 核心管理页</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">B01 · 数字员工管理页原型图</div>
+      <svg width="760" height="440" viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="440" fill="#0a0e14" rx="4"/>
+        <!-- 顶部 -->
+        <rect x="0" y="0" width="760" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="24" y="28" fill="#e6edf3" font-size="15" font-weight="700">数字员工管理</text>
+        <rect x="560" y="10" width="88" height="28" rx="6" fill="#1c2330" stroke="#30363d" stroke-width="1"/>
+        <text x="604" y="28" fill="#8b949e" font-size="12" text-anchor="middle">从人才市场招募</text>
+        <rect x="660" y="10" width="80" height="28" rx="6" fill="#1B6FD8"/>
+        <text x="700" y="28" fill="white" font-size="12" text-anchor="middle">+ 自定义创建</text>
+        <!-- 搜索筛选 -->
+        <rect x="24" y="60" width="220" height="30" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="79" fill="#484f58" font-size="12">🔍 搜索员工名称...</text>
+        <rect x="260" y="60" width="90" height="30" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="305" y="79" fill="#8b949e" font-size="12" text-anchor="middle">部门 ▾</text>
+        <rect x="362" y="60" width="90" height="30" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="407" y="79" fill="#8b949e" font-size="12" text-anchor="middle">状态 ▾</text>
+        <!-- 表格头 -->
+        <rect x="0" y="98" width="760" height="32" fill="#1c2330"/>
+        <text x="40" y="118" fill="#8b949e" font-size="12">员工</text>
+        <text x="200" y="118" fill="#8b949e" font-size="12">岗位</text>
+        <text x="310" y="118" fill="#8b949e" font-size="12">大模型</text>
+        <text x="420" y="118" fill="#8b949e" font-size="12">技能数</text>
+        <text x="500" y="118" fill="#8b949e" font-size="12">状态</text>
+        <text x="580" y="118" fill="#8b949e" font-size="12">本月消耗</text>
+        <text x="680" y="118" fill="#8b949e" font-size="12">操作</text>
+        <!-- 行1 -->
+        <rect x="0" y="130" width="760" height="48" fill="transparent" stroke="#1c2330" stroke-width="1"/>
+        <circle cx="36" cy="154" r="16" fill="#1B6FD8" opacity=".7"/>
+        <text x="36" y="162" fill="white" font-size="12" text-anchor="middle">🎯</text>
+        <text x="70" y="158" fill="#e6edf3" font-size="13" font-weight="600">营销分析师</text>
+        <text x="200" y="158" fill="#8b949e" font-size="12">市场营销</text>
+        <rect x="300" y="144" width="70" height="20" rx="4" fill="rgba(27,111,216,.15)"/>
+        <text x="335" y="158" fill="#58a6ff" font-size="11" text-anchor="middle">GPT-4o</text>
+        <text x="430" y="158" fill="#8b949e" font-size="13" text-anchor="middle">10</text>
+        <rect x="490" y="144" width="50" height="20" rx="10" fill="rgba(63,185,80,.15)"/>
+        <text x="515" y="158" fill="#3fb950" font-size="11" text-anchor="middle">● 在线</text>
+        <text x="600" y="158" fill="#e3b341" font-size="13">¥ 128.4</text>
+        <text x="670" y="154" fill="#58a6ff" font-size="12">配置</text>
+        <text x="706" y="154" fill="#f85149" font-size="12">解雇</text>
+        <!-- 行2 -->
+        <rect x="0" y="178" width="760" height="48" fill="#161b22" stroke="#1c2330" stroke-width="1"/>
+        <circle cx="36" cy="202" r="16" fill="#39d0d0" opacity=".4"/>
+        <text x="36" y="210" fill="white" font-size="12" text-anchor="middle">📊</text>
+        <text x="70" y="206" fill="#e6edf3" font-size="13" font-weight="600">财务顾问</text>
+        <text x="200" y="206" fill="#8b949e" font-size="12">财务分析</text>
+        <rect x="300" y="192" width="90" height="20" rx="4" fill="rgba(188,140,255,.15)"/>
+        <text x="345" y="206" fill="#bc8cff" font-size="11" text-anchor="middle">Claude-3.5</text>
+        <text x="430" y="206" fill="#8b949e" font-size="13" text-anchor="middle">8</text>
+        <rect x="490" y="192" width="50" height="20" rx="10" fill="rgba(63,185,80,.15)"/>
+        <text x="515" y="206" fill="#3fb950" font-size="11" text-anchor="middle">● 就绪</text>
+        <text x="600" y="206" fill="#e3b341" font-size="13">¥ 89.2</text>
+        <text x="670" y="202" fill="#58a6ff" font-size="12">配置</text>
+        <text x="706" y="202" fill="#f85149" font-size="12">解雇</text>
+        <!-- 行3 -->
+        <rect x="0" y="226" width="760" height="48" fill="transparent" stroke="#1c2330" stroke-width="1"/>
+        <circle cx="36" cy="250" r="16" fill="#484f58" opacity=".5"/>
+        <text x="36" y="258" fill="#8b949e" font-size="12" text-anchor="middle">💻</text>
+        <text x="70" y="254" fill="#8b949e" font-size="13" font-weight="600">技术架构师</text>
+        <text x="200" y="254" fill="#8b949e" font-size="12">技术研发</text>
+        <rect x="300" y="240" width="80" height="20" rx="4" fill="rgba(63,185,80,.1)"/>
+        <text x="340" y="254" fill="#3fb950" font-size="11" text-anchor="middle">DeepSeek</text>
+        <text x="430" y="254" fill="#8b949e" font-size="13" text-anchor="middle">12</text>
+        <rect x="490" y="240" width="50" height="20" rx="10" fill="rgba(72,79,88,.3)"/>
+        <text x="515" y="254" fill="#484f58" font-size="11" text-anchor="middle">● 离线</text>
+        <text x="600" y="254" fill="#8b949e" font-size="13">¥ 0</text>
+        <text x="670" y="250" fill="#58a6ff" font-size="12">配置</text>
+        <text x="706" y="250" fill="#f85149" font-size="12">解雇</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑（配置弹窗）</div>
+        <ul class="spec-list">
+          <li>点击「配置」→弹出配置面板（右侧抽屉，宽560px）</li>
+          <li><strong>配置Tab 1 - 基础信息</strong>：名称、头像上传、岗位描述（Prompt编辑器，支持高亮）</li>
+          <li><strong>配置Tab 2 - 大模型</strong>：下拉选择模型（GPT-4o/Claude/DeepSeek/Qwen等），Temperature滑块，Max Tokens输入</li>
+          <li><strong>配置Tab 3 - 技能</strong>：已启用技能列表（开关切换），从技能市场添加技能</li>
+          <li><strong>配置Tab 4 - 知识库</strong>：关联/取消关联知识库</li>
+          <li><strong>配置Tab 5 - 记忆</strong>：查看/编辑/删除记忆条目</li>
+          <li>「解雇」：二次确认弹窗→软删除（保留对话记录，标记为 archived）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/admin/agents</code> 获取企业所有员工</li>
+          <li>更新：<code>PATCH /api/admin/agents/:id</code> 更新配置</li>
+          <li>解雇：<code>DELETE /api/admin/agents/:id</code>（软删除，status='archived'）</li>
+          <li>本月消耗：从 agent_token_usage 表按月聚合计算</li>
+          <li>配置变更即时生效（下次对话时采用新配置）</li>
+        </ul>
+      </div>
+    </div>
+    <h4>员工配置字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>name</td><td>string(50)</td><td><span class="tag req">必填</span></td><td>员工名称</td></tr>
+        <tr><td>avatar_url</td><td>string</td><td><span class="tag opt">可选</span></td><td>自定义头像，默认使用系统头像</td></tr>
+        <tr><td>system_prompt</td><td>text</td><td><span class="tag req">必填</span></td><td>岗位描述系统提示词，最长8000字符</td></tr>
+        <tr><td>model_id</td><td>string</td><td><span class="tag req">必填</span></td><td>选用的大模型ID</td></tr>
+        <tr><td>temperature</td><td>float</td><td><span class="tag opt">可选</span></td><td>0.0~2.0，默认0.7</td></tr>
+        <tr><td>max_tokens</td><td>int</td><td><span class="tag opt">可选</span></td><td>最大输出tokens，默认2048</td></tr>
+        <tr><td>skill_ids</td><td>string[]</td><td><span class="tag opt">可选</span></td><td>启用的技能ID列表</td></tr>
+        <tr><td>kb_ids</td><td>string[]</td><td><span class="tag opt">可选</span></td><td>关联的知识库ID列表</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- B02 技能市场 -->
+<div class="page-spec" id="b02">
+  <div class="page-spec-header">
+    <span class="page-id">B02</span>
+    <span class="page-name">技能市场</span>
+    <span class="page-desc">企业后台 · PC客户端 · 对接ClawHub/SkillHub</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>页面分两区：<strong>已安装技能</strong>（当前企业）+ <strong>市场浏览</strong>（ClawHub/SkillHub）</li>
+          <li>技能卡片：技能图标、名称、来源（clawhub.io标注）、描述、安装企业数</li>
+          <li>点击「安装」→技能添加到企业技能库，可在员工配置中启用</li>
+          <li>技能权限：全企业共享 / 仅指定员工可用（安装时配置）</li>
+          <li>已安装技能：可查看版本、更新、卸载</li>
+          <li>搜索：关键词搜索技能名称、描述、标签</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>市场数据：调用 ClawHub API 拉取技能列表（定时缓存，每10min刷新）</li>
+          <li>安装：本地创建 org_skill 关联记录，下载技能配置文件</li>
+          <li>技能执行：通过 MCP 协议调用，server端维护技能进程池</li>
+          <li>来源标注：技能元数据中包含 source_marketplace 字段（clawhub/skillhub）</li>
+        </ul>
+      </div>
+    </div>
+    <h4>技能字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>skill_id</td><td>string</td><td>技能唯一ID</td></tr>
+        <tr><td>name</td><td>string(50)</td><td>技能名称（如：网页搜索、Excel分析）</td></tr>
+        <tr><td>description</td><td>text</td><td>技能描述和用法</td></tr>
+        <tr><td>source</td><td>enum</td><td>clawhub / skillhub / custom</td></tr>
+        <tr><td>version</td><td>string</td><td>版本号（semver格式）</td></tr>
+        <tr><td>install_count</td><td>int</td><td>安装企业数量</td></tr>
+        <tr><td>is_free</td><td>bool</td><td>是否免费，付费技能需扣除token套餐额度</td></tr>
+        <tr><td>tags</td><td>string[]</td><td>标签（搜索/分析/生成/通信等）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- B04 工资管理 -->
+<div class="page-spec" id="b04">
+  <div class="page-spec-header">
+    <span class="page-id">B04</span>
+    <span class="page-name">工资管理</span>
+    <span class="page-desc">企业后台 · PC客户端 · Token消耗成本看板</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">B04 · 工资管理页原型图</div>
+      <svg width="760" height="380" viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="380" fill="#0a0e14" rx="4"/>
+        <rect x="0" y="0" width="760" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="24" y="28" fill="#e6edf3" font-size="15" font-weight="700">工资管理</text>
+        <text x="24" y="45" fill="#484f58" font-size="11">统计各数字员工消耗的 Token（即"工资"）</text>
+        <!-- 时间筛选 -->
+        <rect x="560" y="10" width="70" height="28" rx="14" fill="#1B6FD8"/>
+        <text x="595" y="28" fill="white" font-size="12" text-anchor="middle">本月</text>
+        <rect x="640" y="10" width="50" height="28" rx="14" fill="#1c2330"/>
+        <text x="665" y="28" fill="#8b949e" font-size="12" text-anchor="middle">上月</text>
+        <rect x="700" y="10" width="46" height="28" rx="14" fill="#1c2330"/>
+        <text x="723" y="28" fill="#8b949e" font-size="12" text-anchor="middle">全部</text>
+        <!-- 汇总卡片 -->
+        <rect x="24" y="64" width="168" height="76" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="90" fill="#8b949e" font-size="12">本月总消耗Token</text>
+        <text x="44" y="118" fill="#e3b341" font-size="22" font-weight="700">2,847,320</text>
+        <text x="44" y="134" fill="#484f58" font-size="10">较上月 ↑ 12.4%</text>
+        <rect x="208" y="64" width="168" height="76" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="228" y="90" fill="#8b949e" font-size="12">折合费用（人民币）</text>
+        <text x="228" y="118" fill="#58a6ff" font-size="22" font-weight="700">¥ 398.6</text>
+        <text x="228" y="134" fill="#484f58" font-size="10">按市场价计算</text>
+        <rect x="392" y="64" width="168" height="76" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="412" y="90" fill="#8b949e" font-size="12">工资最高员工</text>
+        <text x="412" y="118" fill="#bc8cff" font-size="16" font-weight="700">营销分析师</text>
+        <text x="412" y="134" fill="#484f58" font-size="10">消耗 1,234,560 tokens</text>
+        <!-- 柱状图区域 -->
+        <rect x="24" y="152" width="460" height="200" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="176" fill="#8b949e" font-size="12">每日Token消耗趋势</text>
+        <!-- 简化柱状图 -->
+        <line x1="44" y1="320" x2="468" y2="320" stroke="#30363d" stroke-width="1"/>
+        <rect x="60" y="280" width="20" height="40" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="95" y="260" width="20" height="60" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="130" y="240" width="20" height="80" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="165" y="270" width="20" height="50" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="200" y="250" width="20" height="70" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="235" y="230" width="20" height="90" rx="2" fill="#e3b341" opacity=".8"/>
+        <rect x="270" y="245" width="20" height="75" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="305" y="265" width="20" height="55" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="340" y="255" width="20" height="65" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="375" y="235" width="20" height="85" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <rect x="410" y="275" width="20" height="45" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <!-- 员工排行 -->
+        <rect x="500" y="152" width="236" height="200" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="520" y="176" fill="#8b949e" font-size="12">员工工资排行</text>
+        <text x="520" y="205" fill="#e6edf3" font-size="13" font-weight="600">🥇 营销分析师</text>
+        <text x="700" y="205" fill="#e3b341" font-size="12" text-anchor="end">¥128.4</text>
+        <rect x="520" y="210" width="200" height="4" rx="2" fill="#30363d"/>
+        <rect x="520" y="210" width="160" height="4" rx="2" fill="#1B6FD8" opacity=".7"/>
+        <text x="520" y="233" fill="#e6edf3" font-size="13">🥈 财务顾问</text>
+        <text x="700" y="233" fill="#8b949e" font-size="12" text-anchor="end">¥89.2</text>
+        <rect x="520" y="238" width="200" height="4" rx="2" fill="#30363d"/>
+        <rect x="520" y="238" width="110" height="4" rx="2" fill="#39d0d0" opacity=".6"/>
+        <text x="520" y="261" fill="#e6edf3" font-size="13">🥉 技术架构师</text>
+        <text x="700" y="261" fill="#8b949e" font-size="12" text-anchor="end">¥0</text>
+        <rect x="520" y="266" width="200" height="4" rx="2" fill="#30363d"/>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>时间维度切换：本月 / 上月 / 全部，切换后图表和数据联动刷新</li>
+          <li>柱状图：悬停某日柱子 → tooltip显示该日各员工Token明细</li>
+          <li>员工排行：点击员工行 → 展开该员工的对话级别明细（每次对话的token消耗）</li>
+          <li>支持导出CSV：「导出报表」按钮，包含日期/员工/tokens/费用</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>每次对话结束后，异步写入 agent_token_log（agent_id/date/input_tokens/output_tokens）</li>
+          <li>费用换算：按各模型单价计算（GPT-4o: ¥0.1/1K tokens，可配置）</li>
+          <li>统计接口：<code>GET /api/admin/token-stats?period=month</code></li>
+          <li>数据更新频率：实时记录，统计图表1小时聚合一次</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- B05 连接器 -->
+<div class="page-spec" id="b05">
+  <div class="page-spec-header">
+    <span class="page-id">B05</span>
+    <span class="page-name">连接器</span>
+    <span class="page-desc">企业后台 · PC客户端 · MCP与第三方集成</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>两个区域：<strong>已连接服务</strong>（卡片展示+状态）+ <strong>可用连接器</strong>（图标列表）</li>
+          <li>常用连接器预设图标：飞书/钉钉/企微/Salesforce/Jira/Github/Slack/Google等</li>
+          <li>点击连接器→弹窗：① OAuth授权（跳转第三方授权页）或 ② 填写API Key/地址</li>
+          <li>「自定义MCP服务」：填写MCP Server URL / 名称 / 认证Token，测试连接</li>
+          <li>已连接状态：绿色●在线 / 红色●异常（显示错误原因），支持断开连接</li>
+          <li>连接器对员工可见性：可设置哪些员工可调用该连接器</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>连接器元数据存储在 connectors 表（id/name/type/config/status）</li>
+          <li>OAuth Token：加密存储，定时检测有效性（每15min心跳）</li>
+          <li>MCP协议：遵循 Model Context Protocol 标准，支持 tools/resources/prompts</li>
+          <li>连接器状态变更：记录到 connector_logs 表（用于故障排查）</li>
+          <li>权限绑定：connector_agent_permission 表（connector_id + agent_id）</li>
+        </ul>
+      </div>
+    </div>
+    <h4>连接器字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>connector_id</td><td>string(uuid)</td><td><span class="tag sys">系统</span></td><td>连接器实例ID</td></tr>
+        <tr><td>name</td><td>string(50)</td><td><span class="tag req">必填</span></td><td>连接器名称（如：公司飞书）</td></tr>
+        <tr><td>type</td><td>enum</td><td><span class="tag req">必填</span></td><td>preset_oauth / preset_apikey / custom_mcp</td></tr>
+        <tr><td>endpoint_url</td><td>string</td><td><span class="tag req">必填</span></td><td>MCP服务地址（自定义时必填）</td></tr>
+        <tr><td>auth_token</td><td>string(encrypted)</td><td><span class="tag opt">可选</span></td><td>加密存储认证Token</td></tr>
+        <tr><td>status</td><td>enum</td><td><span class="tag sys">系统</span></td><td>connected/disconnected/error</td></tr>
+        <tr><td>last_check_at</td><td>timestamp</td><td><span class="tag sys">系统</span></td><td>最近一次健康检测时间</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- B06 行业AI解决方案 -->
+<div class="page-spec" id="b06">
+  <div class="page-spec-header">
+    <span class="page-id">B06</span>
+    <span class="page-name">行业AI解决方案</span>
+    <span class="page-desc">企业后台 · PC客户端 · 9大行业一键应用</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">B06 · 行业AI解决方案页原型图</div>
+      <svg width="760" height="380" viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="380" fill="#0a0e14" rx="4"/>
+        <rect x="0" y="0" width="760" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="24" y="28" fill="#e6edf3" font-size="15" font-weight="700">行业AI解决方案</text>
+        <text x="24" y="45" fill="#484f58" font-size="11">选择你所在的行业，一键应用预配置好的AI员工团队</text>
+        <!-- 9个行业卡片 3x3 -->
+        <!-- Row1 -->
+        <rect x="24" y="60" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="90" fill="#58a6ff" font-size="24">🏭</text>
+        <text x="80" y="85" fill="#e6edf3" font-size="14" font-weight="700">制造业</text>
+        <text x="80" y="103" fill="#8b949e" font-size="11">质检+生产排期+采购</text>
+        <text x="80" y="119" fill="#484f58" font-size="10">3位AI员工 · 已有328家企业应用</text>
+        <rect x="176" y="126" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="204" y="140" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="260" y="60" width="220" height="90" rx="8" fill="#161b22" stroke="#1B6FD8" stroke-width="1.5"/>
+        <text x="280" y="90" fill="#3fb950" font-size="24">🏪</text>
+        <text x="316" y="85" fill="#e6edf3" font-size="14" font-weight="700">零售业</text>
+        <text x="316" y="103" fill="#8b949e" font-size="11">客服+选品+营销</text>
+        <text x="316" y="119" fill="#484f58" font-size="10">5位AI员工 · 已有1,234家企业应用</text>
+        <text x="400" y="88" fill="#e3b341" font-size="9">🔥 热门</text>
+        <rect x="412" y="126" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="440" y="140" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="496" y="60" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="516" y="90" fill="#bc8cff" font-size="24">🏥</text>
+        <text x="552" y="85" fill="#e6edf3" font-size="14" font-weight="700">医疗健康</text>
+        <text x="552" y="103" fill="#8b949e" font-size="11">问诊助手+档案+运营</text>
+        <text x="552" y="119" fill="#484f58" font-size="10">4位AI员工 · 已有567家企业应用</text>
+        <rect x="648" y="126" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="676" y="140" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <!-- Row2 -->
+        <rect x="24" y="164" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="194" fill="#e3b341" font-size="24">🎓</text>
+        <text x="80" y="189" fill="#e6edf3" font-size="14" font-weight="700">教育培训</text>
+        <text x="80" y="207" fill="#8b949e" font-size="11">课程设计+助教+运营</text>
+        <rect x="176" y="230" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="204" y="244" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="260" y="164" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="280" y="194" fill="#f85149" font-size="24">⚖️</text>
+        <text x="316" y="189" fill="#e6edf3" font-size="14" font-weight="700">法律服务</text>
+        <text x="316" y="207" fill="#8b949e" font-size="11">合同审查+法律顾问</text>
+        <rect x="412" y="230" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="440" y="244" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="496" y="164" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="516" y="194" fill="#39d0d0" font-size="24">🏦</text>
+        <text x="552" y="189" fill="#e6edf3" font-size="14" font-weight="700">金融服务</text>
+        <text x="552" y="207" fill="#8b949e" font-size="11">风控+投顾+合规</text>
+        <rect x="648" y="230" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="676" y="244" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <!-- Row3 partial -->
+        <rect x="24" y="268" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="44" y="298" fill="#58a6ff" font-size="24">🏗️</text>
+        <text x="80" y="293" fill="#e6edf3" font-size="14" font-weight="700">房地产</text>
+        <text x="80" y="311" fill="#8b949e" font-size="11">带看+合同+客服</text>
+        <rect x="176" y="334" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="204" y="348" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="260" y="268" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="280" y="298" fill="#3fb950" font-size="24">🚗</text>
+        <text x="316" y="293" fill="#e6edf3" font-size="14" font-weight="700">汽车行业</text>
+        <text x="316" y="311" fill="#8b949e" font-size="11">销售+售后+质量</text>
+        <rect x="412" y="334" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="440" y="348" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+
+        <rect x="496" y="268" width="220" height="90" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+        <text x="516" y="298" fill="#bc8cff" font-size="24">🛒</text>
+        <text x="552" y="293" fill="#e6edf3" font-size="14" font-weight="700">电商</text>
+        <text x="552" y="311" fill="#8b949e" font-size="11">选品+客服+数据分析</text>
+        <rect x="648" y="334" width="56" height="20" rx="10" fill="#1B6FD8"/>
+        <text x="676" y="348" fill="white" font-size="11" text-anchor="middle">一键应用</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>9个行业卡片，点击卡片展开详情：方案描述/包含的AI员工列表/预期价值</li>
+          <li>「一键应用」：弹窗确认，列出将要创建的员工列表（名称/角色/模型）</li>
+          <li>确认后批量创建员工、关联对应知识库和技能，成功后跳转到数字员工管理页</li>
+          <li>已应用的方案：卡片显示「已应用」蓝色状态，按钮变为「重新应用」（覆盖或新增）</li>
+          <li>自定义行业：底部「没有我的行业？告诉我们」反馈入口</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>方案数据来源于系统管理后台（S03页面发布）</li>
+          <li>方案包含：agent_templates[]、kb_templates[]、skill_ids[]</li>
+          <li>一键应用：服务端批量创建，事务保证原子性（全成功或全回滚）</li>
+          <li>统计应用企业数：通过 solution_apply_log 表统计</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- B07 记忆管理 -->
+<div class="page-spec" id="b07">
+  <div class="page-spec-header">
+    <span class="page-id">B07</span>
+    <span class="page-name">记忆管理</span>
+    <span class="page-desc">企业后台 · PC客户端 · Agent记忆条目管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>左侧员工选择器（下拉或列表），右侧展示该员工的所有记忆条目</li>
+          <li>记忆条目卡片：显示内容摘要/重要程度/创建时间/来源（手动/自动提取）</li>
+          <li>新增记忆：点击「+」→弹窗填写记忆内容和重要程度（1-5星）</li>
+          <li>编辑记忆：点击条目→行内编辑，内容直接修改后回车保存</li>
+          <li>删除记忆：单条删除（确认弹窗）+ 批量删除（勾选后批量操作栏）</li>
+          <li>记忆搜索：按内容关键词搜索</li>
+          <li>记忆分类：工作偏好/用户习惯/历史决策/重要事件（Tag筛选）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>记忆存储在 agent_memories 表（agent_id/content/importance/source/created_at）</li>
+          <li>自动记忆提取：对话结束后，后台异步运行记忆提取模型，从对话内容中提炼关键信息</li>
+          <li>记忆使用：每次对话时，检索 topK=3 相关记忆注入 system prompt</li>
+          <li>记忆容量限制：每个员工最多1000条，超出时按重要程度和时间自动淘汰旧记忆</li>
+        </ul>
+      </div>
+    </div>
+    <h4>记忆字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>memory_id</td><td>string(uuid)</td><td>记忆唯一ID</td></tr>
+        <tr><td>agent_id</td><td>string</td><td>所属员工</td></tr>
+        <tr><td>content</td><td>text</td><td>记忆内容（自然语言描述）</td></tr>
+        <tr><td>category</td><td>enum</td><td>preference/habit/decision/event</td></tr>
+        <tr><td>importance</td><td>int(1-5)</td><td>重要程度（5最重要，影响检索权重）</td></tr>
+        <tr><td>source</td><td>enum</td><td>manual（手动添加）/ auto（AI自动提取）</td></tr>
+        <tr><td>created_at</td><td>timestamp</td><td>创建时间</td></tr>
+        <tr><td>last_used_at</td><td>timestamp</td><td>最近一次被注入到对话的时间</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- B08 设置 -->
+<div class="page-spec" id="b08">
+  <div class="page-spec-header">
+    <span class="page-id">B08</span>
+    <span class="page-name">设置</span>
+    <span class="page-desc">企业后台 · PC客户端 · 账户与系统设置</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="spec-grid three">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">账户管理</div>
+        <ul class="spec-list">
+          <li>企业名称、Logo上传（正方形，≤2MB）</li>
+          <li>绑定的手机号/微信（可更换）</li>
+          <li>企业邀请码（用于子账号注册）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title interaction">子管理员账号</div>
+        <ul class="spec-list">
+          <li>列表展示已添加的子管理员</li>
+          <li>新增：输入手机号→发送邀请</li>
+          <li>权限配置：可限制子管理员的操作范围</li>
+          <li>删除：移除子管理员权限</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title interaction">其他设置</div>
+        <ul class="spec-list">
+          <li><strong>版本管理</strong>：当前版本、更新日志、检查更新按钮</li>
+          <li><strong>帮助与反馈</strong>：在线文档链接、提交问题表单</li>
+          <li><strong>通知设置</strong>：员工任务完成通知、系统公告开关</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- B09 充值 -->
+<div class="page-spec" id="b09">
+  <div class="page-spec-header">
+    <span class="page-id">B09</span>
+    <span class="page-name">充值与Token消耗</span>
+    <span class="page-desc">企业后台 · PC客户端 · 费用管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge app">⚙️ 企业后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>顶部余额展示：当前账户余额（¥）+ 剩余Token估算（基于平均消耗计算可用天数）</li>
+          <li>充值金额：预设套餐（¥100/¥500/¥1000/¥5000）+ 自定义输入</li>
+          <li>支付方式：微信支付 / 支付宝 / 对公转账（≥¥1000时显示）</li>
+          <li>充值后实时更新余额显示（WebSocket推送）</li>
+          <li>消耗统计区域：日/月消耗折线图，每日明细表格（可按日期范围筛选）</li>
+          <li>低余额预警：余额<¥50时，顶部出现橙色警告横幅</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>账户余额：org_balance 表（org_id/balance/updated_at）</li>
+          <li>充值记录：recharge_logs（id/org_id/amount/payment_method/status/created_at）</li>
+          <li>消耗明细：token_consumption_daily 按日聚合视图</li>
+          <li>余额扣除：每次对话结束后，按实际token消耗和模型单价扣除</li>
+          <li>余额不足：对话请求失败，返回 402 状态码，前端弹出充值引导</li>
+        </ul>
+      </div>
+    </div>
+    <h4>充值字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>amount</td><td>decimal(10,2)</td><td>充值金额（人民币），最小¥1</td></tr>
+        <tr><td>payment_method</td><td>enum</td><td>wechat_pay / alipay / bank_transfer</td></tr>
+        <tr><td>order_no</td><td>string(32)</td><td>支付订单号（唯一）</td></tr>
+        <tr><td>status</td><td>enum</td><td>pending/success/failed/refunded</td></tr>
+        <tr><td>token_credited</td><td>bigint</td><td>到账Token数量（按当前汇率换算）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<!-- 三、系统管理后台（Web 端）               -->
+<!-- ════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title" id="s01"><span class="icon">🌐</span>三、系统管理后台（Web 端）</div>
+  <div class="note">平台运营人员专用，通过浏览器访问。负责管理所有企业账号、发布专家模板、维护行业方案、查看整体财务数据。</div>
+</div>
+
+<!-- S01 账号管理 -->
+<div class="page-spec" id="s01" style="margin-top:0">
+  <div class="page-spec-header">
+    <span class="page-id">S01</span>
+    <span class="page-name">账号管理</span>
+    <span class="page-desc">系统后台 · Web端 · 企业账号全量管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge web">🌐 Web 系统后台</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">S01 · 系统后台账号管理页原型图</div>
+      <svg width="760" height="440" viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="440" fill="#0a0e14" rx="4"/>
+        <!-- 左侧菜单 160px -->
+        <rect x="0" y="0" width="160" height="440" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <rect x="10" y="12" width="140" height="32" rx="6" fill="#1B6FD8"/>
+        <text x="80" y="32" fill="white" font-size="13" text-anchor="middle" font-weight="700">AI Team 后台</text>
+        <rect x="10" y="60" width="140" height="32" rx="6" fill="#1c2330"/>
+        <text x="26" y="80" fill="#58a6ff" font-size="12">📊  账号管理</text>
+        <rect x="10" y="100" width="140" height="32" rx="6" fill="transparent"/>
+        <text x="26" y="120" fill="#8b949e" font-size="12">👤  专家管理</text>
+        <rect x="10" y="140" width="140" height="32" rx="6" fill="transparent"/>
+        <text x="26" y="160" fill="#8b949e" font-size="12">🏭  行业方案</text>
+        <rect x="10" y="180" width="140" height="32" rx="6" fill="transparent"/>
+        <text x="26" y="200" fill="#8b949e" font-size="12">💰  财务管理</text>
+        <!-- 主内容 -->
+        <rect x="160" y="0" width="600" height="440" fill="#161b22"/>
+        <!-- 顶部 -->
+        <rect x="160" y="0" width="600" height="48" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="180" y="28" fill="#e6edf3" font-size="15" font-weight="700">企业账号管理</text>
+        <!-- 统计卡片 -->
+        <rect x="175" y="60" width="120" height="56" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="235" y="82" fill="#8b949e" font-size="10" text-anchor="middle">总企业数</text>
+        <text x="235" y="104" fill="#58a6ff" font-size="20" font-weight="700" text-anchor="middle">1,284</text>
+        <rect x="307" y="60" width="120" height="56" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="367" y="82" fill="#8b949e" font-size="10" text-anchor="middle">本月新增</text>
+        <text x="367" y="104" fill="#3fb950" font-size="20" font-weight="700" text-anchor="middle">+134</text>
+        <rect x="439" y="60" width="120" height="56" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="499" y="82" fill="#8b949e" font-size="10" text-anchor="middle">月活企业</text>
+        <text x="499" y="104" fill="#e3b341" font-size="20" font-weight="700" text-anchor="middle">876</text>
+        <rect x="571" y="60" width="120" height="56" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="631" y="82" fill="#8b949e" font-size="10" text-anchor="middle">总充值(万元)</text>
+        <text x="631" y="104" fill="#bc8cff" font-size="20" font-weight="700" text-anchor="middle">¥48.6W</text>
+        <!-- 搜索+表格 -->
+        <rect x="175" y="128" width="200" height="28" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="195" y="146" fill="#484f58" font-size="11">🔍 搜索企业名称/手机号</text>
+        <!-- 表头 -->
+        <rect x="160" y="164" width="600" height="28" fill="#1c2330"/>
+        <text x="175" y="182" fill="#8b949e" font-size="11">企业名称</text>
+        <text x="310" y="182" fill="#8b949e" font-size="11">联系人/手机</text>
+        <text x="420" y="182" fill="#8b949e" font-size="11">注册时间</text>
+        <text x="510" y="182" fill="#8b949e" font-size="11">累计充值</text>
+        <text x="590" y="182" fill="#8b949e" font-size="11">Token消耗</text>
+        <text x="672" y="182" fill="#8b949e" font-size="11">状态</text>
+        <!-- 行 -->
+        <rect x="160" y="192" width="600" height="36" fill="transparent" stroke="#1c2330" stroke-width="1"/>
+        <text x="175" y="214" fill="#e6edf3" font-size="12" font-weight="600">太乙知行AI科技</text>
+        <text x="310" y="214" fill="#8b949e" font-size="11">荆超 / 138****8888</text>
+        <text x="420" y="214" fill="#8b949e" font-size="11">2026-01-15</text>
+        <text x="510" y="214" fill="#e3b341" font-size="12">¥5,000</text>
+        <text x="590" y="214" fill="#8b949e" font-size="11">8.4M tokens</text>
+        <rect x="669" y="202" width="44" height="20" rx="10" fill="rgba(63,185,80,.15)"/>
+        <text x="691" y="216" fill="#3fb950" font-size="10" text-anchor="middle">正常</text>
+        <rect x="160" y="228" width="600" height="36" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="175" y="250" fill="#e6edf3" font-size="12" font-weight="600">豪恩声学</text>
+        <text x="310" y="250" fill="#8b949e" font-size="11">张经理 / 139****0001</text>
+        <text x="420" y="250" fill="#8b949e" font-size="11">2026-02-20</text>
+        <text x="510" y="250" fill="#e3b341" font-size="12">¥2,000</text>
+        <text x="590" y="250" fill="#8b949e" font-size="11">3.2M tokens</text>
+        <rect x="669" y="238" width="44" height="20" rx="10" fill="rgba(63,185,80,.15)"/>
+        <text x="691" y="252" fill="#3fb950" font-size="10" text-anchor="middle">正常</text>
+        <rect x="160" y="264" width="600" height="36" fill="transparent" stroke="#1c2330" stroke-width="1"/>
+        <text x="175" y="286" fill="#e6edf3" font-size="12" font-weight="600">示例企业C</text>
+        <text x="310" y="286" fill="#8b949e" font-size="11">李总 / 137****5566</text>
+        <text x="420" y="286" fill="#8b949e" font-size="11">2026-03-05</text>
+        <text x="510" y="286" fill="#e3b341" font-size="12">¥100</text>
+        <text x="590" y="286" fill="#8b949e" font-size="11">0.1M tokens</text>
+        <rect x="669" y="274" width="44" height="20" rx="10" fill="rgba(248,81,73,.15)"/>
+        <text x="691" y="288" fill="#f85149" font-size="10" text-anchor="middle">欠费</text>
+        <!-- 分页 -->
+        <text x="480" y="430" fill="#484f58" font-size="11" text-anchor="middle">第 1 / 26 页 · 共 1,284 条记录</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>顶部4个统计卡片：总企业数/本月新增/月活企业/总充值金额，实时数据</li>
+          <li>搜索：支持企业名称、手机号、邮箱模糊搜索</li>
+          <li>筛选：注册时间范围/状态（正常/欠费/封禁）</li>
+          <li>点击企业行→弹出企业详情：基本信息/充值记录/员工列表/Token消耗历史</li>
+          <li>操作：充值（手动给账户添加余额）/ 封禁账号 / 调整配额 / 发送通知</li>
+          <li>导出：全量导出企业列表（Excel）</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>GET /api/system/orgs?keyword=&status=&page=</code></li>
+          <li>统计数据：日报聚合（每天0点定时任务刷新），当日数据实时计算</li>
+          <li>月活定义：近30天内有对话记录的企业</li>
+          <li>账号封禁：status='banned'，所有API请求返回403</li>
+        </ul>
+      </div>
+    </div>
+    <h4>企业账号字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>org_id</td><td>string(uuid)</td><td>企业唯一ID</td></tr>
+        <tr><td>org_name</td><td>string(100)</td><td>企业名称</td></tr>
+        <tr><td>owner_name</td><td>string(50)</td><td>注册人姓名</td></tr>
+        <tr><td>owner_phone</td><td>string(11)</td><td>注册手机号（脱敏展示）</td></tr>
+        <tr><td>status</td><td>enum</td><td>active / suspended / banned</td></tr>
+        <tr><td>balance</td><td>decimal(12,2)</td><td>账户余额（元）</td></tr>
+        <tr><td>total_recharged</td><td>decimal(12,2)</td><td>累计充值金额</td></tr>
+        <tr><td>total_tokens_used</td><td>bigint</td><td>累计消耗Token数</td></tr>
+        <tr><td>agent_count</td><td>int</td><td>当前员工数量</td></tr>
+        <tr><td>created_at</td><td>timestamp</td><td>注册时间</td></tr>
+        <tr><td>last_active_at</td><td>timestamp</td><td>最近活跃时间</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- S02 专家管理 -->
+<div class="page-spec" id="s02">
+  <div class="page-spec-header">
+    <span class="page-id">S02</span>
+    <span class="page-name">专家管理</span>
+    <span class="page-desc">系统后台 · Web端 · 人才市场专家模板管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge web">🌐 Web 系统后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>专家模板列表：展示已发布到人才市场的所有专家</li>
+          <li>「新增专家」按钮：打开编辑表单（见字段规范）</li>
+          <li>编辑专家：修改所有字段，保存后人才市场即时更新</li>
+          <li>上下架：切换 is_published 状态（下架后用户端不可见，已招募的不受影响）</li>
+          <li>预览：「预览效果」按钮，展示用户端看到的专家详情页样式</li>
+          <li>克隆：以已有专家为模板快速创建新专家</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>接口：<code>POST /api/system/agent-templates</code> 创建专家模板</li>
+          <li>模板包含完整配置：system_prompt/model/skills/knowledge_bases/memories</li>
+          <li>发布后企业前台人才市场立即可见</li>
+          <li>企业招募时复制模板数据（深拷贝），后续修改模板不影响已招募的实例</li>
+        </ul>
+      </div>
+    </div>
+    <h4>专家模板字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>name</td><td>string(50)</td><td><span class="tag req">必填</span></td><td>专家名称（如：营销分析师）</td></tr>
+        <tr><td>category</td><td>string</td><td><span class="tag req">必填</span></td><td>分类（市场营销/财务分析/…）</td></tr>
+        <tr><td>avatar_url</td><td>string</td><td><span class="tag req">必填</span></td><td>头像图片URL</td></tr>
+        <tr><td>system_prompt</td><td>text</td><td><span class="tag req">必填</span></td><td>岗位描述系统提示词</td></tr>
+        <tr><td>default_model</td><td>string</td><td><span class="tag req">必填</span></td><td>默认使用的大模型</td></tr>
+        <tr><td>skill_ids</td><td>string[]</td><td><span class="tag req">必填</span></td><td>预配置技能列表</td></tr>
+        <tr><td>tags</td><td>string[]</td><td><span class="tag opt">可选</span></td><td>搜索标签</td></tr>
+        <tr><td>description</td><td>text</td><td><span class="tag req">必填</span></td><td>用户可见的岗位描述（不超过200字）</td></tr>
+        <tr><td>initial_memories</td><td>json[]</td><td><span class="tag opt">可选</span></td><td>预置记忆条目</td></tr>
+        <tr><td>sort_order</td><td>int</td><td><span class="tag opt">可选</span></td><td>人才市场排列顺序（数值越小越靠前）</td></tr>
+        <tr><td>is_published</td><td>bool</td><td><span class="tag req">必填</span></td><td>是否发布到人才市场</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- S03 行业AI解决方案管理 -->
+<div class="page-spec" id="s03">
+  <div class="page-spec-header">
+    <span class="page-id">S03</span>
+    <span class="page-name">行业AI解决方案管理</span>
+    <span class="page-desc">系统后台 · Web端 · 方案库内容管理</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge web">🌐 Web 系统后台</div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>方案列表：9个行业卡片 + 「新增方案」按钮</li>
+          <li>新增/编辑方案：表单填写行业名称/图标/描述/包含的专家模板（多选）/标签</li>
+          <li>拖拽排序：调整方案在企业端的展示顺序</li>
+          <li>上下架：控制方案是否对企业可见</li>
+          <li>应用统计：查看各方案被应用次数、活跃使用的企业数</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>方案表：industry_solutions（id/name/icon/description/agent_template_ids[]）</li>
+          <li>应用记录：solution_apply_log（solution_id/org_id/applied_at）</li>
+          <li>统计接口：<code>GET /api/system/solutions/stats</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- S04 财务管理 -->
+<div class="page-spec" id="s04">
+  <div class="page-spec-header">
+    <span class="page-id">S04</span>
+    <span class="page-name">财务管理</span>
+    <span class="page-desc">系统后台 · Web端 · 平台整体财务看板</span>
+  </div>
+  <div class="page-spec-body">
+    <div class="platform-badge web">🌐 Web 系统后台</div>
+    <div class="wireframe-wrap">
+      <div class="wireframe-label">S04 · 财务管理看板原型图</div>
+      <svg width="760" height="360" viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg">
+        <rect width="760" height="360" fill="#0a0e14" rx="4"/>
+        <rect x="0" y="0" width="160" height="360" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="80" y="30" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="700">AI Team 后台</text>
+        <text x="26" y="80" fill="#8b949e" font-size="12">📊  账号管理</text>
+        <text x="26" y="112" fill="#8b949e" font-size="12">👤  专家管理</text>
+        <text x="26" y="144" fill="#8b949e" font-size="12">🏭  行业方案</text>
+        <rect x="10" y="158" width="140" height="28" rx="6" fill="#1c2330"/>
+        <text x="26" y="176" fill="#58a6ff" font-size="12">💰  财务管理</text>
+        <!-- 主区 -->
+        <rect x="160" y="0" width="600" height="360" fill="#161b22"/>
+        <rect x="160" y="0" width="600" height="44" fill="#0d1117" stroke="#1c2330" stroke-width="1"/>
+        <text x="180" y="26" fill="#e6edf3" font-size="15" font-weight="700">财务管理</text>
+        <!-- 时间筛选 -->
+        <rect x="570" y="10" width="50" height="24" rx="12" fill="#1B6FD8"/>
+        <text x="595" y="26" fill="white" font-size="11" text-anchor="middle">本月</text>
+        <rect x="630" y="10" width="50" height="24" rx="12" fill="#1c2330"/>
+        <text x="655" y="26" fill="#8b949e" font-size="11" text-anchor="middle">本年</text>
+        <rect x="690" y="10" width="50" height="24" rx="12" fill="#1c2330"/>
+        <text x="715" y="26" fill="#8b949e" font-size="11" text-anchor="middle">全部</text>
+        <!-- 4个核心指标卡 -->
+        <rect x="175" y="55" width="130" height="68" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="240" y="76" fill="#8b949e" font-size="10" text-anchor="middle">总充值金额</text>
+        <text x="240" y="100" fill="#3fb950" font-size="18" font-weight="700" text-anchor="middle">¥486,200</text>
+        <text x="240" y="116" fill="#484f58" font-size="9" text-anchor="middle">较上月 ↑ 23%</text>
+
+        <rect x="315" y="55" width="130" height="68" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="380" y="76" fill="#8b949e" font-size="10" text-anchor="middle">平台成本Token</text>
+        <text x="380" y="100" fill="#58a6ff" font-size="18" font-weight="700" text-anchor="middle">58.4B</text>
+        <text x="380" y="116" fill="#484f58" font-size="9" text-anchor="middle">实际调用量</text>
+
+        <rect x="455" y="55" width="130" height="68" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="520" y="76" fill="#8b949e" font-size="10" text-anchor="middle">利润（Token差价）</text>
+        <text x="520" y="100" fill="#e3b341" font-size="18" font-weight="700" text-anchor="middle">¥186,400</text>
+        <text x="520" y="116" fill="#3fb950" font-size="9" text-anchor="middle">利润率 38.3%</text>
+
+        <rect x="595" y="55" width="130" height="68" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="660" y="76" fill="#8b949e" font-size="10" text-anchor="middle">付费企业数</text>
+        <text x="660" y="100" fill="#bc8cff" font-size="18" font-weight="700" text-anchor="middle">876</text>
+        <text x="660" y="116" fill="#484f58" font-size="9" text-anchor="middle">月活付费</text>
+
+        <!-- 收入趋势折线图 -->
+        <rect x="175" y="135" width="340" height="180" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="195" y="158" fill="#8b949e" font-size="12">月度收入趋势</text>
+        <!-- 折线 -->
+        <polyline points="195,295 225,280 255,268 285,275 315,254 345,240 375,245 405,228 435,220 465,215 495,208" fill="none" stroke="#1B6FD8" stroke-width="2"/>
+        <polyline points="195,305 225,300 255,292 285,298 315,282 345,276 375,278 405,268 435,262 465,258 495,252" fill="none" stroke="#30363d" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="195" y="320" fill="#484f58" font-size="9">1月</text>
+        <text x="265" y="320" fill="#484f58" font-size="9">3月</text>
+        <text x="345" y="320" fill="#484f58" font-size="9">5月</text>
+        <text x="430" y="320" fill="#484f58" font-size="9">8月</text>
+        <text x="488" y="320" fill="#484f58" font-size="9">10月</text>
+        <!-- 图例 -->
+        <line x1="195" y1="336" x2="215" y2="336" stroke="#1B6FD8" stroke-width="2"/>
+        <text x="220" y="340" fill="#8b949e" font-size="10">充值收入</text>
+        <line x1="280" y1="336" x2="300" y2="336" stroke="#30363d" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="305" y="340" fill="#8b949e" font-size="10">实际成本</text>
+        <!-- 右侧排行 -->
+        <rect x="525" y="135" width="200" height="180" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+        <text x="545" y="158" fill="#8b949e" font-size="12">TOP 5 消费企业</text>
+        <text x="545" y="182" fill="#e6edf3" font-size="12" font-weight="600">1. 太乙知行AI科技</text>
+        <text x="700" y="182" fill="#e3b341" font-size="11" text-anchor="end">¥5,000</text>
+        <text x="545" y="204" fill="#e6edf3" font-size="12" font-weight="600">2. 豪恩声学</text>
+        <text x="700" y="204" fill="#8b949e" font-size="11" text-anchor="end">¥2,000</text>
+        <text x="545" y="226" fill="#e6edf3" font-size="12" font-weight="600">3. 某某科技</text>
+        <text x="700" y="226" fill="#8b949e" font-size="11" text-anchor="end">¥1,800</text>
+        <text x="545" y="248" fill="#e6edf3" font-size="12" font-weight="600">4. XX电商</text>
+        <text x="700" y="248" fill="#8b949e" font-size="11" text-anchor="end">¥1,500</text>
+        <text x="545" y="270" fill="#8b949e" font-size="12">5. 其他企业...</text>
+        <text x="700" y="270" fill="#8b949e" font-size="11" text-anchor="end">¥1,200</text>
+      </svg>
+    </div>
+    <div class="spec-grid">
+      <div class="spec-box">
+        <div class="spec-box-title interaction">交互逻辑</div>
+        <ul class="spec-list">
+          <li>时间维度：本月/本季/本年/全部，切换后所有图表和指标联动</li>
+          <li>收入趋势图：同时展示「充值收入」和「实际Token成本」双折线，差值即利润</li>
+          <li>TOP 5 企业：点击跳转到账号管理的该企业详情</li>
+          <li>导出报表：导出Excel，包含充值明细、消耗明细、利润明细</li>
+          <li>利润率计算：（充值金额 - 实际Token成本）/ 充值金额 × 100%</li>
+        </ul>
+      </div>
+      <div class="spec-box">
+        <div class="spec-box-title data">数据逻辑</div>
+        <ul class="spec-list">
+          <li>充值金额：汇总 recharge_logs 表的成功充值记录</li>
+          <li>实际成本：按各模型官方API价格×实际调用量计算</li>
+          <li>利润：充值收入 - 实际API成本（平台赚取差价）</li>
+          <li>统计接口：<code>GET /api/system/finance/overview?period=month</code></li>
+          <li>数据精度：金额保留2位小数；Token数量以十亿（B）为单位展示</li>
+        </ul>
+      </div>
+    </div>
+    <h4>财务统计字段规范</h4>
+    <table class="data-table">
+      <thead><tr><th>指标</th><th>计算来源</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>total_recharged</td><td>recharge_logs</td><td>∑ 成功充值金额</td></tr>
+        <tr><td>total_tokens_billed</td><td>token_consumption_daily</td><td>企业账户扣除的Token总量（按平台定价）</td></tr>
+        <tr><td>total_api_cost</td><td>api_call_logs</td><td>实际调用上游API的成本（按供应商定价）</td></tr>
+        <tr><td>gross_profit</td><td>计算值</td><td>total_recharged - total_api_cost</td></tr>
+        <tr><td>profit_margin</td><td>计算值</td><td>gross_profit / total_recharged × 100%</td></tr>
+        <tr><td>active_orgs</td><td>conversations</td><td>近30天有对话的企业数</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 页脚 -->
+<div style="text-align:center;padding:40px 0;color:var(--text-dim);font-size:12px;border-top:1px solid var(--border);margin-top:32px;">
+  AI Team PRD v2.0 · 基于《具体页面描述.docx》重新设计 · 2026-05-24<br>
+  企业前台 9 页面 · 企业后台 9 页面 · 系统后台 4 页面 · 共 22 页面
+</div>
+
+</main>
+
+<script>
+// 侧边栏高亮跟随滚动
+const items = document.querySelectorAll('.sidebar-item[href^="#"]');
+const sections = [];
+items.forEach(item => {
+  const id = item.getAttribute('href').slice(1);
+  const el = document.getElementById(id);
+  if (el) sections.push({ id, el, item });
+});
+window.addEventListener('scroll', () => {
+  const y = window.scrollY + 100;
+  let current = sections[0];
+  sections.forEach(s => { if (s.el.offsetTop <= y) current = s; });
+  items.forEach(i => i.classList.remove('active'));
+  if (current) current.item.classList.add('active');
+}, { passive: true });
+// 平滑滚动
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const t = document.getElementById(a.getAttribute('href').slice(1));
+    if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,782 @@
+<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpsCustomData="http://www.wps.cn/officeDocument/2013/wpsCustomData" mc:Ignorable="w14 w15 wp14">
+  <w:body>
+    <w:p w14:paraId="04FF2DD9">
+      <w:pPr>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>页面</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="77B198A5">
+      <w:pPr>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>企业前台（电脑客户端）</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="4AF7A641">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>登录页，支持微信扫码、手机号登录</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="02924411">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>主界面私聊对话：默认没有员工，需要招募数字员工，进入人才市场</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="2D3F36A2">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>人才市场页面：各类专家分类列表页，类似</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="76256819">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="114300" distR="114300">
+            <wp:extent cx="5260975" cy="4831080"/>
+            <wp:effectExtent l="0" t="0" r="9525" b="7620"/>
+            <wp:docPr id="1" name="图片 1"/>
+            <wp:cNvGraphicFramePr>
+              <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="1" name="图片 1"/>
+                    <pic:cNvPicPr>
+                      <a:picLocks noChangeAspect="1"/>
+                    </pic:cNvPicPr>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId4"/>
+                    <a:stretch>
+                      <a:fillRect/>
+                    </a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm>
+                      <a:off x="0" y="0"/>
+                      <a:ext cx="5260975" cy="4831080"/>
+                    </a:xfrm>
+                    <a:prstGeom prst="rect">
+                      <a:avLst/>
+                    </a:prstGeom>
+                    <a:noFill/>
+                    <a:ln>
+                      <a:noFill/>
+                    </a:ln>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="003C3BF6">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>点击可查看专家详情页，有具体岗位描述、使用的大模型、skills列表、知识库、初始记忆等，点击可招募，招募成功有动画，加入企业</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="5244F6D6">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>单聊对话页：员工招募到自己组织内可进行私聊对话</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="69C750C3">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>群聊页面：招募多个数字员工后，可组建群聊</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="128DDCFE">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>组织架构页面：招募多个数字员工后，可配置组织架构，管理员工权限</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="69E004E9">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>知识库页面：可配置公司级知识库，以及知识库权限，可关联腾讯文档或者钉钉文档或者某些开放API的笔记软件</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="407119D2">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="1"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>办公室页面：类似于marvis的办公室，用动效显示各个员工的工作状态</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="02AFF3B7">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="114300" distR="114300">
+            <wp:extent cx="5269230" cy="4653915"/>
+            <wp:effectExtent l="0" t="0" r="1270" b="6985"/>
+            <wp:docPr id="2" name="图片 2"/>
+            <wp:cNvGraphicFramePr>
+              <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="2" name="图片 2"/>
+                    <pic:cNvPicPr>
+                      <a:picLocks noChangeAspect="1"/>
+                    </pic:cNvPicPr>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId5"/>
+                    <a:stretch>
+                      <a:fillRect/>
+                    </a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm>
+                      <a:off x="0" y="0"/>
+                      <a:ext cx="5269230" cy="4653915"/>
+                    </a:xfrm>
+                    <a:prstGeom prst="rect">
+                      <a:avLst/>
+                    </a:prstGeom>
+                    <a:noFill/>
+                    <a:ln>
+                      <a:noFill/>
+                    </a:ln>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="4C1B0410">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>企业后台（电脑客户端）：</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="4A803292">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>数字员工：支持新增、修改、解雇数字员工，配置岗位描述提示词、大模型、skills、知识库、记忆等</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="7024D866">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>技能市场：对接clawhub、skillhub</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="20436169">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>人才市场：跟企业前台一样</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="2CC7073C">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>工资管理：可以查看各员工已经消耗的token（工资）</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="2BC4C384">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>连接器：自定义MCP服务、管理已经链接的软件，页面可参考</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="4E563526">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+      </w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="114300" distR="114300">
+            <wp:extent cx="5274310" cy="4362450"/>
+            <wp:effectExtent l="0" t="0" r="8890" b="6350"/>
+            <wp:docPr id="3" name="图片 3"/>
+            <wp:cNvGraphicFramePr>
+              <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="3" name="图片 3"/>
+                    <pic:cNvPicPr>
+                      <a:picLocks noChangeAspect="1"/>
+                    </pic:cNvPicPr>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId6"/>
+                    <a:stretch>
+                      <a:fillRect/>
+                    </a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm>
+                      <a:off x="0" y="0"/>
+                      <a:ext cx="5274310" cy="4362450"/>
+                    </a:xfrm>
+                    <a:prstGeom prst="rect">
+                      <a:avLst/>
+                    </a:prstGeom>
+                    <a:noFill/>
+                    <a:ln>
+                      <a:noFill/>
+                    </a:ln>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="667D4CCF">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>行业AI解决方案：展示9大行业的AI解决方案案例，可以一键应用到自己的企业</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="72562FDF">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>记忆管理：可管理记忆</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="0DD16215">
+      <w:pPr>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:ind w:leftChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="114300" distR="114300">
+            <wp:extent cx="5272405" cy="4643120"/>
+            <wp:effectExtent l="0" t="0" r="10795" b="5080"/>
+            <wp:docPr id="4" name="图片 4"/>
+            <wp:cNvGraphicFramePr>
+              <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="4" name="图片 4"/>
+                    <pic:cNvPicPr>
+                      <a:picLocks noChangeAspect="1"/>
+                    </pic:cNvPicPr>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId7"/>
+                    <a:stretch>
+                      <a:fillRect/>
+                    </a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm>
+                      <a:off x="0" y="0"/>
+                      <a:ext cx="5272405" cy="4643120"/>
+                    </a:xfrm>
+                    <a:prstGeom prst="rect">
+                      <a:avLst/>
+                    </a:prstGeom>
+                    <a:noFill/>
+                    <a:ln>
+                      <a:noFill/>
+                    </a:ln>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="26134115">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>设置：账户管理、子管理员账号、版本管理、帮助与反馈</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="3A96B96E">
+      <w:pPr>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="2"/>
+        </w:numPr>
+        <w:ind w:left="0" w:leftChars="0" w:firstLine="0" w:firstLineChars="0"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>充值：充值费用，用于消耗token、</w:t>
+      </w:r>
+      <w:bookmarkStart w:id="0" w:name="_GoBack"/>
+      <w:bookmarkEnd w:id="0"/>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>token消耗统计和每日明细</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="1FAE8C2F">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+    </w:p>
+    <w:p w14:paraId="72EAE1DC">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+    </w:p>
+    <w:p w14:paraId="3FC89167">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>系统管理后台（web端）：</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="44580BEA">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="3"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>账号管理：展示已经开通账号的信息、企业名称、充值情况、token消耗情况等</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="68A4765F">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="3"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>专家管理：新增专家到人才市场</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="6E847445">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="3"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>行业AI解决方案管理：新增解决方案到方案库</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="2793D5CA">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:ilvl w:val="0"/>
+          <w:numId w:val="3"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:hint="eastAsia"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+        <w:t>财务管理：总充值金额、日月年统计、消耗token统计、利润统计（token差价）</w:t>
+      </w:r>
+    </w:p>
+    <w:p w14:paraId="596FFF7C">
+      <w:pPr>
+        <w:widowControl w:val="0"/>
+        <w:numPr>
+          <w:numId w:val="0"/>
+        </w:numPr>
+        <w:jc w:val="both"/>
+        <w:rPr>
+          <w:rFonts w:hint="default"/>
+          <w:lang w:val="en-US" w:eastAsia="zh-CN"/>
+        </w:rPr>
+      </w:pPr>
+    </w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>
+      <w:cols w:space="425" w:num="1"/>
+      <w:docGrid w:type="lines" w:linePitch="312" w:charSpace="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>

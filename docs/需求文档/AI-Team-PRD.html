@@ -1,0 +1,2574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Team — 产品需求文档（PRD）v1.0</title>
+<style>
+  :root {
+    --brand: #2563EB;
+    --brand-light: #EFF6FF;
+    --brand-mid: #BFDBFE;
+    --accent: #0EA5E9;
+    --success: #10B981;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --purple: #8B5CF6;
+    --gray-50: #F8FAFC;
+    --gray-100: #F1F5F9;
+    --gray-200: #E2E8F0;
+    --gray-300: #CBD5E1;
+    --gray-400: #94A3B8;
+    --gray-500: #64748B;
+    --gray-600: #475569;
+    --gray-700: #334155;
+    --gray-800: #1E293B;
+    --gray-900: #0F172A;
+    --text: #1E293B;
+    --text-light: #64748B;
+    --border: #E2E8F0;
+    --radius: 10px;
+    --radius-lg: 16px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.10);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    background: var(--gray-50);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 14px;
+  }
+
+  /* ===== TOP NAV ===== */
+  .top-nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 16px; font-weight: 700; color: var(--brand);
+    text-decoration: none;
+  }
+  .nav-brand .logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--brand), var(--accent));
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 16px; font-weight: 800;
+  }
+  .nav-meta { display: flex; gap: 16px; align-items: center; }
+  .nav-badge {
+    background: var(--brand-light); color: var(--brand);
+    padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  }
+  .nav-meta .date { color: var(--text-light); font-size: 12px; }
+
+  /* ===== LAYOUT ===== */
+  .layout {
+    display: flex;
+    padding-top: 56px;
+    min-height: 100vh;
+  }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar {
+    width: 260px; min-width: 260px;
+    position: sticky; top: 56px;
+    height: calc(100vh - 56px);
+    overflow-y: auto;
+    background: white;
+    border-right: 1px solid var(--border);
+    padding: 24px 0;
+  }
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 4px; }
+
+  .sidebar-section { margin-bottom: 8px; }
+  .sidebar-group-label {
+    padding: 6px 20px; font-size: 10px; font-weight: 700;
+    color: var(--gray-400); text-transform: uppercase; letter-spacing: 1px;
+  }
+  .sidebar-link {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 20px; color: var(--gray-600); text-decoration: none;
+    font-size: 13px; border-left: 3px solid transparent;
+    transition: all 0.15s;
+    cursor: pointer;
+  }
+  .sidebar-link:hover { background: var(--gray-50); color: var(--brand); }
+  .sidebar-link.active { background: var(--brand-light); color: var(--brand); border-left-color: var(--brand); font-weight: 600; }
+  .sidebar-link .icon { font-size: 14px; width: 18px; text-align: center; }
+  .sidebar-link .num {
+    margin-left: auto; background: var(--gray-100); color: var(--gray-500);
+    font-size: 10px; padding: 1px 6px; border-radius: 20px; font-weight: 600;
+  }
+
+  /* ===== MAIN CONTENT ===== */
+  .main {
+    flex: 1; min-width: 0;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 48px 80px;
+  }
+
+  /* ===== SECTION ===== */
+  .section {
+    margin-bottom: 56px;
+  }
+
+  .section-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid var(--brand-light);
+  }
+  .section-number {
+    width: 36px; height: 36px; min-width: 36px;
+    background: linear-gradient(135deg, var(--brand), var(--accent));
+    color: white; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 800;
+  }
+  .section-title { font-size: 22px; font-weight: 800; color: var(--gray-900); }
+  .section-subtitle { font-size: 13px; color: var(--text-light); margin-top: 2px; }
+
+  /* ===== HERO ===== */
+  .hero {
+    background: linear-gradient(135deg, #1E3A8A 0%, #1D4ED8 40%, #0EA5E9 100%);
+    border-radius: var(--radius-lg);
+    padding: 48px;
+    color: white;
+    margin-bottom: 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; top: -40px; right: -40px;
+    width: 300px; height: 300px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+  }
+  .hero::after {
+    content: '';
+    position: absolute; bottom: -60px; right: 80px;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 50%;
+  }
+  .hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.15);
+    padding: 5px 14px; border-radius: 20px;
+    font-size: 12px; font-weight: 600; margin-bottom: 20px;
+    backdrop-filter: blur(4px);
+  }
+  .hero h1 { font-size: 32px; font-weight: 900; margin-bottom: 14px; line-height: 1.3; }
+  .hero p { font-size: 15px; opacity: 0.85; max-width: 560px; line-height: 1.7; }
+  .hero-meta {
+    margin-top: 28px; display: flex; gap: 24px; flex-wrap: wrap;
+  }
+  .hero-meta-item { font-size: 12px; opacity: 0.75; }
+  .hero-meta-item strong { opacity: 1; font-weight: 700; display: block; font-size: 14px; }
+  .hero-badge-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 24px; }
+  .hero-badge {
+    background: rgba(255,255,255,0.18); padding: 6px 14px; border-radius: 20px;
+    font-size: 12px; font-weight: 600; backdrop-filter: blur(4px);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+
+  /* ===== CARDS ===== */
+  .card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px;
+    box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 15px; font-weight: 700; color: var(--gray-900);
+    margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .card-title .icon { font-size: 16px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+  /* ===== VALUE CARDS ===== */
+  .value-card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 28px;
+    box-shadow: var(--shadow);
+    border-top: 4px solid var(--brand);
+    position: relative; overflow: hidden;
+  }
+  .value-card::after {
+    content: ''; position: absolute; top: -20px; right: -20px;
+    width: 80px; height: 80px;
+    background: var(--brand-light); border-radius: 50%;
+  }
+  .value-card .icon { font-size: 28px; margin-bottom: 12px; display: block; }
+  .value-card h3 { font-size: 16px; font-weight: 800; margin-bottom: 8px; color: var(--gray-900); }
+  .value-card p { font-size: 13px; color: var(--text-light); line-height: 1.7; }
+
+  /* ===== USER SEGMENTS ===== */
+  .user-card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .user-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .user-avatar {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .user-card-title { font-size: 14px; font-weight: 700; color: var(--gray-900); }
+  .user-card-pct { font-size: 12px; color: var(--text-light); }
+  .tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tag {
+    background: var(--gray-100); color: var(--gray-600);
+    padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500;
+  }
+  .tag.blue { background: var(--brand-light); color: var(--brand); }
+  .tag.green { background: #ECFDF5; color: #059669; }
+  .tag.orange { background: #FFF7ED; color: #D97706; }
+  .tag.purple { background: #F5F3FF; color: #7C3AED; }
+  .pain-point { font-size: 12px; color: var(--gray-500); }
+  .pain-point strong { color: var(--danger); }
+  .value-point { font-size: 12px; color: var(--gray-500); margin-top: 4px; }
+  .value-point strong { color: var(--success); }
+
+  /* ===== SCENARIO CARDS ===== */
+  .scenario-card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 24px;
+    box-shadow: var(--shadow); margin-bottom: 20px;
+  }
+  .scenario-header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+  .scenario-num {
+    width: 40px; height: 40px; min-width: 40px;
+    border-radius: 12px; background: linear-gradient(135deg, var(--brand), var(--accent));
+    color: white; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 800;
+  }
+  .scenario-title { font-size: 16px; font-weight: 800; color: var(--gray-900); }
+  .scenario-desc { font-size: 13px; color: var(--text-light); margin-top: 4px; }
+
+  .flow-steps { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+  .flow-step {
+    background: var(--brand-light); border: 1px solid var(--brand-mid);
+    color: var(--brand); padding: 8px 14px; border-radius: 8px;
+    font-size: 12px; font-weight: 600;
+  }
+  .flow-arrow { color: var(--gray-400); padding: 0 8px; font-size: 14px; }
+
+  /* ===== FEATURE MODULES ===== */
+  .feature-block {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden;
+    box-shadow: var(--shadow); margin-bottom: 24px;
+  }
+  .feature-block-header {
+    background: linear-gradient(90deg, var(--brand-light), white);
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .feature-block-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--brand), var(--accent));
+    color: white; display: flex; align-items: center; justify-content: center; font-size: 17px;
+  }
+  .feature-block-title { font-size: 16px; font-weight: 800; color: var(--gray-900); }
+  .feature-block-sub { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+  .feature-block-body { padding: 24px; }
+
+  .feature-list { list-style: none; }
+  .feature-list li {
+    padding: 8px 0; font-size: 13px; color: var(--gray-700);
+    border-bottom: 1px dashed var(--gray-100);
+    display: flex; gap: 10px;
+  }
+  .feature-list li:last-child { border-bottom: none; }
+  .feature-list li::before { content: '✓'; color: var(--success); font-weight: 700; flex-shrink: 0; }
+
+  .value-box {
+    background: var(--brand-light); border: 1px solid var(--brand-mid);
+    border-radius: 8px; padding: 14px 16px; margin-top: 16px;
+  }
+  .value-box-label {
+    font-size: 11px; font-weight: 700; color: var(--brand); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  .value-box p { font-size: 13px; color: var(--gray-700); }
+
+  /* ===== INFO TABLE ===== */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    background: var(--gray-900); color: white; text-align: left;
+    padding: 12px 16px; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  th:first-child { border-radius: 8px 0 0 0; }
+  th:last-child { border-radius: 0 8px 0 0; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--gray-50); }
+  .tick { color: var(--success); font-weight: 700; }
+  .cross { color: var(--danger); }
+  .partial { color: var(--warning); font-weight: 600; }
+
+  /* ===== PROTOTYPE FRAMES ===== */
+  .proto-section { margin-bottom: 32px; }
+  .proto-label {
+    font-size: 13px; font-weight: 700; color: var(--gray-600);
+    margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .proto-label .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--brand);
+  }
+  .proto-tab-bar {
+    display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .proto-tab {
+    padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    border: 2px solid var(--border); background: white; cursor: pointer;
+    color: var(--gray-600); transition: all 0.15s;
+  }
+  .proto-tab:hover { border-color: var(--brand); color: var(--brand); }
+  .proto-tab.active { background: var(--brand); color: white; border-color: var(--brand); }
+  .proto-wrapper { display: none; }
+  .proto-wrapper.active { display: block; }
+
+  /* ===== PC WIREFRAME ===== */
+  .pc-frame {
+    background: var(--gray-900); border-radius: 12px; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  }
+  .pc-titlebar {
+    background: #1a1a2e; padding: 10px 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .pc-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+  }
+  .pc-dot.red { background: #FF5F57; }
+  .pc-dot.yellow { background: #FFBD2E; }
+  .pc-dot.green { background: #28C840; }
+  .pc-url {
+    flex: 1; background: rgba(255,255,255,0.08); border-radius: 4px;
+    padding: 4px 12px; font-size: 11px; color: rgba(255,255,255,0.5);
+    margin: 0 16px;
+  }
+  .pc-body {
+    display: flex; background: #0F1117;
+    min-height: 520px;
+  }
+  .pc-sidebar-nav {
+    width: 68px; background: #161B27; border-right: 1px solid rgba(255,255,255,0.06);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px 0; gap: 6px;
+  }
+  .pc-nav-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer; transition: all 0.15s; color: rgba(255,255,255,0.4);
+  }
+  .pc-nav-icon:hover { background: rgba(255,255,255,0.08); color: white; }
+  .pc-nav-icon.active { background: rgba(37,99,235,0.3); color: #60A5FA; }
+  .pc-left-panel {
+    width: 220px; background: #161B27; border-right: 1px solid rgba(255,255,255,0.06);
+    display: flex; flex-direction: column;
+  }
+  .pc-panel-header {
+    padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 1px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .pc-panel-header .add-btn {
+    width: 22px; height: 22px; background: rgba(37,99,235,0.5); border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 14px; cursor: pointer;
+  }
+  .pc-agent-item {
+    padding: 10px 16px; display: flex; align-items: center; gap: 10px;
+    cursor: pointer; border-radius: 8px; margin: 2px 8px; transition: all 0.15s;
+  }
+  .pc-agent-item:hover { background: rgba(255,255,255,0.06); }
+  .pc-agent-item.active { background: rgba(37,99,235,0.2); }
+  .pc-agent-avatar {
+    width: 34px; height: 34px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+    flex-shrink: 0;
+  }
+  .pc-agent-info { flex: 1; min-width: 0; }
+  .pc-agent-name { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc-agent-role { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 1px; }
+  .pc-main-chat { flex: 1; display: flex; flex-direction: column; }
+  .pc-chat-header {
+    padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pc-chat-header .avatar { width: 36px; height: 36px; border-radius: 10px; background: rgba(37,99,235,0.4); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .pc-chat-name { font-size: 14px; font-weight: 700; color: white; }
+  .pc-chat-status { font-size: 11px; color: #34D399; margin-top: 1px; }
+  .pc-chat-tools { margin-left: auto; display: flex; gap: 8px; }
+  .pc-chat-tool-btn {
+    width: 30px; height: 30px; border-radius: 8px; background: rgba(255,255,255,0.08);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255,255,255,0.5); font-size: 13px; cursor: pointer;
+  }
+  .pc-messages { flex: 1; padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+  .pc-msg { display: flex; gap: 10px; max-width: 85%; }
+  .pc-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .pc-msg-avatar { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .pc-msg-bubble {
+    padding: 10px 14px; border-radius: 12px; font-size: 12px; line-height: 1.6;
+    max-width: 100%;
+  }
+  .pc-msg .pc-msg-bubble { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.85); border-radius: 4px 12px 12px 12px; }
+  .pc-msg.user .pc-msg-bubble { background: #2563EB; color: white; border-radius: 12px 4px 12px 12px; }
+  .pc-thinking-box {
+    background: rgba(139,92,246,0.1); border: 1px solid rgba(139,92,246,0.3);
+    border-radius: 8px; padding: 8px 12px; font-size: 11px; color: rgba(139,92,246,0.8);
+    margin-top: 6px;
+  }
+  .pc-thinking-box .label { font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 4px; }
+  .pc-input-area {
+    padding: 12px 20px; border-top: 1px solid rgba(255,255,255,0.06);
+    background: rgba(0,0,0,0.2);
+  }
+  .pc-input-box {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pc-input-placeholder { font-size: 12px; color: rgba(255,255,255,0.3); flex: 1; }
+  .pc-input-actions { display: flex; gap: 6px; }
+  .pc-input-btn {
+    width: 28px; height: 28px; border-radius: 7px; background: rgba(255,255,255,0.08);
+    display: flex; align-items: center; justify-content: center; font-size: 12px; color: rgba(255,255,255,0.5);
+  }
+  .pc-input-btn.send { background: #2563EB; color: white; }
+
+  .pc-right-panel {
+    width: 220px; background: #161B27; border-left: 1px solid rgba(255,255,255,0.06);
+    padding: 16px;
+  }
+  .pc-right-title { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .pc-skill-item {
+    display: flex; align-items: center; gap: 8px; padding: 7px 8px;
+    background: rgba(255,255,255,0.04); border-radius: 7px; margin-bottom: 6px;
+  }
+  .pc-skill-icon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .pc-skill-name { font-size: 11px; color: rgba(255,255,255,0.6); font-weight: 500; }
+  .pc-skill-on { margin-left: auto; width: 26px; height: 14px; background: #2563EB; border-radius: 7px; position: relative; }
+  .pc-skill-on::after { content: ''; position: absolute; right: 2px; top: 2px; width: 10px; height: 10px; background: white; border-radius: 50%; }
+  .pc-memory-item {
+    background: rgba(255,255,255,0.04); border-radius: 7px;
+    padding: 7px 10px; margin-bottom: 6px; font-size: 11px;
+    color: rgba(255,255,255,0.5);
+  }
+  .pc-memory-type { font-size: 10px; color: #60A5FA; font-weight: 600; margin-bottom: 2px; }
+
+  /* ===== APP WIREFRAME ===== */
+  .app-frame-row { display: flex; gap: 24px; justify-content: flex-start; flex-wrap: wrap; align-items: flex-start; }
+  .app-frame {
+    background: white; border-radius: 20px;
+    overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    border: 8px solid #1a1a2e; position: relative;
+    width: 240px; flex-shrink: 0;
+  }
+  .app-notch {
+    height: 28px; background: #0F1117;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .app-notch-bar { width: 80px; height: 10px; background: #0a0a0a; border-radius: 5px; }
+  .app-screen { background: #0F1117; min-height: 400px; }
+  .app-status-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 14px; font-size: 10px; color: rgba(255,255,255,0.6);
+  }
+  .app-header {
+    padding: 8px 14px 10px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .app-header-title { font-size: 14px; font-weight: 800; color: white; }
+  .app-header-sub { font-size: 10px; color: rgba(255,255,255,0.4); }
+  .app-nav-btn { margin-left: auto; width: 28px; height: 28px; background: rgba(255,255,255,0.08); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.6); font-size: 12px; }
+  .app-content { padding: 10px 14px; }
+  .app-search {
+    background: rgba(255,255,255,0.06); border-radius: 8px;
+    padding: 8px 12px; font-size: 11px; color: rgba(255,255,255,0.35);
+    margin-bottom: 12px; display: flex; align-items: center; gap: 6px;
+  }
+  .app-section-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .app-agent-card {
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px; padding: 10px; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .app-agent-avatar { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .app-agent-name { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.85); }
+  .app-agent-role { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+  .app-agent-badge { margin-left: auto; background: rgba(37,99,235,0.3); color: #60A5FA; padding: 2px 7px; border-radius: 10px; font-size: 9px; font-weight: 700; }
+  .app-bottom-nav {
+    display: flex; border-top: 1px solid rgba(255,255,255,0.06);
+    padding: 8px 0 4px;
+  }
+  .app-bottom-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 9px; color: rgba(255,255,255,0.4); cursor: pointer;
+    padding: 4px 0;
+  }
+  .app-bottom-btn.active { color: #2563EB; }
+  .app-bottom-btn .icon { font-size: 16px; }
+
+  /* Chat screen */
+  .app-chat-bubble {
+    background: rgba(255,255,255,0.07); border-radius: 10px; padding: 9px 11px;
+    font-size: 10px; color: rgba(255,255,255,0.8); line-height: 1.5;
+    margin-bottom: 8px;
+  }
+  .app-chat-bubble.me { background: #2563EB; color: white; margin-left: 20px; }
+  .app-chat-sender { font-size: 9px; color: rgba(255,255,255,0.4); margin-bottom: 3px; font-weight: 600; }
+  .app-chat-input {
+    background: rgba(255,255,255,0.06); border-radius: 8px;
+    padding: 8px 10px; display: flex; align-items: center; gap: 6px; margin-top: 8px;
+  }
+  .app-chat-placeholder { font-size: 10px; color: rgba(255,255,255,0.25); flex: 1; }
+  .app-send-btn { width: 24px; height: 24px; background: #2563EB; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; }
+
+  /* ===== WEB ADMIN WIREFRAME ===== */
+  .admin-frame {
+    background: white; border-radius: var(--radius);
+    overflow: hidden; box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+  }
+  .admin-topbar {
+    background: var(--gray-900); padding: 0 24px;
+    display: flex; align-items: center; gap: 16px; height: 52px;
+  }
+  .admin-logo { color: white; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+  .admin-logo-dot { width: 24px; height: 24px; background: linear-gradient(135deg, #2563EB, #0EA5E9); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 800; }
+  .admin-nav { display: flex; gap: 4px; margin-left: 24px; }
+  .admin-nav-item { padding: 6px 12px; border-radius: 6px; font-size: 12px; color: rgba(255,255,255,0.6); cursor: pointer; transition: all 0.15s; }
+  .admin-nav-item:hover { background: rgba(255,255,255,0.08); color: white; }
+  .admin-nav-item.active { background: rgba(37,99,235,0.4); color: #60A5FA; font-weight: 600; }
+  .admin-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .admin-avatar-sm { width: 28px; height: 28px; background: #2563EB; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
+
+  .admin-body { display: flex; min-height: 480px; }
+  .admin-sidebar {
+    width: 200px; background: var(--gray-50); border-right: 1px solid var(--border);
+    padding: 16px 0;
+  }
+  .admin-sidebar-group { margin-bottom: 12px; }
+  .admin-sidebar-label { padding: 4px 16px; font-size: 10px; font-weight: 700; color: var(--gray-400); text-transform: uppercase; letter-spacing: 1px; }
+  .admin-sidebar-item {
+    padding: 8px 16px; font-size: 12px; color: var(--gray-600);
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .admin-sidebar-item:hover { background: var(--gray-100); color: var(--brand); }
+  .admin-sidebar-item.active { background: var(--brand-light); color: var(--brand); border-left-color: var(--brand); font-weight: 600; }
+  .admin-sidebar-item .badge { margin-left: auto; background: var(--danger); color: white; border-radius: 10px; padding: 1px 6px; font-size: 9px; font-weight: 700; }
+
+  .admin-content { flex: 1; padding: 20px 24px; overflow: hidden; }
+  .admin-content-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .admin-content-title { font-size: 16px; font-weight: 800; color: var(--gray-900); }
+  .admin-btn {
+    padding: 7px 14px; border-radius: 7px; font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.15s;
+    border: 1px solid transparent;
+  }
+  .admin-btn.primary { background: var(--brand); color: white; }
+  .admin-btn.secondary { background: white; color: var(--gray-700); border-color: var(--border); }
+  .admin-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+  .admin-stat-row { display: flex; gap: 12px; margin-bottom: 20px; }
+  .admin-stat-card {
+    flex: 1; background: white; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .admin-stat-label { font-size: 11px; color: var(--text-light); margin-bottom: 6px; }
+  .admin-stat-value { font-size: 22px; font-weight: 900; color: var(--gray-900); }
+  .admin-stat-change { font-size: 11px; margin-top: 4px; }
+  .admin-stat-change.up { color: var(--success); }
+  .admin-stat-change.down { color: var(--danger); }
+
+  .admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .admin-table th { background: var(--gray-100); padding: 9px 12px; text-align: left; font-weight: 700; color: var(--gray-500); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .admin-table td { padding: 10px 12px; border-bottom: 1px solid var(--gray-100); color: var(--gray-700); vertical-align: middle; }
+  .admin-table tr:last-child td { border-bottom: none; }
+  .admin-table tr:hover td { background: var(--gray-50); }
+  .admin-status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+  .admin-status.active { background: #ECFDF5; color: #059669; }
+  .admin-status.paused { background: #FFF7ED; color: #D97706; }
+  .admin-status.error { background: #FEF2F2; color: #DC2626; }
+  .admin-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* ===== INTERACTION SPECS ===== */
+  .interaction-card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .interaction-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .interaction-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+  }
+  .interaction-title { font-size: 15px; font-weight: 700; color: var(--gray-900); }
+  .interaction-desc { font-size: 13px; color: var(--text-light); line-height: 1.7; }
+
+  .spec-table { width: 100%; font-size: 12px; margin-top: 12px; }
+  .spec-table td { padding: 7px 10px; border-bottom: 1px solid var(--gray-100); }
+  .spec-table td:first-child { color: var(--gray-500); width: 120px; font-weight: 600; }
+  .spec-table td:last-child { color: var(--gray-800); font-family: 'JetBrains Mono', monospace; }
+
+  /* ===== ANIMATION SPEC ===== */
+  .anim-card {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .anim-preview {
+    height: 64px; border-radius: 8px;
+    background: var(--gray-50); border: 1px solid var(--gray-200);
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    margin-bottom: 12px; overflow: hidden; position: relative;
+  }
+
+  /* ===== DATA SCHEMA ===== */
+  .data-schema-block {
+    background: var(--gray-900); border-radius: var(--radius);
+    padding: 20px; margin-top: 12px; overflow-x: auto;
+  }
+  .data-schema-block pre {
+    color: #E5E7EB; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.7;
+  }
+  .c-key { color: #60A5FA; }
+  .c-type { color: #34D399; }
+  .c-comment { color: #6B7280; }
+  .c-string { color: #FCD34D; }
+  .c-num { color: #F87171; }
+
+  /* ===== ROADMAP ===== */
+  .roadmap-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .roadmap-phase {
+    background: white; border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .roadmap-phase-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .roadmap-phase-badge {
+    padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700;
+    white-space: nowrap;
+  }
+  .phase-q2 { background: #ECFDF5; color: #059669; }
+  .phase-q3 { background: var(--brand-light); color: var(--brand); }
+  .phase-q4 { background: #F5F3FF; color: #7C3AED; }
+  .roadmap-item { display: flex; gap: 8px; font-size: 12px; color: var(--gray-700); margin-bottom: 8px; }
+  .roadmap-item::before { content: '→'; color: var(--gray-400); flex-shrink: 0; }
+
+  /* ===== PRIORITY MATRIX ===== */
+  .priority-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700;
+  }
+  .p0 { background: #FEF2F2; color: #DC2626; }
+  .p1 { background: #FFF7ED; color: #D97706; }
+  .p2 { background: var(--brand-light); color: var(--brand); }
+  .p3 { background: var(--gray-100); color: var(--gray-500); }
+
+  /* ===== MISC ===== */
+  .info-block {
+    background: var(--brand-light); border: 1px solid var(--brand-mid);
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 16px;
+    font-size: 13px; color: var(--gray-700);
+  }
+  .info-block strong { color: var(--brand); }
+
+  .warning-block {
+    background: #FFFBEB; border: 1px solid #FDE68A;
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 16px;
+    font-size: 13px; color: var(--gray-700);
+  }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+  p { color: var(--gray-700); font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
+
+  .label-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    border: 1px solid;
+  }
+  .label-pill.blue { background: var(--brand-light); color: var(--brand); border-color: var(--brand-mid); }
+  .label-pill.green { background: #ECFDF5; color: #059669; border-color: #A7F3D0; }
+  .label-pill.orange { background: #FFF7ED; color: #D97706; border-color: #FDE68A; }
+  .label-pill.purple { background: #F5F3FF; color: #7C3AED; border-color: #DDD6FE; }
+  .label-pill.red { background: #FEF2F2; color: #DC2626; border-color: #FECACA; }
+
+  ul.md-list { list-style: none; margin-bottom: 12px; }
+  ul.md-list li { padding: 5px 0; font-size: 13px; color: var(--gray-700); display: flex; gap: 10px; }
+  ul.md-list li::before { content: '•'; color: var(--brand); font-weight: 800; flex-shrink: 0; }
+
+  @media print {
+    .top-nav, .sidebar { display: none; }
+    .main { max-width: 100%; padding: 20px; }
+  }
+
+  /* ===== ANIMATION DEMO ===== */
+  @keyframes typing { 0%,100%{opacity:0.3} 50%{opacity:1} }
+  .typing-dot { width: 6px; height: 6px; background: var(--brand); border-radius: 50%; display: inline-block; animation: typing 1s ease-in-out infinite; }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes fadeUp { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+  @keyframes shimmer { 0%{background-position:-200%} 100%{background-position:200%} }
+
+  .demo-slide { animation: slideIn 0.4s ease; }
+  .demo-fade { animation: fadeUp 0.3s ease; }
+</style>
+</head>
+<body>
+
+<!-- TOP NAV -->
+<nav class="top-nav">
+  <a class="nav-brand" href="#top">
+    <div class="logo">AT</div>
+    AI Team PRD
+  </a>
+  <div class="nav-meta">
+    <span class="nav-badge">v1.0</span>
+    <span class="date">撰写：2026-05-24 &nbsp;·&nbsp; 产品版本 v0.3.x</span>
+  </div>
+</nav>
+
+<!-- LAYOUT -->
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">文档导航</div>
+      <a class="sidebar-link active" href="#overview"><span class="icon">📋</span> 产品概述</a>
+      <a class="sidebar-link" href="#background"><span class="icon">🎯</span> 需求背景</a>
+      <a class="sidebar-link" href="#users"><span class="icon">👥</span> 目标用户</a>
+      <a class="sidebar-link" href="#scenarios"><span class="icon">📸</span> 应用场景</a>
+      <a class="sidebar-link" href="#architecture"><span class="icon">🏗️</span> 产品框架</a>
+      <a class="sidebar-link" href="#features"><span class="icon">⚡</span> 功能模块</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">设计规范</div>
+      <a class="sidebar-link" href="#prototypes"><span class="icon">🖥️</span> UED 原型图</a>
+      <a class="sidebar-link" href="#interactions"><span class="icon">👆</span> 交互方式</a>
+      <a class="sidebar-link" href="#animations"><span class="icon">✨</span> 页面动效</a>
+      <a class="sidebar-link" href="#data"><span class="icon">🗄️</span> 数据设计</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-group-label">研发指南</div>
+      <a class="sidebar-link" href="#tech"><span class="icon">⚙️</span> 技术架构</a>
+      <a class="sidebar-link" href="#priority"><span class="icon">📌</span> 需求优先级</a>
+      <a class="sidebar-link" href="#roadmap"><span class="icon">🗺️</span> 产品路线图</a>
+      <a class="sidebar-link" href="#competition"><span class="icon">⚔️</span> 竞品对比</a>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main" id="top">
+
+    <!-- HERO -->
+    <div class="hero">
+      <div class="hero-eyebrow">🤖 产品需求文档（PRD）</div>
+      <h1>AI Team — 智能体团队协作平台</h1>
+      <p>面向企业和个人的多智能体协作操作系统，让每个人都能拥有一支自主分工、协同执行的 AI 员工队伍。</p>
+      <div class="hero-badge-row">
+        <span class="hero-badge">📦 v0.3.x OpenClaw</span>
+        <span class="hero-badge">🖥️ PC 桌面端</span>
+        <span class="hero-badge">📱 App 移动端</span>
+        <span class="hero-badge">🌐 Web 管理后台</span>
+        <span class="hero-badge">🔗 Node.js + SQLite</span>
+      </div>
+      <div class="hero-meta">
+        <div class="hero-meta-item"><strong>文档版本</strong>PRD v1.0</div>
+        <div class="hero-meta-item"><strong>产品版本</strong>v0.3.x</div>
+        <div class="hero-meta-item"><strong>撰写日期</strong>2026-05-24</div>
+        <div class="hero-meta-item"><strong>撰写人</strong>荆超（Chao）</div>
+        <div class="hero-meta-item"><strong>状态</strong>开发中</div>
+      </div>
+    </div>
+
+    <!-- ===== SECTION 1: 产品概述 ===== -->
+    <section id="overview" class="section">
+      <div class="section-header">
+        <div class="section-number">1</div>
+        <div>
+          <div class="section-title">产品概述</div>
+          <div class="section-subtitle">Product Overview</div>
+        </div>
+      </div>
+
+      <p>AI Team 是一个面向企业和个人的 <strong>智能体团队协作平台</strong>。它将多个具备独立角色、专项能力的 AI 智能体组织在统一的工作空间中，用户可以像管理真实团队一样，创建智能体成员、为其分配岗位与技能、搭建组织架构，并通过私聊或群聊的方式发起协作任务。智能体之间能够自主分工、互相委托、共享上下文，最终合力完成复杂的多步骤任务。</p>
+
+      <div class="info-block">
+        <strong>核心定位：</strong> 下一代 AI 工作站——把分散的 AI 对话工具，升级为一支可以持续运转、独立决策、协同执行的 AI 员工队伍。
+      </div>
+
+      <div class="grid-3">
+        <div class="value-card">
+          <span class="icon">🧩</span>
+          <h3>可组织</h3>
+          <p>像管理真实团队一样管理 AI 成员，支持完整的组织架构体系（部门/岗位/职级）</p>
+        </div>
+        <div class="value-card" style="border-top-color: var(--accent)">
+          <span class="icon">🤝</span>
+          <h3>可协作</h3>
+          <p>智能体之间自主分工委托，用户只需输入任务目标，剩下的交给团队自动完成</p>
+        </div>
+        <div class="value-card" style="border-top-color: var(--success)">
+          <span class="icon">🧠</span>
+          <h3>可进化</h3>
+          <p>每个智能体拥有独立记忆和持续运行能力，越用越懂你的业务场景</p>
+        </div>
+        <div class="value-card" style="border-top-color: var(--purple)">
+          <span class="icon">🔌</span>
+          <h3>可扩展</h3>
+          <p>技能市场支持按需为智能体装配新能力，一键安装即用，低门槛扩展</p>
+        </div>
+        <div class="value-card" style="border-top-color: var(--warning)">
+          <span class="icon">🔍</span>
+          <h3>可追溯</h3>
+          <p>完整的系统日志、对话历史和任务上下文，每一步执行都清晰可查</p>
+        </div>
+        <div class="value-card" style="border-top-color: var(--danger)">
+          <span class="icon">🏠</span>
+          <h3>本地安全</h3>
+          <p>纯本地化部署，数据存储在本地 SQLite，完全符合企业数据隐私要求</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 2: 需求背景 ===== -->
+    <section id="background" class="section">
+      <div class="section-header">
+        <div class="section-number">2</div>
+        <div>
+          <div class="section-title">需求背景</div>
+          <div class="section-subtitle">Background & Problem Statement</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">😤</span> 核心痛点分析</div>
+        <div class="grid-2">
+          <div>
+            <h4 style="font-size:13px; font-weight:700; color: var(--gray-900); margin-bottom:8px;">个人用户痛点</h4>
+            <ul class="md-list">
+              <li>独立工作者需要在写作、分析、编程、设计之间频繁切换工具</li>
+              <li>反复粘贴上下文，效率极低，一遍遍重复同样的任务说明</li>
+              <li>单一 AI 工具只能完成单点任务，无法串联完整工作流</li>
+              <li>多个 SaaS 工具分散，管理成本高，学习曲线陡峭</li>
+            </ul>
+          </div>
+          <div>
+            <h4 style="font-size:13px; font-weight:700; color: var(--gray-900); margin-bottom:8px;">企业/团队痛点</h4>
+            <ul class="md-list">
+              <li>人手不足，重复性知识工作（写报告、分析数据）耗时巨大</li>
+              <li>单点 AI SaaS 工具碎片化，管理成本与授权费用叠加</li>
+              <li>无法按照真实组织架构管理 AI 能力，难以系统化落地</li>
+              <li>AI 能力无法持续积累沉淀，每次使用都从零开始</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="icon">💡</span> 产品机会</div>
+          <p style="font-size:13px">AI 从"工具"走向"员工"的历史窗口期——现有平台要么是无协作的单智能体对话（ChatGPT 等），要么是对技术用户要求极高的工作流编排平台（n8n/Dify）。AI Team 填补了两者之间的空白：<strong>低门槛的多智能体协作操作系统</strong>。</p>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">📊</span> 市场定位</div>
+          <ul class="md-list">
+            <li><span class="label-pill blue">个人</span> 私人多角色 AI 工作团队</li>
+            <li><span class="label-pill green">企业</span> AI 员工扩充方案</li>
+            <li><span class="label-pill purple">开发者</span> 开放的多智能体实验平台</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 3: 目标用户 ===== -->
+    <section id="users" class="section">
+      <div class="section-header">
+        <div class="section-number">3</div>
+        <div>
+          <div class="section-title">目标用户</div>
+          <div class="section-subtitle">Target Users</div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="user-card">
+          <div class="user-card-header">
+            <div class="user-avatar" style="background: var(--brand-light);">✍️</div>
+            <div>
+              <div class="user-card-title">独立创作者 & 知识工作者</div>
+              <div class="user-card-pct">预计占比 40%</div>
+            </div>
+          </div>
+          <div class="tag-list">
+            <span class="tag blue">内容创作者</span>
+            <span class="tag blue">自媒体</span>
+            <span class="tag blue">研究员</span>
+            <span class="tag blue">作家</span>
+          </div>
+          <div class="pain-point"><strong>核心痛点：</strong>写作/调研/数据分析/视觉设计频繁切换</div>
+          <div class="value-point"><strong>AI Team 价值：</strong>搭建"写作+调研+排版"一体化私人 AI 工作团队</div>
+        </div>
+
+        <div class="user-card">
+          <div class="user-card-header">
+            <div class="user-avatar" style="background: #ECFDF5;">🏢</div>
+            <div>
+              <div class="user-card-title">创业团队 & 中小企业</div>
+              <div class="user-card-pct">预计占比 35%</div>
+            </div>
+          </div>
+          <div class="tag-list">
+            <span class="tag green">10~50人</span>
+            <span class="tag green">运营部门</span>
+            <span class="tag green">产品团队</span>
+          </div>
+          <div class="pain-point"><strong>核心痛点：</strong>人手不足，重复性知识工作耗时巨大</div>
+          <div class="value-point"><strong>AI Team 价值：</strong>极低成本部署 AI 增援团队承接日常工作</div>
+        </div>
+
+        <div class="user-card">
+          <div class="user-card-header">
+            <div class="user-avatar" style="background: #F5F3FF;">💻</div>
+            <div>
+              <div class="user-card-title">技术开发者 & AI 爱好者</div>
+              <div class="user-card-pct">预计占比 25%</div>
+            </div>
+          </div>
+          <div class="tag-list">
+            <span class="tag purple">Agent 开发</span>
+            <span class="tag purple">多智能体</span>
+            <span class="tag purple">高可定制</span>
+          </div>
+          <div class="pain-point"><strong>核心痛点：</strong>现有平台过于封闭，无法自定义智能体行为</div>
+          <div class="value-point"><strong>AI Team 价值：</strong>开放 Prompt 定制、技能扩展、可观测执行日志</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title"><span class="icon">🎯</span> 次要目标群体</div>
+        <p>教育机构、研究院所的小型研究团队；有数字化转型需求的传统行业职能部门（HR、法务、财务等）。</p>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 4: 应用场景 ===== -->
+    <section id="scenarios" class="section">
+      <div class="section-header">
+        <div class="section-number">4</div>
+        <div>
+          <div class="section-title">应用场景</div>
+          <div class="section-subtitle">Core Use Cases</div>
+        </div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-header">
+          <div class="scenario-num">1</div>
+          <div>
+            <div class="scenario-title">多角色内容生产流水线</div>
+            <div class="scenario-desc">用户设置「调研员」「写作者」「编辑」三个智能体，在群聊发出指令，三者通过龙虾编排协议自动流转</div>
+          </div>
+          <span class="label-pill blue" style="margin-left:auto; white-space:nowrap">个人用户</span>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">💬 用户发起指令</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🔍 调研员收集资料</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">✍️ 写作者起草内容</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">✏️ 编辑润色</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">📄 输出最终报告</div>
+        </div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-header">
+          <div class="scenario-num">2</div>
+          <div>
+            <div class="scenario-title">数据分析与可视化报告</div>
+            <div class="scenario-desc">企业运营团队将业务数据交给「数据分析师」智能体，配合代码执行技能自动完成数据清洗、分析、周报生成</div>
+          </div>
+          <span class="label-pill green" style="margin-left:auto; white-space:nowrap">企业用户</span>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">📊 上传业务数据</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🧹 数据清洗</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">📈 统计分析</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">📝 生成报告草稿</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">📨 输出可读周报</div>
+        </div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-header">
+          <div class="scenario-num">3</div>
+          <div>
+            <div class="scenario-title">企业智能体组织管理</div>
+            <div class="scenario-desc">按照真实组织架构（技术/产品/市场部）部署智能体成员，@多个部门成员协同分析，模拟跨部门协作会议</div>
+          </div>
+          <span class="label-pill orange" style="margin-left:auto; white-space:nowrap">中型企业</span>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">🏢 创建部门架构</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🤖 分配智能体岗位</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">@多部门成员</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🤝 跨部门协作</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">📋 汇总决策结果</div>
+        </div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-header">
+          <div class="scenario-num">4</div>
+          <div>
+            <div class="scenario-title">24小时自主任务执行</div>
+            <div class="scenario-desc">为「系统监控员」智能体开启 Loop 模式，设定目标"每10分钟检查服务状态"，持续后台循环无需人工守值</div>
+          </div>
+          <span class="label-pill purple" style="margin-left:auto; white-space:nowrap">开发者</span>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">🎯 设定长期目标</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">👁️ 感知阶段</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🧠 决策阶段</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">⚡ 执行阶段</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🔄 反思 → 循环</div>
+        </div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-header">
+          <div class="scenario-num">5</div>
+          <div>
+            <div class="scenario-title">知识沉淀与记忆增强</div>
+            <div class="scenario-desc">为客服类智能体开启长期记忆，自动将对话结果、用户偏好存储为结构化记忆，后续对话主动调用，越用越聪明</div>
+          </div>
+          <span class="label-pill green" style="margin-left:auto; white-space:nowrap">企业客服</span>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">💬 对话交互</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🏷️ 记忆提取</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">💾 结构化存储</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🔍 重要性评分</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">🧠 后续智能调用</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 5: 产品框架 ===== -->
+    <section id="architecture" class="section">
+      <div class="section-header">
+        <div class="section-number">5</div>
+        <div>
+          <div class="section-title">产品框架</div>
+          <div class="section-subtitle">Product Architecture</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">🏗️</span> 整体架构分层</div>
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top:12px;">
+          <div style="background:linear-gradient(135deg, #EFF6FF, #DBEAFE); border:1px solid #BFDBFE; border-radius:10px; padding:14px; text-align:center;">
+            <div style="font-size:20px; margin-bottom:6px;">📱</div>
+            <div style="font-size:12px; font-weight:800; color:var(--brand)">前端层</div>
+            <div style="font-size:11px; color:var(--text-light); margin-top:4px">PC客户端<br>App移动端<br>Web管理后台</div>
+          </div>
+          <div style="background:linear-gradient(135deg, #F0FDF4, #DCFCE7); border:1px solid #A7F3D0; border-radius:10px; padding:14px; text-align:center;">
+            <div style="font-size:20px; margin-bottom:6px;">⚙️</div>
+            <div style="font-size:12px; font-weight:800; color:#059669">业务层</div>
+            <div style="font-size:11px; color:var(--text-light); margin-top:4px">Agent管理<br>龙虾编排<br>Loop执行</div>
+          </div>
+          <div style="background:linear-gradient(135deg, #FFF7ED, #FFEDD5); border:1px solid #FDE68A; border-radius:10px; padding:14px; text-align:center;">
+            <div style="font-size:20px; margin-bottom:6px;">🔌</div>
+            <div style="font-size:12px; font-weight:800; color:#D97706">接入层</div>
+            <div style="font-size:11px; color:var(--text-light); margin-top:4px">多模型API<br>Skills系统<br>知识库RAG</div>
+          </div>
+          <div style="background:linear-gradient(135deg, #F5F3FF, #EDE9FE); border:1px solid #DDD6FE; border-radius:10px; padding:14px; text-align:center;">
+            <div style="font-size:20px; margin-bottom:6px;">💾</div>
+            <div style="font-size:12px; font-weight:800; color:#7C3AED">数据层</div>
+            <div style="font-size:11px; color:var(--text-light); margin-top:4px">SQLite本地<br>SSE实时推送<br>记忆存储</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-title"><span class="icon">📦</span> 核心模块清单</div>
+          <ul class="md-list">
+            <li>企业/用户体系（自建）—— 注册登录、企业空间</li>
+            <li>Agent 编排执行系统（自建）—— 工作流 + 龙虾协议</li>
+            <li>上下文系统（自建）—— System Prompt、跨会话记忆</li>
+            <li>记忆系统（开源框架）—— 云端存储 / 记忆迁移</li>
+            <li>Skills 中心（对接）—— SkillHub 市场 + 本地管理</li>
+            <li>工具中心（自建）—— PPT/Excel/代码执行等</li>
+            <li>Agent Team（开源框架）—— 多 Agent 互通</li>
+            <li>商业化模块 —— Token 充值、用量统计、限流</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">🔗</span> 技术栈选型</div>
+          <table class="spec-table">
+            <tr><td>后端框架</td><td>Node.js v22 + Express</td></tr>
+            <tr><td>数据库</td><td>SQLite（本地 data.db）</td></tr>
+            <tr><td>实时通信</td><td>SSE（Server-Sent Events）</td></tr>
+            <tr><td>多模型</td><td>DeepSeek / GLM / Doubao</td></tr>
+            <tr><td>图像生成</td><td>ZhipuAI CogView API</td></tr>
+            <tr><td>技能扩展</td><td>SKILL.md 标准化格式</td></tr>
+            <tr><td>前端</td><td>Web 自建（性能优化）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 6: 功能模块 ===== -->
+    <section id="features" class="section">
+      <div class="section-header">
+        <div class="section-number">6</div>
+        <div>
+          <div class="section-title">功能模块详细说明</div>
+          <div class="section-subtitle">Feature Specifications</div>
+        </div>
+      </div>
+
+      <!-- Agent Management -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">🤖</div>
+          <div>
+            <div class="feature-block-title">5.1 智能体管理（Agent Management）</div>
+            <div class="feature-block-sub">智能体是 AI Team 的核心构成单元，代表平台中的每一位 AI "员工"</div>
+          </div>
+          <span class="label-pill blue" style="margin-left:auto">P0 核心功能</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">创建与配置</h4>
+              <ul class="feature-list">
+                <li>自定义名称、岗位名称、头像表情符号</li>
+                <li>三大主流模型系列选择（DeepSeek / GLM / Doubao）</li>
+                <li>任务类型自由切换底层模型</li>
+                <li>系统提示词（System Prompt）深度定制</li>
+              </ul>
+            </div>
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">核心能力</h4>
+              <ul class="feature-list">
+                <li>每个智能体可深度定制为垂直领域专家</li>
+                <li>同平台内多个专业智能体并存</li>
+                <li>按业务需求分配不同模型，控制成本</li>
+                <li>智能体归属部门/岗位分配</li>
+              </ul>
+            </div>
+          </div>
+          <div class="value-box">
+            <div class="value-box-label">💡 核心价值</div>
+            <p>不同于通用 AI 助手，每个智能体都可以被深度定制为某个垂直领域的专家，在特定任务上显著优于通用对话。同一平台内多个专业智能体并存，覆盖不同职能需求，彻底替代了多个单点工具的组合使用。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Private Chat -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">💬</div>
+          <div>
+            <div class="feature-block-title">5.2 私聊对话（Private Chat）</div>
+            <div class="feature-block-sub">每个智能体拥有独立的私聊频道，适合专注于单一专业领域的任务场景</div>
+          </div>
+          <span class="label-pill blue" style="margin-left:auto">P0 核心功能</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <ul class="feature-list">
+              <li>多媒体内容支持（图片最大 20MB + 文件）</li>
+              <li>图像生成意图自动识别，调用 CogView API</li>
+              <li>推理链（Chain of Thought）折叠展示面板</li>
+            </ul>
+            <ul class="feature-list">
+              <li>历史记录持久化至本地 SQLite 数据库</li>
+              <li>支持完整历史回溯，频道可删除重开</li>
+              <li>数据完全在用户本地，不存在隐私泄露风险</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Group Chat -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">👥</div>
+          <div>
+            <div class="feature-block-title">5.3 群聊协作（Group Chat）</div>
+            <div class="feature-block-sub">AI Team 最具差异化竞争力的核心功能</div>
+          </div>
+          <span class="label-pill blue" style="margin-left:auto">P0 核心功能</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <ul class="feature-list">
+              <li>@提及方式同时激活多个智能体</li>
+              <li>多智能体并发响应（不同视角独立回复）</li>
+              <li>适合需要综合评估、多方论证的决策场景</li>
+            </ul>
+            <ul class="feature-list">
+              <li>灵活成员配置（随时添加/移除智能体）</li>
+              <li>设置群组名称和目的说明</li>
+              <li>群组持久化，作为真正的"项目工作间"</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lobster Orchestration -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">🦞</div>
+          <div>
+            <div class="feature-block-title">5.4 龙虾编排协议（Lobster Orchestration）</div>
+            <div class="feature-block-sub">AI Team 最核心的技术创新，真正实现"智能体自主协作"的关键引擎</div>
+          </div>
+          <span class="label-pill red" style="margin-left:auto">技术核心</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">工作原理</h4>
+              <ul class="feature-list">
+                <li>智能体通过系统提示词自动具备协作能力</li>
+                <li>回复末尾嵌入 &lt;delegate&gt; XML 指令块</li>
+                <li>声明子任务委托对象及依赖关系</li>
+                <li>按依赖关系自动排序执行子任务</li>
+              </ul>
+            </div>
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">用户体验</h4>
+              <ul class="feature-list">
+                <li>SSE 实时推送执行进度至前端</li>
+                <li>协同气泡动态展示每个智能体执行结果</li>
+                <li>可折叠详情卡，界面整洁信息不丢失</li>
+                <li>主持智能体自动生成汇总回复</li>
+              </ul>
+            </div>
+          </div>
+          <div class="value-box">
+            <div class="value-box-label">💡 核心价值</div>
+            <p>龙虾编排将"用户给指令、AI 给回答"的单轮交互，升级为"用户定目标、AI 团队自主完成"的多步骤工作流。这是从 AI 工具到 AI 员工的本质跃升。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- OpenClaw Loop -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">🔄</div>
+          <div>
+            <div class="feature-block-title">5.5 OpenClaw Agent Loop & 记忆系统</div>
+            <div class="feature-block-sub">让智能体在没有用户实时干预的情况下自主工作</div>
+          </div>
+          <span class="label-pill purple" style="margin-left:auto">差异化能力</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">PDAR 循环</h4>
+              <ul class="feature-list">
+                <li>感知（Perceive）：扫描对话消息和系统状态</li>
+                <li>决策（Decide）：结合目标、记忆、工具决定行动</li>
+                <li>行动（Act）：执行决策，调用技能工具接口</li>
+                <li>反思（Reflect）：结果存入长期记忆</li>
+              </ul>
+            </div>
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">长期记忆类型</h4>
+              <ul class="feature-list">
+                <li>fact（事实）</li>
+                <li>experience（经验）</li>
+                <li>reflection（反思）</li>
+                <li>plan（计划）+ tool_execution（工具执行结果）</li>
+              </ul>
+            </div>
+          </div>
+          <div class="card" style="margin-top:12px; padding:14px; background:var(--gray-50)">
+            <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:var(--gray-800)">Loop 生命周期控制</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <span class="label-pill green">▶ 启动</span>
+              <span style="color:var(--gray-400);align-self:center">→</span>
+              <span class="label-pill orange">⏸ 暂停</span>
+              <span style="color:var(--gray-400);align-self:center">→</span>
+              <span class="label-pill blue">▶ 恢复</span>
+              <span style="color:var(--gray-400);align-self:center">→</span>
+              <span class="label-pill red">⏹ 停止</span>
+              <div style="margin-left:8px;font-size:12px;color:var(--text-light);align-self:center">执行间隔精确控制（毫秒级）</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SkillHub -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">🛍️</div>
+          <div>
+            <div class="feature-block-title">5.6 技能市场（SkillHub / ClawHub）</div>
+            <div class="feature-block-sub">智能体能力的扩展体系，按需扩展按角色配置</div>
+          </div>
+          <span class="label-pill green" style="margin-left:auto">P1 重要功能</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">内置技能（8项）</h4>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                <span class="tag">🔍 联网搜索</span>
+                <span class="tag">💻 代码执行</span>
+                <span class="tag">🎨 图像生成</span>
+                <span class="tag">📁 文件处理</span>
+                <span class="tag">📊 数据分析</span>
+                <span class="tag">📧 邮件发送</span>
+                <span class="tag">📅 日历管理</span>
+                <span class="tag">📚 知识库问答</span>
+              </div>
+            </div>
+            <div>
+              <h4 style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--gray-800)">ClawHub 市场</h4>
+              <ul class="feature-list">
+                <li>按分类浏览 + 关键词搜索</li>
+                <li>多维排序（最新/最热/最高评分）</li>
+                <li>一键安装/卸载</li>
+                <li>SKILL.md 低门槛扩展机制</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Org Chart -->
+      <div class="feature-block">
+        <div class="feature-block-header">
+          <div class="feature-block-icon">🏢</div>
+          <div>
+            <div class="feature-block-title">5.7 组织架构（Org Chart）</div>
+            <div class="feature-block-sub">面向企业场景的核心功能模块，将"一堆智能体"升级为"结构化的 AI 组织"</div>
+          </div>
+          <span class="label-pill green" style="margin-left:auto">P1 重要功能</span>
+        </div>
+        <div class="feature-block-body">
+          <div class="grid-2">
+            <ul class="feature-list">
+              <li>多层级部门体系（支持嵌套子部门）</li>
+              <li>岗位管理（1~5 级职级 + 颜色标识）</li>
+              <li>智能体归属部门/岗位分配</li>
+            </ul>
+            <ul class="feature-list">
+              <li>统计看板：部门总数/岗位总数/分配比例</li>
+              <li>未分配智能体统一展示区域</li>
+              <li>为权限管理、报表等企业功能奠定数据基础</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 7: UED 原型图 ===== -->
+    <section id="prototypes" class="section">
+      <div class="section-header">
+        <div class="section-number">7</div>
+        <div>
+          <div class="section-title">UED 原型图</div>
+          <div class="section-subtitle">UI/UX Wireframes — PC Desktop · App · Web Admin</div>
+        </div>
+      </div>
+
+      <div class="proto-tab-bar">
+        <div class="proto-tab active" onclick="switchProto('pc', this)">🖥️ PC 桌面端</div>
+        <div class="proto-tab" onclick="switchProto('app', this)">📱 App 移动端</div>
+        <div class="proto-tab" onclick="switchProto('admin', this)">🌐 Web 管理后台</div>
+      </div>
+
+      <!-- PC PROTO -->
+      <div id="proto-pc" class="proto-wrapper active">
+        <div class="proto-label"><div class="dot"></div> PC 桌面客户端 — 主界面（私聊对话）</div>
+        <div class="pc-frame">
+          <div class="pc-titlebar">
+            <div class="pc-dot red"></div>
+            <div class="pc-dot yellow"></div>
+            <div class="pc-dot green"></div>
+            <div class="pc-url">AI Team Desktop — v0.3.x</div>
+          </div>
+          <div class="pc-body">
+            <!-- Icon Nav -->
+            <div class="pc-sidebar-nav">
+              <div class="pc-nav-icon active" title="智能体">🤖</div>
+              <div class="pc-nav-icon" title="群聊">👥</div>
+              <div class="pc-nav-icon" title="组织架构">🏢</div>
+              <div class="pc-nav-icon" title="技能市场">🛍️</div>
+              <div class="pc-nav-icon" title="知识库">📚</div>
+              <div style="flex:1"></div>
+              <div class="pc-nav-icon" title="系统日志">📋</div>
+              <div class="pc-nav-icon" title="设置">⚙️</div>
+            </div>
+            <!-- Agent List -->
+            <div class="pc-left-panel">
+              <div class="pc-panel-header">
+                我的团队
+                <div class="add-btn">+</div>
+              </div>
+              <div style="padding:8px 8px 4px; font-size:10px; color:rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.5px; padding-left:16px;">技术部</div>
+              <div class="pc-agent-item active">
+                <div class="pc-agent-avatar" style="background:rgba(37,99,235,0.3)">🤖</div>
+                <div class="pc-agent-info">
+                  <div class="pc-agent-name">全栈工程师 Alex</div>
+                  <div class="pc-agent-role">技术部 · 高级工程师</div>
+                </div>
+              </div>
+              <div class="pc-agent-item">
+                <div class="pc-agent-avatar" style="background:rgba(16,185,129,0.25)">🧠</div>
+                <div class="pc-agent-info">
+                  <div class="pc-agent-name">数据分析师 Iris</div>
+                  <div class="pc-agent-role">技术部 · 数据科学家</div>
+                </div>
+              </div>
+              <div style="padding:8px 8px 4px; font-size:10px; color:rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.5px; padding-left:16px; margin-top:4px;">市场部</div>
+              <div class="pc-agent-item">
+                <div class="pc-agent-avatar" style="background:rgba(245,158,11,0.25)">✍️</div>
+                <div class="pc-agent-info">
+                  <div class="pc-agent-name">内容创作者 Luna</div>
+                  <div class="pc-agent-role">市场部 · 内容运营</div>
+                </div>
+              </div>
+              <div class="pc-agent-item">
+                <div class="pc-agent-avatar" style="background:rgba(139,92,246,0.25)">🔍</div>
+                <div class="pc-agent-info">
+                  <div class="pc-agent-name">调研员 Max</div>
+                  <div class="pc-agent-role">市场部 · 市场分析</div>
+                </div>
+              </div>
+              <div style="padding:8px 8px 4px; font-size:10px; color:rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.5px; padding-left:16px; margin-top:4px;">群聊</div>
+              <div class="pc-agent-item">
+                <div class="pc-agent-avatar" style="background:rgba(239,68,68,0.25)">💬</div>
+                <div class="pc-agent-info">
+                  <div class="pc-agent-name">内容生产团队</div>
+                  <div class="pc-agent-role">群聊 · 3个成员</div>
+                </div>
+              </div>
+            </div>
+            <!-- Chat Area -->
+            <div class="pc-main-chat">
+              <div class="pc-chat-header">
+                <div class="avatar">🤖</div>
+                <div>
+                  <div class="pc-chat-name">全栈工程师 Alex</div>
+                  <div class="pc-chat-status">● 在线 · DeepSeek-Chat</div>
+                </div>
+                <div class="pc-chat-tools">
+                  <div class="pc-chat-tool-btn">🔍</div>
+                  <div class="pc-chat-tool-btn">📎</div>
+                  <div class="pc-chat-tool-btn">⚙️</div>
+                </div>
+              </div>
+              <div class="pc-messages">
+                <div class="pc-msg">
+                  <div class="pc-msg-avatar" style="background:rgba(37,99,235,0.3)">🤖</div>
+                  <div>
+                    <div class="pc-msg-bubble">你好！我是 Alex，专注于全栈开发。有什么技术问题我可以帮你解决？</div>
+                  </div>
+                </div>
+                <div class="pc-msg user">
+                  <div class="pc-msg-avatar" style="background:rgba(255,255,255,0.1)">👤</div>
+                  <div class="pc-msg-bubble">帮我分析一下这段 Python 代码的性能瓶颈，并给出优化建议。</div>
+                </div>
+                <div class="pc-msg">
+                  <div class="pc-msg-avatar" style="background:rgba(37,99,235,0.3)">🤖</div>
+                  <div>
+                    <div class="pc-msg-bubble">好的，我来分析一下这段代码的性能瓶颈...</div>
+                    <div class="pc-thinking-box">
+                      <div class="label">🧠 思维链（展开）</div>
+                      <div>首先分析循环复杂度：O(n²) → 考虑使用哈希表优化为 O(n)... 内存分配频繁，建议使用生成器...数据库查询放在循环内，建议批量查询...</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="pc-input-area">
+                <div class="pc-input-box">
+                  <div class="pc-input-placeholder">输入消息，Shift+Enter 换行，Enter 发送...</div>
+                  <div class="pc-input-actions">
+                    <div class="pc-input-btn">📎</div>
+                    <div class="pc-input-btn">🖼️</div>
+                    <div class="pc-input-btn send">↑</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Right Panel -->
+            <div class="pc-right-panel">
+              <div class="pc-right-title">技能配置</div>
+              <div class="pc-skill-item">
+                <div class="pc-skill-icon" style="background:rgba(37,99,235,0.2)">💻</div>
+                <div class="pc-skill-name">代码执行</div>
+                <div class="pc-skill-on"></div>
+              </div>
+              <div class="pc-skill-item">
+                <div class="pc-skill-icon" style="background:rgba(16,185,129,0.2)">🔍</div>
+                <div class="pc-skill-name">联网搜索</div>
+                <div class="pc-skill-on"></div>
+              </div>
+              <div class="pc-skill-item">
+                <div class="pc-skill-icon" style="background:rgba(245,158,11,0.2)">📁</div>
+                <div class="pc-skill-name">文件处理</div>
+                <div style="margin-left:auto;width:26px;height:14px;background:rgba(255,255,255,0.1);border-radius:7px;position:relative"></div>
+              </div>
+              <div style="height:16px"></div>
+              <div class="pc-right-title">长期记忆</div>
+              <div class="pc-memory-item">
+                <div class="pc-memory-type">FACT</div>
+                用户偏好 Python 3.10+，避免使用 async 语法
+              </div>
+              <div class="pc-memory-item">
+                <div class="pc-memory-type">EXPERIENCE</div>
+                上次代码审查发现内存泄漏，使用 tracemalloc 定位
+              </div>
+              <div style="height:16px"></div>
+              <div class="pc-right-title">Loop 状态</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.04);border-radius:7px;padding:7px 10px;">
+                <span style="width:6px;height:6px;border-radius:50%;background:#34D399;flex-shrink:0"></span>
+                运行中 · 循环 #42
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px">
+          <div class="proto-label"><div class="dot"></div> PC 桌面端 — 龙虾编排协议执行过程（群聊视图）</div>
+          <div class="pc-frame">
+            <div class="pc-titlebar">
+              <div class="pc-dot red"></div>
+              <div class="pc-dot yellow"></div>
+              <div class="pc-dot green"></div>
+              <div class="pc-url">内容生产团队 · 群聊</div>
+            </div>
+            <div class="pc-body" style="min-height:300px">
+              <div class="pc-sidebar-nav">
+                <div class="pc-nav-icon active">👥</div>
+                <div class="pc-nav-icon">🤖</div>
+                <div class="pc-nav-icon">🏢</div>
+              </div>
+              <div class="pc-left-panel" style="width:180px; min-width:180px">
+                <div class="pc-panel-header">群组成员</div>
+                <div class="pc-agent-item">
+                  <div class="pc-agent-avatar" style="background:rgba(139,92,246,0.3)">🔍</div>
+                  <div class="pc-agent-info"><div class="pc-agent-name">调研员 Max</div></div>
+                </div>
+                <div class="pc-agent-item">
+                  <div class="pc-agent-avatar" style="background:rgba(16,185,129,0.25)">✍️</div>
+                  <div class="pc-agent-info"><div class="pc-agent-name">写作者 Luna</div></div>
+                </div>
+                <div class="pc-agent-item">
+                  <div class="pc-agent-avatar" style="background:rgba(245,158,11,0.25)">📝</div>
+                  <div class="pc-agent-info"><div class="pc-agent-name">编辑 Oliver</div></div>
+                </div>
+              </div>
+              <div class="pc-main-chat">
+                <div class="pc-messages">
+                  <div class="pc-msg user">
+                    <div class="pc-msg-avatar" style="background:rgba(255,255,255,0.1)">👤</div>
+                    <div class="pc-msg-bubble">@全员 帮我写一篇2026年AI行业深度报告</div>
+                  </div>
+                  <!-- Orchestration flow -->
+                  <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.25);border-radius:10px;padding:10px 14px;font-size:11px;">
+                    <div style="color:rgba(139,92,246,0.8);font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+                      🦞 龙虾编排协议 · 任务流水线
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="width:6px;height:6px;border-radius:50%;background:#34D399;flex-shrink:0;"></div>
+                        <span style="color:rgba(255,255,255,0.7)"><strong style="color:#60A5FA">调研员 Max</strong> — 收集2026年AI行业数据与报告</span>
+                        <span style="margin-left:auto;color:#34D399;font-size:10px">✓ 完成</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="width:6px;height:6px;border-radius:50%;background:#60A5FA;flex-shrink:0;animation:pulse 1s ease infinite"></div>
+                        <span style="color:rgba(255,255,255,0.7)"><strong style="color:#34D399">写作者 Luna</strong> — 基于调研结果起草报告</span>
+                        <span style="margin-left:auto;color:#60A5FA;font-size:10px">进行中...</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.2);flex-shrink:0;"></div>
+                        <span style="color:rgba(255,255,255,0.4)"><strong style="color:rgba(255,255,255,0.4)">编辑 Oliver</strong> — 润色与最终输出</span>
+                        <span style="margin-left:auto;color:rgba(255,255,255,0.3);font-size:10px">等待中</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="pc-msg">
+                    <div class="pc-msg-avatar" style="background:rgba(139,92,246,0.3)">🔍</div>
+                    <div>
+                      <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:3px">调研员 Max</div>
+                      <div class="pc-msg-bubble">已完成行业数据收集，整理了12份权威报告，关键趋势：大模型商业化加速、具身智能爆发...</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="pc-input-area">
+                  <div class="pc-input-box">
+                    <span style="display:inline-flex;gap:4px;align-items:center;margin-right:8px;font-size:11px;color:rgba(255,255,255,0.3)">
+                      <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
+                      写作者 Luna 正在生成...
+                    </span>
+                    <div class="pc-input-actions" style="margin-left:auto">
+                      <div class="pc-input-btn send">↑</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- APP PROTO -->
+      <div id="proto-app" class="proto-wrapper">
+        <div class="proto-label"><div class="dot"></div> App 移动端 — 三个核心页面</div>
+        <div class="app-frame-row">
+
+          <!-- Screen 1: Home -->
+          <div>
+            <div style="text-align:center;font-size:12px;color:var(--text-light);margin-bottom:8px;font-weight:600">首页 · 我的团队</div>
+            <div class="app-frame">
+              <div class="app-notch"><div class="app-notch-bar"></div></div>
+              <div class="app-screen">
+                <div class="app-status-bar">
+                  <span>9:41</span>
+                  <span>📶 🔋</span>
+                </div>
+                <div class="app-header">
+                  <div>
+                    <div class="app-header-title">AI Team</div>
+                    <div class="app-header-sub">4个智能体 · 2个群聊</div>
+                  </div>
+                  <div class="app-nav-btn">+</div>
+                </div>
+                <div class="app-content">
+                  <div class="app-search">🔍 搜索智能体或群聊...</div>
+                  <div class="app-section-label">我的智能体</div>
+                  <div class="app-agent-card">
+                    <div class="app-agent-avatar" style="background:rgba(37,99,235,0.2)">🤖</div>
+                    <div><div class="app-agent-name">全栈工程师 Alex</div><div class="app-agent-role">技术部 · DeepSeek</div></div>
+                    <div class="app-agent-badge">在线</div>
+                  </div>
+                  <div class="app-agent-card">
+                    <div class="app-agent-avatar" style="background:rgba(16,185,129,0.2)">🧠</div>
+                    <div><div class="app-agent-name">数据分析师 Iris</div><div class="app-agent-role">技术部 · GLM-4</div></div>
+                    <div class="app-agent-badge">在线</div>
+                  </div>
+                  <div class="app-section-label" style="margin-top:8px">群聊</div>
+                  <div class="app-agent-card">
+                    <div class="app-agent-avatar" style="background:rgba(239,68,68,0.2)">💬</div>
+                    <div><div class="app-agent-name">内容生产团队</div><div class="app-agent-role">3个成员</div></div>
+                    <div class="app-agent-badge" style="background:rgba(239,68,68,0.3);color:#F87171">3</div>
+                  </div>
+                </div>
+                <div class="app-bottom-nav">
+                  <div class="app-bottom-btn active"><span class="icon">🏠</span>首页</div>
+                  <div class="app-bottom-btn"><span class="icon">👥</span>群聊</div>
+                  <div class="app-bottom-btn"><span class="icon">🛍️</span>技能</div>
+                  <div class="app-bottom-btn"><span class="icon">⚙️</span>设置</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Screen 2: Chat -->
+          <div>
+            <div style="text-align:center;font-size:12px;color:var(--text-light);margin-bottom:8px;font-weight:600">私聊对话</div>
+            <div class="app-frame">
+              <div class="app-notch"><div class="app-notch-bar"></div></div>
+              <div class="app-screen">
+                <div class="app-status-bar"><span>9:41</span><span>📶 🔋</span></div>
+                <div class="app-header">
+                  <span style="color:rgba(255,255,255,0.5);font-size:16px">←</span>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <div style="width:28px;height:28px;border-radius:8px;background:rgba(37,99,235,0.3);display:flex;align-items:center;justify-content:center;font-size:13px">🤖</div>
+                    <div>
+                      <div class="app-header-title" style="font-size:13px">Alex</div>
+                      <div class="app-header-sub" style="color:#34D399">● 在线</div>
+                    </div>
+                  </div>
+                  <div class="app-nav-btn" style="margin-left:auto">⋮</div>
+                </div>
+                <div class="app-content" style="flex:1">
+                  <div class="app-chat-bubble">
+                    <div class="app-chat-sender">🤖 Alex</div>
+                    你好！有什么我可以帮你的？
+                  </div>
+                  <div class="app-chat-bubble me">帮我审查一下代码性能</div>
+                  <div class="app-chat-bubble">
+                    <div class="app-chat-sender">🤖 Alex（思维链 ▼）</div>
+                    好的！检测到 3 个性能瓶颈：<br>1. 循环内 O(n²) 复杂度<br>2. 未使用连接池<br>3. 重复内存分配
+                  </div>
+                  <div class="app-chat-input">
+                    <span class="app-chat-placeholder">输入消息...</span>
+                    <span style="font-size:12px;color:rgba(255,255,255,0.4)">📎</span>
+                    <div class="app-send-btn">↑</div>
+                  </div>
+                </div>
+                <div class="app-bottom-nav">
+                  <div class="app-bottom-btn active"><span class="icon">🏠</span>首页</div>
+                  <div class="app-bottom-btn"><span class="icon">👥</span>群聊</div>
+                  <div class="app-bottom-btn"><span class="icon">🛍️</span>技能</div>
+                  <div class="app-bottom-btn"><span class="icon">⚙️</span>设置</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Screen 3: Loop Monitor -->
+          <div>
+            <div style="text-align:center;font-size:12px;color:var(--text-light);margin-bottom:8px;font-weight:600">Loop 监控</div>
+            <div class="app-frame">
+              <div class="app-notch"><div class="app-notch-bar"></div></div>
+              <div class="app-screen">
+                <div class="app-status-bar"><span>9:41</span><span>📶 🔋</span></div>
+                <div class="app-header">
+                  <span style="color:rgba(255,255,255,0.5);font-size:16px">←</span>
+                  <div>
+                    <div class="app-header-title" style="font-size:13px">Agent Loop</div>
+                    <div class="app-header-sub">系统监控员</div>
+                  </div>
+                  <div class="app-nav-btn" style="margin-left:auto">⏸</div>
+                </div>
+                <div class="app-content">
+                  <div style="background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);border-radius:10px;padding:12px;margin-bottom:10px;text-align:center">
+                    <div style="font-size:22px;font-weight:900;color:#34D399">运行中</div>
+                    <div style="font-size:10px;color:rgba(255,255,255,0.5);margin-top:3px">循环 #142 · 间隔 600,000ms</div>
+                  </div>
+                  <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">当前阶段</div>
+                  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+                    <div style="background:rgba(52,211,153,0.2);color:#34D399;padding:4px 8px;border-radius:6px;font-size:9px;font-weight:700">✓ 感知</div>
+                    <div style="background:rgba(96,165,250,0.3);color:#60A5FA;padding:4px 8px;border-radius:6px;font-size:9px;font-weight:700">● 决策</div>
+                    <div style="background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.3);padding:4px 8px;border-radius:6px;font-size:9px">行动</div>
+                    <div style="background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.3);padding:4px 8px;border-radius:6px;font-size:9px">反思</div>
+                  </div>
+                  <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">最新记忆</div>
+                  <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:10px;color:rgba(255,255,255,0.6)">
+                    <span style="color:#60A5FA;font-weight:700">FACT</span> · 服务器A CPU使用率正常（23%）
+                  </div>
+                  <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:8px 10px;font-size:10px;color:rgba(255,255,255,0.6)">
+                    <span style="color:#F87171;font-weight:700">⚠ WARN</span> · 服务器B 内存使用率 87%，已记录告警
+                  </div>
+                </div>
+                <div class="app-bottom-nav">
+                  <div class="app-bottom-btn active"><span class="icon">🏠</span>首页</div>
+                  <div class="app-bottom-btn"><span class="icon">👥</span>群聊</div>
+                  <div class="app-bottom-btn"><span class="icon">🛍️</span>技能</div>
+                  <div class="app-bottom-btn"><span class="icon">⚙️</span>设置</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ADMIN PROTO -->
+      <div id="proto-admin" class="proto-wrapper">
+        <div class="proto-label"><div class="dot"></div> Web 管理后台 — 组织架构看板</div>
+        <div class="admin-frame">
+          <div class="admin-topbar">
+            <div class="admin-logo">
+              <div class="admin-logo-dot">AT</div>
+              AI Team Admin
+            </div>
+            <div class="admin-nav">
+              <div class="admin-nav-item">概览</div>
+              <div class="admin-nav-item active">组织架构</div>
+              <div class="admin-nav-item">智能体管理</div>
+              <div class="admin-nav-item">技能市场</div>
+              <div class="admin-nav-item">使用统计</div>
+              <div class="admin-nav-item">系统日志</div>
+            </div>
+            <div class="admin-topbar-right">
+              <div style="font-size:12px;color:rgba(255,255,255,0.5)">太乙知行工作空间</div>
+              <div class="admin-avatar-sm">荆</div>
+            </div>
+          </div>
+          <div class="admin-body">
+            <div class="admin-sidebar">
+              <div class="admin-sidebar-group">
+                <div class="admin-sidebar-label">组织</div>
+                <div class="admin-sidebar-item active">🏢 组织总览</div>
+                <div class="admin-sidebar-item">📁 部门管理</div>
+                <div class="admin-sidebar-item">🎭 岗位管理</div>
+                <div class="admin-sidebar-item">🤖 智能体分配</div>
+              </div>
+              <div class="admin-sidebar-group">
+                <div class="admin-sidebar-label">运营</div>
+                <div class="admin-sidebar-item">📊 使用分析</div>
+                <div class="admin-sidebar-item">💰 Token 用量</div>
+                <div class="admin-sidebar-item">📋 执行日志 <span class="badge">3</span></div>
+                <div class="admin-sidebar-item">⚙️ 系统设置</div>
+              </div>
+            </div>
+            <div class="admin-content">
+              <div class="admin-content-header">
+                <div class="admin-content-title">组织架构总览</div>
+                <div style="display:flex;gap:8px">
+                  <div class="admin-btn secondary">📥 导出</div>
+                  <div class="admin-btn primary">+ 新建部门</div>
+                </div>
+              </div>
+              <div class="admin-stat-row">
+                <div class="admin-stat-card">
+                  <div class="admin-stat-label">部门总数</div>
+                  <div class="admin-stat-value">4</div>
+                  <div class="admin-stat-change up">↑ +1 本月新增</div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-label">岗位总数</div>
+                  <div class="admin-stat-value">12</div>
+                  <div class="admin-stat-change up">↑ +3 本月新增</div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-label">智能体总数</div>
+                  <div class="admin-stat-value">8</div>
+                  <div class="admin-stat-change" style="color:var(--text-light)">→ 7 已分配</div>
+                </div>
+                <div class="admin-stat-card">
+                  <div class="admin-stat-label">分配覆盖率</div>
+                  <div class="admin-stat-value">87.5%</div>
+                  <div class="admin-stat-change up">↑ +12.5%</div>
+                </div>
+              </div>
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>部门名称</th>
+                    <th>岗位数</th>
+                    <th>智能体数</th>
+                    <th>主要模型</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>🔧 <strong>技术部</strong></td>
+                    <td>4</td>
+                    <td>3</td>
+                    <td>DeepSeek-Chat</td>
+                    <td><div class="admin-status active"><div class="admin-status-dot"></div>正常</div></td>
+                    <td><div style="display:flex;gap:6px"><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">编辑</div><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">查看</div></div></td>
+                  </tr>
+                  <tr>
+                    <td>📢 <strong>市场部</strong></td>
+                    <td>3</td>
+                    <td>2</td>
+                    <td>GLM-4-Flash</td>
+                    <td><div class="admin-status active"><div class="admin-status-dot"></div>正常</div></td>
+                    <td><div style="display:flex;gap:6px"><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">编辑</div><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">查看</div></div></td>
+                  </tr>
+                  <tr>
+                    <td>📊 <strong>数据部</strong></td>
+                    <td>2</td>
+                    <td>2</td>
+                    <td>DeepSeek-Reasoner</td>
+                    <td><div class="admin-status active"><div class="admin-status-dot"></div>正常</div></td>
+                    <td><div style="display:flex;gap:6px"><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">编辑</div><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">查看</div></div></td>
+                  </tr>
+                  <tr>
+                    <td>⚖️ <strong>法务部</strong></td>
+                    <td>3</td>
+                    <td>1</td>
+                    <td>GLM-Z1-Air</td>
+                    <td><div class="admin-status paused"><div class="admin-status-dot"></div>部分配置</div></td>
+                    <td><div style="display:flex;gap:6px"><div class="admin-btn secondary" style="padding:4px 10px;font-size:11px">编辑</div><div class="admin-btn primary" style="padding:4px 10px;font-size:11px">配置</div></div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ===== SECTION 8: 交互方式 ===== -->
+    <section id="interactions" class="section">
+      <div class="section-header">
+        <div class="section-number">8</div>
+        <div>
+          <div class="section-title">交互方式规范</div>
+          <div class="section-subtitle">Interaction Design Specifications</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="interaction-card">
+          <div class="interaction-card-header">
+            <div class="interaction-icon" style="background:var(--brand-light)">💬</div>
+            <div>
+              <div class="interaction-title">消息发送交互</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>Enter 键</td><td>发送消息</td></tr>
+            <tr><td>Shift + Enter</td><td>换行（多行输入）</td></tr>
+            <tr><td>@ 符号</td><td>触发成员提及下拉列表</td></tr>
+            <tr><td>拖拽文件</td><td>触发文件上传（图片 / 文件）</td></tr>
+            <tr><td>粘贴图片</td><td>自动识别 Clipboard 图片并预览</td></tr>
+            <tr><td>消息气泡悬停</td><td>显示时间戳 + 操作菜单（复制/删除）</td></tr>
+          </table>
+        </div>
+
+        <div class="interaction-card">
+          <div class="interaction-card-header">
+            <div class="interaction-icon" style="background:#ECFDF5">🤖</div>
+            <div>
+              <div class="interaction-title">智能体管理交互</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>侧边栏点击</td><td>进入对应智能体私聊页面</td></tr>
+            <tr><td>右键/长按</td><td>打开上下文菜单（编辑/删除/清空记录）</td></tr>
+            <tr><td>拖拽排序</td><td>智能体侧边栏列表拖拽排序</td></tr>
+            <tr><td>头像点击</td><td>打开智能体详情/配置面板</td></tr>
+            <tr><td>技能开关</td><td>Toggle 开关，即时生效无需保存</td></tr>
+            <tr><td>Loop 控制</td><td>启动/暂停/停止按钮含确认二次弹窗</td></tr>
+          </table>
+        </div>
+
+        <div class="interaction-card">
+          <div class="interaction-card-header">
+            <div class="interaction-icon" style="background:#F5F3FF">🦞</div>
+            <div>
+              <div class="interaction-title">龙虾编排执行过程交互</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>执行卡片</td><td>默认折叠，点击展开子任务详情</td></tr>
+            <tr><td>进度动画</td><td>脉冲动效表示"进行中"状态</td></tr>
+            <tr><td>子任务卡片</td><td>逐步渐显，每完成一步即刻呈现</td></tr>
+            <tr><td>中止按钮</td><td>执行过程中可点击强制中止</td></tr>
+            <tr><td>展开详情</td><td>点击展开查看完整 JSON 输出</td></tr>
+          </table>
+        </div>
+
+        <div class="interaction-card">
+          <div class="interaction-card-header">
+            <div class="interaction-icon" style="background:#FFF7ED">📱</div>
+            <div>
+              <div class="interaction-title">App 移动端手势</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>左滑聊天项</td><td>显示删除/置顶快捷操作</td></tr>
+            <tr><td>下拉刷新</td><td>刷新智能体状态列表</td></tr>
+            <tr><td>长按头像</td><td>快速进入编辑模式</td></tr>
+            <tr><td>双指捏合</td><td>字号缩放（消息气泡内）</td></tr>
+            <tr><td>边缘右滑</td><td>返回上级页面</td></tr>
+            <tr><td>消息长按</td><td>选择/复制/转发操作面板</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="interaction-card">
+        <div class="interaction-card-header">
+          <div class="interaction-icon" style="background:var(--brand-light)">⌨️</div>
+          <div><div class="interaction-title">PC 端快捷键体系</div></div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; font-size:12px;">
+          <div>
+            <div style="font-weight:700;color:var(--gray-800);margin-bottom:8px">全局</div>
+            <table class="spec-table">
+              <tr><td>Cmd/Ctrl + N</td><td>新建智能体</td></tr>
+              <tr><td>Cmd/Ctrl + K</td><td>全局搜索</td></tr>
+              <tr><td>Cmd/Ctrl + ,</td><td>打开设置</td></tr>
+            </table>
+          </div>
+          <div>
+            <div style="font-weight:700;color:var(--gray-800);margin-bottom:8px">对话</div>
+            <table class="spec-table">
+              <tr><td>Cmd/Ctrl + L</td><td>清空当前对话</td></tr>
+              <tr><td>Cmd/Ctrl + ↑↓</td><td>切换智能体</td></tr>
+              <tr><td>Esc</td><td>关闭弹窗/面板</td></tr>
+            </table>
+          </div>
+          <div>
+            <div style="font-weight:700;color:var(--gray-800);margin-bottom:8px">Loop 控制</div>
+            <table class="spec-table">
+              <tr><td>Space</td><td>暂停/继续（Loop 视图）</td></tr>
+              <tr><td>Cmd/Ctrl + S</td><td>保存智能体配置</td></tr>
+              <tr><td>Cmd/Ctrl + Z</td><td>撤销最近操作</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 9: 页面动效 ===== -->
+    <section id="animations" class="section">
+      <div class="section-header">
+        <div class="section-number">9</div>
+        <div>
+          <div class="section-title">页面动效规范</div>
+          <div class="section-subtitle">Motion Design Specifications</div>
+        </div>
+      </div>
+
+      <div class="info-block">
+        <strong>设计原则：</strong>所有动效遵循「功能优先，轻量微妙」原则——动画是信息传递的辅助手段，而非装饰。时长控制在 150~400ms，避免超过 500ms 的长动效妨碍工作流。
+      </div>
+
+      <div class="grid-2">
+        <div class="anim-card">
+          <div class="card-title">消息气泡出现动效</div>
+          <div class="anim-preview">
+            <div class="demo-fade" style="background:var(--brand-light);border-radius:8px;padding:8px 14px;font-size:12px;color:var(--brand)">AI 回复消息</div>
+          </div>
+          <table class="spec-table">
+            <tr><td>动效类型</td><td>fadeUp — Y轴 8px↑ + opacity 0→1</td></tr>
+            <tr><td>时长</td><td>300ms</td></tr>
+            <tr><td>缓动</td><td>ease-out cubic-bezier(0.0, 0.0, 0.2, 1)</td></tr>
+            <tr><td>触发时机</td><td>SSE 收到第一个 token 即刻触发</td></tr>
+          </table>
+        </div>
+
+        <div class="anim-card">
+          <div class="card-title">流式输出打字效果</div>
+          <div class="anim-preview">
+            <div style="font-size:13px;color:var(--gray-700)">正在生成回复
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>动效类型</td><td>逐字符渲染（SSE streaming）</td></tr>
+            <tr><td>等待状态</td><td>三点脉冲（opacity 0.3→1，1s loop）</td></tr>
+            <tr><td>光标</td><td>末尾闪烁竖线 cursor blink 600ms</td></tr>
+            <tr><td>完成过渡</td><td>光标淡出 150ms ease</td></tr>
+          </table>
+        </div>
+
+        <div class="anim-card">
+          <div class="card-title">侧边栏导航切换</div>
+          <div class="anim-preview">
+            <div style="display:flex;gap:6px">
+              <div style="width:8px;height:32px;border-radius:4px;background:var(--brand);transition:all 0.15s"></div>
+              <div style="font-size:12px;color:var(--brand);font-weight:700;align-self:center">选中态</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>选中态</td><td>左侧 3px 蓝色竖线 + 背景色 150ms slide</td></tr>
+            <tr><td>悬停态</td><td>背景色 fadeIn 100ms + 颜色变 brand</td></tr>
+            <tr><td>页面切换</td><td>内容区 opacity 0→1，150ms ease</td></tr>
+          </table>
+        </div>
+
+        <div class="anim-card">
+          <div class="card-title">龙虾编排子任务卡片</div>
+          <div class="anim-preview">
+            <div style="display:flex;gap:6px;align-items:center">
+              <div style="width:8px;height:8px;border-radius:50%;background:#34D399"></div>
+              <div style="font-size:11px;color:var(--gray-700)">子任务完成</div>
+              <div style="width:8px;height:8px;border-radius:50%;background:#3B82F6;animation:pulse 1s ease infinite"></div>
+              <div style="font-size:11px;color:var(--gray-700)">执行中</div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>卡片入场</td><td>slideIn（X轴 +20px）+ 300ms ease</td></tr>
+            <tr><td>进行中</td><td>状态点 pulse scale 1→1.05，1s loop</td></tr>
+            <tr><td>完成态</td><td>颜色 blue→green，100ms ease</td></tr>
+            <tr><td>折叠/展开</td><td>高度动画 + 300ms ease-in-out</td></tr>
+          </table>
+        </div>
+
+        <div class="anim-card">
+          <div class="card-title">模态弹窗 / 抽屉面板</div>
+          <div class="anim-preview" style="background:rgba(0,0,0,0.05)">
+            <div style="background:white;border-radius:8px;padding:10px 16px;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:12px;color:var(--gray-700)">弹窗内容区域</div>
+          </div>
+          <table class="spec-table">
+            <tr><td>遮罩</td><td>opacity 0→0.5，200ms ease</td></tr>
+            <tr><td>弹窗入场</td><td>scale 0.95→1 + fadeUp，250ms ease-out</td></tr>
+            <tr><td>抽屉入场</td><td>translateX(100%)→0，300ms ease-out</td></tr>
+            <tr><td>关闭动效</td><td>入场动效反向，150ms ease-in</td></tr>
+          </table>
+        </div>
+
+        <div class="anim-card">
+          <div class="card-title">技能开关 Toggle</div>
+          <div class="anim-preview">
+            <div style="display:flex;gap:12px;align-items:center">
+              <div style="width:42px;height:22px;background:#2563EB;border-radius:11px;position:relative;cursor:pointer">
+                <div style="position:absolute;right:2px;top:2px;width:18px;height:18px;background:white;border-radius:50%;transition:all 0.15s;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>
+              </div>
+              <div style="width:42px;height:22px;background:#CBD5E1;border-radius:11px;position:relative;cursor:pointer">
+                <div style="position:absolute;left:2px;top:2px;width:18px;height:18px;background:white;border-radius:50%;transition:all 0.15s;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>
+              </div>
+            </div>
+          </div>
+          <table class="spec-table">
+            <tr><td>开/关切换</td><td>圆球滑动 translateX，150ms ease</td></tr>
+            <tr><td>颜色变化</td><td>背景色渐变，150ms ease</td></tr>
+            <tr><td>触觉反馈</td><td>移动端 vibrate(10ms)</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title"><span class="icon">♿</span> 无障碍 & 减少动效</div>
+        <div class="info-block" style="margin-bottom:0">
+          所有动效需响应 <code>@media (prefers-reduced-motion: reduce)</code> 媒体查询，启用后将所有过渡时长缩短至 1ms，确保对动效敏感的用户可正常使用产品。
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 10: 数据设计 ===== -->
+    <section id="data" class="section">
+      <div class="section-header">
+        <div class="section-number">10</div>
+        <div>
+          <div class="section-title">数据设计</div>
+          <div class="section-subtitle">Data Architecture & Schema</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="icon">📊</span> 核心数据实体</div>
+          <ul class="md-list">
+            <li><strong>agents</strong> — 智能体基础信息（名称/模型/Prompt/配置）</li>
+            <li><strong>conversations</strong> — 对话会话（私聊/群聊区分）</li>
+            <li><strong>messages</strong> — 消息内容（含附件、推理链）</li>
+            <li><strong>agent_memories</strong> — 长期记忆条目（类型/重要性权重）</li>
+            <li><strong>skills</strong> — 技能注册表（内置 + 市场安装）</li>
+            <li><strong>departments</strong> — 部门层级树</li>
+            <li><strong>positions</strong> — 岗位配置（职级/颜色/所属部门）</li>
+            <li><strong>system_logs</strong> — 系统事件日志（最多 500 条）</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">⚡</span> 数据流向</div>
+          <ul class="md-list">
+            <li>前端发送消息 → Express API → SQLite 写入</li>
+            <li>AI API 调用 → SSE 流式推送 → 前端实时渲染</li>
+            <li>Loop 执行结果 → 记忆系统评分 → SQLite 持久化</li>
+            <li>技能调用 → ToolRegistry → 工具执行结果回写</li>
+            <li>&lt;delegate&gt; 解析 → 任务队列 → 子任务依次调度</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">🗄️</span> 核心表结构（SQLite）</div>
+        <div class="data-schema-block">
+          <pre>
+<span class="c-comment">-- agents 表</span>
+<span class="c-key">CREATE TABLE</span> agents (
+  id          <span class="c-type">INTEGER PRIMARY KEY</span>,
+  name        <span class="c-type">TEXT NOT NULL</span>,
+  role        <span class="c-type">TEXT</span>,                <span class="c-comment">-- 岗位名称</span>
+  avatar      <span class="c-type">TEXT</span>,                <span class="c-comment">-- emoji 表情</span>
+  model       <span class="c-type">TEXT NOT NULL</span>,        <span class="c-comment">-- deepseek-chat / glm-4-flash 等</span>
+  system_prompt <span class="c-type">TEXT</span>,            <span class="c-comment">-- 系统提示词</span>
+  department_id <span class="c-type">INTEGER</span>,          <span class="c-comment">-- 所属部门 FK</span>
+  position_id   <span class="c-type">INTEGER</span>,          <span class="c-comment">-- 所属岗位 FK</span>
+  loop_enabled  <span class="c-type">BOOLEAN DEFAULT 0</span>,
+  loop_interval <span class="c-type">INTEGER DEFAULT 60000</span>, <span class="c-comment">-- 毫秒</span>
+  loop_goal     <span class="c-type">TEXT</span>,
+  created_at    <span class="c-type">DATETIME DEFAULT CURRENT_TIMESTAMP</span>
+);
+
+<span class="c-comment">-- messages 表</span>
+<span class="c-key">CREATE TABLE</span> messages (
+  id              <span class="c-type">INTEGER PRIMARY KEY</span>,
+  conversation_id <span class="c-type">INTEGER NOT NULL</span>,
+  role            <span class="c-type">TEXT NOT NULL</span>,     <span class="c-comment">-- user / assistant / system</span>
+  content         <span class="c-type">TEXT NOT NULL</span>,
+  thinking        <span class="c-type">TEXT</span>,            <span class="c-comment">-- 思维链内容（可为空）</span>
+  attachments     <span class="c-type">JSON</span>,            <span class="c-comment">-- 图片/文件 URL 列表</span>
+  agent_id        <span class="c-type">INTEGER</span>,
+  created_at      <span class="c-type">DATETIME DEFAULT CURRENT_TIMESTAMP</span>
+);
+
+<span class="c-comment">-- agent_memories 表</span>
+<span class="c-key">CREATE TABLE</span> agent_memories (
+  id          <span class="c-type">INTEGER PRIMARY KEY</span>,
+  agent_id    <span class="c-type">INTEGER NOT NULL</span>,
+  type        <span class="c-type">TEXT NOT NULL</span>,     <span class="c-comment">-- fact / experience / reflection / plan / tool_execution</span>
+  content     <span class="c-type">TEXT NOT NULL</span>,
+  importance  <span class="c-type">REAL DEFAULT 0.5</span>,   <span class="c-comment">-- 0~1 重要性权重</span>
+  keywords    <span class="c-type">JSON</span>,
+  created_at  <span class="c-type">DATETIME DEFAULT CURRENT_TIMESTAMP</span>
+);</pre>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-title"><span class="icon">📈</span> 关键业务指标（KPI）</div>
+          <table style="width:100%;font-size:12px;border-collapse:collapse">
+            <tr><th style="background:var(--gray-900);color:white;padding:9px 12px;text-align:left;font-size:11px;border-radius:8px 0 0 0">指标名称</th><th style="background:var(--gray-900);color:white;padding:9px 12px;text-align:left;font-size:11px">目标值</th><th style="background:var(--gray-900);color:white;padding:9px 12px;text-align:left;font-size:11px;border-radius:0 8px 0 0">说明</th></tr>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">日活智能体数</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">≥ 3</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100);color:var(--text-light)">每用户日均激活智能体数</td></tr>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">消息响应延迟</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">&lt; 800ms</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100);color:var(--text-light)">首字节时间（TTFB）P95</td></tr>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">龙虾编排成功率</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">≥ 95%</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100);color:var(--text-light)">多步骤任务完整执行成功率</td></tr>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">技能安装率</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100)">≥ 60%</td><td style="padding:9px 12px;border-bottom:1px solid var(--gray-100);color:var(--text-light)">用户安装过≥1个市场技能的比例</td></tr>
+            <tr><td style="padding:9px 12px">前端错误率</td><td style="padding:9px 12px">&lt; 0.1%</td><td style="padding:9px 12px;color:var(--text-light)">JS 运行时报错比例</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">🔒</span> 数据安全约束</div>
+          <ul class="md-list">
+            <li>API Key 前端展示时自动脱敏（仅显示前4后4位）</li>
+            <li>所有数据存储在本地 SQLite，不上传云端</li>
+            <li>图片代理下载防止外部资源失效（跨域安全）</li>
+            <li>AbortController 10秒超时，防止请求挂起</li>
+            <li>系统日志最多保存 500 条，防止内存溢出</li>
+            <li>数据库 Schema 迁移机制保障版本平滑升级</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 11: 技术架构 ===== -->
+    <section id="tech" class="section">
+      <div class="section-header">
+        <div class="section-number">11</div>
+        <div>
+          <div class="section-title">技术架构亮点</div>
+          <div class="section-subtitle">Technical Architecture Highlights</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="icon">🏠</span> 纯本地化部署</div>
+          <p>整个系统基于 Node.js + Express + SQLite 构建，无需云数据库，所有数据存储在本地 data.db 文件中。完全符合企业数据隐私要求，适合内网环境部署，数据不出境。</p>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">⚡</span> 实时通信（SSE）</div>
+          <p>多智能体编排任务通过 Server-Sent Events 协议实时推送进度，用户看到的每一步执行结果都是真实的实时流，而非轮询模拟。连接断开后支持自动重连。</p>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">🛡️</span> 请求健壮性</div>
+          <p>前端所有 API 请求统一封装 10 秒超时机制（AbortController），即便服务器暂时不可达，界面也不会卡死，而是给出明确的超时提示，提升系统容错能力。</p>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="icon">🔄</span> 数据库迁移机制</div>
+          <p>系统内置增量 Schema Migration 逻辑，升级版本时自动为旧数据库补齐新增字段，保证平滑升级不丢数据，无需用户手动操作或备份。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 12: 需求优先级 ===== -->
+    <section id="priority" class="section">
+      <div class="section-header">
+        <div class="section-number">12</div>
+        <div>
+          <div class="section-title">需求优先级矩阵</div>
+          <div class="section-subtitle">Requirements Priority Matrix</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>需求模块</th>
+              <th>优先级</th>
+              <th>当前状态</th>
+              <th>端点覆盖</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>智能体创建与配置</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App / Admin</td>
+              <td>三端需保持配置同步</td>
+            </tr>
+            <tr>
+              <td><strong>私聊对话</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App</td>
+              <td>含推理链展示、文件上传</td>
+            </tr>
+            <tr>
+              <td><strong>群聊协作（@提及）</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App</td>
+              <td>并发响应是差异化核心</td>
+            </tr>
+            <tr>
+              <td><strong>龙虾编排协议</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App</td>
+              <td>SSE 实时推送 + 折叠卡片</td>
+            </tr>
+            <tr>
+              <td><strong>OpenClaw Loop 模式</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App</td>
+              <td>PDAR 循环 + 生命周期控制</td>
+            </tr>
+            <tr>
+              <td><strong>长期记忆系统</strong></td>
+              <td><span class="priority-tag p0">P0 核心</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / App / Admin</td>
+              <td>含重要性评分机制</td>
+            </tr>
+            <tr>
+              <td><strong>技能市场（ClawHub）</strong></td>
+              <td><span class="priority-tag p1">P1 重要</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>PC / Admin</td>
+              <td>SKILL.md 标准扩展</td>
+            </tr>
+            <tr>
+              <td><strong>组织架构管理</strong></td>
+              <td><span class="priority-tag p1">P1 重要</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>Admin（为主）</td>
+              <td>B 端差异化功能</td>
+            </tr>
+            <tr>
+              <td><strong>多模型支持</strong></td>
+              <td><span class="priority-tag p1">P1 重要</span></td>
+              <td><span class="label-pill green">✓ 已实现</span></td>
+              <td>全端</td>
+              <td>API Key 安全脱敏展示</td>
+            </tr>
+            <tr>
+              <td><strong>知识库 RAG 集成</strong></td>
+              <td><span class="priority-tag p1">P1 重要</span></td>
+              <td><span class="label-pill orange">🚧 规划中</span></td>
+              <td>Admin（为主）</td>
+              <td>Q3 2026 交付</td>
+            </tr>
+            <tr>
+              <td><strong>触发器可视化配置</strong></td>
+              <td><span class="priority-tag p2">P2 优化</span></td>
+              <td><span class="label-pill orange">🚧 规划中</span></td>
+              <td>PC / Admin</td>
+              <td>Q2 2026 交付</td>
+            </tr>
+            <tr>
+              <td><strong>工作流可视化编辑器</strong></td>
+              <td><span class="priority-tag p2">P2 优化</span></td>
+              <td><span class="label-pill orange">🚧 规划中</span></td>
+              <td>Admin</td>
+              <td>Q3 2026 交付</td>
+            </tr>
+            <tr>
+              <td><strong>权限与角色控制</strong></td>
+              <td><span class="priority-tag p2">P2 优化</span></td>
+              <td><span class="label-pill orange">🚧 规划中</span></td>
+              <td>Admin</td>
+              <td>Q3 2026 交付</td>
+            </tr>
+            <tr>
+              <td><strong>企业版 SSO / 审计日志</strong></td>
+              <td><span class="priority-tag p3">P3 未来</span></td>
+              <td><span class="label-pill" style="background:var(--gray-100);color:var(--gray-500);border-color:var(--gray-200)">💡 待定</span></td>
+              <td>Admin</td>
+              <td>Q4 2026+</td>
+            </tr>
+            <tr>
+              <td><strong>智能体模板市场</strong></td>
+              <td><span class="priority-tag p3">P3 未来</span></td>
+              <td><span class="label-pill" style="background:var(--gray-100);color:var(--gray-500);border-color:var(--gray-200)">💡 待定</span></td>
+              <td>全端</td>
+              <td>Q4 2026+</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 13: 竞品对比 ===== -->
+    <section id="competition" class="section">
+      <div class="section-header">
+        <div class="section-number">13</div>
+        <div>
+          <div class="section-title">竞品对比</div>
+          <div class="section-subtitle">Competitive Analysis</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>维度</th>
+              <th>AI Team</th>
+              <th>单一AI助手（ChatGPT等）</th>
+              <th>工作流编排（n8n/Dify）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>多智能体协作</strong></td><td><span class="tick">✅ 原生支持，自主委托</span></td><td><span class="cross">❌ 单对话无协作</span></td><td><span class="partial">⚠ 需手动搭建流程</span></td></tr>
+            <tr><td><strong>组织架构管理</strong></td><td><span class="tick">✅ 完整部门/岗位体系</span></td><td><span class="cross">❌ 无</span></td><td><span class="cross">❌ 无</span></td></tr>
+            <tr><td><strong>自主 Loop 运行</strong></td><td><span class="tick">✅ 独立目标，持续执行</span></td><td><span class="cross">❌ 无</span></td><td><span class="partial">⚠ 依赖触发器配置</span></td></tr>
+            <tr><td><strong>长期记忆</strong></td><td><span class="tick">✅ 结构化记忆+重要性评分</span></td><td><span class="partial">⚠ 有限/付费</span></td><td><span class="cross">❌ 无</span></td></tr>
+            <tr><td><strong>多模型自由切换</strong></td><td><span class="tick">✅ 三大厂商，按需分配</span></td><td><span class="cross">❌ 绑定单一供应商</span></td><td><span class="partial">⚠ 部分支持</span></td></tr>
+            <tr><td><strong>本地化部署</strong></td><td><span class="tick">✅ 数据完全本地</span></td><td><span class="cross">❌ 云端强依赖</span></td><td><span class="partial">⚠ 部分支持</span></td></tr>
+            <tr><td><strong>技能市场扩展</strong></td><td><span class="tick">✅ ClawHub 市场</span></td><td><span class="cross">❌ 无</span></td><td><span class="partial">⚠ 插件体系较复杂</span></td></tr>
+            <tr><td><strong>上手门槛</strong></td><td><span class="tick">低（可视化配置）</span></td><td><span class="tick">极低</span></td><td><span class="cross">高（需编程/拖拽建图）</span></td></tr>
+            <tr><td><strong>图像生成集成</strong></td><td><span class="tick">✅ 内置 CogView 集成</span></td><td><span class="partial">⚠ 部分版本支持</span></td><td><span class="cross">❌ 无</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== SECTION 14: 产品路线图 ===== -->
+    <section id="roadmap" class="section">
+      <div class="section-header">
+        <div class="section-number">14</div>
+        <div>
+          <div class="section-title">产品路线图</div>
+          <div class="section-subtitle">Product Roadmap 2026</div>
+        </div>
+      </div>
+
+      <div class="roadmap-row">
+        <div class="roadmap-phase">
+          <div class="roadmap-phase-header">
+            <span class="roadmap-phase-badge phase-q2">Q2 2026 近期</span>
+          </div>
+          <div class="roadmap-item">智能体触发器（Trigger）配置界面，支持定时触发和事件触发的可视化配置</div>
+          <div class="roadmap-item">群聊任务进度持久化，避免刷新后丢失执行状态</div>
+          <div class="roadmap-item">扩展 AI 模型列表，支持本地模型（Ollama）接入</div>
+          <div class="roadmap-item">App 移动端 1.0 版本上线</div>
+          <div class="roadmap-item">Web 管理后台基础功能完善</div>
+        </div>
+
+        <div class="roadmap-phase">
+          <div class="roadmap-phase-header">
+            <span class="roadmap-phase-badge phase-q3">Q3 2026 中期</span>
+          </div>
+          <div class="roadmap-item">工作流可视化编辑器（非技术用户图形化配置）</div>
+          <div class="roadmap-item">知识库（RAG）集成，上传企业文档作为专属知识源</div>
+          <div class="roadmap-item">权限与角色控制，多用户场景下的智能体访问管理</div>
+          <div class="roadmap-item">Token 用量统计仪表盘与成本预警</div>
+          <div class="roadmap-item">国际化（i18n）支持</div>
+        </div>
+
+        <div class="roadmap-phase">
+          <div class="roadmap-phase-header">
+            <span class="roadmap-phase-badge phase-q4">Q4 2026+ 长期</span>
+          </div>
+          <div class="roadmap-item">智能体模板市场（分享/导入智能体配置模板）</div>
+          <div class="roadmap-item">企业版功能：SSO、审计日志、SLA 保障</div>
+          <div class="roadmap-item">多人协作空间（团队成员共享 AI 团队）</div>
+          <div class="roadmap-item">API 开放平台（外部系统集成）</div>
+          <div class="roadmap-item">AI 能力进化指标（智能体成熟度评估体系）</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <div style="margin-top:48px; padding-top:24px; border-top:2px solid var(--border); text-align:center; color:var(--text-light); font-size:12px;">
+      <div style="font-size:15px; font-weight:800; color:var(--gray-900); margin-bottom:6px">AI Team — 产品需求文档（PRD）v1.0</div>
+      <div>太乙知行人工智能科技有限公司 · 荆超（Chao）· 2026-05-24</div>
+      <div style="margin-top:6px; color:var(--gray-400)">本文档基于 AI Team v0.3.x BPD 整理，如产品功能发生迭代，请及时更新对应章节。</div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// Tab switching
+function switchProto(tab, el) {
+  document.querySelectorAll('.proto-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.proto-wrapper').forEach(w => w.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('proto-' + tab).classList.add('active');
+}
+
+// Active sidebar link on scroll
+const sections = document.querySelectorAll('section[id]');
+const links = document.querySelectorAll('.sidebar-link');
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      links.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === '#' + entry.target.id) {
+          link.classList.add('active');
+        }
+      });
+    }
+  });
+}, { rootMargin: '-100px 0px -60% 0px' });
+
+sections.forEach(s => observer.observe(s));
+
+// Smooth scroll
+document.querySelectorAll('.sidebar-link').forEach(link => {
+  link.addEventListener('click', function(e) {
+    const href = this.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      e.preventDefault();
+      const target = document.querySelector(href);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  });
+});
+</script>
+</body>
+</html>
