@@ -24,6 +24,12 @@ class SolutionTemplateBindingRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(row) for row in rows]
 
+    def delete_by_solution(self, solution_id: str) -> None:
+        self._cur.execute(
+            "UPDATE solution_template_binding SET deleted_at=now(), updated_at=now() WHERE solution_id = %s AND deleted_at IS NULL",
+            (solution_id,),
+        )
+
     @staticmethod
     def _row_to_entity(row) -> SolutionTemplateBinding:
         return SolutionTemplateBinding(

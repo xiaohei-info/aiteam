@@ -10,14 +10,21 @@ from dataclasses import dataclass, field
 # ── Workbench ──────────────────────────────────────────────────────────────
 
 @dataclass
-class WorkbenchView:
-    """Aggregate view for the workbench home page."""
-    enterprise_id: str
-    active_employees: int = 0
-    active_conversations: int = 0
-    today_runs: int = 0
-    today_tokens: int = 0
-    recent_conversations: list = field(default_factory=list)
+class WorkbenchEmployeeItem:
+    employee_id: str
+    display_name: str = ""
+    role_name: str = ""
+    status: str = "draft"
+    presence: str = "idle"
+    avatar_url: str | None = None
+    last_message_preview: str = ""
+    unread_count: int = 0
+    pinned: bool = False
+    conversation_id: str | None = None
+    latest_run_status: str | None = None
+    running_task_count: int = 0
+    knowledge_base_count: int = 0
+    navigation_target: str = ""
 
 
 @dataclass
@@ -30,6 +37,31 @@ class WorkbenchConversationItem:
     display_state: str = "idle"
     last_preview: str = ""
     updated_at: str = ""
+    navigation_target: str = ""
+    latest_run_status: str | None = None
+    unread_count: int = 0
+    member_count: int = 0
+    task_status_digest: dict = field(default_factory=dict)
+
+
+@dataclass
+class WorkbenchView:
+    """Aggregate view for the workbench home page."""
+    enterprise_id: str
+    active_employees: int = 0
+    active_conversations: int = 0
+    today_runs: int = 0
+    today_tokens: int = 0
+    recent_conversations: list[WorkbenchConversationItem] = field(default_factory=list)
+    employees: list[WorkbenchEmployeeItem] = field(default_factory=list)
+    conversations: list[WorkbenchConversationItem] = field(default_factory=list)
+    groups: list[WorkbenchConversationItem] = field(default_factory=list)
+    my_team: dict = field(default_factory=dict)
+    navigation: dict = field(default_factory=dict)
+    task_status_digest: dict = field(default_factory=dict)
+    office_digest: dict = field(default_factory=dict)
+    empty_state: dict | None = None
+    permissions: dict = field(default_factory=dict)
 
 
 # ── Conversation ───────────────────────────────────────────────────────────
@@ -39,14 +71,14 @@ class WorkbenchConversationItem:
 
 _DISPLAY_RULES = {
     # (run_status, has_message_delta) -> display_state
-    ("queued",    False): "idle",
-    ("routing",   False): "routing",
+    ("queued", False): "idle",
+    ("routing", False): "routing",
     ("submitting", False): "routing",
-    ("running",   True):  "streaming",
-    ("running",   False): "busy",
+    ("running", True): "streaming",
+    ("running", False): "busy",
     ("waiting_human", False): "waiting_reply",
     ("succeeded", False): "resolved",
-    ("failed",    False): "resolved",
+    ("failed", False): "resolved",
     ("cancelled", False): "resolved",
 }
 
@@ -115,25 +147,64 @@ class BillingEmployeeItem:
 # ── Office ─────────────────────────────────────────────────────────────────
 
 @dataclass
-class OfficeView:
-    """Lightweight office dashboard view (stub)."""
-    enterprise_id: str
-    busy_employees: int = 0
-    pending_tasks: int = 0
-    recent_activity: list = field(default_factory=list)
+class OfficeSceneSummary:
+    online_employee_count: int = 0
+    running_task_count: int = 0
+    mode_label: str = "Live"
+
+
+@dataclass
+class OfficeSeatView:
+    employee_id: str
+    display_name: str = ""
+    role_name: str = ""
+    presence: str = "offline"
+    current_task: str = ""
+    conversation_id: str | None = None
+
+
+@dataclass
+class OfficeSceneView:
+    summary: OfficeSceneSummary
+    seats: list[OfficeSeatView] = field(default_factory=list)
+
+
+@dataclass
+class OfficeFeedItemView:
+    employee_id: str
+    employee_name: str = ""
+    title: str = ""
+    detail: str = ""
+    status: str = "idle"
+    progress: int = 0
+    conversation_id: str | None = None
+
+
+@dataclass
+class OfficeFeedView:
+    items: list[OfficeFeedItemView] = field(default_factory=list)
 
 
 # ── Employee Admin ─────────────────────────────────────────────────────────
 
 @dataclass
 class EmployeeAdminView:
-    """Employee admin detail view (stub)."""
+    """Employee admin detail view — real persisted config surfaces."""
     employee_id: str
     display_name: str = ""
     status: str = "draft"
     role_name: str = ""
     model_provider: str = ""
     model_name: str = ""
+    prompt_version: int = 1
+    config_version: int = 1
+    capabilities_json: str = "{}"
+    description: str = ""
+    skills: list = field(default_factory=list)
+    knowledge_bases: list = field(default_factory=list)
+    memory_config: dict = field(default_factory=dict)
+    prompt_config: dict | None = None
+    connector_bindings: list = field(default_factory=list)
     bindings_summary: list = field(default_factory=list)
     scheduled_jobs: list = field(default_factory=list)
     run_summary: dict = field(default_factory=dict)

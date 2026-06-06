@@ -7,7 +7,6 @@ No DB access or side effects.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
 from typing import Optional
 
 from ..domain.entities import Conversation, Employee, RunEvent, TeamRun
@@ -17,6 +16,7 @@ from .schemas import (
     BillingView,
     ConversationView,
     WorkbenchConversationItem,
+    WorkbenchEmployeeItem,
     WorkbenchView,
     compute_display_state,
 )
@@ -24,31 +24,26 @@ from .schemas import (
 
 # ── Workbench ──────────────────────────────────────────────────────────────
 
+
 def assemble_workbench(
     enterprise_id: str,
     employees: list[Employee],
     conversations: list[Conversation],
     today_runs: list[TeamRun],
     today_tokens: int,
+    *,
+    team_items: list[WorkbenchEmployeeItem],
+    conversation_items: list[WorkbenchConversationItem],
+    group_items: list[WorkbenchConversationItem],
+    navigation: dict,
+    task_status_digest: dict,
+    office_digest: dict,
+    empty_state: dict | None,
+    permissions: dict,
 ) -> WorkbenchView:
-    active_employees = sum(
-        1 for e in employees if e.status == EmployeeStatus.ACTIVE
-    )
-    active_convs = sum(
-        1 for c in conversations if c.status == "active"
-    )
-    recent = [
-        WorkbenchConversationItem(
-            id=c.id,
-            title=c.title,
-            conv_type=c.type,
-            status=c.status,
-            display_state=_conversation_display_state(c),
-            last_preview=c.last_message_preview or "",
-            updated_at=c.updated_at,
-        )
-        for c in conversations[:10]
-    ]
+    active_employees = sum(1 for e in employees if e.status == EmployeeStatus.ACTIVE)
+    active_convs = sum(1 for c in conversations if c.status == "active")
+    recent = conversation_items[:10]
     return WorkbenchView(
         enterprise_id=enterprise_id,
         active_employees=active_employees,
@@ -56,10 +51,24 @@ def assemble_workbench(
         today_runs=len(today_runs),
         today_tokens=today_tokens,
         recent_conversations=recent,
+        employees=team_items,
+        conversations=conversation_items,
+        groups=group_items,
+        my_team={
+            "items": team_items,
+            "total": len(team_items),
+            "active_count": active_employees,
+        },
+        navigation=navigation,
+        task_status_digest=task_status_digest,
+        office_digest=office_digest,
+        empty_state=empty_state,
+        permissions=permissions,
     )
 
 
 # ── Conversation ───────────────────────────────────────────────────────────
+
 
 def assemble_conversation_view(
     conversation: Conversation,
@@ -86,6 +95,7 @@ def assemble_conversation_view(
     )
 
 
+
 def assemble_conversation_views(
     conversations: list[Conversation],
     *,
@@ -107,6 +117,7 @@ def assemble_conversation_views(
 
 
 # ── Billing ────────────────────────────────────────────────────────────────
+
 
 def _jsonb_to_dict(payload) -> dict | None:
     """Normalize JSONB input that may be a string, dict, or Python repr (from psycopg2)."""
@@ -132,6 +143,7 @@ def _jsonb_to_dict(payload) -> dict | None:
     return None
 
 
+
 def _parse_tokens_from_json(payload_json: str | dict | None) -> int:
     """Best-effort extraction of token count from result_summary_json or payload_json."""
     data = _jsonb_to_dict(payload_json)
@@ -146,6 +158,7 @@ def _parse_tokens_from_json(payload_json: str | dict | None) -> int:
         if tokens is not None and isinstance(tokens, (int, float)):
             return int(tokens)
     return 0
+
 
 
 def _parse_cost_cents_from_json(payload_json: str | dict | None) -> int:
@@ -164,6 +177,7 @@ def _parse_cost_cents_from_json(payload_json: str | dict | None) -> int:
     return 0
 
 
+
 def _aggregate_run_tokens(run: TeamRun, events: list[RunEvent]) -> int:
     """Aggregate tokens for a run from result_summary_json and event payloads."""
     tokens = _parse_tokens_from_json(run.result_summary_json)
@@ -173,12 +187,14 @@ def _aggregate_run_tokens(run: TeamRun, events: list[RunEvent]) -> int:
     return tokens
 
 
+
 def _aggregate_run_cost_cents(run: TeamRun, events: list[RunEvent]) -> int:
     cost = _parse_cost_cents_from_json(run.result_summary_json)
     for ev in events:
         if ev.event_type == "usage_recorded":
             cost += _parse_cost_cents_from_json(ev.payload_json)
     return cost
+
 
 
 def assemble_billing_view(
@@ -224,6 +240,7 @@ def assemble_billing_view(
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
 
 def _conversation_display_state(c: Conversation) -> str:
     if c.status != "active":

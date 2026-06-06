@@ -145,3 +145,20 @@ def test_solution_apply_requires_bound_solution_template(db_conn, seeded_enterpr
     )
     assert status == 409, body
     assert body["error"] == "SOLUTION_TEMPLATE_BINDING_MISSING"
+
+
+def test_solution_apply_accepts_replace_and_reapply_modes(db_conn, seeded_enterprise):
+    """Replace and reapply modes are accepted as compat aliases for append.
+    They must not 400 with UNSUPPORTED_MODE."""
+    for mode in ("replace", "reapply"):
+        payload = {
+            "mode": mode,
+            "department_id": "dept_retail",
+            "idempotency_key": f"solution-apply-{mode}-{uuid.uuid4().hex[:6]}",
+        }
+        status, body = _post(
+            f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+            payload,
+        )
+        assert status == 201, f"mode={mode}: expected 201, got {status}: {body}"
+        assert body["status"] == "succeeded"

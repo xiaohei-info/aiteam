@@ -11,17 +11,22 @@ _ROLE_PERMISSIONS = {
         "manage_enterprise",
         "manage_employees",
         "view_billing",
+        "export_data",
+        "view_audit_logs",
         "manage_connectors",
         "view_all_conversations",
     },
     EnterpriseRole.ENTERPRISE_ADMIN: {
         "manage_employees",
+        "export_data",
+        "view_audit_logs",
         "manage_connectors",
         "view_all_conversations",
     },
     EnterpriseRole.FINANCE_ADMIN: {
         "view_billing",
         "export_data",
+        "view_audit_logs",
     },
     EnterpriseRole.MEMBER: {
         "view_own_conversations",

@@ -79,6 +79,17 @@ def _patch(parsed_path: str, body: dict | None = None, headers: dict | None = No
     return handler.status, handler.get_json()
 
 
+def _delete(parsed_path: str, headers: dict | None = None) -> tuple[int, dict]:
+    """Call handle_delete with a FakeHandler and return (status, response_json)."""
+    from api.routes import handle_delete
+    handler = _FakeHandler()
+    if headers:
+        handler.headers.update(headers)
+    parsed = urlparse(f"http://example.com{parsed_path}")
+    handle_delete(handler, parsed)
+    return handler.status, handler.get_json()
+
+
 # ── S02-T01: /api/team/* dispatches to Team router (L2-S06: real data) ──
 
 def test_team_namespace_known_routes_return_503_when_db_unavailable(monkeypatch):
@@ -92,8 +103,12 @@ def test_team_namespace_known_routes_return_503_when_db_unavailable(monkeypatch)
 
     checks = [
         ("GET", "/api/team/workbench", None),
+        ("GET", "/api/team/office/scene", None),
+        ("GET", "/api/team/office/feed", None),
+        ("GET", "/api/team/org/tree", None),
         ("POST", "/api/team/runs", {}),
         ("PATCH", "/api/team/employees/nonexistent_emp", {"name": "test"}),
+        ("PATCH", "/api/team/org/assignments/nonexistent_emp", {"department_id": "dept_marketing"}),
     ]
 
     for method, path, payload in checks:
@@ -180,13 +195,45 @@ def test_team_namespace_patch_checks_csrf_before_body_read(monkeypatch):
     assert read_calls == 0
 
 
+def test_auth_northbound_routes_no_longer_return_404_or_501():
+    checks = [
+        ("GET", "/api/auth/login/wechat/poll?state=missing", None),
+        ("GET", "/api/me", None),
+        ("POST", "/api/auth/login/wechat/init", {}),
+        ("POST", "/api/auth/login/wechat/callback", {"state": "missing", "code": "bad"}),
+        ("POST", "/api/auth/login/phone/send-code", {"phone": "13800138000"}),
+        ("POST", "/api/auth/login/phone/verify", {"phone": "13800138000", "code": "bad"}),
+        ("POST", "/api/auth/refresh", {}),
+        ("POST", "/api/auth/logout", {}),
+    ]
+
+    for method, path, payload in checks:
+        if method == "GET":
+            status, body = _get(path)
+        else:
+            status, body = _post(path, payload)
+        assert status != 501, f"{method} {path}: expected host dispatch to handle route, got {status}: {body}"
+
+
 # ── S02-T02: admin namespaces route real endpoints and keep stubs for unknowns ──
 
 def test_enterprise_admin_known_namespace_routes_return_real_json():
     """Known enterprise-admin GET routes should no longer return the 501 stub."""
     for path in [
-        "/api/enterprise-admin/employees",
-        "/api/enterprise-admin/billing/usage",
+        "/api/enterprise-admin/employees?role=owner",
+        "/api/enterprise-admin/billing/usage?role=owner",
+    ]:
+        status, body = _get(path)
+        assert status != 501, f"GET {path}: should not be 501 stub, got {status}: {body}"
+        assert body.get("error") != "not_implemented"
+
+
+def test_team_known_b08_b09_routes_return_real_json_or_503():
+    """New B08/B09 Team routes should no longer fall through to the 501 stub."""
+    for path in [
+        "/api/team/settings",
+        "/api/team/billing/balance",
+        "/api/team/billing/recharges",
     ]:
         status, body = _get(path)
         assert status != 501, f"GET {path}: should not be 501 stub, got {status}: {body}"
@@ -220,9 +267,16 @@ def test_enterprise_admin_unknown_namespace_stays_501_when_db_unavailable(monkey
 
 def test_system_admin_known_namespace_routes_return_real_json():
     """Known system-admin GET routes should no longer return the 501 stub."""
-    status, body = _get("/api/system-admin/health")
-    assert status != 501, f"GET /api/system-admin/health: should not be 501 stub, got {status}: {body}"
-    assert body.get("error") != "not_implemented"
+    for path in [
+        "/api/system-admin/health",
+        "/api/system-admin/templates",
+        "/api/system-admin/solutions",
+        "/api/system-admin/finance/overview",
+        "/api/system-admin/finance/reports",
+    ]:
+        status, body = _get(path)
+        assert status != 501, f"GET {path}: should not be 501 stub, got {status}: {body}"
+        assert body.get("error") != "not_implemented"
 
 
 def test_enterprise_admin_unknown_namespace_still_returns_501_json():
@@ -254,8 +308,20 @@ def test_enterprise_admin_namespace_post_returns_501_json():
     assert body.get("error") == "not_implemented"
 
 
+def test_system_admin_known_route_db_unavailable_returns_503(monkeypatch):
+    import team_panel.api_team.router_system_admin as router_system_admin
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(router_system_admin, "_make_conn", _boom)
+    status, body = _get("/api/system-admin/templates")
+    assert status == 503, body
+    assert body.get("error") == "database_unavailable"
+
+
 def test_system_admin_namespace_post_returns_501_json():
-    """POST /api/system-admin/* must also return 501 JSON."""
+    """Unknown POST /api/system-admin/* must still return 501 JSON."""
     status, body = _post("/api/system-admin/tenants", {})
     assert status == 501
     assert body.get("error") == "not_implemented"

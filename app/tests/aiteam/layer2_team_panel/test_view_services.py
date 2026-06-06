@@ -15,8 +15,10 @@ from datetime import date
 import pytest
 from team_panel.domain.entities import (
     Conversation,
+    EmployeeKnowledgeBinding,
     Employee,
     RunEvent,
+    TeamTask,
     TeamRun,
 )
 from team_panel.domain.enums import EmployeeStatus
@@ -135,6 +137,95 @@ class TestWorkbenchView:
 
         assert view.active_employees == 1  # only the active one
         assert view.active_conversations == 0
+
+    def test_workbench_view_includes_navigation_and_task_digest(self, db_conn):
+        ent_id = _eid("ent")
+        employee_id = _eid("emp")
+        conversation_id = _eid("conv")
+        run_id = _eid("run")
+        _seed_enterprise(db_conn, ent_id)
+
+        with UnitOfWork(db_conn) as uow:
+            uow.employees().create(Employee(
+                id=employee_id,
+                enterprise_id=ent_id,
+                profile_name=f"p-{employee_id}",
+                display_name="Navigator",
+                role_name="planner",
+                status=EmployeeStatus.ACTIVE,
+            ))
+            uow.employee_knowledge_bindings().create(EmployeeKnowledgeBinding(
+                id=_eid("kb"),
+                enterprise_id=ent_id,
+                employee_id=employee_id,
+                knowledge_base_id="kb_strategy",
+            ))
+            uow.conversations().create(Conversation(
+                id=conversation_id,
+                enterprise_id=ent_id,
+                type="private",
+                status="active",
+                title="Strategy sync",
+                entry_employee_id=employee_id,
+                latest_run_id=run_id,
+                last_message_preview="Latest planning update",
+                created_by="user_1",
+            ))
+            uow.team_runs().create(TeamRun(
+                id=run_id,
+                enterprise_id=ent_id,
+                conversation_id=conversation_id,
+                trigger_type="private_message",
+                execution_mode="single_agent",
+                status="running",
+                entry_employee_id=employee_id,
+                result_summary_json='{"tokens": 42}',
+            ))
+            uow.team_tasks().create(TeamTask(
+                id=_eid("task"),
+                run_id=run_id,
+                assignee_employee_id=employee_id,
+                title="Draft launch plan",
+                status="running",
+                sequence_no=1,
+            ))
+            uow.team_tasks().create(TeamTask(
+                id=_eid("task"),
+                run_id=run_id,
+                assignee_employee_id=employee_id,
+                title="Review outline",
+                status="failed",
+                sequence_no=2,
+            ))
+
+        with UnitOfWork(db_conn) as uow:
+            from team_panel.application.queries.workbench_view_service import get_workbench_view
+            view = get_workbench_view(uow, ent_id, role="member")
+
+        assert view.my_team["total"] == 1
+        assert view.my_team["items"][0].presence == "busy"
+        assert view.my_team["items"][0].knowledge_base_count == 1
+        assert view.conversations[0].navigation_target == f"/app/chat/{conversation_id}"
+        assert view.navigation["talent"]["target"] == "/app/marketplace"
+        assert view.navigation["knowledge"]["badge_count"] == 1
+        assert view.navigation["org"]["target"] == "/app/workbench"
+        assert view.task_status_digest["running"] == 1
+        assert view.task_status_digest["failed"] == 1
+        assert view.office_digest["running_task_count"] == 1
+        assert view.permissions["can_view_admin"] is False
+
+    def test_workbench_view_exposes_empty_state_for_new_enterprise(self, db_conn):
+        ent_id = _eid("ent")
+        _seed_enterprise(db_conn, ent_id)
+
+        with UnitOfWork(db_conn) as uow:
+            from team_panel.application.queries.workbench_view_service import get_workbench_view
+            view = get_workbench_view(uow, ent_id, role="owner")
+
+        assert view.empty_state is not None
+        assert view.empty_state["code"] == "NO_EMPLOYEES"
+        assert view.empty_state["cta_target"] == "/app/marketplace"
+        assert view.my_team["total"] == 0
 
 
 # ── T02: Conversation display_state computed ───────────────────────────────

@@ -9,8 +9,21 @@ window.aiteam = window.aiteam || {};
     return headers;
   }
 
+  function normalizeError(data, fallback) {
+    if (data && data.error) {
+      if (typeof data.error === 'string') {
+        return data.error;
+      }
+      if (data.error && typeof data.error === 'object') {
+        return data.error.message || data.error.code || fallback;
+      }
+    }
+    return fallback;
+  }
+
   function buildResult(res, data) {
-    const error = res.ok ? null : ((data && data.error) || res.statusText || 'Request failed');
+    const fallback = res.statusText || 'Request failed';
+    const error = res.ok ? null : normalizeError(data, fallback);
     return {
       ok: res.ok,
       status: res.status,
@@ -66,8 +79,28 @@ window.aiteam = window.aiteam || {};
       return this._request('PATCH', path, body, options);
     },
 
+    delete(path, options) {
+      return this._request('DELETE', path, undefined, options);
+    },
+
     getWorkbench() {
       return this.get('/workbench');
+    },
+
+    getOfficeScene() {
+      return this.get('/office/scene');
+    },
+
+    getOfficeFeed() {
+      return this.get('/office/feed');
+    },
+
+    getKnowledgeBases(options) {
+      return this.get('/knowledge-bases', options);
+    },
+
+    postKnowledgeDocument(kbId, body, options) {
+      return this.post(`/knowledge-bases/${encodeURIComponent(kbId)}/documents`, body, options);
     },
 
     getTalentTemplates(options) {
@@ -84,6 +117,18 @@ window.aiteam = window.aiteam || {};
 
     getConversation(conversationId, options) {
       return this.get(`/conversations/${encodeURIComponent(conversationId)}`, options);
+    },
+
+    submitGroupMessage(conversationId, body, options) {
+      return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/messages`, body, options);
+    },
+
+    getOrgTree(options) {
+      return this.get('/org/tree', options);
+    },
+
+    updateOrgAssignment(assignmentId, body, options) {
+      return this.patch(`/org/assignments/${encodeURIComponent(assignmentId)}`, body, options);
     },
 
     createRun(body, options) {
@@ -118,6 +163,67 @@ window.aiteam = window.aiteam || {};
 
     updateEmployee(employeeId, body, options) {
       return this.patch(`/employees/${encodeURIComponent(employeeId)}`, body, options);
+    },
+
+    getSkillCatalog(options) {
+      return this.get('/skills/catalog', options);
+    },
+
+    getSkillInstalls(options) {
+      return this.get('/skills/installs', options);
+    },
+
+    installSkill(body, options) {
+      return this.post('/skills/installs', body, options);
+    },
+
+    getBillingUsageOverview(options) {
+      return this.get('/billing/usage/overview', options);
+    },
+
+    getBillingUsageRecords(query, options) {
+      const suffix = query ? ('?' + query) : '';
+      return this.get('/billing/usage/records' + suffix, options);
+    },
+
+    getConnectors(options) {
+      return this.get('/connectors', options);
+    },
+
+    createConnector(body, options) {
+      return this.post('/connectors', body, options);
+    },
+
+    testConnector(connectorId, body, options) {
+      return this.post(`/connectors/${encodeURIComponent(connectorId)}/test`, body || {}, options);
+    },
+
+    updateConnectorGrants(connectorId, body, options) {
+      return this.patch(`/connectors/${encodeURIComponent(connectorId)}/grants`, body, options);
+    },
+
+    getSolutions(options) {
+      return this.get('/solutions', options);
+    },
+
+    applySolution(solutionId, body, options) {
+      return this.post(`/solutions/${encodeURIComponent(solutionId)}/apply`, body, options);
+    },
+
+    getMemories(options) {
+      return this.get('/memories', options);
+    },
+
+    createMemory(body, options) {
+      return this.post('/memories', body, options);
+    },
+
+    updateMemory(memoryId, body, options) {
+      return this.patch(`/memories/${encodeURIComponent(memoryId)}`, body, options);
+    },
+
+    deleteMemory(memoryId, options) {
+      return this.delete(`/memories/${encodeURIComponent(memoryId)}`, options);
     },
   };
 }(window.aiteam));

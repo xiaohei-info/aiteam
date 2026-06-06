@@ -87,6 +87,7 @@ def test_loading_helper_and_expected_symbols_exist() -> None:
         "handleApiResult",
         "renderEmpty",
         "renderError",
+        "renderInfo",
         "renderLoading",
         "renderPermissionDenied",
     ]

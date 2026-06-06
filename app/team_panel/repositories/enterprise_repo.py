@@ -62,6 +62,54 @@ class EnterpriseRepo:
         )
         return ent
 
+    def list_with_filter(
+        self,
+        name: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[list[Enterprise], int]:
+        """List enterprises with optional search/filter and pagination."""
+        conditions = ["deleted_at IS NULL"]
+        params: list = []
+
+        if name:
+            conditions.append("(name ILIKE %s OR slug ILIKE %s)")
+            like = f"%{name}%"
+            params.extend([like, like])
+
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+
+        where_clause = " AND ".join(conditions)
+
+        self._cur.execute(
+            f"SELECT COUNT(*) FROM enterprise WHERE {where_clause}",
+            tuple(params),
+        )
+        total = self._cur.fetchone()[0]
+
+        offset = (page - 1) * limit
+        self._cur.execute(
+            f"SELECT id, slug, name, status, owner_user_id, default_workspace_id, "
+            f"archive_reason, created_at, updated_at, created_by, updated_by, deleted_at "
+            f"FROM enterprise WHERE {where_clause} "
+            f"ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            tuple(params) + (limit, offset),
+        )
+        rows = self._cur.fetchall()
+        items = []
+        for row in rows:
+            items.append(Enterprise(
+                id=row[0], slug=row[1], name=row[2], status=row[3],
+                owner_user_id=row[4], default_workspace_id=row[5],
+                archive_reason=row[6], created_at=str(row[7]), updated_at=str(row[8]),
+                created_by=row[9] or "", updated_by=row[10] or "",
+                deleted_at=str(row[11]) if row[11] else None,
+            ))
+        return items, total
+
     def delete(self, enterprise_id: str) -> None:
         self._cur.execute(
             "UPDATE enterprise SET deleted_at=now() WHERE id=%s",

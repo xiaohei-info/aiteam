@@ -61,9 +61,21 @@ class AgentTemplateRepo:
 
     def update(self, t: AgentTemplate) -> AgentTemplate:
         self._cur.execute(
-            "UPDATE agent_template SET name=%s, status=%s, version_no=%s, "
-            "updated_at=now() WHERE id=%s",
-            (t.name, t.status, t.version_no, t.id),
+            "UPDATE agent_template SET name=%s, category_code=%s, role_name=%s, status=%s, "
+            "prompt_pack_json=%s::jsonb, default_model_json=%s::jsonb, default_binding_json=%s::jsonb, "
+            "version_no=%s, updated_at=now(), updated_by=%s WHERE id=%s",
+            (
+                t.name,
+                t.category_code,
+                t.role_name,
+                t.status,
+                t.prompt_pack_json,
+                t.default_model_json,
+                t.default_binding_json,
+                t.version_no,
+                t.updated_by or None,
+                t.id,
+            ),
         )
         return t
 

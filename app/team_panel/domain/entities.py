@@ -3,6 +3,7 @@
 Enterprise / Membership / Employee aggregate per L1-S02 plan.
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 from .enums import EmployeeStatus, EnterpriseRole
@@ -165,6 +166,78 @@ class EmployeeMemoryBinding:
     retention_days: Optional[int] = None
     writeback_enabled: bool = True
     binding_version: int = 1
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class ConnectorDefinition:
+    id: str
+    provider_code: str
+    connector_type: str
+    display_name: str = ""
+    auth_scheme: str = "opaque_ref"  # oauth2 | api_key | mcp | webhook | opaque_ref
+    config_schema_json: str = "{}"
+    status: str = "active"  # active | deprecated | hidden
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class EnterpriseSkillInstall:
+    id: str
+    enterprise_id: str
+    skill_code: str
+    display_name: str = ""
+    description: str = ""
+    source_marketplace: str = "custom"  # clawhub | skillhub | custom | builtin
+    version: str = "1.0.0"
+    latest_version: str = "1.0.0"
+    scope_mode: str = "selected_employees"  # all_employees | selected_employees
+    install_status: str = "active"  # active | update_available | uninstalled
+    manifest_json: str = "{}"
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class MemoryItem:
+    id: str
+    enterprise_id: str
+    employee_id: str
+    content: str
+    category: str = "event"  # preference | habit | decision | event
+    importance: int = 3
+    source_type: str = "manual"  # manual | extraction | system_policy
+    tags_json: str = "[]"
+    visibility_scope: str = "enterprise"  # enterprise | admin_only
+    runtime_ref_json: str = "{}"
+    last_used_at: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class MemoryReviewDecision:
+    id: str
+    enterprise_id: str
+    memory_item_id: str
+    reviewer_user_id: str = ""
+    decision: str = "pending"  # pending | confirmed | rejected | corrected
+    comment: Optional[str] = None
+    corrected_content: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""
     created_by: str = ""
@@ -612,6 +685,47 @@ class AuditEvent:
 # ═══════════════════════════════════════════════════════════════════
 
 @dataclass
+class SolutionApplyRecord:
+    id: str
+    enterprise_id: str
+    solution_id: str
+    idempotency_key: str
+    mode: str = "append"
+    status: str = "succeeded"  # pending | succeeded | failed | cancelled
+    requested_by: str = ""
+    department_id: Optional[str] = None
+    created_employee_ids_json: str = "[]"
+    created_knowledge_base_ids_json: str = "[]"
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class UsageLedger:
+    id: str
+    enterprise_id: str
+    employee_id: str
+    run_id: str
+    conversation_id: Optional[str] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost_cents: int = 0
+    source_type: str = "run_summary"  # run_summary | usage_event | backfill
+    occurred_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
 class Enterprise:
     """企业空间，Team Panel 多租户边界 (§4.1)."""
     id: str
@@ -740,3 +854,212 @@ class Employee:
     def is_provisionable(self) -> bool:
         """Whether a provision attempt is allowed."""
         return self.status in (EmployeeStatus.DRAFT, EmployeeStatus.PROVISIONING_FAILED)
+
+
+@dataclass
+class Department:
+    """Enterprise org department for P07 organization tree."""
+    id: str
+    enterprise_id: str
+    name: str
+    parent_id: Optional[str] = None
+    leader_user_id: Optional[str] = None
+    visibility_scope: str = "enterprise"
+    sort_order: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+@dataclass
+class EmployeeOrgAssignment:
+    """Employee-to-department placement plus org presentation fields."""
+    id: str
+    enterprise_id: str
+    employee_id: str
+    department_id: Optional[str] = None
+    position_title: str = ""
+    visibility_scope: str = "department"
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+
+def _now_str() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class KnowledgeBase:
+    """P08 knowledge base aggregate root."""
+
+    id: str
+    enterprise_id: str
+    name: str = ""
+    description: str = ""
+    status: str = "active"  # active | archived
+    document_count: int = 0
+    storage_prefix: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+    def archive(self) -> None:
+        if self.status != "active":
+            raise ValueError(f"Cannot archive from {self.status}")
+        self.status = "archived"
+
+
+@dataclass
+class KnowledgeDocument:
+    """Durable document state for upload -> ingestion -> retrieval."""
+
+    id: str
+    knowledge_base_id: str
+    enterprise_id: str
+    asset_id: str = ""
+    display_name: str = ""
+    file_name: str = ""
+    file_type: str = ""
+    file_size: int = 0
+    storage_key: str = ""
+    status: str = "uploaded"  # uploaded | ingesting | ready | error
+    ingestion_job_id: Optional[str] = None
+    rag_document_id: str = ""
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    chunk_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+    def start_ingesting(self, ingestion_job_id: str) -> None:
+        if self.status not in ("uploaded", "error"):
+            raise ValueError(f"Cannot start ingesting from {self.status}")
+        self.status = "ingesting"
+        self.ingestion_job_id = ingestion_job_id
+        self.error_code = None
+        self.error_message = None
+
+    def mark_ready(self, *, rag_document_id: str = "", chunk_count: int = 0) -> None:
+        if self.status != "ingesting":
+            raise ValueError(f"Cannot mark ready from {self.status}")
+        self.status = "ready"
+        self.rag_document_id = rag_document_id
+        self.chunk_count = chunk_count
+        self.error_code = None
+        self.error_message = None
+
+    def mark_error(self, error_code: str, error_message: str) -> None:
+        if self.status != "ingesting":
+            raise ValueError(f"Cannot mark error from {self.status}")
+        self.status = "error"
+        self.error_code = error_code
+        self.error_message = error_message
+
+    def reset_for_retry(self) -> None:
+        if self.status != "error":
+            raise ValueError(f"Cannot reset retry from {self.status}")
+        self.status = "uploaded"
+        self.ingestion_job_id = None
+        self.error_code = None
+        self.error_message = None
+
+
+@dataclass
+class KnowledgeIndexBinding:
+    """Employee-facing retrieval binding to a LightRAG index/document."""
+
+    id: str
+    enterprise_id: str
+    employee_id: str
+    knowledge_base_id: str
+    employee_knowledge_binding_id: Optional[str] = None
+    document_id: Optional[str] = None
+    rag_index_id: str = ""
+    rag_document_id: str = ""
+    scope_mode: str = "read"  # read | read_write_metadata
+    status: str = "pending"  # pending | ready | error | disabled
+    error_message: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+    def mark_ready(self, *, rag_document_id: str = "") -> None:
+        if self.status not in ("pending", "error"):
+            raise ValueError(f"Cannot mark ready from {self.status}")
+        self.status = "ready"
+        self.rag_document_id = rag_document_id or self.rag_document_id
+        self.error_message = None
+        self.last_synced_at = _now_str()
+
+    def mark_error(self, error_message: str) -> None:
+        if self.status not in ("pending", "ready"):
+            raise ValueError(f"Cannot mark error from {self.status}")
+        self.status = "error"
+        self.error_message = error_message
+        self.last_synced_at = _now_str()
+
+    def disable(self) -> None:
+        if self.status == "disabled":
+            raise ValueError("Knowledge index binding already disabled")
+        self.status = "disabled"
+        self.last_synced_at = _now_str()
+
+
+@dataclass
+class KnowledgeIngestionJob:
+    """Async ingestion tracker for document parsing + LightRAG indexing."""
+
+    id: str
+    knowledge_base_id: str
+    enterprise_id: str
+    document_id: str
+    status: str = "pending"  # pending | parsing | inserting | completed | failed
+    rag_document_id: str = ""
+    error_message: Optional[str] = None
+    chunk_count: int = 0
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+    deleted_at: Optional[str] = None
+
+    def start(self) -> None:
+        if self.status != "pending":
+            raise ValueError(f"Cannot start from {self.status}")
+        self.status = "parsing"
+        self.started_at = _now_str()
+
+    def start_inserting(self) -> None:
+        if self.status != "parsing":
+            raise ValueError(f"Cannot start inserting from {self.status}")
+        self.status = "inserting"
+
+    def complete(self, *, rag_document_id: str = "", chunk_count: int = 0) -> None:
+        if self.status not in ("parsing", "inserting"):
+            raise ValueError(f"Cannot complete from {self.status}")
+        self.status = "completed"
+        self.rag_document_id = rag_document_id
+        self.chunk_count = chunk_count
+        self.completed_at = _now_str()
+
+    def fail(self, error_message: str) -> None:
+        if self.status not in ("pending", "parsing", "inserting"):
+            raise ValueError(f"Cannot fail from {self.status}")
+        self.status = "failed"
+        self.error_message = error_message
+        self.completed_at = _now_str()

@@ -33,7 +33,14 @@ def _read(path: Path) -> str:
 def test_sse_stream_emits_timeline_events(seeded_enterprise, db_conn):
     emp_id = seeded_enterprise["employee_id"]
     enterprise_id = seeded_enterprise["enterprise_id"]
-    _, run_resp = _post("/api/team/runs", {"employee_id": emp_id})
+    _, run_resp = _post(
+        "/api/team/runs",
+        {
+            "employee_id": emp_id,
+            "conversation_id": seeded_enterprise["conversation_id"],
+            "message": {"text": "Hello"},
+        },
+    )
     run_id = run_resp["run_id"]
 
     cur = db_conn.cursor()

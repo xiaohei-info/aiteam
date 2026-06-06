@@ -122,3 +122,75 @@ def test_index_html_loads_aiteam_dependencies_before_page_shell() -> None:
     page_shell_pos = source.index('static/aiteam/page-shell.js')
     assert api_client_pos < page_shell_pos
     assert state_helpers_pos < page_shell_pos
+
+
+@pytest.mark.parametrize(
+    ('route', 'pathname', 'expected_nav_label', 'expected_title'),
+    [
+        ('admin', '/admin', '员工', '企业后台'),
+        ('system', '/system', '企业', '系统后台'),
+        ('app', '/app', '工作台', '工作台'),
+    ],
+)
+def test_page_shell_init_executes_without_missing_global_helpers(route, pathname, expected_nav_label, expected_title):
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const source = fs.readFileSync({json.dumps(str(_PAGE_SHELL_PATH))}, 'utf8');
+
+const shellEl = {{ hidden: true }};
+const mainEl = {{ innerHTML: '', style: {{}}, hidden: false }};
+const navEl = {{ innerHTML: '', style: {{}}, hidden: false }};
+const titleEl = {{ textContent: '' }};
+const subtitleEl = {{ textContent: '' }};
+const toastEl = {{ style: {{ display: '' }} }};
+const titlebarEl = {{ style: {{ display: '' }} }};
+const layoutEl = {{ style: {{ display: '' }} }};
+const bodyClasses = new Set();
+
+global.window = {{ aiteam: {{}}, location: {{ pathname: {json.dumps(pathname)} }} }};
+global.aiteam = global.window.aiteam;
+global.document = {{
+  body: {{
+    classList: {{
+      add: (cls) => bodyClasses.add(cls),
+      contains: (cls) => bodyClasses.has(cls),
+    }},
+  }},
+  head: {{ appendChild: () => {{}} }},
+  querySelector: (selector) => {{
+    if (selector === '.app-titlebar') return titlebarEl;
+    if (selector === '.layout') return layoutEl;
+    return null;
+  }},
+  getElementById: (id) => {{
+    if (id === 'aiteam-app') return shellEl;
+    if (id === 'aiteam-main') return mainEl;
+    if (id === 'aiteam-nav') return navEl;
+    if (id === 'aiteam-shell-title') return titleEl;
+    if (id === 'aiteam-shell-subtitle') return subtitleEl;
+    if (id === 'toast') return toastEl;
+    return null;
+  }},
+}};
+
+vm.runInThisContext(source, {{ filename: 'page-shell.js' }});
+window.aiteam.shell.init({json.dumps(route)});
+console.log(JSON.stringify({{
+  shellHidden: shellEl.hidden,
+  navHtml: navEl.innerHTML,
+  title: titleEl.textContent,
+  bodyHasClass: bodyClasses.has('aiteam-shell-active'),
+}}));
+"""
+    completed = __import__('subprocess').run(
+        ['node', '-e', script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result['shellHidden'] is False
+    assert result['bodyHasClass'] is True
+    assert expected_nav_label in result['navHtml']
+    assert result['title'] == expected_title

@@ -1280,6 +1280,10 @@ def _csrf_exempt_path(path: str) -> bool:
     """Paths that cannot or must not carry a session CSRF token."""
     return path in {
         "/api/auth/login",
+        "/api/auth/login/wechat/init",
+        "/api/auth/login/wechat/callback",
+        "/api/auth/login/phone/send-code",
+        "/api/auth/login/phone/verify",
         "/api/auth/passkey/options",
         "/api/auth/passkey/login",
         "/api/csp-report",
@@ -3781,6 +3785,20 @@ _AI_TEAM_PREFIXES = {
     "/api/system-admin/":       "team_panel.api_team.router_system_admin",
 }
 
+_AI_TEAM_AUTH_POST_PATHS = {
+    "/api/auth/login/wechat/init",
+    "/api/auth/login/wechat/callback",
+    "/api/auth/login/phone/send-code",
+    "/api/auth/login/phone/verify",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+}
+
+_AI_TEAM_AUTH_GET_PATHS = {
+    "/api/auth/login/wechat/poll",
+    "/api/me",
+}
+
 _AI_TEAM_PAGE_PREFIXES = ("/app", "/admin", "/system")
 
 
@@ -3788,6 +3806,131 @@ def _is_aiteam_page_path(path: str) -> bool:
     for prefix in _AI_TEAM_PAGE_PREFIXES:
         if path == prefix or path.startswith(prefix + "/"):
             return True
+    return False
+
+
+def _build_aiteam_request_context(handler) -> dict:
+    request_context = {
+        "webui_auth_enabled": False,
+        "webui_authenticated": False,
+    }
+    try:
+        from api.auth import is_auth_enabled, parse_cookie, verify_session
+
+        request_context["webui_auth_enabled"] = bool(is_auth_enabled())
+        cookie_val = parse_cookie(handler)
+        request_context["webui_authenticated"] = bool(cookie_val and verify_session(cookie_val))
+    except Exception:
+        pass
+    return request_context
+
+
+def _send_json_header_list(handler, payload, *, status: int = 200, extra_headers: list[tuple[str, str]] | None = None) -> bool:
+    body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    _security_headers(handler)
+    for key, value in extra_headers or []:
+        if key.lower() == "cache-control":
+            continue
+        handler.send_header(key, value)
+    handler.end_headers()
+    handler.wfile.write(body)
+    return True
+
+
+def _aiteam_client_ip(handler) -> str:
+    try:
+        client_address = getattr(handler, "client_address", None)
+        if isinstance(client_address, (list, tuple)) and client_address:
+            return str(client_address[0])
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def _aiteam_user_agent(handler) -> str:
+    try:
+        value = str(handler.headers.get("User-Agent", "") or "").strip()
+    except Exception:
+        value = ""
+    return value or "Mock Browser"
+
+
+def _try_aiteam_auth_dispatch(handler, path, method, body=None):
+    if method == "GET" and path not in _AI_TEAM_AUTH_GET_PATHS and not path.startswith("/api/auth/login/wechat/poll?"):
+        return False
+    if method == "POST" and path not in _AI_TEAM_AUTH_POST_PATHS:
+        return False
+
+    from team_panel.api_team.router_auth import (
+        AuthRouteError,
+        access_token_from_headers,
+        handle_logout,
+        handle_me,
+        handle_phone_send_code,
+        handle_phone_verify,
+        handle_refresh,
+        handle_wechat_callback,
+        handle_wechat_init,
+        handle_wechat_poll,
+        refresh_token_from_headers,
+    )
+
+    request_path = path
+    query = ""
+    if "?" in path:
+        request_path, query = path.split("?", 1)
+    query_params = parse_qs(query)
+    client_ip = _aiteam_client_ip(handler)
+    user_agent = _aiteam_user_agent(handler)
+
+    try:
+        if method == "POST" and request_path == "/api/auth/login/wechat/init":
+            result = handle_wechat_init(client_ip=client_ip, user_agent=user_agent)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "GET" and request_path == "/api/auth/login/wechat/poll":
+            state = (query_params.get("state") or [""])[0]
+            result = handle_wechat_poll(state)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/login/wechat/callback":
+            result = handle_wechat_callback(
+                str((body or {}).get("state") or ""),
+                str((body or {}).get("code") or ""),
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/login/phone/send-code":
+            result = handle_phone_send_code(str((body or {}).get("phone") or ""), client_ip=client_ip)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/login/phone/verify":
+            result = handle_phone_verify(
+                str((body or {}).get("phone") or ""),
+                str((body or {}).get("code") or ""),
+                client_ip=client_ip,
+                user_agent=user_agent,
+            )
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/refresh":
+            result = handle_refresh(refresh_token_from_headers(handler.headers), client_ip=client_ip, user_agent=user_agent)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/logout":
+            result = handle_logout(
+                access_token_from_headers(handler.headers),
+                refresh_token_from_headers(handler.headers),
+                all_devices=bool((body or {}).get("all_devices", False)),
+            )
+            if result is None:
+                return _send_json_header_list(handler, {"ok": True}, status=200)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "GET" and request_path == "/api/me":
+            result = handle_me(access_token_from_headers(handler.headers))
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+    except AuthRouteError as exc:
+        return _send_json_header_list(handler, {"error": str(exc)}, status=exc.status)
     return False
 
 
@@ -3802,7 +3945,13 @@ def _try_aiteam_dispatch(handler, path, method, body=None):
             try:
                 import importlib
                 mod = importlib.import_module(module_name)
-                result = mod.handle_team_route(path, method, body)
+                request_context = _build_aiteam_request_context(handler)
+                try:
+                    result = mod.handle_team_route(path, method, body, request_context=request_context)
+                except TypeError as exc:
+                    if "request_context" not in str(exc):
+                        raise
+                    result = mod.handle_team_route(path, method, body)
                 if len(result) == 3:
                     status, resp_body, content_type = result
                     return True, status, resp_body, content_type
@@ -3814,6 +3963,9 @@ def _try_aiteam_dispatch(handler, path, method, body=None):
 
 
 def _is_aiteam_api_path(path: str) -> bool:
+    base_path = path.split("?", 1)[0]
+    if base_path in _AI_TEAM_AUTH_GET_PATHS or base_path in _AI_TEAM_AUTH_POST_PATHS:
+        return True
     for prefix in _AI_TEAM_PREFIXES:
         if path.startswith(prefix):
             return True
@@ -3822,6 +3974,10 @@ def _is_aiteam_api_path(path: str) -> bool:
 
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
+
+    team_auth_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
+    if _try_aiteam_auth_dispatch(handler, team_auth_path, "GET"):
+        return True
 
     # ── AI Team namespace dispatch ──
     team_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
@@ -5045,11 +5201,22 @@ def handle_post(handler, parsed) -> bool:
             if diag:
                 diag.finish()
 
+    if parsed.path in _AI_TEAM_AUTH_POST_PATHS:
+        if diag:
+            diag.stage("read_aiteam_auth_body")
+        team_auth_body = read_body(handler)
+        try:
+            return _try_aiteam_auth_dispatch(handler, parsed.path, "POST", team_auth_body)
+        finally:
+            if diag:
+                diag.finish()
+
     if _is_aiteam_api_path(parsed.path):
         if diag:
             diag.stage("read_aiteam_body")
         team_body = read_body(handler)
-        dispatched, status, body, ct = _try_aiteam_dispatch(handler, parsed.path, "POST", team_body)
+        team_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
+        dispatched, status, body, ct = _try_aiteam_dispatch(handler, team_path, "POST", team_body)
         if dispatched:
             if diag:
                 diag.finish()
@@ -6775,7 +6942,8 @@ def handle_patch(handler, parsed) -> bool:
 
     if _is_aiteam_api_path(parsed.path):
         team_body = read_body(handler)
-        dispatched, status, body, ct = _try_aiteam_dispatch(handler, parsed.path, "PATCH", team_body)
+        team_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
+        dispatched, status, body, ct = _try_aiteam_dispatch(handler, team_path, "PATCH", team_body)
         if dispatched:
             if ct is not None:
                 return t(handler, body, status=status, content_type=ct)
@@ -6799,6 +6967,14 @@ def handle_delete(handler, parsed) -> bool:
     """Handle all DELETE routes. Returns True if handled, False for 404."""
     if not _check_csrf(handler):
         return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
+
+    if _is_aiteam_api_path(parsed.path):
+        dispatched, status, body, ct = _try_aiteam_dispatch(handler, parsed.path, "DELETE")
+        if dispatched:
+            if ct is not None:
+                return t(handler, body, status=status, content_type=ct)
+            return j(handler, body, status=status)
+
     body = read_body(handler)
     if parsed.path.startswith("/api/mcp/servers/"):
         name = parsed.path[len("/api/mcp/servers/"):]

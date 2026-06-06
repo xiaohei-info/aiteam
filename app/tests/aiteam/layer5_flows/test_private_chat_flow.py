@@ -12,7 +12,7 @@ from team_panel.transactions.uow import UnitOfWork
 from tests.aiteam.layer0_contracts.test_host_routing import _get, _post
 
 
-def test_recruit_then_private_chat_run(seeded_enterprise):
+def test_recruit_then_private_chat_run(seeded_enterprise, db_conn):
     status, workbench = _get("/api/team/workbench")
     assert status == 200, workbench
     assert workbench["enterprise"]["enterprise_id"] == seeded_enterprise["enterprise_id"]
@@ -38,7 +38,16 @@ def test_recruit_then_private_chat_run(seeded_enterprise):
     assert body["conversation_id"] == seeded_enterprise["conversation_id"]
     assert body["stream_url"].endswith("?cursor=0")
     assert body["events_url"].endswith("?cursor=0")
-    assert "runtime_handle" in body
+    assert body["runtime_handle"]["kind"] == "session"
+    assert body["runtime_handle"]["profile_name"] == seeded_enterprise["employee_id"]
+    assert body["runtime_handle"]["session_id"].startswith("sess_")
+
+    with UnitOfWork(db_conn) as uow:
+        binding = uow.runtime_bindings().get_by_owner("team_run", body["run_id"])
+        assert binding is not None
+        assert binding.runtime_kind == "session"
+        assert binding.profile_name == seeded_enterprise["employee_id"]
+        assert binding.runtime_session_id == body["runtime_handle"]["session_id"]
 
 
 def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):

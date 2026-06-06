@@ -1,14 +1,14 @@
 """Team Panel — /api/enterprise-admin/* router."""
 from __future__ import annotations
 
-from dataclasses import asdict
-from urllib.parse import parse_qs
-
-from ..application.queries.billing_view_service import get_billing_view
 from ..repositories.employee_repo import EmployeeRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
+from .router_team import (
+    _database_unavailable_response,
+    _require_permission,
+    _billing_usage_overview_payload,
+)
 from ..transactions.db import create_connection
-from ..transactions.uow import UnitOfWork
 
 
 def _make_conn():
@@ -19,13 +19,16 @@ def _match_exact(path: str, target: str) -> bool:
     return path == target or path.rstrip("/") == target
 
 
-def _handle_employees(conn) -> tuple[int, dict]:
+def _handle_employees(conn, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
-            return 200, {"employees": [], "total": 0, "enterprise": None}
+            return 200, {"employees": [], "total": 0, "enterprise": None, "effective_role": role}
         employees = EmployeeRepo(cur).list_by_enterprise(enterprise.id)
         return 200, {
             "enterprise": {
@@ -45,47 +48,21 @@ def _handle_employees(conn) -> tuple[int, dict]:
                 for emp in employees
             ],
             "total": len(employees),
+            "effective_role": role,
         }
     finally:
         cur.close()
 
 
 def _handle_billing_usage(conn, query: str) -> tuple[int, dict]:
-    cur = conn.cursor()
-    try:
-        enterprises = EnterpriseRepo(cur).list_all()
-        enterprise = enterprises[0] if enterprises else None
-    finally:
-        cur.close()
-    conn.rollback()
-
-    params = parse_qs(query, keep_blank_values=True)
-    period_start = params.get("period_start", [None])[0] or "2000-01-01"
-    period_end = params.get("period_end", [None])[0] or "2099-12-31"
-
-    if enterprise is None:
-        return 200, {
-            "enterprise_id": None,
-            "period_start": period_start,
-            "period_end": period_end,
-            "total_tokens": 0,
-            "total_cost_cents": 0,
-            "by_employee": [],
-        }
-
-    with UnitOfWork(conn) as uow:
-        view = get_billing_view(
-            uow,
-            enterprise.id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-    return 200, asdict(view)
-
-
-def _database_unavailable_response() -> tuple[int, dict]:
-    return 503, {"error": "database_unavailable", "message": "Cannot connect to database"}
-
+    role, denial = _require_permission(query, None, "view_billing")
+    if denial is not None:
+        return denial
+    payload = _billing_usage_overview_payload(conn, query)
+    payload["effective_role"] = role
+    payload["deprecated"] = True
+    payload["canonical_path"] = "/api/team/billing/usage/overview"
+    return 200, payload
 
 def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple[int, dict]:
     """Returns (status_code, response_dict)."""
@@ -103,7 +80,7 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
         except Exception:
             return _database_unavailable_response()
         try:
-            return _handle_employees(conn)
+            return _handle_employees(conn, query)
         finally:
             try:
                 conn.close()

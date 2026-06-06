@@ -72,11 +72,22 @@ class EmployeeRepo:
 
     def update_status(self, emp: Employee) -> Employee:
         self._cur.execute(
-            "UPDATE employee SET status=%s, config_version=%s, "
-            "last_provisioned_at=%s, archive_reason=%s, updated_at=now() "
-            "WHERE id=%s",
-            (emp.status, emp.config_version,
-             emp.last_provisioned_at, emp.archive_reason, emp.id),
+            "UPDATE employee SET display_name=%s, status=%s, model_provider=%s, model_name=%s, "
+            "prompt_version=%s, config_version=%s, last_provisioned_at=%s, archive_reason=%s, "
+            "capabilities_json=%s, updated_by=%s, updated_at=now() WHERE id=%s",
+            (
+                emp.display_name,
+                emp.status,
+                emp.model_provider or None,
+                emp.model_name or None,
+                emp.prompt_version,
+                emp.config_version,
+                emp.last_provisioned_at,
+                emp.archive_reason,
+                emp.capabilities_json,
+                emp.updated_by or None,
+                emp.id,
+            ),
         )
         return emp
 

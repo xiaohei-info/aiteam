@@ -38,6 +38,33 @@ class IndustrySolutionRepo:
             return None
         return self._row_to_entity(row)
 
+    def list_all(self) -> list[IndustrySolution]:
+        self._cur.execute(
+            "SELECT id, name, status, tags_json, default_kb_blueprint_json, default_skill_bundle_json, "
+            "default_collaboration_template_ref, created_at, updated_at, created_by, updated_by, deleted_at "
+            "FROM industry_solution ORDER BY created_at"
+        )
+        rows = self._cur.fetchall()
+        return [self._row_to_entity(row) for row in rows]
+
+    def update(self, solution: IndustrySolution) -> IndustrySolution:
+        self._cur.execute(
+            "UPDATE industry_solution SET name=%s, status=%s, tags_json=%s::jsonb, default_kb_blueprint_json=%s::jsonb, "
+            "default_skill_bundle_json=%s::jsonb, default_collaboration_template_ref=%s, updated_at=now(), updated_by=%s "
+            "WHERE id=%s",
+            (
+                solution.name,
+                solution.status,
+                solution.tags_json,
+                solution.default_kb_blueprint_json,
+                solution.default_skill_bundle_json,
+                solution.default_collaboration_template_ref,
+                solution.updated_by or None,
+                solution.id,
+            ),
+        )
+        return solution
+
     @staticmethod
     def _row_to_entity(row) -> IndustrySolution:
         return IndustrySolution(

@@ -24,6 +24,12 @@ def test_server():
     yield None
 
 
+@pytest.fixture(autouse=True)
+def _clean_db(clean_tables):
+    """Ensure each layer2 test runs against a fresh mutable schema."""
+    yield
+
+
 @pytest.fixture
 def uow(db_conn):
     return UnitOfWork(db_conn)
@@ -133,6 +139,18 @@ def clean_tables_with_enterprise(clean_tables, db_conn):
                 "user_test",
             ),
         )
+        cur.execute(
+            "INSERT INTO department (id, enterprise_id, parent_id, name, visibility_scope, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("dept_marketing", data["enterprise_id"], None, "市场部", "enterprise", 1),
+        )
+        cur.execute(
+            "INSERT INTO department (id, enterprise_id, parent_id, name, visibility_scope, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("dept_content", data["enterprise_id"], "dept_marketing", "内容组", "department", 2),
+        )
+        cur.execute(
+            "INSERT INTO employee_org_assignment (id, enterprise_id, employee_id, department_id, position_title, visibility_scope) VALUES (%s, %s, %s, %s, %s, %s)",
+            (data["employee_id"], data["enterprise_id"], data["employee_id"], "dept_marketing", "营销分析师", "department"),
+        )
         db_conn.commit()
         return data
     except Exception:
@@ -150,10 +168,10 @@ def seeded_enterprise(clean_tables_with_enterprise):
 @pytest.fixture(autouse=True)
 def _set_db_url(db_conn):
     """Point the router at the test DB via DATABASE_URL env var."""
+    from tests.aiteam.layer1_data.conftest import _DB_PASSWORD
     dsn = db_conn.get_dsn_parameters()
-    password = os.environ.get("PGPASSWORD", "aiteam_test")
     url = (
-        f"postgresql://{dsn.get('user')}:{password}@"
+        f"postgresql://{dsn.get('user')}:{_DB_PASSWORD}@"
         f"{dsn.get('host')}:{dsn.get('port')}/{dsn.get('dbname')}"
     )
     old = os.environ.get("DATABASE_URL")

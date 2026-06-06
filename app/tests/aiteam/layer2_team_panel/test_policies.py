@@ -34,6 +34,14 @@ class TestPermissionOwner:
         allowed, _ = check_permission(EnterpriseRole.OWNER, "view_billing")
         assert allowed is True
 
+    def test_owner_can_export_data(self):
+        allowed, _ = check_permission(EnterpriseRole.OWNER, "export_data")
+        assert allowed is True
+
+    def test_owner_can_view_audit_logs(self):
+        allowed, _ = check_permission(EnterpriseRole.OWNER, "view_audit_logs")
+        assert allowed is True
+
     def test_owner_can_manage_connectors(self):
         allowed, _ = check_permission(EnterpriseRole.OWNER, "manage_connectors")
         assert allowed is True
@@ -250,12 +258,24 @@ class TestPermissionEdgeCases:
         allowed, _ = check_permission(EnterpriseRole.ENTERPRISE_ADMIN, "manage_employees")
         assert allowed is True
 
+    def test_enterprise_admin_can_export_data(self):
+        allowed, _ = check_permission(EnterpriseRole.ENTERPRISE_ADMIN, "export_data")
+        assert allowed is True
+
+    def test_enterprise_admin_can_view_audit_logs(self):
+        allowed, _ = check_permission(EnterpriseRole.ENTERPRISE_ADMIN, "view_audit_logs")
+        assert allowed is True
+
     def test_finance_admin_can_view_billing(self):
         allowed, _ = check_permission(EnterpriseRole.FINANCE_ADMIN, "view_billing")
         assert allowed is True
 
     def test_finance_admin_can_export_data(self):
         allowed, _ = check_permission(EnterpriseRole.FINANCE_ADMIN, "export_data")
+        assert allowed is True
+
+    def test_finance_admin_can_view_audit_logs(self):
+        allowed, _ = check_permission(EnterpriseRole.FINANCE_ADMIN, "view_audit_logs")
         assert allowed is True
 
     def test_finance_admin_cannot_manage_employees(self):

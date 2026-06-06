@@ -43,6 +43,19 @@ class EmployeeSkillBindingRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
+    def list_by_skill_code(self, enterprise_id: str, skill_code: str) -> list[EmployeeSkillBinding]:
+        self._cur.execute(
+            "SELECT id, enterprise_id, employee_id, skill_code, enabled, "
+            "source_type, binding_version, visibility, "
+            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "FROM employee_skill_binding WHERE enterprise_id = %s AND skill_code = %s AND deleted_at IS NULL "
+            "ORDER BY skill_code",
+            (enterprise_id, skill_code),
+        )
+        rows = self._cur.fetchall()
+        return [self._row_to_entity(r) for r in rows]
+
+
     def update(self, b: EmployeeSkillBinding) -> EmployeeSkillBinding:
         self._cur.execute(
             "UPDATE employee_skill_binding SET enabled=%s, binding_version=%s, "

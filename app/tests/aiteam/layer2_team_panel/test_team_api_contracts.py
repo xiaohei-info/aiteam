@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 
 import pytest
 
+from team_panel.transactions.uow import UnitOfWork
+
 # Reuse the FakeHandler pattern from layer0_contracts
 try:
     from tests.aiteam.layer0_contracts.test_host_routing import _FakeHandler, _get, _post, _patch
@@ -137,6 +139,37 @@ class TestWorkbench:
         for key in ("employee_id", "display_name", "role_name", "status", "presence"):
             assert key in emp, f"Missing {key} in employee: {emp}"
 
+    def test_workbench_exposes_navigation_permissions_and_task_digest(self, seeded_enterprise):
+        _, body = _get("/api/team/workbench")
+        assert "my_team" in body
+        assert "conversations" in body
+        assert "navigation" in body
+        assert "task_status_digest" in body
+        assert "permissions" in body
+        assert body["navigation"]["talent"]["target"] == "/app/marketplace"
+        assert body["navigation"]["org"]["target"] == "/app/workbench"
+        assert body["permissions"]["role"] == "member"
+        assert body["permissions"]["can_view_admin"] is False
+
+    def test_workbench_ignores_public_role_query_param(self, seeded_enterprise):
+        _, body = _get("/api/team/workbench?role=owner")
+        assert body["navigation"]["org"]["target"] == "/app/workbench"
+        assert body["permissions"]["role"] == "member"
+        assert body["permissions"]["can_view_admin"] is False
+
+    def test_workbench_returns_structured_permission_error_for_system_admin(self, seeded_enterprise, monkeypatch):
+        monkeypatch.setenv("HERMES_AITEAM_WORKBENCH_ROLE", "system_admin")
+        status, body = _get("/api/team/workbench")
+        assert status == 403
+        assert body["error"]["code"] == "PERMISSION_DENIED"
+        assert body["error"]["retryable"] is False
+
+    def test_workbench_owner_gets_org_admin_navigation_target(self, seeded_enterprise, monkeypatch):
+        monkeypatch.setenv("HERMES_AITEAM_WORKBENCH_ROLE", "owner")
+        _, body = _get("/api/team/workbench")
+        assert body["navigation"]["org"]["target"] == "/app/org"
+        assert body["permissions"]["can_view_admin"] is True
+
 
 class TestTalentMarketTemplates:
     """S06-T02: GET /api/team/talent-market/templates."""
@@ -206,11 +239,11 @@ class TestEmployeeList:
     """S06-T10: GET /api/team/employees."""
 
     def test_get_employees_returns_200(self, seeded_enterprise):
-        status, body = _get("/api/team/employees")
+        status, body = _get("/api/team/employees?role=owner")
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_employees_response_has_correct_structure(self, seeded_enterprise):
-        _, body = _get("/api/team/employees")
+        _, body = _get("/api/team/employees?role=owner")
         assert "employees" in body
         assert "total" in body
         assert "page" in body
@@ -219,11 +252,16 @@ class TestEmployeeList:
         assert body["total"] >= 1
 
     def test_employee_items_have_expected_shape(self, seeded_enterprise):
-        _, body = _get("/api/team/employees")
+        _, body = _get("/api/team/employees?role=owner")
         employees = body["employees"]
         emp = employees[0]
         for key in ("employee_id", "display_name", "role_name", "status", "presence"):
             assert key in emp, f"Missing {key} in employee: {emp}"
+
+    def test_finance_admin_cannot_list_employees(self, seeded_enterprise):
+        status, body = _get("/api/team/employees?role=finance_admin")
+        assert status == 403
+        assert body.get("error") == "FORBIDDEN"
 
 
 class TestEmployeeDetail:
@@ -231,20 +269,83 @@ class TestEmployeeDetail:
 
     def test_get_existing_employee_returns_200(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
-        status, body = _get(f"/api/team/employees/{emp_id}")
+        status, body = _get(f"/api/team/employees/{emp_id}?role=owner")
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_get_missing_employee_returns_404(self, seeded_enterprise):
-        status, body = _get("/api/team/employees/nonexistent")
+        status, body = _get("/api/team/employees/nonexistent?role=owner")
         assert status == 404
         assert body.get("error") == "EMPLOYEE_NOT_FOUND"
 
     def test_employee_detail_has_expected_shape(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
-        _, body = _get(f"/api/team/employees/{emp_id}")
+        _, body = _get(f"/api/team/employees/{emp_id}?role=owner")
         for key in ("employee_id", "display_name", "role_name", "status", "presence",
                      "profile_config", "usage_summary", "created_at"):
             assert key in body, f"Missing {key}: {body}"
+
+
+class TestGovernanceBillingAndExport:
+    def test_billing_overview_requires_billing_permission(self, seeded_enterprise):
+        status, body = _get("/api/team/billing/usage/overview?role=member")
+        assert status == 403
+        assert body.get("required_action") == "view_billing"
+
+    def test_billing_overview_returns_real_totals(self, seeded_enterprise, db_conn):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, result_summary_json, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+                (
+                    "run_bill_001",
+                    seeded_enterprise["enterprise_id"],
+                    seeded_enterprise["conversation_id"],
+                    "manual_run",
+                    "single_agent",
+                    "succeeded",
+                    seeded_enterprise["employee_id"],
+                    '{"total_tokens": 42, "cost_cents": 7}',
+                    "user_test",
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+        status, body = _get("/api/team/billing/usage/overview?role=owner&period_start=2000-01-01&period_end=2099-12-31")
+        assert status == 200
+        assert body["total_tokens"] >= 42
+        assert body["total_cost_cents"] >= 7
+
+    def test_billing_alias_returns_deprecated_metadata(self, seeded_enterprise):
+        status, body = _get("/api/enterprise-admin/billing/usage?role=owner")
+        assert status == 200
+        assert body.get("deprecated") is True
+        assert body.get("canonical_path") == "/api/team/billing/usage/overview"
+
+    def test_employees_export_returns_csv(self, seeded_enterprise):
+        handler = _get_raw("/api/team/employees/export?role=owner")
+        assert handler.status == 200
+        ct = _handler_content_type(handler)
+        assert ct is not None and "text/csv" in ct
+        text = _handler_text(handler)
+        assert "employee_id,display_name,role_name,status" in text
+        assert "emp_test,Test Analyst" in text
+
+    def test_billing_records_export_requires_export_permission(self, seeded_enterprise):
+        handler = _get_raw("/api/team/billing/usage/records/export?role=member")
+        assert handler.status == 403
+
+    def test_audit_events_returns_employee_update(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, _ = _patch(
+            f"/api/team/employees/{emp_id}?role=owner&actor_id=user_test&request_id=req_audit",
+            {"display_name": "Governed Analyst"},
+        )
+        assert status == 200
+        status, body = _get("/api/team/audit-events?role=owner&target_type=employee&target_id=emp_test")
+        assert status == 200
+        assert body["total"] >= 1
+        assert any(item["event_type"] == "employee.updated" for item in body["items"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -290,14 +391,42 @@ class TestRunsPost:
 
     def test_run_response_has_required_fields(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
-        body = {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"]}
+        body = {
+            "employee_id": emp_id,
+            "conversation_id": seeded_enterprise["conversation_id"],
+            "message": {"text": "Hello"},
+        }
         _, resp = _post("/api/team/runs", body)
         for key in ("run_id", "status", "conversation_id", "stream_url", "events_url", "runtime_handle"):
             assert key in resp, f"Missing {key}: {resp}"
         assert resp["status"] == "queued"
-        # stream_url and events_url contain the run_id
+        assert resp["runtime_handle"]["kind"] == "session"
+        assert resp["runtime_handle"]["profile_name"] == emp_id
+        assert resp["runtime_handle"]["session_id"].startswith("sess_")
         assert resp["run_id"] in resp["stream_url"]
         assert resp["run_id"] in resp["events_url"]
+
+    def test_post_run_persists_runtime_binding_with_real_session_handle(self, seeded_enterprise, db_conn):
+        body = {
+            "employee_id": seeded_enterprise["employee_id"],
+            "conversation_id": seeded_enterprise["conversation_id"],
+            "message": {"text": "Need a real runtime handle"},
+            "idempotency_key": f"run-{uuid.uuid4().hex[:8]}",
+        }
+        status, resp = _post("/api/team/runs", body)
+        assert status == 201, resp
+        runtime_handle = resp["runtime_handle"]
+        assert runtime_handle["kind"] == "session"
+        assert runtime_handle["profile_name"] == seeded_enterprise["employee_id"]
+        assert runtime_handle["session_id"].startswith("sess_")
+
+        with UnitOfWork(db_conn) as uow:
+            binding = uow.runtime_bindings().get_by_owner("team_run", resp["run_id"])
+            assert binding is not None
+            assert binding.runtime_kind == "session"
+            assert binding.profile_name == seeded_enterprise["employee_id"]
+            assert binding.runtime_session_id == runtime_handle["session_id"]
+            assert binding.runtime_session_id is not None
 
 
 class TestUploadsPost:
@@ -325,7 +454,7 @@ class TestRunStream:
     def test_get_run_stream_returns_200_and_sse_content_type(self, seeded_enterprise):
         # First create a run
         emp_id = seeded_enterprise["employee_id"]
-        body = {"employee_id": emp_id}
+        body = {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}}
         _, run_resp = _post("/api/team/runs", body)
         run_id = run_resp["run_id"]
 
@@ -338,7 +467,7 @@ class TestRunStream:
     def test_stream_for_existing_run_produces_valid_sse_frames(self, seeded_enterprise, db_conn):
         emp_id = seeded_enterprise["employee_id"]
         enterprise_id = seeded_enterprise["enterprise_id"]
-        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id})
+        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}})
         run_id = run_resp["run_id"]
 
         cur = db_conn.cursor()
@@ -383,6 +512,73 @@ class TestRunStream:
             assert data["event_type"] == "run_started"
             assert data["run_id"] == run_id
 
+    def test_stream_resume_replays_only_events_after_cursor(self, seeded_enterprise, db_conn):
+        emp_id = seeded_enterprise["employee_id"]
+        enterprise_id = seeded_enterprise["enterprise_id"]
+        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}})
+        run_id = run_resp["run_id"]
+
+        cur = db_conn.cursor()
+        try:
+            cur.executemany(
+                "INSERT INTO run_event (id, enterprise_id, run_id, cursor_no, event_type, source_type, source_id, employee_id, preview_text, payload_json) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                [
+                    (
+                        f"evt_{uuid.uuid4().hex[:8]}",
+                        enterprise_id,
+                        run_id,
+                        1,
+                        "run_started",
+                        "session",
+                        "sess_test",
+                        emp_id,
+                        "Starting...",
+                        json.dumps({"message_id": "msg_001"}),
+                    ),
+                    (
+                        f"evt_{uuid.uuid4().hex[:8]}",
+                        enterprise_id,
+                        run_id,
+                        2,
+                        "message_delta",
+                        "session",
+                        "sess_test",
+                        emp_id,
+                        "Part 1",
+                        json.dumps({"message_id": "msg_001", "delta": "Part 1"}),
+                    ),
+                    (
+                        f"evt_{uuid.uuid4().hex[:8]}",
+                        enterprise_id,
+                        run_id,
+                        3,
+                        "message_delta",
+                        "session",
+                        "sess_test",
+                        emp_id,
+                        "Part 2",
+                        json.dumps({"message_id": "msg_001", "delta": "Part 2"}),
+                    ),
+                ],
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        handler = _get_raw(f"/api/team/runs/{run_id}/stream?cursor=1")
+        assert handler.status == 200, f"Expected 200, got {handler.status}: {_handler_text(handler)}"
+        ct = _handler_content_type(handler)
+        assert ct is not None and "text/event-stream" in ct
+
+        body_text = _handler_text(handler)
+        frames = [frame for frame in body_text.rstrip("\n").split("\n\n") if frame]
+        payloads = [json.loads(frame.split("\n", 1)[1][len("data: "):]) for frame in frames]
+
+        assert [payload["event_cursor"] for payload in payloads] == [2, 3]
+        assert all(payload["event_cursor"] > 1 for payload in payloads)
+        assert [payload["event_type"] for payload in payloads] == ["message_delta", "message_delta"]
+
     def test_stream_for_nonexistent_run_returns_404(self, seeded_enterprise):
         status, resp = _get("/api/team/runs/nonexistent/stream")
         assert status == 404
@@ -393,7 +589,7 @@ class TestRunStream:
         event_type strings in northbound RunTimelineEvent payloads."""
         emp_id = seeded_enterprise["employee_id"]
         enterprise_id = seeded_enterprise["enterprise_id"]
-        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id})
+        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}})
         run_id = run_resp["run_id"]
 
         cur = db_conn.cursor()
@@ -484,7 +680,7 @@ class TestRunEvents:
 
     def test_get_run_events_returns_200(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
-        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id})
+        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}})
         run_id = run_resp["run_id"]
 
         status, resp = _get(f"/api/team/runs/{run_id}/events")
@@ -492,7 +688,7 @@ class TestRunEvents:
 
     def test_events_response_has_cursor_pagination_shape(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
-        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id})
+        _, run_resp = _post("/api/team/runs", {"employee_id": emp_id, "conversation_id": seeded_enterprise["conversation_id"], "message": {"text": "Hello"}})
         run_id = run_resp["run_id"]
 
         _, resp = _get(f"/api/team/runs/{run_id}/events")
@@ -518,14 +714,14 @@ class TestEmployeePatch:
     def test_patch_display_name_returns_200(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         body = {"display_name": "Updated Analyst"}
-        status, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner&actor_id=user_test", body)
         assert status == 200, f"Expected 200, got {status}: {resp}"
         assert resp["display_name"] == "Updated Analyst"
 
     def test_patch_status_active_to_paused(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         body = {"status": "paused"}
-        status, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", body)
         assert status == 200, f"Expected 200, got {status}: {resp}"
         assert resp["status"] == "paused"
 
@@ -533,38 +729,212 @@ class TestEmployeePatch:
         emp_id = seeded_enterprise["employee_id"]
         # active -> provisioning_failed is not a valid transition
         body = {"status": "provisioning_failed"}
-        status, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", body)
         assert status == 400, f"Expected 400, got {status}: {resp}"
         assert resp.get("error") == "INVALID_STATUS_TRANSITION"
 
     def test_patch_archived_employee_cannot_be_modified(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         # First archive the employee
-        _patch(f"/api/team/employees/{emp_id}", {"status": "archived"})
+        _patch(f"/api/team/employees/{emp_id}?role=owner", {"status": "archived"})
         # Now try to transition from archived to active
         body = {"status": "active"}
-        status, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", body)
         assert status == 400
         assert resp.get("error") == "INVALID_STATUS_TRANSITION"
 
     def test_patch_unknown_field_rejected(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         body = {"unknown_field": "value"}
-        status, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", body)
         assert status == 400, f"Expected 400, got {status}: {resp}"
         assert resp.get("error") == "INVALID_FIELD"
 
     def test_patch_nonexistent_employee_returns_404(self, seeded_enterprise):
-        status, resp = _patch("/api/team/employees/nonexistent", {"display_name": "x"})
+        status, resp = _patch("/api/team/employees/nonexistent?role=owner", {"display_name": "x"})
         assert status == 404
         assert resp.get("error") == "EMPLOYEE_NOT_FOUND"
 
     def test_patch_response_has_expected_shape(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         body = {"display_name": "Final Name"}
-        _, resp = _patch(f"/api/team/employees/{emp_id}", body)
+        _, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", body)
         for key in ("employee_id", "display_name", "status", "updated_at"):
             assert key in resp, f"Missing {key}: {resp}"
+
+    def test_finance_admin_cannot_patch_employee(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=finance_admin", {"display_name": "Nope"})
+        assert status == 403
+        assert resp["required_action"] == "manage_employees"
+
+
+class TestOrgTree:
+    def test_get_org_tree_returns_200(self, seeded_enterprise):
+        status, body = _get("/api/team/org/tree")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert body["enterprise"]["enterprise_id"] == seeded_enterprise["enterprise_id"]
+
+    def test_org_tree_has_expected_shape(self, seeded_enterprise):
+        _, body = _get("/api/team/org/tree")
+        for key in ("enterprise", "departments", "unassigned_members", "stats"):
+            assert key in body, f"Missing {key}: {body}"
+        root = body["departments"][0]
+        for key in ("department_id", "name", "visibility_scope", "members", "children"):
+            assert key in root, f"Missing {key}: {root}"
+        member = root["members"][0]
+        for key in ("assignment_id", "employee_id", "department_id", "position_title", "visibility_scope", "presence"):
+            assert key in member, f"Missing {key}: {member}"
+
+    def test_org_tree_includes_unassigned_employees(self, seeded_enterprise):
+        _, body = _get("/api/team/org/tree")
+        unassigned_ids = {item["employee_id"] for item in body["unassigned_members"]}
+        assert "emp_member" in unassigned_ids
+        assert body["stats"]["unassigned_employee_count"] >= 1
+
+
+class TestOrgAssignments:
+    def test_patch_org_assignment_updates_department_and_position(self, seeded_enterprise):
+        assignment_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(
+            f"/api/team/org/assignments/{assignment_id}",
+            {"department_id": "dept_content", "position_title": "内容策划", "visibility_scope": "private"},
+        )
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+        assert resp["department_id"] == "dept_content"
+        assert resp["position_title"] == "内容策划"
+        assert resp["visibility_scope"] == "private"
+
+        _, tree = _get("/api/team/org/tree")
+        content_group = tree["departments"][0]["children"][0]
+        moved_ids = {member["employee_id"] for member in content_group["members"]}
+        assert assignment_id in moved_ids
+
+    def test_patch_org_assignment_allows_unassigned(self, seeded_enterprise):
+        assignment_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/org/assignments/{assignment_id}", {"department_id": None})
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+        assert resp["department_id"] is None
+        assert resp["department"] is None
+
+    def test_patch_org_assignment_rejects_missing_department(self, seeded_enterprise):
+        assignment_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/org/assignments/{assignment_id}", {"department_id": "dept_missing"})
+        assert status == 404
+        assert resp.get("error") == "DEPARTMENT_NOT_FOUND"
+
+    def test_patch_org_assignment_rejects_invalid_field(self, seeded_enterprise):
+        assignment_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/org/assignments/{assignment_id}", {"role_name": "x"})
+        assert status == 400
+        assert resp.get("error") == "INVALID_FIELD"
+class TestSettingsAndBillingB08B09:
+    def test_get_settings_returns_enterprise_and_policy_shape(self, seeded_enterprise):
+        status, body = _get("/api/team/settings")
+        assert status == 200, body
+        assert body["enterprise_id"] == seeded_enterprise["enterprise_id"]
+        assert body["name"] == "Test Corp"
+        assert "invite_code" in body
+        assert isinstance(body["notification_policy"], dict)
+        assert isinstance(body["admin_invites"], list)
+
+    def test_patch_settings_updates_enterprise_and_notification_policy(self, seeded_enterprise):
+        status, body = _patch(
+            "/api/team/settings",
+            {
+                "name": "Updated Corp",
+                "contact_phone": "13800138000",
+                "notification_policy": {"employee_task_completed": False, "system_announcements": True},
+                "low_balance_threshold_cents": 8800,
+            },
+        )
+        assert status == 200, body
+        assert body["name"] == "Updated Corp"
+        assert body["contact_phone"] == "13800138000"
+        assert body["notification_policy"]["employee_task_completed"] is False
+        assert body["low_balance_threshold_cents"] == 8800
+
+    def test_post_admin_invite_is_created_and_idempotent(self, seeded_enterprise):
+        payload = {
+            "phone": "13900001111",
+            "role": "enterprise_admin",
+            "permissions": {"employees": "write"},
+            "idempotency_key": "invite-001",
+        }
+        status, body = _post("/api/team/settings/admin-invites", payload)
+        assert status == 201, body
+        assert body["status"] == "pending"
+        assert body["phone"] == payload["phone"]
+
+        repeat_status, repeat_body = _post("/api/team/settings/admin-invites", payload)
+        assert repeat_status == 200, repeat_body
+        assert repeat_body["invite_id"] == body["invite_id"]
+
+        settings_status, settings_body = _get("/api/team/settings")
+        assert settings_status == 200, settings_body
+        assert any(item["invite_id"] == body["invite_id"] for item in settings_body["admin_invites"])
+
+    def test_get_balance_defaults_to_zero_and_low_balance_warning(self, seeded_enterprise):
+        status, body = _get("/api/team/billing/balance")
+        assert status == 200, body
+        assert body["balance"] == "0.00"
+        assert body["balance_cents"] == 0
+        assert body["low_balance_warning"] is True
+
+    def test_mock_recharge_updates_balance_and_recharge_history(self, seeded_enterprise):
+        recharge_status, recharge_body = _post(
+            "/api/team/billing/recharges",
+            {"amount": 100, "payment_method": "mock_pay", "idempotency_key": "recharge-001"},
+        )
+        assert recharge_status == 201, recharge_body
+        assert recharge_body["status"] == "succeeded"
+        assert recharge_body["mock_provider"] is True
+        assert recharge_body["token_credited"] > 0
+
+        balance_status, balance_body = _get("/api/team/billing/balance")
+        assert balance_status == 200, balance_body
+        assert balance_body["balance_cents"] == 10000
+        assert balance_body["token_balance"] == recharge_body["token_credited"]
+        assert balance_body["low_balance_warning"] is False
+
+        list_status, list_body = _get("/api/team/billing/recharges")
+        assert list_status == 200, list_body
+        assert list_body["total"] == 1
+        assert list_body["items"][0]["recharge_id"] == recharge_body["recharge_id"]
+
+    def test_run_creation_returns_402_when_initialized_balance_is_empty(self, seeded_enterprise):
+        balance_status, _ = _get("/api/team/billing/balance")
+        assert balance_status == 200
+        status, body = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": "Need help reviewing the empty balance case"},
+                "idempotency_key": "run-insufficient-001",
+            },
+        )
+        assert status == 402, body
+        assert body["error"] == "INSUFFICIENT_BALANCE"
+        assert body["recharge_required"] is True
+
+    def test_run_creation_succeeds_after_mock_recharge(self, seeded_enterprise):
+        _post(
+            "/api/team/billing/recharges",
+            {"amount": 50, "payment_method": "mock_pay", "idempotency_key": "recharge-run-001"},
+        )
+        status, body = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": "Need help after the recharge clears"},
+                "idempotency_key": "run-funded-001",
+            },
+        )
+        assert status == 201, body
+        assert body["status"] == "queued"
+        assert body["run_id"].startswith("run_")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -581,3 +951,221 @@ def test_non_team_paths_still_work():
             # If we get 200, make sure it's not a team-panel response
             assert "enterprise_id" not in body or "employees" in body, \
                 f"Non-team path {path} should not return team workbench data"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Batch C shared integration coverage
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSolutionsList:
+    def test_get_solutions_returns_200(self, seeded_enterprise):
+        status, body = _get("/api/team/solutions")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert "solutions" in body
+        assert isinstance(body["solutions"], list)
+        assert "total" in body
+
+    def test_solutions_list_reflects_apply_records_and_template_stats(self, seeded_enterprise):
+        payload = {
+            "mode": "append",
+            "department_id": "dept_marketing",
+            "idempotency_key": "solution-list-truth-001",
+        }
+        status, apply_body = _post(f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply", payload)
+        assert status == 201, apply_body
+
+        status, body = _get("/api/team/solutions")
+        assert status == 200, body
+        solution = next(item for item in body["solutions"] if item["solution_id"] == seeded_enterprise["solution_id"])
+        assert solution["template_ids"] == [seeded_enterprise["template_id"]]
+        assert solution["template_count"] == 1
+        assert solution["apply_count"] == 1
+        assert solution["active_employee_count"] == 1
+        assert solution["last_apply_record_id"] == apply_body["apply_record_id"]
+        assert solution["last_apply_status"] == "succeeded"
+        assert solution["created_employee_ids"] == apply_body["created_employee_ids"]
+        assert solution["created_knowledge_base_ids"] == apply_body["created_knowledge_base_ids"]
+        assert solution["solution_stats"]["apply_count"] == 1
+        assert solution["solution_stats"]["active_employee_count"] == 1
+        assert solution["solution_stats"]["template_count"] == 1
+
+
+class TestConnectorsIntegration:
+    def test_get_connectors_returns_both_lists(self, seeded_enterprise):
+        status, body = _get("/api/team/connectors")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert "connectors" in body
+        assert "definitions" in body
+        assert isinstance(body["connectors"], list)
+        assert isinstance(body["definitions"], list)
+
+    def test_post_connector_returns_201(self, seeded_enterprise):
+        status, resp = _post(
+            "/api/team/connectors",
+            {"name": "Test Slack", "provider_code": "slack", "type": "oauth_connector"},
+        )
+        assert status == 201, f"Expected 201, got {status}: {resp}"
+        assert "connector_id" in resp
+        assert resp["status"] == "draft"
+
+    def test_connector_test_missing_connector_returns_404(self, seeded_enterprise):
+        status, resp = _post("/api/team/connectors/nonexistent/test", {})
+        assert status == 404, f"Expected 404, got {status}: {resp}"
+        assert resp.get("error") == "CONNECTOR_NOT_FOUND"
+
+    def test_connector_grants_shape_returns_200(self, seeded_enterprise):
+        _, create_resp = _post(
+            "/api/team/connectors",
+            {"name": "Grant Test", "provider_code": "test"},
+        )
+        connector_id = create_resp["connector_id"]
+        status, resp = _patch(
+            f"/api/team/connectors/{connector_id}/grants",
+            {"grant": [], "revoke": []},
+        )
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+        for key in ("granted", "revoked", "errors"):
+            assert key in resp, f"Missing {key}: {resp}"
+
+    def test_connectors_list_reflects_config_credentials_grants_and_test_state(self, seeded_enterprise, db_conn):
+        status, create_resp = _post(
+            "/api/team/connectors",
+            {
+                "name": "Refresh Truth",
+                "provider_code": "slack",
+                "type": "oauth_connector",
+                "credential_ref": "cred://vault/slack/ent_test",
+                "config": {"tenant_hint": "acme", "bot_secret": "should-mask-in-ui-only"},
+            },
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE enterprise_connector SET status='online', last_validated_at=now() WHERE id=%s",
+                (connector_id,),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        grant_status, grant_resp = _patch(
+            f"/api/team/connectors/{connector_id}/grants",
+            {"grant": [{"employee_ids": ["emp_member", "emp_test"], "access_mode": "invoke"}], "revoke": []},
+        )
+        assert grant_status == 200, grant_resp
+
+        status, body = _get("/api/team/connectors")
+        assert status == 200, body
+        connector = next(item for item in body["connectors"] if item["connector_id"] == connector_id)
+        assert connector["credential_ref"] == "cred://vault/slack/ent_test"
+        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "should-mask-in-ui-only"}
+        assert connector["status"] == "online"
+        assert connector["health_status"] == "online"
+        assert connector["last_test_at"]
+        assert connector["grants"] == ["emp_member", "emp_test"]
+        assert connector["granted_employee_ids"] == ["emp_member", "emp_test"]
+        assert connector["employee_grants"] == [
+            {"employee_id": "emp_member", "access_mode": "invoke", "enabled": True},
+            {"employee_id": "emp_test", "access_mode": "invoke", "enabled": True},
+        ]
+
+
+class TestEmployeePatchExpanded:
+    def test_patch_model_provider_accepted(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", {"model_provider": "openai"})
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+
+    def test_patch_model_name_accepted(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", {"model_name": "gpt-4o"})
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+
+    def test_patch_prompt_version_accepted(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", {"prompt_version": 3})
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+
+    def test_patch_capabilities_json_accepted(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", {"capabilities_json": '{"web": true}'})
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+
+    def test_patch_unknown_field_still_rejected(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(f"/api/team/employees/{emp_id}?role=owner", {"random_field": "nope"})
+        assert status == 400, f"Expected 400, got {status}: {resp}"
+        assert resp.get("error") == "INVALID_FIELD"
+
+
+class TestBatchCReworkPersistence:
+    def test_employee_detail_preserves_truthful_prompt_and_memory_config(self, seeded_enterprise, db_conn):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO employee_memory_binding (id, enterprise_id, employee_id, memory_mode, provider_code, retention_days, writeback_enabled, binding_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                ("mem_emp_test", seeded_enterprise["enterprise_id"], seeded_enterprise["employee_id"], "builtin", "mem0", 30, True, 2),
+            )
+            cur.execute(
+                "INSERT INTO employee_prompt (employee_id, system_prompt, behavior_rules_json, opening_message, version_no, source_template_version) VALUES (%s, %s, %s::jsonb, %s, %s, %s)",
+                (seeded_enterprise["employee_id"], "Stay truthful", '{"tone": "direct"}', "Ready to help", 4, 1),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get(f"/api/team/employees/{seeded_enterprise['employee_id']}?role=owner")
+        assert status == 200, body
+        assert body["profile_config"]["memory_config"] == {
+            "mode": "builtin",
+            "provider_code": "mem0",
+            "retention_days": 30,
+            "writeback_enabled": True,
+        }
+        assert body["prompt_config"] == {
+            "system_prompt": "Stay truthful",
+            "behavior_rules_json": '{"tone": "direct"}',
+            "opening_message": "Ready to help",
+            "version_no": 4,
+        }
+
+    def test_patch_skills_add_persists(self, seeded_enterprise):
+        # ensure skill is installed so authorization passes
+        _post('/api/team/skills/installs', {
+            'skill_code': 'forecasting',
+            'scope_mode': 'all_employees',
+        })
+        emp_id = seeded_enterprise["employee_id"]
+        status, _ = _patch(
+            f"/api/team/employees/{emp_id}?role=owner",
+            {"skills_add": ["forecasting"]},
+        )
+        assert status == 200
+        detail_status, detail_body = _get(f"/api/team/employees/{emp_id}?role=owner")
+        assert detail_status == 200
+        assert "forecasting" in detail_body["profile_config"]["skills"], detail_body
+
+    def test_connector_grants_accept_employee_ids_array(self, seeded_enterprise, db_conn):
+        _, create_resp = _post("/api/team/connectors", {
+            "name": "Bulk Grant Test",
+            "provider_code": "test",
+        })
+        connector_id = create_resp["connector_id"]
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE enterprise_connector SET status='online' WHERE id=%s",
+                (connector_id,),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+        status, resp = _patch(
+            f"/api/team/connectors/{connector_id}/grants",
+            {"grant": [{"employee_ids": ["emp_test", "emp_member"], "access_mode": "invoke"}], "revoke": []},
+        )
+        assert status == 200, f"Expected 200, got {status}: {resp}"
+        assert len(resp["granted"]) == 2, resp
