@@ -61,6 +61,10 @@ def submit_group_conversation(request: dict) -> GatewayAcceptResponse:
             conversation_id=request.get("conversation_id", ""),
             message_text=request.get("message_text", ""),
             route_mode=request.get("route_mode", "auto"),
+            employee_id=request.get("employee_id", ""),
+            planner_employee_id=request.get("planner_employee_id", ""),
+            target_employee_ids=list(request.get("target_employee_ids") or []),
+            message_id=request.get("message_id", ""),
             idempotency_key=request.get("idempotency_key", ""),
         )
     )

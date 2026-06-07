@@ -93,6 +93,7 @@ def test_api_client_exposes_team_panel_endpoint_helpers() -> None:
         "return this.get('/talent-market/templates'",
         "return this.post('/recruitments'",
         "return this.get(`/conversations/${encodeURIComponent(conversationId)}`",
+        "return this.get(`/group-conversations/${encodeURIComponent(conversationId)}`",
         "return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/messages`",
         "return this.post('/runs'",
         "return fetch(`${this.BASE}/runs/${encodeURIComponent(runId)}/stream?cursor=${value}`)",

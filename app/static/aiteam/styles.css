@@ -1400,6 +1400,193 @@ body.aiteam-shell-active .aiteam-shell {
   border-color: rgba(96, 165, 250, 0.28);
 }
 
+.aiteam-group-page .aiteam-page__desc {
+  max-width: 880px;
+}
+
+.aiteam-group-layout {
+  align-items: start;
+}
+
+.aiteam-group-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.aiteam-group-controls {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.aiteam-route-feedback,
+.aiteam-route-decision {
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.72);
+  padding: 16px 18px;
+}
+
+.aiteam-route-feedback {
+  margin: 12px 0 18px;
+}
+
+.aiteam-route-feedback__summary,
+.aiteam-timeline-row__top,
+.aiteam-task-tree__title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.aiteam-route-feedback__label,
+.aiteam-route-feedback__desc,
+.aiteam-route-decision__desc,
+.aiteam-timeline-row__cursor,
+.aiteam-task-tree__runtime,
+.aiteam-task-tree__children,
+.aiteam-task-tree__preview {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.aiteam-route-feedback__desc,
+.aiteam-route-decision__desc,
+.aiteam-task-tree__preview {
+  margin: 8px 0 0;
+}
+
+.aiteam-route-feedback__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.aiteam-timeline-row__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.aiteam-timeline-row__pill--is-multi,
+.aiteam-route-decision--is-multi,
+.aiteam-task-tree__item--is-multi {
+  border-color: rgba(99, 102, 241, 0.42);
+  background: rgba(67, 56, 202, 0.16);
+}
+
+.aiteam-timeline-row__pill--is-single,
+.aiteam-route-decision--is-single,
+.aiteam-task-tree__item--is-single {
+  border-color: rgba(16, 185, 129, 0.38);
+  background: rgba(6, 95, 70, 0.16);
+}
+
+.aiteam-timeline-row__pill--is-auto,
+.aiteam-task-tree__item--is-auto {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(30, 41, 59, 0.42);
+}
+
+.aiteam-badge--task {
+  align-self: flex-start;
+}
+
+.aiteam-group-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.aiteam-group-field input {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.68);
+  color: #eff6ff;
+  padding: 12px 14px;
+}
+
+.aiteam-member {
+  padding: 16px;
+}
+
+.aiteam-member__header,
+.aiteam-member__meta,
+.aiteam-timeline-row__meta {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.aiteam-member__header {
+  margin-bottom: 8px;
+}
+
+.aiteam-member__header strong,
+.aiteam-task-tree__body strong {
+  display: block;
+}
+
+.aiteam-member__meta,
+.aiteam-timeline-row__meta,
+.aiteam-task-tree__body span {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.aiteam-card-link--inline {
+  flex: 1;
+  min-width: 180px;
+}
+
+.aiteam-task-tree__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aiteam-task-tree__item {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.aiteam-task-tree__rail {
+  width: 3px;
+  min-width: 3px;
+  align-self: stretch;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.38);
+}
+
+.aiteam-timeline-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.aiteam-timeline-row strong {
+  margin-top: 0;
+}
+
 @media (max-width: 900px) {
   .aiteam-shell__frame {
     grid-template-columns: 1fr;
@@ -1424,13 +1611,17 @@ body.aiteam-shell-active .aiteam-shell {
   .aiteam-page__hero,
   .aiteam-panel__header,
   .aiteam-card__row,
-  .aiteam-detail-kv {
+  .aiteam-detail-kv,
+  .aiteam-member__header,
+  .aiteam-member__meta,
+  .aiteam-timeline-row__meta {
     flex-direction: column;
   }
 
   .aiteam-metric-grid,
   .aiteam-grid--split,
-  .aiteam-grid--chat {
+  .aiteam-grid--chat,
+  .aiteam-group-controls {
     grid-template-columns: 1fr;
   }
 }

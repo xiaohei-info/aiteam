@@ -20,9 +20,12 @@ def accept(req: GroupConversationRunRequest) -> GatewayAcceptResponse:
                 conversation_id=req.conversation_id,
                 root_task_context={
                     "conversation_id": req.conversation_id,
+                    "message_id": req.message_id,
                     "message_text": req.message_text,
                     "source": "group_conversation",
                 },
+                target_employee_ids=list(req.target_employee_ids),
+                planner_employee_id=req.planner_employee_id or req.employee_id,
                 idempotency_key=req.idempotency_key,
             )
         )
@@ -32,11 +35,11 @@ def accept(req: GroupConversationRunRequest) -> GatewayAcceptResponse:
 def _accept_single_agent_mode(req: GroupConversationRunRequest) -> GatewayAcceptResponse:
     handle = RuntimeHandle(
         enterprise_id="",
-        employee_id="",
+        employee_id=req.employee_id,
         run_id=req.run_id,
         kind="session",
-        profile_name=f"group:{req.conversation_id}",
-        session_id=f"group_{req.conversation_id}",
+        profile_name=req.employee_id or f"group:{req.conversation_id}",
+        session_id=f"group_{req.conversation_id}_{req.employee_id or 'entry'}",
     )
     return GatewayAcceptResponse(
         run_id=req.run_id,

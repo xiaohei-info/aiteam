@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import pytest
 
 from team_panel.transactions.uow import UnitOfWork
+from team_panel.application.commands.conversation_service import create_group_conversation
 
 # Reuse the FakeHandler pattern from layer0_contracts
 try:
@@ -233,6 +234,306 @@ class TestConversationDetail:
         _, body = _get(f"/api/team/conversations/{conv_id}")
         for key in ("conversation_id", "conversation_type", "status", "created_at"):
             assert key in body, f"Missing {key}: {body}"
+
+    def test_get_group_conversation_detail_returns_members(self, db_conn, seeded_enterprise):
+        with UnitOfWork(db_conn) as uow:
+            conv_id = create_group_conversation(
+                uow,
+                seeded_enterprise["enterprise_id"],
+                "Contract Group",
+                [seeded_enterprise["employee_id"], "emp_member", "emp_planner"],
+                "user_test",
+            )
+
+        status, body = _get(f"/api/team/group-conversations/{conv_id}")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert body["conversation_type"] == "group"
+        assert body["member_count"] == 3
+        assert isinstance(body["members"], list)
+        assert {member["employee_id"] for member in body["members"]} == {
+            seeded_enterprise["employee_id"],
+            "emp_member",
+            "emp_planner",
+        }
+        assert body["default_route_hint"] == "auto"
+        assert body["latest_route_decision"] is None
+        assert body["timeline"] == {
+            "run_id": None,
+            "events_url": None,
+            "stream_url": None,
+            "latest_event_cursor": 0,
+        }
+        assert body["task_tree"] == {"run_id": None, "items": []}
+
+    def test_group_conversation_detail_exposes_task_tree_and_timeline_handles(self, db_conn, seeded_enterprise):
+        with UnitOfWork(db_conn) as uow:
+            conv_id = create_group_conversation(
+                uow,
+                seeded_enterprise["enterprise_id"],
+                "Contract Group",
+                [seeded_enterprise["employee_id"], "emp_member", "emp_planner"],
+                "user_test",
+            )
+            uow.cur.execute(
+                "UPDATE conversation SET latest_run_id = %s, last_message_preview = %s WHERE id = %s",
+                ("run_group_contract", "财务校验完成", conv_id),
+            )
+            uow.cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, planner_employee_id, result_summary_json, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+                (
+                    "run_group_contract",
+                    seeded_enterprise["enterprise_id"],
+                    conv_id,
+                    "group_message",
+                    "kanban_orchestration",
+                    "running",
+                    seeded_enterprise["employee_id"],
+                    "emp_planner",
+                    json.dumps({
+                        "route_mode": "orchestration",
+                        "target_employee_ids": ["emp_member", "emp_planner"],
+                        "candidate_employee_ids": ["emp_planner", "emp_member"],
+                        "entry_employee_id": seeded_enterprise["employee_id"],
+                        "planner_employee_id": "emp_planner",
+                    }),
+                    "user_test",
+                ),
+            )
+            uow.cur.execute(
+                "INSERT INTO team_task (id, run_id, parent_team_task_id, title, description, assignee_employee_id, status, sequence_no, depth, input_payload_json, output_summary_json, runtime_task_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)",
+                (
+                    "task_local_001",
+                    "run_group_contract",
+                    None,
+                    "需求拆解",
+                    "拆解预算问题",
+                    "emp_planner",
+                    "running",
+                    1,
+                    0,
+                    json.dumps({"phase": "planner", "description": "拆解预算问题"}),
+                    json.dumps({"summary": "正在拆解中"}),
+                    "task_root_001",
+                ),
+            )
+            uow.cur.execute(
+                "INSERT INTO run_event (id, enterprise_id, run_id, cursor_no, event_type, source_type, source_id, employee_id, preview_text, payload_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    "evt_group_003",
+                    seeded_enterprise["enterprise_id"],
+                    "run_group_contract",
+                    3,
+                    "task_started",
+                    "kanban_task",
+                    "task_root_001",
+                    "emp_planner",
+                    "财务校验开始",
+                    json.dumps({"phase": "planner", "parent_task_id": "task_root_000"}),
+                ),
+            )
+
+        status, body = _get(f"/api/team/group-conversations/{conv_id}")
+        assert status == 200, body
+        assert body["latest_run"]["run_id"] == "run_group_contract"
+        assert body["latest_run"]["stream_url"].endswith("/api/team/runs/run_group_contract/stream?cursor=3")
+        assert body["latest_run"]["events_url"].endswith("/api/team/runs/run_group_contract/events?cursor=3")
+        assert body["latest_run"]["latest_event_cursor"] == 3
+        assert body["timeline"] == {
+            "run_id": "run_group_contract",
+            "events_url": "/api/team/runs/run_group_contract/events?cursor=0",
+            "stream_url": "/api/team/runs/run_group_contract/stream?cursor=3",
+            "latest_event_cursor": 3,
+        }
+        assert body["latest_route_decision"] == {
+            "route_mode": "orchestration",
+            "target_employee_ids": ["emp_member", "emp_planner"],
+            "planner_employee_id": "emp_planner",
+            "entry_employee_id": seeded_enterprise["employee_id"],
+            "candidate_employee_ids": ["emp_planner", "emp_member"],
+        }
+        assert body["task_tree"]["run_id"] == "run_group_contract"
+        assert body["task_tree"]["items"] == [
+            {
+                "task_id": "task_local_001",
+                "parent_task_id": None,
+                "runtime_task_id": "task_root_001",
+                "title": "需求拆解",
+                "description": "拆解预算问题",
+                "status": "running",
+                "assignee_employee_id": "emp_planner",
+                "sequence_no": 1,
+                "depth": 0,
+                "started_at": None,
+                "finished_at": None,
+                "input_payload": {"phase": "planner", "description": "拆解预算问题"},
+                "output_summary": {"summary": "正在拆解中"},
+            }
+        ]
+
+
+class TestRunTimelineEndpoints:
+    def test_run_events_returns_full_event_payload_and_latest_cursor(self, db_conn, seeded_enterprise):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    "run_events_contract",
+                    seeded_enterprise["enterprise_id"],
+                    seeded_enterprise["conversation_id"],
+                    "group_message",
+                    "kanban_orchestration",
+                    "running",
+                    seeded_enterprise["employee_id"],
+                    "user_test",
+                ),
+            )
+            cur.execute(
+                "INSERT INTO run_event (id, enterprise_id, run_id, cursor_no, event_type, source_type, source_id, employee_id, preview_text, payload_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    "evt_run_events_001",
+                    seeded_enterprise["enterprise_id"],
+                    "run_events_contract",
+                    1,
+                    "routing_decided",
+                    "session",
+                    "sess_contract",
+                    seeded_enterprise["employee_id"],
+                    "已决定编排方式",
+                    json.dumps({"route_mode": "orchestration", "candidate_employee_ids": ["emp_planner", "emp_member"]}),
+                ),
+            )
+            cur.execute(
+                "INSERT INTO run_event (id, enterprise_id, run_id, cursor_no, event_type, source_type, source_id, employee_id, preview_text, payload_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    "evt_run_events_002",
+                    seeded_enterprise["enterprise_id"],
+                    "run_events_contract",
+                    2,
+                    "task_started",
+                    "kanban_task",
+                    "task_root_001",
+                    "emp_planner",
+                    "财务校验开始",
+                    json.dumps({"phase": "planner", "parent_task_id": "task_root_000"}),
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get("/api/team/runs/run_events_contract/events?cursor=0&limit=1")
+        assert status == 200, body
+        assert body["latest_event_cursor"] == 2
+        assert body["next_cursor"] == 1
+        assert body["has_more"] is True
+        assert body["run_status"] == "running"
+        assert body["items"] == [
+            {
+                "event_id": "evt_run_events_001",
+                "event_cursor": 1,
+                "run_id": "run_events_contract",
+                "event_type": "routing_decided",
+                "source_type": "session",
+                "source_id": "sess_contract",
+                "employee_id": seeded_enterprise["employee_id"],
+                "event_ts": body["items"][0]["event_ts"],
+                "preview": "已决定编排方式",
+                "payload": {"route_mode": "orchestration", "candidate_employee_ids": ["emp_planner", "emp_member"]},
+            }
+        ]
+
+    def test_run_events_rejects_invalid_pagination(self, db_conn, seeded_enterprise):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    "run_events_invalid",
+                    seeded_enterprise["enterprise_id"],
+                    seeded_enterprise["conversation_id"],
+                    "group_message",
+                    "single_agent",
+                    "running",
+                    seeded_enterprise["employee_id"],
+                    "user_test",
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get("/api/team/runs/run_events_invalid/events?cursor=-1&limit=foo")
+        assert status == 400
+        assert body["error"] == "INVALID_PAGINATION"
+
+    def test_run_stream_returns_timeline_frames_and_keepalive_comment(self, db_conn, seeded_enterprise):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    "run_stream_contract",
+                    seeded_enterprise["enterprise_id"],
+                    seeded_enterprise["conversation_id"],
+                    "group_message",
+                    "kanban_orchestration",
+                    "running",
+                    seeded_enterprise["employee_id"],
+                    "user_test",
+                ),
+            )
+            cur.execute(
+                "INSERT INTO run_event (id, enterprise_id, run_id, cursor_no, event_type, source_type, source_id, employee_id, preview_text, payload_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    "evt_stream_001",
+                    seeded_enterprise["enterprise_id"],
+                    "run_stream_contract",
+                    1,
+                    "task_started",
+                    "kanban_task",
+                    "task_root_001",
+                    "emp_planner",
+                    "财务校验开始",
+                    json.dumps({"phase": "planner", "parent_task_id": "task_root_000"}),
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        handler = _get_raw("/api/team/runs/run_stream_contract/stream?cursor=0")
+        assert handler.status == 200
+        assert "text/event-stream" in (_handler_content_type(handler) or "")
+        text = _handler_text(handler)
+        assert text.startswith("event: timeline\n")
+        assert '"event_cursor": 1' in text
+        assert '"event_type": "task_started"' in text
+        assert text.endswith("\n\n")
+
+    def test_run_stream_rejects_invalid_cursor(self, db_conn, seeded_enterprise):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO team_run (id, enterprise_id, conversation_id, trigger_type, execution_mode, status, entry_employee_id, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    "run_stream_invalid",
+                    seeded_enterprise["enterprise_id"],
+                    seeded_enterprise["conversation_id"],
+                    "group_message",
+                    "single_agent",
+                    "running",
+                    seeded_enterprise["employee_id"],
+                    "user_test",
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        handler = _get_raw("/api/team/runs/run_stream_invalid/stream?cursor=-2")
+        assert handler.status == 400
+        assert handler.get_json()["error"] == "INVALID_CURSOR"
 
 
 class TestEmployeeList:

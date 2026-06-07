@@ -119,6 +119,10 @@ window.aiteam = window.aiteam || {};
       return this.get(`/conversations/${encodeURIComponent(conversationId)}`, options);
     },
 
+    getGroupConversation(conversationId, options) {
+      return this.get(`/group-conversations/${encodeURIComponent(conversationId)}`, options);
+    },
+
     submitGroupMessage(conversationId, body, options) {
       return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/messages`, body, options);
     },

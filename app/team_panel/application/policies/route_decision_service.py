@@ -1,44 +1,142 @@
-"""Route decision — determines single_agent vs orchestration for group messages.
+"""Route decision — determines single_agent vs orchestration for group messages."""
 
-Uses a simple heuristic: explicit @mentions drive orchestration;
-otherwise single_agent.  The returned value conforms to the existing
-``RouteDecision`` value object in domain.
-"""
+from __future__ import annotations
+
+import re
 
 from team_panel.domain.value_objects import RouteDecision
 
 
 def decide_route(
     message_text: str,
-    available_employee_ids: list[str],
+    available_members: list,
     route_hint: str = "auto",
 ) -> RouteDecision:
     """Return a RouteDecision value object.
 
-    - ``route_hint = "orchestration"`` → all available employees are targeted.
-    - ``route_hint = "single_agent"`` → single_agent (no planner).
-    - ``route_hint = "auto"`` (default) → detects @mentions:
-      if >1 employee mentioned → orchestration with those employees;
-      otherwise → single_agent.
+    ``available_members`` may be either:
+    - ``list[str]`` of employee ids, or
+    - ``list[dict]`` with ``employee_id`` plus optional aliases such as
+      ``display_name`` / ``role_name`` / ``profile_name``.
     """
+    members = [_normalize_member(member) for member in available_members]
+    employee_ids = [member["employee_id"] for member in members if member["employee_id"]]
+    if not employee_ids:
+        return RouteDecision(route_mode="single_agent")
+
+    mentioned = _extract_mentions(message_text, members)
+    planner_employee_id = _pick_planner_employee_id(members, mentioned or employee_ids)
+
     if route_hint == "orchestration":
         return RouteDecision(
             route_mode="orchestration",
-            target_employee_ids=tuple(available_employee_ids),
+            target_employee_ids=tuple(employee_ids),
+            planner_employee_id=planner_employee_id,
         )
-    if route_hint == "single_agent":
-        return RouteDecision(route_mode="single_agent")
 
-    # auto: detect @mentions
-    mentioned = _extract_mentions(message_text, available_employee_ids)
+    if route_hint == "single_agent":
+        target_id = mentioned[0] if mentioned else employee_ids[0]
+        return RouteDecision(
+            route_mode="single_agent",
+            target_employee_ids=(),
+        )
+
     if len(mentioned) > 1:
         return RouteDecision(
             route_mode="orchestration",
             target_employee_ids=tuple(mentioned),
+            planner_employee_id=_pick_planner_employee_id(members, mentioned),
         )
-    return RouteDecision(route_mode="single_agent")
+
+    if len(mentioned) == 1:
+        return RouteDecision(
+            route_mode="single_agent",
+            target_employee_ids=(),
+        )
+
+    if _looks_like_collaboration_request(message_text):
+        return RouteDecision(
+            route_mode="orchestration",
+            target_employee_ids=tuple(employee_ids),
+            planner_employee_id=planner_employee_id,
+        )
+
+    return RouteDecision(
+        route_mode="single_agent",
+        target_employee_ids=(),
+    )
 
 
-def _extract_mentions(text: str, available: list[str]) -> list[str]:
-    """V1 simple substring check — finds employee IDs literally present in text."""
-    return [eid for eid in available if eid in text]
+def _normalize_member(member) -> dict[str, str]:
+    if isinstance(member, str):
+        return {
+            "employee_id": member,
+            "display_name": "",
+            "role_name": "",
+            "profile_name": "",
+        }
+    if isinstance(member, dict):
+        return {
+            "employee_id": str(member.get("employee_id") or member.get("member_ref_id") or ""),
+            "display_name": str(member.get("display_name") or ""),
+            "role_name": str(member.get("role_name") or ""),
+            "profile_name": str(member.get("profile_name") or ""),
+        }
+    raise TypeError(f"Unsupported member descriptor: {type(member)!r}")
+
+
+def _extract_mentions(text: str, members: list[dict[str, str]]) -> list[str]:
+    normalized_text = _normalize_text(text)
+    mentioned: list[str] = []
+    for member in members:
+        employee_id = member["employee_id"]
+        if not employee_id:
+            continue
+        aliases = {
+            employee_id,
+            member.get("display_name", ""),
+            member.get("role_name", ""),
+            member.get("profile_name", ""),
+        }
+        for alias in aliases:
+            token = _normalize_text(alias)
+            if not token:
+                continue
+            if f"@{token}" in normalized_text or token in normalized_text:
+                mentioned.append(employee_id)
+                break
+    return list(dict.fromkeys(mentioned))
+
+
+def _looks_like_collaboration_request(text: str) -> bool:
+    normalized = _normalize_text(text)
+    keywords = (
+        "一起", "协作", "分工", "汇总", "对比", "复盘", "方案", "调研", "报告",
+        "collaborate", "together", "compare", "research", "summarize", "plan",
+    )
+    return any(keyword in normalized for keyword in keywords)
+
+
+def _pick_planner_employee_id(members: list[dict[str, str]], candidate_ids: list[str]) -> str:
+    planner_keywords = ("planner", "orchestrator", "协调", "规划")
+
+    def _matches(member: dict[str, str]) -> bool:
+        haystack = " ".join(
+            [member.get("display_name", ""), member.get("role_name", ""), member.get("profile_name", ""), member.get("employee_id", "")]
+        ).lower()
+        return any(keyword in haystack for keyword in planner_keywords)
+
+    candidate_set = set(candidate_ids)
+    for member in members:
+        employee_id = member["employee_id"]
+        if employee_id in candidate_set and _matches(member):
+            return employee_id
+    for member in members:
+        if _matches(member):
+            return member["employee_id"]
+    return candidate_ids[0] if candidate_ids else ""
+
+
+def _normalize_text(text: str) -> str:
+    lowered = str(text or "").strip().lower()
+    return re.sub(r"\s+", "", lowered)

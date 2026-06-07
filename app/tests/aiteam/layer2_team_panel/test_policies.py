@@ -198,7 +198,7 @@ class TestRouteDecisionOutputSchema:
         assert isinstance(result, RouteDecision)
         assert result.route_mode == "orchestration"
         assert result.target_employee_ids == ("emp-1", "emp-2")
-        assert result.planner_employee_id == ""
+        assert result.planner_employee_id == "emp-1"
 
     def test_route_decision_output_schema_auto_no_mentions(self):
         result = decide_route("hello world", ["emp-1", "emp-2"], route_hint="auto")

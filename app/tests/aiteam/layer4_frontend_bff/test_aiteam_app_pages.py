@@ -11,7 +11,7 @@ EXPECTED_PAGE_MODULES = {
     "app-marketplace.js": ["getTalentTemplates", "立即招募", "RATE_LIMITED"],
     "app-template-detail.js": ["getTemplate", "default_memory_config", "立即招募"],
     "app-chat.js": ["getConversation", "createRun", "tool_call", "getRunEvents"],
-    "app-group.js": ["submitGroupMessage", "routing_decided", "task_created", "result_merged"],
+    "app-group.js": ["getGroupConversation", "routing_decided", "task_created", "result_merged", "成员管理", "群设置", "协作反馈", "多员工协作", "runtime:", "子任务", "runtime_handle", "单员工会话", "协作根任务", "提及选择 / 协作状态"],
 }
 
 FORBIDDEN_RUNTIME_ROUTES = [
@@ -81,8 +81,41 @@ def test_group_page_uses_shared_timeline_client_contract() -> None:
         "route_hint",
         "sender_id",
         "message: { text: text }",
+        "renderRouteFeedback",
+        "candidate_employee_ids",
+        "runtimeTaskId",
+        "childCount",
+        "runtime_handle",
+        "session_id",
+        "task_id",
+        "data-group-recovery",
+        "catching-up",
+        "reconnecting",
+        "resolved",
+        "setRecoveryStatus",
+        "onReconnect",
     ]:
         assert snippet in source, f"Group page missing timeline/group contract snippet: {snippet}"
+
+
+
+def test_group_page_exposes_single_and_multi_agent_routing_feedback() -> None:
+    source = _read(PAGES_DIR / "app-group.js")
+    for snippet in [
+        "single_agent",
+        "orchestration",
+        "routeModeDescription",
+        "本轮消息会优先路由到单个数字员工",
+        "本轮消息会进入协作编排",
+        "协作反馈",
+        "提及选择 / 协作状态",
+        "collaborationModeLabel",
+        "renderRuntimeHandle",
+        "SSE 恢复状态",
+        "SSE 已断流，正在 catch-up 缺失事件",
+        "实时协作流已恢复，不会重复补拉已消费事件",
+    ]:
+        assert snippet in source, f"Group page missing routing feedback snippet: {snippet}"
 
 
 

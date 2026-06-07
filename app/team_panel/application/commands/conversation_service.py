@@ -88,14 +88,20 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
             binding = uow.runtime_bindings().get_by_owner("team_run", run.id)
             decision = _load_route_decision(run)
             existing_msg_id = _find_message_id_for_run(uow, run.id)
+            route_payload = {
+                "route_mode": decision.route_mode,
+                "target_employee_ids": list(decision.target_employee_ids),
+                "planner_employee_id": decision.planner_employee_id,
+            }
+            summary = json.loads(run.result_summary_json or "{}") if run.result_summary_json else {}
+            if summary.get("entry_employee_id"):
+                route_payload["entry_employee_id"] = summary.get("entry_employee_id")
+            if summary.get("candidate_employee_ids"):
+                route_payload["candidate_employee_ids"] = list(summary.get("candidate_employee_ids") or [])
             return {
                 "message_id": existing_msg_id or "",
                 "run_id": run.id,
-                "route_decision": {
-                    "route_mode": decision.route_mode,
-                    "target_employee_ids": list(decision.target_employee_ids),
-                    "planner_employee_id": decision.planner_employee_id,
-                },
+                "route_decision": route_payload,
                 "stream_url": f"/api/team/runs/{run.id}/stream?cursor=0",
                 "events_url": f"/api/team/runs/{run.id}/events?cursor=0",
                 "runtime_handle": {
@@ -105,11 +111,16 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
                 },
             }
 
-    # ── Resolve available employees from conversation members ──────
-    available = _get_active_member_employee_ids(uow, conversation_id)
+    # ── Resolve available members from conversation members ─────────
+    available_members = _get_active_members(uow, conversation_id)
+    available_employee_ids = [member["employee_id"] for member in available_members]
+    if sender_id not in available_employee_ids:
+        raise ValueError(f"sender_id {sender_id} is not an active conversation member")
 
     # ── Compute route decision ─────────────────────────────────────
-    decision = decide_route(message_text, available, route_hint)
+    decision = decide_route(message_text, available_members, route_hint)
+    entry_employee_id = _pick_entry_employee_id(decision, sender_id)
+    candidate_employee_ids = _pick_candidate_employee_ids(decision, available_employee_ids)
 
     # ── Map route_mode → execution_mode ────────────────────────────
     if decision.route_mode == "orchestration":
@@ -144,6 +155,7 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
         trigger_type="group_message",
         execution_mode=execution_mode,
         status="queued",
+        entry_employee_id=entry_employee_id,
         planner_employee_id=decision.planner_employee_id or None,
         idempotency_key=idempotency_key,
         input_message_json=json.dumps({
@@ -154,18 +166,22 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
             "route_mode": decision.route_mode,
             "target_employee_ids": list(decision.target_employee_ids),
             "planner_employee_id": decision.planner_employee_id or "",
+            "entry_employee_id": entry_employee_id,
+            "candidate_employee_ids": candidate_employee_ids,
         }),
         created_by=sender_id,
     )
     uow.team_runs().create(run)
 
     # ── Call gateway ───────────────────────────────────────────────
-    entry_employee = sender_id if execution_mode == "single_agent" else ""
     gw_request = {
         "run_id": run_id,
         "enterprise_id": enterprise_id,
-        "employee_id": entry_employee,
+        "employee_id": entry_employee_id,
+        "planner_employee_id": decision.planner_employee_id or entry_employee_id,
+        "target_employee_ids": candidate_employee_ids,
         "conversation_id": conversation_id,
+        "message_id": message_id,
         "message_text": message_text,
         "execution_mode": execution_mode,
         "route_mode": decision.route_mode,
@@ -203,6 +219,9 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
             "conversation_id": conversation_id,
             "route_mode": decision.route_mode,
             "execution_mode": execution_mode,
+            "entry_employee_id": entry_employee_id,
+            "planner_employee_id": decision.planner_employee_id or "",
+            "target_employee_ids": list(decision.target_employee_ids),
         }),
         created_by=sender_id,
     )
@@ -223,6 +242,8 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
             "route_mode": decision.route_mode,
             "target_employee_ids": list(decision.target_employee_ids),
             "planner_employee_id": decision.planner_employee_id,
+            "entry_employee_id": entry_employee_id,
+            "candidate_employee_ids": candidate_employee_ids,
         },
         "stream_url": gw_response.stream_url,
         "events_url": gw_response.events_url,
@@ -240,17 +261,28 @@ def _find_run_by_idempotency(uow, idempotency_key: str) -> str | None:
     return existing.id if existing else None
 
 
-def _get_active_member_employee_ids(uow, conversation_id: str) -> list[str]:
-    """Return active employee member IDs for a group conversation."""
+def _get_active_members(uow, conversation_id: str) -> list[dict[str, str]]:
+    """Return active employee members with aliases for a group conversation."""
     uow.cur.execute(
-        "SELECT member_ref_id FROM conversation_member "
-        "WHERE conversation_id = %s AND member_type = 'employee' "
-        "AND status = 'active' "
-        "ORDER BY member_ref_id",
+        "SELECT cm.member_ref_id, COALESCE(e.display_name, ''), COALESCE(e.role_name, ''), "
+        "COALESCE(e.profile_name, '') "
+        "FROM conversation_member cm "
+        "LEFT JOIN employee e ON e.id = cm.member_ref_id "
+        "WHERE cm.conversation_id = %s AND cm.member_type = 'employee' "
+        "AND cm.status = 'active' "
+        "ORDER BY cm.member_ref_id",
         (conversation_id,),
     )
     rows = uow.cur.fetchall()
-    return [row[0] for row in rows]
+    return [
+        {
+            "employee_id": row[0],
+            "display_name": row[1],
+            "role_name": row[2],
+            "profile_name": row[3],
+        }
+        for row in rows if row[0]
+    ]
 
 
 def _load_route_decision(run):
@@ -265,6 +297,38 @@ def _load_route_decision(run):
         target_employee_ids=tuple(data.get("target_employee_ids", [])),
         planner_employee_id=data.get("planner_employee_id", ""),
     )
+
+
+def _pick_entry_employee_id(decision, sender_id: str) -> str:
+    if decision.route_mode == "single_agent":
+        if decision.target_employee_ids:
+            return decision.target_employee_ids[0]
+        return sender_id
+    if decision.planner_employee_id:
+        return decision.planner_employee_id
+    if decision.target_employee_ids:
+        return decision.target_employee_ids[0]
+    return sender_id
+
+
+def _pick_candidate_employee_ids(decision, available_employee_ids: list[str]) -> list[str]:
+    if decision.target_employee_ids:
+        ordered_targets = list(decision.target_employee_ids)
+        if decision.route_mode == "orchestration" and decision.planner_employee_id:
+            ordered = [employee_id for employee_id in available_employee_ids if employee_id == decision.planner_employee_id]
+            ordered.extend(employee_id for employee_id in ordered_targets if employee_id != decision.planner_employee_id)
+            for employee_id in available_employee_ids:
+                if employee_id not in ordered and employee_id in ordered_targets:
+                    ordered.append(employee_id)
+            return ordered
+        return ordered_targets
+    ordered_available = list(available_employee_ids)
+    if decision.route_mode == "single_agent":
+        return ordered_available
+    if decision.planner_employee_id:
+        if decision.planner_employee_id in ordered_available:
+            return [decision.planner_employee_id, *[employee_id for employee_id in ordered_available if employee_id != decision.planner_employee_id]]
+    return ordered_available
 
 
 def _create_member(uow, member: ConversationMember) -> None:

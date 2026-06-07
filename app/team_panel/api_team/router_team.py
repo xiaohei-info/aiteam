@@ -65,6 +65,7 @@ from ..repositories.knowledge_ingestion_job_repo import KnowledgeIngestionJobRep
 from ..repositories.enterprise_skill_install_repo import EnterpriseSkillInstallRepo
 from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
 from ..repositories.team_run_repo import TeamRunRepo
+from ..repositories.team_task_repo import TeamTaskRepo
 from ..transactions.uow import UnitOfWork
 from ..application.commands.conversation_service import submit_group_message
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
@@ -144,6 +145,19 @@ def _load_json_list(value) -> list[str]:
     if not isinstance(parsed, list):
         return []
     return [str(item) for item in parsed]
+
+
+def _parse_non_negative_int(value: str | None, *, field_name: str, default: int) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return parsed
 
 
 def _normalize_review_status(item: MemoryItem, review: MemoryReviewDecision | None) -> str:
@@ -1582,6 +1596,54 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
         latest_event = RunEventRepo(cur).get_latest_for_run(conv.latest_run_id) if conv.latest_run_id else None
         run_status = latest_run.status if latest_run is not None else None
         has_recent_delta = latest_event is not None and latest_event.event_type == "message_delta"
+        message_count = _conversation_message_count(cur, conv_id)
+        if conv.type == "group":
+            members = _list_group_conversation_members(cur, conv_id)
+            latest_route_decision = _conversation_latest_route_decision(latest_run)
+            task_items = []
+            latest_event_cursor = latest_event.cursor_no if latest_event is not None else 0
+            if latest_run is not None:
+                task_repo = TeamTaskRepo(cur)
+                task_items = [
+                    _serialize_team_task_item(task)
+                    for task in task_repo.list_by_run(latest_run.id)
+                ]
+            return 200, {
+                "conversation_id": conv.id,
+                "conversation_type": conv.type,
+                "title": conv.title,
+                "status": conv.status,
+                "display_state": compute_display_state(conv.status, run_status, has_recent_delta),
+                "created_at": conv.created_at or _today_iso(),
+                "latest_run": {
+                    "run_id": conv.latest_run_id,
+                    "status": latest_run.status if latest_run is not None else "queued",
+                    "started_at": (latest_run.started_at if latest_run is not None else "") or _today_iso(),
+                    "stream_url": f"/api/team/runs/{latest_run.id}/stream?cursor={latest_event_cursor}",
+                    "events_url": f"/api/team/runs/{latest_run.id}/events?cursor={latest_event_cursor}",
+                    "latest_event_cursor": latest_event_cursor,
+                } if conv.latest_run_id else None,
+                "message_count": message_count,
+                "member_count": len(members),
+                "members": members,
+                "default_route_hint": "auto",
+                "latest_route_decision": latest_route_decision,
+                "timeline": {
+                    "run_id": latest_run.id if latest_run is not None else None,
+                    "events_url": f"/api/team/runs/{latest_run.id}/events?cursor=0" if latest_run is not None else None,
+                    "stream_url": f"/api/team/runs/{latest_run.id}/stream?cursor={latest_event_cursor}" if latest_run is not None else None,
+                    "latest_event_cursor": latest_event_cursor,
+                },
+                "task_tree": {
+                    "run_id": latest_run.id if latest_run is not None else None,
+                    "items": task_items,
+                },
+                "last_message_preview": {
+                    "event_cursor": latest_event.cursor_no if latest_event is not None else 0,
+                    "event_ts": (latest_event.event_ts if latest_event is not None else "") or _today_iso(),
+                    "preview": conv.last_message_preview or "",
+                } if conv.last_message_preview else None,
+            }
         return 200, {
             "conversation_id": conv.id,
             "conversation_type": conv.type,
@@ -1597,7 +1659,7 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
                 "status": latest_run.status if latest_run is not None else "queued",
                 "started_at": (latest_run.started_at if latest_run is not None else "") or _today_iso(),
             } if conv.latest_run_id else None,
-            "message_count": 0,
+            "message_count": message_count,
             "last_message_preview": {
                 "event_cursor": latest_event.cursor_no if latest_event is not None else 0,
                 "event_ts": (latest_event.event_ts if latest_event is not None else "") or _today_iso(),
@@ -1606,6 +1668,99 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
         }
     finally:
         cur.close()
+
+
+def _conversation_message_count(cur, conversation_id: str) -> int:
+    cur.execute(
+        "SELECT COUNT(*) FROM conversation_message WHERE conversation_id = %s",
+        (conversation_id,),
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _list_group_conversation_members(cur, conversation_id: str) -> list[dict]:
+    cur.execute(
+        "SELECT cm.member_id, cm.member_type, cm.member_ref_id, cm.role, cm.status, "
+        "cm.joined_at, cm.removed_at, COALESCE(e.display_name, ''), COALESCE(e.role_name, ''), "
+        "COALESCE(e.profile_name, ''), COALESCE(e.status, '') "
+        "FROM conversation_member cm "
+        "LEFT JOIN employee e ON e.id = cm.member_ref_id "
+        "WHERE cm.conversation_id = %s AND cm.status = 'active' "
+        "ORDER BY cm.joined_at ASC, cm.member_id ASC",
+        (conversation_id,),
+    )
+    members = []
+    for row in cur.fetchall():
+        members.append(
+            {
+                "member_id": row[0],
+                "member_type": row[1],
+                "member_ref_id": row[2],
+                "employee_id": row[2] if row[1] == "employee" else None,
+                "role": row[3],
+                "status": row[4],
+                "joined_at": str(row[5]) if row[5] is not None else None,
+                "removed_at": str(row[6]) if row[6] is not None else None,
+                "display_name": row[7] or row[2],
+                "role_name": row[8] or "",
+                "profile_name": row[9] or "",
+                "employee_status": row[10] or None,
+                "is_human": row[1] == "user",
+                "is_agent": row[1] == "employee",
+            }
+        )
+    return members
+
+
+def _conversation_latest_route_decision(latest_run: TeamRun | None) -> dict | None:
+    if latest_run is None or not latest_run.result_summary_json:
+        return None
+    payload = _load_payload(latest_run.result_summary_json)
+    if not payload:
+        return None
+    return {
+        "route_mode": payload.get("route_mode", "single_agent"),
+        "target_employee_ids": payload.get("target_employee_ids") or [],
+        "planner_employee_id": payload.get("planner_employee_id") or None,
+        "entry_employee_id": payload.get("entry_employee_id") or latest_run.entry_employee_id,
+        "candidate_employee_ids": payload.get("candidate_employee_ids") or payload.get("target_employee_ids") or [],
+    }
+
+
+def _serialize_run_event_item(event) -> dict:
+    return {
+        "event_id": event.id,
+        "event_cursor": event.cursor_no,
+        "run_id": event.run_id,
+        "event_type": event.event_type,
+        "source_type": event.source_type,
+        "source_id": event.source_id,
+        "employee_id": event.employee_id,
+        "event_ts": event.event_ts or _today_iso(),
+        "preview": event.preview_text or "",
+        "payload": _load_payload(event.payload_json),
+    }
+
+
+def _serialize_team_task_item(task) -> dict:
+    payload = _load_payload(task.input_payload_json)
+    output_summary = _load_payload(task.output_summary_json)
+    return {
+        "task_id": task.id,
+        "parent_task_id": task.parent_team_task_id,
+        "runtime_task_id": task.runtime_task_id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "assignee_employee_id": task.assignee_employee_id,
+        "sequence_no": task.sequence_no,
+        "depth": task.depth,
+        "started_at": task.started_at or None,
+        "finished_at": task.finished_at or None,
+        "input_payload": payload,
+        "output_summary": output_summary,
+    }
 
 
 def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
@@ -1646,6 +1801,8 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
             return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
         if "Cannot submit" in message:
             return 409, {"error": "CONVERSATION_NOT_ACTIVE", "message": message}
+        if "not an active conversation member" in message:
+            return 403, {"error": "SENDER_NOT_CONVERSATION_MEMBER", "message": message}
         return 400, {"error": "INVALID_REQUEST", "message": message}
 
 
@@ -1729,7 +1886,10 @@ def _handle_run_stream(conn, path: str, run_id: str, query: str) -> tuple[int, s
         if run is None:
             return 404, json.dumps({"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}), "application/json"
         qs = parse_qs(query)
-        cursor_val = int(qs.get("cursor", ["0"])[0])
+        try:
+            cursor_val = _parse_non_negative_int(qs.get("cursor", ["0"])[0], field_name="cursor", default=0)
+        except ValueError as exc:
+            return 400, json.dumps({"error": "INVALID_CURSOR", "message": str(exc)}), "application/json"
         event_repo = RunEventRepo(cur)
         events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=50)
         frames = []
@@ -1765,26 +1925,24 @@ def _handle_run_events(conn, path: str, run_id: str, query: str) -> tuple[int, d
         if run is None:
             return 404, {"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}
         qs = parse_qs(query)
-        cursor_val = int(qs.get("cursor", ["0"])[0])
-        limit_val = min(int(qs.get("limit", ["100"])[0]), 200)
+        try:
+            cursor_val = _parse_non_negative_int(qs.get("cursor", ["0"])[0], field_name="cursor", default=0)
+            requested_limit = _parse_non_negative_int(qs.get("limit", ["100"])[0], field_name="limit", default=100)
+        except ValueError as exc:
+            return 400, {"error": "INVALID_PAGINATION", "message": str(exc)}
+        limit_val = max(1, min(requested_limit or 100, 200))
         event_repo = RunEventRepo(cur)
-        events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=limit_val)
-        items = [
-            {
-                "event_id": e.id,
-                "event_cursor": e.cursor_no,
-                "event_type": e.event_type,
-                "preview": e.preview_text,
-            }
-            for e in events
-        ]
+        paged_events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=limit_val + 1)
+        events = paged_events[:limit_val]
+        items = [_serialize_run_event_item(e) for e in events]
         next_cursor = events[-1].cursor_no if events else cursor_val
-        has_more = len(events) >= limit_val
+        has_more = len(paged_events) > limit_val
         return 200, {
             "items": items,
             "next_cursor": next_cursor,
             "has_more": has_more,
             "run_status": run.status,
+            "latest_event_cursor": event_repo.get_max_cursor(run_id),
         }
     finally:
         cur.close()
@@ -2659,21 +2817,25 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                     if not install:
                         return 403, {"error": "SKILL_NOT_AUTHORIZED", "message": f"Skill {skill_code} is not installed for this enterprise"}
 
+                existing_skill_codes = {
+                    binding.skill_code
+                    for binding in uow.employee_skill_bindings().list_by_employee(emp_id)
+                    if binding.enabled
+                }
                 for skill_code in skills_add:
-                    try:
-                        uow.employee_skill_bindings().create(
-                            EmployeeSkillBinding(
-                                id=f"sb_{uuid.uuid4().hex[:12]}",
-                                enterprise_id=emp.enterprise_id,
-                                employee_id=emp_id,
-                                skill_code=skill_code,
-                                enabled=True,
-                                source_type="manual",
-                                visibility="allow",
-                            )
+                    if skill_code in existing_skill_codes:
+                        continue
+                    uow.employee_skill_bindings().create(
+                        EmployeeSkillBinding(
+                            id=f"sb_{uuid.uuid4().hex[:12]}",
+                            enterprise_id=emp.enterprise_id,
+                            employee_id=emp_id,
+                            skill_code=skill_code,
+                            enabled=True,
+                            source_type="manual",
+                            visibility="allow",
                         )
-                    except Exception:
-                        pass
+                    )
 
             if skills_remove:
                 existing_bindings = uow.employee_skill_bindings().list_by_employee(emp_id)
@@ -2850,6 +3012,12 @@ def handle_team_route(
         conv_id = _match_prefix(sub, "/conversations/")
         if method == "GET" and conv_id is not None and "/" not in conv_id:
             route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, sub, conversation_id)
+
+    # ── group-conversations/{id} GET ──
+    if route_handler is None:
+        group_conv_id = _match_prefix(sub, "/group-conversations/")
+        if method == "GET" and group_conv_id is not None and "/" not in group_conv_id:
+            route_handler = lambda conn, conversation_id=group_conv_id: _handle_conversation_detail(conn, sub, conversation_id)
 
     # ── group-conversations/{id}/messages ──
     if route_handler is None:

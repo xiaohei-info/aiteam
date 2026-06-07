@@ -216,6 +216,10 @@ class GroupConversationRunRequest:
     conversation_id: str
     message_text: str
     route_mode: str = "auto"    # "auto" | "single_agent" | "orchestration"
+    employee_id: str = ""
+    planner_employee_id: str = ""
+    target_employee_ids: list[str] = field(default_factory=list)
+    message_id: str = ""
     idempotency_key: str = ""
 
     def __post_init__(self):
