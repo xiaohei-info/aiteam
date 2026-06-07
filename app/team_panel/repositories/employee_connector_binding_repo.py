@@ -43,6 +43,18 @@ class EmployeeConnectorBindingRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
+    def list_by_connector(self, connector_id: str) -> list[EmployeeConnectorBinding]:
+        self._cur.execute(
+            "SELECT id, enterprise_id, employee_id, connector_id, enabled, "
+            "access_mode, binding_version, "
+            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "FROM employee_connector_binding WHERE connector_id = %s AND deleted_at IS NULL "
+            "ORDER BY employee_id",
+            (connector_id,),
+        )
+        rows = self._cur.fetchall()
+        return [self._row_to_entity(r) for r in rows]
+
     def update(self, b: EmployeeConnectorBinding) -> EmployeeConnectorBinding:
         self._cur.execute(
             "UPDATE employee_connector_binding SET enabled=%s, binding_version=%s, "

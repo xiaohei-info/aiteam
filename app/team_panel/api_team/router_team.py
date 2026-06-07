@@ -49,6 +49,7 @@ from ..repositories.conversation_repo import ConversationRepo
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
 from ..repositories.employee_org_assignment_repo import EmployeeOrgAssignmentRepo
 from ..repositories.employee_repo import EmployeeRepo
+from ..repositories.employee_connector_binding_repo import EmployeeConnectorBindingRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..repositories.connector_repo import EnterpriseConnectorRepo
 from ..repositories.department_repo import DepartmentRepo
@@ -262,6 +263,224 @@ def _record_audit_event(cur, *, enterprise_id: str, event_type: str, target_type
             payload_json=json.dumps(payload, ensure_ascii=False),
             created_by="system",
         )
+    )
+
+
+def _mask_connector_secret(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "未配置"
+    if len(raw) >= 8:
+        return f"{raw[:3]}****{raw[-4:]}"
+    return "已配置"
+
+
+_CONNECTOR_SECRET_MARKERS = ("secret", "token", "password", "key", "credential")
+_CONNECTOR_ALLOWED_CREDENTIAL_INPUT_FIELDS = {"mode", "credential_ref"}
+
+
+def _is_secret_bearing_connector_key(key: object) -> bool:
+    key_text = str(key).lower()
+    return any(marker in key_text for marker in _CONNECTOR_SECRET_MARKERS)
+
+
+def _sanitize_connector_config_value(value: object, *, parent_key: object | None = None) -> object:
+    if parent_key is not None and _is_secret_bearing_connector_key(parent_key):
+        return "****" if value not in (None, "") else ""
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_connector_config_value(child_value, parent_key=key)
+            for key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _sanitize_connector_config_value(item, parent_key=parent_key)
+            for item in value
+        ]
+    return value
+
+
+def _sanitize_connector_config(config: dict) -> dict:
+    return {
+        str(key): _sanitize_connector_config_value(value, parent_key=key)
+        for key, value in config.items()
+    }
+
+
+def _normalize_connector_config_input(payload: object) -> dict:
+    return _sanitize_connector_config(_load_payload(payload))
+
+
+def _extract_connector_credential_ref(body: dict | None) -> tuple[str | None, dict | None]:
+    payload = body or {}
+    credential_input = payload.get("credential_input")
+    if credential_input is None:
+        return str(payload.get("credential_ref") or "").strip(), None
+    if not isinstance(credential_input, dict):
+        return None, {
+            "error": "INVALID_CREDENTIAL_INPUT",
+            "message": "credential_input must be an object with credential_ref only",
+        }
+    invalid_fields = sorted(set(credential_input.keys()) - _CONNECTOR_ALLOWED_CREDENTIAL_INPUT_FIELDS)
+    if invalid_fields:
+        return None, {
+            "error": "INVALID_CREDENTIAL_INPUT",
+            "message": f"credential_input field '{invalid_fields[0]}' is not allowed; use credential_ref only",
+        }
+    return str(credential_input.get("credential_ref") or payload.get("credential_ref") or "").strip(), None
+
+
+def _normalize_scopes(payload: object) -> list[str]:
+    if isinstance(payload, list):
+        scopes = [str(item).strip() for item in payload if str(item).strip()]
+    elif isinstance(payload, str) and payload.strip():
+        scopes = [payload.strip()]
+    else:
+        scopes = []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for scope in scopes:
+        if scope in seen:
+            continue
+        seen.add(scope)
+        deduped.append(scope)
+    return deduped
+
+
+def _default_last_test_result() -> dict:
+    return {
+        "result": "never_tested",
+        "checked_at": None,
+        "checked_by": "",
+        "error_code": "",
+        "message": "尚未测试",
+        "log_ref": "",
+    }
+
+
+def _normalize_last_test_result(payload: object) -> dict:
+    result = _default_last_test_result()
+    parsed = _load_payload(payload)
+    for key in result:
+        value = parsed.get(key)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _serialize_connector_definition(definition) -> dict:
+    return {
+        "definition_id": definition.id,
+        "provider_code": definition.provider_code,
+        "connector_type": definition.connector_type,
+        "display_name": definition.display_name,
+        "auth_scheme": definition.auth_scheme,
+        "config_schema_json": _load_payload(definition.config_schema_json),
+        "status": definition.status,
+    }
+
+
+def _serialize_connector_grant(binding: EmployeeConnectorBinding, employee_map: dict[str, Employee]) -> dict:
+    employee = employee_map.get(binding.employee_id)
+    return {
+        "binding_id": binding.id,
+        "employee_id": binding.employee_id,
+        "employee_display_name": employee.display_name if employee else "",
+        "enabled": bool(binding.enabled),
+        "access_mode": binding.access_mode,
+    }
+
+
+def _serialize_connector(connector: EnterpriseConnector, *, grants: list[dict], definition=None, available_employees: list[dict] | None = None, audit_summary: list[dict] | None = None) -> dict:
+    payload = {
+        "connector_id": connector.id,
+        "definition_id": connector.definition_id,
+        "name": connector.name,
+        "provider_code": connector.provider_code,
+        "connector_type": connector.connector_type,
+        "status": connector.status,
+        "health_status": connector.status,
+        "config": _sanitize_connector_config(_load_payload(connector.config_json)),
+        "scopes": _load_json_list(connector.scopes_json),
+        "credential_ref": connector.credential_ref,
+        "credential_mask": connector.credential_mask,
+        "credential_state": connector.credential_state,
+        "rotation_version": int(connector.rotation_version or 0),
+        "grants": [grant["employee_id"] for grant in grants if grant["enabled"]],
+        "granted_employee_ids": [grant["employee_id"] for grant in grants if grant["enabled"]],
+        "employee_grants": grants,
+        "last_test_result": _normalize_last_test_result(connector.last_test_result_json),
+        "last_validated_at": connector.last_validated_at,
+        "last_test_at": connector.last_validated_at,
+        "created_at": connector.created_at,
+        "updated_at": connector.updated_at,
+        "updated_by": connector.updated_by,
+    }
+    if definition is not None:
+        payload["definition"] = _serialize_connector_definition(definition)
+    if available_employees is not None:
+        payload["available_employees"] = available_employees
+    if audit_summary is not None:
+        payload["audit_summary"] = audit_summary
+    return payload
+
+
+def _connector_test_outcome(connector: EnterpriseConnector, body: dict | None, actor_id: str) -> tuple[str, str, dict]:
+    requested_result = str((body or {}).get("simulate_result") or "passed").strip().lower()
+    if connector.credential_state == "missing":
+        requested_result = "missing"
+
+    checked_at = _today_iso()
+    if requested_result == "auth_failed":
+        return (
+            "auth_failed",
+            "invalid",
+            {
+                "result": "failed",
+                "checked_at": checked_at,
+                "checked_by": actor_id,
+                "error_code": "CREDENTIAL_INVALID",
+                "message": "连接测试失败：凭据认证失败",
+                "log_ref": f"audit://connector-test/{connector.id}",
+            },
+        )
+    if requested_result in {"offline", "network_failed"}:
+        return (
+            "offline",
+            connector.credential_state if connector.credential_state != "missing" else "missing",
+            {
+                "result": "failed",
+                "checked_at": checked_at,
+                "checked_by": actor_id,
+                "error_code": "CONNECTOR_UNREACHABLE",
+                "message": "连接测试失败：服务不可达",
+                "log_ref": f"audit://connector-test/{connector.id}",
+            },
+        )
+    if requested_result == "missing":
+        return (
+            "draft",
+            "missing",
+            {
+                "result": "failed",
+                "checked_at": checked_at,
+                "checked_by": actor_id,
+                "error_code": "CREDENTIAL_REQUIRED",
+                "message": "连接测试失败：缺少凭据引用",
+                "log_ref": f"audit://connector-test/{connector.id}",
+            },
+        )
+    return (
+        "online",
+        "configured" if connector.credential_state == "missing" else connector.credential_state,
+        {
+            "result": "passed",
+            "checked_at": checked_at,
+            "checked_by": actor_id,
+            "error_code": "",
+            "message": "最近一次连接测试通过",
+            "log_ref": f"audit://connector-test/{connector.id}",
+        },
     )
 
 
@@ -2562,110 +2781,157 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
 
 # ── B05: connectors list/create/test/grants ──
 
-def _handle_connectors_list(conn, path: str) -> tuple[int, dict]:
+def _handle_connectors_list(conn, path: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_connectors")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
-            return 200, {"connectors": [], "definitions": []}
+            return 200, {"items": [], "definitions": [], "effective_role": role}
         connector_repo = EnterpriseConnectorRepo(cur)
         definition_repo = ConnectorDefinitionRepo(cur)
+        employee_repo = EmployeeRepo(cur)
         connectors = connector_repo.list_by_enterprise(enterprise.id)
         definitions = definition_repo.list_active()
-        cur.execute(
-            "SELECT connector_id, employee_id, access_mode, enabled "
-            "FROM employee_connector_binding "
-            "WHERE enterprise_id = %s AND deleted_at IS NULL "
-            "ORDER BY connector_id, employee_id",
-            (enterprise.id,),
-        )
+        employees = employee_repo.list_by_enterprise(enterprise.id)
+        employee_map = {employee.id: employee for employee in employees}
+        binding_repo = EmployeeConnectorBindingRepo(cur)
         grants_by_connector: dict[str, list[dict]] = {}
-        for connector_id, employee_id, access_mode, enabled in cur.fetchall():
-            grants_by_connector.setdefault(connector_id, []).append(
-                {
-                    "employee_id": employee_id,
-                    "access_mode": access_mode,
-                    "enabled": bool(enabled),
-                }
+        for connector in connectors:
+            bindings = binding_repo.list_by_connector(connector.id)
+            grants_by_connector[connector.id] = [
+                _serialize_connector_grant(binding, employee_map)
+                for binding in bindings
+            ]
+        definition_map = {definition.id: definition for definition in definitions}
+        items = [
+            _serialize_connector(
+                connector,
+                grants=grants_by_connector.get(connector.id, []),
+                definition=definition_map.get(connector.definition_id),
             )
+            for connector in connectors
+            if connector.status != "archived"
+        ]
         return 200, {
-            "connectors": [
-                {
-                    "connector_id": connector.id,
-                    "name": connector.name,
-                    "provider_code": connector.provider_code,
-                    "connector_type": connector.connector_type,
-                    "status": connector.status,
-                    "health_status": connector.status,
-                    "credential_ref": connector.credential_ref,
-                    "config": _load_payload(connector.config_json),
-                    "grants": [
-                        grant["employee_id"]
-                        for grant in grants_by_connector.get(connector.id, [])
-                        if grant["enabled"]
-                    ],
-                    "employee_grants": grants_by_connector.get(connector.id, []),
-                    "granted_employee_ids": [
-                        grant["employee_id"]
-                        for grant in grants_by_connector.get(connector.id, [])
-                        if grant["enabled"]
-                    ],
-                    "last_validated_at": connector.last_validated_at,
-                    "last_test_at": connector.last_validated_at,
-                    "created_at": connector.created_at,
-                }
-                for connector in connectors
-            ],
-            "definitions": [
-                {
-                    "definition_id": definition.id,
-                    "provider_code": definition.provider_code,
-                    "connector_type": definition.connector_type,
-                    "display_name": definition.display_name,
-                    "auth_scheme": definition.auth_scheme,
-                    "config_schema_json": definition.config_schema_json,
-                    "status": definition.status,
-                }
-                for definition in definitions
-            ],
+            "items": items,
+            "connectors": items,
+            "definitions": [_serialize_connector_definition(definition) for definition in definitions],
+            "effective_role": role,
         }
     finally:
         cur.close()
 
 
-def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connector_detail(conn, path: str, connector_id: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_connectors")
+    if denial is not None:
+        return denial
+    cur = conn.cursor()
+    try:
+        repo = EnterpriseConnectorRepo(cur)
+        connector = repo.get_by_id(connector_id)
+        if connector is None or connector.deleted_at is not None:
+            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        definition = ConnectorDefinitionRepo(cur).get_by_id(connector.definition_id) if connector.definition_id else None
+        employees = EmployeeRepo(cur).list_by_enterprise(connector.enterprise_id)
+        employee_map = {employee.id: employee for employee in employees}
+        bindings = EmployeeConnectorBindingRepo(cur).list_by_connector(connector_id)
+        grants = [_serialize_connector_grant(binding, employee_map) for binding in bindings]
+        audit_summary = [
+            {
+                "event_type": audit.event_type,
+                "created_at": audit.created_at,
+                "payload": _load_payload(audit.payload_json),
+            }
+            for audit in AuditEventRepo(cur).list_by_target("connector", connector_id, limit=10)
+        ]
+        available_employees = [
+            {
+                "employee_id": employee.id,
+                "display_name": employee.display_name,
+                "status": employee.status,
+            }
+            for employee in employees
+        ]
+        payload = _serialize_connector(
+            connector,
+            grants=grants,
+            definition=definition,
+            available_employees=available_employees,
+            audit_summary=audit_summary,
+        )
+        payload["effective_role"] = role
+        return 200, payload
+    finally:
+        cur.close()
+
+
+def _handle_connectors_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_connectors")
+    if denial is not None:
+        return denial
+    credential_ref, credential_error = _extract_connector_credential_ref(body)
+    if credential_error is not None:
+        return 400, credential_error
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
-        name = body.get("name", "Connector")
-        provider_code = body.get("provider_code", body.get("provider", "custom"))
-        connector_type = body.get("connector_type", body.get("type", "api_key_connector"))
-        credential_ref = body.get("credential_ref", f"cred://{enterprise.id}/{uuid.uuid4().hex[:8]}")
-        config_json = body.get("config_json", body.get("config", {}))
+        credential_state = "configured" if credential_ref else "missing"
+        name = str(body.get("name") or "Connector")
+        provider_code = str(body.get("provider_code") or body.get("provider") or "custom")
+        connector_type = str(body.get("connector_type") or body.get("type") or "api_key_connector")
+        definition_id = body.get("definition_id")
+        config_json = _normalize_connector_config_input(body.get("config_json", body.get("config", {})))
+        scopes = _normalize_scopes(body.get("scopes") or ["invoke"])
+        actor_id = _request_actor_id(query, body)
         connector_id = f"conn_{uuid.uuid4().hex[:12]}"
         connector = EnterpriseConnector(
             id=connector_id,
             enterprise_id=enterprise.id,
+            definition_id=str(definition_id) if definition_id else None,
             name=name,
             provider_code=provider_code,
             connector_type=connector_type,
             credential_ref=credential_ref,
+            credential_mask=_mask_connector_secret(credential_ref),
+            credential_state=credential_state,
             rotation_version=0,
             status="draft",
-            config_json=json.dumps(config_json) if isinstance(config_json, dict) else str(config_json),
+            config_json=json.dumps(config_json, ensure_ascii=False),
+            scopes_json=json.dumps(scopes, ensure_ascii=False),
+            last_test_result_json=json.dumps(_default_last_test_result(), ensure_ascii=False),
+            updated_by=actor_id,
         )
         EnterpriseConnectorRepo(cur).create(connector)
+        _record_audit_event(
+            cur,
+            enterprise_id=enterprise.id,
+            event_type="connector_created",
+            target_type="connector",
+            target_id=connector_id,
+            payload={
+                "connector_id": connector_id,
+                "new_status": "draft",
+                "new_credential_ref": credential_ref,
+                "request_id": body.get("idempotency_key") or connector_id,
+            },
+        )
         conn.commit()
         return 201, {
             "connector_id": connector_id,
             "status": "draft",
-            "name": name,
+            "credential_state": credential_state,
+            "updated_at": connector.updated_at or _today_iso(),
+            "effective_role": role,
         }
     except Exception:
         conn.rollback()
@@ -2674,22 +2940,135 @@ def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, di
         cur.close()
 
 
-def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dict]:
+def _handle_connector_patch(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_connectors")
+    if denial is not None:
+        return denial
+    credential_ref, credential_error = _extract_connector_credential_ref(body)
+    if credential_error is not None:
+        return 400, credential_error
+    allowed_fields = {"name", "config", "scopes", "credential_input", "archive", "unarchive"}
+    invalid_fields = sorted(set(body.keys()) - allowed_fields)
+    if invalid_fields:
+        return 400, {"error": "INVALID_FIELD", "message": f"Field '{invalid_fields[0]}' is not allowed for PATCH"}
+    cur = conn.cursor()
+    try:
+        repo = EnterpriseConnectorRepo(cur)
+        connector = repo.get_by_id(connector_id)
+        if connector is None or connector.deleted_at is not None:
+            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        actor_id = _request_actor_id(query, body)
+        previous_status = connector.status
+        previous_credential_ref = connector.credential_ref
+        if "name" in body:
+            connector.name = str(body.get("name") or connector.name)
+        if "config" in body:
+            connector.config_json = json.dumps(_normalize_connector_config_input(body.get("config") or {}), ensure_ascii=False)
+            if connector.status == "online":
+                connector.status = "draft"
+        if "scopes" in body:
+            connector.scopes_json = json.dumps(_normalize_scopes(body.get("scopes")), ensure_ascii=False)
+            if connector.status == "online":
+                connector.status = "draft"
+        if "credential_input" in body:
+            new_ref = credential_ref or ""
+            if new_ref != connector.credential_ref:
+                connector.credential_ref = new_ref
+                connector.credential_mask = _mask_connector_secret(new_ref)
+                connector.rotation_version = int(connector.rotation_version or 0) + 1
+                connector.credential_state = "configured" if new_ref else "missing"
+                connector.status = "draft" if new_ref else "draft"
+        if body.get("archive"):
+            connector.status = "archived"
+        if body.get("unarchive"):
+            connector.status = "draft"
+        connector.updated_by = actor_id
+        repo.update(connector)
+        event_type = "connector_updated"
+        if body.get("archive"):
+            event_type = "connector_archived"
+        elif body.get("unarchive"):
+            event_type = "connector_unarchived"
+        elif previous_credential_ref != connector.credential_ref:
+            event_type = "connector_credential_rotated"
+        new_status = connector.status
+        _record_audit_event(
+            cur,
+            enterprise_id=connector.enterprise_id,
+            event_type=event_type,
+            target_type="connector",
+            target_id=connector.id,
+            payload={
+                "connector_id": connector.id,
+                "old_status": previous_status,
+                "new_status": new_status,
+                "old_credential_ref": previous_credential_ref,
+                "new_credential_ref": connector.credential_ref,
+                "request_id": connector.id,
+            },
+        )
+        conn.commit()
+        return 200, {
+            "connector_id": connector.id,
+            "status": connector.status,
+            "credential_state": connector.credential_state,
+            "rotation_version": connector.rotation_version,
+            "updated_at": connector.updated_at or _today_iso(),
+            "effective_role": role,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def _handle_connector_test(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
+    role, denial = _require_permission(query, body, "manage_connectors")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         repo = EnterpriseConnectorRepo(cur)
         connector = repo.get_by_id(connector_id)
         if connector is None:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        actor_id = _request_actor_id(query, body)
+        previous_status = connector.status
+        new_status, new_credential_state, test_result = _connector_test_outcome(connector, body, actor_id)
+        connector.status = new_status
+        connector.credential_state = new_credential_state
+        connector.last_test_result_json = json.dumps(test_result, ensure_ascii=False)
+        connector.last_validated_at = test_result["checked_at"]
+        connector.updated_by = actor_id
+        repo.update(connector)
         cur.execute(
-            "UPDATE enterprise_connector SET last_validated_at=now() WHERE id=%s",
-            (connector_id,),
+            "UPDATE enterprise_connector SET last_validated_at=%s WHERE id=%s",
+            (test_result["checked_at"], connector_id),
+        )
+        _record_audit_event(
+            cur,
+            enterprise_id=connector.enterprise_id,
+            event_type="connector_tested",
+            target_type="connector",
+            target_id=connector.id,
+            payload={
+                "connector_id": connector.id,
+                "old_status": previous_status,
+                "new_status": new_status,
+                "test_result": test_result["result"],
+                "request_id": connector.id,
+            },
         )
         conn.commit()
         return 200, {
-            "ok": connector.status == "online",
+            "connector_id": connector.id,
+            "result": test_result["result"],
             "status": connector.status,
-            "checked_at": _today_iso(),
+            "last_test_result": test_result,
+            "effective_role": role,
         }
     except Exception:
         conn.rollback()
@@ -2698,9 +3077,33 @@ def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dic
         cur.close()
 
 
-def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connector_status(conn, path: str, connector_id: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_connectors")
+    if denial is not None:
+        return denial
+    cur = conn.cursor()
+    try:
+        connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
+        if connector is None or connector.deleted_at is not None:
+            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        return 200, {
+            "connector_id": connector.id,
+            "status": connector.status,
+            "credential_state": connector.credential_state,
+            "last_test_result": _normalize_last_test_result(connector.last_test_result_json),
+            "updated_at": connector.updated_at,
+            "effective_role": role,
+        }
+    finally:
+        cur.close()
+
+
+def _handle_connector_grants_patch(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_connectors")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -2710,9 +3113,11 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dic
         connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
         if connector is None:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        if connector.status != "online" and body.get("grant"):
+            return 409, {"error": "CONNECTOR_NOT_ONLINE", "message": f"Connector {connector_id} is {connector.status}, must be online"}
         grant = body.get("grant")
         revoke = body.get("revoke")
-        results = {"granted": [], "revoked": [], "errors": []}
+        results = {"granted": [], "revoked": [], "errors": [], "effective_role": role}
         conn.rollback()
         with UnitOfWork(conn) as uow:
             for entry in (grant or []):
@@ -2736,6 +3141,38 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dic
                     results["revoked"].append(binding_id)
                 except ValueError as exc:
                     results["errors"].append({"binding_id": binding_id, "error": str(exc)})
+        audit_cur = conn.cursor()
+        try:
+            for granted in results["granted"]:
+                _record_audit_event(
+                    audit_cur,
+                    enterprise_id=enterprise.id,
+                    event_type="connector_grant_created",
+                    target_type="connector",
+                    target_id=connector_id,
+                    payload={
+                        "connector_id": connector_id,
+                        "employee_id": granted["employee_id"],
+                        "access_mode": next((entry.get("access_mode", "invoke") for entry in (grant or []) if granted["employee_id"] in (entry.get("employee_ids") or [entry.get("employee_id")]) ), "invoke"),
+                        "request_id": granted["binding_id"],
+                    },
+                )
+            for revoked in results["revoked"]:
+                _record_audit_event(
+                    audit_cur,
+                    enterprise_id=enterprise.id,
+                    event_type="connector_grant_revoked",
+                    target_type="connector",
+                    target_id=connector_id,
+                    payload={
+                        "connector_id": connector_id,
+                        "binding_id": revoked,
+                        "request_id": revoked,
+                    },
+                )
+            conn.commit()
+        finally:
+            audit_cur.close()
         return 200, results
     except Exception:
         conn.rollback()
@@ -3077,24 +3514,41 @@ def handle_team_route(
 
     # ── B05 connectors list/create/test/grants ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_list(conn, sub)
+        route_handler = lambda conn: _handle_connectors_list(conn, sub, query)
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_post(conn, sub, body)
+        route_handler = lambda conn: _handle_connectors_post(conn, sub, query, body)
+
+    if route_handler is None:
+        connector_detail = _match_prefix(sub, "/connectors/")
+        if method == "GET" and connector_detail is not None and "/" not in connector_detail:
+            route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id, query)
+
+    if route_handler is None:
+        connector_patch = _match_prefix(sub, "/connectors/")
+        if method == "PATCH" and connector_patch is not None and "/" not in connector_patch:
+            route_handler = lambda conn, matched_connector_id=connector_patch: _handle_connector_patch(conn, sub, matched_connector_id, query, body)
 
     if route_handler is None:
         connector_test = _match_prefix(sub, "/connectors/")
         if method == "POST" and connector_test is not None and connector_test.endswith("/test"):
             connector_id = connector_test[:-len("/test")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id, query, body)
+
+    if route_handler is None:
+        connector_status = _match_prefix(sub, "/connectors/")
+        if method == "GET" and connector_status is not None and connector_status.endswith("/status"):
+            connector_id = connector_status[:-len("/status")]
+            if "/" not in connector_id:
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_status(conn, sub, matched_connector_id, query)
 
     if route_handler is None:
         connector_grants = _match_prefix(sub, "/connectors/")
         if method == "PATCH" and connector_grants is not None and connector_grants.endswith("/grants"):
             connector_id = connector_grants[:-len("/grants")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, body)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, query, body)
 
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees/export"):
         route_handler = lambda conn: _handle_employees_export(conn, query)

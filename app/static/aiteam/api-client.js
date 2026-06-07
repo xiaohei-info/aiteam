@@ -194,8 +194,16 @@ window.aiteam = window.aiteam || {};
       return this.get('/connectors', options);
     },
 
+    getConnector(connectorId, options) {
+      return this.get(`/connectors/${encodeURIComponent(connectorId)}`, options);
+    },
+
     createConnector(body, options) {
       return this.post('/connectors', body, options);
+    },
+
+    updateConnector(connectorId, body, options) {
+      return this.patch(`/connectors/${encodeURIComponent(connectorId)}`, body, options);
     },
 
     testConnector(connectorId, body, options) {
@@ -204,6 +212,10 @@ window.aiteam = window.aiteam || {};
 
     updateConnectorGrants(connectorId, body, options) {
       return this.patch(`/connectors/${encodeURIComponent(connectorId)}/grants`, body, options);
+    },
+
+    getConnectorStatus(connectorId, options) {
+      return this.get(`/connectors/${encodeURIComponent(connectorId)}/status`, options);
     },
 
     getSolutions(options) {

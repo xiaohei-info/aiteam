@@ -474,6 +474,32 @@ def test_revoke_nonexistent_binding_raises(db_conn):
             revoke_connector(uow, "cb_nonexistent")
 
 
+def test_connector_grant_and_revoke_can_be_audited(db_conn):
+    tpl = _fresh_template()
+    profile_name = _uid("cs")
+
+    with UnitOfWork(db_conn) as uow:
+        ent_id = _setup_enterprise(uow)
+        uow.agent_templates().create(tpl)
+        employee_id = recruit_employee(
+            uow, enterprise_id=ent_id, template_id=tpl.id,
+            profile_name=profile_name, display_name="CS Agent 1",
+            requested_by="usr_001",
+        )
+        connector = _fresh_connector(enterprise_id=ent_id, status="online")
+        uow.enterprise_connectors().create(connector)
+        binding_id = grant_connector(
+            uow, enterprise_id=ent_id, employee_id=employee_id,
+            connector_id=connector.id,
+        )
+
+    with UnitOfWork(db_conn) as uow:
+        revoke_connector(uow, binding_id)
+        binding = uow.employee_connector_bindings().get_by_id(binding_id)
+        assert binding is not None
+        assert binding.deleted_at is not None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Additional edge-case tests
 # ═══════════════════════════════════════════════════════════════════

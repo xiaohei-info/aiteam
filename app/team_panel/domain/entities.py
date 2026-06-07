@@ -249,13 +249,18 @@ class MemoryReviewDecision:
 class EnterpriseConnector:
     id: str
     enterprise_id: str
+    definition_id: Optional[str] = None
     name: str = ""
     provider_code: str = ""
     connector_type: str = "api_key_connector"  # oauth_connector | api_key_connector | mcp_server | webhook_target
     credential_ref: str = ""
+    credential_mask: str = "未配置"
+    credential_state: str = "missing"  # missing | configured | rotated | invalid | revoked
     rotation_version: int = 1
     status: str = "draft"  # draft | online | offline | auth_failed | archived
     config_json: str = "{}"
+    scopes_json: str = "[]"
+    last_test_result_json: str = '{"result": "never_tested"}'
     last_validated_at: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""

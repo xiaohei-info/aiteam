@@ -1362,16 +1362,19 @@ class TestConnectorsIntegration:
         assert status == 200, body
         connector = next(item for item in body["connectors"] if item["connector_id"] == connector_id)
         assert connector["credential_ref"] == "cred://vault/slack/ent_test"
-        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "should-mask-in-ui-only"}
+        assert connector["credential_mask"] == "cre****test"
+        assert connector["credential_state"] == "configured"
+        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "****"}
         assert connector["status"] == "online"
         assert connector["health_status"] == "online"
         assert connector["last_test_at"]
         assert connector["grants"] == ["emp_member", "emp_test"]
         assert connector["granted_employee_ids"] == ["emp_member", "emp_test"]
         assert connector["employee_grants"] == [
-            {"employee_id": "emp_member", "access_mode": "invoke", "enabled": True},
-            {"employee_id": "emp_test", "access_mode": "invoke", "enabled": True},
+            {"binding_id": grant_resp["granted"][0]["binding_id"], "employee_id": "emp_member", "employee_display_name": "Member Employee", "access_mode": "invoke", "enabled": True},
+            {"binding_id": grant_resp["granted"][1]["binding_id"], "employee_id": "emp_test", "employee_display_name": "Test Employee", "access_mode": "invoke", "enabled": True},
         ]
+        assert connector["last_test_result"]["result"] in {"never_tested", "passed"}
 
 
 class TestEmployeePatchExpanded:
@@ -1470,3 +1473,194 @@ class TestBatchCReworkPersistence:
         )
         assert status == 200, f"Expected 200, got {status}: {resp}"
         assert len(resp["granted"]) == 2, resp
+
+
+class TestConnectorContractFreeze:
+    def test_connector_create_redacts_secret_config_before_persistence(self, seeded_enterprise, db_conn):
+        raw_secret = "should-never-hit-db"
+        status, create_resp = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {
+                "name": "Persist Safe",
+                "provider_code": "slack",
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_safe"},
+                "config": {
+                    "tenant_hint": "acme",
+                    "bot_secret": raw_secret,
+                    "nested": {"access_token": raw_secret},
+                },
+            },
+        )
+        assert status == 201, create_resp
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute("SELECT config_json::text FROM enterprise_connector WHERE id=%s", (create_resp["connector_id"],))
+            persisted = cur.fetchone()[0]
+        finally:
+            cur.close()
+
+        assert raw_secret not in persisted
+        assert '"bot_secret": "****"' in persisted
+        assert '"access_token": "****"' in persisted
+
+    def test_connector_rejects_secret_bearing_credential_input(self, seeded_enterprise, db_conn):
+        status, body = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {
+                "name": "Bad Credential Input",
+                "provider_code": "slack",
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_test", "api_key": "sk-live-raw"},
+            },
+        )
+        assert status == 400, body
+        assert body["error"] == "INVALID_CREDENTIAL_INPUT"
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute("SELECT COUNT(*) FROM enterprise_connector")
+            assert cur.fetchone()[0] == 0
+        finally:
+            cur.close()
+
+    def test_connectors_list_masks_secret_fields_and_returns_frozen_shape(self, seeded_enterprise):
+        status, create_resp = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {
+                "name": "Refresh Truth",
+                "provider_code": "slack",
+                "type": "oauth_connector",
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_test"},
+                "config": {"tenant_hint": "acme", "bot_secret": "should-never-hit-db"},
+                "scopes": ["invoke", "writeback"],
+            },
+        )
+        assert status == 201, create_resp
+
+        test_status, test_resp = _post(
+            f"/api/team/connectors/{create_resp['connector_id']}/test?role=owner&actor_id=user_1",
+            {"mode": "manual", "dry_run": False, "simulate_result": "passed"},
+        )
+        assert test_status == 200, test_resp
+
+        grant_status, grant_resp = _patch(
+            f"/api/team/connectors/{create_resp['connector_id']}/grants?role=owner&actor_id=user_1",
+            {"grant": [{"employee_ids": ["emp_member", "emp_test"], "access_mode": "invoke"}], "revoke": []},
+        )
+        assert grant_status == 200, grant_resp
+
+        status, body = _get("/api/team/connectors?role=owner")
+        assert status == 200, body
+        connector = next(item for item in body["items"] if item["connector_id"] == create_resp["connector_id"])
+        assert connector["credential_ref"] == "cred://vault/slack/ent_test"
+        assert connector["credential_mask"] == "cre****test"
+        assert connector["credential_state"] == "configured"
+        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "****"}
+        assert connector["status"] == "online"
+        assert connector["scopes"] == ["invoke", "writeback"]
+        assert connector["granted_employee_ids"] == ["emp_member", "emp_test"]
+        assert connector["employee_grants"] == [
+            {"binding_id": grant_resp["granted"][0]["binding_id"], "employee_id": "emp_member", "employee_display_name": "Member Employee", "enabled": True, "access_mode": "invoke"},
+            {"binding_id": grant_resp["granted"][1]["binding_id"], "employee_id": "emp_test", "employee_display_name": "Test Employee", "enabled": True, "access_mode": "invoke"},
+        ]
+        assert connector["last_test_result"]["result"] == "passed"
+        assert connector["last_test_result"]["message"] == "最近一次连接测试通过"
+
+    def test_connector_detail_status_and_patch_follow_frozen_contract(self, seeded_enterprise, db_conn):
+        status, create_resp = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {
+                "name": "Draft Connector",
+                "provider_code": "slack",
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_test"},
+                "config": {"tenant_hint": "acme"},
+                "scopes": ["invoke"],
+            },
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        patch_status, patch_resp = _patch(
+            f"/api/team/connectors/{connector_id}?role=owner&actor_id=user_2",
+            {
+                "config": {"tenant_hint": "beta", "api_secret": "never-hit-db"},
+                "scopes": ["sync"],
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_rotated"},
+            },
+        )
+        assert patch_status == 200, patch_resp
+        assert patch_resp["status"] == "draft"
+        assert patch_resp["credential_state"] == "configured"
+        assert patch_resp["rotation_version"] == 1
+
+        detail_status, detail = _get(f"/api/team/connectors/{connector_id}?role=owner")
+        assert detail_status == 200, detail
+        assert "definition" not in detail or isinstance(detail.get("definition"), dict)
+        assert detail["available_employees"] == [
+            {"employee_id": "emp_test", "display_name": "Test Employee", "status": "active"},
+            {"employee_id": "emp_member", "display_name": "Member Employee", "status": "active"},
+            {"employee_id": "emp_planner", "display_name": "Planner Analyst", "status": "active"},
+        ]
+        assert detail["config"] == {"tenant_hint": "beta", "api_secret": "****"}
+        assert detail["scopes"] == ["sync"]
+        assert detail["credential_ref"] == "cred://vault/slack/ent_rotated"
+        assert detail["credential_mask"] == "cre****ated"
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute("SELECT config_json::text FROM enterprise_connector WHERE id=%s", (connector_id,))
+            persisted = cur.fetchone()[0]
+        finally:
+            cur.close()
+        assert "never-hit-db" not in persisted
+        assert '"api_secret": "****"' in persisted
+
+        status_status, status_body = _get(f"/api/team/connectors/{connector_id}/status?role=owner")
+        assert status_status == 200, status_body
+        assert status_body["status"] == "draft"
+        assert status_body["credential_state"] == "configured"
+        assert status_body["last_test_result"]["result"] == "never_tested"
+
+    def test_connector_permissions_and_non_online_grant_are_rejected(self, seeded_enterprise):
+        create_status, create_resp = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {"name": "Blocked Grant", "provider_code": "test"},
+        )
+        assert create_status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        list_status, list_resp = _get("/api/team/connectors?role=finance_admin")
+        assert list_status == 403, list_resp
+        assert list_resp["error"] == "FORBIDDEN"
+
+        grant_status, grant_resp = _patch(
+            f"/api/team/connectors/{connector_id}/grants?role=owner",
+            {"grant": [{"employee_ids": ["emp_test"], "access_mode": "invoke"}], "revoke": []},
+        )
+        assert grant_status == 409, grant_resp
+        assert grant_resp["error"] == "CONNECTOR_NOT_ONLINE"
+
+    def test_connector_test_updates_auth_failed_and_status_endpoint(self, seeded_enterprise):
+        create_status, create_resp = _post(
+            "/api/team/connectors?role=owner&actor_id=user_1",
+            {
+                "name": "Auth Failure",
+                "provider_code": "slack",
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/ent_auth"},
+            },
+        )
+        assert create_status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        test_status, test_resp = _post(
+            f"/api/team/connectors/{connector_id}/test?role=owner&actor_id=user_9",
+            {"simulate_result": "auth_failed"},
+        )
+        assert test_status == 200, test_resp
+        assert test_resp["status"] == "auth_failed"
+        assert test_resp["last_test_result"]["error_code"] == "CREDENTIAL_INVALID"
+
+        status_status, status_body = _get(f"/api/team/connectors/{connector_id}/status?role=owner")
+        assert status_status == 200, status_body
+        assert status_body["status"] == "auth_failed"
+        assert status_body["last_test_result"]["error_code"] == "CREDENTIAL_INVALID"
