@@ -234,6 +234,17 @@ class TestConversationDetail:
         for key in ("conversation_id", "conversation_type", "status", "created_at"):
             assert key in body, f"Missing {key}: {body}"
 
+    def test_conversation_detail_includes_message_page_and_employee_summary(self, seeded_enterprise):
+        conv_id = seeded_enterprise["conversation_id"]
+        _, body = _get(f"/api/team/conversations/{conv_id}")
+        assert "messages" in body
+        assert body["messages"]["items"] == []
+        assert body["messages"]["next_cursor"] == 0
+        assert body["messages"]["has_more"] is False
+        assert body["employee_summary"]["employee_id"] == seeded_enterprise["employee_id"]
+        assert body["employee_summary"]["role_name"] == "市场分析"
+        assert body["employee_summary"]["usage_summary"]["total_runs"] == 0
+
 
 class TestEmployeeList:
     """S06-T10: GET /api/team/employees."""
@@ -504,6 +515,57 @@ class TestRunsPost:
             assert binding.profile_name == seeded_enterprise["employee_id"]
             assert binding.runtime_session_id == runtime_handle["session_id"]
             assert binding.runtime_session_id is not None
+
+
+class TestRunControls:
+    def test_post_run_retry_replays_original_message_with_new_run(self, seeded_enterprise):
+        status, first = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": "Retry me once"},
+                "idempotency_key": f"run-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert status == 201, first
+
+        status, retry = _post(
+            f"/api/team/runs/{first['run_id']}/retry",
+            {"idempotency_key": f"retry-{uuid.uuid4().hex[:8]}"},
+        )
+        assert status == 201, retry
+        assert retry["run_id"] != first["run_id"]
+        assert retry["conversation_id"] == first["conversation_id"]
+        assert retry["retry_of_run_id"] == first["run_id"]
+        assert retry["runtime_handle"]["kind"] == "session"
+
+    def test_post_run_abort_marks_run_cancelled_and_advances_numeric_cursor(self, seeded_enterprise):
+        status, created = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": "Abort me"},
+                "idempotency_key": f"run-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert status == 201, created
+
+        status, aborted = _post(
+            f"/api/team/runs/{created['run_id']}/abort",
+            {"reason": "User stopped this run"},
+        )
+        assert status == 200, aborted
+        assert aborted["run_id"] == created["run_id"]
+        assert aborted["status"] == "cancelled"
+        assert aborted["aborted"] is True
+        assert aborted["event_cursor"] >= 1
+
+        _, events = _get(f"/api/team/runs/{created['run_id']}/events?cursor=0")
+        assert events["run_status"] == "cancelled"
+        assert events["items"][-1]["event_type"] == "run_cancelled"
+        assert events["items"][-1]["event_cursor"] == aborted["event_cursor"]
 
 
 class TestUploadsPost:

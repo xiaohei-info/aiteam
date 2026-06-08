@@ -9,67 +9,480 @@ window.aiteam = window.aiteam || {};
     return parts.length >= 4 ? decodeURIComponent(parts[3]) : '';
   }
 
-  function messageBubble(role, title, body, extraClass) {
-    return '<article class="aiteam-message aiteam-message--' + role + (extraClass ? ' ' + extraClass : '') + '">' +
-      '<div class="aiteam-message__meta">' + escapeHtml(title) + '</div>' +
+  function formatTime(value) {
+    if (!value) {
+      return '刚刚';
+    }
+    try {
+      var date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return String(value);
+      }
+      return date.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch (_error) {
+      return String(value);
+    }
+  }
+
+  function chip(label, tone) {
+    return '<span class="aiteam-chat-chip' + (tone ? ' aiteam-chat-chip--' + tone : '') + '">' + escapeHtml(label) + '</span>';
+  }
+
+  function renderQuote(quote) {
+    if (!quote || !quote.preview) {
+      return '';
+    }
+    return '<blockquote class="aiteam-quote">引用：' + escapeHtml(quote.preview) + '</blockquote>';
+  }
+
+  function renderAttachmentList(attachments) {
+    if (!Array.isArray(attachments) || !attachments.length) {
+      return '';
+    }
+    return '<div class="aiteam-chat-attachments">' + attachments.map(function (item) {
+      item = item || {};
+      var label = item.name || item.file_name || item.filename || item.url || item.asset_id || '附件';
+      var meta = [item.kind || item.scope, item.mime_type, item.size != null ? (item.size + ' B') : ''].filter(Boolean).join(' · ');
+      var href = item.preview_url || item.url || item.download_url || '';
+      return '<article class="aiteam-chat-attachment">' +
+        '<div class="aiteam-chat-attachment__icon">📎</div>' +
+        '<div class="aiteam-chat-attachment__body"><strong>' + escapeHtml(label) + '</strong>' + (meta ? '<span>' + escapeHtml(meta) + '</span>' : '') + '</div>' +
+        (href ? '<a class="aiteam-chat-attachment__link" href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer">预览</a>' : '<span class="aiteam-chat-attachment__link is-disabled">待桥接</span>') +
+        '</article>';
+    }).join('') + '</div>';
+  }
+
+  function normalizeToolStatus(payload) {
+    if (payload.is_error) {
+      return { label: '失败', tone: 'danger' };
+    }
+    if (payload.done || payload.finished || payload.status === 'done' || payload.status === 'completed' || payload.status === 'succeeded') {
+      return { label: '已完成', tone: 'success' };
+    }
+    if (payload.status === 'running' || payload.status === 'pending' || payload.status === 'started') {
+      return { label: '执行中', tone: 'brand' };
+    }
+    return { label: '已触发', tone: 'neutral' };
+  }
+
+  function summarizeToolArgs(payload) {
+    var raw = payload.arguments || payload.args || payload.input || payload.parameters || payload.params;
+    if (raw == null || raw === '') {
+      return '';
+    }
+    try {
+      return typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+    } catch (_error) {
+      return String(raw);
+    }
+  }
+
+  function summarizeToolResult(payload) {
+    var raw = payload.result || payload.output || payload.response || payload.preview || payload.summary || payload.text || payload.snippet;
+    if (raw == null || raw === '') {
+      return '';
+    }
+    try {
+      return typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+    } catch (_error) {
+      return String(raw);
+    }
+  }
+
+  function renderCitationList(citations) {
+    if (!Array.isArray(citations) || !citations.length) {
+      return '';
+    }
+    return '<div class="aiteam-chat-citations">' + citations.map(function (item) {
+      var label = item.title || item.label || item.url || '引用来源';
+      return '<span class="aiteam-chat-citation">' + escapeHtml(label) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function renderMetadataBlock(metadata) {
+    if (!metadata || typeof metadata !== 'object') {
+      return '';
+    }
+    var bits = [];
+    if (metadata.summary) {
+      bits.push('<div class="aiteam-inline-note">摘要：' + escapeHtml(metadata.summary) + '</div>');
+    }
+    if (metadata.error_summary) {
+      bits.push('<div class="aiteam-inline-note">失败说明：' + escapeHtml(metadata.error_summary) + '</div>');
+    }
+    if (metadata.cancel_summary) {
+      bits.push('<div class="aiteam-inline-note">取消说明：' + escapeHtml(metadata.cancel_summary) + '</div>');
+    }
+    if (metadata.usage && typeof metadata.usage === 'object') {
+      var usage = metadata.usage;
+      var usageBits = [];
+      if (usage.total_tokens != null) usageBits.push('tokens ' + usage.total_tokens);
+      if (usage.prompt_tokens != null) usageBits.push('prompt ' + usage.prompt_tokens);
+      if (usage.completion_tokens != null) usageBits.push('completion ' + usage.completion_tokens);
+      if (usage.cost_cents != null) usageBits.push('¥' + (Number(usage.cost_cents) / 100).toFixed(2));
+      if (usageBits.length) {
+        bits.push('<div class="aiteam-inline-note">用量：' + escapeHtml(usageBits.join(' · ')) + '</div>');
+      }
+    }
+    return bits.join('');
+  }
+
+  function messageTitle(message) {
+    if (!message) {
+      return '消息';
+    }
+    if (message.role === 'user') {
+      return message.sender_id ? ('你 · ' + message.sender_id) : '你';
+    }
+    if (message.role === 'assistant') {
+      return message.sender_id ? ('员工 · ' + message.sender_id) : '员工回复';
+    }
+    return '系统提示';
+  }
+
+  function renderMessageBubble(message, extraClass) {
+    var roleClass = message && message.role ? message.role : 'system';
+    var body = '';
+    body += renderQuote(message && message.quote);
+    body += message && message.text ? '<p>' + escapeHtml(message.text).replace(/\n/g, '<br>') + '</p>' : '<p>暂无正文</p>';
+    body += renderAttachmentList(message && message.attachments);
+    body += renderCitationList(message && message.citations);
+    body += renderMetadataBlock(message && message.metadata);
+    return '<article class="aiteam-message aiteam-message--' + roleClass + (extraClass ? ' ' + extraClass : '') + '">' +
+      '<div class="aiteam-message__meta">' +
+      '<span>' + escapeHtml(messageTitle(message)) + '</span>' +
+      '<span>' + escapeHtml(formatTime(message && message.created_at)) + '</span>' +
+      '</div>' +
       '<div class="aiteam-message__body">' + body + '</div>' +
       '</article>';
   }
 
   function renderToolCall(payload) {
-    var toolName = payload.tool_name || payload.tool || 'tool_call';
-    var summary = payload.preview || payload.summary || '工具调用已触发';
-    return '<div class="aiteam-tool-card"><div class="aiteam-tool-card__title">工具调用 · ' + escapeHtml(toolName) + '</div>' +
-      '<pre class="aiteam-tool-card__body">' + escapeHtml(summary) + '</pre></div>';
+    payload = payload || {};
+    var toolName = payload.tool_name || payload.tool || payload.name || 'tool_call';
+    var status = normalizeToolStatus(payload);
+    var summary = summarizeToolResult(payload) || '工具调用已触发';
+    var args = summarizeToolArgs(payload);
+    var target = payload.target || payload.resource || payload.endpoint || '';
+    return '<article class="aiteam-tool-card">' +
+      '<div class="aiteam-tool-card__header"><div class="aiteam-tool-card__title">工具调用 · ' + escapeHtml(toolName) + '</div>' + chip(status.label, status.tone) + '</div>' +
+      '<div class="aiteam-tool-card__meta">' +
+      '<span>调用源 ' + escapeHtml(payload.source_type || 'timeline') + '</span>' +
+      (target ? '<span>目标 ' + escapeHtml(String(target)) + '</span>' : '') +
+      (payload.duration != null ? '<span>耗时 ' + escapeHtml(String(payload.duration)) + '</span>' : '') +
+      '</div>' +
+      (args ? '<details class="aiteam-tool-card__details"><summary>查看入参</summary><pre class="aiteam-tool-card__body">' + escapeHtml(args) + '</pre></details>' : '') +
+      '<pre class="aiteam-tool-card__body">' + escapeHtml(summary) + '</pre>' +
+      '</article>';
   }
 
-  function quoteBlock(preview) {
+  function renderTimelineNotice(event) {
+    var eventType = event && event.event_type;
+    var labels = {
+      run_created: '运行已创建',
+      routing_decided: '路由已决定',
+      run_started: '开始执行',
+      run_waiting_human: '等待人工输入',
+      heartbeat: '执行心跳',
+      error: '过程告警',
+      run_failed: '运行失败',
+      run_cancelled: '已中止',
+      run_succeeded: '运行完成'
+    };
+    var label = labels[eventType] || '时间线事件';
+    var preview = event && event.preview ? event.preview : '';
     if (!preview) {
-      return '';
+      if (eventType === 'run_failed') preview = '本次运行失败，可重试发送。';
+      else if (eventType === 'run_cancelled') preview = '本次运行已取消。';
+      else if (eventType === 'run_succeeded') preview = '本次回复已完成。';
+      else if (eventType === 'routing_decided') preview = '系统正在决定由哪位员工继续处理。';
+      else if (eventType === 'run_started') preview = '员工已开始处理本轮任务。';
+      else if (eventType === 'run_waiting_human') preview = '当前运行等待人工补充信息后继续。';
+      else if (eventType === 'heartbeat') preview = '运行仍在进行中。';
+      else if (eventType === 'error') preview = '时间线记录到过程异常。';
+      else preview = '已记录过程事件。';
     }
-    return '<blockquote class="aiteam-quote">' + escapeHtml(preview) + '</blockquote>';
+    return '<div class="aiteam-timeline-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(preview) + '</strong></div>';
   }
 
-  function eventToNode(event) {
-    if (!event || !event.event_type) {
-      return '';
+  function historyItem(message, activeId) {
+    var subtitleBits = [];
+    subtitleBits.push(message.role === 'user' ? '用户提问' : (message.role === 'assistant' ? '员工回复' : '系统记录'));
+    if (message.citations && message.citations.length) {
+      subtitleBits.push('引用 ' + message.citations.length);
     }
-    if (event.event_type === 'tool_call') {
-      return messageBubble('assistant', '工具执行', renderToolCall(event.payload || event), 'aiteam-message--tool');
+    if (message.attachments && message.attachments.length) {
+      subtitleBits.push('附件 ' + message.attachments.length);
     }
-    if (event.event_type === 'message_delta') {
-      return messageBubble('assistant', '员工回复', escapeHtml((event.payload && event.payload.text) || event.preview || '正在输出内容...'));
-    }
-    if (event.event_type === 'run_failed') {
-      return messageBubble('system', '运行失败', escapeHtml(event.preview || '本次运行失败，可重试发送。'));
-    }
-    if (event.event_type === 'run_succeeded') {
-      return messageBubble('system', '运行完成', escapeHtml(event.preview || '本次回复已完成。'));
-    }
-    return '<div class="aiteam-timeline-row"><span>' + escapeHtml(event.event_type) + '</span><strong>' + escapeHtml(event.preview || '已记录') + '</strong></div>';
+    return '<button class="aiteam-history-item' + (activeId === message.message_id ? ' is-active' : '') + '" type="button" data-history-message="' + escapeHtml(message.message_id) + '">' +
+      '<span class="aiteam-history-item__title">' + escapeHtml(message.text || '空消息') + '</span>' +
+      '<span class="aiteam-history-item__meta">' + escapeHtml(subtitleBits.join(' · ')) + '</span>' +
+      '<span class="aiteam-history-item__time">' + escapeHtml(formatTime(message.created_at)) + '</span>' +
+      '</button>';
   }
 
-  function appendTimeline(nodes, event) {
-    nodes.push(eventToNode(event));
-    return nodes;
+  function employeeSummaryCard(summary, conversation) {
+    if (!summary) {
+      return '<div class="aiteam-inline-empty">当前会话还没有绑定员工摘要。</div>';
+    }
+    var usage = summary.usage_summary || {};
+    var statusCounts = usage.status_counts || {};
+    var statusKeys = Object.keys(statusCounts);
+    return '<div class="aiteam-chat-summary">' +
+      '<div class="aiteam-chat-summary__hero">' +
+      '<div><p class="aiteam-page__eyebrow">员工摘要</p><h3>' + escapeHtml(summary.display_name || summary.employee_id || '未命名员工') + '</h3>' +
+      '<p class="aiteam-card__sub">' + escapeHtml(summary.role_name || '待配置岗位') + '</p></div>' +
+      '<div class="aiteam-chip-row">' +
+      chip(summary.status || 'idle', 'success') +
+      chip((summary.model_provider || 'provider') + ' / ' + (summary.model_name || '未配置模型'), 'brand') +
+      '</div>' +
+      '</div>' +
+      '<div class="aiteam-chat-stat-grid">' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(usage.total_runs != null ? usage.total_runs : 0) + '</strong><span>累计运行</span></article>' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(statusCounts.succeeded != null ? statusCounts.succeeded : 0) + '</strong><span>成功完成</span></article>' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(conversation.message_count != null ? conversation.message_count : 0) + '</strong><span>历史消息</span></article>' +
+      '</div>' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>业务字段</h3>' +
+      '<div class="aiteam-detail-kv"><span>员工 ID</span><strong>' + escapeHtml(summary.employee_id || '未绑定') + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>岗位</span><strong>' + escapeHtml(summary.role_name || '未配置') + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>模型</span><strong>' + escapeHtml(summary.model_name || '未配置') + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>最近运行</span><strong>' + escapeHtml(formatTime(usage.last_run_at || conversation.created_at)) + '</strong></div>' +
+      '</div>' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>技能</h3>' +
+      (Array.isArray(summary.skills) && summary.skills.length ? '<div class="aiteam-chip-row">' + summary.skills.map(function (item) { return chip(item, 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无技能绑定</div>') +
+      '</div>' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>知识库</h3>' +
+      (Array.isArray(summary.knowledge_bases) && summary.knowledge_bases.length ? '<div class="aiteam-chip-row">' + summary.knowledge_bases.map(function (item) { return chip(item, 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无知识库绑定</div>') +
+      '</div>' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>运行状态分布</h3>' +
+      (statusKeys.length ? '<div class="aiteam-chip-row">' + statusKeys.map(function (key) { return chip(key + ' × ' + statusCounts[key], 'brand'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无运行记录</div>') +
+      '</div>' +
+      '<div class="aiteam-action-row">' +
+      '<a class="aiteam-card-link" href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '"><span class="aiteam-card-link__label">配置员工</span><span class="aiteam-card-link__note">前往企业后台查看技能 / 知识 / 模型</span></a>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function conversationHero(conversation, summary) {
+    var usage = summary && summary.usage_summary ? summary.usage_summary : {};
+    return '<div class="aiteam-chat-hero">' +
+      '<div class="aiteam-chat-hero__identity">' +
+      '<div class="aiteam-chat-hero__avatar">💬</div>' +
+      '<div><h2>' + escapeHtml((summary && summary.display_name) || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id || '单聊会话') + '</h2>' +
+      '<p>' + escapeHtml((summary && summary.role_name) || 'P05 单聊对话') + '</p></div>' +
+      '</div>' +
+      '<div class="aiteam-chip-row">' +
+      chip('display_state · ' + (conversation.display_state || 'idle'), 'brand') +
+      chip('消息 ' + (conversation.message_count != null ? conversation.message_count : 0), 'neutral') +
+      chip('最近运行 ' + (usage.total_runs != null ? usage.total_runs : 0), 'neutral') +
+      '</div>' +
+      '</div>';
+  }
+
+  function buildConversationRequestPath(conversationId, cursor, limit) {
+    return '/conversations/' + encodeURIComponent(conversationId) + '?cursor=' + Number(cursor || 0) + '&limit=' + Number(limit || 100);
   }
 
   function bindChat(container, state) {
-    var form = container.querySelector('[data-chat-form]');
-    var input = container.querySelector('[data-chat-input]');
-    var quoteBtn = container.querySelector('[data-chat-quote]');
-    var retryBtn = container.querySelector('[data-chat-retry]');
-    var abortBtn = container.querySelector('[data-chat-abort]');
-    var attachBtn = container.querySelector('[data-chat-attach]');
-    var statusEl = container.querySelector('[data-chat-status]');
-    var transcript = container.querySelector('[data-chat-transcript]');
+    state.refs = {
+      history: container.querySelector('[data-chat-history]'),
+      transcript: container.querySelector('[data-chat-transcript]'),
+      status: container.querySelector('[data-chat-status]'),
+      quoteBanner: container.querySelector('[data-chat-quote-banner]'),
+      pendingAttachments: container.querySelector('[data-chat-pending-attachments]'),
+      input: container.querySelector('[data-chat-input]'),
+      summary: container.querySelector('[data-chat-summary]'),
+      hero: container.querySelector('[data-chat-hero]'),
+    };
 
     function setStatus(text) {
-      if (statusEl) statusEl.textContent = text || '';
+      if (state.refs.status) {
+        state.refs.status.textContent = text || '';
+      }
+    }
+
+    function renderHistory() {
+      if (!state.refs.history) return;
+      if (!state.messages.length) {
+        state.refs.history.innerHTML = '<div class="aiteam-inline-empty">当前会话还没有历史记录。</div>';
+        return;
+      }
+      state.refs.history.innerHTML = state.messages.map(function (message) {
+        return historyItem(message, state.selectedQuoteId);
+      }).join('');
+    }
+
+    function renderQuoteBanner() {
+      if (!state.refs.quoteBanner) return;
+      if (!state.selectedQuoteId || !state.selectedQuotePreview) {
+        state.refs.quoteBanner.innerHTML = '<span class="aiteam-inline-note">点击左侧历史记录，可将该消息作为引用上下文发送。</span>';
+        return;
+      }
+      state.refs.quoteBanner.innerHTML = '<div class="aiteam-chat-quote-banner__content">' +
+        '<strong>已引用历史：</strong><span>' + escapeHtml(state.selectedQuotePreview) + '</span></div>' +
+        '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-clear-quote>清除引用</button>';
+      var clearBtn = state.refs.quoteBanner.querySelector('[data-chat-clear-quote]');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+          state.selectedQuoteId = '';
+          state.selectedQuotePreview = '';
+          renderHistory();
+          renderQuoteBanner();
+        });
+      }
+    }
+
+    function renderPendingAttachments() {
+      if (!state.refs.pendingAttachments) return;
+      if (!state.pendingAttachments.length) {
+        state.refs.pendingAttachments.innerHTML = '<span class="aiteam-inline-note">当前未登记附件。上传后的 asset_id 会随下一次发送一并提交。</span>';
+        return;
+      }
+      state.refs.pendingAttachments.innerHTML = '<div class="aiteam-chat-pending-attachments__header"><strong>待发送附件</strong><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-clear-attachments>清空附件</button></div>' + renderAttachmentList(state.pendingAttachments);
+      var clearBtn = state.refs.pendingAttachments.querySelector('[data-chat-clear-attachments]');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+          state.pendingAttachments = [];
+          renderPendingAttachments();
+        });
+      }
     }
 
     function renderTranscript() {
-      transcript.innerHTML = state.nodes.join('');
+      if (!state.refs.transcript) return;
+      var html = '';
+      if (!state.messages.length && !state.liveItems.length && !state.streamingAssistantText) {
+        html = '<div class="aiteam-inline-empty">欢迎开始新的私聊任务。可在左侧历史区回看消息、在右侧查看员工摘要。</div>';
+      } else {
+        html += state.messages.map(function (message) {
+          return renderMessageBubble(message);
+        }).join('');
+        html += state.liveItems.map(function (item) {
+          if (item.kind === 'tool_call') {
+            return renderToolCall(item.payload);
+          }
+          return renderTimelineNotice(item.payload || item);
+        }).join('');
+        if (state.streamingAssistantText) {
+          html += renderMessageBubble({
+            role: 'assistant',
+            sender_id: state.employeeId,
+            created_at: new Date().toISOString(),
+            text: state.streamingAssistantText,
+            quote: null,
+            attachments: [],
+            citations: [],
+            metadata: {},
+          }, 'aiteam-message--streaming');
+        }
+      }
+      state.refs.transcript.innerHTML = html;
+      state.refs.transcript.scrollTop = state.refs.transcript.scrollHeight;
+    }
+
+    function renderSummary() {
+      if (!state.refs.summary) return;
+      state.refs.summary.innerHTML = employeeSummaryCard(state.employeeSummary, state.conversation);
+    }
+
+    function renderHero() {
+      if (!state.refs.hero) return;
+      state.refs.hero.innerHTML = conversationHero(state.conversation, state.employeeSummary);
+    }
+
+    function renderAll() {
+      renderHero();
+      renderHistory();
+      renderQuoteBanner();
+      renderPendingAttachments();
+      renderTranscript();
+      renderSummary();
+      setStatus(state.statusText || '');
+    }
+
+    function normalizeConversation(data) {
+      var conversation = data || {};
+      state.conversation = conversation;
+      state.employeeSummary = conversation.employee_summary || null;
+      state.employeeId = (state.employeeSummary && state.employeeSummary.employee_id) || (conversation.employee_ref && conversation.employee_ref.employee_id) || state.employeeId;
+      state.messages = Array.isArray(conversation.messages && conversation.messages.items) ? conversation.messages.items.slice() : [];
+      state.nextCursor = conversation.messages && conversation.messages.next_cursor || 0;
+      state.hasMore = !!(conversation.messages && conversation.messages.has_more);
+      state.cursor = Math.max(state.cursor || 0, conversation.last_message_preview && conversation.last_message_preview.event_cursor || 0);
+      state.runId = conversation.latest_run && conversation.latest_run.run_id || state.runId;
+      state.latestRunStatus = conversation.latest_run && conversation.latest_run.status || state.latestRunStatus || '';
+      if (!state.selectedQuoteId && state.messages.length) {
+        var lastUser = state.messages.slice().reverse().find(function (message) { return message.role === 'user'; });
+        if (lastUser) {
+          state.selectedQuotePreview = '';
+        }
+      }
+      state.lastMessagePreview = conversation.last_message_preview && conversation.last_message_preview.preview || (state.messages.length ? state.messages[state.messages.length - 1].text : '');
+    }
+
+    function reloadConversation(cursor, limit) {
+      ns.api.get(buildConversationRequestPath(state.conversationId, cursor || 0, limit || 100)).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '刷新会话失败');
+          return;
+        }
+        state.liveItems = [];
+        state.streamingAssistantText = '';
+        normalizeConversation(result.data || {});
+        state.statusText = '已同步最新历史与员工摘要。';
+        renderAll();
+      });
+    }
+
+    function applyTimelineEvent(event) {
+      if (!event || !event.event_type) {
+        return;
+      }
+      state.cursor = Math.max(state.cursor || 0, Number(event.event_cursor) || 0);
+      state.latestEventType = event.event_type;
+      if (event.event_type === 'message_delta') {
+        var text = (event.payload && event.payload.text) || event.preview || '';
+        state.streamingAssistantText = (state.streamingAssistantText || '') + text;
+        state.hasLiveDelta = !!state.streamingAssistantText;
+        state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });
+        state.statusText = '正在生成回复...';
+      } else if (event.event_type === 'tool_call') {
+        state.liveItems.push({ kind: 'tool_call', payload: event.payload || event });
+        state.statusText = '员工正在调用工具处理任务...';
+      } else if (event.event_type === 'routing_decided') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = '系统已决定路由，正在继续执行...';
+      } else if (event.event_type === 'run_started') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = state.hasLiveDelta ? '继续接收回复中...' : '员工已开始处理本轮任务。';
+      } else if (event.event_type === 'run_waiting_human') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = '当前运行等待人工补充信息。';
+      } else if (event.event_type === 'heartbeat') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = state.hasLiveDelta ? '仍在持续生成回复...' : '运行仍在进行中。';
+      } else if (event.event_type === 'run_succeeded' || event.event_type === 'run_failed' || event.event_type === 'run_cancelled') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = event.event_type === 'run_failed' ? '本次运行失败，可重试发送。' : (event.event_type === 'run_cancelled' ? '本次运行已取消，正在同步历史记录。' : '回复完成，正在同步历史记录。');
+        renderAll();
+        reloadConversation(0, 100);
+        return;
+      } else if (event.event_type === 'error') {
+        state.liveItems.push({ kind: 'notice', payload: event });
+        state.statusText = '时间线记录到过程异常，正在等待后续状态。';
+      } else {
+        state.liveItems.push({ kind: 'notice', payload: event });
+      }
+      renderAll();
     }
 
     function syncRun(runId, initialCursor) {
@@ -78,13 +491,29 @@ window.aiteam = window.aiteam || {};
       }
       state.runId = runId;
       state.cursor = Number(initialCursor) || state.cursor || 0;
-      setStatus('queued / 正在唤起员工...');
+      state.liveItems = [];
+      state.streamingAssistantText = '';
+      state.hasLiveDelta = false;
+      state.latestEventType = '';
+      state.statusText = 'queued / 正在唤起员工...';
+      renderAll();
       ns.timeline.connect(runId, state.cursor, function (event) {
-        appendTimeline(state.nodes, event || {});
-        state.cursor = ns.timeline.getCurrentCursor();
-        renderTranscript();
-        if (event && (event.event_type === 'run_succeeded' || event.event_type === 'run_failed')) {
-          setStatus(event.event_type === 'run_failed' ? '本次运行失败，可使用“重试发送”。' : '回复完成。');
+        applyTimelineEvent(event || {});
+      }, {
+        onReconnect: function (resumeCursor) {
+          state.statusText = 'SSE 连接中断，正在从 cursor ' + Number(resumeCursor || state.cursor || 0) + ' 补拉...';
+          state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });
+          state.liveItems.push({ kind: 'recovery', payload: { event_type: 'heartbeat', preview: '网络抖动后已触发自动补拉，过程记录会从中断 cursor 继续回放。' } });
+          renderAll();
+        },
+        onOpen: function (resumeCursor) {
+          if (!state.runId) {
+            return;
+          }
+          if ((Number(resumeCursor) || 0) > 0) {
+            state.statusText = state.hasLiveDelta ? '已恢复流式连接，继续接收回复...' : '已恢复时间线连接，继续同步过程...';
+            renderAll();
+          }
         }
       });
       ns.api.getRunEvents(runId, state.cursor, 100).then(function (result) {
@@ -92,33 +521,119 @@ window.aiteam = window.aiteam || {};
           return;
         }
         result.data.items.forEach(function (event) {
-          appendTimeline(state.nodes, event);
-          state.cursor = Math.max(state.cursor, Number(event.event_cursor) || 0);
+          applyTimelineEvent(event);
         });
-        renderTranscript();
       });
     }
 
     function createRun(messageText) {
       state.lastSentText = messageText;
-      state.nodes.push(messageBubble('user', '你', quoteBlock(state.lastMessagePreview) + '<p>' + escapeHtml(messageText) + '</p>'));
-      renderTranscript();
-      setStatus('创建运行中...');
-      ns.api.createRun({
+      state.statusText = '创建运行中...';
+      renderAll();
+      var body = {
         employee_id: state.employeeId,
         conversation_id: state.conversationId,
-        message_text: messageText,
-        idempotency_key: 'chat-' + state.conversationId + '-' + messageText,
-      }).then(function (result) {
+        message: {
+          text: messageText,
+        },
+        idempotency_key: 'chat-' + state.conversationId + '-' + Date.now(),
+      };
+      if (state.selectedQuoteId) {
+        body.message.quote_message_id = state.selectedQuoteId;
+      }
+      if (state.pendingAttachments.length) {
+        body.message.attachments = state.pendingAttachments.map(function (item) {
+          return {
+            asset_id: item.asset_id,
+            name: item.name,
+            mime_type: item.mime_type,
+            size: item.size,
+            preview_url: item.preview_url,
+          };
+        });
+      }
+      ns.api.createRun(body).then(function (result) {
         if (!result.ok) {
-          state.nodes.push(messageBubble('system', '发送失败', escapeHtml(result.error || '消息发送失败，可重试。')));
-          renderTranscript();
-          setStatus('发送失败，可重试发送。');
+          state.liveItems.push({ kind: 'notice', payload: { event_type: 'run_failed', preview: result.error || '消息发送失败，可重试。' } });
+          state.statusText = '发送失败，可重试发送。';
+          renderAll();
           return;
         }
+        reloadConversation(0, 100);
         syncRun(result.data && result.data.run_id, state.cursor);
+        state.selectedQuoteId = '';
+        state.selectedQuotePreview = '';
+        state.pendingAttachments = [];
+        renderQuoteBanner();
+        renderPendingAttachments();
+        renderHistory();
       });
     }
+
+    function retryLatestRun() {
+      if (!state.runId) {
+        if (!state.lastSentText) {
+          setStatus('暂无可重试的上一条消息。');
+          return;
+        }
+        createRun(state.lastSentText);
+        return;
+      }
+      state.statusText = '正在重试上一轮运行...';
+      renderAll();
+      ns.api.retryRun(state.runId, {
+        idempotency_key: 'retry-' + state.conversationId + '-' + Date.now(),
+      }).then(function (result) {
+        if (!result.ok) {
+          state.statusText = result.error || '重试失败。';
+          renderAll();
+          return;
+        }
+        state.liveItems = [];
+        state.streamingAssistantText = '';
+        state.statusText = '已创建重试运行，正在同步时间线...';
+        renderAll();
+        reloadConversation(0, 100);
+        syncRun(result.data && result.data.run_id, 0);
+      });
+    }
+
+    function abortActiveRun() {
+      if (!state.runId) {
+        setStatus('当前没有可中止的运行。');
+        return;
+      }
+      state.statusText = '正在提交中止请求...';
+      renderAll();
+      ns.api.abortRun(state.runId, {
+        reason: '用户从单聊页主动停止本轮',
+      }).then(function (result) {
+        if (!result.ok) {
+          state.statusText = result.error || '中止失败。';
+          renderAll();
+          return;
+        }
+        ns.timeline.disconnect();
+        state.statusText = result.data && result.data.already_terminal ? '当前运行已结束，无需重复中止。' : '已提交中止请求，正在刷新会话。';
+        state.liveItems.push({
+          kind: 'notice',
+          payload: {
+            event_type: 'run_cancelled',
+            preview: (result.data && result.data.status === 'cancelled') ? '本轮运行已取消。' : '中止请求已接收。',
+          },
+        });
+        renderAll();
+        reloadConversation(0, 100);
+      });
+    }
+
+    var form = container.querySelector('[data-chat-form]');
+    var input = state.refs.input;
+    var quoteBtn = container.querySelector('[data-chat-quote]');
+    var retryBtn = container.querySelector('[data-chat-retry]');
+    var abortBtn = container.querySelector('[data-chat-abort]');
+    var attachBtn = container.querySelector('[data-chat-attach]');
+    var loadMoreBtn = container.querySelector('[data-chat-load-more]');
 
     if (form && input) {
       form.addEventListener('submit', function (event) {
@@ -132,97 +647,136 @@ window.aiteam = window.aiteam || {};
 
     if (quoteBtn && input) {
       quoteBtn.addEventListener('click', function () {
-        var preview = state.lastMessagePreview || '引用上一条会话内容';
-        input.value = '> ' + preview + '\n\n' + input.value;
+        var fallback = state.messages.slice().reverse().find(function (message) {
+          return message.role === 'assistant' || message.role === 'user';
+        });
+        if (!fallback) {
+          setStatus('当前没有可引用的历史消息。');
+          return;
+        }
+        state.selectedQuoteId = fallback.message_id;
+        state.selectedQuotePreview = fallback.text || '';
+        renderHistory();
+        renderQuoteBanner();
         input.focus();
       });
     }
 
     if (retryBtn) {
       retryBtn.addEventListener('click', function () {
-        if (!state.lastSentText) return;
-        createRun(state.lastSentText);
+        retryLatestRun();
       });
     }
 
     if (abortBtn) {
       abortBtn.addEventListener('click', function () {
-        setStatus('当前北向契约未提供取消接口，已停止前端补拉并保留现场。');
-        ns.timeline.disconnect();
+        abortActiveRun();
       });
     }
 
     if (attachBtn) {
       attachBtn.addEventListener('click', function () {
-        setStatus('正在登记附件元数据...');
+        state.statusText = '正在登记附件元数据...';
+        renderAll();
         ns.api.upload({ name: 'meeting-notes.txt', size: 128, mime_type: 'text/plain' }).then(function (result) {
-          setStatus(result.ok ? '附件已登记，可随下一次发送提交。' : (result.error || '附件登记失败。'));
+          if (result.ok && result.data) {
+            state.pendingAttachments = state.pendingAttachments.concat([result.data]);
+            state.statusText = '附件已登记，可随下一次发送提交。';
+          } else {
+            state.statusText = result.error || '附件登记失败。';
+          }
+          renderAll();
         });
       });
+    }
+
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener('click', function () {
+        if (!state.hasMore) {
+          setStatus('没有更多历史记录了。');
+          return;
+        }
+        reloadConversation(state.nextCursor, 100);
+      });
+    }
+
+    if (state.refs.history) {
+      state.refs.history.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-history-message]');
+        if (!button) return;
+        var messageId = button.getAttribute('data-history-message');
+        var matched = state.messages.find(function (item) { return item.message_id === messageId; });
+        if (!matched) return;
+        state.selectedQuoteId = matched.message_id;
+        state.selectedQuotePreview = matched.text || '';
+        renderHistory();
+        renderQuoteBanner();
+        if (input) input.focus();
+      });
+    }
+
+    normalizeConversation(state.conversation);
+    renderAll();
+
+    if (state.runId && state.conversation.display_state && /waiting_reply|streaming|busy|reconnecting/.test(state.conversation.display_state)) {
+      syncRun(state.runId, state.cursor);
     }
   }
 
   function renderChat(container, conversation) {
-    var preview = conversation.last_message_preview && conversation.last_message_preview.preview;
-    var state = {
-      conversationId: conversation.conversation_id,
-      employeeId: conversation.employee_ref && conversation.employee_ref.employee_id,
-      runId: conversation.latest_run && conversation.latest_run.run_id,
-      cursor: conversation.last_message_preview && conversation.last_message_preview.event_cursor || 0,
-      lastMessagePreview: preview || '',
-      lastSentText: '',
-      nodes: [
-        messageBubble('system', '员工欢迎语', '<p>欢迎开始新的私聊任务。</p><div class="aiteam-chip-row"><span class="aiteam-tag">总结知识库</span><span class="aiteam-tag">起草回复</span><span class="aiteam-tag">整理待办</span></div>'),
-      ],
-    };
-    if (preview) {
-      state.nodes.push(messageBubble('assistant', '历史摘要', '<p>' + escapeHtml(preview) + '</p>'));
-    }
-
+    var summary = conversation.employee_summary || {};
+    var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
+    var modelLine = [summary.model_provider, summary.model_name].filter(Boolean).join(' · ');
     container.innerHTML = '<section class="aiteam-page aiteam-page--chat">' +
-      '<div class="aiteam-page__hero"><div><p class="aiteam-page__eyebrow">P05 · 单聊对话</p><h2 class="aiteam-page__title">会话 ' + escapeHtml(conversation.conversation_id) + '</h2>' +
-      '<p class="aiteam-page__desc">通过 Team Panel 会话详情、runs 和 timeline SSE 组合还原单聊体验。</p></div>' +
-      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/admin/employees">配置员工</a></div></div>' +
-      '<div class="aiteam-grid aiteam-grid--chat">' +
-      '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>消息区</h3><span data-chat-status class="aiteam-inline-note">display_state：' + escapeHtml(conversation.display_state || 'idle') + '</span></div>' +
+      '<div class="aiteam-page__hero"><div><p class="aiteam-page__eyebrow">P05 · 单聊对话</p><h2 class="aiteam-page__title">' + escapeHtml(displayName || '单聊会话') + '</h2>' +
+      '<p class="aiteam-page__desc">按 PRD 原型落三栏结构：左侧历史区、中间消息与输入区、右侧员工摘要。数据仅消费 Team Panel 会话详情 / runs / timeline 契约。</p></div>' +
+      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">返回工作台</a></div></div>' +
+      '<div class="aiteam-grid aiteam-grid--chat-3col">' +
+      '<aside class="aiteam-panel aiteam-panel--history">' +
+      '<div class="aiteam-panel__header"><div><h3>历史区</h3><p class="aiteam-inline-note">完整历史回溯与引用入口</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
+      '<div class="aiteam-chat-history-meta">' + chip('状态 ' + (conversation.status || 'active'), 'neutral') + chip('共 ' + (conversation.message_count != null ? conversation.message_count : 0) + ' 条', 'brand') + '</div>' +
+      '<div class="aiteam-chat-history" data-chat-history></div>' +
+      '</aside>' +
+      '<section class="aiteam-panel aiteam-panel--conversation">' +
+      '<div class="aiteam-chat-topbar" data-chat-hero></div>' +
+      '<div class="aiteam-panel__header"><div><h3>消息区</h3><p class="aiteam-inline-note">' + escapeHtml(modelLine || '等待模型配置') + '</p></div><span data-chat-status class="aiteam-inline-note">display_state：' + escapeHtml(conversation.display_state || 'idle') + '</span></div>' +
       '<div class="aiteam-chat-transcript" data-chat-transcript></div>' +
-      '<form class="aiteam-chat-composer" data-chat-form><textarea data-chat-input placeholder="输入要交给员工处理的任务"></textarea><div class="aiteam-action-row">' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-quote>引用历史</button>' +
+      '<form class="aiteam-chat-composer" data-chat-form>' +
+      '<div class="aiteam-chat-quote-banner" data-chat-quote-banner></div>' +
+      '<div class="aiteam-chat-pending-attachments" data-chat-pending-attachments></div>' +
+      '<textarea data-chat-input placeholder="输入要交给员工处理的任务，支持引用左侧历史记录"></textarea>' +
+      '<div class="aiteam-action-row">' +
+      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-quote>引用最新</button>' +
       '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-attach>登记附件</button>' +
       '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-retry>重试发送</button>' +
       '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-abort>停止补拉</button>' +
       '<button class="aiteam-button" type="submit">发送</button>' +
       '</div></form></section>' +
-      '<aside class="aiteam-panel"><div class="aiteam-panel__header"><h3>员工摘要</h3><a href="/admin/employees">后台详情</a></div>' +
-      '<div class="aiteam-detail-kv"><span>员工 ID</span><strong>' + escapeHtml(state.employeeId || '未绑定') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>最新 run</span><strong>' + escapeHtml(state.runId || '暂无') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>消息引用</span><strong>支持一键将历史摘要插入输入框</strong></div>' +
-      '<p class="aiteam-inline-note">当前契约未提供 abort/cancel 北向接口，因此“停止补拉”只会断开前端 SSE 并保留已回放过程。</p>' +
-      '</aside>' +
+      '<aside class="aiteam-panel aiteam-panel--summary"><div class="aiteam-panel__header"><h3>员工摘要</h3><a href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '">后台详情</a></div><div data-chat-summary></div></aside>' +
       '</div>' +
       '</section>';
 
-    bindChat(container, state);
-    var transcript = container.querySelector('[data-chat-transcript]');
-    if (transcript) {
-      transcript.innerHTML = state.nodes.join('');
-    }
-    if (state.runId) {
-      ns.api.getRunEvents(state.runId, 0, 100).then(function (result) {
-        if (!result.ok || !result.data || !Array.isArray(result.data.items)) {
-          return;
-        }
-        result.data.items.forEach(function (event) {
-          state.nodes.push(eventToNode(event));
-        });
-        transcript.innerHTML = state.nodes.join('');
-      });
-      ns.timeline.connect(state.runId, state.cursor, function (event) {
-        state.nodes.push(eventToNode(event || {}));
-        state.cursor = ns.timeline.getCurrentCursor();
-        transcript.innerHTML = state.nodes.join('');
-      });
-    }
+    bindChat(container, {
+      conversationId: conversation.conversation_id,
+      employeeId: summary.employee_id || (conversation.employee_ref && conversation.employee_ref.employee_id) || '',
+      employeeSummary: summary,
+      conversation: conversation,
+      runId: conversation.latest_run && conversation.latest_run.run_id,
+      cursor: conversation.last_message_preview && conversation.last_message_preview.event_cursor || 0,
+      nextCursor: conversation.messages && conversation.messages.next_cursor || 0,
+      hasMore: !!(conversation.messages && conversation.messages.has_more),
+      messages: [],
+      liveItems: [],
+      streamingAssistantText: '',
+      selectedQuoteId: '',
+      selectedQuotePreview: '',
+      lastSentText: '',
+      latestRunStatus: conversation.latest_run && conversation.latest_run.status || '',
+      lastMessagePreview: conversation.last_message_preview && conversation.last_message_preview.preview || '',
+      pendingAttachments: [],
+      statusText: '会话已加载。',
+      refs: {},
+    });
   }
 
   ns.pages.appChat = {
@@ -235,7 +789,7 @@ window.aiteam = window.aiteam || {};
         return;
       }
       ns.states.renderLoading(container, '加载单聊会话...');
-      ns.api.getConversation(conversationId).then(function (result) {
+      ns.api.get(buildConversationRequestPath(conversationId, 0, 100)).then(function (result) {
         if (!result.ok) {
           ns.states.handleApiResult(result, container, function () {});
           return;

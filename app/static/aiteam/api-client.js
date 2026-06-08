@@ -165,6 +165,14 @@ window.aiteam = window.aiteam || {};
       return this.post('/runs', body, options);
     },
 
+    retryRun(runId, body, options) {
+      return this.post(`/runs/${encodeURIComponent(runId)}/retry`, body || {}, options);
+    },
+
+    abortRun(runId, body, options) {
+      return this.post(`/runs/${encodeURIComponent(runId)}/abort`, body || {}, options);
+    },
+
     getRunStream(runId, cursor) {
       const value = Number.isFinite(cursor) ? cursor : 0;
       return fetch(`${this.BASE}/runs/${encodeURIComponent(runId)}/stream?cursor=${value}`);

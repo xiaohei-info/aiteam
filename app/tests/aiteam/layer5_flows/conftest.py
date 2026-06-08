@@ -55,6 +55,13 @@ def seeded_private_chat(seeded_enterprise, db_conn):
                 "payload_json": {
                     "summary": "已根据企业知识库整理出入职流程。",
                     "usage": {"total_tokens": 128},
+                    "citations": [
+                        {
+                            "title": "入职手册",
+                            "source_type": "knowledge_document",
+                            "snippet": "第一天请先完成账号激活与制度学习。",
+                        }
+                    ],
                 },
             },
         )

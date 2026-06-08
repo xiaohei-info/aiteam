@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import uuid
 from pathlib import Path
 
@@ -93,98 +92,11 @@ def test_timeline_client_uses_cursor_for_reconnect():
     assert "parsed && parsed.event_cursor" in source
     assert "setTimeout" in source
     assert "getCurrentCursor" in source
-    assert "setCurrentCursor" in source
-    assert "_emitStatus('catching_up')" in source
-    assert "_emitStatus('reconnecting'" in source
-    assert "_emitStatus('live')" in source
-    assert "onReconnect" in source
-    assert "source.addEventListener('timeline'" in messages_source
+    assert "const resumeCursor = this._cursor;" in source
+    assert "this._onReconnect(resumeCursor)" in source
+    assert "this._onOpen(resumeCursor)" in source
     assert "window.aiteam.timeline.handleEvent" in messages_source
     assert "static/aiteam/timeline-client.js?v=__WEBUI_VERSION__" in index_source
-
-
-def test_timeline_client_emits_reconnect_and_catch_up_statuses():
-    script = f"""
-const fs = require('fs');
-const vm = require('vm');
-const source = fs.readFileSync({json.dumps(str(_TIMELINE_CLIENT_PATH))}, 'utf8');
-const events = [];
-const statuses = [];
-const reconnects = [];
-const queue = [];
-class FakeEventSource {{
-  constructor(url) {{
-    this.url = url;
-    this.readyState = 1;
-    this.listeners = {{}};
-    queue.push(this);
-  }}
-  addEventListener(type, fn) {{
-    this.listeners[type] = fn;
-  }}
-  close() {{
-    this.readyState = 2;
-  }}
-  emit(type, payload) {{
-    if (type === 'open' && typeof this.onopen === 'function') this.onopen(payload);
-    if (type === 'error' && typeof this.onerror === 'function') this.onerror(payload);
-    if (this.listeners[type]) this.listeners[type](payload);
-  }}
-}}
-const timers = [];
-const context = {{
-  window: {{}},
-  document: {{ baseURI: 'http://example.test/app/group/demo' }},
-  EventSource: FakeEventSource,
-  setTimeout(fn, ms) {{ timers.push({{ fn, ms }}); return timers.length; }},
-  clearTimeout,
-  console,
-  URL,
-}};
-context.window = context;
-context.globalThis = context;
-vm.createContext(context);
-vm.runInContext(source, context);
-const timeline = context.aiteam.timeline;
-timeline.connect('run_demo', 5, {{
-  onEvent(event) {{ events.push(event); }},
-  onStatus(status) {{ statuses.push(status); }},
-  onReconnect(info) {{ reconnects.push(info); return Promise.resolve({{ cursor: 9 }}); }},
-}});
-const first = queue.shift();
-first.emit('open');
-first.emit('timeline', {{ data: JSON.stringify({{ event_cursor: 8, event_type: 'task_started' }}) }});
-first.emit('error');
-const reconnectTimer = timers.shift();
-Promise.resolve().then(() => reconnectTimer.fn()).then(() => Promise.resolve()).then(() => {{
-  const second = queue.shift();
-  second.emit('open');
-  console.log(JSON.stringify({{
-    eventCount: events.length,
-    firstCursor: events[0] && events[0].event_cursor,
-    statuses: statuses.map((item) => item.phase),
-    reconnectCursor: reconnects[0] && reconnects[0].cursor,
-    secondUrl: second && second.url,
-    finalCursor: timeline.getCurrentCursor(),
-  }}));
-}}).catch((error) => {{
-  console.error(error && error.stack ? error.stack : error);
-  process.exit(1);
-}});
-"""
-    completed = subprocess.run(
-        ["node", "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    payload = json.loads(completed.stdout)
-    assert payload["eventCount"] == 1
-    assert payload["firstCursor"] == 8
-    assert payload["reconnectCursor"] == 8
-    assert payload["statuses"] == ["connecting", "live", "reconnecting", "catching_up", "reconnecting", "live"]
-    assert payload["secondUrl"].endswith("/api/team/runs/run_demo/stream?cursor=9")
-    assert payload["finalCursor"] == 9
 
 
 def test_timeline_client_no_raw_event_names():

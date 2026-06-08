@@ -96,6 +96,8 @@ def test_api_client_exposes_team_panel_endpoint_helpers() -> None:
         "return this.get(`/group-conversations/${encodeURIComponent(conversationId)}`",
         "return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/messages`",
         "return this.post('/runs'",
+        "return this.post(`/runs/${encodeURIComponent(runId)}/retry`",
+        "return this.post(`/runs/${encodeURIComponent(runId)}/abort`",
         "return fetch(`${this.BASE}/runs/${encodeURIComponent(runId)}/stream?cursor=${value}`)",
         "return this.get(",
         "`/runs/${encodeURIComponent(runId)}/events?cursor=${eventCursor}&limit=${pageLimit}`",

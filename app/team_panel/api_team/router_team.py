@@ -38,6 +38,7 @@ from ..domain.entities import (
     MemoryItem,
     MemoryReviewDecision,
     RecruitmentOrder,
+    RunEvent,
     SolutionApplyRecord,
     TeamRun,
 )
@@ -45,6 +46,7 @@ from ..domain.enums import EmployeeStatus
 from ..repositories.agent_template_repo import AgentTemplateRepo
 from ..repositories.audit_event_repo import AuditEventRepo
 from ..repositories.connector_definition_repo import ConnectorDefinitionRepo
+from ..repositories.conversation_message_repo import ConversationMessageRepo
 from ..repositories.conversation_repo import ConversationRepo
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
 from ..repositories.employee_org_assignment_repo import EmployeeOrgAssignmentRepo
@@ -65,11 +67,9 @@ from ..repositories.knowledge_ingestion_job_repo import KnowledgeIngestionJobRep
 from ..repositories.enterprise_skill_install_repo import EnterpriseSkillInstallRepo
 from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
 from ..repositories.team_run_repo import TeamRunRepo
-from ..repositories.scheduled_job_repo import ScheduledJobRepo
 from ..transactions.uow import UnitOfWork
 from ..application.commands.conversation_service import submit_group_message
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
-from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
 from ..application.policies.permission_service import check_permission
 from ..application.queries.billing_view_service import get_billing_view
 from ..application.queries.employee_admin_view_service import get_employee_admin_view
@@ -102,8 +102,7 @@ _ALLOWED_PATCH_FIELDS = {"display_name", "status", "skills_add", "skills_remove"
                          "config_version", "capabilities_json", "description",
                          "prompt_system", "prompt_behavior_rules_json", "prompt_opening_message",
                          "memory_mode", "memory_provider_code", "memory_retention_days",
-                         "memory_writeback_enabled", "knowledge_base_ids", "connector_ids",
-                         "scheduled_job", "scheduled_job_action"}
+                         "memory_writeback_enabled", "knowledge_base_ids", "connector_ids"}
 _VALID_EMPLOYEE_TRANSITIONS = {
     "active": {"paused", "archived"},
     "paused": {"active"},
@@ -1023,21 +1022,21 @@ def _write_audit_event(
     target_type: str,
     target_id: str,
     payload: dict,
-) -> str:
-    event = AuditEvent(
-        id=f"audit_{uuid.uuid4().hex[:12]}",
-        enterprise_id=enterprise_id,
-        actor_type="user",
-        actor_id=_request_actor_id(query, body),
-        event_type=event_type,
-        target_type=target_type,
-        target_id=target_id,
-        request_id=str(_request_params(query, body).get("request_id") or uuid.uuid4().hex[:12]),
-        payload_json=json.dumps(payload, ensure_ascii=False),
-        created_by=_request_role(query, body),
+) -> None:
+    AuditEventRepo(cur).create(
+        AuditEvent(
+            id=f"audit_{uuid.uuid4().hex[:12]}",
+            enterprise_id=enterprise_id,
+            actor_type="user",
+            actor_id=_request_actor_id(query, body),
+            event_type=event_type,
+            target_type=target_type,
+            target_id=target_id,
+            request_id=str(_request_params(query, body).get("request_id") or uuid.uuid4().hex[:12]),
+            payload_json=json.dumps(payload, ensure_ascii=False),
+            created_by=_request_role(query, body),
+        )
     )
-    AuditEventRepo(cur).create(event)
-    return event.id
 
 
 # ── handler helpers ────────────────────────────────────────────────────────
@@ -1574,23 +1573,242 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
         cur.close()
 
 
+def _serialize_private_history(
+    cur,
+    conversation_id: str,
+    *,
+    cursor: int,
+    limit: int,
+) -> tuple[list[dict], int, int, bool]:
+    message_repo = ConversationMessageRepo(cur)
+    run_repo = TeamRunRepo(cur)
+    event_repo = RunEventRepo(cur)
+
+    persisted_messages = message_repo.list_by_conversation(conversation_id)
+    persisted_by_run: dict[str, list] = {}
+    for msg in persisted_messages:
+        if msg.run_id:
+            persisted_by_run.setdefault(msg.run_id, []).append(msg)
+
+    envelopes: list[dict] = []
+    runs = sorted(run_repo.list_by_conversation(conversation_id), key=lambda item: item.created_at or "")
+    for run in runs:
+        input_payload = _load_payload(run.input_message_json)
+        run_messages = persisted_by_run.get(run.id, [])
+        user_message = next((msg for msg in run_messages if msg.sender_type == "user"), None)
+        user_payload = _load_payload(user_message.message_json) if user_message is not None else input_payload
+        user_text = (
+            (user_message.message_text if user_message is not None else "")
+            or str(input_payload.get("message_text") or "")
+        ).strip()
+        if user_text or user_payload.get("attachments") or _message_quote_id(user_payload):
+            envelopes.append(
+                {
+                    "message_id": user_message.id if user_message is not None else f"msg_{run.id}_user",
+                    "cursor": 0,
+                    "run_id": run.id,
+                    "role": "user",
+                    "sender_type": "user",
+                    "sender_id": user_message.sender_id if user_message is not None else "",
+                    "status": "submitted",
+                    "created_at": (user_message.created_at if user_message is not None else run.created_at) or _today_iso(),
+                    "text": user_text,
+                    "quote": None,
+                    "attachments": _normalize_attachment_refs(user_payload.get("attachments")),
+                    "citations": [],
+                    "metadata": {
+                        key: user_payload[key]
+                        for key in ("quote_message_id", "reference_message_id", "reply_to_message_id")
+                        if user_payload.get(key)
+                    },
+                }
+            )
+
+        terminal_event = event_repo.get_latest_for_run(run.id)
+        assistant_payload = _load_payload(run.result_summary_json)
+        terminal_event_type = None
+        if terminal_event is not None and terminal_event.event_type in {"run_succeeded", "run_failed", "run_cancelled"}:
+            assistant_payload = _load_payload(terminal_event.payload_json) or assistant_payload
+            assistant_preview = terminal_event.preview_text or _run_summary_text(run, assistant_payload)
+            assistant_created_at = terminal_event.event_ts or run.finished_at or run.updated_at or run.created_at or _today_iso()
+            terminal_event_type = terminal_event.event_type
+        else:
+            assistant_preview = _run_summary_text(run, assistant_payload)
+            assistant_created_at = run.finished_at or run.updated_at or run.created_at or _today_iso()
+
+        if assistant_preview:
+            envelopes.append(
+                {
+                    "message_id": f"msg_{run.id}_assistant",
+                    "cursor": 0,
+                    "run_id": run.id,
+                    "role": "assistant" if run.status == "succeeded" else "system",
+                    "sender_type": "employee" if run.status == "succeeded" else "system",
+                    "sender_id": run.entry_employee_id or "",
+                    "status": run.status,
+                    "created_at": assistant_created_at,
+                    "text": assistant_preview,
+                    "quote": None,
+                    "attachments": _normalize_attachment_refs(
+                        assistant_payload.get("attachments") or assistant_payload.get("asset_refs")
+                    ),
+                    "citations": _normalize_citations(
+                        assistant_payload.get("citations") or assistant_payload.get("references")
+                    ),
+                    "metadata": {
+                        key: assistant_payload[key]
+                        for key in ("summary", "error_summary", "cancel_summary", "usage")
+                        if assistant_payload.get(key) is not None
+                    },
+                    "event_type": terminal_event_type,
+                }
+            )
+
+    synthetic_by_id = {item["message_id"]: item for item in envelopes}
+    for item in envelopes:
+        quote_id = _message_quote_id(item.get("metadata") or {})
+        if quote_id:
+            item["quote"] = _resolve_quote_preview(quote_id, synthetic_by_id, message_repo)
+
+    envelopes.sort(key=lambda item: (item.get("created_at") or "", item.get("message_id") or ""))
+    for index, item in enumerate(envelopes, start=1):
+        item["cursor"] = index
+
+    page = [item for item in envelopes if item["cursor"] > cursor][:limit]
+    next_cursor = page[-1]["cursor"] if page else cursor
+    has_more = any(item["cursor"] > next_cursor for item in envelopes)
+    return page, len(envelopes), next_cursor, has_more
+
+
+def _run_summary_text(run: TeamRun, payload: dict) -> str:
+    for key in ("summary", "error_summary", "cancel_summary"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if run.error_message:
+        return run.error_message
+    return ""
+
+
+def _message_quote_id(payload: dict) -> str | None:
+    for key in ("quote_message_id", "reference_message_id", "reply_to_message_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _resolve_quote_preview(message_id: str, synthetic_by_id: dict[str, dict], message_repo: ConversationMessageRepo) -> dict:
+    synthetic = synthetic_by_id.get(message_id)
+    if synthetic is not None:
+        return {
+            "message_id": message_id,
+            "preview": synthetic.get("text") or "",
+        }
+    persisted = message_repo.get_by_id(message_id)
+    if persisted is not None:
+        return {
+            "message_id": message_id,
+            "preview": persisted.message_text or "",
+        }
+    return {
+        "message_id": message_id,
+        "preview": "",
+    }
+
+
+def _normalize_attachment_refs(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _normalize_citations(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    citations: list[dict] = []
+    for item in value:
+        if isinstance(item, dict):
+            citations.append(item)
+        elif item not in (None, ""):
+            citations.append({"title": str(item)})
+    return citations
+
+
+def _build_employee_summary(conn, employee_id: str | None) -> dict | None:
+    if not employee_id:
+        return None
+    conn.rollback()
+    with UnitOfWork(conn) as uow:
+        view = get_employee_admin_view(uow, employee_id)
+    if view is None:
+        return None
+
+    cur = conn.cursor()
+    try:
+        employee = EmployeeRepo(cur).get_by_id(employee_id)
+        enterprise_runs = TeamRunRepo(cur).list_by_enterprise(employee.enterprise_id) if employee is not None else []
+    finally:
+        cur.close()
+
+    employee_runs = [run for run in enterprise_runs if run.entry_employee_id == employee_id]
+    last_run_at = max(
+        (
+            run.finished_at or run.started_at or run.updated_at or run.created_at
+            for run in employee_runs
+            if run.finished_at or run.started_at or run.updated_at or run.created_at
+        ),
+        default=None,
+    )
+    status_counts: dict[str, int] = {}
+    for run in employee_runs:
+        status_counts[run.status] = status_counts.get(run.status, 0) + 1
+
+    return {
+        "employee_id": view.employee_id,
+        "display_name": view.display_name,
+        "role_name": view.role_name,
+        "status": view.status,
+        "model_provider": view.model_provider,
+        "model_name": view.model_name,
+        "skills": [skill["skill_code"] for skill in view.skills if skill.get("enabled", True)],
+        "knowledge_bases": [item["knowledge_base_id"] for item in view.knowledge_bases if item.get("enabled", True)],
+        "usage_summary": {
+            "total_runs": len(employee_runs),
+            "last_run_at": last_run_at,
+            "status_counts": status_counts,
+        },
+    }
+
+
 def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
+        qs = parse_qs(urlparse(path).query)
+        cursor_val = max(0, int(qs.get("cursor", ["0"])[0]))
+        limit_val = max(1, min(100, int(qs.get("limit", ["20"])[0])))
         repo = ConversationRepo(cur)
         conv = repo.get_by_id(conv_id)
         if conv is None:
             return 404, {"error": "CONVERSATION_NOT_FOUND", "message": f"Conversation {conv_id} not found"}
+        employee = EmployeeRepo(cur).get_by_id(conv.entry_employee_id) if conv.entry_employee_id else None
         latest_run = TeamRunRepo(cur).get_by_id(conv.latest_run_id) if conv.latest_run_id else None
         latest_event = RunEventRepo(cur).get_latest_for_run(conv.latest_run_id) if conv.latest_run_id else None
         run_status = latest_run.status if latest_run is not None else None
         has_recent_delta = latest_event is not None and latest_event.event_type == "message_delta"
+        messages, message_count, next_cursor, has_more = _serialize_private_history(
+            cur,
+            conv.id,
+            cursor=cursor_val,
+            limit=limit_val,
+        )
+        employee_summary = _build_employee_summary(conn, conv.entry_employee_id)
         return 200, {
             "conversation_id": conv.id,
             "conversation_type": conv.type,
             "employee_ref": {
                 "employee_id": conv.entry_employee_id,
-                "display_name": "",
+                "display_name": employee.display_name if employee is not None else "",
             } if conv.entry_employee_id else None,
             "status": conv.status,
             "display_state": compute_display_state(conv.status, run_status, has_recent_delta),
@@ -1600,12 +1818,18 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
                 "status": latest_run.status if latest_run is not None else "queued",
                 "started_at": (latest_run.started_at if latest_run is not None else "") or _today_iso(),
             } if conv.latest_run_id else None,
-            "message_count": 0,
+            "message_count": message_count,
             "last_message_preview": {
                 "event_cursor": latest_event.cursor_no if latest_event is not None else 0,
                 "event_ts": (latest_event.event_ts if latest_event is not None else "") or _today_iso(),
                 "preview": conv.last_message_preview or "",
             } if conv.last_message_preview else None,
+            "messages": {
+                "items": messages,
+                "next_cursor": next_cursor,
+                "has_more": has_more,
+            },
+            "employee_summary": employee_summary,
         }
     finally:
         cur.close()
@@ -1661,6 +1885,12 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     message = body.get("message") or {}
     message_text = str(message.get("text") or body.get("message_text") or "").strip()
     idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
+    message_payload = {
+        "attachments": message.get("attachments") or body.get("attachments") or [],
+        "quote_message_id": message.get("quote_message_id") or body.get("quote_message_id"),
+        "reference_message_id": message.get("reference_message_id") or body.get("reference_message_id"),
+        "reply_to_message_id": message.get("reply_to_message_id") or body.get("reply_to_message_id"),
+    }
 
     cur = conn.cursor()
     try:
@@ -1713,6 +1943,7 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
                 employee_id or None,
                 message_text,
                 idempotency_key,
+                message_payload=message_payload,
             )
         return 201, result
     except ValueError as exc:
@@ -1791,6 +2022,142 @@ def _handle_run_events(conn, path: str, run_id: str, query: str) -> tuple[int, d
         }
     finally:
         cur.close()
+
+
+def _handle_run_retry_post(conn, path: str, run_id: str, body: dict | None) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        run = TeamRunRepo(cur).get_by_id(run_id)
+        if run is None:
+            return 404, {"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}
+        if not run.conversation_id:
+            return 409, {"error": "RUN_NOT_RETRYABLE", "message": f"Run {run_id} has no conversation context"}
+
+        message_payload = _load_payload(run.input_message_json)
+        message_text = str(
+            (body or {}).get("message_text")
+            or ((body or {}).get("message") or {}).get("text")
+            or message_payload.get("message_text")
+            or ""
+        ).strip()
+        if not message_text:
+            return 409, {"error": "RUN_NOT_RETRYABLE", "message": f"Run {run_id} has no retryable message"}
+
+        next_idempotency_key = str((body or {}).get("idempotency_key") or uuid.uuid4())
+        message_payload["retry_of_run_id"] = run.id
+        message_payload.setdefault("retry_count", 0)
+        try:
+            message_payload["retry_count"] = int(message_payload.get("retry_count") or 0) + 1
+        except (TypeError, ValueError):
+            message_payload["retry_count"] = 1
+        message_payload["message_text"] = message_text
+    finally:
+        cur.close()
+
+    uow = UnitOfWork(conn)
+    try:
+        conn.rollback()
+        with uow:
+            result = create_run(
+                uow,
+                run.conversation_id,
+                run.entry_employee_id,
+                message_text,
+                next_idempotency_key,
+                message_payload=message_payload,
+            )
+        result["retry_of_run_id"] = run.id
+        return 201, result
+    except ValueError as exc:
+        message = str(exc)
+        if "Conversation" in message and "not found" in message:
+            return 404, {"error": "CONVERSATION_NOT_FOUND", "message": message}
+        if "message.text is required" in message:
+            return 400, {"error": "MISSING_MESSAGE_TEXT", "message": message}
+        return 400, {"error": "INVALID_REQUEST", "message": message}
+
+
+def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        run_repo = TeamRunRepo(cur)
+        run = run_repo.get_by_id(run_id)
+        if run is None:
+            return 404, {"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}
+        if run.is_terminal():
+            return 200, {
+                "run_id": run.id,
+                "status": run.status,
+                "aborted": run.status == "cancelled",
+                "already_terminal": True,
+            }
+    finally:
+        cur.close()
+
+    binding = None
+    next_cursor = 0
+    try:
+        conn.rollback()
+        with UnitOfWork(conn) as uow:
+            run = uow.team_runs().get_by_id(run_id)
+            if run is None:
+                return 404, {"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}
+            if run.is_terminal():
+                return 200, {
+                    "run_id": run.id,
+                    "status": run.status,
+                    "aborted": run.status == "cancelled",
+                    "already_terminal": True,
+                }
+
+            binding = uow.runtime_bindings().get_by_owner("team_run", run_id)
+            next_cursor = uow.run_events().get_max_cursor(run_id) + 1
+            payload = {
+                "cancel_summary": str((body or {}).get("reason") or "Run cancelled by user").strip() or "Run cancelled by user",
+                "cancelled_by": str((body or {}).get("actor_id") or "user").strip() or "user",
+            }
+            event = RunEvent(
+                id=f"evt_{uuid.uuid4().hex[:12]}",
+                enterprise_id=run.enterprise_id,
+                run_id=run.id,
+                cursor_no=next_cursor,
+                event_type="run_cancelled",
+                source_type="session",
+                source_id=(binding.runtime_session_id if binding is not None and binding.runtime_session_id else run.id),
+                employee_id=run.entry_employee_id,
+                event_ts=_today_iso(),
+                preview_text=payload["cancel_summary"],
+                payload_json=json.dumps(payload, ensure_ascii=False),
+            )
+            uow.run_events().create(event)
+            run.cancel()
+            run.result_summary_json = json.dumps(payload, ensure_ascii=False)
+            if not run.finished_at:
+                run.finished_at = event.event_ts
+            uow.team_runs().update_status(run)
+            if run.conversation_id:
+                conv = uow.conversations().get_by_id(run.conversation_id)
+                if conv is not None:
+                    uow.conversations().update_latest_run(
+                        run.conversation_id,
+                        run.id,
+                        None,
+                        payload["cancel_summary"],
+                    )
+            if binding is not None:
+                if next_cursor > binding.event_cursor:
+                    binding.event_cursor = next_cursor
+                binding.mark_synced()
+                uow.runtime_bindings().update_sync(binding)
+
+        return 200, {
+            "run_id": run.id,
+            "status": run.status,
+            "aborted": True,
+            "event_cursor": binding.event_cursor if binding is not None else next_cursor,
+        }
+    except ValueError as exc:
+        return 409, {"error": "RUN_ABORT_CONFLICT", "message": str(exc)}
 
 
 def _handle_org_tree(conn, path: str) -> tuple[int, dict]:
@@ -2282,24 +2649,6 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         template_id = emp.template_id if emp else None
         profile_name = emp.profile_name if emp else ""
         created_at = emp.created_at if emp else _today_iso()
-        audit_events = list(AuditEventRepo(cur).list_by_target("employee", emp_id, limit=20))
-        scheduled_job_ids = {
-            job.get("scheduled_job_id")
-            for job in view.scheduled_jobs
-            if job.get("scheduled_job_id")
-        }
-        enterprise_audits = AuditEventRepo(cur).list_by_enterprise(emp.enterprise_id, limit=200) if emp is not None else []
-        for event in list(audit_events) + list(enterprise_audits):
-            payload = _load_payload(event.payload_json)
-            if event.target_type == "scheduled_job" and payload.get("employee_id") == emp_id and event.target_id:
-                scheduled_job_ids.add(event.target_id)
-            payload_job_id = payload.get("scheduled_job_id") or payload.get("job_id")
-            if payload.get("employee_id") == emp_id and payload_job_id:
-                scheduled_job_ids.add(str(payload_job_id))
-        for scheduled_job_id in sorted(scheduled_job_ids):
-            audit_events.extend(AuditEventRepo(cur).list_by_target("scheduled_job", scheduled_job_id, limit=20))
-        audit_events.sort(key=lambda item: item.created_at or "", reverse=True)
-        audit_events = audit_events[:20]
     finally:
         cur.close()
     return 200, {
@@ -2319,18 +2668,6 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
                 skill["skill_code"] for skill in view.skills if skill.get("enabled", True)
             ],
             "memory_config": view.memory_config,
-            "knowledge": [
-                kb["knowledge_base_id"] for kb in view.knowledge_bases if kb.get("enabled", True)
-            ],
-            "connectors": [
-                {
-                    "connector_id": binding["connector_id"],
-                    "access_mode": binding.get("access_mode", "invoke"),
-                    "enabled": binding.get("enabled", True),
-                }
-                for binding in view.connector_bindings
-                if binding.get("enabled", True)
-            ],
         },
         "connector_bindings": [
             {
@@ -2343,31 +2680,15 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         ],
         "conversation_bindings": [],
         "usage_summary": {
-            "total_runs": view.run_summary.get("total_runs", 0),
-            "total_tokens": view.run_summary.get("total_tokens", 0),
-            "last_run_at": view.run_summary.get("last_run_at"),
+            "total_runs": 0,
+            "total_tokens": 0,
+            "last_run_at": None,
         },
         "model_provider": view.model_provider,
         "model_name": view.model_name,
         "prompt_version": view.prompt_version,
         "prompt_config": view.prompt_config,
         "knowledge_bases": view.knowledge_bases,
-        "bindings_summary": view.bindings_summary,
-        "scheduled_jobs": view.scheduled_jobs,
-        "run_summary": view.run_summary,
-        "recent_audit_events": [
-            {
-                "audit_event_id": event.id,
-                "actor_type": event.actor_type,
-                "actor_id": event.actor_id,
-                "event_type": event.event_type,
-                "request_id": event.request_id,
-                "payload": _load_payload(event.payload_json),
-                "created_at": event.created_at,
-                "created_by": event.created_by,
-            }
-            for event in audit_events
-        ],
         "created_at": created_at,
         "effective_role": role,
     }
@@ -2649,9 +2970,6 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             if emp is None:
                 return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {emp_id} not found"}
 
-            audit_event_ids: list[str] = []
-            previous_status = emp.status
-
             for key in body:
                 if key not in _ALLOWED_PATCH_FIELDS:
                     return 400, {"error": "INVALID_FIELD", "message": f"Field '{key}' is not allowed for PATCH"}
@@ -2685,25 +3003,6 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 except ValueError as exc:
                     return 400, {"error": "INVALID_STATUS_TRANSITION", "message": str(exc)}
 
-                if emp.status != previous_status:
-                    status_event_type = {
-                        "active": "employee.activate",
-                        "paused": "employee.pause",
-                        "archived": "employee.archive",
-                    }.get(emp.status, "employee.status_changed")
-                    audit_event_ids.append(
-                        _write_audit_event(
-                            uow.cur,
-                            enterprise_id=emp.enterprise_id,
-                            query=query,
-                            body=body,
-                            event_type=status_event_type,
-                            target_type="employee",
-                            target_id=emp.id,
-                            payload={"from_status": previous_status, "to_status": emp.status},
-                        )
-                    )
-
             new_display_name = body.get("display_name")
             if new_display_name is not None:
                 emp.display_name = new_display_name
@@ -2733,7 +3032,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 existing_skill_codes = {
                     binding.skill_code
                     for binding in uow.employee_skill_bindings().list_by_employee(emp_id)
-                    if binding.deleted_at is None
+                    if binding.enabled
                 }
                 for skill_code in skills_add:
                     if skill_code in existing_skill_codes:
@@ -2820,177 +3119,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                         )
                     )
 
-            scheduled_job_payload = body.get("scheduled_job")
-            scheduled_job_action = body.get("scheduled_job_action")
-            if scheduled_job_payload is not None or scheduled_job_action is not None:
-                if scheduled_job_payload is not None and not isinstance(scheduled_job_payload, dict):
-                    return 400, {"error": "INVALID_FIELD", "message": "scheduled_job must be an object"}
-                payload = scheduled_job_payload or {}
-                if scheduled_job_action not in (None, "create", "pause", "resume", "archive"):
-                    return 400, {"error": "INVALID_FIELD", "message": "scheduled_job_action is invalid"}
-                target_job_id = str(payload.get("scheduled_job_id") or "").strip()
-                job_repo = ScheduledJobRepo(uow.cur)
-                if scheduled_job_action in ("pause", "resume", "archive"):
-                    if not target_job_id:
-                        return 400, {"error": "INVALID_FIELD", "message": "scheduled_job_id is required for scheduled_job_action"}
-                    job = job_repo.get_by_id(target_job_id)
-                    if job is None or job.employee_id != emp_id:
-                        return 404, {"error": "SCHEDULED_JOB_NOT_FOUND", "message": f"ScheduledJob {target_job_id} not found"}
-                    if scheduled_job_action == "pause":
-                        pause_job(uow, target_job_id)
-                        audit_event_ids.append(
-                            _write_audit_event(
-                                uow.cur,
-                                enterprise_id=emp.enterprise_id,
-                                query=query,
-                                body=body,
-                                event_type="scheduled_job.pause",
-                                target_type="scheduled_job",
-                                target_id=target_job_id,
-                                payload={"employee_id": emp.id, "action": "pause"},
-                            )
-                        )
-                    elif scheduled_job_action == "resume":
-                        resume_job(uow, target_job_id)
-                        audit_event_ids.append(
-                            _write_audit_event(
-                                uow.cur,
-                                enterprise_id=emp.enterprise_id,
-                                query=query,
-                                body=body,
-                                event_type="scheduled_job.resume",
-                                target_type="scheduled_job",
-                                target_id=target_job_id,
-                                payload={"employee_id": emp.id, "action": "resume"},
-                            )
-                        )
-                    else:
-                        if job.status == "archived":
-                            return 400, {"error": "INVALID_STATUS_TRANSITION", "message": "ScheduledJob already archived"}
-                        job.archive()
-                        job_repo.update_status(job)
-                        audit_event_ids.append(
-                            _write_audit_event(
-                                uow.cur,
-                                enterprise_id=emp.enterprise_id,
-                                query=query,
-                                body=body,
-                                event_type="scheduled_job.archive",
-                                target_type="scheduled_job",
-                                target_id=target_job_id,
-                                payload={"employee_id": emp.id, "action": "archive"},
-                            )
-                        )
-                else:
-                    existing_job = job_repo.get_by_id(target_job_id) if target_job_id else None
-                    if existing_job is None:
-                        schedule_expr = str(payload.get("schedule_expr") or "").strip()
-                        name = str(payload.get("name") or "Scheduled Job").strip() or "Scheduled Job"
-                        goal = str(payload.get("goal") or "").strip()
-                        if not schedule_expr:
-                            return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.schedule_expr is required"}
-                        auto_enable = payload.get("status", "enabled") != "draft"
-                        max_failures_value = payload.get("max_consecutive_failures", 3)
-                        try:
-                            max_failures = int(max_failures_value)
-                        except (TypeError, ValueError):
-                            return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.max_consecutive_failures must be an integer"}
-                        create_scheduled_job(
-                            uow,
-                            emp.enterprise_id,
-                            emp_id,
-                            schedule_expr,
-                            {
-                                "name": name,
-                                "goal": goal,
-                                "auto_enable": auto_enable,
-                                "max_consecutive_failures": max_failures,
-                                "notification_policy": payload.get("notification_policy", {}),
-                                "created_by": _request_actor_id(query, body),
-                            },
-                        )
-                        created_job = next(iter(uow.scheduled_jobs().list_by_employee(emp_id)), None)
-                        if created_job is not None:
-                            audit_event_ids.append(
-                                _write_audit_event(
-                                    uow.cur,
-                                    enterprise_id=emp.enterprise_id,
-                                    query=query,
-                                    body=body,
-                                    event_type="scheduled_job.create",
-                                    target_type="scheduled_job",
-                                    target_id=created_job.id,
-                                    payload={
-                                        "employee_id": emp.id,
-                                        "schedule_expr": created_job.schedule_expr,
-                                        "status": created_job.status,
-                                    },
-                                )
-                            )
-                    else:
-                        if existing_job.employee_id != emp_id:
-                            return 404, {"error": "SCHEDULED_JOB_NOT_FOUND", "message": f"ScheduledJob {target_job_id} not found"}
-                        if "name" in payload:
-                            existing_job.name = str(payload.get("name") or existing_job.name)
-                        if "goal" in payload:
-                            existing_job.goal = str(payload.get("goal") or existing_job.goal)
-                        if "schedule_expr" in payload and payload.get("schedule_expr"):
-                            existing_job.schedule_expr = str(payload.get("schedule_expr"))
-                        if "max_consecutive_failures" in payload and payload.get("max_consecutive_failures") is not None:
-                            raw_max_failures = payload.get("max_consecutive_failures")
-                            try:
-                                existing_job.max_consecutive_failures = int(raw_max_failures if raw_max_failures is not None else 0)
-                            except (TypeError, ValueError):
-                                return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.max_consecutive_failures must be an integer"}
-                        if "notification_policy" in payload:
-                            existing_job.notification_policy_json = json.dumps(payload.get("notification_policy") or {}, ensure_ascii=False)
-                        if payload.get("status") == "paused" and existing_job.status == "enabled":
-                            pause_job(uow, existing_job.id)
-                            existing_job = job_repo.get_by_id(existing_job.id)
-                            audit_event_ids.append(
-                                _write_audit_event(
-                                    uow.cur,
-                                    enterprise_id=emp.enterprise_id,
-                                    query=query,
-                                    body=body,
-                                    event_type="scheduled_job.pause",
-                                    target_type="scheduled_job",
-                                    target_id=existing_job.id,
-                                    payload={"employee_id": emp.id, "action": "pause"},
-                                )
-                            )
-                        elif payload.get("status") == "enabled" and existing_job.status == "paused":
-                            resume_job(uow, existing_job.id)
-                            existing_job = job_repo.get_by_id(existing_job.id)
-                            if existing_job is not None:
-                                audit_event_ids.append(
-                                    _write_audit_event(
-                                        uow.cur,
-                                        enterprise_id=emp.enterprise_id,
-                                        query=query,
-                                        body=body,
-                                        event_type="scheduled_job.resume",
-                                        target_type="scheduled_job",
-                                        target_id=existing_job.id,
-                                        payload={"employee_id": emp.id, "action": "resume"},
-                                    )
-                                )
-                        else:
-                            job_repo.update(existing_job)
-                            audit_event_ids.append(
-                                _write_audit_event(
-                                    uow.cur,
-                                    enterprise_id=emp.enterprise_id,
-                                    query=query,
-                                    body=body,
-                                    event_type="scheduled_job.update",
-                                    target_type="scheduled_job",
-                                    target_id=existing_job.id,
-                                    payload={"employee_id": emp.id, "fields": sorted(payload.keys())},
-                                )
-                            )
-
-            audit_event_ids.append(_write_audit_event(
+            _write_audit_event(
                 uow.cur,
                 enterprise_id=emp.enterprise_id,
                 query=query,
@@ -2999,7 +3128,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 target_type="employee",
                 target_id=emp.id,
                 payload={"fields": sorted(body.keys()), "status": emp.status, "display_name": emp.display_name},
-            ))
+            )
 
         response = {
             "employee_id": emp.id,
@@ -3008,8 +3137,6 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             "reprovision_status": None,
             "updated_at": _today_iso(),
             "effective_role": role,
-            "audit_event_id": audit_event_ids[-1] if audit_event_ids else None,
-            "audit_event_ids": audit_event_ids,
         }
         if skills_add or skills_remove:
             response["skills_updated"] = {"added": skills_add or [], "removed": skills_remove or []}
@@ -3096,7 +3223,7 @@ def handle_team_route(
     if route_handler is None:
         conv_id = _match_prefix(sub, "/conversations/")
         if method == "GET" and conv_id is not None and "/" not in conv_id:
-            route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, sub, conversation_id)
+            route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, f"{sub}?{query}" if query else sub, conversation_id)
 
     # ── group-conversations/{id}/messages ──
     if route_handler is None:
@@ -3123,6 +3250,20 @@ def handle_team_route(
         if method == "GET" and run_events is not None and run_events.endswith("/events"):
             run_id = run_events[:-len("/events")]
             route_handler = lambda conn, matched_run_id=run_id: _handle_run_events(conn, sub, matched_run_id, query)
+
+    # ── runs/{id}/retry ──
+    if route_handler is None:
+        run_retry = _match_prefix(sub, "/runs/")
+        if method == "POST" and run_retry is not None and run_retry.endswith("/retry"):
+            run_id = run_retry[:-len("/retry")]
+            route_handler = lambda conn, matched_run_id=run_id: _handle_run_retry_post(conn, sub, matched_run_id, body)
+
+    # ── runs/{id}/abort ──
+    if route_handler is None:
+        run_abort = _match_prefix(sub, "/runs/")
+        if method == "POST" and run_abort is not None and run_abort.endswith("/abort"):
+            run_id = run_abort[:-len("/abort")]
+            route_handler = lambda conn, matched_run_id=run_id: _handle_run_abort_post(conn, sub, matched_run_id, body)
 
     # ── uploads ──
     if route_handler is None and method == "POST" and _match_exact(sub, "/uploads"):
