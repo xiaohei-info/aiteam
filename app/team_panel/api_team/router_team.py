@@ -38,6 +38,7 @@ from ..domain.entities import (
     MemoryItem,
     MemoryReviewDecision,
     RecruitmentOrder,
+    RuntimeBinding,
     SolutionApplyRecord,
     TeamRun,
 )
@@ -68,8 +69,10 @@ from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecision
 from ..repositories.team_run_repo import TeamRunRepo
 from ..repositories.team_task_repo import TeamTaskRepo
 from ..transactions.uow import UnitOfWork
-from ..application.commands.conversation_service import submit_group_message
+from ..application.commands.conversation_service import create_private_conversation, submit_group_message
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
+from ..application.commands.employee_admin_service import activate_employee
+from ..application.commands.recruitment_service import recruit_employee
 from ..application.policies.permission_service import check_permission
 from ..application.queries.billing_view_service import get_billing_view
 from ..application.queries.employee_admin_view_service import get_employee_admin_view
@@ -1516,32 +1519,110 @@ def _handle_office_feed(conn, _path: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
+def _handle_talent_templates(conn, path: str, query: str = "") -> tuple[int, dict]:
     cur = conn.cursor()
     try:
+        qs = parse_qs(query)
+        page = max(1, int(qs.get("page", ["1"])[0]))
+        page_size = min(100, max(1, int(qs.get("page_size", ["20"])[0])))
+        keyword = str(qs.get("keyword", [""])[0] or qs.get("q", [""])[0] or "").strip() or None
+        category = str(qs.get("category", [""])[0] or "").strip() or None
+        tag = str(qs.get("tag", [""])[0] or "").strip() or None
+        sort_by = str(qs.get("sort_by", ["popularity"])[0] or "popularity").strip()
+        sort_order = str(qs.get("sort_order", ["desc"])[0] or "desc").strip()
+
         repo = AgentTemplateRepo(cur)
-        templates = repo.list_all()
-        items = [
-            {
+        templates, total = repo.list_filtered(
+            status="published",
+            category_code=category,
+            keyword=keyword,
+            tag=tag,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+
+        # Get recruit counts per template
+        recruit_counts: dict[str, int] = {}
+        try:
+            cur.execute(
+                "SELECT template_id, COUNT(*) as cnt FROM recruitment_order "
+                "WHERE deleted_at IS NULL GROUP BY template_id"
+            )
+            for row in cur.fetchall():
+                recruit_counts[row[0]] = row[1]
+        except Exception:
+            pass
+
+        # Get enterprise for is_recruited check
+        enterprise_id = None
+        try:
+            enterprises = EnterpriseRepo(cur).list_all()
+            if enterprises:
+                enterprise_id = enterprises[0].id
+        except Exception:
+            pass
+
+        recruited_set: set[str] = set()
+        if enterprise_id:
+            try:
+                cur.execute(
+                    "SELECT DISTINCT template_id FROM recruitment_order "
+                    "WHERE enterprise_id = %s AND deleted_at IS NULL",
+                    (enterprise_id,),
+                )
+                recruited_set = {row[0] for row in cur.fetchall()}
+            except Exception:
+                pass
+
+        items = []
+        for t in templates:
+            prompt_pack = _load_payload(t.prompt_pack_json)
+            default_binding = _load_payload(t.default_binding_json)
+            default_model = _load_payload(t.default_model_json)
+
+            # Extract description from prompt_pack
+            description = (
+                prompt_pack.get("description")
+                or prompt_pack.get("system_prompt", "")[:120]
+                or t.name
+            )
+
+            # Extract tags from prompt_pack or derive from category
+            tags = prompt_pack.get("tags") or []
+            if not isinstance(tags, list):
+                tags = [str(tags)]
+            if not tags and t.category_code:
+                tags = [t.category_code]
+
+            # Extract skills from prompt_pack or default_binding
+            skills = prompt_pack.get("skills") or default_binding.get("skills") or []
+            if not isinstance(skills, list):
+                skills = [str(skills)]
+
+            items.append({
                 "template_id": t.id,
                 "name": t.name,
                 "role": t.role_name,
-                "description": t.name,
-                "default_model_ref": json.loads(t.default_model_json) if t.default_model_json else {},
-                "skills": [],
-                "tags": [t.category_code] if t.category_code else [],
-                "recruit_count": 0,
-                "is_recruited": False,
-            }
-            for t in templates
-        ]
+                "description": description,
+                "default_model_ref": default_model if default_model else {},
+                "skills": skills,
+                "tags": tags,
+                "category": t.category_code,
+                "recruit_count": recruit_counts.get(t.id, 0),
+                "is_recruited": t.id in recruited_set,
+            })
+
         return 200, {
             "items": items,
-            "page": 1,
-            "page_size": 20,
-            "total": len(items),
-            "has_more": False,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": (page * page_size) < total,
         }
+    except ValueError:
+        return 400, {"error": "INVALID_PARAMETER", "message": "Invalid query parameter value"}
     finally:
         cur.close()
 
@@ -1551,76 +1632,268 @@ def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[i
     try:
         repo = AgentTemplateRepo(cur)
         t = repo.get_by_id(template_id)
-        if t is None:
+        if t is None or t.deleted_at is not None or t.status != "published":
             return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
+
+        prompt_pack = _load_payload(t.prompt_pack_json)
+        default_binding = _load_payload(t.default_binding_json)
+        default_model = _load_payload(t.default_model_json)
+
+        # Description
+        description = (
+            prompt_pack.get("description")
+            or prompt_pack.get("system_prompt", "")[:120]
+            or t.name
+        )
+
+        # Tags
+        tags = prompt_pack.get("tags") or []
+        if not isinstance(tags, list):
+            tags = [str(tags)]
+        if not tags and t.category_code:
+            tags = [t.category_code]
+
+        # Skills from prompt_pack or default_binding
+        skills = prompt_pack.get("skills") or default_binding.get("skills") or []
+        if not isinstance(skills, list):
+            skills = [str(skills)]
+
+        # Knowledge bindings
+        knowledge_bindings = (
+            prompt_pack.get("knowledge_bindings")
+            or default_binding.get("knowledge_bindings")
+            or []
+        )
+        if not isinstance(knowledge_bindings, list):
+            knowledge_bindings = []
+
+        # Connector requirements
+        connector_requirements = (
+            prompt_pack.get("connector_requirements")
+            or default_binding.get("connector_requirements")
+            or []
+        )
+        if not isinstance(connector_requirements, list):
+            connector_requirements = []
+
+        # Memory config
+        memory_config = prompt_pack.get("memory_config") or default_binding.get("memory_config") or {
+            "type": "conversation scoped",
+            "max_tokens": 8000,
+        }
+
+        # Recruit count
+        recruit_count = 0
+        active_instances = 0
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM recruitment_order "
+                "WHERE template_id = %s AND deleted_at IS NULL",
+                (t.id,),
+            )
+            recruit_count = cur.fetchone()[0]
+            cur.execute(
+                "SELECT COUNT(*) FROM employee "
+                "WHERE template_id = %s AND status = 'active' AND deleted_at IS NULL",
+                (t.id,),
+            )
+            active_instances = cur.fetchone()[0]
+        except Exception:
+            pass
+
         return 200, {
             "template_id": t.id,
             "name": t.name,
             "category": t.category_code,
-            "description": t.name,
-            "preview_avatar_url": None,
-            "default_skills": [],
-            "default_memory_config": {"type": "conversation scoped", "max_tokens": 8000},
-            "knowledge_bindings": [],
-            "connector_requirements": [],
-            "price_tier": "standard",
-            "usage_stats": {"total_recruits": 0, "active_instances": 0},
+            "description": description,
+            "preview_avatar_url": prompt_pack.get("preview_avatar_url"),
+            "default_skills": skills,
+            "tags": tags,
+            "default_memory_config": memory_config,
+            "knowledge_bindings": knowledge_bindings,
+            "connector_requirements": connector_requirements,
+            "price_tier": prompt_pack.get("price_tier") or "standard",
+            "usage_stats": {
+                "total_recruits": recruit_count,
+                "active_instances": active_instances,
+            },
         }
     finally:
         cur.close()
+
+
+def _find_private_conversation_id(cur, employee_id: str) -> str | None:
+    cur.execute(
+        "SELECT id FROM conversation WHERE type = 'private' AND entry_employee_id = %s "
+        "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+        (employee_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _serialize_recruitment_response(*, order: RecruitmentOrder, employee: Employee, conversation_id: str | None) -> dict:
+    employee_admin_target = f"/admin/employees?employee_id={employee.id}"
+    payload = {
+        "order_id": order.id,
+        "status": order.status,
+        "employee_id": employee.id,
+        "profile_name": employee.profile_name,
+        "conversation_id": conversation_id,
+        "navigation": {
+            "workbench": "/app/workbench",
+            "employee_admin": employee_admin_target,
+        },
+    }
+    if conversation_id:
+        payload["navigation"]["chat"] = f"/app/chat/{conversation_id}"
+    return payload
+
+
+def _next_recruitment_profile_name(cur, enterprise_id: str, enterprise_slug: str, template_id: str, display_name: str) -> str:
+    employee_repo = EmployeeRepo(cur)
+    base = f"{_slug_fragment(enterprise_slug or enterprise_id, 'enterprise')}-{_slug_fragment(template_id, 'template')}-{_slug_fragment(display_name, 'employee')}"
+    candidate = base[:60]
+    suffix = 1
+    while employee_repo.get_by_profile_name(enterprise_id, candidate) is not None:
+        suffix += 1
+        candidate = f"{base[:52]}-{suffix}"[:60]
+    return candidate
 
 
 def _handle_recruitments_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
-    template_id = body.get("template_id", "")
-    display_name = body.get("display_name", "Employee")
-    idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
-    cur = conn.cursor()
-    try:
-        enterprise_repo = EnterpriseRepo(cur)
-        enterprises = enterprise_repo.list_all()
+
+    template_id = str(body.get("template_id") or "").strip()
+    if not template_id:
+        return 400, {"error": "MISSING_TEMPLATE_ID", "message": "template_id is required"}
+
+    display_name = str(body.get("display_name") or "").strip() or "Employee"
+    idempotency_key = str(body.get("idempotency_key") or "").strip() or str(uuid.uuid4())
+    requested_by = str(body.get("requested_by") or body.get("actor_id") or "talent_market").strip() or "talent_market"
+
+    with UnitOfWork(conn) as uow:
+        enterprises = uow.enterprises().list_all()
         if not enterprises:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
         ent = enterprises[0]
-        employee_id = f"emp_{uuid.uuid4().hex[:12]}"
-        profile_name = f"{ent.slug or ent.id}-{display_name.lower().replace(' ', '-')}"[:60]
-        order_id = f"recruit_{uuid.uuid4().hex[:8]}"
-        order = RecruitmentOrder(
-            id=order_id,
+
+        template = uow.agent_templates().get_by_id(template_id)
+        if template is None or template.deleted_at is not None:
+            return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
+        if template.status != "published":
+            return 409, {
+                "error": {
+                    "code": "TEMPLATE_NOT_AVAILABLE",
+                    "message": f"Template {template_id} is not available for recruitment",
+                }
+            }
+
+        existing_order = uow.recruitment_orders().get_by_idempotency_key(ent.id, idempotency_key)
+        if existing_order is not None and existing_order.created_employee_id:
+            existing_employee = uow.employees().get_by_id(existing_order.created_employee_id)
+            if existing_employee is not None:
+                existing_conversation_id = _find_private_conversation_id(uow.cur, existing_employee.id)
+                return 200, _serialize_recruitment_response(
+                    order=existing_order,
+                    employee=existing_employee,
+                    conversation_id=existing_conversation_id,
+                )
+
+        uow.cur.execute(
+            "SELECT id FROM recruitment_order "
+            "WHERE enterprise_id = %s AND template_id = %s AND deleted_at IS NULL "
+            "AND created_at >= (now() - interval '5 minutes') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ent.id, template_id),
+        )
+        if uow.cur.fetchone() is not None:
+            return 429, {
+                "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "同一模板 5 分钟内不可重复招募，请稍后再试。",
+                },
+                "retry_after_seconds": 300,
+            }
+
+        profile_name = _next_recruitment_profile_name(
+            uow.cur,
+            ent.id,
+            ent.slug,
+            template_id,
+            display_name or template.role_name or template.name,
+        )
+        employee_id = recruit_employee(
+            uow,
             enterprise_id=ent.id,
-            template_id=template_id or None,
-            status="succeeded",
-            requested_by="system",
-            created_employee_id=employee_id,
+            template_id=template_id,
+            profile_name=profile_name,
+            display_name=display_name or template.role_name or template.name,
+            requested_by=requested_by,
             idempotency_key=idempotency_key,
         )
-        repo = RecruitmentOrderRepo(cur)
-        repo.create(order)
-        emp = Employee(
-            id=employee_id,
-            enterprise_id=ent.id,
-            template_id=template_id or None,
-            profile_name=profile_name,
-            display_name=display_name,
-            role_name="",
-            status=EmployeeStatus.ACTIVE,
-            created_from="talent_market",
+        employee = uow.employees().get_by_id(employee_id)
+        order = uow.recruitment_orders().get_by_idempotency_key(ent.id, idempotency_key)
+        if employee is None or order is None:
+            raise RuntimeError("recruitment write path failed to persist employee/order")
+
+        employee.provision()
+        employee.updated_by = requested_by
+        uow.employees().update_status(employee)
+
+        order.start_provisioning()
+        order.updated_by = requested_by
+        uow.recruitment_orders().update(order)
+
+        uow.runtime_bindings().create(
+            RuntimeBinding(
+                id=f"rb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=ent.id,
+                owner_type="employee",
+                owner_id=employee.id,
+                profile_name=employee.profile_name,
+                runtime_kind="profile",
+                sync_status="pending",
+                created_by=requested_by,
+            )
         )
-        emp_repo = EmployeeRepo(cur)
-        emp_repo.create(emp)
-        conn.commit()
-        return 201, {
-            "order_id": order.id,
-            "status": "succeeded",
-            "employee_id": employee_id,
-            "profile_name": profile_name,
-        }
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
+        uow.audit_events().create(
+            AuditEvent(
+                id=f"ae_{uuid.uuid4().hex[:12]}",
+                enterprise_id=ent.id,
+                actor_type="user",
+                actor_id=requested_by,
+                event_type="employee.recruitment_created",
+                target_type="employee",
+                target_id=employee.id,
+                request_id=idempotency_key,
+                payload_json=json.dumps({"template_id": template_id, "recruitment_order_id": order.id}, ensure_ascii=False),
+                created_by=requested_by,
+            )
+        )
+
+        conversation_id = create_private_conversation(uow, ent.id, employee.id, requested_by)
+        activate_employee(uow, employee.id, requested_by)
+        employee = uow.employees().get_by_id(employee.id)
+        if employee is None:
+            raise RuntimeError("recruitment activation lost employee state")
+
+        order.mark_succeeded(employee.id)
+        order.updated_by = requested_by
+        uow.recruitment_orders().update(order)
+
+        binding = uow.runtime_bindings().get_by_owner("employee", employee.id)
+        if binding is not None:
+            binding.mark_synced()
+            binding.updated_by = requested_by
+            uow.runtime_bindings().update_sync(binding)
+
+        return 201, _serialize_recruitment_response(
+            order=order,
+            employee=employee,
+            conversation_id=conversation_id,
+        )
 
 
 def _slug_fragment(value: str, fallback: str) -> str:
@@ -3249,6 +3522,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
 
             if skills_add:
                 # B01 Phase 3 behavior change: reject unauthorized skill additions.
+                existing_skill_codes = {binding.skill_code for binding in uow.employee_skill_bindings().list_by_employee(emp_id)}
                 for skill_code in skills_add:
                     install = uow.enterprise_skill_installs().get_active_by_skill_code(emp.enterprise_id, skill_code)
                     if not install:
@@ -3418,7 +3692,7 @@ def handle_team_route(
 
     # ── talent-market/templates ──
     elif method == "GET" and _match_exact(sub, "/talent-market/templates"):
-        route_handler = lambda conn: _handle_talent_templates(conn, sub)
+        route_handler = lambda conn: _handle_talent_templates(conn, sub, query)
 
     # ── talent-market/templates/{id} ──
     else:

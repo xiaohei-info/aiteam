@@ -32,6 +32,20 @@ class RecruitmentOrderRepo:
             return None
         return self._row_to_entity(row)
 
+    def get_by_idempotency_key(self, enterprise_id: str, idempotency_key: str) -> Optional[RecruitmentOrder]:
+        self._cur.execute(
+            "SELECT id, enterprise_id, template_id, status, requested_by, "
+            "created_employee_id, error_code, error_message, idempotency_key, "
+            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "FROM recruitment_order WHERE enterprise_id = %s AND idempotency_key = %s "
+            "AND deleted_at IS NULL",
+            (enterprise_id, idempotency_key),
+        )
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_entity(row)
+
     def list_by_enterprise(self, enterprise_id: str) -> list[RecruitmentOrder]:
         self._cur.execute(
             "SELECT id, enterprise_id, template_id, status, requested_by, "

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import pytest
 
@@ -93,6 +93,48 @@ def _get_raw(parsed_path: str) -> "_FakeHandler":
     parsed = urlparse(f"http://example.com{parsed_path}")
     handle_get(handler, parsed)
     return handler
+
+
+def _insert_template(
+    db_conn,
+    *,
+    template_id: str,
+    name: str,
+    category_code: str,
+    role_name: str,
+    description: str,
+    tags: list[str],
+    skills: list[str],
+) -> None:
+    cur = db_conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) VALUES (%s, %s, %s, %s, 'published', %s::jsonb, %s::jsonb, %s::jsonb, 1, 'system')",
+            (
+                template_id,
+                name,
+                category_code,
+                role_name,
+                json.dumps({"description": description, "tags": tags}, ensure_ascii=False),
+                json.dumps({"provider": "openai", "model": "gpt-4o-mini"}, ensure_ascii=False),
+                json.dumps({"skills": skills}, ensure_ascii=False),
+            ),
+        )
+        db_conn.commit()
+    finally:
+        cur.close()
+
+
+def _insert_recruitment_order(db_conn, *, order_id: str, enterprise_id: str, template_id: str, employee_id: str) -> None:
+    cur = db_conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO recruitment_order (id, enterprise_id, template_id, status, requested_by, created_employee_id, idempotency_key, created_by) VALUES (%s, %s, %s, 'succeeded', 'user_test', %s, %s, 'user_test')",
+            (order_id, enterprise_id, template_id, employee_id, f"ik-{order_id}"),
+        )
+        db_conn.commit()
+    finally:
+        cur.close()
 
 
 # ═══════════════════════════════════════════════════════
@@ -194,6 +236,75 @@ class TestTalentMarketTemplates:
         for key in ("template_id", "name", "role", "skills", "tags"):
             assert key in tpl, f"Missing {key} in template: {tpl}"
 
+    def test_templates_support_category_tag_and_keyword_filters(self, seeded_enterprise, db_conn):
+        _insert_template(
+            db_conn,
+            template_id="tpl_writer",
+            name="Content Writer",
+            category_code="content",
+            role_name="内容策划",
+            description="擅长长文撰写与改写",
+            tags=["写作", "内容"],
+            skills=["writing", "editing"],
+        )
+
+        status, body = _get("/api/team/talent-market/templates?category=marketing&tag=%E8%90%A5%E9%94%80&q=slides")
+        assert status == 200, body
+        assert [item["template_id"] for item in body["items"]] == [seeded_enterprise["template_id"]]
+
+    def test_templates_support_popularity_sort_and_pagination(self, seeded_enterprise, db_conn):
+        _insert_template(
+            db_conn,
+            template_id="tpl_low",
+            name="Junior Analyst",
+            category_code="marketing",
+            role_name="增长执行",
+            description="擅长数据整理",
+            tags=["营销"],
+            skills=["spreadsheets"],
+        )
+        _insert_template(
+            db_conn,
+            template_id="tpl_high",
+            name="Senior Analyst",
+            category_code="marketing",
+            role_name="增长策略",
+            description="擅长高阶增长策略",
+            tags=["营销", "策略"],
+            skills=["slides", "forecasting"],
+        )
+
+        _insert_recruitment_order(
+            db_conn,
+            order_id="ro_tpl_test_1",
+            enterprise_id=seeded_enterprise["enterprise_id"],
+            template_id=seeded_enterprise["template_id"],
+            employee_id=seeded_enterprise["employee_id"],
+        )
+        _insert_recruitment_order(
+            db_conn,
+            order_id="ro_tpl_high_1",
+            enterprise_id=seeded_enterprise["enterprise_id"],
+            template_id="tpl_high",
+            employee_id="emp_high_1",
+        )
+        _insert_recruitment_order(
+            db_conn,
+            order_id="ro_tpl_high_2",
+            enterprise_id=seeded_enterprise["enterprise_id"],
+            template_id="tpl_high",
+            employee_id="emp_high_2",
+        )
+
+        status, body = _get("/api/team/talent-market/templates?sort_by=popularity&sort_order=desc&page=1&page_size=1")
+        assert status == 200, body
+        assert body["page"] == 1
+        assert body["page_size"] == 1
+        assert body["total"] == 3
+        assert body["has_more"] is True
+        assert [item["template_id"] for item in body["items"]] == ["tpl_high"]
+        assert body["items"][0]["recruit_count"] == 2
+
 
 class TestTalentTemplateDetail:
     """S06-T03: GET /api/team/talent-market/templates/{id}."""
@@ -214,6 +325,28 @@ class TestTalentTemplateDetail:
         for key in ("template_id", "name", "category", "description", "default_skills",
                      "default_memory_config", "price_tier"):
             assert key in body, f"Missing {key} in template detail: {body}"
+
+    def test_template_detail_parses_default_bindings_and_usage_stats(self, seeded_enterprise, db_conn):
+        _insert_recruitment_order(
+            db_conn,
+            order_id="ro_tpl_detail_1",
+            enterprise_id=seeded_enterprise["enterprise_id"],
+            template_id=seeded_enterprise["template_id"],
+            employee_id=seeded_enterprise["employee_id"],
+        )
+
+        status, body = _get(f"/api/team/talent-market/templates/{seeded_enterprise['template_id']}")
+        assert status == 200, body
+        assert body["description"] == "擅长竞品、增长、用户洞察"
+        assert body["preview_avatar_url"] == "https://cdn.example.com/avatars/marketing-analyst.png"
+        assert body["default_skills"] == ["web_search", "slides"]
+        assert body["tags"] == ["营销", "策略"]
+        assert body["default_memory_config"] == {"type": "conversation scoped", "max_tokens": 8000}
+        assert body["knowledge_bindings"] == [{"knowledge_id": "kb_style_guide", "scope": "enterprise"}]
+        assert body["connector_requirements"] == [{"connector_type": "web_search", "required": False}]
+        assert body["price_tier"] == "standard"
+        assert body["usage_stats"]["total_recruits"] == 1
+        assert body["usage_stats"]["active_instances"] >= 1
 
 
 class TestConversationDetail:
@@ -559,6 +692,23 @@ class TestEmployeeList:
         for key in ("employee_id", "display_name", "role_name", "status", "presence"):
             assert key in emp, f"Missing {key} in employee: {emp}"
 
+    def test_recruitment_created_employee_surfaces_in_employee_list(self, seeded_enterprise):
+        status, resp = _post(
+            "/api/team/recruitments",
+            {
+                "template_id": seeded_enterprise["template_id"],
+                "display_name": "List Analyst",
+                "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert status == 201, resp
+        list_status, list_body = _get("/api/team/employees?role=owner")
+        assert list_status == 200, list_body
+        created = next((item for item in list_body["employees"] if item["employee_id"] == resp["employee_id"]), None)
+        assert created is not None, list_body
+        assert created["display_name"] == "List Analyst"
+        assert created["status"] == "active"
+
     def test_finance_admin_cannot_list_employees(self, seeded_enterprise):
         status, body = _get("/api/team/employees?role=finance_admin")
         assert status == 403
@@ -584,6 +734,24 @@ class TestEmployeeDetail:
         for key in ("employee_id", "display_name", "role_name", "status", "presence",
                      "profile_config", "usage_summary", "created_at"):
             assert key in body, f"Missing {key}: {body}"
+
+    def test_recruitment_created_employee_detail_inherits_template_defaults(self, seeded_enterprise):
+        status, resp = _post(
+            "/api/team/recruitments",
+            {
+                "template_id": seeded_enterprise["template_id"],
+                "display_name": "Detail Analyst",
+                "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert status == 201, resp
+        detail_status, detail = _get(f"/api/team/employees/{resp['employee_id']}?role=owner")
+        assert detail_status == 200, detail
+        assert detail["display_name"] == "Detail Analyst"
+        assert detail["status"] == "active"
+        assert detail["profile_config"]["profile_name"] == resp["profile_name"]
+        assert detail["model_provider"] == "openai"
+        assert detail["model_name"] == "gpt-4o"
 
 
 class TestGovernanceBillingAndExport:
@@ -670,9 +838,58 @@ class TestRecruitmentsPost:
         tpl_id = seeded_enterprise["template_id"]
         body = {"template_id": tpl_id, "display_name": "New Analyst"}
         _, resp = _post("/api/team/recruitments", body)
-        for key in ("order_id", "status", "employee_id", "profile_name"):
+        for key in ("order_id", "status", "employee_id", "profile_name", "conversation_id", "navigation"):
             assert key in resp, f"Missing {key}: {resp}"
         assert resp["status"] == "succeeded"
+        assert resp["conversation_id"].startswith("conv_")
+        assert resp["navigation"]["workbench"] == "/app/workbench"
+        assert resp["navigation"]["chat"].endswith(resp["conversation_id"])
+        employee_admin_query = parse_qs(urlparse(resp["navigation"]["employee_admin"]).query)
+        assert employee_admin_query.get("employee_id") == [resp["employee_id"]]
+
+    def test_recruitment_is_idempotent_for_same_enterprise_key(self, seeded_enterprise):
+        tpl_id = seeded_enterprise["template_id"]
+        body = {
+            "template_id": tpl_id,
+            "display_name": "Repeat Analyst",
+            "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}",
+        }
+        first_status, first_resp = _post("/api/team/recruitments", body)
+        second_status, second_resp = _post("/api/team/recruitments", body)
+        assert first_status == 201, first_resp
+        assert second_status == 200, second_resp
+        assert second_resp["employee_id"] == first_resp["employee_id"]
+        assert second_resp["conversation_id"] == first_resp["conversation_id"]
+        assert second_resp["order_id"] == first_resp["order_id"]
+
+    def test_recruitment_rate_limits_same_template_within_five_minutes(self, seeded_enterprise):
+        tpl_id = seeded_enterprise["template_id"]
+        first_status, first_resp = _post(
+            "/api/team/recruitments",
+            {"template_id": tpl_id, "display_name": "Fast Analyst", "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}"},
+        )
+        assert first_status == 201, first_resp
+        second_status, second_resp = _post(
+            "/api/team/recruitments",
+            {"template_id": tpl_id, "display_name": "Fast Analyst 2", "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}"},
+        )
+        assert second_status == 429, second_resp
+        assert second_resp["error"]["code"] == "RATE_LIMITED"
+        assert second_resp["retry_after_seconds"] == 300
+
+    def test_recruitment_rejects_unpublished_template(self, seeded_enterprise, db_conn):
+        cur = db_conn.cursor()
+        try:
+            cur.execute("UPDATE agent_template SET status = 'retired' WHERE id = %s", (seeded_enterprise["template_id"],))
+            db_conn.commit()
+        finally:
+            cur.close()
+        status, resp = _post(
+            "/api/team/recruitments",
+            {"template_id": seeded_enterprise["template_id"], "display_name": "Retired Analyst", "idempotency_key": f"recruit-{uuid.uuid4().hex[:8]}"},
+        )
+        assert status == 409, resp
+        assert resp["error"]["code"] == "TEMPLATE_NOT_AVAILABLE"
 
 
 class TestRunsPost:

@@ -22,7 +22,7 @@ from ...domain.enums import CreatedFrom, EmployeeStatus
 def recruit_employee(uow, enterprise_id: str, template_id: str,
                      profile_name: str, display_name: str,
                      *, created_from: str = CreatedFrom.TALENT_MARKET,
-                     requested_by: str = "") -> str:
+                     requested_by: str = "", idempotency_key: str | None = None) -> str:
     """Create a draft Employee from a talent template.
 
     Raises:
@@ -44,11 +44,30 @@ def recruit_employee(uow, enterprise_id: str, template_id: str,
             f"profile_name '{profile_name}' already in use by employee {existing.id}"
         )
 
-    # ── Parse template bindings ────────────────────────────────────
+    # ── Parse template bindings / defaults ──────────────────────────
     try:
         default_bindings = json.loads(template.default_binding_json or "{}")
     except json.JSONDecodeError:
         default_bindings = {}
+    try:
+        default_model = json.loads(template.default_model_json or "{}")
+    except json.JSONDecodeError:
+        default_model = {}
+    try:
+        prompt_pack = json.loads(template.prompt_pack_json or "{}")
+    except json.JSONDecodeError:
+        prompt_pack = {}
+
+    default_model_provider = default_model.get("provider") or ""
+    default_model_name = (
+        default_model.get("model")
+        or default_model.get("model_name")
+        or default_model.get("name")
+        or ""
+    )
+    system_prompt = prompt_pack.get("system_prompt", "")
+    behavior_rules = prompt_pack.get("behavior_rules", {})
+    opening = prompt_pack.get("opening_message")
 
     # ── Create Employee (draft) ────────────────────────────────────
     employee_id = f"emp_{uuid.uuid4().hex[:12]}"
@@ -61,8 +80,10 @@ def recruit_employee(uow, enterprise_id: str, template_id: str,
         role_name=template.role_name,
         status=EmployeeStatus.DRAFT,
         created_from=created_from,
-        model_provider="",
-        model_name="",
+        model_provider=default_model_provider,
+        model_name=default_model_name,
+        avatar_url=prompt_pack.get("preview_avatar_url"),
+        description=prompt_pack.get("description") or template.name,
     )
     uow.employees().create(emp)
 
@@ -75,19 +96,12 @@ def recruit_employee(uow, enterprise_id: str, template_id: str,
         status="pending",
         requested_by=requested_by,
         created_employee_id=employee_id,
-        idempotency_key=f"recruit_{employee_id}",
+        idempotency_key=(idempotency_key or f"recruit_{employee_id}"),
         created_by=requested_by,
     )
     uow.recruitment_orders().create(order)
 
     # ── Create EmployeePrompt ──────────────────────────────────────
-    try:
-        prompt_pack = json.loads(template.prompt_pack_json or "{}")
-    except json.JSONDecodeError:
-        prompt_pack = {}
-    system_prompt = prompt_pack.get("system_prompt", "")
-    behavior_rules = prompt_pack.get("behavior_rules", {})
-    opening = prompt_pack.get("opening_message")
     prompt = EmployeePrompt(
         employee_id=employee_id,
         system_prompt=system_prompt,

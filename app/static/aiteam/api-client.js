@@ -32,6 +32,26 @@ window.aiteam = window.aiteam || {};
     };
   }
 
+  function buildQuerySuffix(query) {
+    if (!query || typeof query !== 'object') {
+      return '';
+    }
+    const params = new URLSearchParams();
+    Object.keys(query).forEach((key) => {
+      const value = query[key];
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item) => params.append(key, String(item)));
+        return;
+      }
+      params.set(key, String(value));
+    });
+    const text = params.toString();
+    return text ? `?${text}` : '';
+  }
+
   ns.api = {
     BASE: '/api/team',
 
@@ -104,6 +124,12 @@ window.aiteam = window.aiteam || {};
     },
 
     getTalentTemplates(options) {
+      const query = options && options.query;
+      if (query) {
+        const requestOptions = { ...options };
+        delete requestOptions.query;
+        return this.get(`/talent-market/templates${buildQuerySuffix(query)}`, requestOptions);
+      }
       return this.get('/talent-market/templates', options);
     },
 

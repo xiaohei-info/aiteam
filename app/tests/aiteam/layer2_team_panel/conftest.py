@@ -7,6 +7,7 @@ Does NOT require the full test server — overrides the root autouse
 test_server fixture to a no-op.
 """
 
+import json
 import os
 
 import pytest
@@ -58,9 +59,25 @@ def clean_tables_with_enterprise(clean_tables, db_conn):
                 "marketing",
                 "市场分析",
                 "published",
-                "{}",
-                '{"provider": "openai", "model": "gpt-4o"}',
-                "{}",
+                json.dumps(
+                    {
+                        "description": "擅长竞品、增长、用户洞察",
+                        "tags": ["营销", "策略"],
+                        "preview_avatar_url": "https://cdn.example.com/avatars/marketing-analyst.png",
+                        "price_tier": "standard",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps({"provider": "openai", "model": "gpt-4o"}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "skills": ["web_search", "slides"],
+                        "knowledge_bindings": [{"knowledge_id": "kb_style_guide", "scope": "enterprise"}],
+                        "connector_requirements": [{"connector_type": "web_search", "required": False}],
+                        "memory_config": {"type": "conversation scoped", "max_tokens": 8000},
+                    },
+                    ensure_ascii=False,
+                ),
                 1,
                 "system",
             ),

@@ -4,6 +4,16 @@ from typing import Optional
 
 from ..domain.entities import AgentTemplate
 
+# Allowed sort columns — maps external sort key → DB column
+_SORT_COLUMN_MAP = {
+    "created_at": "created_at",
+    "name": "name",
+    "popularity": "recruit_count",
+    "recruit_count": "recruit_count",
+}
+_DEFAULT_SORT = "created_at"
+_DEFAULT_SORT_ORDER = "desc"
+
 
 class AgentTemplateRepo:
     def __init__(self, cur):
@@ -58,6 +68,84 @@ class AgentTemplateRepo:
         )
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
+
+    def list_filtered(
+        self,
+        *,
+        status: str | None = None,
+        category_code: str | None = None,
+        keyword: str | None = None,
+        tag: str | None = None,
+        sort_by: str = _DEFAULT_SORT,
+        sort_order: str = _DEFAULT_SORT_ORDER,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[AgentTemplate], int]:
+        """Return filtered + paginated templates.
+
+        Returns (items, total_count).
+        """
+        db_sort = _SORT_COLUMN_MAP.get(sort_by, _DEFAULT_SORT)
+        db_order = "DESC" if sort_order.lower() == "desc" else "ASC"
+        order_by_expr = {
+            "created_at": "t.created_at",
+            "name": "LOWER(t.name)",
+            "recruit_count": "COALESCE(rc.recruit_count, 0)",
+        }[db_sort]
+
+        conditions = ["t.deleted_at IS NULL"]
+        params: list = []
+
+        if status:
+            conditions.append("t.status = %s")
+            params.append(status)
+        if category_code:
+            conditions.append("t.category_code = %s")
+            params.append(category_code)
+        if keyword:
+            kw = f"%{keyword}%"
+            conditions.append(
+                "(t.name ILIKE %s OR t.role_name ILIKE %s "
+                "OR t.category_code ILIKE %s "
+                "OR t.prompt_pack_json::text ILIKE %s "
+                "OR t.default_binding_json::text ILIKE %s)"
+            )
+            params.extend([kw, kw, kw, kw, kw])
+        if tag:
+            conditions.append("(t.category_code = %s OR COALESCE(t.prompt_pack_json->'tags', '[]'::jsonb) ? %s)")
+            params.extend([tag, tag])
+
+        where_clause = " AND ".join(conditions)
+
+        # Count total
+        self._cur.execute(
+            f"SELECT COUNT(*) FROM agent_template t WHERE {where_clause}",
+            params,
+        )
+        total = self._cur.fetchone()[0]
+
+        # Fetch page
+        query_sql = (
+            f"SELECT t.id, t.name, t.category_code, t.role_name, t.status, "
+            f"t.prompt_pack_json, t.default_model_json, t.default_binding_json, "
+            f"t.version_no, t.source_type, t.owner_enterprise_id, "
+            f"t.created_at, t.updated_at, t.created_by, t.updated_by, t.deleted_at "
+            f"FROM agent_template t "
+            f"LEFT JOIN ("
+            f"  SELECT template_id, COUNT(*)::int AS recruit_count "
+            f"  FROM recruitment_order "
+            f"  WHERE deleted_at IS NULL "
+            f"  GROUP BY template_id"
+            f") rc ON rc.template_id = t.id "
+            f"WHERE {where_clause} "
+            f"ORDER BY {order_by_expr} {db_order}, t.created_at DESC "
+            f"LIMIT %s OFFSET %s"
+        )
+        self._cur.execute(query_sql, params + [limit, offset])
+        rows = self._cur.fetchall()
+        items = [self._row_to_entity(r) for r in rows]
+
+        return items, total
 
     def update(self, t: AgentTemplate) -> AgentTemplate:
         self._cur.execute(
