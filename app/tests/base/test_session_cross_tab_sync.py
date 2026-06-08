@@ -60,8 +60,9 @@ def test_long_lived_stream_urls_resolve_against_document_base():
 
 def test_session_url_route_serves_index_and_base_href_handles_session_path():
     assert 'parsed.path.startswith("/session/")' in ROUTES_PY
-    assert "marker='/session/'" in INDEX_HTML
-    assert "path.slice(0,i+1)" in INDEX_HTML
+    assert "sessionMarker='/session/'" in INDEX_HTML
+    assert "routeMatch=path.match(/^(.*?)(\\/(app|admin|system))(?:\\/|$)/)" in INDEX_HTML
+    assert "path.slice(0,sessionIndex+1)" in INDEX_HTML
 
 
 def _evaluate_base_href_for_path(path: str) -> str:
@@ -84,3 +85,10 @@ def test_base_href_resolution_handles_session_urls_under_subpath_mounts():
     assert _evaluate_base_href_for_path("/myapp/session/abc123/extra") == '<base href="https://example.test/myapp/">'
     assert _evaluate_base_href_for_path("/session-tools/session/abc123") == '<base href="https://example.test/session-tools/">'
     assert _evaluate_base_href_for_path("/session-tools/page") == '<base href="https://example.test/session-tools/">'
+    assert _evaluate_base_href_for_path("/app") == '<base href="https://example.test/">'
+    assert _evaluate_base_href_for_path("/app/workbench") == '<base href="https://example.test/">'
+    assert _evaluate_base_href_for_path("/admin/employees") == '<base href="https://example.test/">'
+    assert _evaluate_base_href_for_path("/system/health") == '<base href="https://example.test/">'
+    assert _evaluate_base_href_for_path("/myapp/app/workbench") == '<base href="https://example.test/myapp/">'
+    assert _evaluate_base_href_for_path("/myapp/admin/employees") == '<base href="https://example.test/myapp/">'
+    assert _evaluate_base_href_for_path("/myapp/system/health") == '<base href="https://example.test/myapp/">'
