@@ -902,6 +902,31 @@ body.aiteam-shell-active .aiteam-shell {
   gap: 12px;
 }
 
+.aiteam-drawer__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.aiteam-drawer__summary-card {
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  display: grid;
+  gap: 6px;
+}
+
+.aiteam-drawer__summary-label {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.aiteam-drawer__summary-value {
+  color: #e2e8f0;
+  font-size: 20px;
+}
+
 .aiteam-drawer__binding-item {
   align-items: center;
 }

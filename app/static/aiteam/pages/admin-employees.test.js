@@ -48,6 +48,9 @@ const document = {
   createElement,
 };
 
+let pushedPath = null;
+let replacedPath = null;
+
 let drawerOpened = null;
 let getEmployeesCalls = 0;
 const context = {
@@ -64,8 +67,8 @@ const context = {
       pages: {
         adminEmployeeDrawer: {
           init() {},
-          open(employeeId) {
-            drawerOpened = employeeId;
+          open(employeeId, options) {
+            drawerOpened = { employeeId, options: options || {} };
           },
         },
       },
@@ -76,6 +79,15 @@ const context = {
         renderEmpty(container, message) {
           container.innerHTML = message || 'empty';
         },
+      },
+    },
+    location: { pathname: '/admin/employees' },
+    history: {
+      pushState(_state, _title, path) {
+        pushedPath = path;
+      },
+      replaceState(_state, _title, path) {
+        replacedPath = path;
       },
     },
   },
@@ -118,7 +130,15 @@ async function run() {
   assert(getEmployeesCalls === 1, 'page should use ns.api.getEmployees');
   assert(host.innerHTML.indexOf('/api/team/employees/{id}') !== -1, 'page should reference team employee detail contract');
   host._rows[0].dispatchEvent({ type: 'click' });
-  assert(drawerOpened === 'emp_1', 'clicking an employee row should open drawer');
+  assert(pushedPath === '/admin/employees/emp_1', 'clicking an employee row should push nested employee detail route');
+  assert(drawerOpened && drawerOpened.employeeId === 'emp_1', 'clicking an employee row should open drawer');
+
+  context.window.location.pathname = '/admin/employees/emp_2/loop';
+  drawerOpened = null;
+  page.init(host);
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  assert(drawerOpened && drawerOpened.employeeId === 'emp_2', 'nested employee detail route should auto-open drawer');
+  assert(drawerOpened && drawerOpened.options && drawerOpened.options.tab === 'loop', 'nested employee detail route should pass requested tab to drawer');
 
   if (failed) {
     console.error('admin-employees.test.js failed');

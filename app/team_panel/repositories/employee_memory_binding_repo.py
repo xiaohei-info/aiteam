@@ -19,18 +19,11 @@ class EmployeeMemoryBindingRepo:
         return b
 
     def upsert(self, b: EmployeeMemoryBinding) -> EmployeeMemoryBinding:
-        self._cur.execute(
-            "INSERT INTO employee_memory_binding (id, enterprise_id, employee_id, "
-            "memory_mode, provider_code, retention_days, writeback_enabled, binding_version) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT (employee_id) DO UPDATE SET "
-            "memory_mode=EXCLUDED.memory_mode, "
-            "binding_version=EXCLUDED.binding_version, "
-            "updated_at=now()",
-            (b.id, b.enterprise_id, b.employee_id, b.memory_mode,
-             b.provider_code, b.retention_days, b.writeback_enabled, b.binding_version),
-        )
-        return b
+        existing = self.get_by_employee(b.employee_id)
+        if existing is None:
+            return self.create(b)
+        b.id = existing.id
+        return self.update(b)
 
     def get_by_employee(self, employee_id: str) -> Optional[EmployeeMemoryBinding]:
         self._cur.execute(
@@ -60,9 +53,9 @@ class EmployeeMemoryBindingRepo:
 
     def update(self, b: EmployeeMemoryBinding) -> EmployeeMemoryBinding:
         self._cur.execute(
-            "UPDATE employee_memory_binding SET memory_mode=%s, binding_version=%s, "
-            "updated_at=now() WHERE employee_id=%s",
-            (b.memory_mode, b.binding_version, b.employee_id),
+            "UPDATE employee_memory_binding SET memory_mode=%s, provider_code=%s, retention_days=%s, "
+            "writeback_enabled=%s, binding_version=%s, updated_at=now() WHERE employee_id=%s",
+            (b.memory_mode, b.provider_code, b.retention_days, b.writeback_enabled, b.binding_version, b.employee_id),
         )
         return b
 

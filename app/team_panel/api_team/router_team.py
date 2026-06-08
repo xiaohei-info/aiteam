@@ -38,7 +38,6 @@ from ..domain.entities import (
     MemoryItem,
     MemoryReviewDecision,
     RecruitmentOrder,
-    RuntimeBinding,
     SolutionApplyRecord,
     TeamRun,
 )
@@ -50,7 +49,6 @@ from ..repositories.conversation_repo import ConversationRepo
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
 from ..repositories.employee_org_assignment_repo import EmployeeOrgAssignmentRepo
 from ..repositories.employee_repo import EmployeeRepo
-from ..repositories.employee_connector_binding_repo import EmployeeConnectorBindingRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..repositories.connector_repo import EnterpriseConnectorRepo
 from ..repositories.department_repo import DepartmentRepo
@@ -67,12 +65,11 @@ from ..repositories.knowledge_ingestion_job_repo import KnowledgeIngestionJobRep
 from ..repositories.enterprise_skill_install_repo import EnterpriseSkillInstallRepo
 from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
 from ..repositories.team_run_repo import TeamRunRepo
-from ..repositories.team_task_repo import TeamTaskRepo
+from ..repositories.scheduled_job_repo import ScheduledJobRepo
 from ..transactions.uow import UnitOfWork
-from ..application.commands.conversation_service import create_private_conversation, submit_group_message
+from ..application.commands.conversation_service import submit_group_message
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
-from ..application.commands.employee_admin_service import activate_employee
-from ..application.commands.recruitment_service import recruit_employee
+from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
 from ..application.policies.permission_service import check_permission
 from ..application.queries.billing_view_service import get_billing_view
 from ..application.queries.employee_admin_view_service import get_employee_admin_view
@@ -105,7 +102,8 @@ _ALLOWED_PATCH_FIELDS = {"display_name", "status", "skills_add", "skills_remove"
                          "config_version", "capabilities_json", "description",
                          "prompt_system", "prompt_behavior_rules_json", "prompt_opening_message",
                          "memory_mode", "memory_provider_code", "memory_retention_days",
-                         "memory_writeback_enabled", "knowledge_base_ids", "connector_ids"}
+                         "memory_writeback_enabled", "knowledge_base_ids", "connector_ids",
+                         "scheduled_job", "scheduled_job_action"}
 _VALID_EMPLOYEE_TRANSITIONS = {
     "active": {"paused", "archived"},
     "paused": {"active"},
@@ -149,19 +147,6 @@ def _load_json_list(value) -> list[str]:
     if not isinstance(parsed, list):
         return []
     return [str(item) for item in parsed]
-
-
-def _parse_non_negative_int(value: str | None, *, field_name: str, default: int) -> int:
-    raw = str(value or "").strip()
-    if not raw:
-        return default
-    try:
-        parsed = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be a non-negative integer") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-    return parsed
 
 
 def _normalize_review_status(item: MemoryItem, review: MemoryReviewDecision | None) -> str:
@@ -266,224 +251,6 @@ def _record_audit_event(cur, *, enterprise_id: str, event_type: str, target_type
             payload_json=json.dumps(payload, ensure_ascii=False),
             created_by="system",
         )
-    )
-
-
-def _mask_connector_secret(value: str | None) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return "未配置"
-    if len(raw) >= 8:
-        return f"{raw[:3]}****{raw[-4:]}"
-    return "已配置"
-
-
-_CONNECTOR_SECRET_MARKERS = ("secret", "token", "password", "key", "credential")
-_CONNECTOR_ALLOWED_CREDENTIAL_INPUT_FIELDS = {"mode", "credential_ref"}
-
-
-def _is_secret_bearing_connector_key(key: object) -> bool:
-    key_text = str(key).lower()
-    return any(marker in key_text for marker in _CONNECTOR_SECRET_MARKERS)
-
-
-def _sanitize_connector_config_value(value: object, *, parent_key: object | None = None) -> object:
-    if parent_key is not None and _is_secret_bearing_connector_key(parent_key):
-        return "****" if value not in (None, "") else ""
-    if isinstance(value, dict):
-        return {
-            str(key): _sanitize_connector_config_value(child_value, parent_key=key)
-            for key, child_value in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            _sanitize_connector_config_value(item, parent_key=parent_key)
-            for item in value
-        ]
-    return value
-
-
-def _sanitize_connector_config(config: dict) -> dict:
-    return {
-        str(key): _sanitize_connector_config_value(value, parent_key=key)
-        for key, value in config.items()
-    }
-
-
-def _normalize_connector_config_input(payload: object) -> dict:
-    return _sanitize_connector_config(_load_payload(payload))
-
-
-def _extract_connector_credential_ref(body: dict | None) -> tuple[str | None, dict | None]:
-    payload = body or {}
-    credential_input = payload.get("credential_input")
-    if credential_input is None:
-        return str(payload.get("credential_ref") or "").strip(), None
-    if not isinstance(credential_input, dict):
-        return None, {
-            "error": "INVALID_CREDENTIAL_INPUT",
-            "message": "credential_input must be an object with credential_ref only",
-        }
-    invalid_fields = sorted(set(credential_input.keys()) - _CONNECTOR_ALLOWED_CREDENTIAL_INPUT_FIELDS)
-    if invalid_fields:
-        return None, {
-            "error": "INVALID_CREDENTIAL_INPUT",
-            "message": f"credential_input field '{invalid_fields[0]}' is not allowed; use credential_ref only",
-        }
-    return str(credential_input.get("credential_ref") or payload.get("credential_ref") or "").strip(), None
-
-
-def _normalize_scopes(payload: object) -> list[str]:
-    if isinstance(payload, list):
-        scopes = [str(item).strip() for item in payload if str(item).strip()]
-    elif isinstance(payload, str) and payload.strip():
-        scopes = [payload.strip()]
-    else:
-        scopes = []
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for scope in scopes:
-        if scope in seen:
-            continue
-        seen.add(scope)
-        deduped.append(scope)
-    return deduped
-
-
-def _default_last_test_result() -> dict:
-    return {
-        "result": "never_tested",
-        "checked_at": None,
-        "checked_by": "",
-        "error_code": "",
-        "message": "尚未测试",
-        "log_ref": "",
-    }
-
-
-def _normalize_last_test_result(payload: object) -> dict:
-    result = _default_last_test_result()
-    parsed = _load_payload(payload)
-    for key in result:
-        value = parsed.get(key)
-        if value is not None:
-            result[key] = value
-    return result
-
-
-def _serialize_connector_definition(definition) -> dict:
-    return {
-        "definition_id": definition.id,
-        "provider_code": definition.provider_code,
-        "connector_type": definition.connector_type,
-        "display_name": definition.display_name,
-        "auth_scheme": definition.auth_scheme,
-        "config_schema_json": _load_payload(definition.config_schema_json),
-        "status": definition.status,
-    }
-
-
-def _serialize_connector_grant(binding: EmployeeConnectorBinding, employee_map: dict[str, Employee]) -> dict:
-    employee = employee_map.get(binding.employee_id)
-    return {
-        "binding_id": binding.id,
-        "employee_id": binding.employee_id,
-        "employee_display_name": employee.display_name if employee else "",
-        "enabled": bool(binding.enabled),
-        "access_mode": binding.access_mode,
-    }
-
-
-def _serialize_connector(connector: EnterpriseConnector, *, grants: list[dict], definition=None, available_employees: list[dict] | None = None, audit_summary: list[dict] | None = None) -> dict:
-    payload = {
-        "connector_id": connector.id,
-        "definition_id": connector.definition_id,
-        "name": connector.name,
-        "provider_code": connector.provider_code,
-        "connector_type": connector.connector_type,
-        "status": connector.status,
-        "health_status": connector.status,
-        "config": _sanitize_connector_config(_load_payload(connector.config_json)),
-        "scopes": _load_json_list(connector.scopes_json),
-        "credential_ref": connector.credential_ref,
-        "credential_mask": connector.credential_mask,
-        "credential_state": connector.credential_state,
-        "rotation_version": int(connector.rotation_version or 0),
-        "grants": [grant["employee_id"] for grant in grants if grant["enabled"]],
-        "granted_employee_ids": [grant["employee_id"] for grant in grants if grant["enabled"]],
-        "employee_grants": grants,
-        "last_test_result": _normalize_last_test_result(connector.last_test_result_json),
-        "last_validated_at": connector.last_validated_at,
-        "last_test_at": connector.last_validated_at,
-        "created_at": connector.created_at,
-        "updated_at": connector.updated_at,
-        "updated_by": connector.updated_by,
-    }
-    if definition is not None:
-        payload["definition"] = _serialize_connector_definition(definition)
-    if available_employees is not None:
-        payload["available_employees"] = available_employees
-    if audit_summary is not None:
-        payload["audit_summary"] = audit_summary
-    return payload
-
-
-def _connector_test_outcome(connector: EnterpriseConnector, body: dict | None, actor_id: str) -> tuple[str, str, dict]:
-    requested_result = str((body or {}).get("simulate_result") or "passed").strip().lower()
-    if connector.credential_state == "missing":
-        requested_result = "missing"
-
-    checked_at = _today_iso()
-    if requested_result == "auth_failed":
-        return (
-            "auth_failed",
-            "invalid",
-            {
-                "result": "failed",
-                "checked_at": checked_at,
-                "checked_by": actor_id,
-                "error_code": "CREDENTIAL_INVALID",
-                "message": "连接测试失败：凭据认证失败",
-                "log_ref": f"audit://connector-test/{connector.id}",
-            },
-        )
-    if requested_result in {"offline", "network_failed"}:
-        return (
-            "offline",
-            connector.credential_state if connector.credential_state != "missing" else "missing",
-            {
-                "result": "failed",
-                "checked_at": checked_at,
-                "checked_by": actor_id,
-                "error_code": "CONNECTOR_UNREACHABLE",
-                "message": "连接测试失败：服务不可达",
-                "log_ref": f"audit://connector-test/{connector.id}",
-            },
-        )
-    if requested_result == "missing":
-        return (
-            "draft",
-            "missing",
-            {
-                "result": "failed",
-                "checked_at": checked_at,
-                "checked_by": actor_id,
-                "error_code": "CREDENTIAL_REQUIRED",
-                "message": "连接测试失败：缺少凭据引用",
-                "log_ref": f"audit://connector-test/{connector.id}",
-            },
-        )
-    return (
-        "online",
-        "configured" if connector.credential_state == "missing" else connector.credential_state,
-        {
-            "result": "passed",
-            "checked_at": checked_at,
-            "checked_by": actor_id,
-            "error_code": "",
-            "message": "最近一次连接测试通过",
-            "log_ref": f"audit://connector-test/{connector.id}",
-        },
     )
 
 
@@ -1256,21 +1023,21 @@ def _write_audit_event(
     target_type: str,
     target_id: str,
     payload: dict,
-) -> None:
-    AuditEventRepo(cur).create(
-        AuditEvent(
-            id=f"audit_{uuid.uuid4().hex[:12]}",
-            enterprise_id=enterprise_id,
-            actor_type="user",
-            actor_id=_request_actor_id(query, body),
-            event_type=event_type,
-            target_type=target_type,
-            target_id=target_id,
-            request_id=str(_request_params(query, body).get("request_id") or uuid.uuid4().hex[:12]),
-            payload_json=json.dumps(payload, ensure_ascii=False),
-            created_by=_request_role(query, body),
-        )
+) -> str:
+    event = AuditEvent(
+        id=f"audit_{uuid.uuid4().hex[:12]}",
+        enterprise_id=enterprise_id,
+        actor_type="user",
+        actor_id=_request_actor_id(query, body),
+        event_type=event_type,
+        target_type=target_type,
+        target_id=target_id,
+        request_id=str(_request_params(query, body).get("request_id") or uuid.uuid4().hex[:12]),
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        created_by=_request_role(query, body),
     )
+    AuditEventRepo(cur).create(event)
+    return event.id
 
 
 # ── handler helpers ────────────────────────────────────────────────────────
@@ -1519,110 +1286,32 @@ def _handle_office_feed(conn, _path: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_talent_templates(conn, path: str, query: str = "") -> tuple[int, dict]:
+def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
-        qs = parse_qs(query)
-        page = max(1, int(qs.get("page", ["1"])[0]))
-        page_size = min(100, max(1, int(qs.get("page_size", ["20"])[0])))
-        keyword = str(qs.get("keyword", [""])[0] or qs.get("q", [""])[0] or "").strip() or None
-        category = str(qs.get("category", [""])[0] or "").strip() or None
-        tag = str(qs.get("tag", [""])[0] or "").strip() or None
-        sort_by = str(qs.get("sort_by", ["popularity"])[0] or "popularity").strip()
-        sort_order = str(qs.get("sort_order", ["desc"])[0] or "desc").strip()
-
         repo = AgentTemplateRepo(cur)
-        templates, total = repo.list_filtered(
-            status="published",
-            category_code=category,
-            keyword=keyword,
-            tag=tag,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            limit=page_size,
-            offset=(page - 1) * page_size,
-        )
-
-        # Get recruit counts per template
-        recruit_counts: dict[str, int] = {}
-        try:
-            cur.execute(
-                "SELECT template_id, COUNT(*) as cnt FROM recruitment_order "
-                "WHERE deleted_at IS NULL GROUP BY template_id"
-            )
-            for row in cur.fetchall():
-                recruit_counts[row[0]] = row[1]
-        except Exception:
-            pass
-
-        # Get enterprise for is_recruited check
-        enterprise_id = None
-        try:
-            enterprises = EnterpriseRepo(cur).list_all()
-            if enterprises:
-                enterprise_id = enterprises[0].id
-        except Exception:
-            pass
-
-        recruited_set: set[str] = set()
-        if enterprise_id:
-            try:
-                cur.execute(
-                    "SELECT DISTINCT template_id FROM recruitment_order "
-                    "WHERE enterprise_id = %s AND deleted_at IS NULL",
-                    (enterprise_id,),
-                )
-                recruited_set = {row[0] for row in cur.fetchall()}
-            except Exception:
-                pass
-
-        items = []
-        for t in templates:
-            prompt_pack = _load_payload(t.prompt_pack_json)
-            default_binding = _load_payload(t.default_binding_json)
-            default_model = _load_payload(t.default_model_json)
-
-            # Extract description from prompt_pack
-            description = (
-                prompt_pack.get("description")
-                or prompt_pack.get("system_prompt", "")[:120]
-                or t.name
-            )
-
-            # Extract tags from prompt_pack or derive from category
-            tags = prompt_pack.get("tags") or []
-            if not isinstance(tags, list):
-                tags = [str(tags)]
-            if not tags and t.category_code:
-                tags = [t.category_code]
-
-            # Extract skills from prompt_pack or default_binding
-            skills = prompt_pack.get("skills") or default_binding.get("skills") or []
-            if not isinstance(skills, list):
-                skills = [str(skills)]
-
-            items.append({
+        templates = repo.list_all()
+        items = [
+            {
                 "template_id": t.id,
                 "name": t.name,
                 "role": t.role_name,
-                "description": description,
-                "default_model_ref": default_model if default_model else {},
-                "skills": skills,
-                "tags": tags,
-                "category": t.category_code,
-                "recruit_count": recruit_counts.get(t.id, 0),
-                "is_recruited": t.id in recruited_set,
-            })
-
+                "description": t.name,
+                "default_model_ref": json.loads(t.default_model_json) if t.default_model_json else {},
+                "skills": [],
+                "tags": [t.category_code] if t.category_code else [],
+                "recruit_count": 0,
+                "is_recruited": False,
+            }
+            for t in templates
+        ]
         return 200, {
             "items": items,
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-            "has_more": (page * page_size) < total,
+            "page": 1,
+            "page_size": 20,
+            "total": len(items),
+            "has_more": False,
         }
-    except ValueError:
-        return 400, {"error": "INVALID_PARAMETER", "message": "Invalid query parameter value"}
     finally:
         cur.close()
 
@@ -1632,268 +1321,76 @@ def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[i
     try:
         repo = AgentTemplateRepo(cur)
         t = repo.get_by_id(template_id)
-        if t is None or t.deleted_at is not None or t.status != "published":
+        if t is None:
             return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
-
-        prompt_pack = _load_payload(t.prompt_pack_json)
-        default_binding = _load_payload(t.default_binding_json)
-        default_model = _load_payload(t.default_model_json)
-
-        # Description
-        description = (
-            prompt_pack.get("description")
-            or prompt_pack.get("system_prompt", "")[:120]
-            or t.name
-        )
-
-        # Tags
-        tags = prompt_pack.get("tags") or []
-        if not isinstance(tags, list):
-            tags = [str(tags)]
-        if not tags and t.category_code:
-            tags = [t.category_code]
-
-        # Skills from prompt_pack or default_binding
-        skills = prompt_pack.get("skills") or default_binding.get("skills") or []
-        if not isinstance(skills, list):
-            skills = [str(skills)]
-
-        # Knowledge bindings
-        knowledge_bindings = (
-            prompt_pack.get("knowledge_bindings")
-            or default_binding.get("knowledge_bindings")
-            or []
-        )
-        if not isinstance(knowledge_bindings, list):
-            knowledge_bindings = []
-
-        # Connector requirements
-        connector_requirements = (
-            prompt_pack.get("connector_requirements")
-            or default_binding.get("connector_requirements")
-            or []
-        )
-        if not isinstance(connector_requirements, list):
-            connector_requirements = []
-
-        # Memory config
-        memory_config = prompt_pack.get("memory_config") or default_binding.get("memory_config") or {
-            "type": "conversation scoped",
-            "max_tokens": 8000,
-        }
-
-        # Recruit count
-        recruit_count = 0
-        active_instances = 0
-        try:
-            cur.execute(
-                "SELECT COUNT(*) FROM recruitment_order "
-                "WHERE template_id = %s AND deleted_at IS NULL",
-                (t.id,),
-            )
-            recruit_count = cur.fetchone()[0]
-            cur.execute(
-                "SELECT COUNT(*) FROM employee "
-                "WHERE template_id = %s AND status = 'active' AND deleted_at IS NULL",
-                (t.id,),
-            )
-            active_instances = cur.fetchone()[0]
-        except Exception:
-            pass
-
         return 200, {
             "template_id": t.id,
             "name": t.name,
             "category": t.category_code,
-            "description": description,
-            "preview_avatar_url": prompt_pack.get("preview_avatar_url"),
-            "default_skills": skills,
-            "tags": tags,
-            "default_memory_config": memory_config,
-            "knowledge_bindings": knowledge_bindings,
-            "connector_requirements": connector_requirements,
-            "price_tier": prompt_pack.get("price_tier") or "standard",
-            "usage_stats": {
-                "total_recruits": recruit_count,
-                "active_instances": active_instances,
-            },
+            "description": t.name,
+            "preview_avatar_url": None,
+            "default_skills": [],
+            "default_memory_config": {"type": "conversation scoped", "max_tokens": 8000},
+            "knowledge_bindings": [],
+            "connector_requirements": [],
+            "price_tier": "standard",
+            "usage_stats": {"total_recruits": 0, "active_instances": 0},
         }
     finally:
         cur.close()
 
 
-def _find_private_conversation_id(cur, employee_id: str) -> str | None:
-    cur.execute(
-        "SELECT id FROM conversation WHERE type = 'private' AND entry_employee_id = %s "
-        "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
-        (employee_id,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
-
-
-def _serialize_recruitment_response(*, order: RecruitmentOrder, employee: Employee, conversation_id: str | None) -> dict:
-    employee_admin_target = f"/admin/employees?employee_id={employee.id}"
-    payload = {
-        "order_id": order.id,
-        "status": order.status,
-        "employee_id": employee.id,
-        "profile_name": employee.profile_name,
-        "conversation_id": conversation_id,
-        "navigation": {
-            "workbench": "/app/workbench",
-            "employee_admin": employee_admin_target,
-        },
-    }
-    if conversation_id:
-        payload["navigation"]["chat"] = f"/app/chat/{conversation_id}"
-    return payload
-
-
-def _next_recruitment_profile_name(cur, enterprise_id: str, enterprise_slug: str, template_id: str, display_name: str) -> str:
-    employee_repo = EmployeeRepo(cur)
-    base = f"{_slug_fragment(enterprise_slug or enterprise_id, 'enterprise')}-{_slug_fragment(template_id, 'template')}-{_slug_fragment(display_name, 'employee')}"
-    candidate = base[:60]
-    suffix = 1
-    while employee_repo.get_by_profile_name(enterprise_id, candidate) is not None:
-        suffix += 1
-        candidate = f"{base[:52]}-{suffix}"[:60]
-    return candidate
-
-
 def _handle_recruitments_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
-
-    template_id = str(body.get("template_id") or "").strip()
-    if not template_id:
-        return 400, {"error": "MISSING_TEMPLATE_ID", "message": "template_id is required"}
-
-    display_name = str(body.get("display_name") or "").strip() or "Employee"
-    idempotency_key = str(body.get("idempotency_key") or "").strip() or str(uuid.uuid4())
-    requested_by = str(body.get("requested_by") or body.get("actor_id") or "talent_market").strip() or "talent_market"
-
-    with UnitOfWork(conn) as uow:
-        enterprises = uow.enterprises().list_all()
+    template_id = body.get("template_id", "")
+    display_name = body.get("display_name", "Employee")
+    idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
+    cur = conn.cursor()
+    try:
+        enterprise_repo = EnterpriseRepo(cur)
+        enterprises = enterprise_repo.list_all()
         if not enterprises:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
         ent = enterprises[0]
-
-        template = uow.agent_templates().get_by_id(template_id)
-        if template is None or template.deleted_at is not None:
-            return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
-        if template.status != "published":
-            return 409, {
-                "error": {
-                    "code": "TEMPLATE_NOT_AVAILABLE",
-                    "message": f"Template {template_id} is not available for recruitment",
-                }
-            }
-
-        existing_order = uow.recruitment_orders().get_by_idempotency_key(ent.id, idempotency_key)
-        if existing_order is not None and existing_order.created_employee_id:
-            existing_employee = uow.employees().get_by_id(existing_order.created_employee_id)
-            if existing_employee is not None:
-                existing_conversation_id = _find_private_conversation_id(uow.cur, existing_employee.id)
-                return 200, _serialize_recruitment_response(
-                    order=existing_order,
-                    employee=existing_employee,
-                    conversation_id=existing_conversation_id,
-                )
-
-        uow.cur.execute(
-            "SELECT id FROM recruitment_order "
-            "WHERE enterprise_id = %s AND template_id = %s AND deleted_at IS NULL "
-            "AND created_at >= (now() - interval '5 minutes') "
-            "ORDER BY created_at DESC LIMIT 1",
-            (ent.id, template_id),
-        )
-        if uow.cur.fetchone() is not None:
-            return 429, {
-                "error": {
-                    "code": "RATE_LIMITED",
-                    "message": "同一模板 5 分钟内不可重复招募，请稍后再试。",
-                },
-                "retry_after_seconds": 300,
-            }
-
-        profile_name = _next_recruitment_profile_name(
-            uow.cur,
-            ent.id,
-            ent.slug,
-            template_id,
-            display_name or template.role_name or template.name,
-        )
-        employee_id = recruit_employee(
-            uow,
+        employee_id = f"emp_{uuid.uuid4().hex[:12]}"
+        profile_name = f"{ent.slug or ent.id}-{display_name.lower().replace(' ', '-')}"[:60]
+        order_id = f"recruit_{uuid.uuid4().hex[:8]}"
+        order = RecruitmentOrder(
+            id=order_id,
             enterprise_id=ent.id,
-            template_id=template_id,
-            profile_name=profile_name,
-            display_name=display_name or template.role_name or template.name,
-            requested_by=requested_by,
+            template_id=template_id or None,
+            status="succeeded",
+            requested_by="system",
+            created_employee_id=employee_id,
             idempotency_key=idempotency_key,
         )
-        employee = uow.employees().get_by_id(employee_id)
-        order = uow.recruitment_orders().get_by_idempotency_key(ent.id, idempotency_key)
-        if employee is None or order is None:
-            raise RuntimeError("recruitment write path failed to persist employee/order")
-
-        employee.provision()
-        employee.updated_by = requested_by
-        uow.employees().update_status(employee)
-
-        order.start_provisioning()
-        order.updated_by = requested_by
-        uow.recruitment_orders().update(order)
-
-        uow.runtime_bindings().create(
-            RuntimeBinding(
-                id=f"rb_{uuid.uuid4().hex[:12]}",
-                enterprise_id=ent.id,
-                owner_type="employee",
-                owner_id=employee.id,
-                profile_name=employee.profile_name,
-                runtime_kind="profile",
-                sync_status="pending",
-                created_by=requested_by,
-            )
+        repo = RecruitmentOrderRepo(cur)
+        repo.create(order)
+        emp = Employee(
+            id=employee_id,
+            enterprise_id=ent.id,
+            template_id=template_id or None,
+            profile_name=profile_name,
+            display_name=display_name,
+            role_name="",
+            status=EmployeeStatus.ACTIVE,
+            created_from="talent_market",
         )
-        uow.audit_events().create(
-            AuditEvent(
-                id=f"ae_{uuid.uuid4().hex[:12]}",
-                enterprise_id=ent.id,
-                actor_type="user",
-                actor_id=requested_by,
-                event_type="employee.recruitment_created",
-                target_type="employee",
-                target_id=employee.id,
-                request_id=idempotency_key,
-                payload_json=json.dumps({"template_id": template_id, "recruitment_order_id": order.id}, ensure_ascii=False),
-                created_by=requested_by,
-            )
-        )
-
-        conversation_id = create_private_conversation(uow, ent.id, employee.id, requested_by)
-        activate_employee(uow, employee.id, requested_by)
-        employee = uow.employees().get_by_id(employee.id)
-        if employee is None:
-            raise RuntimeError("recruitment activation lost employee state")
-
-        order.mark_succeeded(employee.id)
-        order.updated_by = requested_by
-        uow.recruitment_orders().update(order)
-
-        binding = uow.runtime_bindings().get_by_owner("employee", employee.id)
-        if binding is not None:
-            binding.mark_synced()
-            binding.updated_by = requested_by
-            uow.runtime_bindings().update_sync(binding)
-
-        return 201, _serialize_recruitment_response(
-            order=order,
-            employee=employee,
-            conversation_id=conversation_id,
-        )
+        emp_repo = EmployeeRepo(cur)
+        emp_repo.create(emp)
+        conn.commit()
+        return 201, {
+            "order_id": order.id,
+            "status": "succeeded",
+            "employee_id": employee_id,
+            "profile_name": profile_name,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
 
 
 def _slug_fragment(value: str, fallback: str) -> str:
@@ -2088,54 +1585,6 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
         latest_event = RunEventRepo(cur).get_latest_for_run(conv.latest_run_id) if conv.latest_run_id else None
         run_status = latest_run.status if latest_run is not None else None
         has_recent_delta = latest_event is not None and latest_event.event_type == "message_delta"
-        message_count = _conversation_message_count(cur, conv_id)
-        if conv.type == "group":
-            members = _list_group_conversation_members(cur, conv_id)
-            latest_route_decision = _conversation_latest_route_decision(latest_run)
-            task_items = []
-            latest_event_cursor = latest_event.cursor_no if latest_event is not None else 0
-            if latest_run is not None:
-                task_repo = TeamTaskRepo(cur)
-                task_items = [
-                    _serialize_team_task_item(task)
-                    for task in task_repo.list_by_run(latest_run.id)
-                ]
-            return 200, {
-                "conversation_id": conv.id,
-                "conversation_type": conv.type,
-                "title": conv.title,
-                "status": conv.status,
-                "display_state": compute_display_state(conv.status, run_status, has_recent_delta),
-                "created_at": conv.created_at or _today_iso(),
-                "latest_run": {
-                    "run_id": conv.latest_run_id,
-                    "status": latest_run.status if latest_run is not None else "queued",
-                    "started_at": (latest_run.started_at if latest_run is not None else "") or _today_iso(),
-                    "stream_url": f"/api/team/runs/{latest_run.id}/stream?cursor={latest_event_cursor}",
-                    "events_url": f"/api/team/runs/{latest_run.id}/events?cursor={latest_event_cursor}",
-                    "latest_event_cursor": latest_event_cursor,
-                } if conv.latest_run_id else None,
-                "message_count": message_count,
-                "member_count": len(members),
-                "members": members,
-                "default_route_hint": "auto",
-                "latest_route_decision": latest_route_decision,
-                "timeline": {
-                    "run_id": latest_run.id if latest_run is not None else None,
-                    "events_url": f"/api/team/runs/{latest_run.id}/events?cursor=0" if latest_run is not None else None,
-                    "stream_url": f"/api/team/runs/{latest_run.id}/stream?cursor={latest_event_cursor}" if latest_run is not None else None,
-                    "latest_event_cursor": latest_event_cursor,
-                },
-                "task_tree": {
-                    "run_id": latest_run.id if latest_run is not None else None,
-                    "items": task_items,
-                },
-                "last_message_preview": {
-                    "event_cursor": latest_event.cursor_no if latest_event is not None else 0,
-                    "event_ts": (latest_event.event_ts if latest_event is not None else "") or _today_iso(),
-                    "preview": conv.last_message_preview or "",
-                } if conv.last_message_preview else None,
-            }
         return 200, {
             "conversation_id": conv.id,
             "conversation_type": conv.type,
@@ -2151,7 +1600,7 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
                 "status": latest_run.status if latest_run is not None else "queued",
                 "started_at": (latest_run.started_at if latest_run is not None else "") or _today_iso(),
             } if conv.latest_run_id else None,
-            "message_count": message_count,
+            "message_count": 0,
             "last_message_preview": {
                 "event_cursor": latest_event.cursor_no if latest_event is not None else 0,
                 "event_ts": (latest_event.event_ts if latest_event is not None else "") or _today_iso(),
@@ -2160,99 +1609,6 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
         }
     finally:
         cur.close()
-
-
-def _conversation_message_count(cur, conversation_id: str) -> int:
-    cur.execute(
-        "SELECT COUNT(*) FROM conversation_message WHERE conversation_id = %s",
-        (conversation_id,),
-    )
-    row = cur.fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
-
-
-def _list_group_conversation_members(cur, conversation_id: str) -> list[dict]:
-    cur.execute(
-        "SELECT cm.member_id, cm.member_type, cm.member_ref_id, cm.role, cm.status, "
-        "cm.joined_at, cm.removed_at, COALESCE(e.display_name, ''), COALESCE(e.role_name, ''), "
-        "COALESCE(e.profile_name, ''), COALESCE(e.status, '') "
-        "FROM conversation_member cm "
-        "LEFT JOIN employee e ON e.id = cm.member_ref_id "
-        "WHERE cm.conversation_id = %s AND cm.status = 'active' "
-        "ORDER BY cm.joined_at ASC, cm.member_id ASC",
-        (conversation_id,),
-    )
-    members = []
-    for row in cur.fetchall():
-        members.append(
-            {
-                "member_id": row[0],
-                "member_type": row[1],
-                "member_ref_id": row[2],
-                "employee_id": row[2] if row[1] == "employee" else None,
-                "role": row[3],
-                "status": row[4],
-                "joined_at": str(row[5]) if row[5] is not None else None,
-                "removed_at": str(row[6]) if row[6] is not None else None,
-                "display_name": row[7] or row[2],
-                "role_name": row[8] or "",
-                "profile_name": row[9] or "",
-                "employee_status": row[10] or None,
-                "is_human": row[1] == "user",
-                "is_agent": row[1] == "employee",
-            }
-        )
-    return members
-
-
-def _conversation_latest_route_decision(latest_run: TeamRun | None) -> dict | None:
-    if latest_run is None or not latest_run.result_summary_json:
-        return None
-    payload = _load_payload(latest_run.result_summary_json)
-    if not payload:
-        return None
-    return {
-        "route_mode": payload.get("route_mode", "single_agent"),
-        "target_employee_ids": payload.get("target_employee_ids") or [],
-        "planner_employee_id": payload.get("planner_employee_id") or None,
-        "entry_employee_id": payload.get("entry_employee_id") or latest_run.entry_employee_id,
-        "candidate_employee_ids": payload.get("candidate_employee_ids") or payload.get("target_employee_ids") or [],
-    }
-
-
-def _serialize_run_event_item(event) -> dict:
-    return {
-        "event_id": event.id,
-        "event_cursor": event.cursor_no,
-        "run_id": event.run_id,
-        "event_type": event.event_type,
-        "source_type": event.source_type,
-        "source_id": event.source_id,
-        "employee_id": event.employee_id,
-        "event_ts": event.event_ts or _today_iso(),
-        "preview": event.preview_text or "",
-        "payload": _load_payload(event.payload_json),
-    }
-
-
-def _serialize_team_task_item(task) -> dict:
-    payload = _load_payload(task.input_payload_json)
-    output_summary = _load_payload(task.output_summary_json)
-    return {
-        "task_id": task.id,
-        "parent_task_id": task.parent_team_task_id,
-        "runtime_task_id": task.runtime_task_id,
-        "title": task.title,
-        "description": task.description,
-        "status": task.status,
-        "assignee_employee_id": task.assignee_employee_id,
-        "sequence_no": task.sequence_no,
-        "depth": task.depth,
-        "started_at": task.started_at or None,
-        "finished_at": task.finished_at or None,
-        "input_payload": payload,
-        "output_summary": output_summary,
-    }
 
 
 def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
@@ -2293,8 +1649,6 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
             return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
         if "Cannot submit" in message:
             return 409, {"error": "CONVERSATION_NOT_ACTIVE", "message": message}
-        if "not an active conversation member" in message:
-            return 403, {"error": "SENDER_NOT_CONVERSATION_MEMBER", "message": message}
         return 400, {"error": "INVALID_REQUEST", "message": message}
 
 
@@ -2378,10 +1732,7 @@ def _handle_run_stream(conn, path: str, run_id: str, query: str) -> tuple[int, s
         if run is None:
             return 404, json.dumps({"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}), "application/json"
         qs = parse_qs(query)
-        try:
-            cursor_val = _parse_non_negative_int(qs.get("cursor", ["0"])[0], field_name="cursor", default=0)
-        except ValueError as exc:
-            return 400, json.dumps({"error": "INVALID_CURSOR", "message": str(exc)}), "application/json"
+        cursor_val = int(qs.get("cursor", ["0"])[0])
         event_repo = RunEventRepo(cur)
         events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=50)
         frames = []
@@ -2417,24 +1768,26 @@ def _handle_run_events(conn, path: str, run_id: str, query: str) -> tuple[int, d
         if run is None:
             return 404, {"error": "RUN_NOT_FOUND", "message": f"Run {run_id} not found"}
         qs = parse_qs(query)
-        try:
-            cursor_val = _parse_non_negative_int(qs.get("cursor", ["0"])[0], field_name="cursor", default=0)
-            requested_limit = _parse_non_negative_int(qs.get("limit", ["100"])[0], field_name="limit", default=100)
-        except ValueError as exc:
-            return 400, {"error": "INVALID_PAGINATION", "message": str(exc)}
-        limit_val = max(1, min(requested_limit or 100, 200))
+        cursor_val = int(qs.get("cursor", ["0"])[0])
+        limit_val = min(int(qs.get("limit", ["100"])[0]), 200)
         event_repo = RunEventRepo(cur)
-        paged_events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=limit_val + 1)
-        events = paged_events[:limit_val]
-        items = [_serialize_run_event_item(e) for e in events]
+        events = event_repo.list_by_run(run_id, after_cursor=cursor_val, limit=limit_val)
+        items = [
+            {
+                "event_id": e.id,
+                "event_cursor": e.cursor_no,
+                "event_type": e.event_type,
+                "preview": e.preview_text,
+            }
+            for e in events
+        ]
         next_cursor = events[-1].cursor_no if events else cursor_val
-        has_more = len(paged_events) > limit_val
+        has_more = len(events) >= limit_val
         return 200, {
             "items": items,
             "next_cursor": next_cursor,
             "has_more": has_more,
             "run_status": run.status,
-            "latest_event_cursor": event_repo.get_max_cursor(run_id),
         }
     finally:
         cur.close()
@@ -2929,6 +2282,24 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         template_id = emp.template_id if emp else None
         profile_name = emp.profile_name if emp else ""
         created_at = emp.created_at if emp else _today_iso()
+        audit_events = list(AuditEventRepo(cur).list_by_target("employee", emp_id, limit=20))
+        scheduled_job_ids = {
+            job.get("scheduled_job_id")
+            for job in view.scheduled_jobs
+            if job.get("scheduled_job_id")
+        }
+        enterprise_audits = AuditEventRepo(cur).list_by_enterprise(emp.enterprise_id, limit=200) if emp is not None else []
+        for event in list(audit_events) + list(enterprise_audits):
+            payload = _load_payload(event.payload_json)
+            if event.target_type == "scheduled_job" and payload.get("employee_id") == emp_id and event.target_id:
+                scheduled_job_ids.add(event.target_id)
+            payload_job_id = payload.get("scheduled_job_id") or payload.get("job_id")
+            if payload.get("employee_id") == emp_id and payload_job_id:
+                scheduled_job_ids.add(str(payload_job_id))
+        for scheduled_job_id in sorted(scheduled_job_ids):
+            audit_events.extend(AuditEventRepo(cur).list_by_target("scheduled_job", scheduled_job_id, limit=20))
+        audit_events.sort(key=lambda item: item.created_at or "", reverse=True)
+        audit_events = audit_events[:20]
     finally:
         cur.close()
     return 200, {
@@ -2948,6 +2319,18 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
                 skill["skill_code"] for skill in view.skills if skill.get("enabled", True)
             ],
             "memory_config": view.memory_config,
+            "knowledge": [
+                kb["knowledge_base_id"] for kb in view.knowledge_bases if kb.get("enabled", True)
+            ],
+            "connectors": [
+                {
+                    "connector_id": binding["connector_id"],
+                    "access_mode": binding.get("access_mode", "invoke"),
+                    "enabled": binding.get("enabled", True),
+                }
+                for binding in view.connector_bindings
+                if binding.get("enabled", True)
+            ],
         },
         "connector_bindings": [
             {
@@ -2960,15 +2343,31 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         ],
         "conversation_bindings": [],
         "usage_summary": {
-            "total_runs": 0,
-            "total_tokens": 0,
-            "last_run_at": None,
+            "total_runs": view.run_summary.get("total_runs", 0),
+            "total_tokens": view.run_summary.get("total_tokens", 0),
+            "last_run_at": view.run_summary.get("last_run_at"),
         },
         "model_provider": view.model_provider,
         "model_name": view.model_name,
         "prompt_version": view.prompt_version,
         "prompt_config": view.prompt_config,
         "knowledge_bases": view.knowledge_bases,
+        "bindings_summary": view.bindings_summary,
+        "scheduled_jobs": view.scheduled_jobs,
+        "run_summary": view.run_summary,
+        "recent_audit_events": [
+            {
+                "audit_event_id": event.id,
+                "actor_type": event.actor_type,
+                "actor_id": event.actor_id,
+                "event_type": event.event_type,
+                "request_id": event.request_id,
+                "payload": _load_payload(event.payload_json),
+                "created_at": event.created_at,
+                "created_by": event.created_by,
+            }
+            for event in audit_events
+        ],
         "created_at": created_at,
         "effective_role": role,
     }
@@ -3054,157 +2453,110 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
 
 # ── B05: connectors list/create/test/grants ──
 
-def _handle_connectors_list(conn, path: str, query: str) -> tuple[int, dict]:
-    role, denial = _require_permission(query, None, "manage_connectors")
-    if denial is not None:
-        return denial
+def _handle_connectors_list(conn, path: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
-            return 200, {"items": [], "definitions": [], "effective_role": role}
+            return 200, {"connectors": [], "definitions": []}
         connector_repo = EnterpriseConnectorRepo(cur)
         definition_repo = ConnectorDefinitionRepo(cur)
-        employee_repo = EmployeeRepo(cur)
         connectors = connector_repo.list_by_enterprise(enterprise.id)
         definitions = definition_repo.list_active()
-        employees = employee_repo.list_by_enterprise(enterprise.id)
-        employee_map = {employee.id: employee for employee in employees}
-        binding_repo = EmployeeConnectorBindingRepo(cur)
+        cur.execute(
+            "SELECT connector_id, employee_id, access_mode, enabled "
+            "FROM employee_connector_binding "
+            "WHERE enterprise_id = %s AND deleted_at IS NULL "
+            "ORDER BY connector_id, employee_id",
+            (enterprise.id,),
+        )
         grants_by_connector: dict[str, list[dict]] = {}
-        for connector in connectors:
-            bindings = binding_repo.list_by_connector(connector.id)
-            grants_by_connector[connector.id] = [
-                _serialize_connector_grant(binding, employee_map)
-                for binding in bindings
-            ]
-        definition_map = {definition.id: definition for definition in definitions}
-        items = [
-            _serialize_connector(
-                connector,
-                grants=grants_by_connector.get(connector.id, []),
-                definition=definition_map.get(connector.definition_id),
+        for connector_id, employee_id, access_mode, enabled in cur.fetchall():
+            grants_by_connector.setdefault(connector_id, []).append(
+                {
+                    "employee_id": employee_id,
+                    "access_mode": access_mode,
+                    "enabled": bool(enabled),
+                }
             )
-            for connector in connectors
-            if connector.status != "archived"
-        ]
         return 200, {
-            "items": items,
-            "connectors": items,
-            "definitions": [_serialize_connector_definition(definition) for definition in definitions],
-            "effective_role": role,
+            "connectors": [
+                {
+                    "connector_id": connector.id,
+                    "name": connector.name,
+                    "provider_code": connector.provider_code,
+                    "connector_type": connector.connector_type,
+                    "status": connector.status,
+                    "health_status": connector.status,
+                    "credential_ref": connector.credential_ref,
+                    "config": _load_payload(connector.config_json),
+                    "grants": [
+                        grant["employee_id"]
+                        for grant in grants_by_connector.get(connector.id, [])
+                        if grant["enabled"]
+                    ],
+                    "employee_grants": grants_by_connector.get(connector.id, []),
+                    "granted_employee_ids": [
+                        grant["employee_id"]
+                        for grant in grants_by_connector.get(connector.id, [])
+                        if grant["enabled"]
+                    ],
+                    "last_validated_at": connector.last_validated_at,
+                    "last_test_at": connector.last_validated_at,
+                    "created_at": connector.created_at,
+                }
+                for connector in connectors
+            ],
+            "definitions": [
+                {
+                    "definition_id": definition.id,
+                    "provider_code": definition.provider_code,
+                    "connector_type": definition.connector_type,
+                    "display_name": definition.display_name,
+                    "auth_scheme": definition.auth_scheme,
+                    "config_schema_json": definition.config_schema_json,
+                    "status": definition.status,
+                }
+                for definition in definitions
+            ],
         }
     finally:
         cur.close()
 
 
-def _handle_connector_detail(conn, path: str, connector_id: str, query: str) -> tuple[int, dict]:
-    role, denial = _require_permission(query, None, "manage_connectors")
-    if denial is not None:
-        return denial
-    cur = conn.cursor()
-    try:
-        repo = EnterpriseConnectorRepo(cur)
-        connector = repo.get_by_id(connector_id)
-        if connector is None or connector.deleted_at is not None:
-            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
-        definition = ConnectorDefinitionRepo(cur).get_by_id(connector.definition_id) if connector.definition_id else None
-        employees = EmployeeRepo(cur).list_by_enterprise(connector.enterprise_id)
-        employee_map = {employee.id: employee for employee in employees}
-        bindings = EmployeeConnectorBindingRepo(cur).list_by_connector(connector_id)
-        grants = [_serialize_connector_grant(binding, employee_map) for binding in bindings]
-        audit_summary = [
-            {
-                "event_type": audit.event_type,
-                "created_at": audit.created_at,
-                "payload": _load_payload(audit.payload_json),
-            }
-            for audit in AuditEventRepo(cur).list_by_target("connector", connector_id, limit=10)
-        ]
-        available_employees = [
-            {
-                "employee_id": employee.id,
-                "display_name": employee.display_name,
-                "status": employee.status,
-            }
-            for employee in employees
-        ]
-        payload = _serialize_connector(
-            connector,
-            grants=grants,
-            definition=definition,
-            available_employees=available_employees,
-            audit_summary=audit_summary,
-        )
-        payload["effective_role"] = role
-        return 200, payload
-    finally:
-        cur.close()
-
-
-def _handle_connectors_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
-    role, denial = _require_permission(query, body, "manage_connectors")
-    if denial is not None:
-        return denial
-    credential_ref, credential_error = _extract_connector_credential_ref(body)
-    if credential_error is not None:
-        return 400, credential_error
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
-        credential_state = "configured" if credential_ref else "missing"
-        name = str(body.get("name") or "Connector")
-        provider_code = str(body.get("provider_code") or body.get("provider") or "custom")
-        connector_type = str(body.get("connector_type") or body.get("type") or "api_key_connector")
-        definition_id = body.get("definition_id")
-        config_json = _normalize_connector_config_input(body.get("config_json", body.get("config", {})))
-        scopes = _normalize_scopes(body.get("scopes") or ["invoke"])
-        actor_id = _request_actor_id(query, body)
+        name = body.get("name", "Connector")
+        provider_code = body.get("provider_code", body.get("provider", "custom"))
+        connector_type = body.get("connector_type", body.get("type", "api_key_connector"))
+        credential_ref = body.get("credential_ref", f"cred://{enterprise.id}/{uuid.uuid4().hex[:8]}")
+        config_json = body.get("config_json", body.get("config", {}))
         connector_id = f"conn_{uuid.uuid4().hex[:12]}"
         connector = EnterpriseConnector(
             id=connector_id,
             enterprise_id=enterprise.id,
-            definition_id=str(definition_id) if definition_id else None,
             name=name,
             provider_code=provider_code,
             connector_type=connector_type,
             credential_ref=credential_ref,
-            credential_mask=_mask_connector_secret(credential_ref),
-            credential_state=credential_state,
             rotation_version=0,
             status="draft",
-            config_json=json.dumps(config_json, ensure_ascii=False),
-            scopes_json=json.dumps(scopes, ensure_ascii=False),
-            last_test_result_json=json.dumps(_default_last_test_result(), ensure_ascii=False),
-            updated_by=actor_id,
+            config_json=json.dumps(config_json) if isinstance(config_json, dict) else str(config_json),
         )
         EnterpriseConnectorRepo(cur).create(connector)
-        _record_audit_event(
-            cur,
-            enterprise_id=enterprise.id,
-            event_type="connector_created",
-            target_type="connector",
-            target_id=connector_id,
-            payload={
-                "connector_id": connector_id,
-                "new_status": "draft",
-                "new_credential_ref": credential_ref,
-                "request_id": body.get("idempotency_key") or connector_id,
-            },
-        )
         conn.commit()
         return 201, {
             "connector_id": connector_id,
             "status": "draft",
-            "credential_state": credential_state,
-            "updated_at": connector.updated_at or _today_iso(),
-            "effective_role": role,
+            "name": name,
         }
     except Exception:
         conn.rollback()
@@ -3213,135 +2565,22 @@ def _handle_connectors_post(conn, path: str, query: str, body: dict | None) -> t
         cur.close()
 
 
-def _handle_connector_patch(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
-    if not body:
-        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
-    role, denial = _require_permission(query, body, "manage_connectors")
-    if denial is not None:
-        return denial
-    credential_ref, credential_error = _extract_connector_credential_ref(body)
-    if credential_error is not None:
-        return 400, credential_error
-    allowed_fields = {"name", "config", "scopes", "credential_input", "archive", "unarchive"}
-    invalid_fields = sorted(set(body.keys()) - allowed_fields)
-    if invalid_fields:
-        return 400, {"error": "INVALID_FIELD", "message": f"Field '{invalid_fields[0]}' is not allowed for PATCH"}
-    cur = conn.cursor()
-    try:
-        repo = EnterpriseConnectorRepo(cur)
-        connector = repo.get_by_id(connector_id)
-        if connector is None or connector.deleted_at is not None:
-            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
-        actor_id = _request_actor_id(query, body)
-        previous_status = connector.status
-        previous_credential_ref = connector.credential_ref
-        if "name" in body:
-            connector.name = str(body.get("name") or connector.name)
-        if "config" in body:
-            connector.config_json = json.dumps(_normalize_connector_config_input(body.get("config") or {}), ensure_ascii=False)
-            if connector.status == "online":
-                connector.status = "draft"
-        if "scopes" in body:
-            connector.scopes_json = json.dumps(_normalize_scopes(body.get("scopes")), ensure_ascii=False)
-            if connector.status == "online":
-                connector.status = "draft"
-        if "credential_input" in body:
-            new_ref = credential_ref or ""
-            if new_ref != connector.credential_ref:
-                connector.credential_ref = new_ref
-                connector.credential_mask = _mask_connector_secret(new_ref)
-                connector.rotation_version = int(connector.rotation_version or 0) + 1
-                connector.credential_state = "configured" if new_ref else "missing"
-                connector.status = "draft" if new_ref else "draft"
-        if body.get("archive"):
-            connector.status = "archived"
-        if body.get("unarchive"):
-            connector.status = "draft"
-        connector.updated_by = actor_id
-        repo.update(connector)
-        event_type = "connector_updated"
-        if body.get("archive"):
-            event_type = "connector_archived"
-        elif body.get("unarchive"):
-            event_type = "connector_unarchived"
-        elif previous_credential_ref != connector.credential_ref:
-            event_type = "connector_credential_rotated"
-        new_status = connector.status
-        _record_audit_event(
-            cur,
-            enterprise_id=connector.enterprise_id,
-            event_type=event_type,
-            target_type="connector",
-            target_id=connector.id,
-            payload={
-                "connector_id": connector.id,
-                "old_status": previous_status,
-                "new_status": new_status,
-                "old_credential_ref": previous_credential_ref,
-                "new_credential_ref": connector.credential_ref,
-                "request_id": connector.id,
-            },
-        )
-        conn.commit()
-        return 200, {
-            "connector_id": connector.id,
-            "status": connector.status,
-            "credential_state": connector.credential_state,
-            "rotation_version": connector.rotation_version,
-            "updated_at": connector.updated_at or _today_iso(),
-            "effective_role": role,
-        }
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-
-
-def _handle_connector_test(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
-    role, denial = _require_permission(query, body, "manage_connectors")
-    if denial is not None:
-        return denial
+def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         repo = EnterpriseConnectorRepo(cur)
         connector = repo.get_by_id(connector_id)
         if connector is None:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
-        actor_id = _request_actor_id(query, body)
-        previous_status = connector.status
-        new_status, new_credential_state, test_result = _connector_test_outcome(connector, body, actor_id)
-        connector.status = new_status
-        connector.credential_state = new_credential_state
-        connector.last_test_result_json = json.dumps(test_result, ensure_ascii=False)
-        connector.last_validated_at = test_result["checked_at"]
-        connector.updated_by = actor_id
-        repo.update(connector)
         cur.execute(
-            "UPDATE enterprise_connector SET last_validated_at=%s WHERE id=%s",
-            (test_result["checked_at"], connector_id),
-        )
-        _record_audit_event(
-            cur,
-            enterprise_id=connector.enterprise_id,
-            event_type="connector_tested",
-            target_type="connector",
-            target_id=connector.id,
-            payload={
-                "connector_id": connector.id,
-                "old_status": previous_status,
-                "new_status": new_status,
-                "test_result": test_result["result"],
-                "request_id": connector.id,
-            },
+            "UPDATE enterprise_connector SET last_validated_at=now() WHERE id=%s",
+            (connector_id,),
         )
         conn.commit()
         return 200, {
-            "connector_id": connector.id,
-            "result": test_result["result"],
+            "ok": connector.status == "online",
             "status": connector.status,
-            "last_test_result": test_result,
-            "effective_role": role,
+            "checked_at": _today_iso(),
         }
     except Exception:
         conn.rollback()
@@ -3350,33 +2589,9 @@ def _handle_connector_test(conn, path: str, connector_id: str, query: str, body:
         cur.close()
 
 
-def _handle_connector_status(conn, path: str, connector_id: str, query: str) -> tuple[int, dict]:
-    role, denial = _require_permission(query, None, "manage_connectors")
-    if denial is not None:
-        return denial
-    cur = conn.cursor()
-    try:
-        connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
-        if connector is None or connector.deleted_at is not None:
-            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
-        return 200, {
-            "connector_id": connector.id,
-            "status": connector.status,
-            "credential_state": connector.credential_state,
-            "last_test_result": _normalize_last_test_result(connector.last_test_result_json),
-            "updated_at": connector.updated_at,
-            "effective_role": role,
-        }
-    finally:
-        cur.close()
-
-
-def _handle_connector_grants_patch(conn, path: str, connector_id: str, query: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
-    role, denial = _require_permission(query, body, "manage_connectors")
-    if denial is not None:
-        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -3386,11 +2601,9 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, query: st
         connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
         if connector is None:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
-        if connector.status != "online" and body.get("grant"):
-            return 409, {"error": "CONNECTOR_NOT_ONLINE", "message": f"Connector {connector_id} is {connector.status}, must be online"}
         grant = body.get("grant")
         revoke = body.get("revoke")
-        results = {"granted": [], "revoked": [], "errors": [], "effective_role": role}
+        results = {"granted": [], "revoked": [], "errors": []}
         conn.rollback()
         with UnitOfWork(conn) as uow:
             for entry in (grant or []):
@@ -3414,38 +2627,6 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, query: st
                     results["revoked"].append(binding_id)
                 except ValueError as exc:
                     results["errors"].append({"binding_id": binding_id, "error": str(exc)})
-        audit_cur = conn.cursor()
-        try:
-            for granted in results["granted"]:
-                _record_audit_event(
-                    audit_cur,
-                    enterprise_id=enterprise.id,
-                    event_type="connector_grant_created",
-                    target_type="connector",
-                    target_id=connector_id,
-                    payload={
-                        "connector_id": connector_id,
-                        "employee_id": granted["employee_id"],
-                        "access_mode": next((entry.get("access_mode", "invoke") for entry in (grant or []) if granted["employee_id"] in (entry.get("employee_ids") or [entry.get("employee_id")]) ), "invoke"),
-                        "request_id": granted["binding_id"],
-                    },
-                )
-            for revoked in results["revoked"]:
-                _record_audit_event(
-                    audit_cur,
-                    enterprise_id=enterprise.id,
-                    event_type="connector_grant_revoked",
-                    target_type="connector",
-                    target_id=connector_id,
-                    payload={
-                        "connector_id": connector_id,
-                        "binding_id": revoked,
-                        "request_id": revoked,
-                    },
-                )
-            conn.commit()
-        finally:
-            audit_cur.close()
         return 200, results
     except Exception:
         conn.rollback()
@@ -3467,6 +2648,9 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             emp = repo.get_by_id(emp_id)
             if emp is None:
                 return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {emp_id} not found"}
+
+            audit_event_ids: list[str] = []
+            previous_status = emp.status
 
             for key in body:
                 if key not in _ALLOWED_PATCH_FIELDS:
@@ -3501,6 +2685,25 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 except ValueError as exc:
                     return 400, {"error": "INVALID_STATUS_TRANSITION", "message": str(exc)}
 
+                if emp.status != previous_status:
+                    status_event_type = {
+                        "active": "employee.activate",
+                        "paused": "employee.pause",
+                        "archived": "employee.archive",
+                    }.get(emp.status, "employee.status_changed")
+                    audit_event_ids.append(
+                        _write_audit_event(
+                            uow.cur,
+                            enterprise_id=emp.enterprise_id,
+                            query=query,
+                            body=body,
+                            event_type=status_event_type,
+                            target_type="employee",
+                            target_id=emp.id,
+                            payload={"from_status": previous_status, "to_status": emp.status},
+                        )
+                    )
+
             new_display_name = body.get("display_name")
             if new_display_name is not None:
                 emp.display_name = new_display_name
@@ -3522,7 +2725,6 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
 
             if skills_add:
                 # B01 Phase 3 behavior change: reject unauthorized skill additions.
-                existing_skill_codes = {binding.skill_code for binding in uow.employee_skill_bindings().list_by_employee(emp_id)}
                 for skill_code in skills_add:
                     install = uow.enterprise_skill_installs().get_active_by_skill_code(emp.enterprise_id, skill_code)
                     if not install:
@@ -3531,7 +2733,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 existing_skill_codes = {
                     binding.skill_code
                     for binding in uow.employee_skill_bindings().list_by_employee(emp_id)
-                    if binding.enabled
+                    if binding.deleted_at is None
                 }
                 for skill_code in skills_add:
                     if skill_code in existing_skill_codes:
@@ -3618,7 +2820,177 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                         )
                     )
 
-            _write_audit_event(
+            scheduled_job_payload = body.get("scheduled_job")
+            scheduled_job_action = body.get("scheduled_job_action")
+            if scheduled_job_payload is not None or scheduled_job_action is not None:
+                if scheduled_job_payload is not None and not isinstance(scheduled_job_payload, dict):
+                    return 400, {"error": "INVALID_FIELD", "message": "scheduled_job must be an object"}
+                payload = scheduled_job_payload or {}
+                if scheduled_job_action not in (None, "create", "pause", "resume", "archive"):
+                    return 400, {"error": "INVALID_FIELD", "message": "scheduled_job_action is invalid"}
+                target_job_id = str(payload.get("scheduled_job_id") or "").strip()
+                job_repo = ScheduledJobRepo(uow.cur)
+                if scheduled_job_action in ("pause", "resume", "archive"):
+                    if not target_job_id:
+                        return 400, {"error": "INVALID_FIELD", "message": "scheduled_job_id is required for scheduled_job_action"}
+                    job = job_repo.get_by_id(target_job_id)
+                    if job is None or job.employee_id != emp_id:
+                        return 404, {"error": "SCHEDULED_JOB_NOT_FOUND", "message": f"ScheduledJob {target_job_id} not found"}
+                    if scheduled_job_action == "pause":
+                        pause_job(uow, target_job_id)
+                        audit_event_ids.append(
+                            _write_audit_event(
+                                uow.cur,
+                                enterprise_id=emp.enterprise_id,
+                                query=query,
+                                body=body,
+                                event_type="scheduled_job.pause",
+                                target_type="scheduled_job",
+                                target_id=target_job_id,
+                                payload={"employee_id": emp.id, "action": "pause"},
+                            )
+                        )
+                    elif scheduled_job_action == "resume":
+                        resume_job(uow, target_job_id)
+                        audit_event_ids.append(
+                            _write_audit_event(
+                                uow.cur,
+                                enterprise_id=emp.enterprise_id,
+                                query=query,
+                                body=body,
+                                event_type="scheduled_job.resume",
+                                target_type="scheduled_job",
+                                target_id=target_job_id,
+                                payload={"employee_id": emp.id, "action": "resume"},
+                            )
+                        )
+                    else:
+                        if job.status == "archived":
+                            return 400, {"error": "INVALID_STATUS_TRANSITION", "message": "ScheduledJob already archived"}
+                        job.archive()
+                        job_repo.update_status(job)
+                        audit_event_ids.append(
+                            _write_audit_event(
+                                uow.cur,
+                                enterprise_id=emp.enterprise_id,
+                                query=query,
+                                body=body,
+                                event_type="scheduled_job.archive",
+                                target_type="scheduled_job",
+                                target_id=target_job_id,
+                                payload={"employee_id": emp.id, "action": "archive"},
+                            )
+                        )
+                else:
+                    existing_job = job_repo.get_by_id(target_job_id) if target_job_id else None
+                    if existing_job is None:
+                        schedule_expr = str(payload.get("schedule_expr") or "").strip()
+                        name = str(payload.get("name") or "Scheduled Job").strip() or "Scheduled Job"
+                        goal = str(payload.get("goal") or "").strip()
+                        if not schedule_expr:
+                            return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.schedule_expr is required"}
+                        auto_enable = payload.get("status", "enabled") != "draft"
+                        max_failures_value = payload.get("max_consecutive_failures", 3)
+                        try:
+                            max_failures = int(max_failures_value)
+                        except (TypeError, ValueError):
+                            return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.max_consecutive_failures must be an integer"}
+                        create_scheduled_job(
+                            uow,
+                            emp.enterprise_id,
+                            emp_id,
+                            schedule_expr,
+                            {
+                                "name": name,
+                                "goal": goal,
+                                "auto_enable": auto_enable,
+                                "max_consecutive_failures": max_failures,
+                                "notification_policy": payload.get("notification_policy", {}),
+                                "created_by": _request_actor_id(query, body),
+                            },
+                        )
+                        created_job = next(iter(uow.scheduled_jobs().list_by_employee(emp_id)), None)
+                        if created_job is not None:
+                            audit_event_ids.append(
+                                _write_audit_event(
+                                    uow.cur,
+                                    enterprise_id=emp.enterprise_id,
+                                    query=query,
+                                    body=body,
+                                    event_type="scheduled_job.create",
+                                    target_type="scheduled_job",
+                                    target_id=created_job.id,
+                                    payload={
+                                        "employee_id": emp.id,
+                                        "schedule_expr": created_job.schedule_expr,
+                                        "status": created_job.status,
+                                    },
+                                )
+                            )
+                    else:
+                        if existing_job.employee_id != emp_id:
+                            return 404, {"error": "SCHEDULED_JOB_NOT_FOUND", "message": f"ScheduledJob {target_job_id} not found"}
+                        if "name" in payload:
+                            existing_job.name = str(payload.get("name") or existing_job.name)
+                        if "goal" in payload:
+                            existing_job.goal = str(payload.get("goal") or existing_job.goal)
+                        if "schedule_expr" in payload and payload.get("schedule_expr"):
+                            existing_job.schedule_expr = str(payload.get("schedule_expr"))
+                        if "max_consecutive_failures" in payload and payload.get("max_consecutive_failures") is not None:
+                            raw_max_failures = payload.get("max_consecutive_failures")
+                            try:
+                                existing_job.max_consecutive_failures = int(raw_max_failures if raw_max_failures is not None else 0)
+                            except (TypeError, ValueError):
+                                return 400, {"error": "INVALID_FIELD", "message": "scheduled_job.max_consecutive_failures must be an integer"}
+                        if "notification_policy" in payload:
+                            existing_job.notification_policy_json = json.dumps(payload.get("notification_policy") or {}, ensure_ascii=False)
+                        if payload.get("status") == "paused" and existing_job.status == "enabled":
+                            pause_job(uow, existing_job.id)
+                            existing_job = job_repo.get_by_id(existing_job.id)
+                            audit_event_ids.append(
+                                _write_audit_event(
+                                    uow.cur,
+                                    enterprise_id=emp.enterprise_id,
+                                    query=query,
+                                    body=body,
+                                    event_type="scheduled_job.pause",
+                                    target_type="scheduled_job",
+                                    target_id=existing_job.id,
+                                    payload={"employee_id": emp.id, "action": "pause"},
+                                )
+                            )
+                        elif payload.get("status") == "enabled" and existing_job.status == "paused":
+                            resume_job(uow, existing_job.id)
+                            existing_job = job_repo.get_by_id(existing_job.id)
+                            if existing_job is not None:
+                                audit_event_ids.append(
+                                    _write_audit_event(
+                                        uow.cur,
+                                        enterprise_id=emp.enterprise_id,
+                                        query=query,
+                                        body=body,
+                                        event_type="scheduled_job.resume",
+                                        target_type="scheduled_job",
+                                        target_id=existing_job.id,
+                                        payload={"employee_id": emp.id, "action": "resume"},
+                                    )
+                                )
+                        else:
+                            job_repo.update(existing_job)
+                            audit_event_ids.append(
+                                _write_audit_event(
+                                    uow.cur,
+                                    enterprise_id=emp.enterprise_id,
+                                    query=query,
+                                    body=body,
+                                    event_type="scheduled_job.update",
+                                    target_type="scheduled_job",
+                                    target_id=existing_job.id,
+                                    payload={"employee_id": emp.id, "fields": sorted(payload.keys())},
+                                )
+                            )
+
+            audit_event_ids.append(_write_audit_event(
                 uow.cur,
                 enterprise_id=emp.enterprise_id,
                 query=query,
@@ -3627,7 +2999,7 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 target_type="employee",
                 target_id=emp.id,
                 payload={"fields": sorted(body.keys()), "status": emp.status, "display_name": emp.display_name},
-            )
+            ))
 
         response = {
             "employee_id": emp.id,
@@ -3636,6 +3008,8 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             "reprovision_status": None,
             "updated_at": _today_iso(),
             "effective_role": role,
+            "audit_event_id": audit_event_ids[-1] if audit_event_ids else None,
+            "audit_event_ids": audit_event_ids,
         }
         if skills_add or skills_remove:
             response["skills_updated"] = {"added": skills_add or [], "removed": skills_remove or []}
@@ -3692,7 +3066,7 @@ def handle_team_route(
 
     # ── talent-market/templates ──
     elif method == "GET" and _match_exact(sub, "/talent-market/templates"):
-        route_handler = lambda conn: _handle_talent_templates(conn, sub, query)
+        route_handler = lambda conn: _handle_talent_templates(conn, sub)
 
     # ── talent-market/templates/{id} ──
     else:
@@ -3723,12 +3097,6 @@ def handle_team_route(
         conv_id = _match_prefix(sub, "/conversations/")
         if method == "GET" and conv_id is not None and "/" not in conv_id:
             route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, sub, conversation_id)
-
-    # ── group-conversations/{id} GET ──
-    if route_handler is None:
-        group_conv_id = _match_prefix(sub, "/group-conversations/")
-        if method == "GET" and group_conv_id is not None and "/" not in group_conv_id:
-            route_handler = lambda conn, conversation_id=group_conv_id: _handle_conversation_detail(conn, sub, conversation_id)
 
     # ── group-conversations/{id}/messages ──
     if route_handler is None:
@@ -3788,41 +3156,24 @@ def handle_team_route(
 
     # ── B05 connectors list/create/test/grants ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_list(conn, sub, query)
+        route_handler = lambda conn: _handle_connectors_list(conn, sub)
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_post(conn, sub, query, body)
-
-    if route_handler is None:
-        connector_detail = _match_prefix(sub, "/connectors/")
-        if method == "GET" and connector_detail is not None and "/" not in connector_detail:
-            route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id, query)
-
-    if route_handler is None:
-        connector_patch = _match_prefix(sub, "/connectors/")
-        if method == "PATCH" and connector_patch is not None and "/" not in connector_patch:
-            route_handler = lambda conn, matched_connector_id=connector_patch: _handle_connector_patch(conn, sub, matched_connector_id, query, body)
+        route_handler = lambda conn: _handle_connectors_post(conn, sub, body)
 
     if route_handler is None:
         connector_test = _match_prefix(sub, "/connectors/")
         if method == "POST" and connector_test is not None and connector_test.endswith("/test"):
             connector_id = connector_test[:-len("/test")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id, query, body)
-
-    if route_handler is None:
-        connector_status = _match_prefix(sub, "/connectors/")
-        if method == "GET" and connector_status is not None and connector_status.endswith("/status"):
-            connector_id = connector_status[:-len("/status")]
-            if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_status(conn, sub, matched_connector_id, query)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id)
 
     if route_handler is None:
         connector_grants = _match_prefix(sub, "/connectors/")
         if method == "PATCH" and connector_grants is not None and connector_grants.endswith("/grants"):
             connector_id = connector_grants[:-len("/grants")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, query, body)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, body)
 
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees/export"):
         route_handler = lambda conn: _handle_employees_export(conn, query)

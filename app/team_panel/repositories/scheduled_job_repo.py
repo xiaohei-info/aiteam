@@ -79,6 +79,29 @@ class ScheduledJobRepo:
         )
         return job
 
+    def update(self, job: ScheduledJob) -> ScheduledJob:
+        self._cur.execute(
+            "UPDATE scheduled_job SET name=%s, goal=%s, schedule_expr=%s, status=%s, "
+            "max_consecutive_failures=%s, consecutive_failures=%s, last_run_status=%s, "
+            "last_run_at=%s, last_success_at=%s, runtime_job_id=%s, notification_policy_json=%s, "
+            "updated_at=now() WHERE id=%s",
+            (
+                job.name,
+                job.goal,
+                job.schedule_expr,
+                job.status,
+                job.max_consecutive_failures,
+                job.consecutive_failures,
+                job.last_run_status,
+                job.last_run_at or None,
+                job.last_success_at or None,
+                job.runtime_job_id,
+                job.notification_policy_json,
+                job.id,
+            ),
+        )
+        return job
+
     def delete(self, job_id: str) -> None:
         self._cur.execute(
             "UPDATE scheduled_job SET deleted_at=now() WHERE id=%s",

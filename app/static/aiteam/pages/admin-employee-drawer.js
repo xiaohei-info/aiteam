@@ -12,6 +12,7 @@ window.aiteam = window.aiteam || {};
     { id: 'knowledge', label: '知识库' },
     { id: 'memory', label: '记忆' },
     { id: 'connectors', label: '连接器' },
+    { id: 'loop', label: 'Loop' },
   ];
 
   var _activeTab = 'profile';
@@ -26,6 +27,7 @@ window.aiteam = window.aiteam || {};
   var _skillActionLoading = null;
   var _statusNotice = '';
   var _statusActionLoading = '';
+  var _suppressHistorySync = false;
 
   function _createEl(tag, cls, attrs) {
     var el = document.createElement(tag);
@@ -106,6 +108,23 @@ window.aiteam = window.aiteam || {};
     return [_stringValue(parsed, '未设置')];
   }
 
+  function _findTab(tabId) {
+    for (var i = 0; i < TABS.length; i++) {
+      if (TABS[i].id === tabId) return TABS[i];
+    }
+    return null;
+  }
+
+  function _syncDrawerPath() {
+    if (_suppressHistorySync || !_lastEmployeeId || typeof window === 'undefined') return;
+    var nextPath = '/admin/employees/' + encodeURIComponent(_lastEmployeeId) + (_activeTab && _activeTab !== 'profile' ? '/' + encodeURIComponent(_activeTab) : '');
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', nextPath);
+    } else if (window.location) {
+      window.location.pathname = nextPath;
+    }
+  }
+
   function _removeSkillCode(skillCode) {
     if (!_employeeData || !skillCode) return;
     _employeeData.skillCodes = (_employeeData.skillCodes || []).filter(function (item) {
@@ -135,6 +154,7 @@ window.aiteam = window.aiteam || {};
     var memory = profileConfig.memory || memoryConfig;
     var skills = profileConfig.skills || [];
     var connectorBindings = data.connector_bindings || [];
+    var knowledgeBindings = data.knowledge_bases || [];
     var usageSummary = data.usage_summary || {};
     var maxTokens = memory && memory.max_tokens != null ? String(memory.max_tokens) : '未设置';
 
@@ -166,7 +186,13 @@ window.aiteam = window.aiteam || {};
           meta: item.source_type || '',
         };
       }),
-      knowledge: [],
+      knowledge: knowledgeBindings.map(function (item) {
+        return {
+          name: item.name || item.knowledge_base_id || '未命名知识库',
+          status: item.status || (item.enabled ? 'enabled' : 'disabled'),
+          meta: item.scope_mode || '',
+        };
+      }),
       memory: memory ? {
         mode: memory.mode || memory.type || '未设置',
         providerCode: _stringValue(memory.provider_code, '未设置'),
@@ -188,6 +214,9 @@ window.aiteam = window.aiteam || {};
         totalTokens: usageSummary.total_tokens == null ? '0' : String(usageSummary.total_tokens),
         lastRunAt: _stringValue(usageSummary.last_run_at, '暂无记录'),
       },
+      runSummary: data.run_summary || {},
+      scheduledJobs: data.scheduled_jobs || [],
+      bindingsSummary: data.bindings_summary || [],
       usageItems: [
         { name: '累计 Runs', status: usageSummary.total_runs == null ? '0' : String(usageSummary.total_runs) },
         { name: '累计 Tokens', status: usageSummary.total_tokens == null ? '0' : String(usageSummary.total_tokens) },
@@ -201,9 +230,10 @@ window.aiteam = window.aiteam || {};
           accessMode: item.access_mode || '',
         };
       }),
+      recentAuditEvents: data.recent_audit_events || [],
       connectorNames: _listValue(connectorBindings, ['name', 'connector_id'], '未命名连接器'),
       skillCodes: _listValue(skills, ['skill_code'], '未命名技能'),
-      knowledgeIds: [],
+      knowledgeIds: _listValue(knowledgeBindings, ['name', 'knowledge_base_id'], '未命名知识库'),
     };
   }
 
@@ -226,6 +256,73 @@ window.aiteam = window.aiteam || {};
         (item.accessMode ? '<div class="aiteam-drawer__binding-meta">访问模式: ' + _escapeHtml(item.accessMode) + '</div>' : '') +
         '</div>' +
         (item.status ? '<span class="aiteam-drawer__binding-status">' + _escapeHtml(item.status) + '</span>' : '') +
+        '</li>';
+    }).join('') + '</ul>';
+  }
+
+  function _bindingsSummaryMarkup(items) {
+    if (!items || !items.length) return '<p class="aiteam-drawer__desc">暂无能力装配摘要</p>';
+    return '<div class="aiteam-drawer__summary-grid">' + items.map(function (item) {
+      return '<div class="aiteam-drawer__summary-card">' +
+        '<span class="aiteam-drawer__summary-label">' + _escapeHtml(item.binding_type || '未命名分类') + '</span>' +
+        '<strong class="aiteam-drawer__summary-value">' + _escapeHtml(item.count == null ? '0' : String(item.count)) + '</strong>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  function _scheduledJobsMarkup(items) {
+    if (!items || !items.length) {
+      return '<p class="aiteam-drawer__desc">当前员工暂无 Loop / Scheduled Job 配置。</p>';
+    }
+    return '<ul class="aiteam-drawer__binding-list">' + items.map(function (item) {
+      var expr = _stringValue(item.schedule_expr, '未设置');
+      var goal = _stringValue(item.goal, '未设置执行目标');
+      var failureText = (item.consecutive_failures == null ? '0' : String(item.consecutive_failures)) + ' / ' + (item.max_consecutive_failures == null ? '—' : String(item.max_consecutive_failures));
+      return '<li class="aiteam-drawer__binding-item">' +
+        '<div>' +
+        '<span class="aiteam-drawer__binding-name">' + _escapeHtml(item.name || item.scheduled_job_id || '未命名任务') + '</span>' +
+        '<div class="aiteam-drawer__binding-meta">Cron: ' + _escapeHtml(expr) + '</div>' +
+        '<div class="aiteam-drawer__binding-meta">目标: ' + _escapeHtml(goal) + '</div>' +
+        '<div class="aiteam-drawer__binding-meta">最近执行: ' + _escapeHtml(_stringValue(item.last_run_at, '暂无记录')) + ' · 最近成功: ' + _escapeHtml(_stringValue(item.last_success_at, '暂无记录')) + '</div>' +
+        '<div class="aiteam-drawer__binding-meta">连续失败: ' + _escapeHtml(failureText) + ' · Runtime Job: ' + _escapeHtml(_stringValue(item.runtime_job_id, '待创建')) + '</div>' +
+        '</div>' +
+        '<span class="aiteam-drawer__binding-status">' + _escapeHtml(item.status || 'unknown') + '</span>' +
+        '</li>';
+    }).join('') + '</ul>';
+  }
+
+  function _runSummaryMarkup(summary) {
+    if (!summary || !Object.keys(summary).length) {
+      return '<p class="aiteam-drawer__desc">暂无运行摘要</p>';
+    }
+    return '<div class="aiteam-drawer__summary-grid">' +
+      '<div class="aiteam-drawer__summary-card"><span class="aiteam-drawer__summary-label">最近 Run</span><strong class="aiteam-drawer__summary-value">' + _escapeHtml(_stringValue(summary.latest_run_id, '暂无')) + '</strong></div>' +
+      '<div class="aiteam-drawer__summary-card"><span class="aiteam-drawer__summary-label">最近状态</span><strong class="aiteam-drawer__summary-value">' + _escapeHtml(_stringValue(summary.latest_status, '暂无')) + '</strong></div>' +
+      '<div class="aiteam-drawer__summary-card"><span class="aiteam-drawer__summary-label">触发方式</span><strong class="aiteam-drawer__summary-value">' + _escapeHtml(_stringValue(summary.latest_trigger_type, '暂无')) + '</strong></div>' +
+      '<div class="aiteam-drawer__summary-card"><span class="aiteam-drawer__summary-label">累计成本(分)</span><strong class="aiteam-drawer__summary-value">' + _escapeHtml(summary.total_cost_cents == null ? '0' : String(summary.total_cost_cents)) + '</strong></div>' +
+      '</div>' +
+      '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+      '<span class="aiteam-drawer__field-label">最近完成时间</span>' +
+      '<div class="aiteam-drawer__prompt-text">' + _escapeHtml(_stringValue(summary.latest_finished_at, '暂无记录')) + '</div>' +
+      '</div>';
+  }
+
+  function _recentAuditMarkup(items) {
+    if (!items || !items.length) {
+      return '<p class="aiteam-drawer__desc">当前员工尚无治理审计记录。</p>';
+    }
+    return '<ul class="aiteam-drawer__binding-list">' + items.map(function (item) {
+      var payload = item && item.payload && Object.keys(item.payload).length
+        ? JSON.stringify(item.payload)
+        : '';
+      return '<li class="aiteam-drawer__binding-item">' +
+        '<div>' +
+        '<span class="aiteam-drawer__binding-name">' + _escapeHtml(item.event_type || 'unknown') + '</span>' +
+        '<div class="aiteam-drawer__binding-meta">操作者: ' + _escapeHtml(_stringValue(item.actor_id, 'system')) + ' · 时间: ' + _escapeHtml(_stringValue(item.created_at, '暂无记录')) + '</div>' +
+        (item.request_id ? '<div class="aiteam-drawer__binding-meta">request_id: ' + _escapeHtml(item.request_id) + '</div>' : '') +
+        (payload ? '<div class="aiteam-drawer__binding-meta">payload: ' + _escapeHtml(payload) + '</div>' : '') +
+        '</div>' +
+        '<span class="aiteam-drawer__binding-status">audit</span>' +
         '</li>';
     }).join('') + '</ul>';
   }
@@ -346,9 +443,14 @@ window.aiteam = window.aiteam || {};
           _fieldRow('Profile', d.profileName) +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">运行安全操作</span>' +
-          '<div class="aiteam-drawer__prompt-text">通过 PATCH /api/team/employees/{id} 提交变更。当前支持字段：display_name、status、skills_add/skills_remove、model_provider、model_name、prompt_version。</div>' +
+          '<div class="aiteam-drawer__prompt-text">通过 PATCH /api/team/employees/{id} 提交变更。当前支持字段：display_name、status、skills_add/skills_remove、model_provider、model_name、prompt_version、prompt_system/prompt_behavior_rules_json/prompt_opening_message、memory_mode/memory_provider_code/memory_retention_days/memory_writeback_enabled、knowledge_base_ids、connector_ids、scheduled_job/scheduled_job_action。</div>' +
           (_statusNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_statusNotice) + '</p>' : '') +
           _statusActionsMarkup() +
+          '</div>' +
+          '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">治理审计</h3>' +
+          '<p class="aiteam-drawer__desc">最近治理动作直接来自 /api/team/employees/{id} 返回的 recent_audit_events，可核对停用/恢复/Loop 调整是否已落库。</p>' +
+          _recentAuditMarkup(d.recentAuditEvents) +
           '</div>' +
           '</div>';
       },
@@ -413,6 +515,21 @@ window.aiteam = window.aiteam || {};
           _bindingList(d.connectors, '暂无已绑定连接器') +
           '</div>';
       },
+      loop: function () {
+        return '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">Loop 配置</h3>' +
+          '<p class="aiteam-drawer__desc">Scheduled Job 由 /api/team/employees/{id} 聚合返回，修改时通过 scheduled_job / scheduled_job_action PATCH 字段提交。</p>' +
+          _scheduledJobsMarkup(d.scheduledJobs) +
+          '</div>' +
+          '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">运行摘要</h3>' +
+          _runSummaryMarkup(d.runSummary) +
+          '</div>' +
+          '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">能力装配摘要</h3>' +
+          _bindingsSummaryMarkup(d.bindingsSummary) +
+          '</div>';
+      },
     };
 
     body.innerHTML = (renderers[_activeTab] || renderers.profile)();
@@ -438,6 +555,7 @@ window.aiteam = window.aiteam || {};
         }
       }
     }
+    _syncDrawerPath();
     _renderTabContent();
   }
 
@@ -527,9 +645,11 @@ window.aiteam = window.aiteam || {};
     return drawer;
   }
 
-  function open(employeeId) {
+  function open(employeeId, options) {
+    options = options || {};
     if (!employeeId || !_container || !ns.api || !ns.api.getEmployee) return;
-    _activeTab = 'profile';
+    var requestedTab = _findTab(options.tab) ? options.tab : 'profile';
+    _activeTab = requestedTab;
     _employeeData = null;
     _lastEmployeeId = employeeId;
     _enterpriseSkillInstalls = [];
@@ -540,6 +660,11 @@ window.aiteam = window.aiteam || {};
     _statusActionLoading = '';
 
     close();
+    _suppressHistorySync = options.syncUrl === false;
+    if (window.location && window.location.pathname && window.location.pathname.indexOf('/admin/employees/') !== 0) {
+      _suppressHistorySync = false;
+    }
+
     _overlay = _renderOverlay();
     _drawer = _renderDrawerShell();
     _container.appendChild(_overlay);
@@ -551,9 +676,12 @@ window.aiteam = window.aiteam || {};
     ns.api.getEmployee(employeeId).then(function (result) {
       if (!result.ok) {
         if (body) body.innerHTML = '<div class="aiteam-drawer__state aiteam-drawer__state--error"><p>' + _escapeHtml(_apiErrorMsg(result)) + '</p></div>';
+        _suppressHistorySync = false;
         return;
       }
       _employeeData = normalizeEmployeePayload(result.data);
+      _syncDrawerPath();
+      _suppressHistorySync = false;
       _renderTabContent();
       _loadEnterpriseSkillInstalls();
     });
@@ -566,6 +694,7 @@ window.aiteam = window.aiteam || {};
     _drawer = null;
     _employeeData = null;
     _activeTab = 'profile';
+    _suppressHistorySync = false;
   }
 
   function init(container) {

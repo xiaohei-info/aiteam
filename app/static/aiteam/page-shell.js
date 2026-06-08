@@ -171,19 +171,20 @@ window.aiteam = window.aiteam || {};
         var moduleScript = pathToModule[currentPath];
         var _appRouteHandler = null;
 
-        // Regex fallback for dynamic app routes (chat/:id, group/:id, marketplace/:templateId)
+        // Regex fallback for dynamic app/admin routes
         if (!moduleScript) {
-          var _APP_ROUTES = [
+          var _DYNAMIC_ROUTES = [
             { re: /^\/app\/workbench\/?$/, script: 'app-workbench.js', handler: 'appWorkbench' },
             { re: /^\/app\/marketplace\/?$/, script: 'app-marketplace.js', handler: 'appMarketplace' },
             { re: /^\/app\/marketplace\/[^/]+\/?$/, script: 'app-template-detail.js', handler: 'appTemplateDetail' },
             { re: /^\/app\/chat\/[^/]+\/?$/, script: 'app-chat.js', handler: 'appChat' },
             { re: /^\/app\/group\/[^/]+\/?$/, script: 'app-group.js', handler: 'appGroup' },
+            { re: /^\/admin\/employees\/[^/]+(?:\/[^/]+)?\/?$/, script: 'admin-employees.js', handler: 'adminEmployees' },
           ];
-          for (var _ri = 0; _ri < _APP_ROUTES.length; _ri += 1) {
-            if (_APP_ROUTES[_ri].re.test(currentPath)) {
-              moduleScript = _APP_ROUTES[_ri].script;
-              _appRouteHandler = _APP_ROUTES[_ri].handler;
+          for (var _ri = 0; _ri < _DYNAMIC_ROUTES.length; _ri += 1) {
+            if (_DYNAMIC_ROUTES[_ri].re.test(currentPath)) {
+              moduleScript = _DYNAMIC_ROUTES[_ri].script;
+              _appRouteHandler = _DYNAMIC_ROUTES[_ri].handler;
               break;
             }
           }
@@ -205,6 +206,8 @@ window.aiteam = window.aiteam || {};
                 handler = aiteam.pages && aiteam.pages.appChat;
               } else if (_appRouteHandler === 'appGroup') {
                 handler = aiteam.pages && aiteam.pages.appGroup;
+              } else if (_appRouteHandler === 'adminEmployees') {
+                handler = aiteam.pages && aiteam.pages.adminEmployees;
               } else if (currentPath === '/app/org' || currentPath.indexOf('/app/org/') === 0) {
                 handler = aiteam.pages && aiteam.pages.appOrg;
               } else if (currentPath === '/app/knowledge' || currentPath.indexOf('/app/knowledge') === 0) {

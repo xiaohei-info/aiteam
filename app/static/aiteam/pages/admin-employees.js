@@ -20,6 +20,25 @@ window.aiteam = window.aiteam || {};
     document.head.appendChild(scriptEl);
   }
 
+  function _parseEmployeeDetailPath(pathname) {
+    var parts = String(pathname || '').split('/').filter(Boolean);
+    if (parts.length < 3 || parts[0] !== 'admin' || parts[1] !== 'employees') return null;
+    return {
+      employeeId: decodeURIComponent(parts[2] || ''),
+      tab: parts[3] ? decodeURIComponent(parts[3]) : ''
+    };
+  }
+
+  function _pushEmployeeDetailPath(employeeId, tab) {
+    if (!employeeId || typeof window === 'undefined') return;
+    var nextPath = '/admin/employees/' + encodeURIComponent(employeeId) + (tab ? '/' + encodeURIComponent(tab) : '');
+    if (window.history && window.history.pushState) {
+      window.history.pushState({}, '', nextPath);
+    } else if (window.location) {
+      window.location.pathname = nextPath;
+    }
+  }
+
   function bindDrawer(container) {
     var drawer = ns.pages && ns.pages.adminEmployeeDrawer;
     if (!drawer) return;
@@ -29,8 +48,16 @@ window.aiteam = window.aiteam || {};
     for (var i = 0; i < rows.length; i++) {
       rows[i].addEventListener('click', function () {
         var employeeId = this.getAttribute('data-employee-id');
-        if (employeeId) drawer.open(employeeId);
+        if (employeeId) {
+          _pushEmployeeDetailPath(employeeId);
+          drawer.open(employeeId);
+        }
       });
+    }
+
+    var detailRoute = _parseEmployeeDetailPath(window.location && window.location.pathname);
+    if (detailRoute && detailRoute.employeeId) {
+      drawer.open(detailRoute.employeeId, { tab: detailRoute.tab, syncUrl: false });
     }
   }
 
@@ -120,7 +147,7 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-shell__panel">' +
           '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
           '<h2 class="aiteam-shell__panel-title">员工管理</h2>' +
-          '<p class="aiteam-shell__panel-body">通过 /api/team/employees 消费员工列表；点击员工行可查看 /api/team/employees/{id} 返回的技能配置，并用 skills_add / skills_remove 完成授权变更。</p>' +
+          '<p class="aiteam-shell__panel-body">通过 /api/team/employees 消费员工列表；点击员工行或直接访问 /admin/employees/:employeeId/:tab? 可查看 /api/team/employees/{id} 返回的员工详情页签，并通过 skills_add / skills_remove、knowledge_base_ids、connector_ids、memory_*、scheduled_job 等入口完成配置。</p>' +
           exportBtn +
           '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th></tr></thead><tbody>' + rows + '</tbody></table>' +
           auditLink +

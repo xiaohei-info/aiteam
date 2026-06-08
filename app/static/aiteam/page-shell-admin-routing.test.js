@@ -72,6 +72,11 @@ shell.init('/admin/skills');
 assert(nodes['#aiteam-nav'].innerHTML.indexOf('/admin/skills') !== -1, 'admin nav should include /admin/skills');
 assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/admin-skills.js', 'shell should lazy-load admin-skills.js for /admin/skills');
 
+context.window.location.pathname = '/admin/employees/emp_7/loop';
+shell.init('/admin/employees/emp_7/loop');
+assert(nodes['#aiteam-nav'].innerHTML.indexOf('/admin/employees') !== -1, 'admin nav should include /admin/employees for nested employee detail routes');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/admin-employees.js', 'shell should lazy-load admin-employees.js for nested employee detail routes');
+
 if (failed) {
   console.error('page-shell-admin-routing.test.js failed');
   failures.forEach(function (item) { console.error('- ' + item); });
