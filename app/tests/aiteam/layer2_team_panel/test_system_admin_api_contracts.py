@@ -10,6 +10,11 @@ from team_panel.transactions.uow import UnitOfWork
 from tests.aiteam.layer0_contracts.test_host_routing import _get, _patch, _post
 
 
+def _system_admin_path(path: str) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}role=system_admin"
+
+
 def _seed_usage(db_conn, *, enterprise_id: str, employee_id: str, summary_tokens: int, summary_cost: int, event_tokens: int, event_cost: int) -> None:
     run_id = f"run_{uuid.uuid4().hex[:10]}"
     with UnitOfWork(db_conn) as uow:
@@ -67,7 +72,7 @@ def _seed_second_enterprise(db_conn, *, template_id: str) -> dict:
 
 class TestSystemTemplates:
     def test_get_templates_returns_seeded_template(self, seeded_enterprise):
-        status, body = _get("/api/system-admin/templates")
+        status, body = _get(_system_admin_path("/api/system-admin/templates"))
         assert status == 200, body
         assert body["total"] >= 1
         seeded = next(item for item in body["items"] if item["template_id"] == seeded_enterprise["template_id"])
@@ -102,7 +107,7 @@ class TestSystemTemplates:
 
 class TestSystemSolutions:
     def test_get_solutions_returns_seeded_solution(self, seeded_enterprise):
-        status, body = _get("/api/system-admin/solutions")
+        status, body = _get(_system_admin_path("/api/system-admin/solutions"))
         assert status == 200, body
         seeded = next(item for item in body["items"] if item["solution_id"] == seeded_enterprise["solution_id"])
         assert seeded["template_ids"] == [seeded_enterprise["template_id"]]
@@ -153,7 +158,9 @@ class TestSystemFinance:
             event_cost=1,
         )
 
-        status, overview = _get("/api/system-admin/finance/overview?period_start=2000-01-01&period_end=2099-12-31")
+        status, overview = _get(
+            _system_admin_path("/api/system-admin/finance/overview?period_start=2000-01-01&period_end=2099-12-31")
+        )
         assert status == 200, overview
         assert overview["total_tokens"] == 49
         assert overview["total_revenue_cents"] == 11
@@ -163,7 +170,9 @@ class TestSystemFinance:
         assert len(overview["top_enterprises"]) == 2
         assert overview["top_enterprises"][0]["cost_cents"] >= overview["top_enterprises"][1]["cost_cents"]
 
-        report_status, reports = _get("/api/system-admin/finance/reports?period_start=2000-01-01&period_end=2099-12-31")
+        report_status, reports = _get(
+            _system_admin_path("/api/system-admin/finance/reports?period_start=2000-01-01&period_end=2099-12-31")
+        )
         assert report_status == 200, reports
         assert len(reports["trends"]) >= 1
         trend_total = sum(item["cost_cents"] for item in reports["trends"])
