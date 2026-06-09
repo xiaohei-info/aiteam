@@ -56,7 +56,7 @@ const context = {
     aiteam: {
       api: {
         installSkill(body) {
-          apiCalls.push('install:' + body.skill_id);
+          apiCalls.push('install:' + body.skill_code + ':' + JSON.stringify(body));
           return Promise.resolve({ ok: true, data: { skill_id: body.skill_id, name: 'Excel分析', version: '1.2.0', source: 'skillhub', visibility: 'enterprise', granted_employee_ids: [] } });
         },
         patchSkillInstall(installId, body) {
@@ -81,7 +81,7 @@ const context = {
           apiCalls.push('catalog');
           return Promise.resolve({ ok: true, data: { items: [
             { skill_id: 'skill_excel', name: 'Excel分析', description: '处理表格', source: 'skillhub', version: '1.2.0', latest_version: '1.3.0', update_available: true, install_count: 42, tags: ['分析', '表格'], authorization_scope: 'employee_grant' },
-            { skill_id: 'skill_search', name: '联网搜索', description: '联网检索', source: 'skillhub', version: '0.9.0', install_count: 11, tags: ['搜索'] },
+            { skill_id: 'skill_search', name: '联网搜索', description: '联网检索', source: 'clawhub', version: '0.9.0', install_count: 11, tags: ['搜索'] },
           ] } });
         },
         getSkillInstalls() {
@@ -144,13 +144,19 @@ async function run() {
   assert(host.innerHTML.indexOf('编辑授权员工') !== -1, 'page should render scope management action');
   assert(host.innerHTML.indexOf('Excel分析') !== -1, 'page should render skill card content');
   assert(host.innerHTML.indexOf('搜索技能名称、描述或标签') !== -1, 'page should render search guidance');
+  assert(host.innerHTML.indexOf('安装时配置授权范围') !== -1, 'page should render install-time scope controls');
+  assert(host.innerHTML.indexOf('skillhub.io') !== -1, 'page should render skillhub source badge');
+  assert(host.innerHTML.indexOf('clawhub.io') !== -1, 'page should render clawhub source badge');
 
   assert(typeof page.__test.createController === 'function', 'page should expose controller factory for interaction tests');
   const controller = page.__test.createController(createElement('div'));
   await controller.load();
+  controller.__test.setInstallScope('selected_employees', ['emp_7', 'emp_8']);
+  await controller.__test.installSkill('skill_search');
   await controller.__test.upgradeInstall('inst_1');
   await controller.__test.updateScope('inst_1', 'selected_employees', ['emp_1', 'emp_2']);
   await controller.__test.uninstallInstall('inst_1');
+  assert(apiCalls.indexOf('install:skill_search:{"skill_code":"skill_search","scope_mode":"selected_employees","employee_ids":["emp_7","emp_8"]}') !== -1, 'install should carry install-time employee scope');
   assert(apiCalls.indexOf('patch:inst_1:{"version":"1.3.0","latest_version":"1.3.0"}') !== -1, 'upgrade should patch install to latest version');
   assert(apiCalls.indexOf('patch:inst_1:{"scope_mode":"selected_employees","employee_ids":["emp_1","emp_2"]}') !== -1, 'scope update should patch employee scope');
   assert(apiCalls.indexOf('delete:inst_1') !== -1, 'uninstall should call deleteSkillInstall');

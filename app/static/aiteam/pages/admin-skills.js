@@ -65,6 +65,13 @@ window.aiteam = window.aiteam || {};
     };
   }
 
+  function sourceLabel(source) {
+    var value = stringValue(source, '').toLowerCase();
+    if (value === 'clawhub') return 'clawhub.io';
+    if (value === 'skillhub') return 'skillhub.io';
+    return value || 'custom';
+  }
+
   function installedLookup(installs) {
     var lookup = {};
     (installs || []).forEach(function (item) {
@@ -115,6 +122,7 @@ window.aiteam = window.aiteam || {};
     return '<li class="aiteam-skill-card">' +
       '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
       '<div class="aiteam-skill-card__meta">' + versionLine + '</div>' +
+      '<div class="aiteam-skill-card__meta">来源：' + esc(sourceLabel(item.source)) + '</div>' +
       '<div class="aiteam-skill-card__meta">可见性：' + esc(item.visibility) + ' · 已授权员工：' + esc(grants) + '</div>' +
       '<div class="aiteam-skill-card__meta">' + scopeLine + '</div>' +
       updatedLine +
@@ -142,6 +150,7 @@ window.aiteam = window.aiteam || {};
     return '<li class="aiteam-skill-card">' +
       '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
       '<div class="aiteam-skill-card__meta">' + esc(item.description) + '</div>' +
+      '<div class="aiteam-skill-card__meta">来源标注：' + esc(sourceLabel(item.source)) + '</div>' +
       '<div class="aiteam-skill-card__meta">' + versionHint + '</div>' +
       '<div class="aiteam-skill-card__meta">标签：' + esc((item.tags || []).join(' / ') || '无') + '</div>' +
       actionHint +
@@ -162,7 +171,9 @@ window.aiteam = window.aiteam || {};
       loadState: {
         installs: 'loading',
         catalog: 'loading'
-      }
+      },
+      installScopeMode: 'all_employees',
+      installScopeEmployeeIds: []
     };
 
     function setNotice(message) {
@@ -185,6 +196,12 @@ window.aiteam = window.aiteam || {};
       return filterCatalog(state.catalog, state.query);
     }
 
+    function setInstallScope(scopeMode, employeeIds) {
+      state.installScopeMode = scopeMode === 'selected_employees' ? 'selected_employees' : 'all_employees';
+      state.installScopeEmployeeIds = Array.isArray(employeeIds) ? employeeIds.slice() : [];
+      render();
+    }
+
     function bindEvents() {
       if (!container || !container.querySelectorAll) return;
       var searchInput = container.querySelector('[data-role="skills-search"]');
@@ -192,6 +209,21 @@ window.aiteam = window.aiteam || {};
         searchInput.addEventListener('input', function () {
           state.query = this.value || '';
           render();
+        });
+      }
+      var scopeModeButtons = container.querySelectorAll('[data-role="install-scope-mode"]');
+      for (var h = 0; h < scopeModeButtons.length; h++) {
+        scopeModeButtons[h].addEventListener('click', function () {
+          setInstallScope(this.getAttribute('data-scope-mode'), state.installScopeEmployeeIds);
+        });
+      }
+      var scopeInput = container.querySelector('[data-role="install-scope-employees"]');
+      if (scopeInput) {
+        scopeInput.addEventListener('input', function () {
+          var employeeIds = String(this.value || '').split(',').map(function (item) {
+            return item.replace(/^\s+|\s+$/g, '');
+          }).filter(Boolean);
+          state.installScopeEmployeeIds = employeeIds;
         });
       }
       var buttons = container.querySelectorAll('[data-role="install-skill"]');
@@ -279,6 +311,16 @@ window.aiteam = window.aiteam || {};
         '<span class="aiteam-skill-summary__item">市场可见 ' + esc(visibleCatalog.length) + ' 项</span>' +
         '<span class="aiteam-skill-summary__item">员工授权入口：员工详情抽屉</span>' +
         '</div>' +
+        '<div class="aiteam-card aiteam-card--flat">' +
+        '<div class="aiteam-card__row"><strong>安装时配置授权范围</strong><span class="aiteam-inline-note">全企业共享 / 仅指定员工可用</span></div>' +
+        '<div class="aiteam-action-row">' +
+        '<button type="button" class="aiteam-btn' + (state.installScopeMode === 'all_employees' ? '' : ' aiteam-btn--secondary') + '" data-role="install-scope-mode" data-scope-mode="all_employees">全企业共享</button>' +
+        '<button type="button" class="aiteam-btn' + (state.installScopeMode === 'selected_employees' ? '' : ' aiteam-btn--secondary') + '" data-role="install-scope-mode" data-scope-mode="selected_employees">仅指定员工可用</button>' +
+        '</div>' +
+        '<div class="aiteam-card__meta"><span>员工 ID</span><span>' +
+        '<input class="aiteam-input" data-role="install-scope-employees" value="' + esc(state.installScopeEmployeeIds.join(', ')) + '" placeholder="emp_1, emp_2">' +
+        '</span></div>' +
+        '</div>' +
         '<label class="aiteam-skills-search-wrap">' +
         '<span class="aiteam-shell__panel-body">搜索技能名称、描述或标签</span>' +
         '<input class="aiteam-skills-search" data-role="skills-search" type="search" value="' + esc(state.query) + '" placeholder="例如：搜索 / 表格 / 分析">' +
@@ -297,10 +339,17 @@ window.aiteam = window.aiteam || {};
     function installSkill(skillId) {
       if (!skillId || !ns.api || !ns.api.installSkill || state.pendingSkillId) return;
       var catalogItem = state.catalog.find(function (entry) { return entry.skill_id === skillId; });
+      var payload = {
+        skill_code: skillId,
+        scope_mode: state.installScopeMode,
+      };
+      if (state.installScopeMode === 'selected_employees') {
+        payload.employee_ids = state.installScopeEmployeeIds.slice();
+      }
       state.pendingSkillId = skillId;
       setNotice('正在安装技能：' + skillId);
       render();
-      ns.api.installSkill({ skill_code: skillId, scope_mode: 'all_employees' }).then(function (result) {
+      ns.api.installSkill(payload).then(function (result) {
         state.pendingSkillId = '';
         if (!result.ok) {
           setNotice('技能安装失败：' + apiErrorMessage(result));
@@ -312,16 +361,18 @@ window.aiteam = window.aiteam || {};
           name: catalogItem ? catalogItem.name : skillId,
           version: catalogItem ? catalogItem.version : '—',
           source: catalogItem ? catalogItem.source : 'custom',
-          visibility: 'all_employees',
-          scope_mode: 'all_employees',
-          granted_employee_ids: []
+          visibility: state.installScopeMode,
+          scope_mode: state.installScopeMode,
+          granted_employee_ids: state.installScopeMode === 'selected_employees' ? state.installScopeEmployeeIds.slice() : []
         });
         state.installs = state.installs.filter(function (item) {
           return item.skill_id !== nextInstall.skill_id;
         });
         state.installs.push(nextInstall);
         state.loadState.installs = 'ready';
-        setNotice('安装成功：' + nextInstall.name + '。默认已授权全员，可按需缩小员工范围。');
+        setNotice(state.installScopeMode === 'selected_employees'
+          ? '安装成功：' + nextInstall.name + '。已按安装时选择的员工范围授权。'
+          : '安装成功：' + nextInstall.name + '。默认已授权全员，可按需缩小员工范围。');
         render();
       });
     }
@@ -444,6 +495,7 @@ window.aiteam = window.aiteam || {};
         normalizeInstall: normalizeInstall,
         normalizeCatalogItem: normalizeCatalogItem,
         filterCatalog: filterCatalog,
+        setInstallScope: setInstallScope,
         installSkill: installSkill,
         upgradeInstall: upgradeInstall,
         updateScope: updateScope,
