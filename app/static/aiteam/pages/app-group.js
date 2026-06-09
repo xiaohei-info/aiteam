@@ -402,7 +402,11 @@ window.aiteam = window.aiteam || {};
       if (titleInput && typeof titleInput.addEventListener === 'function') {
         titleInput.addEventListener('input', function () {
           launcherState.title = this.value || '';
-          launcherState.limitMessage = launcherState.selectedEmployeeIds.length < 2 ? '至少选择 2 名成员' : '';
+          if (!stringValue(launcherState.title, '')) {
+            launcherState.limitMessage = '请输入群聊标题';
+          } else {
+            launcherState.limitMessage = launcherState.selectedEmployeeIds.length < 2 ? '至少选择 2 名成员' : '';
+          }
           renderLauncher();
           bindLauncherInteractions();
         });
@@ -432,6 +436,12 @@ window.aiteam = window.aiteam || {};
       if (createButton && typeof createButton.addEventListener === 'function') {
         createButton.disabled = launcherState.selectedEmployeeIds.length < 2 || !stringValue(launcherState.title, '');
         createButton.addEventListener('click', function () {
+          if (!stringValue(launcherState.title, '')) {
+            launcherState.limitMessage = '请输入群聊标题';
+            renderLauncher();
+            bindLauncherInteractions();
+            return;
+          }
           if (launcherState.selectedEmployeeIds.length < 2) {
             launcherState.limitMessage = '至少选择 2 名成员';
             renderLauncher();

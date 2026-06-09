@@ -552,6 +552,103 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     return json.loads(completed.stdout)
 
 
+def _run_group_launcher_title_required_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
+function makeNode(initialValue = '') {{
+  return {{
+    value: initialValue,
+    checked: false,
+    disabled: false,
+    listeners: {{}},
+    textContent: '',
+    innerHTML: '',
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatch(type) {{
+      if (this.listeners[type]) this.listeners[type].call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const titleInput = makeNode('启动群');
+const createButton = makeNode();
+const statusNode = makeNode();
+const memberInputs = {{
+  emp_test: Object.assign(makeNode(''), {{ checked: true, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_test' : null; }} }}),
+  emp_member: Object.assign(makeNode(''), {{ checked: true, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_member' : null; }} }}),
+}};
+const employees = [
+  {{ employee_id: 'emp_test', display_name: 'Alice', role_name: '产品经理', status: 'active' }},
+  {{ employee_id: 'emp_member', display_name: 'Bob', role_name: '工程师', status: 'active' }},
+];
+const apiCalls = [];
+const container = {{
+  innerHTML: '',
+  querySelector(selector) {{
+    if (selector === '[data-group-create-title]') return titleInput;
+    if (selector === '[data-group-create-launch]') return createButton;
+    if (selector === '[data-group-create-status]') return statusNode;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-group-create-member]') return [memberInputs.emp_test, memberInputs.emp_member];
+    return [];
+  }},
+}};
+global.window = {{
+  location: {{ pathname: '/app/group', href: 'http://example.test/app/group' }},
+  localStorage: {{ getItem() {{ return ''; }}, setItem() {{}}, removeItem() {{}} }},
+  aiteam: {{
+    util: {{ escapeHtml(value) {{ return String(value == null ? '' : value); }} }},
+    states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
+    timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
+    api: {{
+      getEmployees() {{
+        apiCalls.push({{ method: 'GET', path: '/api/team/employees' }});
+        return Promise.resolve({{ ok: true, data: {{ items: employees }} }});
+      }},
+      createGroupConversation(body) {{
+        apiCalls.push({{ method: 'POST', path: '/api/team/group-conversations', body }});
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_new' }} }});
+      }},
+      getGroupConversation() {{
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_new', title: '启动群', members: [] }} }});
+      }},
+      getRunEvents() {{
+        return Promise.resolve({{ ok: true, data: {{ items: [], next_cursor: 0, latest_event_cursor: 0, run_status: 'idle' }} }});
+      }},
+    }},
+    pages: {{}},
+  }},
+}};
+global.document = {{ baseURI: 'http://example.test/app/group' }};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
+aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
+  const initialHtml = container.innerHTML;
+  titleInput.value = '';
+  titleInput.dispatch('input');
+  const emptyTitleHtml = container.innerHTML;
+  createButton.dispatch('click');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  console.log(JSON.stringify({{
+    initialHtml,
+    emptyTitleHtml,
+    createDisabled: createButton.disabled,
+    statusText: statusNode.textContent,
+    apiCalls,
+  }}));
+}}).catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_group_management_actions() -> dict:
     script = f"""
 const fs = require('fs');
@@ -797,6 +894,14 @@ def test_group_page_launcher_requires_at_least_two_members() -> None:
     assert "当前已选 1 人" in payload["oneMemberHtml"]
     assert payload["createDisabled"] is True
     assert "至少选择 2 名成员" in payload["oneMemberHtml"]
+    assert payload["apiCalls"] == [{"method": "GET", "path": "/api/team/employees"}]
+
+
+def test_group_page_launcher_requires_non_empty_title() -> None:
+    payload = _run_group_launcher_title_required_flow()
+    assert "当前已选 2 人" in payload["initialHtml"]
+    assert payload["createDisabled"] is True
+    assert "请输入群聊标题" in payload["emptyTitleHtml"]
     assert payload["apiCalls"] == [{"method": "GET", "path": "/api/team/employees"}]
 
 
