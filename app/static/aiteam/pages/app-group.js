@@ -277,7 +277,26 @@ window.aiteam = window.aiteam || {};
   }
 
   function renderGroupLauncher(container) {
-    container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
+    var launcherState = {
+      title: '新建群聊',
+      employeeItems: [],
+      selectedEmployeeIds: ['emp_test', 'emp_member'],
+    };
+
+    function renderLauncher() {
+      var memberCards = launcherState.employeeItems.length
+        ? launcherState.employeeItems.map(function (employee) {
+            var employeeId = stringValue(employee && employee.employee_id, '');
+            var checked = launcherState.selectedEmployeeIds.indexOf(employeeId) !== -1 ? ' checked' : '';
+            return '<label class="aiteam-card aiteam-card--flat">' +
+              '<div class="aiteam-card__row"><strong>' + escapeHtml(stringValue(employee.display_name, employeeId || '未命名员工')) + '</strong>' + badge(stringValue(employee.role_name, '数字员工')) + '</div>' +
+              '<div class="aiteam-card__meta"><span>' + escapeHtml(stringValue(employee.status || employee.presence, 'active')) + '</span><span>' + escapeHtml(employeeId) + '</span></div>' +
+              '<div class="aiteam-action-row"><input type="checkbox" data-group-create-member="' + escapeHtml(employeeId) + '"' + checked + '> <span>加入群聊</span></div>' +
+              '</label>';
+          }).join('')
+        : '<div class="aiteam-inline-empty">当前暂无可选成员</div>';
+
+      container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
       '<div class="aiteam-page__hero">' +
       '<div>' +
       '<p class="aiteam-page__eyebrow">P06 · 群聊协作</p>' +
@@ -287,12 +306,17 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-panel">' +
       '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>填写标题与成员后创建</span></div>' +
-      '<div class="aiteam-detail-kv"><span>默认成员</span><strong>逗号分隔 employee_id</strong></div>' +
+      '<div class="aiteam-shell__meta">' +
+      '<div class="aiteam-shell__meta-card"><label>群聊标题<br><input class="aiteam-input" type="text" data-group-create-title value="' + escapeHtml(launcherState.title) + '" placeholder="例如：新品启动群"></label></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">可选成员</span><span class="aiteam-shell__meta-value">最多 10 人，当前已选 ' + escapeHtml(String(launcherState.selectedEmployeeIds.length)) + ' 人</span></div>' +
+      '</div>' +
+      '<div class="aiteam-stack" data-group-create-members>' + memberCards + '</div>' +
       '<div class="aiteam-action-row">' +
       '<button class="aiteam-button" type="button" data-group-create-launch>立即创建</button>' +
       '</div>' +
       '</div>' +
       '</section>';
+    }
 
     var statusEl = container.querySelector('[data-group-create-status]');
     function setStatus(text) {
@@ -326,15 +350,65 @@ window.aiteam = window.aiteam || {};
       });
     };
 
-    var createButton = container.querySelector('[data-group-create-launch]');
-    if (createButton && typeof createButton.addEventListener === 'function') {
-      createButton.addEventListener('click', function () {
-        container.lastCreateGroupHandler({
-          title: '新建群聊',
-          member_employee_ids: ['emp_test', 'emp_member'],
-        });
+    container.lastLoadEmployeesHandler = function () {
+      if (!ns.api || !ns.api.getEmployees) {
+        renderLauncher();
+        setStatus('当前 API client 未接入 getEmployees。');
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_getEmployees' });
+      }
+      return ns.api.getEmployees().then(function (result) {
+        if (!result.ok) {
+          renderLauncher();
+          setStatus(result.error || '成员列表加载失败');
+          return result;
+        }
+        var payload = result.data || {};
+        launcherState.employeeItems = listValue(payload.items || payload.employees || payload);
+        if (!launcherState.selectedEmployeeIds.length) {
+          launcherState.selectedEmployeeIds = launcherState.employeeItems.slice(0, 2).map(function (item) {
+            return stringValue(item && item.employee_id, '');
+          }).filter(Boolean);
+        }
+        renderLauncher();
+        bindLauncherInteractions();
+        return result;
       });
+    };
+
+    function bindLauncherInteractions() {
+      var titleInput = container.querySelector('[data-group-create-title]');
+      if (titleInput && typeof titleInput.addEventListener === 'function') {
+        titleInput.addEventListener('input', function () {
+          launcherState.title = this.value || '';
+        });
+      }
+      var memberInputs = container.querySelectorAll ? container.querySelectorAll('[data-group-create-member]') : [];
+      for (var i = 0; i < memberInputs.length; i += 1) {
+        memberInputs[i].addEventListener('change', function () {
+          var employeeId = this.getAttribute('data-group-create-member') || '';
+          if (!employeeId) return;
+          if (this.checked) {
+            if (launcherState.selectedEmployeeIds.indexOf(employeeId) === -1 && launcherState.selectedEmployeeIds.length < 10) {
+              launcherState.selectedEmployeeIds.push(employeeId);
+            }
+          } else {
+            launcherState.selectedEmployeeIds = launcherState.selectedEmployeeIds.filter(function (id) { return id !== employeeId; });
+          }
+        });
+      }
+      var createButton = container.querySelector('[data-group-create-launch]');
+      if (createButton && typeof createButton.addEventListener === 'function') {
+        createButton.addEventListener('click', function () {
+          container.lastCreateGroupHandler({
+            title: launcherState.title || '新建群聊',
+            member_employee_ids: launcherState.selectedEmployeeIds.slice(),
+          });
+        });
+      }
     }
+
+    renderLauncher();
+    container.lastLoadEmployeesHandler();
   }
 
   function renderGroup(container, conversation) {

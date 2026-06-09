@@ -111,6 +111,11 @@ const fs = require('fs');
 const vm = require('vm');
 const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
 const apiCalls = [];
+const employees = [
+  {{ employee_id: 'emp_test', display_name: 'Alice', role_name: '产品经理', status: 'active' }},
+  {{ employee_id: 'emp_member', display_name: 'Bob', role_name: '工程师', status: 'active' }},
+  {{ employee_id: 'emp_planner', display_name: 'Cara', role_name: '研究员', status: 'active' }},
+];
 const conversation = {{
   conversation_id: 'group_new',
   title: '新品启动群',
@@ -139,6 +144,10 @@ global.window = {{
     states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
     timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
     api: {{
+      getEmployees() {{
+        apiCalls.push({{ method: 'GET', path: '/api/team/employees' }});
+        return Promise.resolve({{ ok: true, data: {{ items: employees }} }});
+      }},
       createGroupConversation(body) {{
         apiCalls.push({{ method: 'POST', path: '/api/team/group-conversations', body }});
         return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_new', navigation: {{ conversation: '/app/group/group_new' }} }} }});
@@ -159,9 +168,10 @@ global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
 aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
+  const launcherHtml = container.innerHTML;
   await container.lastCreateGroupHandler({{ title: '新品启动群', member_employee_ids: ['emp_test', 'emp_member'] }});
   await new Promise((resolve) => setTimeout(resolve, 0));
-  console.log(JSON.stringify({{ html: container.innerHTML, apiCalls }}));
+  console.log(JSON.stringify({{ launcherHtml, html: container.innerHTML, apiCalls }}));
 }}).catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -379,9 +389,14 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
 
 def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None:
     payload = _run_group_launcher_flow()
-    assert payload["apiCalls"][0]["method"] == "POST"
-    assert payload["apiCalls"][0]["path"] == "/api/team/group-conversations"
-    assert payload["apiCalls"][1] == {"method": "GET", "path": "/api/team/group-conversations/group_new"}
+    assert payload["apiCalls"][0] == {"method": "GET", "path": "/api/team/employees"}
+    assert payload["apiCalls"][1]["method"] == "POST"
+    assert payload["apiCalls"][1]["path"] == "/api/team/group-conversations"
+    assert payload["apiCalls"][2] == {"method": "GET", "path": "/api/team/group-conversations/group_new"}
+    assert "可选成员" in payload["launcherHtml"]
+    assert "Alice" in payload["launcherHtml"]
+    assert "Bob" in payload["launcherHtml"]
+    assert "Cara" in payload["launcherHtml"]
     assert "新品启动群" in payload["html"]
     assert "成员管理" in payload["html"]
 
