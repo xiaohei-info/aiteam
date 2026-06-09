@@ -46,6 +46,27 @@ window.aiteam = window.aiteam || {};
     return list;
   }
 
+  function renderPreviewPanel(item) {
+    if (!item) {
+      return '<div class="aiteam-inline-empty">选择一个模板后查看用户端预览。</div>';
+    }
+    var tags = Array.isArray(item.tags) ? item.tags : [];
+    return '' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>用户端预览</h3>' +
+      '<div class="aiteam-chat-summary__hero">' +
+      '<h3>' + (item.name || '') + '</h3>' +
+      '<p>' + (item.description || '暂无岗位描述') + '</p>' +
+      '</div>' +
+      '<div class="aiteam-detail-kv">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">角色标识</span><span class="aiteam-shell__meta-value">' + (item.role_name || item.role || '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">默认模型</span><span class="aiteam-shell__meta-value">' + (item.default_model || item.model || '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + (tags.length ? tags.join(' / ') : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布状态</span><span class="aiteam-shell__meta-value">' + (item.status || item.publish_state || 'draft') + '</span></div>' +
+      '</div>' +
+      '</div>';
+  }
+
   function renderNotImplemented(container) {
     container.innerHTML =
       '<div class="aiteam-shell__panel">' +
@@ -62,6 +83,7 @@ window.aiteam = window.aiteam || {};
   function renderPanel(container, state) {
     var items = normalizeItems(state && state.items);
     var notice = state && state.notice ? state.notice : '';
+    var previewTemplate = findTemplate(items, state && state.previewTemplateId);
     var rows = items.map(function (item) {
       var templateId = item.template_id || item.id || '';
       var status = item.status || item.publish_state || '';
@@ -103,6 +125,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">行级治理</span><span class="aiteam-shell__meta-value">更新、预览效果、克隆、发布记录都在这一页收口；发布 / 下架直接提交</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布记录</span><span class="aiteam-shell__meta-value">当前以前台招募数与版本号做最小展示；后续可继续扩成独立记录面板</span></div>' +
       '</div>' +
+      '<div class="aiteam-panel aiteam-panel--nested">' + renderPreviewPanel(previewTemplate) + '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th><th>版本</th><th>招募数</th><th>治理操作</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="7">暂无可治理的系统模板</td></tr>') +
       '</tbody></table>' +
@@ -153,7 +176,9 @@ window.aiteam = window.aiteam || {};
           return;
         }
         if (action === 'preview') {
-          rerender('预览效果：当前页面已保留产品位，后续可扩为用户端详情预览面板。');
+          if (typeof container.lastPreviewHandler === 'function') {
+            container.lastPreviewHandler(templateId);
+          }
           return;
         }
         if (action === 'clone') {
@@ -227,6 +252,12 @@ window.aiteam = window.aiteam || {};
         });
       };
 
+      container.lastPreviewHandler = function (templateId) {
+        state.previewTemplateId = templateId;
+        rerender('');
+        return Promise.resolve({ ok: true, template_id: templateId });
+      };
+
       ns.api.get('/api/system-admin/templates').then(function (result) {
         if (!result.ok) {
           if (result.status === 501) {
@@ -241,6 +272,9 @@ window.aiteam = window.aiteam || {};
           return;
         }
         state.items = normalizeItems(result.data);
+        if (!state.previewTemplateId && state.items.length) {
+          state.previewTemplateId = state.items[0].template_id || state.items[0].id || '';
+        }
         rerender('');
       });
     }
