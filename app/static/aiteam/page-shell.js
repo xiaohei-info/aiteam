@@ -16,6 +16,7 @@ window.aiteam = window.aiteam || {};
       { label: '员工',      href: '/admin/employees',        note: 'Employees' },
       { label: '方案',      href: '/admin/solutions',        note: 'Solutions' },
       { label: '技能',      href: '/admin/skills',           note: 'Skills' },
+      { label: '人才市场',  href: '/admin/templates',        note: 'Templates' },
       { label: '记忆',      href: '/admin/memories',         note: 'Memories' },
       { label: '连接器',    href: '/admin/connectors',       note: 'Connectors' },
       { label: '费用',      href: '/admin/billing/usage',    note: 'Billing' },
@@ -68,6 +69,7 @@ window.aiteam = window.aiteam || {};
   function _hasPathAccess(pathname, role) {
     if (!pathname || !role || !ns.role || !ns.role.hasPermission) return true;
     if (pathname.indexOf('/admin/employees') === 0) return ns.role.hasPermission(role, 'manage_employees');
+    if (pathname.indexOf('/admin/templates') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/connectors') === 0) return ns.role.hasPermission(role, 'manage_connectors');
     if (pathname.indexOf('/admin/billing') === 0) return ns.role.hasPermission(role, 'view_billing');
     if (pathname.indexOf('/system/') === 0) return ns.role.hasPermission(role, 'system_read');
@@ -157,6 +159,7 @@ window.aiteam = window.aiteam || {};
         pathToModule['/admin/employees'] = 'admin-employees.js';
         pathToModule['/admin/solutions'] = 'admin-solutions.js';
         pathToModule['/admin/skills'] = 'admin-skills.js';
+        pathToModule['/admin/templates'] = 'admin-templates.js';
         pathToModule['/admin/memories'] = 'admin-memories.js';
         pathToModule['/admin/connectors'] = 'admin-connectors.js';
         pathToModule['/admin/billing/usage'] = 'admin-billing.js';
@@ -220,6 +223,8 @@ window.aiteam = window.aiteam || {};
                 handler = aiteam.pages && aiteam.pages.adminSolutions;
               } else if (currentPath === '/admin/skills' || currentPath.indexOf('/admin/skills') === 0) {
                 handler = aiteam.pages && aiteam.pages.adminSkills;
+              } else if (currentPath === '/admin/templates' || currentPath.indexOf('/admin/templates') === 0) {
+                handler = aiteam.pages && aiteam.pages.adminTemplates;
               } else if (currentPath === '/admin/memories' || currentPath.indexOf('/admin/memories') === 0) {
                 handler = aiteam.pages && aiteam.pages.adminMemories;
               } else if (currentPath === '/admin/connectors' || currentPath.indexOf('/admin/connectors') === 0) {

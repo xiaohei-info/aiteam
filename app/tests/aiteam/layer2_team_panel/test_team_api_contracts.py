@@ -197,6 +197,12 @@ class TestTalentMarketTemplates:
         assert tpl["default_model_ref"]["model"] == "gpt-4o"
         assert tpl["recruit_count"] >= 0
 
+    def test_admin_templates_alias_returns_same_payload_shape(self, seeded_enterprise):
+        status, body = _get("/api/team/templates")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert "items" in body
+        assert body["items"][0]["template_id"] == seeded_enterprise["template_id"]
+
 
 class TestTalentTemplateDetail:
     """S06-T03: GET /api/team/talent-market/templates/{id}."""
@@ -223,6 +229,13 @@ class TestTalentTemplateDetail:
         assert body["connector_requirements"] == [{"connector_type": "web_search", "required": False}]
         assert body["default_memory_config"]["max_tokens"] == 8000
         assert body["price_tier"] == "standard"
+
+    def test_admin_template_alias_returns_same_detail_shape(self, seeded_enterprise):
+        tpl_id = seeded_enterprise["template_id"]
+        status, body = _get(f"/api/team/templates/{tpl_id}")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert body["template_id"] == tpl_id
+        assert body["default_skills"] == ["web_search", "slides"]
 
 
 class TestConversationDetail:

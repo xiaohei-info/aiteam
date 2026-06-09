@@ -137,6 +137,20 @@ window.aiteam = window.aiteam || {};
       return this.get(`/talent-market/templates/${encodeURIComponent(templateId)}`, options);
     },
 
+    getAdminTemplates(options) {
+      const query = options && options.query;
+      if (query) {
+        const requestOptions = { ...options };
+        delete requestOptions.query;
+        return this.get(`/templates${buildQuerySuffix(query)}`, requestOptions);
+      }
+      return this.get('/templates', options);
+    },
+
+    getAdminTemplate(templateId, options) {
+      return this.get(`/templates/${encodeURIComponent(templateId)}`, options);
+    },
+
     recruit(body, options) {
       return this.post('/recruitments', body, options);
     },

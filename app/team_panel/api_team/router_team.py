@@ -3711,14 +3711,17 @@ def handle_team_route(
     elif method == "GET" and _match_exact(sub, "/org/tree"):
         route_handler = lambda conn: _handle_org_tree(conn, sub)
 
-    # ── talent-market/templates ──
-    elif method == "GET" and _match_exact(sub, "/talent-market/templates"):
+    # ── enterprise admin templates alias + talent-market/templates ──
+    elif method == "GET" and (_match_exact(sub, "/templates") or _match_exact(sub, "/talent-market/templates")):
         route_handler = lambda conn: _handle_talent_templates(conn, sub)
 
-    # ── talent-market/templates/{id} ──
+    # ── enterprise admin templates alias + talent-market/templates/{id} ──
     else:
+        admin_tmpl_id = _match_prefix(sub, "/templates/")
         tmpl_id = _match_prefix(sub, "/talent-market/templates/")
-        if method == "GET" and tmpl_id is not None and "/" not in tmpl_id:
+        if method == "GET" and admin_tmpl_id is not None and "/" not in admin_tmpl_id:
+            route_handler = lambda conn, template_id=admin_tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
+        elif method == "GET" and tmpl_id is not None and "/" not in tmpl_id:
             route_handler = lambda conn, template_id=tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
 
     # ── recruitments ──

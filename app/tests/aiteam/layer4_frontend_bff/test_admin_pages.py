@@ -98,6 +98,7 @@ vm.runInThisContext(moduleSource, {{ filename: {json.dumps(module_file)} }});
 EXPECTED_ADMIN_PREFIXES = [
     ("admin-employees.js", ["/api/team/employees", "/api/team/employees/"]),
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
+    ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
 ]
 
 EXPECTED_SYSTEM_PREFIXES = [
@@ -175,6 +176,14 @@ class TestAdminSystemPageRuntimeInit:
         )
         assert "费用接口尚未实现" in result["html"]
 
+    def test_admin_templates_init_executes_with_loaded_dependencies(self):
+        result = _run_page_module(
+            "admin-templates.js",
+            "adminTemplates",
+            [{"url": "/api/team/templates", "method": "GET"}],
+        )
+        assert "企业后台人才市场接口尚未实现" in result["html"]
+
     def test_system_health_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
             "system-health.js",
@@ -203,6 +212,8 @@ class TestDynamicPageLoading:
                 "\"/admin/employees\"" in content), "page-shell must route /admin/employees"
         assert ("'/admin/billing/usage'" in content or
                 "\"/admin/billing/usage\"" in content), "page-shell must route /admin/billing/usage"
+        assert ("'/admin/templates'" in content or
+                "\"/admin/templates\"" in content), "page-shell must route /admin/templates"
 
     def test_page_shell_references_system_routes(self):
         shell_path = os.path.join(AITEAM_STATIC, "page-shell.js")
