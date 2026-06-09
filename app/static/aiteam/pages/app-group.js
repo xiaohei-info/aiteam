@@ -284,6 +284,11 @@ window.aiteam = window.aiteam || {};
     };
 
     function renderLauncher() {
+      var selectedLabels = launcherState.employeeItems.filter(function (employee) {
+        return launcherState.selectedEmployeeIds.indexOf(stringValue(employee && employee.employee_id, '')) !== -1;
+      }).map(function (employee) {
+        return stringValue(employee && employee.display_name, stringValue(employee && employee.employee_id, '未命名员工'));
+      });
       var memberCards = launcherState.employeeItems.length
         ? launcherState.employeeItems.map(function (employee) {
             var employeeId = stringValue(employee && employee.employee_id, '');
@@ -308,7 +313,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>填写标题与成员后创建</span></div>' +
       '<div class="aiteam-shell__meta">' +
       '<div class="aiteam-shell__meta-card"><label>群聊标题<br><input class="aiteam-input" type="text" data-group-create-title value="' + escapeHtml(launcherState.title) + '" placeholder="例如：新品启动群"></label></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">可选成员</span><span class="aiteam-shell__meta-value">最多 10 人，当前已选 ' + escapeHtml(String(launcherState.selectedEmployeeIds.length)) + ' 人</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">可选成员</span><span class="aiteam-shell__meta-value">最多 10 人，当前已选 ' + escapeHtml(String(launcherState.selectedEmployeeIds.length)) + ' 人</span><br><span class="aiteam-inline-note">已选成员：' + escapeHtml(selectedLabels.join('、') || '未选择') + '</span></div>' +
       '</div>' +
       '<div class="aiteam-stack" data-group-create-members>' + memberCards + '</div>' +
       '<div class="aiteam-action-row">' +
@@ -394,6 +399,8 @@ window.aiteam = window.aiteam || {};
           } else {
             launcherState.selectedEmployeeIds = launcherState.selectedEmployeeIds.filter(function (id) { return id !== employeeId; });
           }
+          renderLauncher();
+          bindLauncherInteractions();
         });
       }
       var createButton = container.querySelector('[data-group-create-launch]');

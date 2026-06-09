@@ -111,6 +111,25 @@ const fs = require('fs');
 const vm = require('vm');
 const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
 const apiCalls = [];
+function makeNode(initialValue = '') {{
+  return {{
+    value: initialValue,
+    checked: false,
+    listeners: {{}},
+    textContent: '',
+    innerHTML: '',
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatch(type) {{
+      if (this.listeners[type]) this.listeners[type].call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const titleInput = makeNode('新品启动群');
+const memberInputs = {{
+  emp_test: Object.assign(makeNode(''), {{ checked: true, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_test' : null; }} }}),
+  emp_member: Object.assign(makeNode(''), {{ checked: true, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_member' : null; }} }}),
+  emp_planner: Object.assign(makeNode(''), {{ checked: false, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_planner' : null; }} }}),
+}};
 const employees = [
   {{ employee_id: 'emp_test', display_name: 'Alice', role_name: '产品经理', status: 'active' }},
   {{ employee_id: 'emp_member', display_name: 'Bob', role_name: '工程师', status: 'active' }},
@@ -133,8 +152,16 @@ const conversation = {{
 }};
 const container = {{
   innerHTML: '',
-  querySelector() {{ return null; }},
-  querySelectorAll() {{ return []; }},
+  querySelector(selector) {{
+    if (selector === '[data-group-create-title]') return titleInput;
+    if (selector === '[data-group-create-launch]') return makeNode();
+    if (selector === '[data-group-create-status]') return makeNode();
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-group-create-member]') return [memberInputs.emp_test, memberInputs.emp_member, memberInputs.emp_planner];
+    return [];
+  }},
 }};
 global.window = {{
   location: {{ pathname: '/app/group', href: 'http://example.test/app/group' }},
@@ -169,9 +196,16 @@ vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
 aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const launcherHtml = container.innerHTML;
-  await container.lastCreateGroupHandler({{ title: '新品启动群', member_employee_ids: ['emp_test', 'emp_member'] }});
+  titleInput.value = '预算评审群';
+  titleInput.dispatch('input');
+  memberInputs.emp_test.checked = false;
+  memberInputs.emp_test.dispatch('change');
+  memberInputs.emp_planner.checked = true;
+  memberInputs.emp_planner.dispatch('change');
+  const updatedLauncherHtml = container.innerHTML;
+  await container.lastCreateGroupHandler({{ title: '预算评审群', member_employee_ids: ['emp_member', 'emp_planner'] }});
   await new Promise((resolve) => setTimeout(resolve, 0));
-  console.log(JSON.stringify({{ launcherHtml, html: container.innerHTML, apiCalls }}));
+  console.log(JSON.stringify({{ launcherHtml, updatedLauncherHtml, html: container.innerHTML, apiCalls }}));
 }}).catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -392,11 +426,14 @@ def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None
     assert payload["apiCalls"][0] == {"method": "GET", "path": "/api/team/employees"}
     assert payload["apiCalls"][1]["method"] == "POST"
     assert payload["apiCalls"][1]["path"] == "/api/team/group-conversations"
+    assert payload["apiCalls"][1]["body"] == {"title": "预算评审群", "member_employee_ids": ["emp_member", "emp_planner"]}
     assert payload["apiCalls"][2] == {"method": "GET", "path": "/api/team/group-conversations/group_new"}
     assert "可选成员" in payload["launcherHtml"]
     assert "Alice" in payload["launcherHtml"]
     assert "Bob" in payload["launcherHtml"]
     assert "Cara" in payload["launcherHtml"]
+    assert "已选成员：Alice、Bob" in payload["launcherHtml"]
+    assert "已选成员：Bob、Cara" in payload["updatedLauncherHtml"]
     assert "新品启动群" in payload["html"]
     assert "成员管理" in payload["html"]
 
