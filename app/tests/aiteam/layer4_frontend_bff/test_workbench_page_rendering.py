@@ -53,6 +53,9 @@ def test_workbench_empty_state_uses_prd_split_shell_instead_of_generic_empty_sta
         }
     )
     assert "data-workbench-shell" in result["html"]
+    assert "data-workbench-rail" in result["html"]
+    assert 'href="/app/group"' in result["html"]
+    assert 'href="/app/knowledge"' in result["html"]
     assert "data-workbench-empty" in result["html"]
     assert "前往人才市场" in result["html"]
     assert "从左侧选择员工开始对话" in result["html"]
@@ -98,6 +101,11 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
         }
     )
     assert "data-workbench-shell" in result["html"]
+    assert "data-workbench-rail" in result["html"]
+    assert "私聊" in result["html"]
+    assert "群聊" in result["html"]
+    assert "知识库" in result["html"]
+    assert "设置" in result["html"]
     assert "data-workbench-search" in result["html"]
     assert "data-workbench-list" in result["html"]
     assert "data-workbench-main" in result["html"]
@@ -105,3 +113,9 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
     assert "Nova" in result["html"]
     assert "运营协作组" in result["html"]
     assert "继续对话" in result["html"]
+    assert "快捷操作" in result["html"]
+    assert "查看详情" in result["html"]
+    assert "设置为星标" in result["html"]
+    assert "解雇" in result["html"]
+    assert 'href="/app/group"' in result["html"]
+    assert 'href="/app/org"' in result["html"]

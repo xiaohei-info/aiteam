@@ -50,6 +50,26 @@ window.aiteam = window.aiteam || {};
       '</a>';
   }
 
+  function renderRail() {
+    var items = [
+      { key: 'chat', label: '私聊', icon: '💬', href: '/app/workbench', active: true },
+      { key: 'group', label: '群聊', icon: '👥', href: '/app/group' },
+      { key: 'org', label: '组织', icon: '🏢', href: '/app/org' },
+      { key: 'knowledge', label: '知识库', icon: '📚', href: '/app/knowledge' },
+      { key: 'marketplace', label: '人才市场', icon: '🏪', href: '/app/marketplace' },
+      { key: 'settings', label: '设置', icon: '⚙', href: '/admin/settings', bottom: true },
+    ];
+    return '' +
+      '<nav class="aiteam-workbench__rail" data-workbench-rail="1" aria-label="工作台主入口">' +
+      items.map(function (item) {
+        return '<a class="aiteam-workbench__rail-link' + (item.active ? ' is-active' : '') + (item.bottom ? ' is-bottom' : '') + '" href="' + escapeHtml(item.href) + '" data-workbench-rail-item="' + escapeHtml(item.key) + '">' +
+          '<span class="aiteam-workbench__rail-icon" aria-hidden="true">' + escapeHtml(item.icon) + '</span>' +
+          '<span class="aiteam-workbench__rail-label">' + escapeHtml(item.label) + '</span>' +
+          '</a>';
+      }).join('') +
+      '</nav>';
+  }
+
   function renderEmployeeRow(employee, selected) {
     var presence = employeePresence(employee);
     var unread = Number(employee.unread_count) || 0;
@@ -94,6 +114,7 @@ window.aiteam = window.aiteam || {};
   function renderEmptyShell(enterpriseName) {
     return '' +
       '<section class="aiteam-workbench" data-workbench-shell="1">' +
+      renderRail() +
       '<aside class="aiteam-workbench__sidebar">' +
       '<div class="aiteam-workbench__sidebar-top">' +
       '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
@@ -207,6 +228,7 @@ window.aiteam = window.aiteam || {};
 
     container.innerHTML =
       '<section class="aiteam-workbench" data-workbench-shell="1">' +
+      renderRail() +
       '<aside class="aiteam-workbench__sidebar">' +
       '<div class="aiteam-workbench__sidebar-top">' +
       '<div>' +
