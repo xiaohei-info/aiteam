@@ -134,6 +134,7 @@ window.aiteam = window.aiteam || {};
       status: status,
       health_status: stringValue(item && item.health_status, status),
       scopes: Array.isArray(item && item.scopes) ? item.scopes.slice() : [],
+      credential_ref: stringValue(item && item.credential_ref, ''),
       credential_mask: credentialMask,
       credential_state: credentialState || (credentialMask === '未配置' ? 'missing' : 'configured'),
       rotation_version: item && item.rotation_version != null ? String(item.rotation_version) : '—',
@@ -357,7 +358,7 @@ window.aiteam = window.aiteam || {};
         '<h2 class="aiteam-shell__panel-title">连接器中心</h2>' +
         '<p class="aiteam-shell__panel-body">B05 连接器管理页按冻结契约消费 `/api/team/connectors`、`/api/team/connectors/{id}`、`PATCH /api/team/connectors/{id}`、`/api/team/connectors/{id}/test`、`/api/team/connectors/{id}/grants`。若后端不可用，页面仅展示真实失败态，不伪造 detail/update 成功结果或 raw secret。</p>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全约束</span><span class="aiteam-shell__meta-value">凭据输入只接受 opaque ref，页面不回显当前凭据标识或 raw secret</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全约束</span><span class="aiteam-shell__meta-value">凭据输入只接受 opaque ref，页面不展示 raw secret</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前状态</span><span class="aiteam-shell__meta-value">' + esc(apiErrorMessage(result)) + '</span></div>' +
         '</div>' +
         '</div>';
@@ -414,7 +415,7 @@ window.aiteam = window.aiteam || {};
       return '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">连接器详情</p>' +
         '<h3 class="aiteam-shell__panel-title">' + esc(item.name) + '</h3>' +
-        '<p class="aiteam-shell__panel-body">按冻结契约显示 provider、类型、状态、作用域、配置摘要与凭据脱敏状态；详情编辑只提交 name/config/credential_input 等允许字段，浏览器不展示 raw secret，也不回显当前凭据标识，只消费 Team Panel 返回的脱敏结果。</p>' +
+        '<p class="aiteam-shell__panel-body">按冻结契约显示 provider、类型、状态、作用域、配置摘要、opaque credential ref 与凭据脱敏状态；详情编辑只提交 name/config/credential_input 等允许字段，浏览器不展示 raw secret，只消费 Team Panel 返回的安全字段。</p>' +
         (state.detailNotice ? '<div class="aiteam-state aiteam-state-info"><p>' + esc(state.detailNotice) + '</p></div>' : '') +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">Provider</span><span class="aiteam-shell__meta-value">' + esc(item.provider) + '</span></div>' +
@@ -422,6 +423,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">连接状态</span><span class="aiteam-shell__meta-value">' + esc(statusLabel(item.status)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">作用域</span><span class="aiteam-shell__meta-value">' + esc(item.scopes.length ? item.scopes.join(', ') : '未声明') + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">凭据显示</span><span class="aiteam-shell__meta-value">' + esc(item.credential_mask) + '</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">凭据标识</span><span class="aiteam-shell__meta-value">' + esc(item.credential_ref || '未配置') + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">凭据状态</span><span class="aiteam-shell__meta-value">' + esc(credentialStateLabel(item.credential_state)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">轮换版本</span><span class="aiteam-shell__meta-value">' + esc(item.rotation_version) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">配置摘要</span><span class="aiteam-shell__meta-value">' + esc(item.config_summary || '暂无自定义配置') + '</span></div>' +
@@ -431,7 +433,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><label>Tenant Hint<br><input class="aiteam-input" type="text" data-role="detail-tenant-hint-' + esc(item.connector_id) + '" placeholder="例如：acme" value="' + esc(state.detailDraft.config_tenant_hint) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Channel<br><input class="aiteam-input" type="text" data-role="detail-channel-' + esc(item.connector_id) + '" placeholder="例如：#sales" value="' + esc(state.detailDraft.config_channel) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>更新凭据标识（受控输入）<br><input class="aiteam-input" type="text" data-role="credential-input-' + esc(item.connector_id) + '" placeholder="cred://enterprise/..." value="' + esc(state.detailDraft.credential_ref) + '"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">保存后展示</span><span class="aiteam-shell__meta-value">仅显示脱敏状态、更新时间等安全字段；当前凭据标识不回显</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">保存后展示</span><span class="aiteam-shell__meta-value">显示 opaque credential ref、脱敏状态、更新时间等安全字段；不展示 raw secret</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">更新口径</span><span class="aiteam-shell__meta-value">提交 PATCH /connectors/{id} 后重新拉取 detail 与列表，避免本地伪造更新结果</span></div>' +
         '</div>' +
         '<div class="aiteam-skill-card__actions">' +
@@ -471,7 +473,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><label>Credential Ref（受控输入）<br><input class="aiteam-input" type="text" data-role="connector-credential-ref" placeholder="cred://enterprise/opaque-id" value="' + esc(state.createDraft.credential_ref) + '"></label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建连接器</button></div>' +
         '</form>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全策略</span><span class="aiteam-shell__meta-value">raw secret 不进入页面；只显示脱敏凭据状态，不回显当前凭据标识</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全策略</span><span class="aiteam-shell__meta-value">raw secret 不进入页面；只显示 opaque credential ref 与脱敏状态</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">测试口径</span><span class="aiteam-shell__meta-value">running / success / failure 与 last_test_result 以后端返回为准</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">授权口径</span><span class="aiteam-shell__meta-value">已授权员工 / 未授权空态 / 错误态均不绕过后端语义</span></div>' +
         '</div>' +
