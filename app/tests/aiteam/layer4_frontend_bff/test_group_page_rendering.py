@@ -848,6 +848,8 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
     assert "新增员工" in payload["html"]
     assert "踢出员工" in payload["html"]
     assert "解散群聊" in payload["html"]
+    assert 'data-group-add-member-input' in payload["html"]
+    assert 'data-group-remove-member-select' in payload["html"]
     assert 'data-group-add-member' in payload["html"]
     assert 'data-group-remove-member' in payload["html"]
     assert 'data-group-archive' in payload["html"]
@@ -917,6 +919,7 @@ def test_group_page_management_handlers_invoke_group_member_and_archive_apis() -
     payload = _run_group_management_actions()
     assert payload["apiCalls"][0]["method"] == "POST"
     assert payload["apiCalls"][0]["path"] == "/api/team/group-conversations/group_ops/members"
+    assert payload["apiCalls"][0]["body"] == {"employee_id": "emp_planner"}
     assert payload["apiCalls"][1]["method"] == "GET"
     assert payload["apiCalls"][2]["method"] == "DELETE"
     assert payload["apiCalls"][2]["path"] == "/api/team/group-conversations/group_ops/members/mem_member"

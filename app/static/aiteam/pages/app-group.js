@@ -211,6 +211,18 @@ window.aiteam = window.aiteam || {};
     }).join('') + '</div>';
   }
 
+  function removableMemberOptions(members) {
+    var removable = listValue(members).filter(function (member) {
+      return stringValue(member.member_id, '');
+    });
+    if (!removable.length) {
+      return '<option value="">当前没有可移除成员</option>';
+    }
+    return removable.map(function (member) {
+      return '<option value="' + escapeHtml(stringValue(member.member_id, '')) + '">' + escapeHtml(memberLabel(member)) + ' · ' + escapeHtml(memberRole(member)) + '</option>';
+    }).join('');
+  }
+
   function renderLatestDecision(decision, state) {
     if (!decision) {
       return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>最近协作决策</strong>' + badge('暂无') + '</div><p class="aiteam-card__sub">还没有 route_decision，首条群聊消息提交后会出现协作方式与候选成员。</p></div>';
@@ -610,6 +622,10 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-stack">' +
       '<a class="aiteam-card-link" href="/app/org"><span class="aiteam-card-link__label">成员管理入口</span><span class="aiteam-card-link__note">通过组织架构页查看归属与调整团队结构</span></a>' +
       '<a class="aiteam-card-link" href="/admin/employees"><span class="aiteam-card-link__label">群设置配套入口</span><span class="aiteam-card-link__note">前往员工后台核对角色、模型与技能配置</span></a>' +
+      '</div>' +
+      '<div class="aiteam-shell__meta">' +
+      '<div class="aiteam-shell__meta-card"><label>待加入员工 ID<br><input class="aiteam-input" type="text" data-group-add-member-input placeholder="emp_planner"></label></div>' +
+      '<div class="aiteam-shell__meta-card"><label>选择移除成员<br><select class="aiteam-input" data-group-remove-member-select>' + removableMemberOptions(members) + '</select></label></div>' +
       '</div>' +
       '<div class="aiteam-route-feedback__chips">' +
       '<button class="aiteam-filter-chip" type="button" data-group-add-member>新增员工</button>' +
@@ -1109,13 +1125,10 @@ window.aiteam = window.aiteam || {};
     }
 
     var addMemberBtn = container.querySelector('[data-group-add-member]');
+    var addMemberInput = container.querySelector('[data-group-add-member-input]');
     if (addMemberBtn && typeof addMemberBtn.addEventListener === 'function') {
       addMemberBtn.addEventListener('click', function () {
-        var typed = typeof window.prompt === 'function'
-          ? window.prompt('请输入要加入群聊的 employee_id', '')
-          : '';
-        if (typed == null) return;
-        var employeeId = stringValue(typed, '');
+        var employeeId = stringValue(addMemberInput && addMemberInput.value, '');
         if (!employeeId) {
           setStatus('请输入有效的 employee_id。');
           return;
@@ -1125,15 +1138,15 @@ window.aiteam = window.aiteam || {};
     }
 
     var removeMemberBtn = container.querySelector('[data-group-remove-member]');
+    var removeMemberSelect = container.querySelector('[data-group-remove-member-select]');
     if (removeMemberBtn && typeof removeMemberBtn.addEventListener === 'function') {
       removeMemberBtn.addEventListener('click', function () {
-        var removable = state.members.filter(function (member) { return stringValue(member.member_id, ''); });
-        if (!removable.length) {
+        var memberId = stringValue(removeMemberSelect && removeMemberSelect.value, '');
+        if (!memberId) {
           setStatus('当前没有可移除的群成员。');
           return;
         }
-        var candidate = removable[removable.length - 1];
-        container.lastRemoveMemberHandler(candidate.member_id);
+        container.lastRemoveMemberHandler(memberId);
       });
     }
 
