@@ -4,13 +4,21 @@ window.aiteam = window.aiteam || {};
   ns.pages = ns.pages || {};
 
   function money(value) {
-    if (typeof value === 'number') {
-      return '¥' + value.toFixed(2);
-    }
-    if (typeof value === 'string' && value) {
-      return value;
-    }
+    var num = Number(value);
+    if (isFinite(num)) return '¥' + num.toLocaleString('en-US');
+    if (typeof value === 'string' && value) return value;
     return '—';
+  }
+
+  function normalizeTrend(payload) {
+    var trend = Array.isArray(payload && payload.trend) ? payload.trend : [];
+    return trend.map(function (item) {
+      return {
+        period: String(item.period || ''),
+        revenue: Number(item.revenue || item.total_revenue || 0),
+        cost: Number(item.cost || item.total_cost || 0),
+      };
+    });
   }
 
   function renderNotImplemented(container) {
@@ -27,6 +35,22 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function renderTrend(trendItems) {
+    if (!trendItems.length) {
+      return '<div class="aiteam-inline-empty">暂无趋势数据</div>';
+    }
+    var maxRevenue = trendItems.reduce(function (max, item) {
+      return Math.max(max, item.revenue);
+    }, 0) || 1;
+    return '<div class="aiteam-billing__trend">' + trendItems.map(function (item) {
+      var height = Math.max(18, Math.round((item.revenue / maxRevenue) * 120));
+      return '<div class="aiteam-billing__trend-col">' +
+        '<div class="aiteam-billing__trend-bar" style="height:' + height + 'px"></div>' +
+        '<span class="aiteam-billing__trend-day">' + item.period + '</span>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
   function renderOverview(container, payload) {
     if (!payload || (typeof payload !== 'object')) {
       if (ns.states && ns.states.renderEmpty) {
@@ -39,12 +63,13 @@ window.aiteam = window.aiteam || {};
     var revenue = summary.total_revenue || summary.revenue || summary.income;
     var cost = summary.total_cost || summary.cost;
     var profit = summary.total_profit || summary.profit;
+    var payingEnterpriseCount = summary.paying_enterprise_count || summary.enterprise_count || 0;
     var topEnterprises = payload.top_enterprises || payload.top_enterprise_costs || [];
-    var trend = payload.trend || payload.finance_trend || [];
-    var trendLabel = Array.isArray(trend) ? (trend.length ? String(trend.length) + ' 个周期' : '暂无趋势数据') : '暂无趋势数据';
+    var trendItems = normalizeTrend(payload);
+
     var topRows = Array.isArray(topEnterprises) && topEnterprises.length
-      ? '<table class="aiteam-table"><thead><tr><th>企业</th><th>消耗</th></tr></thead><tbody>' + topEnterprises.map(function (item) {
-        return '<tr><td>' + (item.enterprise_name || item.enterprise_id || item.name || '') + '</td><td>' + money(item.cost || item.total_cost || item.amount) + '</td></tr>';
+      ? '<table class="aiteam-table"><thead><tr><th>企业</th><th>消耗</th></tr></thead><tbody>' + topEnterprises.map(function (item, index) {
+        return '<tr><td>' + (index + 1) + '. ' + (item.enterprise_name || item.enterprise_id || item.name || '') + '</td><td>' + money(item.cost || item.total_cost || item.amount) + '</td></tr>';
       }).join('') + '</tbody></table>'
       : '<p class="aiteam-shell__panel-body">暂无高消耗企业排行。</p>';
 
@@ -53,13 +78,27 @@ window.aiteam = window.aiteam || {};
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">财务管理</h2>' +
       '<p class="aiteam-shell__panel-body">通过 `/api/system-admin/finance/overview` 消费平台级财务聚合结果；导出能力后续经 `/api/system-admin/finance/reports` 接入。</p>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台收入</span><span class="aiteam-shell__meta-value">' + money(revenue) + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台成本</span><span class="aiteam-shell__meta-value">' + money(cost) + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台利润</span><span class="aiteam-shell__meta-value">' + money(profit) + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">趋势覆盖</span><span class="aiteam-shell__meta-value">' + trendLabel + '</span></div>' +
+      '<div class="aiteam-billing__actions">' +
+      '<button type="button" class="aiteam-pill is-active">本月</button>' +
+      '<button type="button" class="aiteam-pill">本年</button>' +
+      '<button type="button" class="aiteam-pill">全部</button>' +
       '</div>' +
+      '<div class="aiteam-billing__stats">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总充值金额</span><span class="aiteam-shell__meta-value">' + money(revenue) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台成本Token</span><span class="aiteam-shell__meta-value">' + money(cost) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">利润（Token差价）</span><span class="aiteam-shell__meta-value">' + money(profit) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">付费企业数</span><span class="aiteam-shell__meta-value">' + payingEnterpriseCount + '</span></div>' +
+      '</div>' +
+      '<div class="aiteam-shell__two-column">' +
+      '<div class="aiteam-shell__panel">' +
+      '<div class="aiteam-billing__section-head">月度收入趋势</div>' +
+      renderTrend(trendItems) +
+      '</div>' +
+      '<div class="aiteam-shell__panel">' +
+      '<div class="aiteam-billing__section-head">TOP 5 消费企业</div>' +
       topRows +
+      '</div>' +
+      '</div>' +
       '</div>';
   }
 
