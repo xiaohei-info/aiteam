@@ -364,9 +364,6 @@ document.addEventListener('DOMContentLoaded', function () {
       var tabName = this.getAttribute('data-auth-tab') || 'wechat';
       setActiveTab(tabName);
       hideErr();
-      if (tabName === 'wechat' && !pendingWechatState) {
-        runWechatLogin();
-      }
     });
   }
 
@@ -428,5 +425,5 @@ document.addEventListener('DOMContentLoaded', function () {
   })();
 
   setActiveTab('wechat');
-  runWechatLogin();
+  setStatus(wechatStatus, 'Click "Refresh QR state" to start WeChat sign-in.', false);
 });
