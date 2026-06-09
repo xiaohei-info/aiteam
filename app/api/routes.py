@@ -2887,13 +2887,27 @@ _LOGIN_PAGE_HTML = """<!doctype html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#1a1a2e;color:#e8e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#16213e;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:36px 32px;
-  width:320px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.card{background:#16213e;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:36px 32px;
+  width:min(440px,calc(100vw - 32px));text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
 .logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(145deg,#e8a030,#e94560);
   display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;color:#fff;
   margin:0 auto 12px;box-shadow:0 2px 12px rgba(233,69,96,.3)}
 h1{font-size:18px;font-weight:600;margin-bottom:4px}
-.sub{font-size:12px;color:#8888aa;margin-bottom:24px}
+.sub{font-size:12px;color:#8888aa;margin-bottom:20px}
+.auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.auth-tab{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#b9bfd8}
+.auth-tab.is-active{background:rgba(124,185,255,.15);border-color:rgba(124,185,255,.3);color:#7cb9ff}
+.auth-panel{display:none;text-align:left}
+.auth-panel.is-active{display:block}
+.auth-copy{font-size:12px;line-height:1.6;color:#b9bfd8;margin-bottom:14px}
+.auth-row{display:flex;gap:10px}
+.auth-row > *{flex:1}
+.auth-status{font-size:12px;line-height:1.5;color:#b9bfd8;min-height:18px;margin:10px 0 0}
+.auth-link{display:inline-flex;align-items:center;gap:4px;margin-top:10px;color:#7cb9ff;font-size:12px;text-decoration:none}
+.auth-link:hover{text-decoration:underline}
+.muted-link{display:inline-flex;justify-content:center;margin-top:14px;background:transparent;border:none;color:#b9bfd8}
+.password-panel{display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.password-panel.is-open{display:block}
 input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.1);
   background:rgba(255,255,255,.04);color:#e8e8f0;font-size:14px;outline:none;margin-bottom:14px;
   transition:border-color .15s}
@@ -2909,11 +2923,34 @@ button:hover{background:rgba(124,185,255,.25)}
   <div class="logo">{{BOT_NAME_INITIAL}}</div>
   <h1>{{BOT_NAME}}</h1>
   <p class="sub">{{LOGIN_SUBTITLE}}</p>
-  <form id="login-form" data-invalid-pw="{{LOGIN_INVALID_PW}}" data-conn-failed="{{LOGIN_CONN_FAILED}}">
-    <input type="password" id="pw" placeholder="{{LOGIN_PLACEHOLDER}}" autofocus>
-    <button type="submit">{{LOGIN_BTN}}</button>
-    <button type="button" id="passkey-login" class="passkey-login" style="display:none">Sign in with passkey</button>
-  </form>
+  <div class="auth-tabs" role="tablist" aria-label="Login methods">
+    <button type="button" class="auth-tab is-active" data-auth-tab="wechat">WeChat QR</button>
+    <button type="button" class="auth-tab" data-auth-tab="phone">Phone code</button>
+  </div>
+  <section class="auth-panel is-active" data-auth-panel="wechat">
+    <p class="auth-copy">Scan with WeChat to sign in, then continue into your enterprise workspace.</p>
+    <button type="button" id="wechat-start">Refresh QR state</button>
+    <p class="auth-status" id="wechat-status">Preparing WeChat sign-in…</p>
+    <a id="wechat-qr-link" class="auth-link" href="#" target="_blank" rel="noopener" style="display:none">Open mock QR state</a>
+  </section>
+  <section class="auth-panel" data-auth-panel="phone">
+    <p class="auth-copy">Send a phone verification code first, then verify to continue. Test environments use code <strong>888888</strong>.</p>
+    <input type="tel" id="phone" placeholder="Phone number" autocomplete="tel">
+    <div class="auth-row">
+      <input type="text" id="phone-code" placeholder="Verification code" inputmode="numeric" autocomplete="one-time-code">
+      <button type="button" id="phone-send-code">Send code</button>
+    </div>
+    <button type="button" id="phone-verify">Verify and continue</button>
+    <p class="auth-status" id="phone-status"></p>
+  </section>
+  <button type="button" id="password-login-toggle" class="muted-link">Use password instead</button>
+  <div id="password-panel" class="password-panel">
+    <form id="login-form" data-invalid-pw="{{LOGIN_INVALID_PW}}" data-conn-failed="{{LOGIN_CONN_FAILED}}">
+      <input type="password" id="pw" placeholder="{{LOGIN_PLACEHOLDER}}" autocomplete="current-password">
+      <button type="submit">{{LOGIN_BTN}}</button>
+      <button type="button" id="passkey-login" class="passkey-login" style="display:none">Sign in with passkey</button>
+    </form>
+  </div>
   <div class="err" id="err"></div>
 </div>
 <!-- Keep login.js relative so subpath mounts load it under the current scope. -->
