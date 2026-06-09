@@ -82,6 +82,8 @@ window.aiteam = window.aiteam || {};
       selectedAmountYuan: selectedAmountYuan,
       selectedPaymentMethod: selectedPaymentMethod,
       paymentMethods: paymentMethods,
+      warningThresholdCents: Number(seed && seed.warningThresholdCents != null ? seed.warningThresholdCents : balance && balance.low_balance_threshold_cents) || 5000,
+      warningEnabled: seed && seed.warningEnabled != null ? !!seed.warningEnabled : !!(balance && balance.warning_enabled),
       notice: seed && seed.notice ? seed.notice : '',
     };
   }
@@ -137,6 +139,14 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">累计消耗</span><span class="aiteam-shell__meta-value">' + formatCurrencyFromCents(state.usageSummary.total_cost_cents) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">预估可用天数</span><span class="aiteam-shell__meta-value">' + (state.balance && state.balance.estimated_days_remaining != null ? state.balance.estimated_days_remaining : '—') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">低余额预警阈值</span><span class="aiteam-shell__meta-value">' + formatCurrencyFromCents(state.balance && state.balance.low_balance_threshold_cents) + '</span></div>' +
+      '</div>' +
+      '<div class="aiteam-billing__section">' +
+      '<div class="aiteam-billing__section-head">余额预警设置</div>' +
+      '<p class="aiteam-shell__panel-body aiteam-billing__subtle">当余额低于该阈值时，页面顶部展示低余额预警，后续可与通知策略联动。</p>' +
+      '<div class="aiteam-billing__actions">' +
+      '<input class="aiteam-input" type="number" min="1" step="1" value="' + Math.round((state.warningThresholdCents || 0) / 100) + '" data-warning-threshold-input />' +
+      '<button type="button" class="aiteam-button aiteam-button--ghost" data-warning-threshold-save>保存预警阈值</button>' +
+      '</div>' +
       '</div>' +
       '<div class="aiteam-billing__section">' +
       '<div class="aiteam-billing__section-head">发起充值</div>' +
@@ -212,6 +222,8 @@ window.aiteam = window.aiteam || {};
 
     var submitButton = container.querySelector('[data-recharge-submit]');
     var customInput = container.querySelector('[data-recharge-custom-input]');
+    var warningInput = container.querySelector('[data-warning-threshold-input]');
+    var warningSaveButton = container.querySelector('[data-warning-threshold-save]');
     if (submitButton && customInput) {
       submitButton.addEventListener('click', function () {
         page.submitRecharge(container, state, {
@@ -220,11 +232,57 @@ window.aiteam = window.aiteam || {};
         });
       });
     }
+    if (warningSaveButton && warningInput) {
+      warningSaveButton.addEventListener('click', function () {
+        page.updateWarningThreshold(container, state, {
+          thresholdYuan: warningInput.value,
+          warningEnabled: true,
+        });
+      });
+    }
   }
 
   ns.pages.adminRecharge = {
     getPaymentMethods: getPaymentMethods,
     loadPageData: loadPageData,
+    updateWarningThreshold: function (container, state, payload) {
+      var thresholdCents = Number(payload && payload.low_balance_threshold_cents);
+      if (!Number.isFinite(thresholdCents) || thresholdCents < 100) {
+        var thresholdYuan = Number(payload && payload.thresholdYuan);
+        thresholdCents = Number.isFinite(thresholdYuan) ? Math.round(thresholdYuan * 100) : NaN;
+      }
+      if (!Number.isFinite(thresholdCents) || thresholdCents < 100) {
+        state.notice = '请输入不小于 1 元的预警阈值';
+        renderRechargePage(container, state);
+        bindInteractions(container, state, ns.pages.adminRecharge);
+        return Promise.resolve({ ok: false, error: 'invalid_warning_threshold' });
+      }
+      var requestBody = {
+        low_balance_threshold_cents: thresholdCents,
+        warning_enabled: payload && payload.warningEnabled != null ? !!payload.warningEnabled : true,
+      };
+      return ns.api.patch('/api/team/settings', requestBody).then(function (result) {
+        if (!result.ok) {
+          state.notice = '预警阈值更新失败';
+          renderRechargePage(container, state);
+          bindInteractions(container, state, ns.pages.adminRecharge);
+          return result;
+        }
+        return loadPageData(container, {
+          selectedAmountYuan: state.selectedAmountYuan,
+          selectedPaymentMethod: state.selectedPaymentMethod,
+          warningThresholdCents: requestBody.low_balance_threshold_cents,
+          warningEnabled: requestBody.warning_enabled,
+          notice: '预警阈值已更新',
+        }).then(function (nextState) {
+          if (!nextState) return result;
+          Object.assign(state, nextState);
+          renderRechargePage(container, state);
+          bindInteractions(container, state, ns.pages.adminRecharge);
+          return result;
+        });
+      });
+    },
     submitRecharge: function (container, state, payload) {
       var amountYuan = Number(payload && payload.amountYuan != null ? payload.amountYuan : state.selectedAmountYuan || 0);
       if (!Number.isFinite(amountYuan) || amountYuan < 1) {
@@ -273,6 +331,9 @@ window.aiteam = window.aiteam || {};
       loadPageData(container, {}).then(function (state) {
         if (!state) return;
         renderRechargePage(container, state);
+        container.lastWarningHandler = function (payload) {
+          return ns.pages.adminRecharge.updateWarningThreshold(container, state, payload || {});
+        };
         container.lastSubmitHandler = function (payload) {
           return ns.pages.adminRecharge.submitRecharge(container, state, payload || {});
         };

@@ -146,6 +146,90 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-recharge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_admin_recharge_threshold_update() -> dict:
+    page_path = PAGES_DIR / "admin-recharge.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+const patchCalls = [];
+let balanceResponse = {{
+  balance: '48.60',
+  balance_cents: 4860,
+  token_balance: 48600,
+  estimated_days_remaining: 7,
+  low_balance_warning: true,
+  low_balance_threshold_cents: 5000,
+  warning_enabled: true,
+  usage_summary: {{ total_tokens: 2847320, total_cost_cents: 39860 }},
+}};
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      get(url) {{
+        if (url === '/api/team/billing/balance') {{
+          return Promise.resolve({{ ok: true, data: balanceResponse }});
+        }}
+        if (url === '/api/team/billing/recharges') {{
+          return Promise.resolve({{
+            ok: true,
+            data: {{
+              items: [
+                {{ recharge_id: 'rch_1', amount: '100.00', amount_cents: 10000, payment_method: 'wechat_pay', status: 'succeeded', token_credited: 100000, created_at: '2026-06-01T10:00:00Z' }},
+              ],
+            }},
+          }});
+        }}
+        return Promise.resolve({{ ok: false, status: 404 }});
+      }},
+      post() {{
+        return Promise.resolve({{ ok: true, data: {{ recharge_id: 'rch_new' }} }});
+      }},
+      patch(url, body) {{
+        patchCalls.push({{ url, body }});
+        balanceResponse = {{
+          ...balanceResponse,
+          low_balance_threshold_cents: body.low_balance_threshold_cents,
+          warning_enabled: body.warning_enabled,
+        }};
+        return Promise.resolve({{ ok: true, data: {{ low_balance_threshold_cents: body.low_balance_threshold_cents, warning_enabled: body.warning_enabled }} }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-recharge.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll() {{ return []; }},
+  }};
+  aiteam.pages.adminRecharge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const beforeHtml = container.innerHTML;
+  await container.lastWarningHandler({{ low_balance_threshold_cents: 8800, warning_enabled: true }});
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    beforeHtml,
+    afterHtml: container.innerHTML,
+    patchCalls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() -> None:
     payload = _run_admin_billing()
     assert "本月" in payload["html"]
@@ -163,3 +247,16 @@ def test_admin_recharge_renders_warning_threshold_payment_methods_and_usage_entr
     assert "微信支付" in payload["html"]
     assert "支付宝" in payload["html"]
     assert "查看消耗看板" in payload["html"]
+
+
+def test_admin_recharge_can_update_low_balance_threshold_and_refresh_notice() -> None:
+    payload = _run_admin_recharge_threshold_update()
+    assert "低余额预警阈值" in payload["beforeHtml"]
+    assert payload["patchCalls"] == [
+        {
+            "url": "/api/team/settings",
+            "body": {"low_balance_threshold_cents": 8800, "warning_enabled": True},
+        }
+    ]
+    assert "预警阈值已更新" in payload["afterHtml"]
+    assert "¥88.00" in payload["afterHtml"]
