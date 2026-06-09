@@ -78,6 +78,95 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-billing.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_admin_billing_export_flow() -> dict:
+    page_path = PAGES_DIR / "admin-billing.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+const assignedUrls = [];
+const recordsQueries = [];
+global.window = {{
+  location: {{
+    assign(url) {{ assignedUrls.push(url); }},
+  }},
+  aiteam: {{
+    pages: {{}},
+    role: {{
+      getActiveRole() {{ return 'owner'; }},
+      canExportBilling() {{ return true; }},
+    }},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      renderPermissionDenied(container) {{ container.innerHTML = '<div>denied</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      getBillingUsageOverview() {{
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total_tokens: 2847320,
+            total_cost_cents: 39860,
+            period_start: '2026-06-01',
+            period_end: '2026-06-30',
+            by_employee: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', tokens: 1234560, cost_cents: 12840 }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', tokens: 892000, cost_cents: 8920 }},
+            ],
+          }},
+        }});
+      }},
+      getBillingUsageRecords(query) {{
+        recordsQueries.push(query || '');
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total: 2,
+            items: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', run_id: 'run_1', tokens: 420000, cost_cents: 4200, source: 'run_summary', event_ts: '2026-06-03T10:00:00Z' }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', run_id: 'run_3', tokens: 300000, cost_cents: 3020, source: 'run_summary', event_ts: '2026-06-18T10:00:00Z' }},
+            ],
+          }},
+        }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-billing.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+  }};
+  aiteam.pages.adminBilling.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const beforeHtml = container.innerHTML;
+  await container.lastFilterHandler({{
+    period_start: '2026-06-05',
+    period_end: '2026-06-20',
+    employee_id: 'emp_finance',
+  }});
+  await new Promise((resolve) => setImmediate(resolve));
+  const exportUrl = container.lastExportHandler();
+  console.log(JSON.stringify({{
+    beforeHtml,
+    afterHtml: container.innerHTML,
+    exportUrl,
+    assignedUrls,
+    recordsQueries,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_admin_recharge() -> dict:
     page_path = PAGES_DIR / "admin-recharge.js"
     script = f"""
@@ -371,3 +460,16 @@ def test_admin_recharge_submit_failure_renders_result_feedback() -> None:
     assert "充值结果" in payload["afterHtml"]
     assert "失败" in payload["afterHtml"]
     assert "充值请求提交失败" in payload["afterHtml"]
+
+
+def test_admin_billing_export_uses_current_filters_and_download_path() -> None:
+    payload = _run_admin_billing_export_flow()
+    assert "/api/team/billing/usage/records/export" in payload["beforeHtml"]
+    assert payload["recordsQueries"] == [
+        "",
+        "period_start=2026-06-05&period_end=2026-06-20&employee_id=emp_finance",
+    ]
+    assert payload["exportUrl"] == "/api/team/billing/usage/records/export?period_start=2026-06-05&period_end=2026-06-20&employee_id=emp_finance"
+    assert payload["assignedUrls"] == [payload["exportUrl"]]
+    assert "period_start=2026-06-05" in payload["afterHtml"]
+    assert "employee_id=emp_finance" in payload["afterHtml"]
