@@ -22,6 +22,13 @@ window.aiteam = window.aiteam || {};
     });
   }
 
+  function profitRate(revenue, cost) {
+    var revenueNum = Number(revenue || 0);
+    var costNum = Number(cost || 0);
+    if (!revenueNum) return '—';
+    return ((revenueNum - costNum) / revenueNum * 100).toFixed(1) + '%';
+  }
+
   function renderNotImplemented(container) {
     container.innerHTML =
       '<div class="aiteam-shell__panel">' +
@@ -44,12 +51,18 @@ window.aiteam = window.aiteam || {};
       return Math.max(max, item.revenue);
     }, 0) || 1;
     return '<div class="aiteam-billing__trend">' + trendItems.map(function (item) {
-      var height = Math.max(18, Math.round((item.revenue / maxRevenue) * 120));
+      var revenueHeight = Math.max(18, Math.round((item.revenue / maxRevenue) * 120));
+      var costHeight = Math.max(12, Math.round((item.cost / maxRevenue) * 120));
       return '<div class="aiteam-billing__trend-col">' +
-        '<div class="aiteam-billing__trend-bar" style="height:' + height + 'px"></div>' +
+        '<div class="aiteam-billing__trend-bar" style="height:' + revenueHeight + 'px"></div>' +
+        '<div class="aiteam-billing__trend-bar" style="height:' + costHeight + 'px; opacity:.45"></div>' +
         '<span class="aiteam-billing__trend-day">' + item.period + '</span>' +
         '</div>';
-    }).join('') + '</div>';
+    }).join('') + '</div>' +
+    '<div class="aiteam-action-row">' +
+      '<span class="aiteam-inline-note">充值收入</span>' +
+      '<span class="aiteam-inline-note">实际成本</span>' +
+    '</div>';
   }
 
   function renderOverview(container, payload) {
@@ -70,7 +83,8 @@ window.aiteam = window.aiteam || {};
 
     var topRows = Array.isArray(topEnterprises) && topEnterprises.length
       ? '<table class="aiteam-table"><thead><tr><th>企业</th><th>消耗</th></tr></thead><tbody>' + topEnterprises.map(function (item, index) {
-        return '<tr><td>' + (index + 1) + '. ' + (item.enterprise_name || item.enterprise_id || item.name || '') + '</td><td>' + money(item.cost || item.total_cost || item.amount) + '</td></tr>';
+        var enterpriseName = item.enterprise_name || item.enterprise_id || item.name || '';
+        return '<tr><td>' + (index + 1) + '. <a href="/system/accounts?enterprise=' + encodeURIComponent(enterpriseName) + '">' + enterpriseName + '</a></td><td>' + money(item.cost || item.total_cost || item.amount) + '</td></tr>';
       }).join('') + '</tbody></table>'
       : '<p class="aiteam-shell__panel-body">暂无高消耗企业排行。</p>';
 
@@ -89,6 +103,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总充值金额</span><span class="aiteam-shell__meta-value">' + money(revenue) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台成本Token</span><span class="aiteam-shell__meta-value">' + money(cost) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">利润（Token差价）</span><span class="aiteam-shell__meta-value">' + money(profit) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">利润率</span><span class="aiteam-shell__meta-value">' + profitRate(revenue, cost) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">付费企业数</span><span class="aiteam-shell__meta-value">' + payingEnterpriseCount + '</span></div>' +
       '</div>' +
       '<div class="aiteam-shell__two-column">' +

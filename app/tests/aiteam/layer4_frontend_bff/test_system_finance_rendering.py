@@ -152,13 +152,17 @@ def test_system_finance_renders_core_stat_cards_trend_and_top_enterprises() -> N
     assert "总充值金额" in payload["html"]
     assert "平台成本" in payload["html"] or "平台成本Token" in payload["html"]
     assert "平台利润" in payload["html"] or "利润（Token差价）" in payload["html"]
+    assert "利润率" in payload["html"]
     assert "付费企业数" in payload["html"]
     assert "本月" in payload["html"]
     assert "本年" in payload["html"]
     assert "全部" in payload["html"]
     assert "月度收入趋势" in payload["html"]
+    assert "充值收入" in payload["html"]
+    assert "实际成本" in payload["html"]
     assert "TOP 5 消费企业" in payload["html"]
     assert "太乙知行AI科技" in payload["html"]
+    assert 'href="/system/accounts?enterprise=%E5%A4%AA%E4%B9%99%E7%9F%A5%E8%A1%8CAI%E7%A7%91%E6%8A%80"' in payload["html"]
 
 
 def test_system_finance_exposes_export_report_entry() -> None:
