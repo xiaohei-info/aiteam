@@ -4,6 +4,10 @@ window.aiteam = window.aiteam || {};
   ns.pages = ns.pages || {};
   var OFFICE_SCENE_PATH = '/api/team/office/scene';
   var OFFICE_FEED_PATH = '/api/team/office/feed';
+  var VIEWPORT_MIN_SCALE = 0.7;
+  var VIEWPORT_MAX_SCALE = 1.6;
+  var VIEWPORT_SCALE_STEP = 0.15;
+  var VIEWPORT_PAN_STEP = 80;
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -64,6 +68,30 @@ window.aiteam = window.aiteam || {};
     return '#';
   }
 
+  function normalizeViewportState(state) {
+    var next = state || {};
+    var rawScale = Number(next.scale);
+    if (!Number.isFinite(rawScale) || rawScale <= 0) rawScale = 1;
+    rawScale = Math.max(VIEWPORT_MIN_SCALE, Math.min(VIEWPORT_MAX_SCALE, rawScale));
+    var offsetX = Number(next.offsetX);
+    var offsetY = Number(next.offsetY);
+    return {
+      scale: Number(rawScale.toFixed(2)),
+      offsetX: Number.isFinite(offsetX) ? Math.round(offsetX) : 0,
+      offsetY: Number.isFinite(offsetY) ? Math.round(offsetY) : 0,
+    };
+  }
+
+  function viewportTransform(state) {
+    var view = normalizeViewportState(state);
+    return 'translate(' + view.offsetX + 'px, ' + view.offsetY + 'px) scale(' + String(view.scale) + ')';
+  }
+
+  function viewportScaleLabel(state) {
+    var view = normalizeViewportState(state);
+    return String(Math.round(view.scale * 100)) + '%';
+  }
+
   function renderSeat(seat) {
     var href = taskHref(seat);
     var badgeClass = seatPresenceState(seat);
@@ -119,6 +147,36 @@ window.aiteam = window.aiteam || {};
     return tasks.map(renderTask).join('');
   }
 
+  function renderQueueDigest(feedData) {
+    var queue = feedData && feedData.queue ? feedData.queue : {};
+    return '' +
+      '<div class="aiteam-shell__meta">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">排队</span><span class="aiteam-shell__meta-value">' + escapeHtml(String(queue.queued || 0)) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">运行中</span><span class="aiteam-shell__meta-value">' + escapeHtml(String(queue.running || 0)) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">待人工</span><span class="aiteam-shell__meta-value">' + escapeHtml(String(queue.waiting_human || 0)) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">失败</span><span class="aiteam-shell__meta-value">' + escapeHtml(String(queue.failed || 0)) + '</span></div>' +
+      '</div>';
+  }
+
+  function renderActivityLog(tasks) {
+    if (!tasks.length) {
+      return '<div class="aiteam-office__task-empty">当前暂无实时活动日志</div>';
+    }
+    return tasks.slice(0, 5).map(function (item) {
+      var actor = item.employee_display_name || item.employee_name || item.display_name || '系统';
+      var detail = item.detail || item.preview || '等待更新';
+      var eventTs = item.event_ts || '刚刚';
+      return '' +
+        '<div class="aiteam-office__task-item">' +
+        '<div class="aiteam-office__task-main">' +
+        '<div class="aiteam-office__task-title">' + escapeHtml(actor) + '</div>' +
+        '<div class="aiteam-office__task-detail">' + escapeHtml(detail) + '</div>' +
+        '</div>' +
+        '<div class="aiteam-office__task-meta"><span class="aiteam-office__task-progress">' + escapeHtml(eventTs) + '</span></div>' +
+        '</div>';
+    }).join('');
+  }
+
   function renderLegend() {
     return '' +
       '<ul class="aiteam-office__legend">' +
@@ -142,10 +200,11 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
-  function renderOffice(sceneData, feedData) {
+  function renderOffice(sceneData, feedData, viewportState) {
     var summary = sceneData && sceneData.summary ? sceneData.summary : {};
     var seats = Array.isArray(sceneData && sceneData.seats) ? sceneData.seats : [];
     var tasks = Array.isArray(feedData && feedData.items) ? feedData.items : [];
+    var view = normalizeViewportState(viewportState);
     return '' +
       '<section class="aiteam-office">' +
       '<div class="aiteam-shell__panel aiteam-office__panel">' +
@@ -158,13 +217,21 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-office__toolbar-actions">' +
       '<div class="aiteam-office__badge">在线 ' + escapeHtml(String(summary.online_employee_count || 0)) + '</div>' +
       '<div class="aiteam-office__badge">队列 ' + escapeHtml(String(summary.running_task_count || 0)) + '</div>' +
+      '<div class="aiteam-office__badge" data-office-viewport-label>' + escapeHtml(viewportScaleLabel(view)) + '</div>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-zoom-out>缩小</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-zoom-reset>重置视角</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-zoom-in>放大</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-pan-left>←</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-pan-up>↑</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-pan-down>↓</button>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-pan-right>→</button>' +
       '<button type="button" class="aiteam-office__fullscreen" data-office-fullscreen>全屏查看</button>' +
       '</div>' +
       '</div>' +
       renderSeamMeta(sceneData, feedData) +
       '<div class="aiteam-office__layout">' +
       '<div class="aiteam-office__stage-wrap">' +
-      '<div class="aiteam-office__stage" data-office-root>' +
+      '<div class="aiteam-office__stage" data-office-root style="transform:' + escapeHtml(viewportTransform(view)) + ';transform-origin:center center;">' +
       (seats.length ? seats.map(renderSeat).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
       '</div>' +
       '</div>' +
@@ -172,6 +239,14 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-office__sidebar-card">' +
       '<div class="aiteam-office__sidebar-title">任务队列</div>' +
       '<div class="aiteam-office__task-list">' + renderTaskList(tasks) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-office__sidebar-card">' +
+      '<div class="aiteam-office__sidebar-title">队列统计</div>' +
+      renderQueueDigest(feedData) +
+      '</div>' +
+      '<div class="aiteam-office__sidebar-card">' +
+      '<div class="aiteam-office__sidebar-title">最新活动</div>' +
+      '<div class="aiteam-office__task-list">' + renderActivityLog(tasks) + '</div>' +
       '</div>' +
       '<div class="aiteam-office__sidebar-card">' +
       '<div class="aiteam-office__sidebar-title">状态说明</div>' +
@@ -206,9 +281,80 @@ window.aiteam = window.aiteam || {};
     });
   }
 
+  function applyViewportState(container, nextState) {
+    if (!container || typeof container.querySelector !== 'function') return normalizeViewportState(nextState);
+    var view = normalizeViewportState(nextState);
+    container.__aiteamOfficeViewportState = view;
+    var root = container.querySelector('[data-office-root]');
+    var label = container.querySelector('[data-office-viewport-label]');
+    if (root && root.style) {
+      root.style.transform = viewportTransform(view);
+      root.style.transformOrigin = 'center center';
+    }
+    if (label) label.textContent = viewportScaleLabel(view);
+    return view;
+  }
+
+  function zoomViewport(container, delta) {
+    var current = normalizeViewportState(container && container.__aiteamOfficeViewportState);
+    return applyViewportState(container, {
+      scale: current.scale + delta,
+      offsetX: current.offsetX,
+      offsetY: current.offsetY,
+    });
+  }
+
+  function panViewport(container, dx, dy) {
+    var current = normalizeViewportState(container && container.__aiteamOfficeViewportState);
+    return applyViewportState(container, {
+      scale: current.scale,
+      offsetX: current.offsetX + dx,
+      offsetY: current.offsetY + dy,
+    });
+  }
+
+  function resetViewport(container) {
+    return applyViewportState(container, { scale: 1, offsetX: 0, offsetY: 0 });
+  }
+
+  function bindViewportControls(container) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var zoomIn = container.querySelector('[data-office-zoom-in]');
+    var zoomOut = container.querySelector('[data-office-zoom-out]');
+    var zoomReset = container.querySelector('[data-office-zoom-reset]');
+    var panLeft = container.querySelector('[data-office-pan-left]');
+    var panRight = container.querySelector('[data-office-pan-right]');
+    var panUp = container.querySelector('[data-office-pan-up]');
+    var panDown = container.querySelector('[data-office-pan-down]');
+    if (zoomIn && typeof zoomIn.addEventListener === 'function') {
+      zoomIn.addEventListener('click', function () { zoomViewport(container, VIEWPORT_SCALE_STEP); });
+    }
+    if (zoomOut && typeof zoomOut.addEventListener === 'function') {
+      zoomOut.addEventListener('click', function () { zoomViewport(container, -VIEWPORT_SCALE_STEP); });
+    }
+    if (zoomReset && typeof zoomReset.addEventListener === 'function') {
+      zoomReset.addEventListener('click', function () { resetViewport(container); });
+    }
+    if (panLeft && typeof panLeft.addEventListener === 'function') {
+      panLeft.addEventListener('click', function () { panViewport(container, -VIEWPORT_PAN_STEP, 0); });
+    }
+    if (panRight && typeof panRight.addEventListener === 'function') {
+      panRight.addEventListener('click', function () { panViewport(container, VIEWPORT_PAN_STEP, 0); });
+    }
+    if (panUp && typeof panUp.addEventListener === 'function') {
+      panUp.addEventListener('click', function () { panViewport(container, 0, -VIEWPORT_PAN_STEP); });
+    }
+    if (panDown && typeof panDown.addEventListener === 'function') {
+      panDown.addEventListener('click', function () { panViewport(container, 0, VIEWPORT_PAN_STEP); });
+    }
+    applyViewportState(container, container.__aiteamOfficeViewportState || { scale: 1, offsetX: 0, offsetY: 0 });
+  }
+
   function renderOfficeInto(container, sceneData, feedData) {
-    container.innerHTML = renderOffice(sceneData, feedData);
+    var view = normalizeViewportState(container && container.__aiteamOfficeViewportState);
+    container.innerHTML = renderOffice(sceneData, feedData, view);
     bindFullscreen(container);
+    bindViewportControls(container);
   }
 
   function doRefresh(container) {
@@ -239,9 +385,26 @@ window.aiteam = window.aiteam || {};
       doRefresh(container);
     },
 
+    _applyViewportState: function (container, nextState) {
+      return applyViewportState(container, nextState);
+    },
+
+    _zoomViewport: function (container, delta) {
+      return zoomViewport(container, delta);
+    },
+
+    _panViewport: function (container, dx, dy) {
+      return panViewport(container, dx, dy);
+    },
+
+    _resetViewport: function (container) {
+      return resetViewport(container);
+    },
+
     init: function (container) {
       if (!container) return;
       ns.states.renderLoading(container);
+      container.__aiteamOfficeViewportState = normalizeViewportState(container.__aiteamOfficeViewportState);
 
       var self = this;
       self._stopPolling();

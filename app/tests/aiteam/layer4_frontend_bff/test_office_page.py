@@ -194,6 +194,146 @@ vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_viewport_controls_lifecycle() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(OFFICE_MODULE_PATH))}, 'utf8');
+const responses = [
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    summary: {{ online_employee_count: 2, busy_employee_count: 1, running_task_count: 1, queue_depth: 0, waiting_reply_count: 0 }},
+    seats: [{{
+      employee_id: 'emp_rex',
+      display_name: 'Rex',
+      role_name: '代码工程师',
+      presence: {{ state: 'busy', current_task: '执行回归测试', latest_event_cursor: 12, events_url: '/api/team/runs/run_1/events?cursor=12' }},
+    }}],
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    items: [{{
+      employee_id: 'emp_rex',
+      employee_display_name: 'Rex',
+      status: 'running',
+      preview: 'Layer4 前端回归',
+      latest_event_cursor: 12,
+      events_url: '/api/team/runs/run_1/events?cursor=12',
+      event_ts: '2026-06-05T12:34:56Z',
+    }}],
+    queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+];
+function makeClassList() {{
+  const set = new Set();
+  return {{
+    contains(name) {{ return set.has(name); }},
+    add(name) {{ set.add(name); }},
+    remove(name) {{ set.delete(name); }},
+  }};
+}}
+function makeButton(name) {{
+  return {{
+    name,
+    textContent: '',
+    disabled: false,
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) this.listeners.click({{ preventDefault() {{}} }}); }},
+  }};
+}}
+const root = {{ style: {{}}, classList: makeClassList() }};
+const fullScreenButton = makeButton('fullscreen');
+const zoomInButton = makeButton('zoomIn');
+const zoomOutButton = makeButton('zoomOut');
+const resetButton = makeButton('reset');
+const panLeftButton = makeButton('panLeft');
+const panRightButton = makeButton('panRight');
+const panUpButton = makeButton('panUp');
+const panDownButton = makeButton('panDown');
+const label = {{ textContent: '' }};
+const selectorMap = {{
+  '[data-office-root]': root,
+  '[data-office-fullscreen]': fullScreenButton,
+  '[data-office-zoom-in]': zoomInButton,
+  '[data-office-zoom-out]': zoomOutButton,
+  '[data-office-zoom-reset]': resetButton,
+  '[data-office-pan-left]': panLeftButton,
+  '[data-office-pan-right]': panRightButton,
+  '[data-office-pan-up]': panUpButton,
+  '[data-office-pan-down]': panDownButton,
+  '[data-office-viewport-label]': label,
+}};
+global.window = {{ aiteam: {{}} }};
+global.aiteam = global.window.aiteam;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  const next = responses.shift();
+  return {{
+    ok: next.ok,
+    status: next.status,
+    statusText: next.statusText,
+    async text() {{ return JSON.stringify(next.body); }},
+  }};
+}};
+global.setInterval = () => null;
+global.clearInterval = () => {{}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector(selector) {{
+      return selectorMap[selector] || null;
+    }},
+  }};
+  aiteam.pages.office.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const initialTransform = root.style.transform || '';
+  const initialLabel = label.textContent || '';
+  zoomInButton.click();
+  panRightButton.click();
+  const zoomedTransform = root.style.transform || '';
+  const zoomedLabel = label.textContent || '';
+  resetButton.click();
+  console.log(JSON.stringify({{
+    html: container.innerHTML,
+    initialTransform,
+    initialLabel,
+    zoomedTransform,
+    zoomedLabel,
+    resetTransform: root.style.transform || '',
+    resetLabel: label.textContent || '',
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_api_client_exposes_office_helpers() -> None:
     source = _read(API_CLIENT_PATH)
     assert "getOfficeScene()" in source
@@ -219,6 +359,8 @@ def test_office_module_uses_team_panel_office_routes() -> None:
     assert "/api/team/office/feed" in source or "getOfficeFeed" in source
     assert "aiteam-office__stage" in source
     assert "data-office-fullscreen" in source
+    assert "data-office-zoom-in" in source
+    assert "data-office-pan-right" in source
     assert "企业办公室" in source
     for forbidden in FORBIDDEN_ROUTES:
         assert forbidden not in source
@@ -401,3 +543,78 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert "企业办公室" in result["html"]
     assert "全屏查看" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]
+
+
+def test_office_module_supports_zoom_pan_and_viewport_reset() -> None:
+    result = _run_viewport_controls_lifecycle()
+    assert "缩小" in result["html"]
+    assert "放大" in result["html"]
+    assert "重置视角" in result["html"]
+    assert result["initialTransform"] == "translate(0px, 0px) scale(1)"
+    assert result["initialLabel"] == "100%"
+    assert result["zoomedTransform"] == "translate(80px, 0px) scale(1.15)"
+    assert result["zoomedLabel"] == "115%"
+    assert result["resetTransform"] == "translate(0px, 0px) scale(1)"
+    assert result["resetLabel"] == "100%"
+
+
+def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
+    result = _run_office_module(
+        {
+            "ok": True,
+            "status": 200,
+            "body": {
+                "summary": {
+                    "online_employee_count": 2,
+                    "busy_employee_count": 1,
+                    "running_task_count": 1,
+                    "queue_depth": 2,
+                    "waiting_reply_count": 1,
+                },
+                "seats": [
+                    {
+                        "employee_id": "emp_rex",
+                        "display_name": "Rex",
+                        "role_name": "代码工程师",
+                        "presence": {
+                            "state": "busy",
+                            "current_task": "执行回归测试",
+                            "latest_event_cursor": 21,
+                            "events_url": "/api/team/runs/run_rex/events?cursor=21",
+                        },
+                    }
+                ],
+                "generated_cursor": 21,
+                "refresh_hint_ms": 12000,
+            },
+        },
+        {
+            "ok": True,
+            "status": 200,
+            "body": {
+                "items": [
+                    {
+                        "employee_id": "emp_rex",
+                        "employee_display_name": "Rex",
+                        "status": "running",
+                        "preview": "执行回归测试",
+                        "detail": "正在同步 Layer4 回归结果",
+                        "latest_event_cursor": 21,
+                        "events_url": "/api/team/runs/run_rex/events?cursor=21",
+                        "event_ts": "2026-06-05T12:34:56Z",
+                    }
+                ],
+                "queue": {"queued": 2, "running": 1, "waiting_human": 1, "failed": 0},
+                "generated_cursor": 21,
+                "refresh_hint_ms": 12000,
+            },
+        },
+    )
+    assert "队列统计" in result["html"]
+    assert "排队" in result["html"] and ">2<" in result["html"]
+    assert "运行中" in result["html"] and ">1<" in result["html"]
+    assert "待人工" in result["html"]
+    assert "失败" in result["html"] and ">0<" in result["html"]
+    assert "最新活动" in result["html"]
+    assert "2026-06-05T12:34:56Z" in result["html"]
+    assert "正在同步 Layer4 回归结果" in result["html"]
