@@ -229,6 +229,14 @@ window.aiteam = window.aiteam || {};
       return this.post('/skills/installs', body, options);
     },
 
+    patchSkillInstall(installId, body, options) {
+      return this.patch(`/skills/installs/${encodeURIComponent(installId)}`, body, options);
+    },
+
+    deleteSkillInstall(installId, options) {
+      return this.delete(`/skills/installs/${encodeURIComponent(installId)}`, options);
+    },
+
     getBillingUsageOverview(options) {
       return this.get('/billing/usage/overview', options);
     },

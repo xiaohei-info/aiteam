@@ -27,18 +27,25 @@ window.aiteam = window.aiteam || {};
   }
 
   function normalizeInstall(item) {
+    var grants = Array.isArray(item && item.grants) ? item.grants.slice() : [];
+    var grantedEmployeeIds = Array.isArray(item && item.granted_employee_ids)
+      ? item.granted_employee_ids.slice()
+      : grants.map(function (grant) { return grant && grant.employee_id ? String(grant.employee_id) : ''; }).filter(Boolean);
     return {
       install_id: stringValue(item && item.install_id, ''),
       skill_id: stringValue(item && (item.skill_id || item.skill_code), ''),
-      name: stringValue(item && item.name, item && (item.skill_id || item.skill_code) || '未命名技能'),
+      name: stringValue(item && (item.name || item.display_name), item && (item.skill_id || item.skill_code) || '未命名技能'),
       version: stringValue(item && item.version, '—'),
-      source: stringValue(item && item.source, 'custom'),
-      visibility: stringValue(item && item.visibility, 'enterprise'),
-      granted_employee_ids: Array.isArray(item && item.granted_employee_ids) ? item.granted_employee_ids.slice() : [],
+      source: stringValue(item && (item.source || item.source_marketplace), 'custom'),
+      visibility: stringValue(item && (item.visibility || item.scope_mode), 'enterprise'),
+      scope_mode: stringValue(item && item.scope_mode, 'selected_employees'),
+      granted_employee_ids: grantedEmployeeIds,
+      grants: grants,
       updated_at: stringValue(item && (item.updated_at || item.installed_at), ''),
       latest_version: stringValue(item && item.latest_version, ''),
       update_available: !!(item && item.update_available),
       audit_status: stringValue(item && item.audit_status, ''),
+      install_status: stringValue(item && item.install_status, item && item.update_available ? 'update_available' : 'active'),
     };
   }
 
@@ -87,10 +94,10 @@ window.aiteam = window.aiteam || {};
     return '网络请求失败';
   }
 
-  function renderInstallCard(item) {
+  function renderInstallCard(item, state) {
     var grants = Array.isArray(item.granted_employee_ids) ? item.granted_employee_ids.length : 0;
     var versionLine = item.update_available && item.latest_version
-      ? '版本 ' + esc(item.version) + ' → ' + esc(item.latest_version) + '（待后端接入更新接口）'
+      ? '版本 ' + esc(item.version) + ' → ' + esc(item.latest_version)
       : '版本 ' + esc(item.version) + ' · 来源 ' + esc(item.source);
     var auditLine = item.audit_status
       ? '<div class="aiteam-skill-card__meta">审计状态：' + esc(item.audit_status) + '</div>'
@@ -98,15 +105,25 @@ window.aiteam = window.aiteam || {};
     var updatedLine = item.updated_at
       ? '<div class="aiteam-skill-card__meta">最近安装时间：' + esc(item.updated_at) + '</div>'
       : '';
+    var scopeLine = item.scope_mode === 'all_employees'
+      ? '授权范围：全员可见'
+      : '授权员工：' + esc((item.granted_employee_ids || []).join(', ') || '尚未选择');
+    var pending = item.install_id && item.install_id === state.pendingInstallId ? ' disabled' : '';
+    var upgradeButton = item.update_available && item.latest_version && item.latest_version !== item.version
+      ? '<button type="button" class="aiteam-btn" data-role="upgrade-skill-install" data-install-id="' + esc(item.install_id) + '">升级到最新</button>'
+      : '<button type="button" class="aiteam-btn aiteam-btn--secondary" disabled>已是最新版本</button>';
     return '<li class="aiteam-skill-card">' +
       '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
       '<div class="aiteam-skill-card__meta">' + versionLine + '</div>' +
       '<div class="aiteam-skill-card__meta">可见性：' + esc(item.visibility) + ' · 已授权员工：' + esc(grants) + '</div>' +
+      '<div class="aiteam-skill-card__meta">' + scopeLine + '</div>' +
       updatedLine +
       auditLine +
       '<div class="aiteam-skill-card__actions">' +
-      '<button type="button" class="aiteam-btn aiteam-btn--secondary" disabled>卸载待后端接入</button>' +
-      '<button type="button" class="aiteam-btn aiteam-btn--secondary" disabled>员工授权请前往员工详情</button>' +
+      upgradeButton +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="grant-all-skill-install" data-install-id="' + esc(item.install_id) + '"' + pending + '>授权全员</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="edit-skill-scope" data-install-id="' + esc(item.install_id) + '"' + pending + '>编辑授权员工</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="uninstall-skill-install" data-install-id="' + esc(item.install_id) + '"' + pending + '>卸载技能</button>' +
       '</div>' +
       '</li>';
   }
@@ -140,6 +157,7 @@ window.aiteam = window.aiteam || {};
       catalog: [],
       query: '',
       pendingSkillId: '',
+      pendingInstallId: '',
       notices: [],
       loadState: {
         installs: 'loading',
@@ -159,7 +177,7 @@ window.aiteam = window.aiteam || {};
       if (state.loadState.catalog !== 'ready') {
         notices.push('技能市场目录接口未完全就绪：页面保留搜索和降级占位，不伪造缺失数据。');
       }
-      notices.push('员工授权闭环已接入员工详情抽屉；技能卸载/升级仍依赖后端补充接口。');
+      notices.push('已安装技能支持升级、卸载和按 employee_ids 调整授权范围；员工详情抽屉继续负责单员工即时增减。');
       return notices;
     }
 
@@ -182,13 +200,70 @@ window.aiteam = window.aiteam || {};
           installSkill(this.getAttribute('data-skill-id'));
         });
       }
+      var upgradeButtons = container.querySelectorAll('[data-role="upgrade-skill-install"]');
+      for (var j = 0; j < upgradeButtons.length; j++) {
+        upgradeButtons[j].addEventListener('click', function () {
+          upgradeInstall(this.getAttribute('data-install-id'));
+        });
+      }
+      var grantAllButtons = container.querySelectorAll('[data-role="grant-all-skill-install"]');
+      for (var k = 0; k < grantAllButtons.length; k++) {
+        grantAllButtons[k].addEventListener('click', function () {
+          updateScope(this.getAttribute('data-install-id'), 'all_employees', []);
+        });
+      }
+      var scopeButtons = container.querySelectorAll('[data-role="edit-skill-scope"]');
+      for (var m = 0; m < scopeButtons.length; m++) {
+        scopeButtons[m].addEventListener('click', function () {
+          var installId = this.getAttribute('data-install-id');
+          var install = findInstallById(installId);
+          var initial = install && install.granted_employee_ids ? install.granted_employee_ids.join(',') : '';
+          var typed = typeof window.prompt === 'function'
+            ? window.prompt('请输入授权员工 ID，多个用英文逗号分隔', initial)
+            : initial;
+          if (typed == null) return;
+          var employeeIds = String(typed || '').split(',').map(function (item) {
+            return item.replace(/^\s+|\s+$/g, '');
+          }).filter(function (item) { return !!item; });
+          updateScope(installId, 'selected_employees', employeeIds);
+        });
+      }
+      var uninstallButtons = container.querySelectorAll('[data-role="uninstall-skill-install"]');
+      for (var n = 0; n < uninstallButtons.length; n++) {
+        uninstallButtons[n].addEventListener('click', function () {
+          uninstallInstall(this.getAttribute('data-install-id'));
+        });
+      }
+    }
+
+    function findInstallById(installId) {
+      for (var i = 0; i < state.installs.length; i++) {
+        if (state.installs[i].install_id === installId) return state.installs[i];
+      }
+      return null;
+    }
+
+    function upsertInstall(installPatch) {
+      var nextInstall = normalizeInstall(installPatch || {});
+      var next = [];
+      var replaced = false;
+      for (var i = 0; i < state.installs.length; i++) {
+        if (state.installs[i].install_id === nextInstall.install_id) {
+          next.push(normalizeInstall(Object.assign({}, state.installs[i], nextInstall)));
+          replaced = true;
+        } else {
+          next.push(state.installs[i]);
+        }
+      }
+      if (!replaced) next.unshift(nextInstall);
+      state.installs = next;
     }
 
     function render() {
       var installsById = installedLookup(state.installs);
       var visibleCatalog = filteredCatalog();
       var installedMarkup = state.installs.length
-        ? state.installs.map(renderInstallCard).join('')
+        ? state.installs.map(function (item) { return renderInstallCard(item, state); }).join('')
         : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">企业技能库暂无已安装技能</div></li>';
       var catalogMarkup = visibleCatalog.length
         ? visibleCatalog.map(function (item) { return renderCatalogCard(item, installsById, state); }).join('')
@@ -225,7 +300,7 @@ window.aiteam = window.aiteam || {};
       state.pendingSkillId = skillId;
       setNotice('正在安装技能：' + skillId);
       render();
-      ns.api.installSkill({ skill_id: skillId }).then(function (result) {
+      ns.api.installSkill({ skill_code: skillId, scope_mode: 'all_employees' }).then(function (result) {
         state.pendingSkillId = '';
         if (!result.ok) {
           setNotice('技能安装失败：' + apiErrorMessage(result));
@@ -237,7 +312,8 @@ window.aiteam = window.aiteam || {};
           name: catalogItem ? catalogItem.name : skillId,
           version: catalogItem ? catalogItem.version : '—',
           source: catalogItem ? catalogItem.source : 'custom',
-          visibility: 'enterprise',
+          visibility: 'all_employees',
+          scope_mode: 'all_employees',
           granted_employee_ids: []
         });
         state.installs = state.installs.filter(function (item) {
@@ -245,8 +321,88 @@ window.aiteam = window.aiteam || {};
         });
         state.installs.push(nextInstall);
         state.loadState.installs = 'ready';
-        setNotice('安装成功：' + nextInstall.name + '。员工授权请前往员工详情抽屉继续操作。');
+        setNotice('安装成功：' + nextInstall.name + '。默认已授权全员，可按需缩小员工范围。');
         render();
+      });
+    }
+
+    function upgradeInstall(installId) {
+      var install = findInstallById(installId);
+      if (!install || !ns.api || !ns.api.patchSkillInstall || state.pendingInstallId) return Promise.resolve(null);
+      state.pendingInstallId = installId;
+      setNotice('正在升级技能：' + install.name);
+      render();
+      return ns.api.patchSkillInstall(installId, {
+        version: install.latest_version || install.version,
+        latest_version: install.latest_version || install.version,
+      }).then(function (result) {
+        state.pendingInstallId = '';
+        if (!result.ok) {
+          setNotice('技能升级失败：' + apiErrorMessage(result));
+          render();
+          return result;
+        }
+        upsertInstall(Object.assign({}, install, result.data || {}, {
+          skill_id: install.skill_id,
+          name: install.name,
+          source: install.source,
+          granted_employee_ids: (result.data && result.data.grants || []).map(function (grant) { return grant.employee_id; }),
+          update_available: false,
+        }));
+        setNotice('技能已升级到最新版本：' + install.name);
+        render();
+        return result;
+      });
+    }
+
+    function updateScope(installId, scopeMode, employeeIds) {
+      var install = findInstallById(installId);
+      if (!install || !ns.api || !ns.api.patchSkillInstall || state.pendingInstallId) return Promise.resolve(null);
+      state.pendingInstallId = installId;
+      setNotice(scopeMode === 'all_employees' ? '正在切换为全员授权：' + install.name : '正在更新授权员工：' + install.name);
+      render();
+      return ns.api.patchSkillInstall(installId, {
+        scope_mode: scopeMode,
+        employee_ids: scopeMode === 'all_employees' ? undefined : employeeIds,
+      }).then(function (result) {
+        state.pendingInstallId = '';
+        if (!result.ok) {
+          setNotice('技能授权范围更新失败：' + apiErrorMessage(result));
+          render();
+          return result;
+        }
+        upsertInstall(Object.assign({}, install, result.data || {}, {
+          skill_id: install.skill_id,
+          name: install.name,
+          source: install.source,
+          scope_mode: scopeMode,
+          visibility: scopeMode,
+          granted_employee_ids: (result.data && result.data.grants || []).map(function (grant) { return grant.employee_id; }),
+          update_available: install.update_available,
+        }));
+        setNotice(scopeMode === 'all_employees' ? '技能已授权给全员：' + install.name : '技能授权员工已更新：' + install.name);
+        render();
+        return result;
+      });
+    }
+
+    function uninstallInstall(installId) {
+      var install = findInstallById(installId);
+      if (!install || !ns.api || !ns.api.deleteSkillInstall || state.pendingInstallId) return Promise.resolve(null);
+      state.pendingInstallId = installId;
+      setNotice('正在卸载技能：' + install.name);
+      render();
+      return ns.api.deleteSkillInstall(installId).then(function (result) {
+        state.pendingInstallId = '';
+        if (!result.ok) {
+          setNotice('技能卸载失败：' + apiErrorMessage(result));
+          render();
+          return result;
+        }
+        state.installs = state.installs.filter(function (item) { return item.install_id !== installId; });
+        setNotice('技能已卸载：' + install.name);
+        render();
+        return result;
       });
     }
 
@@ -288,6 +444,11 @@ window.aiteam = window.aiteam || {};
         normalizeInstall: normalizeInstall,
         normalizeCatalogItem: normalizeCatalogItem,
         filterCatalog: filterCatalog,
+        installSkill: installSkill,
+        upgradeInstall: upgradeInstall,
+        updateScope: updateScope,
+        uninstallInstall: uninstallInstall,
+        findInstallById: findInstallById,
       }
     };
   }
@@ -302,6 +463,7 @@ window.aiteam = window.aiteam || {};
       normalizeInstall: normalizeInstall,
       normalizeCatalogItem: normalizeCatalogItem,
       filterCatalog: filterCatalog,
+      createController: createPageController,
     }
   };
 }(window.aiteam));

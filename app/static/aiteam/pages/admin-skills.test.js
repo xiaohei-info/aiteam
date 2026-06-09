@@ -59,17 +59,35 @@ const context = {
           apiCalls.push('install:' + body.skill_id);
           return Promise.resolve({ ok: true, data: { skill_id: body.skill_id, name: 'Excel分析', version: '1.2.0', source: 'skillhub', visibility: 'enterprise', granted_employee_ids: [] } });
         },
+        patchSkillInstall(installId, body) {
+          apiCalls.push('patch:' + installId + ':' + JSON.stringify(body));
+          return Promise.resolve({ ok: true, data: {
+            install_id: installId,
+            skill_id: 'skill_excel',
+            version: body.version || '1.2.0',
+            latest_version: body.latest_version || '1.3.0',
+            install_status: body.version === body.latest_version ? 'active' : 'update_available',
+            scope_mode: body.scope_mode || 'selected_employees',
+            grants: (body.employee_ids || ['emp_1']).map(function (employeeId) {
+              return { skill_code: 'skill_excel', employee_id: employeeId, enabled: true };
+            }),
+          } });
+        },
+        deleteSkillInstall(installId) {
+          apiCalls.push('delete:' + installId);
+          return Promise.resolve({ ok: true, data: { install_id: installId, skill_code: 'skill_excel', status: 'uninstalled' } });
+        },
         getSkillCatalog() {
           apiCalls.push('catalog');
           return Promise.resolve({ ok: true, data: { items: [
-            { skill_id: 'skill_excel', name: 'Excel分析', description: '处理表格', source: 'skillhub', version: '1.2.0', install_count: 42, tags: ['分析', '表格'], authorization_scope: 'employee_grant' },
+            { skill_id: 'skill_excel', name: 'Excel分析', description: '处理表格', source: 'skillhub', version: '1.2.0', latest_version: '1.3.0', update_available: true, install_count: 42, tags: ['分析', '表格'], authorization_scope: 'employee_grant' },
             { skill_id: 'skill_search', name: '联网搜索', description: '联网检索', source: 'skillhub', version: '0.9.0', install_count: 11, tags: ['搜索'] },
           ] } });
         },
         getSkillInstalls() {
           apiCalls.push('installs');
           return Promise.resolve({ ok: true, data: { items: [
-            { install_id: 'inst_1', skill_id: 'skill_excel', name: 'Excel分析', version: '1.2.0', source: 'skillhub', visibility: 'enterprise', granted_employee_ids: ['emp_1'] },
+            { install_id: 'inst_1', skill_id: 'skill_excel', name: 'Excel分析', version: '1.2.0', latest_version: '1.3.0', update_available: true, source: 'skillhub', visibility: 'enterprise', granted_employee_ids: ['emp_1'], grants: [{ employee_id: 'emp_1', enabled: true }] },
           ] } });
         },
       },
@@ -121,10 +139,21 @@ async function run() {
 
   assert(apiCalls.join(',') === 'installs,catalog', 'page should request installs then catalog');
   assert(host.innerHTML.indexOf('技能市场') !== -1, 'page should render title');
-  assert(host.innerHTML.indexOf('员工授权请前往员工详情') !== -1, 'page should render authorization guidance');
-  assert(host.innerHTML.indexOf('卸载待后端接入') !== -1, 'page should render degraded uninstall state');
+  assert(host.innerHTML.indexOf('升级到最新') !== -1, 'page should render upgrade action');
+  assert(host.innerHTML.indexOf('卸载技能') !== -1, 'page should render uninstall action');
+  assert(host.innerHTML.indexOf('编辑授权员工') !== -1, 'page should render scope management action');
   assert(host.innerHTML.indexOf('Excel分析') !== -1, 'page should render skill card content');
   assert(host.innerHTML.indexOf('搜索技能名称、描述或标签') !== -1, 'page should render search guidance');
+
+  assert(typeof page.__test.createController === 'function', 'page should expose controller factory for interaction tests');
+  const controller = page.__test.createController(createElement('div'));
+  await controller.load();
+  await controller.__test.upgradeInstall('inst_1');
+  await controller.__test.updateScope('inst_1', 'selected_employees', ['emp_1', 'emp_2']);
+  await controller.__test.uninstallInstall('inst_1');
+  assert(apiCalls.indexOf('patch:inst_1:{"version":"1.3.0","latest_version":"1.3.0"}') !== -1, 'upgrade should patch install to latest version');
+  assert(apiCalls.indexOf('patch:inst_1:{"scope_mode":"selected_employees","employee_ids":["emp_1","emp_2"]}') !== -1, 'scope update should patch employee scope');
+  assert(apiCalls.indexOf('delete:inst_1') !== -1, 'uninstall should call deleteSkillInstall');
 
   if (failed) {
     console.error('admin-skills.test.js failed');

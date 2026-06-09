@@ -98,6 +98,7 @@ vm.runInThisContext(moduleSource, {{ filename: {json.dumps(module_file)} }});
 EXPECTED_ADMIN_PREFIXES = [
     ("admin-employees.js", ["/api/team/employees", "/api/team/employees/"]),
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
+    ("admin-skills.js",    ["/api/team/skills/catalog", "/api/team/skills/installs"]),
     ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
 ]
 
@@ -175,6 +176,17 @@ class TestAdminSystemPageRuntimeInit:
             ],
         )
         assert "费用接口尚未实现" in result["html"]
+
+    def test_admin_skills_init_executes_with_loaded_dependencies(self):
+        result = _run_page_module(
+            "admin-skills.js",
+            "adminSkills",
+            [
+                {"url": "/api/team/skills/installs", "method": "GET"},
+                {"url": "/api/team/skills/catalog", "method": "GET"},
+            ],
+        )
+        assert "技能市场读取失败" in result["html"] or "技能市场目录接口未完全就绪" in result["html"]
 
     def test_admin_templates_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
