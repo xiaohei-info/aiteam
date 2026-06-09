@@ -92,8 +92,15 @@ window.aiteam = window.aiteam || {};
     return String(Math.round(view.scale * 100)) + '%';
   }
 
-  function renderSeat(seat) {
-    var href = taskHref(seat);
+  function findSeatById(seats, seatId) {
+    if (!seatId) return seats[0] || null;
+    for (var i = 0; i < seats.length; i += 1) {
+      if (String(seats[i].employee_id || '') === String(seatId)) return seats[i];
+    }
+    return seats[0] || null;
+  }
+
+  function renderSeat(seat, selected) {
     var badgeClass = seatPresenceState(seat);
     var cursorVal = seatEventCursor(seat);
     var cursorUrl = seatEventsUrl(seat);
@@ -104,7 +111,7 @@ window.aiteam = window.aiteam || {};
         : '<div class="aiteam-office__task-detail">cursor #' + escapeHtml(String(cursorVal)) + '</div>';
     }
     return '' +
-      '<a class="aiteam-office__seat" href="' + escapeHtml(href) + '">' +
+      '<button type="button" class="aiteam-office__seat' + (selected ? ' is-selected' : '') + '" data-office-seat-select="' + escapeHtml(seat.employee_id || '') + '">' +
       '<div class="aiteam-office__seat-header">' +
       '<span class="aiteam-office__seat-name">' + escapeHtml(seat.display_name || seat.employee_id || '未命名员工') + '</span>' +
       '<span class="aiteam-office__seat-status is-' + escapeHtml(badgeClass) + '">' + escapeHtml(seatStatusLabel(badgeClass)) + '</span>' +
@@ -112,7 +119,30 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-office__seat-role">' + escapeHtml(seat.role_name || '数字员工') + '</div>' +
       '<div class="aiteam-office__task-bubble">' + escapeHtml(seatTaskPreview(seat)) + '</div>' +
       cursorHtml +
-      '</a>';
+      '</button>';
+  }
+
+  function renderSeatDetail(seat) {
+    if (!seat) {
+      return '<div class="aiteam-office__task-empty">选择一个工位后查看员工详情</div>';
+    }
+    var status = seatPresenceState(seat);
+    var employeeHref = seat.employee_id ? '/admin/employees/' + encodeURIComponent(seat.employee_id) : '#';
+    var chatHref = seat.conversation_id ? '/app/chat/' + encodeURIComponent(seat.conversation_id) : employeeHref;
+    return '' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>员工详情</h3>' +
+      '<div class="aiteam-detail-kv">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">姓名</span><span class="aiteam-shell__meta-value">' + escapeHtml(seat.display_name || seat.employee_id || '未命名员工') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">岗位</span><span class="aiteam-shell__meta-value">' + escapeHtml(seat.role_name || '数字员工') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(seatStatusLabel(status)) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前任务</span><span class="aiteam-shell__meta-value">' + escapeHtml(seatTaskPreview(seat)) + '</span></div>' +
+      '</div>' +
+      '<div class="aiteam-workbench__quick-links">' +
+      '<a href="' + escapeHtml(chatHref) + '">进入对话</a>' +
+      '<a href="' + escapeHtml(employeeHref) + '">查看员工详情</a>' +
+      '</div>' +
+      '</div>';
   }
 
   function renderTask(item) {
@@ -200,11 +230,12 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
-  function renderOffice(sceneData, feedData, viewportState) {
+  function renderOffice(sceneData, feedData, viewportState, selectedSeatId) {
     var summary = sceneData && sceneData.summary ? sceneData.summary : {};
     var seats = Array.isArray(sceneData && sceneData.seats) ? sceneData.seats : [];
     var tasks = Array.isArray(feedData && feedData.items) ? feedData.items : [];
     var view = normalizeViewportState(viewportState);
+    var selectedSeat = findSeatById(seats, selectedSeatId);
     return '' +
       '<section class="aiteam-office">' +
       '<div class="aiteam-shell__panel aiteam-office__panel">' +
@@ -232,10 +263,15 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-office__layout">' +
       '<div class="aiteam-office__stage-wrap">' +
       '<div class="aiteam-office__stage" data-office-root style="transform:' + escapeHtml(viewportTransform(view)) + ';transform-origin:center center;">' +
-      (seats.length ? seats.map(renderSeat).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
+      (seats.length ? seats.map(function (seat) {
+        return renderSeat(seat, selectedSeat && String(selectedSeat.employee_id || '') === String(seat.employee_id || ''));
+      }).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
       '</div>' +
       '</div>' +
       '<aside class="aiteam-office__sidebar">' +
+      '<div class="aiteam-office__sidebar-card">' +
+      renderSeatDetail(selectedSeat) +
+      '</div>' +
       '<div class="aiteam-office__sidebar-card">' +
       '<div class="aiteam-office__sidebar-title">任务队列</div>' +
       '<div class="aiteam-office__task-list">' + renderTaskList(tasks) + '</div>' +
@@ -350,11 +386,28 @@ window.aiteam = window.aiteam || {};
     applyViewportState(container, container.__aiteamOfficeViewportState || { scale: 1, offsetX: 0, offsetY: 0 });
   }
 
+  function bindSeatSelection(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    var buttons = container.querySelectorAll('[data-office-seat-select]');
+    for (var i = 0; i < buttons.length; i += 1) {
+      buttons[i].addEventListener('click', function () {
+        container.__aiteamOfficeSelectedSeatId = this.getAttribute('data-office-seat-select') || '';
+        renderOfficeInto(container, container.__aiteamOfficeSceneData || {}, container.__aiteamOfficeFeedData || {});
+      });
+    }
+  }
+
   function renderOfficeInto(container, sceneData, feedData) {
     var view = normalizeViewportState(container && container.__aiteamOfficeViewportState);
-    container.innerHTML = renderOffice(sceneData, feedData, view);
+    container.__aiteamOfficeSceneData = sceneData || {};
+    container.__aiteamOfficeFeedData = feedData || {};
+    var seats = Array.isArray(sceneData && sceneData.seats) ? sceneData.seats : [];
+    var selectedSeat = findSeatById(seats, container.__aiteamOfficeSelectedSeatId);
+    container.__aiteamOfficeSelectedSeatId = selectedSeat ? (selectedSeat.employee_id || '') : '';
+    container.innerHTML = renderOffice(sceneData, feedData, view, container.__aiteamOfficeSelectedSeatId);
     bindFullscreen(container);
     bindViewportControls(container);
+    bindSeatSelection(container);
   }
 
   function doRefresh(container) {
