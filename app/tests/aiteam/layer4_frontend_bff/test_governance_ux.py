@@ -515,7 +515,12 @@ class TestPermissionDeniedState:
             }),
         )
         assert "只读" in result["html"]
-        assert result["fetchCalls"] == [{"url": "/api/system-admin/enterprises", "method": "GET"}]
+        assert result["fetchCalls"] == [
+            {"url": "/api/system-admin/enterprises", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/ent_acme", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/ent_acme/quota", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/export", "method": "GET"},
+        ]
         module_source = (ROOT / "static" / "aiteam" / "pages" / "system-accounts.js").read_text(encoding="utf-8")
         assert "system_write" in module_source
         assert "permission_denied" in module_source
@@ -537,6 +542,9 @@ class TestPermissionDeniedState:
         assert result["status"] == 200
         assert result["fetchCalls"] == [
             {"url": "/api/system-admin/enterprises", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/ent_demo", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/ent_demo/quota", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/export", "method": "GET", "body": None},
             {
                 "url": "/api/system-admin/enterprises/ent_demo/actions",
                 "method": "POST",

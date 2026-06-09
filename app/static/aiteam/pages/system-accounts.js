@@ -197,6 +197,43 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + statusLabel(selected.status) + '</span></div>';
   }
 
+  function renderRechargeHistory(selected) {
+    if (!selected) {
+      return '<div class="aiteam-inline-empty">暂无充值记录</div>';
+    }
+    return '' +
+      '<div class="aiteam-card__meta"><span>累计充值</span><span>' + formatMoney(selected.total_recharged || selected.balance || 0) + '</span></div>' +
+      '<div class="aiteam-card__meta"><span>最近活跃</span><span>' + (selected.last_active_at || '—') + '</span></div>' +
+      '<div class="aiteam-inline-note">充值明细后续由系统账本聚合承接；当前保留手动充值动作与总额展示。</div>';
+  }
+
+  function renderEmployeeDigest(selected, detailQuota) {
+    if (!selected) {
+      return '<div class="aiteam-inline-empty">暂无员工列表</div>';
+    }
+    return '' +
+      '<div class="aiteam-card__meta"><span>当前员工数量</span><span>' + (selected.agent_count != null ? selected.agent_count : '—') + '</span></div>' +
+      '<div class="aiteam-card__meta"><span>员工上限</span><span>' + (detailQuota && detailQuota.employee_quota != null ? detailQuota.employee_quota : '—') + '</span></div>' +
+      '<div class="aiteam-inline-note">员工列表入口保留在企业后台员工管理页，这里先提供系统治理摘要。</div>';
+  }
+
+  function renderTokenHistory(selected) {
+    if (!selected) {
+      return '<div class="aiteam-inline-empty">暂无 Token 消耗历史</div>';
+    }
+    return '' +
+      '<div class="aiteam-card__meta"><span>累计消耗</span><span>' + formatTokens(selected.total_tokens_used || 0) + '</span></div>' +
+      '<div class="aiteam-card__meta"><span>最近活跃时间</span><span>' + (selected.last_active_at || '—') + '</span></div>' +
+      '<div class="aiteam-inline-note">Token 消耗历史明细后续通过平台财务与企业账本联动追溯。</div>';
+  }
+
+  function renderExportSummary(items) {
+    var count = (items || []).length;
+    return '' +
+      '<div class="aiteam-card__meta"><span>导出视图</span><span>当前导出样本 ' + count + ' 条</span></div>' +
+      '<div class="aiteam-action-row"><button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="enterprise-export">导出 Excel</button></div>';
+  }
+
   function renderQuota(detailQuota) {
     if (!detailQuota) {
       return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业配额</span><span class="aiteam-shell__meta-value">正在加载</span></div>';
@@ -319,15 +356,24 @@ window.aiteam = window.aiteam || {};
             '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总充值</span><span class="aiteam-shell__meta-value">' + formatMoney(stats.rechargeTotal) + '</span></div>' +
             '</div>' +
             '<div class="aiteam-shell__meta">' +
-            '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号"></label></div>' +
-            '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
-            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">导出视图</span><span class="aiteam-shell__meta-value">当前导出样本 ' + state.exportItems.length + ' 条</span></div>' +
+            '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号/邮箱<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号/邮箱"></label></div>' +
+            '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="arrears"' + (state.statusFilter === 'arrears' ? ' selected' : '') + '>欠费</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
+            '<div class="aiteam-shell__meta-card"><label>注册时间范围<br><input class="aiteam-input" type="text" data-role="enterprise-created-range" value="" placeholder="YYYY-MM-DD ~ YYYY-MM-DD"></label></div>' +
+            '<div class="aiteam-shell__meta-card">' + renderExportSummary(state.exportItems) + '</div>' +
             '</div>' +
             '<div class="aiteam-shell__two-column">' +
             '<div class="aiteam-shell__panel">' +
             '<table class="aiteam-table"><thead><tr><th>企业名称</th><th>联系人/手机</th><th>注册时间</th><th>累计充值</th><th>Token消耗</th><th>状态</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' +
             '</div>' +
-            '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">企业账号详情</h3><div class="aiteam-shell__meta">' + renderDetail(state.selectedDetail || selected) + renderQuota(state.selectedQuota) + '</div></div>' +
+            '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">企业账号详情</h3><div class="aiteam-shell__meta">' + renderDetail(state.selectedDetail || selected) + renderQuota(state.selectedQuota) + '</div>' +
+            '<div class="aiteam-panel__header"><h3>基本信息</h3><span class="aiteam-inline-note">企业基础资料 / 配额</span></div>' +
+            '<div class="aiteam-shell__meta">' + renderDetail(state.selectedDetail || selected) + '</div>' +
+            '<div class="aiteam-panel__header"><h3>充值记录</h3><span class="aiteam-inline-note">手动充值 / 总额摘要</span></div>' +
+            '<div class="aiteam-stack">' + renderRechargeHistory(selected) + '</div>' +
+            '<div class="aiteam-panel__header"><h3>员工列表</h3><span class="aiteam-inline-note">企业侧员工治理摘要</span></div>' +
+            '<div class="aiteam-stack">' + renderEmployeeDigest(selected, state.selectedQuota) + '</div>' +
+            '<div class="aiteam-panel__header"><h3>Token消耗历史</h3><span class="aiteam-inline-note">使用量追踪摘要</span></div>' +
+            '<div class="aiteam-stack">' + renderTokenHistory(selected) + '</div></div>' +
             '</div>' +
             (canMutate ? '' : '<p class="aiteam-shell__meta">当前角色仅可查看企业账号，企业操作需要 system_write 权限。</p>') +
             '<div id="aiteam-sys-accounts-feedback"></div>' +
