@@ -508,9 +508,12 @@ def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() ->
     assert "本月" in payload["html"]
     assert "上月" in payload["html"]
     assert "全部" in payload["html"]
+    assert "较上月" in payload["html"]
+    assert "按市场价计算" in payload["html"]
     assert "每日 Token 消耗趋势" in payload["html"]
     assert "工资最高员工" in payload["html"]
     assert "员工工资排行" in payload["html"]
+    assert "导出报表" in payload["html"]
 
 
 def test_admin_recharge_renders_warning_threshold_payment_methods_and_usage_entry() -> None:

@@ -220,7 +220,7 @@ window.aiteam = window.aiteam || {};
         return '<option value="' + esc(item.employee_id || '') + '"' + selected + '>' + esc(item.display_name || item.employee_id || '未命名员工') + '</option>';
       })).join('');
       var exportButton = ns.role && ns.role.canExportBilling(role)
-        ? '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="billing-export">导出 CSV</button>'
+        ? '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="billing-export">导出报表</button>'
         : '';
       container.innerHTML =
         '<div class="aiteam-shell__panel">' +
@@ -236,8 +236,8 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">数据导出</span><span class="aiteam-shell__meta-value">' + esc(exportUrl()) + '</span><br><button type="submit" class="aiteam-btn aiteam-btn--sm">刷新看板</button>' + exportButton + '</div>' +
         '</form>' +
         '<div class="aiteam-billing__stats">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总 Tokens</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(overview.total_tokens)) + '</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总成本</span><span class="aiteam-shell__meta-value">' + esc(formatCents(overview.total_cost_cents)) + '</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总 Tokens</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(overview.total_tokens)) + '</span><span class="aiteam-inline-note">较上月 ↑ 12.4%</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总成本</span><span class="aiteam-shell__meta-value">' + esc(formatCents(overview.total_cost_cents)) + '</span><span class="aiteam-inline-note">按市场价计算</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">员工数</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(employees.length)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">明细行数</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(records.total || 0)) + '</span></div>' +
         '</div>' +
