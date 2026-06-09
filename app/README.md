@@ -227,6 +227,15 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 ```
 
+如果你在仓库根目录执行，同一套步骤等价写法是：
+
+```bash
+cd /home/ubuntu/code/aiteam
+python -m venv app/.venv
+source app/.venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
 ### 5.1.6 安装 app 依赖 + 测试依赖
 
 ```bash
@@ -277,13 +286,15 @@ PY
 - 已执行 `pip install -r app/requirements-dev.txt`
 - 当前解释器里可导入 `psycopg2`，也就是 `requirements-dev.txt` 里的 `psycopg2-binary` 已装好
 - `docker` 可用，因为 `app/tests/aiteam/layer1_data/fixtures.py` 在本机 `127.0.0.1:5433` 没有 PostgreSQL 时，会回退到 ephemeral postgres 容器
-- `TEST_DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test`
+- `TEST_DATABASE_URL=postgresql://aiteam:aiteam_test@127.0.0.1:5433/aiteam_test`
 
 最小检查命令：
 
 ```bash
 cd /home/ubuntu/code/aiteam
+python -m venv app/.venv
 source app/.venv/bin/activate
+pip install -r app/requirements-dev.txt
 python - <<'PY'
 import psycopg2
 print("psycopg2 ok")
@@ -337,7 +348,7 @@ docker run -d \
 修改 `app/.env`：
 
 ```dotenv
-DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test
+DATABASE_URL=postgresql://aiteam:aiteam_test@127.0.0.1:5433/aiteam_test
 ```
 
 ### 6.2.2 测试连接串（可选，显式指定时用）
@@ -345,7 +356,7 @@ DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test
 修改 `app/.env`：
 
 ```dotenv
-TEST_DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test
+TEST_DATABASE_URL=postgresql://aiteam:aiteam_test@127.0.0.1:5433/aiteam_test
 ```
 
 ### 6.2.3 运行 migrations
