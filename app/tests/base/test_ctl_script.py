@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parents[2]
+REPO_ROOT = Path(__file__).resolve().parent.parents[1]
 CTL = REPO_ROOT / "ctl.sh"
 
 
@@ -97,7 +97,7 @@ def assert_process_exits(pid: int, timeout: float = 3.0) -> None:
     raise AssertionError(f"process {pid} did not exit")
 
 
-def test_start_writes_pid_under_hermes_home_runs_foreground_no_browser_and_logs(tmp_path):
+def test_start_writes_pid_and_logs_under_repo_state_dirs(tmp_path):
     fake_python = tmp_path / "fake-python"
     fake_log = tmp_path / "fake-python.log"
     write_fake_python(fake_python)
@@ -114,9 +114,8 @@ def test_start_writes_pid_under_hermes_home_runs_foreground_no_browser_and_logs(
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
-    hermes_home = tmp_path / ".hermes"
-    pid_file = hermes_home / "webui.pid"
-    log_file = hermes_home / "webui.log"
+    pid_file = REPO_ROOT / ".state" / "aiteam.pid"
+    log_file = REPO_ROOT / "logs" / "aiteam.log"
     pid = wait_for_pid_file(pid_file)
     try:
         assert pid > 1
@@ -124,7 +123,7 @@ def test_start_writes_pid_under_hermes_home_runs_foreground_no_browser_and_logs(
         fake_output = wait_for_file_text(fake_log)
         assert "bootstrap.py --no-browser --foreground" in fake_output
         assert "host=0.0.0.0 port=18991" in fake_output
-        assert str(hermes_home / "webui") in fake_output
+        assert str(REPO_ROOT / ".state") in fake_output
         status = run_ctl(tmp_path, "status")
         assert status.returncode == 0
         assert "running" in status.stdout
@@ -138,11 +137,12 @@ def test_start_writes_pid_under_hermes_home_runs_foreground_no_browser_and_logs(
         assert not pid_file.exists()
 
 
-def test_start_uses_nohup_so_daemon_survives_launcher_exit():
+def test_start_uses_detached_subprocess_so_daemon_survives_launcher_exit():
     ctl_text = CTL.read_text(encoding="utf-8")
 
-    assert "trap '' HUP" in ctl_text
-    assert 'exec nohup "${python_exe}"' in ctl_text
+    assert "start_new_session=True" in ctl_text
+    assert "stdin=subprocess.DEVNULL" in ctl_text
+    assert 'proc = subprocess.Popen(' in ctl_text
 
 
 def test_start_loads_dotenv_but_inline_overrides_win(tmp_path):
@@ -170,7 +170,7 @@ def test_start_loads_dotenv_but_inline_overrides_win(tmp_path):
         repo_root=repo_root,
     )
     assert result.returncode == 0, result.stderr + result.stdout
-    pid = wait_for_pid_file(tmp_path / ".hermes" / "webui.pid")
+    pid = wait_for_pid_file(repo_root / ".state" / "aiteam.pid")
     try:
         fake_output = wait_for_file_text(fake_log)
         assert "fake-python args:" in fake_output
@@ -182,9 +182,9 @@ def test_start_loads_dotenv_but_inline_overrides_win(tmp_path):
 
 
 def test_stale_pid_file_is_removed_without_killing_unrelated_process(tmp_path):
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-    pid_file = hermes_home / "webui.pid"
+    state_dir = REPO_ROOT / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = state_dir / "aiteam.pid"
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         pid_file.write_text(str(sleeper.pid), encoding="utf-8")
@@ -202,9 +202,9 @@ def test_stale_pid_file_is_removed_without_killing_unrelated_process(tmp_path):
 
 
 def test_logs_supports_non_following_line_count(tmp_path):
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-    log_file = hermes_home / "webui.log"
+    log_dir = REPO_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "aiteam.log"
     log_file.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
     result = run_ctl(tmp_path, "logs", "--lines", "2", "--no-follow")

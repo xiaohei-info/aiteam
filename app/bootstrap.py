@@ -204,6 +204,39 @@ def _python_can_run_webui_and_agent(python_exe: str, agent_dir: Path | None = No
     return check.returncode == 0
 
 
+def _is_repo_local_venv_python(python_exe: str) -> bool:
+    candidate = Path(python_exe).expanduser()
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        resolved = candidate
+    venv_dir = REPO_ROOT / ".venv"
+    venv_python = venv_dir / (
+        "Scripts/python.exe" if platform.system() == "Windows" else "bin/python"
+    )
+    try:
+        expected = venv_python.resolve()
+    except OSError:
+        expected = venv_python
+    return resolved == expected
+
+
+def _install_repo_local_agent_editable(venv_python: Path, agent_dir: Path) -> None:
+    info("Installing Hermes Agent into local virtualenv")
+    subprocess.run(
+        [
+            str(venv_python),
+            "-m",
+            "pip",
+            "install",
+            "--quiet",
+            "-e",
+            str(agent_dir),
+        ],
+        check=True,
+    )
+
+
 def ensure_python_has_webui_deps(python_exe: str, agent_dir: Path | None = None) -> str:
     """Return a Python executable that can run both WebUI and Hermes Agent.
 
@@ -213,6 +246,8 @@ def ensure_python_has_webui_deps(python_exe: str, agent_dir: Path | None = None)
     with "AIAgent not available". Prefer the agent venv when it is usable, and
     validate the final interpreter before starting the server.
     """
+    requested_repo_local_venv = _is_repo_local_venv_python(python_exe)
+
     if _python_can_run_webui_and_agent(python_exe, agent_dir):
         return python_exe
 
@@ -266,6 +301,10 @@ def ensure_python_has_webui_deps(python_exe: str, agent_dir: Path | None = None)
     )
     if _python_can_run_webui_and_agent(str(venv_python), agent_dir):
         return str(venv_python)
+    if agent_dir and requested_repo_local_venv:
+        _install_repo_local_agent_editable(venv_python, agent_dir)
+        if _python_can_run_webui_and_agent(str(venv_python), agent_dir):
+            return str(venv_python)
     raise RuntimeError(
         "Python environment cannot import both WebUI dependencies and Hermes Agent. "
         "Set HERMES_WEBUI_PYTHON to the Hermes Agent venv Python or install the "

@@ -71,6 +71,16 @@ _find_python() {
   fi
 }
 
+_spawn_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+  elif command -v python >/dev/null 2>&1; then
+    command -v python
+  else
+    _find_python
+  fi
+}
+
 _json_python() {
   if [[ -n "${HERMES_WEBUI_PYTHON:-}" ]]; then
     printf '%s\n' "${HERMES_WEBUI_PYTHON}"
@@ -230,16 +240,41 @@ start_cmd() {
   fi
   _clear_stale_pid >/dev/null 2>&1 || true
 
-  local python_exe pid
+  local python_exe spawn_python pid
   python_exe="$(_find_python)"
+  spawn_python="$(_spawn_python)"
   : >> "${LOG_FILE}"
-  (
-    cd "${REPO_ROOT}"
-    trap '' HUP
-    export HERMES_WEBUI_PRESERVE_ENV=1
-    exec nohup "${python_exe}" "${REPO_ROOT}/bootstrap.py" --no-browser --foreground --host "${CTL_HOST}" "${CTL_PORT}" ${CTL_BOOTSTRAP_ARGS[@]+"${CTL_BOOTSTRAP_ARGS[@]}"}
-  ) >> "${LOG_FILE}" 2>&1 &
-  pid=$!
+  export HERMES_WEBUI_PRESERVE_ENV=1
+  pid="$("${spawn_python}" - "${LOG_FILE}" "${REPO_ROOT}" "${python_exe}" "${CTL_HOST}" "${CTL_PORT}" ${CTL_BOOTSTRAP_ARGS[@]+"${CTL_BOOTSTRAP_ARGS[@]}"} <<'PY'
+import os
+import subprocess
+import sys
+
+log_path, repo_root, python_exe, host, port, *extra = sys.argv[1:]
+command = [
+    python_exe,
+    os.path.join(repo_root, "bootstrap.py"),
+    "--no-browser",
+    "--foreground",
+    "--host",
+    host,
+    port,
+    *extra,
+]
+env = os.environ.copy()
+with open(log_path, "ab", buffering=0) as log_file:
+    proc = subprocess.Popen(
+        command,
+        cwd=repo_root,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+print(proc.pid)
+PY
+)"
 
   printf '%s\n' "${pid}" > "${PID_FILE}"
   _write_state "${pid}" "${CTL_HOST}" "${CTL_PORT}" "${python_exe}"
