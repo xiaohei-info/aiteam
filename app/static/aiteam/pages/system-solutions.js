@@ -56,6 +56,44 @@ window.aiteam = window.aiteam || {};
     return list;
   }
 
+  function renderSolutionCards(items) {
+    if (!items.length) {
+      return '<div class="aiteam-inline-empty">暂无行业方案卡片</div>';
+    }
+    return '<div class="aiteam-stack">' + items.map(function (item) {
+      var solutionId = item.solution_id || item.id || '';
+      var tags = Array.isArray(item.tags) ? item.tags : [];
+      return '<button type="button" class="aiteam-card" data-aiteam-solution-preview="' + solutionId + '">' +
+        '<div class="aiteam-card__row"><strong>' + (item.icon || '🏭') + ' ' + (item.name || '未命名方案') + '</strong><span class="aiteam-badge">' + (item.status || item.publish_state || 'draft') + '</span></div>' +
+        '<div class="aiteam-card__meta"><span>模板数 ' + (item.template_count || normalizeTemplateIds(item.template_ids || []).length || 0) + '</span><span>应用数 ' + (item.apply_count || 0) + '</span></div>' +
+        '<p class="aiteam-card__body">' + (item.description || '暂无方案描述') + '</p>' +
+        '<div class="aiteam-card__meta"><span>' + (tags.length ? tags.join(' / ') : '无标签') + '</span></div>' +
+        '</button>';
+    }).join('') + '</div>';
+  }
+
+  function renderSolutionPreview(item) {
+    if (!item) {
+      return '<div class="aiteam-inline-empty">选择一个行业方案后查看方案预览。</div>';
+    }
+    var templateIds = normalizeTemplateIds(item.template_ids || []);
+    var tags = Array.isArray(item.tags) ? item.tags : [];
+    return '' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>方案预览</h3>' +
+      '<div class="aiteam-chat-summary__hero">' +
+      '<h3>' + (item.icon || '🏭') + ' ' + (item.name || '') + '</h3>' +
+      '<p>' + (item.description || '暂无方案描述') + '</p>' +
+      '</div>' +
+      '<div class="aiteam-detail-kv">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + (item.status || item.publish_state || 'draft') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">绑定模板</span><span class="aiteam-shell__meta-value">' + (templateIds.length ? templateIds.join(', ') : '未绑定') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用数</span><span class="aiteam-shell__meta-value">' + (item.apply_count || 0) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + (tags.length ? tags.join(' / ') : '—') + '</span></div>' +
+      '</div>' +
+      '</div>';
+  }
+
   function renderNotImplemented(container) {
     container.innerHTML =
       '<div class="aiteam-shell__panel">' +
@@ -72,6 +110,7 @@ window.aiteam = window.aiteam || {};
   function renderPanel(container, state) {
     var items = normalizeItems(state && state.items);
     var notice = state && state.notice ? state.notice : '';
+    var previewSolution = findSolution(items, state && state.previewSolutionId);
     var rows = items.map(function (item) {
       var solutionId = item.solution_id || item.id || '';
       var status = item.status || item.publish_state || '';
@@ -119,6 +158,8 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽排序</span><span class="aiteam-shell__meta-value">当前保留排序操作位，避免前端误宣称未实现的真实拖拽语义</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用统计</span><span class="aiteam-shell__meta-value">以 apply_count 为最小展示，持续与企业侧 Apply 链路保持一致</span></div>' +
       '</div>' +
+      '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionCards(items) + '</div>' +
+      '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution) + '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>模板数</th><th>应用数</th><th>绑定模板</th><th>治理操作</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="7">暂无系统行业方案</td></tr>') +
       '</tbody></table>' +
@@ -180,6 +221,18 @@ window.aiteam = window.aiteam || {};
           return;
         }
         container.lastPublishHandler(solutionId, action);
+      });
+    }
+
+    var previewButtons = container.querySelectorAll ? container.querySelectorAll('[data-aiteam-solution-preview]') : [];
+    for (var j = 0; j < previewButtons.length; j++) {
+      previewButtons[j].addEventListener('click', function (event) {
+        var button = event && event.currentTarget ? event.currentTarget : this;
+        var solutionId = button && button.getAttribute ? button.getAttribute('data-aiteam-solution-preview') : '';
+        if (!solutionId) return;
+        if (typeof container.lastPreviewHandler === 'function') {
+          container.lastPreviewHandler(solutionId);
+        }
       });
     }
   }
@@ -259,6 +312,12 @@ window.aiteam = window.aiteam || {};
         });
       };
 
+      container.lastPreviewHandler = function (solutionId) {
+        state.previewSolutionId = solutionId;
+        rerender('');
+        return Promise.resolve({ ok: true, solution_id: solutionId });
+      };
+
       ns.api.get('/api/system-admin/solutions').then(function (result) {
         if (!result.ok) {
           if (result.status === 501) {
@@ -273,6 +332,9 @@ window.aiteam = window.aiteam || {};
           return;
         }
         state.items = normalizeItems(result.data);
+        if (!state.previewSolutionId && state.items.length) {
+          state.previewSolutionId = state.items[0].solution_id || state.items[0].id || '';
+        }
         rerender('');
       });
     }

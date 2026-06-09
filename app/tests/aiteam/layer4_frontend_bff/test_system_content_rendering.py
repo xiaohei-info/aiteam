@@ -160,6 +160,105 @@ vm.runInThisContext(moduleSource, {{ filename: 'system-templates.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_system_solutions_preview_flow() -> dict:
+    page_path = PAGES_DIR / "system-solutions.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+function makeCardButton(solutionId) {{
+  return {{
+    listeners: {{}},
+    getAttribute(name) {{
+      if (name === 'data-aiteam-solution-preview') return solutionId;
+      return null;
+    }},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{
+      if (this.listeners.click) this.listeners.click.call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const previewButtons = [makeCardButton('sol_retail'), makeCardButton('sol_finance')];
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    states: {{
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      get(url) {{
+        if (url === '/api/system-admin/solutions') {{
+          return Promise.resolve({{
+            ok: true,
+            data: {{
+              items: [
+                {{
+                  solution_id: 'sol_retail',
+                  name: '零售方案',
+                  status: 'published',
+                  icon: '🛍️',
+                  description: '覆盖门店运营、销售分析与复购增长',
+                  template_ids: ['tpl_ops', 'tpl_sales'],
+                  template_count: 2,
+                  apply_count: 12,
+                  tags: ['零售', '增长'],
+                }},
+                {{
+                  solution_id: 'sol_finance',
+                  name: '财务方案',
+                  status: 'draft',
+                  icon: '📊',
+                  description: '覆盖预算分析、利润测算与经营看板',
+                  template_ids: ['tpl_finance'],
+                  template_count: 1,
+                  apply_count: 5,
+                  tags: ['财务', '预算'],
+                }},
+              ],
+            }},
+          }});
+        }}
+        return Promise.resolve({{ ok: false, status: 404 }});
+      }},
+      post() {{ return Promise.resolve({{ ok: true, data: {{}} }}); }},
+      patch() {{ return Promise.resolve({{ ok: true, data: {{}} }}); }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'system-solutions.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll(selector) {{
+      if (selector === '[data-aiteam-solution-preview]') return previewButtons;
+      return [];
+    }},
+  }};
+  aiteam.pages.systemSolutions.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const initialHtml = container.innerHTML;
+  previewButtons[0].click();
+  const firstPreviewHtml = container.innerHTML;
+  previewButtons[1].click();
+  const secondPreviewHtml = container.innerHTML;
+  console.log(JSON.stringify({{
+    initialHtml,
+    firstPreviewHtml,
+    secondPreviewHtml,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def test_system_templates_renders_preview_clone_and_publish_record_controls() -> None:
     payload = _run_page(
         "system-templates.js",
@@ -214,3 +313,15 @@ def test_system_templates_preview_switches_between_template_profiles() -> None:
     assert "财务顾问" in payload["secondPreviewHtml"]
     assert "擅长预算分析与利润测算" in payload["secondPreviewHtml"]
     assert "gpt-4.1" in payload["secondPreviewHtml"]
+
+
+def test_system_solutions_preview_switches_between_solution_cards() -> None:
+    payload = _run_system_solutions_preview_flow()
+    assert "预览效果：当前页面已保留产品位" not in payload["firstPreviewHtml"]
+    assert "方案预览" in payload["firstPreviewHtml"]
+    assert "零售方案" in payload["firstPreviewHtml"]
+    assert "覆盖门店运营、销售分析与复购增长" in payload["firstPreviewHtml"]
+    assert "tpl_ops, tpl_sales" in payload["firstPreviewHtml"]
+    assert "财务方案" in payload["secondPreviewHtml"]
+    assert "覆盖预算分析、利润测算与经营看板" in payload["secondPreviewHtml"]
+    assert "tpl_finance" in payload["secondPreviewHtml"]
