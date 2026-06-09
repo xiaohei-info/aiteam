@@ -220,4 +220,6 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     assert "实时协作流已恢复" in payload["recoveryText"]
     assert "cursor：8" in payload["collabText"]
     assert "结果合并" in payload["transcriptHtml"]
+    assert "Bob" in payload["transcriptHtml"]
+    assert "aiteam-message__avatar" in payload["transcriptHtml"]
     assert "cursor 8" in payload["timelineHtml"]

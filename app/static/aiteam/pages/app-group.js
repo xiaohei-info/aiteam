@@ -121,9 +121,16 @@ window.aiteam = window.aiteam || {};
     return '<span class="aiteam-badge">' + escapeHtml(text) + '</span>';
   }
 
-  function messageBubble(role, title, body, extraClass) {
+  function messageMeta(title, speakerLabel, kindLabel) {
+    var speaker = stringValue(speakerLabel || title, '系统');
+    var initial = speaker.slice(0, 1) || '?';
+    return '<div class="aiteam-message__speaker"><span class="aiteam-message__avatar">' + escapeHtml(initial) + '</span><span class="aiteam-message__speaker-name">' + escapeHtml(speaker) + '</span></div>' +
+      '<span class="aiteam-message__kind">' + escapeHtml(kindLabel || title) + '</span>';
+  }
+
+  function messageBubble(role, title, body, extraClass, speakerLabel, kindLabel) {
     return '<article class="aiteam-message aiteam-message--' + role + (extraClass ? ' ' + extraClass : '') + '">' +
-      '<div class="aiteam-message__meta">' + escapeHtml(title) + '</div>' +
+      '<div class="aiteam-message__meta">' + messageMeta(title, speakerLabel, kindLabel) + '</div>' +
       '<div class="aiteam-message__body">' + body + '</div>' +
       '</article>';
   }
@@ -239,7 +246,10 @@ window.aiteam = window.aiteam || {};
       (entryLabel ? badge('入口：' + entryLabel) : '') +
       (plannerLabel ? badge('编排：' + plannerLabel) : '') +
       '</div>' +
-      '</div>'
+      '</div>',
+      '',
+      '系统',
+      '路由决策'
     );
   }
 
@@ -251,7 +261,10 @@ window.aiteam = window.aiteam || {};
       'assistant',
       author,
       '<p>' + escapeHtml(eventPreview(event, '协作结果已合并')) + '</p>' +
-      '<div class="aiteam-chip-row">' + badge('result_merged') + (employeeId ? badge(employeeId) : '') + '</div>'
+      '<div class="aiteam-chip-row">' + badge('result_merged') + (employeeId ? badge(employeeId) : '') + '</div>',
+      '',
+      author,
+      '协作结果'
     );
   }
 

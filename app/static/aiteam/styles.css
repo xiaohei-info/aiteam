@@ -1839,6 +1839,34 @@ body.aiteam-shell-active .aiteam-shell {
   flex-wrap: wrap;
 }
 
+.aiteam-message__speaker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aiteam-message__avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.22);
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aiteam-message__speaker-name {
+  color: #dbeafe;
+  font-weight: 600;
+}
+
+.aiteam-message__kind {
+  color: #93c5fd;
+}
+
 .aiteam-message__body,
 .aiteam-tool-card__body {
   color: #e2e8f0;
