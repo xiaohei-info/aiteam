@@ -80,6 +80,8 @@ window.aiteam = window.aiteam || {};
         '<td>' + (typeof recruitCount === 'undefined' ? '-' : recruitCount) + '</td>' +
         '<td>' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-template-id="' + templateId + '">更新</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="preview" data-aiteam-template-id="' + templateId + '">预览效果</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="clone" data-aiteam-template-id="' + templateId + '">克隆</button> ' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-template-id="' + templateId + '">' + publishLabel + '</button>' +
         '</td>' +
         '</tr>';
@@ -98,7 +100,8 @@ window.aiteam = window.aiteam || {};
       '</form>' +
       '<div class="aiteam-shell__meta">' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">新建模板</span><span class="aiteam-shell__meta-value">输入名称 / 角色后提交</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">行级治理</span><span class="aiteam-shell__meta-value">更新按钮会按当前值弹出最小编辑提示；发布 / 下架直接提交</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">行级治理</span><span class="aiteam-shell__meta-value">更新、预览效果、克隆、发布记录都在这一页收口；发布 / 下架直接提交</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布记录</span><span class="aiteam-shell__meta-value">当前以前台招募数与版本号做最小展示；后续可继续扩成独立记录面板</span></div>' +
       '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th><th>版本</th><th>招募数</th><th>治理操作</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="7">暂无可治理的系统模板</td></tr>') +
@@ -146,6 +149,18 @@ window.aiteam = window.aiteam || {};
           container.lastUpdateHandler(templateId, {
             name: trimText(nextName),
             role_name: trimText(nextRole)
+          });
+          return;
+        }
+        if (action === 'preview') {
+          rerender('预览效果：当前页面已保留产品位，后续可扩为用户端详情预览面板。');
+          return;
+        }
+        if (action === 'clone') {
+          var current = findTemplate(state.items, templateId) || {};
+          container.lastCreateHandler({
+            name: trimText((current.name || '模板') + '（克隆）'),
+            role_name: trimText(current.role_name || current.role || 'assistant'),
           });
           return;
         }

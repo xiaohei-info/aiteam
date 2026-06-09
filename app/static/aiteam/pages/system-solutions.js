@@ -97,6 +97,7 @@ window.aiteam = window.aiteam || {};
         '<td>' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-solution-id="' + solutionId + '">更新</button> ' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="bind" data-aiteam-solution-id="' + solutionId + '">绑定模板</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="sort" data-aiteam-solution-id="' + solutionId + '">拖拽排序</button> ' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-solution-id="' + solutionId + '">' + publishLabel + '</button>' +
         '</td>' +
         '</tr>';
@@ -114,8 +115,9 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><label><input type="checkbox" data-aiteam-solution-create-publish="1"> 创建后立即发布</label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建方案</button></div>' +
       '</form>' +
       '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">新建方案</span><span class="aiteam-shell__meta-value">输入方案名称与模板 ID 后提交</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">行级治理</span><span class="aiteam-shell__meta-value">更新 / 绑定模板按钮使用最小提示输入；发布 / 下架直接提交</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">9个行业卡片</span><span class="aiteam-shell__meta-value">当前以可治理列表 + 方案卡产品位承接，后续可继续扩成完整行业卡片画廊</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽排序</span><span class="aiteam-shell__meta-value">当前保留排序操作位，避免前端误宣称未实现的真实拖拽语义</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用统计</span><span class="aiteam-shell__meta-value">以 apply_count 为最小展示，持续与企业侧 Apply 链路保持一致</span></div>' +
       '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>模板数</th><th>应用数</th><th>绑定模板</th><th>治理操作</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="7">暂无系统行业方案</td></tr>') +
@@ -171,6 +173,10 @@ window.aiteam = window.aiteam || {};
           var nextTemplates = typeof window.prompt === 'function' ? window.prompt('请输入模板 ID，使用逗号分隔', currentTemplates) : currentTemplates;
           if (nextTemplates === null) return;
           container.lastBindHandler(solutionId, nextTemplates.split(','));
+          return;
+        }
+        if (action === 'sort') {
+          rerender('拖拽排序：当前已保留产品位，待后续接入真实排序持久化语义。');
           return;
         }
         container.lastPublishHandler(solutionId, action);
