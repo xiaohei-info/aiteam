@@ -156,6 +156,7 @@ def _fetch_admin_invites(cur, enterprise_id: str) -> list[dict]:
         SELECT id, invitee_phone, role, permissions_json, invite_code, status, idempotency_key, invited_by, message, created_at
         FROM admin_invite
         WHERE enterprise_id = %s
+          AND status <> 'revoked'
         ORDER BY created_at DESC, id DESC
         """,
         (enterprise_id,),
@@ -478,6 +479,52 @@ def handle_post_admin_invite(conn, path: str, body: dict | None) -> tuple[int, d
             "message": message,
             "created_at": _now_iso(),
         }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def handle_delete_admin_invite(conn, path: str, invite_id: str) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        enterprise, error = _ensure_enterprise(cur)
+        if error is not None:
+            return error
+        assert enterprise is not None
+        cur.execute(
+            """
+            SELECT id, status
+            FROM admin_invite
+            WHERE enterprise_id = %s AND id = %s
+            """,
+            (enterprise.id, invite_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return 404, {"error": "ADMIN_INVITE_NOT_FOUND", "message": f"Admin invite {invite_id} not found"}
+        if row[1] != "revoked":
+            cur.execute(
+                """
+                UPDATE admin_invite
+                SET status = 'revoked',
+                    revoked_at = now(),
+                    updated_at = now()
+                WHERE enterprise_id = %s AND id = %s
+                """,
+                (enterprise.id, invite_id),
+            )
+            _audit(
+                cur,
+                enterprise.id,
+                "admin_invite.revoked",
+                "admin_invite",
+                invite_id,
+                {"status": "revoked"},
+            )
+        conn.commit()
+        return 200, {"invite_id": invite_id, "status": "revoked"}
     except Exception:
         conn.rollback()
         raise

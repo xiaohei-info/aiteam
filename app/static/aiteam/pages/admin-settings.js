@@ -56,6 +56,9 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业邀请码</span><span class="aiteam-shell__meta-value">' + esc(data && data.invite_code || '未设置') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">低余额预警阈值</span><span class="aiteam-shell__meta-value">' + formatMoneyFromCents(data && data.low_balance_threshold_cents) + '</span></div>' +
       '</div>' +
+      '<div class="aiteam-action-row">' +
+      '<button type="button" class="aiteam-btn" data-role="save-notification-policy">保存通知策略</button>' +
+      '</div>' +
       '</section>' +
       '<section class="aiteam-panel">' +
       '<div class="aiteam-panel__header"><h3>子管理员账号</h3><span class="aiteam-inline-note">成员 / 邀请</span></div>' +
@@ -66,8 +69,9 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-stack">' +
       '<div class="aiteam-card"><div class="aiteam-card__row"><strong>待处理邀请</strong><span class="aiteam-inline-note">输入手机号发送邀请</span></div>' +
+      '<div class="aiteam-action-row"><button type="button" class="aiteam-btn" data-role="create-admin-invite">生成邀请</button></div>' +
       (invites.length ? invites.map(function (item) {
-        return '<div class="aiteam-card__meta"><span>' + esc(item.phone || '-') + '</span><span>' + esc(item.role || 'member') + '</span><span>' + esc(item.status || 'pending') + '</span><span>' + esc(item.invite_code || '-') + '</span></div>';
+        return '<div class="aiteam-card__meta"><span>' + esc(item.phone || '-') + '</span><span>' + esc(item.role || 'member') + '</span><span>' + esc(item.status || 'pending') + '</span><span>' + esc(item.invite_code || '-') + '</span><button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="revoke-admin-invite" data-invite-id="' + esc(item.invite_id || '') + '">撤销邀请</button></div>';
       }).join('') : '<div class="aiteam-inline-empty">暂无邀请码</div>') +
       '</div>' +
       '</div>' +
@@ -89,6 +93,46 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function bindSettingsActions(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    var saveButton = container.querySelector('[data-role="save-notification-policy"]');
+    var createInviteButton = container.querySelector('[data-role="create-admin-invite"]');
+    var revokeButtons = container.querySelectorAll('[data-role="revoke-admin-invite"]');
+
+    if (saveButton && typeof saveButton.addEventListener === 'function') {
+      saveButton.addEventListener('click', function () {
+        if (typeof container.lastPatchHandler === 'function') {
+          container.lastPatchHandler({
+            notification_policy: {
+              employee_task_completed: true,
+              system_announcements: true,
+              low_balance_email: true,
+            },
+          });
+        }
+      });
+    }
+    if (createInviteButton && typeof createInviteButton.addEventListener === 'function') {
+      createInviteButton.addEventListener('click', function () {
+        if (typeof container.lastInviteHandler === 'function') {
+          container.lastInviteHandler({
+            phone: '13900002222',
+            role: 'enterprise_admin',
+            idempotency_key: 'ui-admin-invite-create',
+          });
+        }
+      });
+    }
+    for (var i = 0; i < revokeButtons.length; i++) {
+      revokeButtons[i].addEventListener('click', function () {
+        var inviteId = this.getAttribute('data-invite-id');
+        if (inviteId && typeof container.lastDeleteInviteHandler === 'function') {
+          container.lastDeleteInviteHandler(inviteId);
+        }
+      });
+    }
+  }
+
   ns.pages.adminSettings = {
     init: function (container) {
       if (!container) return;
@@ -98,7 +142,10 @@ window.aiteam = window.aiteam || {};
       var settingsData = null;
 
       function refreshNotice(message) {
-        if (settingsData) renderSettings(container, settingsData, message);
+        if (settingsData) {
+          renderSettings(container, settingsData, message);
+          bindSettingsActions(container);
+        }
       }
 
       container.lastPatchHandler = function (payload) {
@@ -126,6 +173,21 @@ window.aiteam = window.aiteam || {};
         });
       };
 
+      container.lastDeleteInviteHandler = function (inviteId) {
+        return ns.api.delete('/api/team/settings/admin-invites/' + encodeURIComponent(inviteId)).then(function (result) {
+          if (result && result.ok) {
+            settingsData = Object.assign({}, settingsData || {});
+            settingsData.admin_invites = (settingsData.admin_invites || []).filter(function (item) {
+              return item.invite_id !== inviteId;
+            });
+            refreshNotice('管理员邀请已撤销');
+            return result;
+          }
+          refreshNotice('管理员邀请撤销失败');
+          return result;
+        });
+      };
+
       ns.api.get('/api/team/settings').then(function (result) {
         if (!result.ok) {
           if (result.status === 501) {
@@ -141,6 +203,7 @@ window.aiteam = window.aiteam || {};
         }
         settingsData = result.data || {};
         renderSettings(container, settingsData, '');
+        bindSettingsActions(container);
       });
     }
   };

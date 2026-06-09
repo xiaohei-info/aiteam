@@ -87,6 +87,7 @@ from ..application.queries.workbench_view_service import (
 from ..views.schemas import compute_display_state
 from ..api_team.router_team_settings_billing import (
     guard_run_creation_allowed,
+    handle_delete_admin_invite,
     handle_get_billing_balance,
     handle_get_billing_recharges,
     handle_get_settings,
@@ -3937,6 +3938,11 @@ def handle_team_route(
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/settings/admin-invites"):
         route_handler = lambda conn: handle_post_admin_invite(conn, sub, body)
+
+    if route_handler is None:
+        admin_invite_id = _match_prefix(sub, "/settings/admin-invites/")
+        if method == "DELETE" and admin_invite_id is not None and "/" not in admin_invite_id:
+            route_handler = lambda conn, matched_invite_id=admin_invite_id: handle_delete_admin_invite(conn, sub, matched_invite_id)
 
     # ── billing/balance + billing/recharges ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/billing/balance"):

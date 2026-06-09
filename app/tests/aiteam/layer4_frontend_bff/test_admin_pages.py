@@ -100,6 +100,7 @@ EXPECTED_ADMIN_PREFIXES = [
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
     ("admin-skills.js",    ["/api/team/skills/catalog", "/api/team/skills/installs"]),
     ("admin-solutions.js", ["/api/team/solutions", "/api/team/solutions/"]),
+    ("admin-settings.js",  ["/api/team/settings", "/api/team/settings/admin-invites"]),
     ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
 ]
 
@@ -196,6 +197,14 @@ class TestAdminSystemPageRuntimeInit:
             [{"url": "/api/team/solutions", "method": "GET"}],
         )
         assert "行业方案接口尚未实现" in result["html"] or "行业方案接口尚未开放" in result["html"]
+
+    def test_admin_settings_init_executes_with_loaded_dependencies(self):
+        result = _run_page_module(
+            "admin-settings.js",
+            "adminSettings",
+            [{"url": "/api/team/settings", "method": "GET"}],
+        )
+        assert "企业设置加载失败" in result["html"] or "设置 API 尚未实现" in result["html"] or "404" in result["html"]
 
     def test_admin_templates_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(

@@ -16,7 +16,7 @@ from team_panel.transactions.uow import UnitOfWork
 
 # Reuse the FakeHandler pattern from layer0_contracts
 try:
-    from tests.aiteam.layer0_contracts.test_host_routing import _FakeHandler, _get, _post, _patch
+    from tests.aiteam.layer0_contracts.test_host_routing import _FakeHandler, _get, _post, _patch, _delete
 except ImportError:
     # Fallback: re-define inline
     class _FakeHandler:
@@ -72,6 +72,14 @@ except ImportError:
             handler.rfile = type("_BytesIO", (), {"read": lambda n: raw})()
         parsed = urlparse(f"http://example.com{parsed_path}")
         handle_patch(handler, parsed)
+        return handler.status, handler.get_json()
+
+
+    def _delete(parsed_path: str) -> tuple[int, dict]:
+        from api.routes import handle_delete
+        handler = _FakeHandler()
+        parsed = urlparse(f"http://example.com{parsed_path}")
+        handle_delete(handler, parsed)
         return handler.status, handler.get_json()
 
 
@@ -1220,6 +1228,25 @@ class TestSettingsAndBillingB08B09:
         settings_status, settings_body = _get("/api/team/settings")
         assert settings_status == 200, settings_body
         assert any(item["invite_id"] == body["invite_id"] for item in settings_body["admin_invites"])
+
+    def test_delete_admin_invite_revokes_and_hides_from_settings(self, seeded_enterprise):
+        payload = {
+            "phone": "13900002222",
+            "role": "finance_admin",
+            "permissions": {"billing": "read"},
+            "idempotency_key": "invite-delete-001",
+        }
+        create_status, create_body = _post("/api/team/settings/admin-invites", payload)
+        assert create_status == 201, create_body
+
+        delete_status, delete_body = _delete(f"/api/team/settings/admin-invites/{create_body['invite_id']}")
+        assert delete_status == 200, delete_body
+        assert delete_body["invite_id"] == create_body["invite_id"]
+        assert delete_body["status"] == "revoked"
+
+        settings_status, settings_body = _get("/api/team/settings")
+        assert settings_status == 200, settings_body
+        assert not any(item["invite_id"] == create_body["invite_id"] for item in settings_body["admin_invites"])
 
     def test_get_balance_defaults_to_zero_and_low_balance_warning(self, seeded_enterprise):
         status, body = _get("/api/team/billing/balance")
