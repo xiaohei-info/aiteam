@@ -111,6 +111,24 @@ window.aiteam = window.aiteam || {};
     return presence || '状态未知';
   }
 
+  function presenceLabel(presence) {
+    var value = firstString(presence).toLowerCase();
+    if (value === 'online') return '在线';
+    if (value === 'offline') return '离线';
+    if (value === 'busy') return '繁忙';
+    return firstString(presence) || '状态未知';
+  }
+
+  function memberRoleGlyph(role) {
+    var value = firstString(role).toLowerCase();
+    if (value.indexOf('营销') !== -1 || value.indexOf('市场') !== -1) return '🎯';
+    if (value.indexOf('内容') !== -1) return '📢';
+    if (value.indexOf('技术') !== -1 || value.indexOf('工程') !== -1 || value.indexOf('研发') !== -1) return '💻';
+    if (value.indexOf('财务') !== -1) return '📊';
+    if (value.indexOf('研究') !== -1 || value.indexOf('ai') !== -1) return '🧠';
+    return '👤';
+  }
+
   function getAssignmentLabel(member, departmentName) {
     var assignment = firstObject(member.assignment, member.org_assignment);
     return firstString(
@@ -125,6 +143,12 @@ window.aiteam = window.aiteam || {};
   function countMembers(departments) {
     return toArray(departments).reduce(function (total, department) {
       return total + getDepartmentMembers(department).length + countMembers(getDepartmentChildren(department));
+    }, 0);
+  }
+
+  function countDepartments(departments) {
+    return toArray(departments).reduce(function (total, department) {
+      return total + 1 + countDepartments(getDepartmentChildren(department));
     }, 0);
   }
 
@@ -175,15 +199,18 @@ window.aiteam = window.aiteam || {};
 
   function renderMember(member, departmentName) {
     var role = getMemberRole(member);
+    var presence = getPresence(member);
     return [
       '<li class="aiteam-org__member">',
       '<div class="aiteam-org__member-main">',
+      '<span class="aiteam-org__badge">' + escapeHtml(memberRoleGlyph(role)) + '</span>',
       '<strong class="aiteam-org__member-name">' + escapeHtml(getMemberName(member)) + '</strong>',
-      '<span class="aiteam-org__badge">' + escapeHtml(getPresence(member)) + '</span>',
+      '<span class="aiteam-org__badge">' + escapeHtml(presenceLabel(presence)) + '</span>',
       '</div>',
       '<div class="aiteam-org__member-meta">',
       '<span class="aiteam-org__member-assignment">归属：' + escapeHtml(getAssignmentLabel(member, departmentName)) + '</span>',
-      role ? '<span class="aiteam-org__member-role">角色：' + escapeHtml(role) + '</span>' : '',
+      role ? '<span class="aiteam-org__member-role">岗位：' + escapeHtml(role) + '</span>' : '',
+      '<span class="aiteam-org__member-role">原始状态：' + escapeHtml(presence) + '</span>',
       '</div>',
       renderEditableAssignment(member),
       '</li>'
@@ -200,7 +227,7 @@ window.aiteam = window.aiteam || {};
       '<article class="aiteam-org__department" data-department-id="' + escapeHtml(getDepartmentId(department)) + '">',
       '<header class="aiteam-org__department-header">',
       '<h3 class="aiteam-org__department-title">' + escapeHtml(name) + '</h3>',
-      '<span class="aiteam-org__department-count">成员 ' + members.length + '</span>',
+      '<span class="aiteam-org__department-count">' + members.length + ' 位数字员工</span>',
       '</header>',
       description ? '<p class="aiteam-org__department-description">' + escapeHtml(description) + '</p>' : '',
       members.length ? '<ul class="aiteam-org__member-list">' + members.map(function (member) { return renderMember(member, name); }).join('') + '</ul>' : '<p class="aiteam-org__empty-hint">当前部门暂无成员。</p>',
@@ -254,6 +281,34 @@ window.aiteam = window.aiteam || {};
     });
   }
 
+  function renderLegend() {
+    return [
+      '<div class="aiteam-card aiteam-card--flat">',
+      '<div class="aiteam-card__row"><strong>状态图例</strong><span class="aiteam-inline-note">在线 / 离线 / 繁忙</span></div>',
+      '<div class="aiteam-card__meta"><span>在线 / 离线 / 繁忙</span><span>拖拽调整层级或使用下方等价归属调整控件</span></div>',
+      '</div>'
+    ].join('');
+  }
+
+  function renderDeptSummary(departments, unassignedMembers) {
+    var primary = departments[0] || null;
+    if (!primary) {
+      return '<div class="aiteam-inline-empty">暂无部门详情</div>';
+    }
+    var primaryMembers = getDepartmentMembers(primary);
+    var primaryChildren = getDepartmentChildren(primary);
+    return [
+      '<div class="aiteam-card">',
+      '<div class="aiteam-card__row"><strong>部门详情</strong><span class="aiteam-inline-note">' + escapeHtml(getDepartmentName(primary)) + '</span></div>',
+      '<div class="aiteam-card__meta"><span>当前主部门</span><span>' + escapeHtml(getDepartmentName(primary)) + '</span></div>',
+      '<div class="aiteam-card__meta"><span>数字员工</span><span>' + primaryMembers.length + ' 位</span></div>',
+      '<div class="aiteam-card__meta"><span>子部门</span><span>' + primaryChildren.length + ' 个</span></div>',
+      '<div class="aiteam-card__meta"><span>待分配成员</span><span>' + unassignedMembers.length + ' 位</span></div>',
+      primary.description ? '<div class="aiteam-card__meta"><span>说明</span><span>' + escapeHtml(primary.description) + '</span></div>' : '',
+      '</div>'
+    ].join('');
+  }
+
   function renderOrg(main, payload) {
     var departments = getPayloadDepartments(payload);
     var unassignedMembers = getUnassignedMembers(payload);
@@ -263,13 +318,14 @@ window.aiteam = window.aiteam || {};
     }
 
     var totalMembers = countMembers(departments) + unassignedMembers.length;
+    var totalDepartments = countDepartments(departments);
     var panels = departments.map(renderDepartment).join('');
     if (unassignedMembers.length) {
       panels += [
         '<article class="aiteam-org__department aiteam-org__department--unassigned">',
         '<header class="aiteam-org__department-header">',
         '<h3 class="aiteam-org__department-title">待分配成员</h3>',
-        '<span class="aiteam-org__department-count">成员 ' + unassignedMembers.length + '</span>',
+        '<span class="aiteam-org__department-count">' + unassignedMembers.length + ' 位数字员工</span>',
         '</header>',
         '<ul class="aiteam-org__member-list">',
         unassignedMembers.map(function (member) { return renderMember(member, '待分配'); }).join(''),
@@ -281,13 +337,17 @@ window.aiteam = window.aiteam || {};
     main.innerHTML = [
       '<section class="aiteam-shell__panel aiteam-org">',
       '<p class="aiteam-shell__panel-kicker">组织架构</p>',
-      '<h2 class="aiteam-shell__panel-title">部门树与成员归属</h2>',
-      '<p class="aiteam-shell__panel-body">查看部门层级、成员归属与在线状态；仅在接口显式提供可编辑字段时显示归属调整控件。</p>',
+      '<div class="aiteam-panel__header"><h2 class="aiteam-shell__panel-title">组织架构</h2><button type="button" class="aiteam-btn aiteam-btn--secondary" disabled>+ 新建部门</button></div>',
+      '<p class="aiteam-shell__panel-body">查看部门树、数字员工归属与在线状态；当前共享契约已支持读取组织树与等价归属调整，新增部门/右键治理仍保留为显式降级提示。</p>',
       '<div class="aiteam-shell__meta">',
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">部门数量</span><span class="aiteam-shell__meta-value">' + departments.length + '</span></div>',
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">部门数量</span><span class="aiteam-shell__meta-value">' + totalDepartments + '</span></div>',
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">成员可见数</span><span class="aiteam-shell__meta-value">' + totalMembers + '</span></div>',
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽调整层级</span><span class="aiteam-shell__meta-value">当前以 PATCH 等价交互承接</span></div>',
       '</div>',
-      '<div class="aiteam-org__tree">' + panels + '</div>',
+      '<div class="aiteam-grid aiteam-grid--chat">',
+      '<section class="aiteam-panel">' + renderLegend() + '<div class="aiteam-org__tree">' + panels + '</div></section>',
+      '<section class="aiteam-panel">' + renderDeptSummary(departments, unassignedMembers) + '</section>',
+      '</div>',
       '</section>'
     ].join('');
 
