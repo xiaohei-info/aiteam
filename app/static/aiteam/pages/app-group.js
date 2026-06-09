@@ -281,9 +281,11 @@ window.aiteam = window.aiteam || {};
       title: '新建群聊',
       employeeItems: [],
       selectedEmployeeIds: ['emp_test', 'emp_member'],
+      limitMessage: '',
     };
 
     function renderLauncher() {
+      var isAtLimit = launcherState.selectedEmployeeIds.length >= 10;
       var selectedLabels = launcherState.employeeItems.filter(function (employee) {
         return launcherState.selectedEmployeeIds.indexOf(stringValue(employee && employee.employee_id, '')) !== -1;
       }).map(function (employee) {
@@ -293,10 +295,11 @@ window.aiteam = window.aiteam || {};
         ? launcherState.employeeItems.map(function (employee) {
             var employeeId = stringValue(employee && employee.employee_id, '');
             var checked = launcherState.selectedEmployeeIds.indexOf(employeeId) !== -1 ? ' checked' : '';
+            var disabled = !checked && isAtLimit ? ' disabled' : '';
             return '<label class="aiteam-card aiteam-card--flat">' +
               '<div class="aiteam-card__row"><strong>' + escapeHtml(stringValue(employee.display_name, employeeId || '未命名员工')) + '</strong>' + badge(stringValue(employee.role_name, '数字员工')) + '</div>' +
               '<div class="aiteam-card__meta"><span>' + escapeHtml(stringValue(employee.status || employee.presence, 'active')) + '</span><span>' + escapeHtml(employeeId) + '</span></div>' +
-              '<div class="aiteam-action-row"><input type="checkbox" data-group-create-member="' + escapeHtml(employeeId) + '"' + checked + '> <span>加入群聊</span></div>' +
+              '<div class="aiteam-action-row"><input type="checkbox" data-group-create-member="' + escapeHtml(employeeId) + '"' + checked + disabled + '> <span>加入群聊</span></div>' +
               '</label>';
           }).join('')
         : '<div class="aiteam-inline-empty">当前暂无可选成员</div>';
@@ -310,7 +313,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '</div>' +
       '<div class="aiteam-panel">' +
-      '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>填写标题与成员后创建</span></div>' +
+      '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>' + escapeHtml(launcherState.limitMessage || '填写标题与成员后创建') + '</span></div>' +
       '<div class="aiteam-shell__meta">' +
       '<div class="aiteam-shell__meta-card"><label>群聊标题<br><input class="aiteam-input" type="text" data-group-create-title value="' + escapeHtml(launcherState.title) + '" placeholder="例如：新品启动群"></label></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">可选成员</span><span class="aiteam-shell__meta-value">最多 10 人，当前已选 ' + escapeHtml(String(launcherState.selectedEmployeeIds.length)) + ' 人</span><br><span class="aiteam-inline-note">已选成员：' + escapeHtml(selectedLabels.join('、') || '未选择') + '</span></div>' +
@@ -395,9 +398,14 @@ window.aiteam = window.aiteam || {};
           if (this.checked) {
             if (launcherState.selectedEmployeeIds.indexOf(employeeId) === -1 && launcherState.selectedEmployeeIds.length < 10) {
               launcherState.selectedEmployeeIds.push(employeeId);
+              launcherState.limitMessage = launcherState.selectedEmployeeIds.length >= 10 ? '已达 10 人上限' : '';
+            } else if (launcherState.selectedEmployeeIds.length >= 10) {
+              this.checked = false;
+              launcherState.limitMessage = '已达 10 人上限';
             }
           } else {
             launcherState.selectedEmployeeIds = launcherState.selectedEmployeeIds.filter(function (id) { return id !== employeeId; });
+            launcherState.limitMessage = '';
           }
           renderLauncher();
           bindLauncherInteractions();

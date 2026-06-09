@@ -215,6 +215,107 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     return json.loads(completed.stdout)
 
 
+def _run_group_launcher_member_limit_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
+function makeNode(initialValue = '') {{
+  return {{
+    value: initialValue,
+    checked: false,
+    disabled: false,
+    listeners: {{}},
+    textContent: '',
+    innerHTML: '',
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatch(type) {{
+      if (this.listeners[type]) this.listeners[type].call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const titleInput = makeNode('群聊上限测试');
+const memberInputs = {{}};
+const employees = [];
+for (let i = 1; i <= 11; i += 1) {{
+  const employeeId = 'emp_' + i;
+  memberInputs[employeeId] = Object.assign(makeNode(''), {{
+    checked: i <= 2,
+    getAttribute(name) {{ return name === 'data-group-create-member' ? employeeId : null; }},
+  }});
+  employees.push({{
+    employee_id: employeeId,
+    display_name: '成员' + i,
+    role_name: '分析师',
+    status: 'active',
+  }});
+}}
+const container = {{
+  innerHTML: '',
+  querySelector(selector) {{
+    if (selector === '[data-group-create-title]') return titleInput;
+    if (selector === '[data-group-create-launch]') return makeNode();
+    if (selector === '[data-group-create-status]') return makeNode();
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-group-create-member]') return Object.values(memberInputs);
+    return [];
+  }},
+}};
+global.window = {{
+  location: {{ pathname: '/app/group', href: 'http://example.test/app/group' }},
+  localStorage: {{ getItem() {{ return ''; }}, setItem() {{}}, removeItem() {{}} }},
+  aiteam: {{
+    util: {{ escapeHtml(value) {{ return String(value == null ? '' : value); }} }},
+    states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
+    timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
+    api: {{
+      getEmployees() {{
+        return Promise.resolve({{ ok: true, data: {{ items: employees }} }});
+      }},
+      createGroupConversation() {{
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_new' }} }});
+      }},
+      getGroupConversation() {{
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_new', title: '群聊上限测试', members: [] }} }});
+      }},
+      getRunEvents() {{
+        return Promise.resolve({{ ok: true, data: {{ items: [], next_cursor: 0, latest_event_cursor: 0, run_status: 'idle' }} }});
+      }},
+    }},
+    pages: {{}},
+  }},
+}};
+global.document = {{ baseURI: 'http://example.test/app/group' }};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
+aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
+  const initialHtml = container.innerHTML;
+  for (let i = 3; i <= 10; i += 1) {{
+    const key = 'emp_' + i;
+    memberInputs[key].checked = true;
+    memberInputs[key].dispatch('change');
+  }}
+  const tenSelectedHtml = container.innerHTML;
+  memberInputs.emp_11.checked = true;
+  memberInputs.emp_11.dispatch('change');
+  const cappedHtml = container.innerHTML;
+  console.log(JSON.stringify({{
+    initialHtml,
+    tenSelectedHtml,
+    cappedHtml,
+  }}));
+}}).catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_group_management_actions() -> dict:
     script = f"""
 const fs = require('fs');
@@ -436,6 +537,16 @@ def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None
     assert "已选成员：Bob、Cara" in payload["updatedLauncherHtml"]
     assert "新品启动群" in payload["html"]
     assert "成员管理" in payload["html"]
+
+
+def test_group_page_launcher_enforces_ten_member_cap_with_visible_feedback() -> None:
+    payload = _run_group_launcher_member_limit_flow()
+    assert "当前已选 2 人" in payload["initialHtml"]
+    assert "当前已选 10 人" in payload["tenSelectedHtml"]
+    assert "已选成员：" in payload["tenSelectedHtml"]
+    assert "成员10" in payload["tenSelectedHtml"]
+    assert "已达 10 人上限" in payload["cappedHtml"]
+    assert "当前已选 10 人" in payload["cappedHtml"]
 
 
 def test_group_page_management_handlers_invoke_group_member_and_archive_apis() -> None:
