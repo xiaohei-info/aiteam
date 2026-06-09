@@ -286,6 +286,7 @@ window.aiteam = window.aiteam || {};
 
     function renderLauncher() {
       var isAtLimit = launcherState.selectedEmployeeIds.length >= 10;
+      var canCreate = launcherState.selectedEmployeeIds.length >= 2 && !!stringValue(launcherState.title, '');
       var selectedLabels = launcherState.employeeItems.filter(function (employee) {
         return launcherState.selectedEmployeeIds.indexOf(stringValue(employee && employee.employee_id, '')) !== -1;
       }).map(function (employee) {
@@ -320,7 +321,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-stack" data-group-create-members>' + memberCards + '</div>' +
       '<div class="aiteam-action-row">' +
-      '<button class="aiteam-button" type="button" data-group-create-launch>立即创建</button>' +
+      '<button class="aiteam-button" type="button" data-group-create-launch' + (canCreate ? '' : ' disabled') + '>立即创建</button>' +
       '</div>' +
       '</div>' +
       '</section>';
@@ -388,6 +389,9 @@ window.aiteam = window.aiteam || {};
       if (titleInput && typeof titleInput.addEventListener === 'function') {
         titleInput.addEventListener('input', function () {
           launcherState.title = this.value || '';
+          launcherState.limitMessage = launcherState.selectedEmployeeIds.length < 2 ? '至少选择 2 名成员' : '';
+          renderLauncher();
+          bindLauncherInteractions();
         });
       }
       var memberInputs = container.querySelectorAll ? container.querySelectorAll('[data-group-create-member]') : [];
@@ -405,7 +409,7 @@ window.aiteam = window.aiteam || {};
             }
           } else {
             launcherState.selectedEmployeeIds = launcherState.selectedEmployeeIds.filter(function (id) { return id !== employeeId; });
-            launcherState.limitMessage = '';
+            launcherState.limitMessage = launcherState.selectedEmployeeIds.length < 2 ? '至少选择 2 名成员' : '';
           }
           renderLauncher();
           bindLauncherInteractions();
@@ -413,7 +417,14 @@ window.aiteam = window.aiteam || {};
       }
       var createButton = container.querySelector('[data-group-create-launch]');
       if (createButton && typeof createButton.addEventListener === 'function') {
+        createButton.disabled = launcherState.selectedEmployeeIds.length < 2 || !stringValue(launcherState.title, '');
         createButton.addEventListener('click', function () {
+          if (launcherState.selectedEmployeeIds.length < 2) {
+            launcherState.limitMessage = '至少选择 2 名成员';
+            renderLauncher();
+            bindLauncherInteractions();
+            return;
+          }
           container.lastCreateGroupHandler({
             title: launcherState.title || '新建群聊',
             member_employee_ids: launcherState.selectedEmployeeIds.slice(),
