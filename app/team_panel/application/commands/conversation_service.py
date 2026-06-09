@@ -62,6 +62,95 @@ def create_group_conversation(uow, enterprise_id: str, title: str,
     return conv_id
 
 
+def add_group_member(uow, conversation_id: str, employee_id: str, *, role: str = "participant") -> dict:
+    """Add or reactivate an employee member for a group conversation."""
+    conv = uow.conversations().get_by_id(conversation_id)
+    if conv is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    if conv.type != "group":
+        raise ValueError(f"Conversation {conversation_id} is not a group conversation")
+    employee = uow.employees().get_by_id(employee_id)
+    if employee is None:
+        raise ValueError(f"Employee {employee_id} not found")
+
+    uow.cur.execute(
+        """
+        SELECT member_id, status
+        FROM conversation_member
+        WHERE conversation_id = %s AND member_type = 'employee' AND member_ref_id = %s
+        """,
+        (conversation_id, employee_id),
+    )
+    row = uow.cur.fetchone()
+    if row is not None:
+        member_id, status = row[0], row[1]
+        if status != "active":
+            uow.cur.execute(
+                """
+                UPDATE conversation_member
+                SET status = 'active', role = %s, removed_at = NULL, updated_at = now()
+                WHERE member_id = %s
+                """,
+                (role, member_id),
+            )
+        return {"member_id": member_id, "employee_id": employee_id, "status": "active"}
+
+    member_id = f"mem_{uuid.uuid4().hex[:12]}"
+    member = ConversationMember(
+        member_id=member_id,
+        conversation_id=conversation_id,
+        member_type="employee",
+        member_ref_id=employee_id,
+        role=role,
+        status="active",
+    )
+    _create_member(uow, member)
+    return {"member_id": member_id, "employee_id": employee_id, "status": "active"}
+
+
+def remove_group_member(uow, conversation_id: str, member_id: str) -> dict:
+    """Soft-remove a member from a group conversation."""
+    conv = uow.conversations().get_by_id(conversation_id)
+    if conv is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    if conv.type != "group":
+        raise ValueError(f"Conversation {conversation_id} is not a group conversation")
+
+    uow.cur.execute(
+        """
+        SELECT member_ref_id, status
+        FROM conversation_member
+        WHERE conversation_id = %s AND member_id = %s
+        """,
+        (conversation_id, member_id),
+    )
+    row = uow.cur.fetchone()
+    if row is None:
+        raise ValueError(f"Conversation member {member_id} not found")
+    if row[1] != "removed":
+        uow.cur.execute(
+            """
+            UPDATE conversation_member
+            SET status = 'removed', removed_at = now(), updated_at = now()
+            WHERE member_id = %s
+            """,
+            (member_id,),
+        )
+    return {"member_id": member_id, "employee_id": row[0], "status": "removed"}
+
+
+def archive_group_conversation(uow, conversation_id: str) -> dict:
+    """Archive a group conversation to represent dissolve semantics."""
+    conv = uow.conversations().get_by_id(conversation_id)
+    if conv is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    if conv.type != "group":
+        raise ValueError(f"Conversation {conversation_id} is not a group conversation")
+    conv.archive()
+    uow.conversations().update_status(conv)
+    return {"conversation_id": conv.id, "status": conv.status}
+
+
 def submit_group_message(uow, conversation_id: str, message_text: str,
                          route_hint: str, idempotency_key: str,
                          sender_id: str) -> dict:

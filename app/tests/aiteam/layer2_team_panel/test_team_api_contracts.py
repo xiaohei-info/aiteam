@@ -278,6 +278,26 @@ class TestConversationDetail:
 
 
 class TestGroupConversationDetail:
+    def test_post_group_conversation_creates_northbound_group_entry(self, seeded_enterprise):
+        status, body = _post(
+            "/api/team/group-conversations",
+            {
+                "title": "Ops Sync",
+                "member_employee_ids": ["emp_test", "emp_member"],
+                "created_by": "user_owner",
+            },
+        )
+        assert status == 201, body
+        assert body["title"] == "Ops Sync"
+        assert body["member_count"] == 2
+        assert body["status"] == "active"
+        assert body["navigation"]["conversation"].startswith("/app/group/")
+
+        detail_status, detail = _get(f"/api/team/group-conversations/{body['conversation_id']}")
+        assert detail_status == 200, detail
+        assert detail["member_count"] == 2
+        assert sorted(member["employee_id"] for member in detail["members"]) == ["emp_member", "emp_test"]
+
     def test_get_group_conversation_returns_contract_shape(self, uow, clean_tables_with_enterprise):
         from team_panel.application.commands.conversation_service import create_group_conversation, submit_group_message
 
@@ -330,6 +350,52 @@ class TestGroupConversationDetail:
         status, body = _get("/api/team/group-conversations/nonexistent")
         assert status == 404
         assert body.get("error") == "CONVERSATION_NOT_FOUND"
+
+    def test_group_conversation_member_add_remove_and_archive_flow(self, seeded_enterprise):
+        create_status, created = _post(
+            "/api/team/group-conversations",
+            {
+                "title": "Launch Squad",
+                "member_employee_ids": ["emp_test", "emp_member"],
+                "created_by": "user_owner",
+            },
+        )
+        assert create_status == 201, created
+        conv_id = created["conversation_id"]
+
+        add_status, add_body = _post(
+            f"/api/team/group-conversations/{conv_id}/members",
+            {"employee_id": "emp_planner"},
+        )
+        assert add_status == 200, add_body
+        assert add_body["employee_id"] == "emp_planner"
+        assert add_body["status"] == "active"
+
+        detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
+        assert detail_status == 200, detail
+        assert detail["member_count"] == 3
+        removed_member = next(member for member in detail["members"] if member["employee_id"] == "emp_member")
+
+        remove_status, remove_body = _delete(
+            f"/api/team/group-conversations/{conv_id}/members/{removed_member['member_id']}"
+        )
+        assert remove_status == 200, remove_body
+        assert remove_body["member_id"] == removed_member["member_id"]
+        assert remove_body["status"] == "removed"
+
+        detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
+        assert detail_status == 200, detail
+        assert detail["member_count"] == 2
+        assert sorted(member["employee_id"] for member in detail["members"]) == ["emp_planner", "emp_test"]
+
+        archive_status, archive_body = _delete(f"/api/team/group-conversations/{conv_id}")
+        assert archive_status == 200, archive_body
+        assert archive_body["conversation_id"] == conv_id
+        assert archive_body["status"] == "archived"
+
+        archived_status, archived_detail = _get(f"/api/team/group-conversations/{conv_id}")
+        assert archived_status == 200, archived_detail
+        assert archived_detail["status"] == "archived"
 
 
 class TestEmployeeList:

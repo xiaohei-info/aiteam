@@ -156,6 +156,7 @@ window.aiteam = window.aiteam || {};
         pathToModule['/app/knowledge'] = 'knowledge.js';
         pathToModule['/app/workbench'] = 'app-workbench.js';
         pathToModule['/app/marketplace'] = 'app-marketplace.js';
+        pathToModule['/app/group'] = 'app-group.js';
         pathToModule['/admin/employees'] = 'admin-employees.js';
         pathToModule['/admin/solutions'] = 'admin-solutions.js';
         pathToModule['/admin/skills'] = 'admin-skills.js';
@@ -181,6 +182,7 @@ window.aiteam = window.aiteam || {};
             { re: /^\/app\/marketplace\/?$/, script: 'app-marketplace.js', handler: 'appMarketplace' },
             { re: /^\/app\/marketplace\/[^/]+\/?$/, script: 'app-template-detail.js', handler: 'appTemplateDetail' },
             { re: /^\/app\/chat\/[^/]+\/?$/, script: 'app-chat.js', handler: 'appChat' },
+            { re: /^\/app\/group\/?$/, script: 'app-group.js', handler: 'appGroup' },
             { re: /^\/app\/group\/[^/]+\/?$/, script: 'app-group.js', handler: 'appGroup' },
             { re: /^\/admin\/employees\/[^/]+(?:\/[^/]+)?\/?$/, script: 'admin-employees.js', handler: 'adminEmployees' },
           ];

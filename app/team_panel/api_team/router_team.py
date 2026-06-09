@@ -71,7 +71,13 @@ from ..repositories.scheduled_job_repo import ScheduledJobRepo
 from ..repositories.team_task_repo import TeamTaskRepo
 from ..repositories.team_run_repo import TeamRunRepo
 from ..transactions.uow import UnitOfWork
-from ..application.commands.conversation_service import submit_group_message
+from ..application.commands.conversation_service import (
+    add_group_member,
+    archive_group_conversation,
+    create_group_conversation,
+    remove_group_member,
+    submit_group_message,
+)
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
 from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
 from ..application.policies.permission_service import check_permission
@@ -2120,6 +2126,83 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
         cur.close()
 
 
+def _handle_group_conversation_create(conn, path: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    title = str(body.get("title") or "").strip()
+    member_employee_ids = [str(item).strip() for item in (body.get("member_employee_ids") or []) if str(item).strip()]
+    if not title:
+        return 400, {"error": "MISSING_TITLE", "message": "title is required"}
+    if not member_employee_ids:
+        return 400, {"error": "MISSING_MEMBERS", "message": "member_employee_ids is required"}
+    with UnitOfWork(conn) as uow:
+        enterprises = EnterpriseRepo(uow.cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        conv_id = create_group_conversation(
+            uow,
+            enterprise.id,
+            title,
+            member_employee_ids,
+            created_by=str(body.get("created_by") or "team_panel"),
+        )
+        return 201, {
+            "conversation_id": conv_id,
+            "title": title,
+            "member_count": len(member_employee_ids),
+            "status": "active",
+            "navigation": {"conversation": f"/app/group/{conv_id}"},
+        }
+
+
+def _handle_group_member_add(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    employee_id = str(body.get("employee_id") or "").strip()
+    if not employee_id:
+        return 400, {"error": "MISSING_EMPLOYEE_ID", "message": "employee_id is required"}
+    try:
+        with UnitOfWork(conn) as uow:
+            result = add_group_member(uow, conv_id, employee_id)
+            return 200, result
+    except ValueError as exc:
+        message = str(exc)
+        if "not a group conversation" in message:
+            return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
+        if "not found" in message:
+            return 404, {"error": "GROUP_MEMBER_TARGET_NOT_FOUND", "message": message}
+        return 409, {"error": "GROUP_MEMBER_ADD_FAILED", "message": message}
+
+
+def _handle_group_member_remove(conn, path: str, conv_id: str, member_id: str) -> tuple[int, dict]:
+    try:
+        with UnitOfWork(conn) as uow:
+            result = remove_group_member(uow, conv_id, member_id)
+            return 200, result
+    except ValueError as exc:
+        message = str(exc)
+        if "not a group conversation" in message:
+            return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
+        if "not found" in message:
+            return 404, {"error": "GROUP_MEMBER_NOT_FOUND", "message": message}
+        return 409, {"error": "GROUP_MEMBER_REMOVE_FAILED", "message": message}
+
+
+def _handle_group_conversation_archive(conn, path: str, conv_id: str) -> tuple[int, dict]:
+    try:
+        with UnitOfWork(conn) as uow:
+            result = archive_group_conversation(uow, conv_id)
+            return 200, result
+    except ValueError as exc:
+        message = str(exc)
+        if "not a group conversation" in message:
+            return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
+        if "not found" in message:
+            return 404, {"error": "CONVERSATION_NOT_FOUND", "message": message}
+        return 409, {"error": "GROUP_CONVERSATION_ARCHIVE_FAILED", "message": message}
+
+
 def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -3749,6 +3832,26 @@ def handle_team_route(
         if method == "GET" and conv_id is not None and "/" not in conv_id:
             route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, f"{sub}?{query}" if query else sub, conversation_id)
 
+    # ── group-conversations create ──
+    if route_handler is None and method == "POST" and _match_exact(sub, "/group-conversations"):
+        route_handler = lambda conn: _handle_group_conversation_create(conn, sub, body)
+
+    # ── group-conversations/{id}/members/{member_id} delete ──
+    if route_handler is None:
+        group_member_delete = _match_prefix(sub, "/group-conversations/")
+        if method == "DELETE" and group_member_delete is not None and "/members/" in group_member_delete:
+            conv_id, member_id = group_member_delete.split("/members/", 1)
+            if conv_id and member_id and "/" not in member_id:
+                route_handler = lambda conn, conversation_id=conv_id, matched_member_id=member_id: _handle_group_member_remove(conn, sub, conversation_id, matched_member_id)
+
+    # ── group-conversations/{id}/members create ──
+    if route_handler is None:
+        group_member_create = _match_prefix(sub, "/group-conversations/")
+        if method == "POST" and group_member_create is not None and group_member_create.endswith("/members"):
+            conv_id = group_member_create[:-len("/members")]
+            if conv_id and "/" not in conv_id:
+                route_handler = lambda conn, conversation_id=conv_id: _handle_group_member_add(conn, sub, conversation_id, body)
+
     # ── group-conversations/{id}/messages ──
     if route_handler is None:
         group_message = _match_prefix(sub, "/group-conversations/")
@@ -3760,6 +3863,8 @@ def handle_team_route(
     # ── group-conversations/{id} ──
     if route_handler is None:
         group_detail = _match_prefix(sub, "/group-conversations/")
+        if method == "DELETE" and group_detail is not None and "/" not in group_detail:
+            route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_archive(conn, sub, conversation_id)
         if method == "GET" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_detail(conn, sub, conversation_id)
 

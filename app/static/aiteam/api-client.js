@@ -163,6 +163,22 @@ window.aiteam = window.aiteam || {};
       return this.get(`/group-conversations/${encodeURIComponent(conversationId)}`, options);
     },
 
+    createGroupConversation(body, options) {
+      return this.post('/group-conversations', body, options);
+    },
+
+    addGroupConversationMember(conversationId, body, options) {
+      return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/members`, body, options);
+    },
+
+    removeGroupConversationMember(conversationId, memberId, options) {
+      return this.delete(`/group-conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(memberId)}`, options);
+    },
+
+    archiveGroupConversation(conversationId, options) {
+      return this.delete(`/group-conversations/${encodeURIComponent(conversationId)}`, options);
+    },
+
     submitGroupMessage(conversationId, body, options) {
       return this.post(`/group-conversations/${encodeURIComponent(conversationId)}/messages`, body, options);
     },

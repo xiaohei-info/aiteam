@@ -276,6 +276,67 @@ window.aiteam = window.aiteam || {};
     };
   }
 
+  function renderGroupLauncher(container) {
+    container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
+      '<div class="aiteam-page__hero">' +
+      '<div>' +
+      '<p class="aiteam-page__eyebrow">P06 · 群聊协作</p>' +
+      '<h2 class="aiteam-page__title">新建群聊</h2>' +
+      '<p class="aiteam-page__desc">创建群聊后即可进入群成员栏、@提及、协作时间线与任务树视图。</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="aiteam-panel">' +
+      '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>填写标题与成员后创建</span></div>' +
+      '<div class="aiteam-detail-kv"><span>默认成员</span><strong>逗号分隔 employee_id</strong></div>' +
+      '<div class="aiteam-action-row">' +
+      '<button class="aiteam-button" type="button" data-group-create-launch>立即创建</button>' +
+      '</div>' +
+      '</div>' +
+      '</section>';
+
+    var statusEl = container.querySelector('[data-group-create-status]');
+    function setStatus(text) {
+      if (statusEl) statusEl.textContent = text || '';
+    }
+
+    container.lastCreateGroupHandler = function (payload) {
+      if (!ns.api || !ns.api.createGroupConversation) {
+        setStatus('当前 API client 未接入 createGroupConversation。');
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_createGroupConversation' });
+      }
+      setStatus('正在创建群聊...');
+      return ns.api.createGroupConversation(payload || {}).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '群聊创建失败');
+          return result;
+        }
+        var conversationId = result.data && result.data.conversation_id;
+        if (!conversationId) {
+          setStatus('群聊已创建，但响应缺少 conversation_id');
+          return result;
+        }
+        return ns.api.getGroupConversation(conversationId).then(function (detailResult) {
+          if (!detailResult.ok) {
+            setStatus(detailResult.error || '群聊详情加载失败');
+            return detailResult;
+          }
+          renderGroup(container, detailResult.data || {});
+          return detailResult;
+        });
+      });
+    };
+
+    var createButton = container.querySelector('[data-group-create-launch]');
+    if (createButton && typeof createButton.addEventListener === 'function') {
+      createButton.addEventListener('click', function () {
+        container.lastCreateGroupHandler({
+          title: '新建群聊',
+          member_employee_ids: ['emp_test', 'emp_member'],
+        });
+      });
+    }
+  }
+
   function renderGroup(container, conversation) {
       var members = listValue(conversation.members);
       var memberMap = {};
@@ -912,6 +973,68 @@ window.aiteam = window.aiteam || {};
       });
     }
 
+    container.lastAddMemberHandler = function (payload) {
+      if (!ns.api || !ns.api.addGroupConversationMember) {
+        setStatus('当前 API client 未接入 addGroupConversationMember。');
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_addGroupConversationMember' });
+      }
+      setStatus('正在新增群成员...');
+      return ns.api.addGroupConversationMember(state.conversationId, payload || {}).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '新增群成员失败');
+          return result;
+        }
+        return ns.api.getGroupConversation(state.conversationId).then(function (detailResult) {
+          if (!detailResult.ok) {
+            setStatus(detailResult.error || '群成员刷新失败');
+            return detailResult;
+          }
+          renderGroup(container, detailResult.data || {});
+          return detailResult;
+        });
+      });
+    };
+
+    container.lastRemoveMemberHandler = function (memberId) {
+      if (!ns.api || !ns.api.removeGroupConversationMember) {
+        setStatus('当前 API client 未接入 removeGroupConversationMember。');
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_removeGroupConversationMember' });
+      }
+      setStatus('正在移除群成员...');
+      return ns.api.removeGroupConversationMember(state.conversationId, memberId).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '移除群成员失败');
+          return result;
+        }
+        return ns.api.getGroupConversation(state.conversationId).then(function (detailResult) {
+          if (!detailResult.ok) {
+            setStatus(detailResult.error || '群成员刷新失败');
+            return detailResult;
+          }
+          renderGroup(container, detailResult.data || {});
+          return detailResult;
+        });
+      });
+    };
+
+    container.lastArchiveGroupHandler = function () {
+      if (!ns.api || !ns.api.archiveGroupConversation) {
+        setStatus('当前 API client 未接入 archiveGroupConversation。');
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_archiveGroupConversation' });
+      }
+      setStatus('正在解散群聊...');
+      return ns.api.archiveGroupConversation(state.conversationId).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '解散群聊失败');
+          return result;
+        }
+        state.conversation.status = (result.data && result.data.status) || 'archived';
+        setStatus('群聊已解散。');
+        updateCollaborationState();
+        return result;
+      });
+    };
+
     renderMembers();
     renderRouteFeedback(conversation.latest_route_decision, conversation.default_route_hint);
     renderRuntimeHandle(state.runtimeHandle);
@@ -933,7 +1056,7 @@ window.aiteam = window.aiteam || {};
       if (!container) return;
       var conversationId = getConversationId(options && options.pathname);
       if (!conversationId) {
-        ns.states.renderError(container, '缺少群聊会话 ID，无法打开协作页。');
+        renderGroupLauncher(container);
         return;
       }
       ns.states.renderLoading(container, '加载群聊会话...');
