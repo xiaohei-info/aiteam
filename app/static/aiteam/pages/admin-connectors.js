@@ -449,6 +449,7 @@ window.aiteam = window.aiteam || {};
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-test" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>测试连接</button>' +
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-refresh" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>刷新状态</button>' +
         '<button type="button" class="aiteam-btn" data-role="connector-grants" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>保存员工授权</button>' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-archive" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>归档连接器</button>' +
         '</div>' +
         '<h4 class="aiteam-shell__panel-kicker">最近测试</h4>' +
         renderLastTest(item) +
@@ -655,6 +656,14 @@ window.aiteam = window.aiteam || {};
           }
           var grantPayload = selectedIds.length ? [{ employee_ids: selectedIds, access_mode: 'invoke' }] : [];
           container.lastGrantHandler(connectorId, { grant: grantPayload, revoke: revoke });
+        });
+      }
+
+      var archiveButtons = container.querySelectorAll('[data-role="connector-archive"]');
+      for (var archiveIndex = 0; archiveIndex < archiveButtons.length; archiveIndex++) {
+        archiveButtons[archiveIndex].addEventListener('click', function () {
+          var connectorId = this.getAttribute('data-connector-id');
+          container.lastArchiveHandler(connectorId);
         });
       }
     }
@@ -874,6 +883,38 @@ window.aiteam = window.aiteam || {};
           });
         }
         setNotice('连接器授权更新失败：' + apiErrorMessage(result));
+        render();
+        return result;
+      });
+    };
+
+    container.lastArchiveHandler = function (connectorId) {
+      if (!ns.api || !ns.api.deleteConnector) {
+        setNotice('当前 API client 未接入 deleteConnector');
+        render();
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_deleteConnector' });
+      }
+      state.pendingConnectorId = connectorId;
+      state.pendingAction = 'archive';
+      setNotice('');
+      setDetailNotice('正在归档连接器...');
+      render();
+      return ns.api.deleteConnector(connectorId).then(function (result) {
+        state.pendingConnectorId = '';
+        state.pendingAction = '';
+        if (result && result.ok) {
+          state.items = state.items.filter(function (item) { return item.connector_id !== connectorId; });
+          if (state.selectedConnectorId === connectorId) {
+            state.selectedConnectorId = state.items.length ? state.items[0].connector_id : '';
+          }
+          ensureSelectedConnector();
+          setDetailNotice('');
+          setNotice('连接器已归档');
+          render();
+          return result;
+        }
+        setDetailNotice('');
+        setNotice('连接器归档失败：' + apiErrorMessage(result));
         render();
         return result;
       });

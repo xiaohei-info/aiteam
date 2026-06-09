@@ -278,6 +278,10 @@ window.aiteam = window.aiteam || {};
       return this.patch(`/connectors/${encodeURIComponent(connectorId)}`, body, options);
     },
 
+    deleteConnector(connectorId, options) {
+      return this.delete(`/connectors/${encodeURIComponent(connectorId)}`, options);
+    },
+
     testConnector(connectorId, body, options) {
       return this.post(`/connectors/${encodeURIComponent(connectorId)}/test`, body || {}, options);
     },

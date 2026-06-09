@@ -70,7 +70,7 @@ class EnterpriseConnectorRepo:
             "credential_ref, credential_mask, credential_state, rotation_version, status, config_json, scopes_json, last_test_result_json, "
             "last_validated_at, "
             "created_at, updated_at, created_by, updated_by, deleted_at "
-            "FROM enterprise_connector WHERE id = %s",
+            "FROM enterprise_connector WHERE id = %s AND deleted_at IS NULL",
             (connector_id,),
         )
         row = self._cur.fetchone()

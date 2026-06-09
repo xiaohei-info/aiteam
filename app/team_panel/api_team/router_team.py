@@ -3308,6 +3308,27 @@ def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | Non
         cur.close()
 
 
+def _handle_connector_delete(conn, path: str, connector_id: str) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        enterprises = EnterpriseRepo(cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        repo = EnterpriseConnectorRepo(cur)
+        connector = repo.get_by_id(connector_id)
+        if connector is None or connector.enterprise_id != enterprise.id or connector.deleted_at:
+            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        repo.delete(connector_id)
+        conn.commit()
+        return 200, {"connector_id": connector_id, "status": "archived"}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def _handle_connector_status(conn, path: str, connector_id: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
@@ -3958,6 +3979,8 @@ def handle_team_route(
                 route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id)
             elif method == "PATCH":
                 route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_patch(conn, sub, matched_connector_id, body)
+            elif method == "DELETE":
+                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_delete(conn, sub, matched_connector_id)
 
     if route_handler is None:
         connector_grants = _match_prefix(sub, "/connectors/")

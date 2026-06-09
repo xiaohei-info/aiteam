@@ -253,6 +253,7 @@ let detailCalls = 0;
 let createPayload = null;
 let updatePayload = null;
 let grantPayload = null;
+let deleteCalls = 0;
 let testCalls = 0;
 let statusCalls = 0;
 global.fetch = async (url, options) => {{
@@ -282,6 +283,10 @@ global.fetch = async (url, options) => {{
   if (url === '/api/team/connectors/conn_truth' && options.method === 'PATCH') {{
     updatePayload = JSON.parse(options.body || '{{}}');
     return {{ ok: true, status: 200, statusText: 'OK', async text() {{ return JSON.stringify({{ connector_id: 'conn_truth', status: 'draft', credential_state: 'rotated' }}); }} }};
+  }}
+  if (url === '/api/team/connectors/conn_truth' && options.method === 'DELETE') {{
+    deleteCalls += 1;
+    return {{ ok: true, status: 200, statusText: 'OK', async text() {{ return JSON.stringify({{ connector_id: 'conn_truth', status: 'archived' }}); }} }};
   }}
   if (url === '/api/team/connectors/conn_truth/grants' && options.method === 'PATCH') {{
     grantPayload = JSON.parse(options.body || '{{}}');
@@ -351,6 +356,9 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
   await container.lastStatusHandler('conn_truth');
   await new Promise((resolve) => setImmediate(resolve));
   const afterStatusHtml = container.innerHTML;
+  await container.lastArchiveHandler('conn_truth');
+  await new Promise((resolve) => setImmediate(resolve));
+  const afterArchiveHtml = container.innerHTML;
   console.log(JSON.stringify({{
     fetchCalls,
     employeeCalls,
@@ -358,6 +366,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
     createPayload,
     updatePayload,
     grantPayload,
+    deleteCalls,
     testCalls,
     statusCalls,
     initialHtml,
@@ -365,6 +374,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
     afterGrantHtml,
     afterTestHtml,
     afterStatusHtml,
+    afterArchiveHtml,
   }}));
 }})().catch((error) => {{
   console.error(error);
@@ -411,6 +421,7 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert result["createPayload"]["credential_input"]["credential_ref"] == "cred://enterprise/new"
     assert "credential_ref" not in result["createPayload"]
     assert result["grantPayload"]["revoke"] == [{"binding_id": "bind_seed"}]
+    assert result["deleteCalls"] == 1
     assert result["testCalls"] == 1
     assert result["statusCalls"] == 1
 
@@ -444,6 +455,10 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     after_status_html = result["afterStatusHtml"]
     assert "已轮换待复测" in after_status_html
     assert "status poll refreshed" in after_status_html
+
+    after_archive_html = result["afterArchiveHtml"]
+    assert "归档连接器" in initial_html
+    assert "连接器已归档" in after_archive_html
 
 
 def test_admin_connectors_member_sees_permission_denied() -> None:

@@ -1553,6 +1553,27 @@ class TestConnectorsIntegration:
         assert body["status"] == "online"
         assert body["last_test_result"]["result"] == "passed"
 
+    def test_delete_connector_archives_and_hides_from_lists(self, seeded_enterprise):
+        status, create_resp = _post(
+            "/api/team/connectors",
+            {"name": "Archive Test", "provider_code": "slack", "type": "oauth_connector"},
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        delete_status, delete_body = _delete(f"/api/team/connectors/{connector_id}")
+        assert delete_status == 200, delete_body
+        assert delete_body["connector_id"] == connector_id
+        assert delete_body["status"] == "archived"
+
+        detail_status, detail_body = _get(f"/api/team/connectors/{connector_id}")
+        assert detail_status == 404, detail_body
+        assert detail_body["error"] == "CONNECTOR_NOT_FOUND"
+
+        list_status, list_body = _get("/api/team/connectors")
+        assert list_status == 200, list_body
+        assert not any(item["connector_id"] == connector_id for item in list_body["connectors"])
+
     def test_connectors_list_reflects_config_credentials_grants_and_test_state(self, seeded_enterprise, db_conn):
         status, create_resp = _post(
             "/api/team/connectors",
