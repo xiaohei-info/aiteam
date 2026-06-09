@@ -86,6 +86,9 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
                     "conversation_id": "conv_nova",
                     "last_message_preview": "等待新的分析任务",
                     "unread_count": 0,
+                    "avatar_url": "https://example.test/nova.png",
+                    "last_active_at": "2026-06-10T10:00:00Z",
+                    "is_starred": True,
                 },
             ],
             "groups": [
@@ -117,5 +120,53 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
     assert "查看详情" in result["html"]
     assert "设置为星标" in result["html"]
     assert "解雇" in result["html"]
+    assert "data-workbench-avatar" in result["html"]
+    assert "https://example.test/nova.png" in result["html"]
+    assert "title=\"私聊\"" in result["html"]
+    assert "title=\"群聊\"" in result["html"]
+    assert "title=\"组织架构\"" in result["html"]
+    assert "title=\"人才市场\"" in result["html"]
+    assert "data-workbench-context-menu" in result["html"]
+    assert "data-workbench-starred" in result["html"]
     assert 'href="/app/group"' in result["html"]
     assert 'href="/app/org"' in result["html"]
+
+
+def test_workbench_starred_employee_is_sorted_to_top_and_context_menu_matches_prd_actions() -> None:
+    result = _run_workbench(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                    "last_active_at": "2026-06-10T09:00:00Z",
+                    "is_starred": False,
+                },
+                {
+                    "employee_id": "emp_nova",
+                    "display_name": "Nova",
+                    "role_name": "数据科学家",
+                    "status": "active",
+                    "presence": "online",
+                    "conversation_id": "conv_nova",
+                    "last_message_preview": "等待新的分析任务",
+                    "unread_count": 0,
+                    "last_active_at": "2026-06-10T08:00:00Z",
+                    "is_starred": True,
+                },
+            ],
+            "groups": [],
+            "office_digest": {"online_employee_count": 2, "running_task_count": 1},
+        }
+    )
+    assert result["html"].index("Nova") < result["html"].index("Rex")
+    assert "查看详情" in result["html"]
+    assert "设置为星标" in result["html"]
+    assert "解雇" in result["html"]

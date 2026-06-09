@@ -35,6 +35,25 @@ window.aiteam = window.aiteam || {};
     ].join(' ').toLowerCase();
   }
 
+  function employeeSortKey(employee) {
+    var ts = stringValue(employee && employee.last_active_at, '');
+    return ts || '';
+  }
+
+  function sortEmployees(employees) {
+    return (employees || []).slice().sort(function (left, right) {
+      var leftStarred = !!(left && left.is_starred);
+      var rightStarred = !!(right && right.is_starred);
+      if (leftStarred !== rightStarred) return rightStarred ? 1 : -1;
+      return employeeSortKey(right).localeCompare(employeeSortKey(left));
+    });
+  }
+
+  function avatarFallback(employee) {
+    var name = stringValue(employee && employee.display_name, employee && employee.employee_id, 'AI');
+    return escapeHtml(name.slice(0, 1).toUpperCase());
+  }
+
   function filterEmployees(employees, query) {
     var needle = stringValue(query, '').toLowerCase();
     if (!needle) return employees.slice();
@@ -52,17 +71,17 @@ window.aiteam = window.aiteam || {};
 
   function renderRail() {
     var items = [
-      { key: 'chat', label: '私聊', icon: '💬', href: '/app/workbench', active: true },
-      { key: 'group', label: '群聊', icon: '👥', href: '/app/group' },
-      { key: 'org', label: '组织', icon: '🏢', href: '/app/org' },
-      { key: 'knowledge', label: '知识库', icon: '📚', href: '/app/knowledge' },
-      { key: 'marketplace', label: '人才市场', icon: '🏪', href: '/app/marketplace' },
-      { key: 'settings', label: '设置', icon: '⚙', href: '/admin/settings', bottom: true },
+      { key: 'chat', label: '私聊', title: '私聊', icon: '💬', href: '/app/workbench', active: true },
+      { key: 'group', label: '群聊', title: '群聊', icon: '👥', href: '/app/group' },
+      { key: 'org', label: '组织', title: '组织架构', icon: '🏢', href: '/app/org' },
+      { key: 'knowledge', label: '知识库', title: '知识库', icon: '📚', href: '/app/knowledge' },
+      { key: 'marketplace', label: '人才市场', title: '人才市场', icon: '🏪', href: '/app/marketplace' },
+      { key: 'settings', label: '设置', title: '设置', icon: '⚙', href: '/admin/settings', bottom: true },
     ];
     return '' +
       '<nav class="aiteam-workbench__rail" data-workbench-rail="1" aria-label="工作台主入口">' +
       items.map(function (item) {
-        return '<a class="aiteam-workbench__rail-link' + (item.active ? ' is-active' : '') + (item.bottom ? ' is-bottom' : '') + '" href="' + escapeHtml(item.href) + '" data-workbench-rail-item="' + escapeHtml(item.key) + '">' +
+        return '<a class="aiteam-workbench__rail-link' + (item.active ? ' is-active' : '') + (item.bottom ? ' is-bottom' : '') + '" href="' + escapeHtml(item.href) + '" title="' + escapeHtml(item.title || item.label) + '" data-workbench-rail-item="' + escapeHtml(item.key) + '">' +
           '<span class="aiteam-workbench__rail-icon" aria-hidden="true">' + escapeHtml(item.icon) + '</span>' +
           '<span class="aiteam-workbench__rail-label">' + escapeHtml(item.label) + '</span>' +
           '</a>';
@@ -74,13 +93,19 @@ window.aiteam = window.aiteam || {};
     var presence = employeePresence(employee);
     var unread = Number(employee.unread_count) || 0;
     var chatHref = employee.conversation_id ? '/app/chat/' + encodeURIComponent(employee.conversation_id) : '/admin/employees/' + encodeURIComponent(employee.employee_id || '');
+    var avatar = employee && employee.avatar_url
+      ? '<img class="aiteam-workbench__avatar-image" data-workbench-avatar="1" src="' + escapeHtml(employee.avatar_url) + '" alt="' + escapeHtml(employee.display_name || employee.employee_id || '员工头像') + '">'
+      : '<span class="aiteam-workbench__avatar-fallback" data-workbench-avatar="1">' + avatarFallback(employee) + '</span>';
+    var starred = !!(employee && employee.is_starred);
     return '' +
       '<div class="aiteam-workbench__employee-row' + (selected ? ' is-selected' : '') + '">' +
       '<button type="button" class="aiteam-workbench__employee" data-select-employee="' + escapeHtml(employee.employee_id || '') + '">' +
       '<div class="aiteam-workbench__employee-head">' +
       '<div class="aiteam-workbench__employee-ident">' +
+      '<span class="aiteam-workbench__avatar" data-workbench-avatar-wrap="1">' + avatar + '</span>' +
       '<span class="aiteam-workbench__presence is-' + escapeHtml(presence) + '"></span>' +
       '<strong>' + escapeHtml(employee.display_name || employee.employee_id || '未命名员工') + '</strong>' +
+      (starred ? '<span class="aiteam-badge" data-workbench-starred="1">星标</span>' : '') +
       '</div>' +
       (unread ? '<span class="aiteam-workbench__unread">' + escapeHtml(String(unread)) + '</span>' : '') +
       '</div>' +
@@ -90,6 +115,11 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-workbench__employee-actions">' +
       '<a class="aiteam-workbench__employee-link" href="' + escapeHtml(chatHref) + '">继续对话</a>' +
       '<button type="button" class="aiteam-workbench__employee-link" data-workbench-menu="' + escapeHtml(employee.employee_id || '') + '">快捷操作</button>' +
+      '</div>' +
+      '<div class="aiteam-workbench__context-menu" data-workbench-context-menu="' + escapeHtml(employee.employee_id || '') + '">' +
+      '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '">查看详情</a>' +
+      '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '?focus=star">设置为星标</a>' +
+      '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '?action=dismiss">解雇</a>' +
       '</div>' +
       '</div>';
   }
@@ -209,7 +239,7 @@ window.aiteam = window.aiteam || {};
   }
 
   function renderWorkbench(container, data, state) {
-    var employees = Array.isArray(data.employees) ? data.employees : [];
+    var employees = sortEmployees(Array.isArray(data.employees) ? data.employees : []);
     var filteredEmployees = filterEmployees(employees, state.query);
     var enterprise = data.enterprise || {};
 
