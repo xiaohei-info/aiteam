@@ -48,7 +48,7 @@ global.fetch = async (url, options) => {{
           credential_mask: '已配置',
           credential_state: 'configured',
           rotation_version: 2,
-          config: {{ tenant_hint: 'acme', channel: '#sales' }},
+          config: {{ tenant_hint: 'acme', channel: '#sales', endpoint_url: 'https://mcp.example.com/company-slack' }},
           employee_grants: [],
           granted_employee_ids: [],
           last_test_result: {{ result: 'passed', checked_at: '2026-06-06T00:00:00Z', message: 'ok' }},
@@ -87,7 +87,7 @@ global.fetch = async (url, options) => {{
         credential_mask: '已配置',
         credential_state: 'configured',
         rotation_version: 2,
-        config: {{ tenant_hint: 'acme', channel: '#sales' }},
+        config: {{ tenant_hint: 'acme', channel: '#sales', endpoint_url: 'https://mcp.example.com/company-slack' }},
         employee_grants: [],
         granted_employee_ids: [],
         last_test_result: {{ result: 'passed', checked_at: '2026-06-06T00:00:00Z', message: 'ok' }},
@@ -138,3 +138,5 @@ def test_admin_connectors_renders_connected_services_and_available_presets() -> 
     assert "Slack" in payload["html"]
     assert "Google" in payload["html"]
     assert "自定义MCP服务" in payload["html"]
+    assert "MCP Server URL" in payload["html"]
+    assert "断开连接" in payload["html"]

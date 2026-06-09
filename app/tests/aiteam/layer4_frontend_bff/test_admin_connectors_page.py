@@ -48,7 +48,7 @@ const connectorSnapshots = [
       credential_mask: '已配置',
       credential_state: 'configured',
       rotation_version: 2,
-      config: {{ tenant_hint: 'acme', channel: '#seed', bot_secret: 'hidden' }},
+      config: {{ tenant_hint: 'acme', channel: '#seed', endpoint_url: 'https://mcp.example.com/seed', bot_secret: 'hidden' }},
       employee_grants: [{{
         binding_id: 'bind_seed',
         employee_id: 'emp_seed',
@@ -90,7 +90,7 @@ const connectorSnapshots = [
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
-      config: {{ tenant_hint: 'acme-updated', channel: '#ops', bot_secret: 'hidden' }},
+      config: {{ tenant_hint: 'acme-updated', channel: '#ops', endpoint_url: 'https://mcp.example.com/slack', bot_secret: 'hidden' }},
       employee_grants: [{{
         binding_id: 'bind_seed',
         employee_id: 'emp_seed',
@@ -132,7 +132,7 @@ const connectorSnapshots = [
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
-      config: {{ tenant_hint: 'acme-updated', channel: '#ops', bot_secret: 'hidden' }},
+      config: {{ tenant_hint: 'acme-updated', channel: '#ops', endpoint_url: 'https://mcp.example.com/slack', bot_secret: 'hidden' }},
       employee_grants: [{{
         binding_id: 'bind_seed',
         employee_id: 'emp_seed',
@@ -174,7 +174,7 @@ const connectorSnapshots = [
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
-      config: {{ tenant_hint: 'acme-updated', channel: '#ops', bot_secret: 'hidden' }},
+      config: {{ tenant_hint: 'acme-updated', channel: '#ops', endpoint_url: 'https://mcp.example.com/slack', bot_secret: 'hidden' }},
       employee_grants: [{{
         binding_id: 'bind_backend',
         employee_id: 'emp_backend',
@@ -216,7 +216,7 @@ const connectorSnapshots = [
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
-      config: {{ tenant_hint: 'acme-updated', channel: '#ops', bot_secret: 'hidden' }},
+      config: {{ tenant_hint: 'acme-updated', channel: '#ops', endpoint_url: 'https://mcp.example.com/slack', bot_secret: 'hidden' }},
       employee_grants: [{{
         binding_id: 'bind_backend',
         employee_id: 'emp_backend',
@@ -330,7 +330,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
   const initialHtml = container.innerHTML;
   await container.lastUpdateHandler('conn_truth', {{
     name: 'Slack Connector',
-    config: {{ tenant_hint: 'acme-updated', channel: '#ops' }},
+    config: {{ tenant_hint: 'acme-updated', channel: '#ops', endpoint_url: 'https://mcp.example.com/slack' }},
     credential_input: {{ mode: 'opaque_ref', credential_ref: 'cred://vault/slack/updated' }},
   }});
   await new Promise((resolve) => setImmediate(resolve));
@@ -340,7 +340,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
     name: '公司 Slack',
     provider_code: 'slack',
     connector_type: 'webhook_target',
-    config: {{ tenant_hint: 'acme', channel: '#sales' }},
+    config: {{ tenant_hint: 'acme', channel: '#sales', endpoint_url: 'https://mcp.example.com/company-slack' }},
     credential_input: {{ mode: 'opaque_ref', credential_ref: 'cred://enterprise/new' }},
   }});
   await new Promise((resolve) => setImmediate(resolve));
@@ -418,8 +418,10 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert result["detailCalls"] == 2
     assert result["updatePayload"]["credential_input"]["credential_ref"] == "cred://vault/slack/updated"
     assert "credential_ref" not in result["updatePayload"]
+    assert result["updatePayload"]["config"]["endpoint_url"] == "https://mcp.example.com/slack"
     assert result["createPayload"]["credential_input"]["credential_ref"] == "cred://enterprise/new"
     assert "credential_ref" not in result["createPayload"]
+    assert result["createPayload"]["config"]["endpoint_url"] == "https://mcp.example.com/company-slack"
     assert result["grantPayload"]["revoke"] == [{"binding_id": "bind_seed"}]
     assert result["deleteCalls"] == 1
     assert result["testCalls"] == 1
@@ -434,6 +436,7 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert "最近一次连接测试通过" in initial_html
     assert "Slack Webhook" in initial_html
     assert "受控输入" in initial_html
+    assert "MCP Server URL" in initial_html
     assert "种子员工" in initial_html
     assert "保存详情" in initial_html
 
@@ -441,6 +444,7 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert "已轮换" in after_update_html
     assert "草稿" in after_update_html
     assert "#ops" in after_update_html
+    assert "https://mcp.example.com/slack" in after_update_html
     assert "等待复测" in after_update_html
     assert "cred://vault/slack/updated" not in after_update_html
 
@@ -457,8 +461,8 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert "status poll refreshed" in after_status_html
 
     after_archive_html = result["afterArchiveHtml"]
-    assert "归档连接器" in initial_html
-    assert "连接器已归档" in after_archive_html
+    assert "断开连接" in initial_html
+    assert "连接器已断开" in after_archive_html
 
 
 def test_admin_connectors_member_sees_permission_denied() -> None:

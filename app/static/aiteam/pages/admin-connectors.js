@@ -239,6 +239,7 @@ window.aiteam = window.aiteam || {};
         name: '',
         config_tenant_hint: '',
         config_channel: '',
+        config_endpoint_url: '',
         credential_ref: '',
       },
       grantDraft: {},
@@ -249,6 +250,7 @@ window.aiteam = window.aiteam || {};
         name: '',
         config_channel: '',
         config_tenant_hint: '',
+        config_endpoint_url: '',
         credential_ref: '',
       },
     };
@@ -271,6 +273,7 @@ window.aiteam = window.aiteam || {};
         name: stringValue(item && item.name, ''),
         config_tenant_hint: stringValue(config.tenant_hint, ''),
         config_channel: stringValue(config.channel, ''),
+        config_endpoint_url: stringValue(config.endpoint_url, ''),
         credential_ref: '',
       };
     }
@@ -283,6 +286,7 @@ window.aiteam = window.aiteam || {};
       var nameInput = container.querySelector('[data-role="connector-name"]');
       var tenantInput = container.querySelector('[data-role="connector-tenant-hint"]');
       var channelInput = container.querySelector('[data-role="connector-channel"]');
+      var endpointInput = container.querySelector('[data-role="connector-endpoint-url"]');
       var credentialInput = container.querySelector('[data-role="connector-credential-ref"]');
       state.createDraft.definition_id = stringValue(definitionInput && definitionInput.value, '').trim();
       state.createDraft.provider_code = stringValue(providerInput && providerInput.value, 'custom').trim();
@@ -290,6 +294,7 @@ window.aiteam = window.aiteam || {};
       state.createDraft.name = stringValue(nameInput && nameInput.value, '').trim();
       state.createDraft.config_tenant_hint = stringValue(tenantInput && tenantInput.value, '').trim();
       state.createDraft.config_channel = stringValue(channelInput && channelInput.value, '').trim();
+      state.createDraft.config_endpoint_url = stringValue(endpointInput && endpointInput.value, '').trim();
       state.createDraft.credential_ref = stringValue(credentialInput && credentialInput.value, '').trim();
     }
 
@@ -301,6 +306,7 @@ window.aiteam = window.aiteam || {};
         name: '',
         config_channel: '',
         config_tenant_hint: '',
+        config_endpoint_url: '',
         credential_ref: '',
       };
     }
@@ -310,6 +316,7 @@ window.aiteam = window.aiteam || {};
       state.detailDraft.name = stringValue((container.querySelector('[data-role="detail-name-' + connectorId + '"]') || {}).value, '').trim();
       state.detailDraft.config_tenant_hint = stringValue((container.querySelector('[data-role="detail-tenant-hint-' + connectorId + '"]') || {}).value, '').trim();
       state.detailDraft.config_channel = stringValue((container.querySelector('[data-role="detail-channel-' + connectorId + '"]') || {}).value, '').trim();
+      state.detailDraft.config_endpoint_url = stringValue((container.querySelector('[data-role="detail-endpoint-url-' + connectorId + '"]') || {}).value, '').trim();
       state.detailDraft.credential_ref = stringValue((container.querySelector('[data-role="credential-input-' + connectorId + '"]') || {}).value, '').trim();
     }
 
@@ -440,6 +447,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><label>连接器名称<br><input class="aiteam-input" type="text" data-role="detail-name-' + esc(item.connector_id) + '" placeholder="例如：公司 Slack" value="' + esc(state.detailDraft.name) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Tenant Hint<br><input class="aiteam-input" type="text" data-role="detail-tenant-hint-' + esc(item.connector_id) + '" placeholder="例如：acme" value="' + esc(state.detailDraft.config_tenant_hint) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Channel<br><input class="aiteam-input" type="text" data-role="detail-channel-' + esc(item.connector_id) + '" placeholder="例如：#sales" value="' + esc(state.detailDraft.config_channel) + '"></label></div>' +
+        '<div class="aiteam-shell__meta-card"><label>MCP Server URL<br><input class="aiteam-input" type="text" data-role="detail-endpoint-url-' + esc(item.connector_id) + '" placeholder="https://mcp.example.com/service" value="' + esc(state.detailDraft.config_endpoint_url) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>更新凭据标识（受控输入）<br><input class="aiteam-input" type="text" data-role="credential-input-' + esc(item.connector_id) + '" placeholder="cred://enterprise/..." value="' + esc(state.detailDraft.credential_ref) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">保存后展示</span><span class="aiteam-shell__meta-value">显示 opaque credential ref、脱敏状态、更新时间等安全字段；不展示 raw secret</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">更新口径</span><span class="aiteam-shell__meta-value">提交 PATCH /connectors/{id} 后重新拉取 detail 与列表，避免本地伪造更新结果</span></div>' +
@@ -449,7 +457,7 @@ window.aiteam = window.aiteam || {};
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-test" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>测试连接</button>' +
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-refresh" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>刷新状态</button>' +
         '<button type="button" class="aiteam-btn" data-role="connector-grants" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>保存员工授权</button>' +
-        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-archive" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>归档连接器</button>' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="connector-archive" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>断开连接</button>' +
         '</div>' +
         '<h4 class="aiteam-shell__panel-kicker">最近测试</h4>' +
         renderLastTest(item) +
@@ -492,6 +500,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><label>类型<br><input class="aiteam-input" type="text" data-role="connector-type" value="' + esc(state.createDraft.connector_type) + '" placeholder="例如：webhook_target"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Tenant Hint<br><input class="aiteam-input" type="text" data-role="connector-tenant-hint" placeholder="例如：acme" value="' + esc(state.createDraft.config_tenant_hint) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Channel<br><input class="aiteam-input" type="text" data-role="connector-channel" placeholder="例如：#sales" value="' + esc(state.createDraft.config_channel) + '"></label></div>' +
+        '<div class="aiteam-shell__meta-card"><label>MCP Server URL<br><input class="aiteam-input" type="text" data-role="connector-endpoint-url" placeholder="https://mcp.example.com/service" value="' + esc(state.createDraft.config_endpoint_url) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Credential Ref（受控输入）<br><input class="aiteam-input" type="text" data-role="connector-credential-ref" placeholder="cred://enterprise/opaque-id" value="' + esc(state.createDraft.credential_ref) + '"></label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建连接器</button></div>' +
         '</form>' +
         '<div class="aiteam-shell__meta">' +
@@ -540,6 +549,7 @@ window.aiteam = window.aiteam || {};
             config: {
               tenant_hint: state.createDraft.config_tenant_hint,
               channel: state.createDraft.config_channel,
+              endpoint_url: state.createDraft.config_endpoint_url,
             },
           };
           if (state.createDraft.credential_ref) {
@@ -598,6 +608,7 @@ window.aiteam = window.aiteam || {};
             config: {
               tenant_hint: state.detailDraft.config_tenant_hint,
               channel: state.detailDraft.config_channel,
+              endpoint_url: state.detailDraft.config_endpoint_url,
             },
           };
           if (state.detailDraft.credential_ref) {
@@ -897,7 +908,7 @@ window.aiteam = window.aiteam || {};
       state.pendingConnectorId = connectorId;
       state.pendingAction = 'archive';
       setNotice('');
-      setDetailNotice('正在归档连接器...');
+      setDetailNotice('正在断开连接...');
       render();
       return ns.api.deleteConnector(connectorId).then(function (result) {
         state.pendingConnectorId = '';
@@ -909,12 +920,12 @@ window.aiteam = window.aiteam || {};
           }
           ensureSelectedConnector();
           setDetailNotice('');
-          setNotice('连接器已归档');
+          setNotice('连接器已断开');
           render();
           return result;
         }
         setDetailNotice('');
-        setNotice('连接器归档失败：' + apiErrorMessage(result));
+        setNotice('连接器断开失败：' + apiErrorMessage(result));
         render();
         return result;
       });
