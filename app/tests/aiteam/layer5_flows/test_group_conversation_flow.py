@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from urllib.parse import urlparse
 
-pytest_plugins = ["tests.aiteam.layer2_team_panel.conftest"]
-
 try:
-    from tests.aiteam.layer0_contracts.test_host_routing import _post
+    from tests.aiteam.layer0_contracts.test_host_routing import _get, _post
 except ImportError:
     class _FakeHandler:
         def __init__(self):
@@ -44,6 +42,15 @@ except ImportError:
             handler.rfile = type("_BytesIO", (), {"read": lambda n: raw})()
         parsed = urlparse(f"http://example.com{parsed_path}")
         handle_post(handler, parsed)
+        assert handler.status is not None
+        return handler.status, handler.get_json()
+
+    def _get(parsed_path: str) -> tuple[int, dict]:
+        from api.routes import handle_get
+
+        handler = _FakeHandler()
+        parsed = urlparse(f"http://example.com{parsed_path}")
+        handle_get(handler, parsed)
         assert handler.status is not None
         return handler.status, handler.get_json()
 
@@ -128,6 +135,14 @@ def test_group_message_flow_orchestration(uow, clean_tables_with_enterprise):
         assert binding.runtime_kind == "kanban_task"
         assert binding.runtime_task_id is not None
         assert binding.runtime_session_id is None
+
+    detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
+    assert detail_status == 200, detail
+    assert detail["conversation_id"] == conv_id
+    assert detail["latest_run"]["run_id"] == body["run_id"]
+    assert detail["latest_route_decision"]["route_mode"] == "orchestration"
+    assert sorted(detail["latest_route_decision"]["candidate_employee_ids"]) == ["emp_member", "emp_planner", "emp_test"]
+    assert detail["task_tree"]["items"] == []
 
 
 def test_group_message_flow_idempotency_preserves_first_result(uow, clean_tables_with_enterprise):

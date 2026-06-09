@@ -16,6 +16,7 @@ import pytest
 from team_panel.domain.entities import Enterprise
 from team_panel.migrations.runner import apply_migrations, is_applied
 from team_panel.transactions.uow import UnitOfWork
+from tests.aiteam.layer1_data.fixtures import _DB_PASSWORD
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -196,16 +197,21 @@ _FRESH_DB_NAME = "aiteam_test_fresh"
 
 
 @pytest.fixture(scope="module")
-def fresh_db_conn():
+def fresh_db_conn(db_conn):
     """Module-scoped connection to a dedicated empty database.
 
     Creates a separate database on the same PostgreSQL server so we can
     verify that migration from scratch creates every expected table.
     """
+    dsn = db_conn.get_dsn_parameters()
+    host = dsn.get("host", "127.0.0.1")
+    port = int(dsn.get("port", 5433))
+    user = dsn.get("user", "aiteam")
+
     # Connect to the default 'postgres' DB to issue CREATE DATABASE
     admin_conn = psycopg2.connect(
-        host="127.0.0.1", port=5433,
-        user="aiteam", password="aiteam_test",
+        host=host, port=port,
+        user=user, password=_DB_PASSWORD,
         dbname="postgres",
     )
     admin_conn.autocommit = True
@@ -229,8 +235,8 @@ def fresh_db_conn():
         admin_conn.close()
 
     conn = psycopg2.connect(
-        host="127.0.0.1", port=5433,
-        user="aiteam", password="aiteam_test",
+        host=host, port=port,
+        user=user, password=_DB_PASSWORD,
         dbname=_FRESH_DB_NAME,
     )
     conn.autocommit = True
@@ -239,8 +245,8 @@ def fresh_db_conn():
 
     # Teardown: drop the fresh DB
     admin_conn = psycopg2.connect(
-        host="127.0.0.1", port=5433,
-        user="aiteam", password="aiteam_test",
+        host=host, port=port,
+        user=user, password=_DB_PASSWORD,
         dbname="postgres",
     )
     admin_conn.autocommit = True

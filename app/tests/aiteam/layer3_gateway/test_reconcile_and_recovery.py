@@ -8,8 +8,6 @@ from agent_gateway.reconcile import catch_up_events, check_run_terminal_state, r
 from team_panel.domain.entities import RuntimeBinding, RunEvent, TeamRun
 from team_panel.transactions.uow import UnitOfWork
 
-pytest_plugins = ["tests.aiteam.layer2_team_panel.conftest"]
-
 
 @pytest.fixture(scope="session", autouse=True)
 def test_server():

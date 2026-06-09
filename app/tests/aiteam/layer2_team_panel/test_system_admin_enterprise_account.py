@@ -57,22 +57,27 @@ except ImportError:
         return handler.status, handler.get_json()
 
 
+def _system_admin_path(path: str) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}role=system_admin"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # T01: List enterprises
 # ═══════════════════════════════════════════════════════════════════
 
 class TestSystemAdminListEnterprises:
     def test_list_enterprises_returns_200(self, seeded_enterprise):
-        status, body = _get("/api/system-admin/enterprises")
+        status, body = _get(_system_admin_path("/api/system-admin/enterprises"))
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_list_enterprises_has_pagination_shape(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises"))
         for key in ("enterprises", "total", "page", "limit", "has_more"):
             assert key in body, f"Missing {key} in response: {body}"
 
     def test_list_enterprises_includes_seeded(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises"))
         assert body.get("total", 0) >= 1
         ids = [e.get("id") or e.get("enterprise_id") for e in body.get("enterprises", [])]
         assert seeded_enterprise["enterprise_id"] in ids
@@ -84,19 +89,19 @@ class TestSystemAdminListEnterprises:
 
 class TestSystemAdminSearchEnterprises:
     def test_search_by_name_returns_matching(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises?name=Test")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises?name=Test"))
         assert body.get("total", 0) >= 1
 
     def test_search_by_name_no_match_returns_empty(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises?name=ZZZ_NO_MATCH_ZZZ")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises?name=ZZZ_NO_MATCH_ZZZ"))
         assert body.get("total", 0) == 0
 
     def test_filter_by_status_active(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises?status=active")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises?status=active"))
         assert body.get("total", 0) >= 1
 
     def test_filter_by_status_archived_returns_empty(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises?status=archived")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises?status=archived"))
         # No archived enterprises in seed data
         assert body.get("total", 0) == 0
 
@@ -108,17 +113,17 @@ class TestSystemAdminSearchEnterprises:
 class TestSystemAdminEnterpriseDetail:
     def test_get_detail_returns_200(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
-        status, body = _get(f"/api/system-admin/enterprises/{ent_id}")
+        status, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}"))
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_get_detail_has_expected_fields(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
-        _, body = _get(f"/api/system-admin/enterprises/{ent_id}")
+        _, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}"))
         for key in ("id", "name", "slug", "status"):
             assert key in body, f"Missing {key} in detail: {body}"
 
     def test_get_detail_missing_returns_404(self, seeded_enterprise):
-        status, body = _get("/api/system-admin/enterprises/nonexistent-999")
+        status, body = _get(_system_admin_path("/api/system-admin/enterprises/nonexistent-999"))
         assert status == 404
 
 
@@ -141,11 +146,9 @@ class TestSystemAdminEnterpriseActions:
         )
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["enterprise_id"] == ent_id
-        assert body["action"] == "suspend"
-        assert body["requested_action"] == "ban"
-        assert body["effective_role"] == "system_admin"
-        assert body["applied"] is True
-        assert body["enterprise"]["status"] == "suspended"
+        assert body["action"] == "ban"
+        assert body["status"] == "succeeded"
+        assert body["message"]
         assert "audit_event_id" in body
 
     def test_ban_action_changes_status_to_suspended(self, seeded_enterprise):
@@ -154,7 +157,7 @@ class TestSystemAdminEnterpriseActions:
             self._action_path(ent_id),
             {"action": "ban", "reason": "policy violation"},
         )
-        _, body = _get(f"/api/system-admin/enterprises/{ent_id}")
+        _, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}"))
         assert body.get("status") == "suspended", f"Expected suspended, got {body}"
 
     def test_unban_action_restores_active_status(self, seeded_enterprise):
@@ -171,13 +174,11 @@ class TestSystemAdminEnterpriseActions:
 
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["enterprise_id"] == ent_id
-        assert body["action"] == "reactivate"
-        assert body["requested_action"] == "unban"
-        assert body["effective_role"] == "system_admin"
-        assert body["applied"] is True
-        assert body["enterprise"]["status"] == "active"
+        assert body["action"] == "unban"
+        assert body["status"] == "succeeded"
+        assert body["message"]
 
-        _, detail = _get(f"/api/system-admin/enterprises/{ent_id}")
+        _, detail = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}"))
         assert detail.get("status") == "active", f"Expected active, got {detail}"
 
     def test_recharge_action_returns_canonical_shape(self, seeded_enterprise):
@@ -189,10 +190,8 @@ class TestSystemAdminEnterpriseActions:
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["enterprise_id"] == ent_id
         assert body["action"] == "recharge"
-        assert body["requested_action"] == "recharge"
-        assert body["effective_role"] == "system_admin"
-        assert body["applied"] is False
-        assert body["enterprise"]["status"] == "active"
+        assert body["status"] == "succeeded"
+        assert body["message"]
         assert "audit_event_id" in body
 
     def test_notify_action_records_request_without_status_change(self, seeded_enterprise):
@@ -204,10 +203,8 @@ class TestSystemAdminEnterpriseActions:
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["enterprise_id"] == ent_id
         assert body["action"] == "notify"
-        assert body["requested_action"] == "notify"
-        assert body["effective_role"] == "system_admin"
-        assert body["applied"] is False
-        assert body["enterprise"]["status"] == "active"
+        assert body["status"] == "succeeded"
+        assert body["message"]
         assert "audit_event_id" in body
 
     def test_invalid_action_is_rejected(self, seeded_enterprise):
@@ -232,22 +229,22 @@ class TestSystemAdminEnterpriseActions:
         ent_id = seeded_enterprise["enterprise_id"]
         status, body = _post(self._action_path(ent_id, "/ban"))
         assert status == 200, f"Expected 200, got {status}: {body}"
-        assert body["action"] == "suspend"
-        assert body["requested_action"] == "ban"
+        assert body["action"] == "ban"
+        assert body["status"] == "succeeded"
 
     def test_legacy_recharge_alias_is_kept_as_compatibility_route(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
         status, body = _post(self._action_path(ent_id, "/recharge"), {"amount": 1000})
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["action"] == "recharge"
-        assert body["requested_action"] == "recharge"
+        assert body["status"] == "succeeded"
 
     def test_legacy_notify_alias_is_kept_as_compatibility_route(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
         status, body = _post(self._action_path(ent_id, "/notify"), {"message": "Alert", "level": "warning"})
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["action"] == "notify"
-        assert body["requested_action"] == "notify"
+        assert body["status"] == "succeeded"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -256,15 +253,15 @@ class TestSystemAdminEnterpriseActions:
 
 class TestSystemAdminExportEnterprises:
     def test_export_returns_200(self, seeded_enterprise):
-        status, body = _get("/api/system-admin/enterprises/export")
+        status, body = _get(_system_admin_path("/api/system-admin/enterprises/export"))
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_export_has_items(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises/export")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises/export"))
         assert "items" in body or "enterprises" in body, f"Missing items: {body}"
 
     def test_export_filters_by_status(self, seeded_enterprise):
-        _, body = _get("/api/system-admin/enterprises/export?status=active")
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises/export?status=active"))
         assert body.get("total", 0) >= 1
 
 
@@ -276,20 +273,19 @@ class TestSystemAdminExportEnterprises:
 class TestSystemAdminQuotaEnterprise:
     def test_get_quota_returns_200(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
-        status, body = _get(f"/api/system-admin/enterprises/{ent_id}/quota")
+        status, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}/quota"))
         assert status == 200, f"Expected 200, got {status}: {body}"
 
     def test_get_quota_has_expected_fields(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
-        _, body = _get(f"/api/system-admin/enterprises/{ent_id}/quota")
+        _, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}/quota"))
         for key in ("employee_quota", "storage_quota_mb", "api_rate_limit"):
             assert key in body, f"Missing {key}: {body}"
 
     def test_post_quota_returns_200(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
-        status, body = _post(f"/api/system-admin/enterprises/{ent_id}/quota", {"employee_quota": 100})
+        status, body = _post(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}/quota"), {"employee_quota": 100})
         assert status == 200, f"Expected 200, got {status}: {body}"
 
 
 # ═══════════════════════════════════════════════════════════════════
-

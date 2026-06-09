@@ -245,7 +245,7 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
             error="INVALID_ACTION",
         )
 
-    role, denial = _require_permission(query, body, "system_write")
+    _role, denial = _require_permission(query, body, "system_write")
     if denial is not None:
         return denial
 
@@ -279,7 +279,6 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
             if payload.get("message") not in (None, ""):
                 audit_payload["message"] = str(payload.get("message"))
 
-            applied = False
             response_message = "enterprise action applied"
 
             if normalized == "suspend":
@@ -289,7 +288,6 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
                 audit_payload["current_status"] = ent.status
                 event_type = "enterprise.suspended"
                 response_message = f"Enterprise {ent.id} suspended"
-                applied = True
             elif normalized == "reactivate":
                 try:
                     ent.reactivate()
@@ -298,16 +296,14 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
                     return 409, {
                         "error": "ENTERPRISE_ACTION_CONFLICT",
                         "message": str(exc),
-                        "action": normalized,
+                        "action": action,
                         "enterprise_id": ent.id,
-                        "enterprise": _enterprise_view(ent),
                     }
                 repo.update(ent)
                 audit_payload["previous_status"] = previous_status
                 audit_payload["current_status"] = ent.status
                 event_type = "enterprise.reactivated"
                 response_message = f"Enterprise {ent.id} reactivated"
-                applied = True
             elif normalized == "recharge":
                 audit_payload["enterprise_status"] = ent.status
                 event_type = "enterprise.recharge_recorded"
@@ -327,16 +323,12 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
                 payload=audit_payload,
             )
             conn.commit()
-            return 200, {
-                "enterprise_id": ent.id,
-                "action": normalized,
-                "requested_action": action,
-                "effective_role": role,
-                "applied": applied,
-                "audit_event_id": audit_event_id,
-                "enterprise": _enterprise_view(ent),
-                "message": response_message,
-            }
+            return 200, _build_action_response(
+                ent.id,
+                action,
+                message=response_message,
+                audit_event_id=audit_event_id,
+            )
         except Exception:
             conn.rollback()
             raise
@@ -462,6 +454,11 @@ def _database_unavailable_response() -> tuple[int, dict]:
     return 503, {"error": "database_unavailable", "message": "Cannot connect to database"}
 
 
+def _require_system_read(query: str, body: dict | None) -> tuple[int, dict] | None:
+    _role, denial = _require_permission(query, body, "system_read")
+    return denial
+
+
 def _require_system_write(query: str, body: dict | None) -> tuple[int, dict] | None:
     _role, denial = _require_permission(query, body, "system_write")
     return denial
@@ -557,13 +554,22 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
 
     # Legacy enterprise-admin management routes retained for compatibility.
     if method == "GET" and sub_clean.rstrip("/") == "/enterprises/export":
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         return _handle_export_enterprises(path)
     if sub_clean.endswith("/quota"):
         ent_prefix = sub_clean[:-len("/quota")]
         if ent_prefix.startswith("/enterprises/") and ent_prefix.count("/") == 2:
             if method == "GET":
+                denial = _require_system_read(query, None)
+                if denial is not None:
+                    return denial
                 return _handle_quota_get(path, sub_clean)
             if method == "POST":
+                denial = _require_system_write(query, body)
+                if denial is not None:
+                    return denial
                 return _handle_quota_post(path, sub_clean, body)
     if method == "POST" and sub_clean.endswith("/actions"):
         ent_prefix = sub_clean[:-len("/actions")]
@@ -582,12 +588,21 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
         if ent_prefix.startswith("/enterprises/") and ent_prefix.count("/") == 2:
             return _handle_legacy_action_alias(path, sub_clean, body, "notify")
     if method == "GET" and sub_clean.rstrip("/") == "/enterprises":
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         return _handle_list_enterprises(path)
     if method == "GET" and sub_clean.startswith("/enterprises/") and sub_clean.count("/") == 2:
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         return _handle_enterprise_detail(path, sub_clean)
 
     route_handler = None
     if method == "GET" and _match_exact(sub_clean, "/templates"):
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         route_handler = lambda conn: _handle_templates_get(conn)
     elif method == "POST" and _match_exact(sub_clean, "/templates"):
         denial = _require_system_write(query, body)
@@ -595,6 +610,9 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
             return denial
         route_handler = lambda conn: _handle_templates_post(conn, body)
     elif method == "GET" and _match_exact(sub_clean, "/solutions"):
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         route_handler = lambda conn: _handle_solutions_get(conn)
     elif method == "POST" and _match_exact(sub_clean, "/solutions"):
         denial = _require_system_write(query, body)
@@ -602,8 +620,14 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
             return denial
         route_handler = lambda conn: _handle_solutions_post(conn, body)
     elif method == "GET" and _match_exact(sub_clean, "/finance/overview"):
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         route_handler = lambda conn: _handle_finance_overview(conn, query)
     elif method == "GET" and _match_exact(sub_clean, "/finance/reports"):
+        denial = _require_system_read(query, None)
+        if denial is not None:
+            return denial
         route_handler = lambda conn: _handle_finance_reports(conn, query)
     else:
         template_id = _match_prefix(sub_clean, "/templates/")

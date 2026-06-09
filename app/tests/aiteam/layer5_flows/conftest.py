@@ -7,8 +7,6 @@ from team_panel.transactions.uow import UnitOfWork
 
 from tests.aiteam.layer0_contracts.test_host_routing import _post
 
-pytest_plugins = ["tests.aiteam.layer2_team_panel.conftest"]
-
 
 @pytest.fixture
 def seeded_private_chat(seeded_enterprise, db_conn):

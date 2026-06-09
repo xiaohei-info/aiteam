@@ -192,6 +192,10 @@ class TestTalentMarketTemplates:
         tpl = items[0]
         for key in ("template_id", "name", "role", "skills", "tags"):
             assert key in tpl, f"Missing {key} in template: {tpl}"
+        assert tpl["template_id"] == seeded_enterprise["template_id"]
+        assert tpl["skills"] == ["web_search", "slides"]
+        assert tpl["default_model_ref"]["model"] == "gpt-4o"
+        assert tpl["recruit_count"] >= 0
 
 
 class TestTalentTemplateDetail:
@@ -213,6 +217,12 @@ class TestTalentTemplateDetail:
         for key in ("template_id", "name", "category", "description", "default_skills",
                      "default_memory_config", "price_tier"):
             assert key in body, f"Missing {key} in template detail: {body}"
+        assert body["default_skills"] == ["web_search", "slides"]
+        assert body["default_model_ref"]["model"] == "gpt-4o"
+        assert body["knowledge_bindings"] == [{"knowledge_id": "kb_style_guide", "scope": "enterprise"}]
+        assert body["connector_requirements"] == [{"connector_type": "web_search", "required": False}]
+        assert body["default_memory_config"]["max_tokens"] == 8000
+        assert body["price_tier"] == "standard"
 
 
 class TestConversationDetail:
@@ -244,6 +254,61 @@ class TestConversationDetail:
         assert body["employee_summary"]["employee_id"] == seeded_enterprise["employee_id"]
         assert body["employee_summary"]["role_name"] == "市场分析"
         assert body["employee_summary"]["usage_summary"]["total_runs"] == 0
+
+
+class TestGroupConversationDetail:
+    def test_get_group_conversation_returns_contract_shape(self, uow, clean_tables_with_enterprise):
+        from team_panel.application.commands.conversation_service import create_group_conversation, submit_group_message
+
+        with uow:
+            conv_id = create_group_conversation(
+                uow,
+                "ent_test",
+                "Strategy Sync",
+                ["emp_test", "emp_member", "emp_planner"],
+                "user_test",
+            )
+            submit_group_message(
+                uow,
+                conv_id,
+                "emp_member emp_planner please collaborate on the brief",
+                "orchestration",
+                "group-detail-contract-001",
+                "emp_test",
+            )
+
+        status, body = _get(f"/api/team/group-conversations/{conv_id}")
+        assert status == 200, body
+        for key in (
+            "conversation_id",
+            "conversation_type",
+            "title",
+            "status",
+            "display_state",
+            "default_route_hint",
+            "member_count",
+            "members",
+            "latest_run",
+            "timeline",
+            "latest_route_decision",
+            "task_tree",
+            "created_at",
+        ):
+            assert key in body, f"Missing {key}: {body}"
+        assert body["conversation_type"] == "group"
+        assert body["member_count"] == 3
+        assert len(body["members"]) == 3
+        assert body["latest_run"]["run_id"].startswith("run_")
+        assert body["latest_run"]["runtime_handle"]["kind"] == "kanban_task"
+        assert body["timeline"]["latest_event_cursor"] == 0
+        assert body["latest_route_decision"]["route_mode"] == "orchestration"
+        assert sorted(body["latest_route_decision"]["candidate_employee_ids"]) == ["emp_member", "emp_planner", "emp_test"]
+        assert isinstance(body["task_tree"]["items"], list)
+
+    def test_get_group_conversation_missing_returns_404(self, seeded_enterprise):
+        status, body = _get("/api/team/group-conversations/nonexistent")
+        assert status == 404
+        assert body.get("error") == "CONVERSATION_NOT_FOUND"
 
 
 class TestEmployeeList:
@@ -1296,6 +1361,92 @@ class TestConnectorsIntegration:
         for key in ("granted", "revoked", "errors"):
             assert key in resp, f"Missing {key}: {resp}"
 
+    def test_get_connector_detail_returns_masked_contract(self, seeded_enterprise):
+        status, create_resp = _post(
+            "/api/team/connectors",
+            {
+                "name": "Detail Test",
+                "provider_code": "slack",
+                "type": "oauth_connector",
+                "credential_ref": "cred://vault/slack/detail",
+                "config": {"tenant_hint": "acme", "bot_secret": "top-secret"},
+            },
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        status, body = _get(f"/api/team/connectors/{connector_id}")
+        assert status == 200, body
+        assert body["connector_id"] == connector_id
+        assert body["credential_ref"] == "cred://vault/slack/detail"
+        assert body["credential_mask"] == "已配置"
+        assert body["credential_state"] == "configured"
+        assert body["config"] == {"tenant_hint": "acme", "bot_secret": "****"}
+        assert body["employee_grants"] == []
+
+    def test_patch_connector_rotates_credential_and_masks_config(self, seeded_enterprise):
+        status, create_resp = _post(
+            "/api/team/connectors",
+            {
+                "name": "Patch Test",
+                "provider_code": "slack",
+                "type": "oauth_connector",
+                "credential_ref": "cred://vault/slack/original",
+                "config": {"tenant_hint": "acme", "bot_secret": "old-secret"},
+            },
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        patch_status, patch_body = _patch(
+            f"/api/team/connectors/{connector_id}",
+            {
+                "name": "Patch Test Updated",
+                "config": {"tenant_hint": "acme-updated", "bot_secret": "new-secret"},
+                "credential_input": {"mode": "opaque_ref", "credential_ref": "cred://vault/slack/rotated"},
+            },
+        )
+        assert patch_status == 200, patch_body
+        assert patch_body["status"] == "draft"
+        assert patch_body["credential_state"] == "rotated"
+        assert patch_body["rotation_version"] == 1
+
+        detail_status, detail = _get(f"/api/team/connectors/{connector_id}")
+        assert detail_status == 200, detail
+        assert detail["name"] == "Patch Test Updated"
+        assert detail["credential_ref"] == "cred://vault/slack/rotated"
+        assert detail["credential_mask"] == "已轮换"
+        assert detail["credential_state"] == "rotated"
+        assert detail["config"] == {"tenant_hint": "acme-updated", "bot_secret": "****"}
+        assert detail["last_test_result"]["result"] == "never_tested"
+
+    def test_get_connector_status_returns_latest_test_payload(self, seeded_enterprise, db_conn):
+        status, create_resp = _post(
+            "/api/team/connectors",
+            {"name": "Status Test", "provider_code": "slack", "type": "oauth_connector"},
+        )
+        assert status == 201, create_resp
+        connector_id = create_resp["connector_id"]
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE enterprise_connector SET status='online' WHERE id=%s",
+                (connector_id,),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        test_status, test_body = _post(f"/api/team/connectors/{connector_id}/test", {})
+        assert test_status == 200, test_body
+
+        status, body = _get(f"/api/team/connectors/{connector_id}/status")
+        assert status == 200, body
+        assert body["connector_id"] == connector_id
+        assert body["status"] == "online"
+        assert body["last_test_result"]["result"] == "passed"
+
     def test_connectors_list_reflects_config_credentials_grants_and_test_state(self, seeded_enterprise, db_conn):
         status, create_resp = _post(
             "/api/team/connectors",
@@ -1330,7 +1481,9 @@ class TestConnectorsIntegration:
         assert status == 200, body
         connector = next(item for item in body["connectors"] if item["connector_id"] == connector_id)
         assert connector["credential_ref"] == "cred://vault/slack/ent_test"
-        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "should-mask-in-ui-only"}
+        assert connector["credential_mask"] == "已配置"
+        assert connector["credential_state"] == "configured"
+        assert connector["config"] == {"tenant_hint": "acme", "bot_secret": "****"}
         assert connector["status"] == "online"
         assert connector["health_status"] == "online"
         assert connector["last_test_at"]
