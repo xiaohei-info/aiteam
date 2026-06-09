@@ -145,7 +145,28 @@ window.aiteam = window.aiteam || {};
     return '系统提示';
   }
 
-  function renderMessageBubble(message, extraClass) {
+  function messageSpeakerName(message, employeeSummary, conversation) {
+    if (!message) return '系统';
+    if (message.role === 'user') {
+      return '你';
+    }
+    if (message.role === 'assistant') {
+      return (employeeSummary && employeeSummary.display_name)
+        || (conversation && conversation.employee_ref && conversation.employee_ref.display_name)
+        || message.sender_id
+        || '员工回复';
+    }
+    return message.sender_id || '系统';
+  }
+
+  function messageMeta(title, speakerName) {
+    var speaker = speakerName || title || '系统';
+    var initial = speaker.slice(0, 1) || '?';
+    return '<div class="aiteam-message__speaker"><span class="aiteam-message__avatar">' + escapeHtml(initial) + '</span><span class="aiteam-message__speaker-name">' + escapeHtml(speaker) + '</span></div>' +
+      '<span class="aiteam-message__kind">' + escapeHtml(title || '消息') + '</span>';
+  }
+
+  function renderMessageBubble(message, extraClass, employeeSummary, conversation) {
     var roleClass = message && message.role ? message.role : 'system';
     var body = '';
     body += renderQuote(message && message.quote);
@@ -153,9 +174,11 @@ window.aiteam = window.aiteam || {};
     body += renderAttachmentList(message && message.attachments);
     body += renderCitationList(message && message.citations);
     body += renderMetadataBlock(message && message.metadata);
+    var title = messageTitle(message);
+    var speakerName = messageSpeakerName(message, employeeSummary, conversation);
     return '<article class="aiteam-message aiteam-message--' + roleClass + (extraClass ? ' ' + extraClass : '') + '">' +
       '<div class="aiteam-message__meta">' +
-      '<span>' + escapeHtml(messageTitle(message)) + '</span>' +
+      messageMeta(title, speakerName) +
       '<span>' + escapeHtml(formatTime(message && message.created_at)) + '</span>' +
       '</div>' +
       '<div class="aiteam-message__body">' + body + '</div>' +
@@ -364,7 +387,7 @@ window.aiteam = window.aiteam || {};
         html = '<div class="aiteam-inline-empty">欢迎开始新的私聊任务。可在左侧历史区回看消息、在右侧查看员工摘要。</div>';
       } else {
         html += state.messages.map(function (message) {
-          return renderMessageBubble(message);
+          return renderMessageBubble(message, '', state.employeeSummary, state.conversation);
         }).join('');
         html += state.liveItems.map(function (item) {
           if (item.kind === 'tool_call') {
@@ -382,7 +405,7 @@ window.aiteam = window.aiteam || {};
             attachments: [],
             citations: [],
             metadata: {},
-          }, 'aiteam-message--streaming');
+          }, 'aiteam-message--streaming', state.employeeSummary, state.conversation);
         }
       }
       state.refs.transcript.innerHTML = html;

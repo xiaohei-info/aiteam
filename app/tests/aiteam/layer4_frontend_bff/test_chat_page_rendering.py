@@ -271,6 +271,8 @@ def test_chat_page_renders_quote_attachment_and_tool_card_html() -> None:
         "conversation": _conversation_fixture(),
     }
     result = _run_chat_module(payload)
+    assert "aiteam-message__avatar" in result["transcriptHtml"]
+    assert "Rex" in result["transcriptHtml"]
     assert "引用：上一轮摘要" in result["transcriptHtml"]
     assert "brief.pdf" in result["transcriptHtml"]
     assert "预览" in result["transcriptHtml"]
