@@ -81,8 +81,32 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-settings.js' }});
   aiteam.pages.adminSettings.init(container);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  await container.lastPatchHandler({{ notification_policy: {{ system_announcements: true }} }});
-  await container.lastInviteHandler({{ phone: '13900002222', role: 'enterprise_admin', idempotency_key: 'inv-002' }});
+  await container.lastProfileHandler({{
+    name: '新的企业名称',
+    logo_url: 'https://example.test/new-logo.png',
+    contact_phone: '13900002222',
+    contact_wechat: 'new-team-demo',
+  }});
+  await container.lastPreferencesHandler({{
+    help_doc_url: '/docs/new',
+    feedback_form_url: '/support/new-feedback',
+    version_label: 'v1.0.0',
+    version_notes_url: '/docs/changelog/v1',
+    low_balance_threshold_cents: 8800,
+    warning_enabled: false,
+    notification_policy: {{
+      employee_task_completed: false,
+      system_announcements: true,
+      low_balance_email: true
+    }},
+  }});
+  await container.lastInviteHandler({{
+    phone: '13900002222',
+    role: 'enterprise_admin',
+    permissions: {{ billing: true, employees: false, audit: true }},
+    message: '请协助处理财务与审计',
+    idempotency_key: 'inv-002'
+  }});
   await container.lastDeleteInviteHandler('inv1');
   console.log(JSON.stringify({{ html: container.innerHTML, apiCalls }}));
 }})().catch((error) => {{
@@ -97,17 +121,48 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-settings.js' }});
 def test_admin_settings_renders_account_admin_and_other_setting_sections() -> None:
     payload = _run_admin_settings()
     assert payload["apiCalls"][0] == {"method": "GET", "url": "/api/team/settings"}
-    assert any(call["method"] == "PATCH" and call["url"] == "/api/team/settings" for call in payload["apiCalls"])
+    patch_calls = [call for call in payload["apiCalls"] if call["method"] == "PATCH" and call["url"] == "/api/team/settings"]
+    assert len(patch_calls) == 2
+    assert patch_calls[0]["payload"] == {
+        "name": "新的企业名称",
+        "logo_url": "https://example.test/new-logo.png",
+        "contact_phone": "13900002222",
+        "contact_wechat": "new-team-demo",
+    }
+    assert patch_calls[1]["payload"] == {
+        "help_doc_url": "/docs/new",
+        "feedback_form_url": "/support/new-feedback",
+        "version_label": "v1.0.0",
+        "version_notes_url": "/docs/changelog/v1",
+        "low_balance_threshold_cents": 8800,
+        "warning_enabled": False,
+        "notification_policy": {
+            "employee_task_completed": False,
+            "system_announcements": True,
+            "low_balance_email": True,
+        },
+    }
     assert any(call["method"] == "POST" and call["url"] == "/api/team/settings/admin-invites" for call in payload["apiCalls"])
     assert any(call["method"] == "DELETE" and call["url"] == "/api/team/settings/admin-invites/inv1" for call in payload["apiCalls"])
     assert "账户管理" in payload["html"]
     assert "子管理员账号" in payload["html"]
     assert "其他设置" in payload["html"]
-    assert "示例企业" in payload["html"]
+    assert "新的企业名称" in payload["html"]
     assert "INV-DEMO" in payload["html"]
+    assert "Logo 上传" in payload["html"]
+    assert "更换绑定信息" in payload["html"]
+    assert "保存企业资料" in payload["html"]
+    assert "权限范围" in payload["html"]
+    assert "财务与充值" in payload["html"]
+    assert "员工与组织" in payload["html"]
     assert "检查更新" in payload["html"]
+    assert "更新日志" in payload["html"]
     assert "帮助与反馈" in payload["html"]
-    assert "保存通知策略" in payload["html"]
-    assert "生成邀请" in payload["html"]
+    assert "通知设置" in payload["html"]
+    assert "员工任务完成通知" in payload["html"]
+    assert "系统公告" in payload["html"]
+    assert "低余额邮件预警" in payload["html"]
+    assert "保存通知与支持设置" in payload["html"]
+    assert "发送邀请" in payload["html"]
     assert "撤销邀请" in payload["html"]
     assert "管理员邀请已撤销" in payload["html"]
