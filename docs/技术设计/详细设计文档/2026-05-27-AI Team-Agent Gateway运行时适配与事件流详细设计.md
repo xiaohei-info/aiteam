@@ -14,7 +14,7 @@ source_docs:
   - /home/ubuntu/code/aiteam/app
   - /home/ubuntu/code/hermes-webui/README.md
   - /home/ubuntu/code/hermes-webui/api/streaming.py
-  - /home/ubuntu/.hermes/hermes-agent/gateway/platforms/api_server.py
+  - ./.hermes/hermes-agent/gateway/platforms/api_server.py
 ---
 
 # Agent Gateway 运行时适配与事件流详细设计
@@ -943,7 +943,7 @@ class HTTPGatewayAdapter(GatewayAdapter):
 2. AI Team 技术概要设计
 3. AI Team 业务解决方案设计
 4. Hermes Web UI 源码：/home/ubuntu/code/hermes-webui/
-5. Hermes Agent 源码：/home/ubuntu/.hermes/hermes-agent/
+5. Hermes Agent 源码：./.hermes/hermes-agent/
 
 ---
 

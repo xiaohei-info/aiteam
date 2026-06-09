@@ -26,9 +26,9 @@
 `app/` 不负责：
 - 作为独立开源 WebUI 产品继续演进
 - 维护上游项目的发布、社区、路线图、主题体系、贡献者文档
-- 取代 `hermes-agent/` 成为执行真相层
+- 取代 `./.hermes/hermes-agent/` 成为执行真相层
 
-执行真相层仍然是仓库外部依赖的 `hermes-agent/`。
+执行真相层仍然是仓库外部依赖的 `./.hermes/hermes-agent/`。
 
 ---
 
@@ -79,7 +79,7 @@ app/
 - `app/` = **Agent Service** 的当前物理落地目录
 - `team_panel/` = **Team Panel** 业务控制面
 - `agent_gateway/` = **Agent Gateway** 运行时适配层
-- `hermes-agent/` = **Agent Runtime / Hermes Runtime**（外部独立仓）
+- `./.hermes/hermes-agent/` = **Agent Runtime / Hermes Runtime**（外部独立仓）
 
 ---
 
@@ -88,7 +88,7 @@ app/
 1. **AI Team 新能力优先进入 `team_panel/`、`agent_gateway/`、`static/aiteam/`**
 2. **`api/routes.py`、`server.py` 等基座文件只做挂接性改造**
 3. **不要把产品语义重新写成上游 WebUI 产品文档**
-4. **不要把 AI Team 业务逻辑写进 `hermes-agent/`**
+4. **不要把 AI Team 业务逻辑写进 `./.hermes/hermes-agent/`**
 5. **凡涉及 Python 解释器、Hermes CLI、Hermes Home 或 config 的运行入口，必须优先复用 `app/.env` 中的 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，禁止裸用其他 Python/Hermes 环境作为主路径。**
 
 ---
@@ -100,18 +100,19 @@ app/
 推荐方案：
 - 用 `pyenv` 管理 Python 版本
 - 在 `app/` 目录下创建项目自己的 `.venv`
-- 把 `app/` 自身依赖和 `hermes-agent/` 的 Python 包都装进这个项目 venv
-- 运行时仍然依赖相邻的 `hermes-agent/` 源码仓或显式的 `HERMES_WEBUI_AGENT_DIR`
+- 把 `app/` 自身依赖和 `./.hermes/hermes-agent/` 的 Python 包都装进这个项目 venv
+- 运行时仍然依赖仓库内的 `./.hermes/hermes-agent/` 源码仓或显式的 `HERMES_WEBUI_AGENT_DIR`
 
 ### 5.1.1 目录建议
 
 ```text
 /home/ubuntu/code/aiteam/
 ├── app/
-└── hermes-agent/
+└── .hermes/
+    └── hermes-agent/
 ```
 
-如果 `hermes-agent/` 不在相邻目录，直接改 `app/.env` 里的：
+如果实际目录不是 `./.hermes/hermes-agent/`，直接改 `app/.env` 里的：
 
 ```dotenv
 HERMES_WEBUI_AGENT_DIR=/absolute/path/to/hermes-agent
@@ -257,12 +258,12 @@ pip install -r app/requirements-dev.txt
 
 ### 5.1.7 安装 hermes-agent 到同一个项目 venv
 
-因为 `app/` 会直接导入 `run_agent` 与一部分 `hermes-agent` 模块，所以如果要本机共享 Hermes venv，把相邻 `hermes-agent` 也装进当前项目 venv：
+因为 `app/` 会直接导入 `run_agent` 与一部分 `hermes-agent` 模块，所以如果要本机共享 Hermes venv，把 `./.hermes/hermes-agent/` 也装进当前项目 venv：
 
 ```bash
 cd /home/ubuntu/code/aiteam/app
 source .venv/bin/activate
-pip install -e "../hermes-agent[dev]"
+pip install -e "../.hermes/hermes-agent[dev]"
 ```
 
 ### 5.1.8 最小验证
@@ -309,7 +310,7 @@ pytest app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py -q
 ## 6. 外部服务依赖
 
 当前至少要明确两类外部依赖：
-- `hermes-agent/` 源码仓（运行时依赖）
+- `./.hermes/hermes-agent/` 源码仓（运行时依赖）
 - PostgreSQL（Team Panel 控制面数据库）
 
 ## 6.1 hermes-agent 依赖
@@ -319,12 +320,13 @@ pytest app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py -q
 ```text
 /home/ubuntu/code/aiteam/
 ├── app/
-└── hermes-agent/
+└── .hermes/
+    └── hermes-agent/
 ```
 
-一般不需要额外指定路径。
+一般不需要额外指定路径，但仍建议以 `app/.env` 中的 `HERMES_WEBUI_AGENT_DIR` 作为最终真相源。
 
-如果不是相邻目录，直接修改 `app/.env` 的 `HERMES_WEBUI_AGENT_DIR`。
+如果不是这个默认目录，直接修改 `app/.env` 的 `HERMES_WEBUI_AGENT_DIR`。
 
 ## 6.2 PostgreSQL 启动
 

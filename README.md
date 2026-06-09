@@ -7,7 +7,8 @@ aiteam/
 ├── app/            # AI Team 主项目代码
 ├── docs/           # 需求文档、业务方案、概要设计、详细设计、架构图
 ├── scripts/        # 项目级脚本
-├── hermes-agent/   # 外部 Hermes Agent 源码仓库（独立 Git，不归 aiteam 主仓管理）
+├── .hermes/
+│   └── hermes-agent/ # 外部 Hermes Agent 源码仓库（独立 Git，不归 aiteam 主仓管理）
 ├── .gitignore
 ├── README.md
 ```
@@ -43,17 +44,17 @@ AI Team 的正式文档目录，包含需求、方案、设计和架构图。
 - 集成检查脚本
 - 发布/部署辅助脚本
 
-### `hermes-agent/`
+### `./.hermes/hermes-agent/`
 Hermes Agent 外部源码仓库。
 
 说明：
 - 它是一个**独立 Git 仓库**
-- 当前放在项目根目录下，主要是为了方便 `app` 近场引用 Hermes Runtime / Python SDK 能力
-- **不归 `aiteam` 主仓 Git 管理**，根目录 `.gitignore` 已忽略该目录
-- 当前项目结构下，`app` 可以通过现有自动发现机制直接找到它
+- 当前默认放在仓库内的 `./.hermes/hermes-agent/`，主要是为了方便 `app` 近场引用 Hermes Runtime / Python SDK 能力
+- **不归 `aiteam` 主仓 Git 管理**，根目录 `.gitignore` 已忽略 `.hermes/`
+- 运行入口路径以 `app/.env` 中的 `HERMES_WEBUI_AGENT_DIR` 为准
 
 治理原则：
-- AI Team 产品逻辑不应写进 `hermes-agent/`
+- AI Team 产品逻辑不应写进 `./.hermes/hermes-agent/`
 - 若未来必须改 Hermes，本仓应只承载最小补丁、可复用增强或通用能力改进
 - 默认策略仍然是：**能外挂就外挂，能配置就配置，能 wrapper 就 wrapper**
 
@@ -66,8 +67,8 @@ Hermes Agent 外部源码仓库。
 
 因此请注意：
 
-1. `git -C /home/ubuntu/code/aiteam status` 不会纳管 `hermes-agent/`
-2. `hermes-agent/` 的拉取、切分支、同步上游，应在其目录内单独操作
+1. `git -C /home/ubuntu/code/aiteam status` 不会纳管 `./.hermes/hermes-agent/`
+2. `./.hermes/hermes-agent/` 的拉取、切分支、同步上游，应在其目录内单独操作
 3. `app/` 是 AI Team 的正式代码主干，不再按“轻量 fork 保持长期紧跟上游”来治理
 
 ## 文档导航
@@ -153,15 +154,15 @@ Hermes Agent 外部源码仓库。
   - 含义：AI Team 主项目代码目录，也就是当前承载 Team Panel 与 Agent Gateway 二次开发的代码基座
 
 - **Agent Runtime** / **Hermes Runtime**
-  - 对应当前仓库中的 **`hermes-agent/`**
+  - 对应当前仓库中的 **`./.hermes/hermes-agent/`**
   - 含义：外部 Hermes Agent 运行时源码仓库，提供 Profile、Session、Task、Cron、Memory、Skills 等真实执行机制
 
 因此，阅读设计文档时可以直接做如下替换理解：
 
 - 文档里写 `Agent Service`，当前项目里看 `app/`
-- 文档里写 `Agent Runtime`，当前项目里看 `hermes-agent/`
+- 文档里写 `Agent Runtime`，当前项目里看 `./.hermes/hermes-agent/`
 
-这两个名字反映的是**设计分层语义**，而 `app/`、`hermes-agent/` 反映的是**当前仓库物理目录结构**。两者并不冲突。
+这两个名字反映的是**设计分层语义**，而 `app/`、`./.hermes/hermes-agent/` 反映的是**当前仓库物理目录结构**。两者并不冲突。
 
 ## 备注
 
@@ -175,7 +176,7 @@ Hermes Agent 外部源码仓库。
 这些主要反映的是设计演进过程中的历史口径。**以当前仓库实际结构为准**：
 
 - 主项目代码目录：`/home/ubuntu/code/aiteam/app`
-- 外部运行时源码目录：`/home/ubuntu/code/aiteam/hermes-agent`
+- 外部运行时源码目录：`/home/ubuntu/code/aiteam/.hermes/hermes-agent`
 
 如果你第一次进入这个仓库，建议按下面顺序理解项目：
 
@@ -183,4 +184,4 @@ Hermes Agent 外部源码仓库。
 2. 再看 `docs/技术设计/技术设计.md`，理解设计文档地图
 3. 再看 `app/README.md`、`app/ARCHITECTURE.md`，理解当前代码基座
 4. 开发时默认把 AI Team 新能力优先落在 `app/` 的新增模块中，而不是直接扩写旧的大文件
-5. 不要把 AI Team 业务逻辑写入 `hermes-agent/`
+5. 不要把 AI Team 业务逻辑写入 `./.hermes/hermes-agent/`

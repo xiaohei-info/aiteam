@@ -97,10 +97,10 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 | 设计概念名 | 代码目录 |
 |------------|----------|
 | Agent Service / agent-service | `app/` |
-| Agent Runtime / Hermes Runtime | `hermes-agent/` |
+| Agent Runtime / Hermes Runtime | `./.hermes/hermes-agent/` |
 
 **治理原则**：
-- AI Team 业务逻辑不写进 `hermes-agent/`
+- AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`
 - 必须改 Hermes 时只做最小补丁或可复用增强
 
 ---
@@ -161,7 +161,7 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 ## 8. 风险边界
 
 **高风险操作需确认**：
-- 修改 `hermes-agent/` 核心文件
+- 修改 `./.hermes/hermes-agent/` 核心文件
 - 修改共享口径（事件协议、游标、状态枚举）
 - 新增北向 API 路径或修改第一批定稿接口
 - 修改数据库主状态枚举
@@ -183,7 +183,7 @@ app/
 ├── agent-gateway/       # Gateway 适配层（adapters、event_hydrator）
 └── api/                 # 基座复用（streaming、config、profiles）
 
-hermes-agent/            # Hermes Runtime（禁止写入业务逻辑）
+./.hermes/hermes-agent/  # Hermes Runtime（禁止写入业务逻辑）
 ```
 
 北向 SSE 格式：
