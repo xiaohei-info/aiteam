@@ -794,18 +794,27 @@ window.aiteam = window.aiteam || {};
       membersEl.innerHTML = state.members.map(renderMemberCard).join('');
       mentionStripEl.innerHTML = state.members.map(function (member) {
         var employeeId = member && (member.employee_id || member.member_ref_id || member.member_id) || '';
-        return '<button class="aiteam-filter-chip" type="button" data-mention="' + escapeHtml(mentionHandle(member)) + '" data-mention-id="' + escapeHtml(employeeId) + '">' + escapeHtml(mentionHandle(member)) + '</button>';
+        var active = state.selectedMentionIds.indexOf(employeeId) !== -1 ? ' is-active' : '';
+        return '<button class="aiteam-filter-chip' + active + '" type="button" data-mention="' + escapeHtml(mentionHandle(member)) + '" data-mention-id="' + escapeHtml(employeeId) + '">' + escapeHtml(mentionHandle(member)) + '</button>';
       }).join('');
       Array.prototype.slice.call(container.querySelectorAll('[data-mention]')).forEach(function (button) {
         button.addEventListener('click', function () {
           if (!input) return;
           var mention = button.getAttribute('data-mention') || '';
           var employeeId = button.getAttribute('data-mention-id') || '';
-          if (employeeId && state.selectedMentionIds.indexOf(employeeId) === -1) {
+          if (employeeId && state.selectedMentionIds.indexOf(employeeId) !== -1) {
+            state.selectedMentionIds = state.selectedMentionIds.filter(function (id) { return id !== employeeId; });
+            updateCollaborationState();
+            renderMembers();
+            input.focus();
+            return;
+          }
+          if (employeeId) {
             state.selectedMentionIds.push(employeeId);
           }
           input.value = (input.value || '').trim() ? input.value + ' ' + mention + ' ' : mention + ' ';
           updateCollaborationState();
+          renderMembers();
           input.focus();
         });
       });

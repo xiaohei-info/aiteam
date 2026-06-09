@@ -316,6 +316,143 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     return json.loads(completed.stdout)
 
 
+def _run_group_mention_toggle_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
+const noopNode = () => ({{
+  innerHTML: '',
+  textContent: '',
+  value: '',
+  addEventListener() {{}},
+  scrollIntoView() {{}},
+  focus() {{}},
+}});
+function makeMentionButton(label, employeeId) {{
+  return {{
+    listeners: {{}},
+    getAttribute(name) {{
+      if (name === 'data-mention') return label;
+      if (name === 'data-mention-id') return employeeId;
+      return null;
+    }},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{
+      if (this.listeners.click) this.listeners.click.call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const refs = {{
+  transcript: noopNode(),
+  timeline: noopNode(),
+  taskTree: noopNode(),
+  members: noopNode(),
+  mentionStrip: noopNode(),
+  status: noopNode(),
+  input: Object.assign(noopNode(), {{ value: '' }}),
+  route: Object.assign(noopNode(), {{ value: 'auto' }}),
+  sender: Object.assign(noopNode(), {{ value: 'user_1' }}),
+  settingsCard: noopNode(),
+  routeMode: noopNode(),
+  routeDesc: noopNode(),
+  routeTargets: noopNode(),
+  runtimeHandle: noopNode(),
+  mentionState: noopNode(),
+  collabState: noopNode(),
+  recoveryLabel: noopNode(),
+  recovery: noopNode(),
+  form: noopNode(),
+  reconnect: noopNode(),
+  openSettings: noopNode(),
+}};
+const buttons = [
+  makeMentionButton('@Alice', 'emp_1'),
+  makeMentionButton('@Bob', 'emp_2'),
+];
+const container = {{
+  innerHTML: '',
+  querySelector(selector) {{
+    const map = {{
+      '[data-group-transcript]': refs.transcript,
+      '[data-group-timeline]': refs.timeline,
+      '[data-group-task-tree]': refs.taskTree,
+      '[data-group-members]': refs.members,
+      '[data-group-mention-strip]': refs.mentionStrip,
+      '[data-group-status]': refs.status,
+      '[data-group-input]': refs.input,
+      '[data-group-route]': refs.route,
+      '[data-group-sender]': refs.sender,
+      '[data-group-settings-card]': refs.settingsCard,
+      '[data-group-route-mode]': refs.routeMode,
+      '[data-group-route-desc]': refs.routeDesc,
+      '[data-group-route-targets]': refs.routeTargets,
+      '[data-group-runtime-handle]': refs.runtimeHandle,
+      '[data-group-mention-state]': refs.mentionState,
+      '[data-group-collab-state]': refs.collabState,
+      '[data-group-recovery-label]': refs.recoveryLabel,
+      '[data-group-recovery]': refs.recovery,
+      '[data-group-form]': refs.form,
+      '[data-group-reconnect]': refs.reconnect,
+      '[data-group-open-settings]': refs.openSettings,
+    }};
+    return map[selector] || null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-mention]') return buttons;
+    return [];
+  }},
+}};
+global.window = {{
+  location: {{ pathname: '/app/group/group_ops', href: 'http://example.test/app/group/group_ops' }},
+  localStorage: {{ getItem() {{ return ''; }}, setItem() {{}}, removeItem() {{}} }},
+  aiteam: {{
+    util: {{ escapeHtml(value) {{ return String(value == null ? '' : value); }} }},
+    states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
+    timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
+    api: {{ getRunEvents() {{ return Promise.resolve({{ ok: true, data: {{ items: [], next_cursor: 0, latest_event_cursor: 0, run_status: 'idle' }} }}); }} }},
+    pages: {{}},
+  }},
+}};
+global.document = {{ baseURI: 'http://example.test/app/group/group_ops' }};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
+aiteam.pages.appGroup.render(container, {{
+  conversation_id: 'group_ops',
+  title: '运营协作组',
+  display_state: 'active',
+  default_route_hint: 'auto',
+  member_count: 2,
+  members: [
+    {{ employee_id: 'emp_1', display_name: 'Alice', role_name: '产品经理' }},
+    {{ employee_id: 'emp_2', display_name: 'Bob', role_name: '工程师' }},
+  ],
+  latest_run: null,
+  timeline: {{ run_id: null, latest_event_cursor: 0 }},
+  latest_route_decision: null,
+  task_tree: {{ items: [] }},
+}});
+Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(() => {{
+  const initialState = refs.mentionState.innerHTML;
+  buttons[0].click();
+  const selectedState = refs.mentionState.innerHTML;
+  buttons[0].click();
+  const deselectedState = refs.mentionState.innerHTML;
+  console.log(JSON.stringify({{
+    initialState,
+    selectedState,
+    deselectedState,
+    inputValue: refs.input.value,
+  }}));
+}}).catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_group_launcher_min_member_flow() -> dict:
     script = f"""
 const fs = require('fs');
@@ -661,6 +798,14 @@ def test_group_page_launcher_requires_at_least_two_members() -> None:
     assert payload["createDisabled"] is True
     assert "至少选择 2 名成员" in payload["oneMemberHtml"]
     assert payload["apiCalls"] == [{"method": "GET", "path": "/api/team/employees"}]
+
+
+def test_group_page_mention_toggle_updates_selected_state() -> None:
+    payload = _run_group_mention_toggle_flow()
+    assert "未指定提及" in payload["initialState"]
+    assert "已选：@Alice" in payload["selectedState"]
+    assert payload["inputValue"].startswith("@Alice")
+    assert "未指定提及" in payload["deselectedState"]
 
 
 def test_group_page_management_handlers_invoke_group_member_and_archive_apis() -> None:
