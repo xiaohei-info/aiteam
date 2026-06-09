@@ -1,11 +1,12 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-README = ROOT / "README.md"
-ENV_EXAMPLE = ROOT / ".env.example"
-FIXTURES = ROOT / "tests" / "aiteam" / "layer1_data" / "fixtures.py"
-REQUIREMENTS_DEV = ROOT / "requirements-dev.txt"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_ROOT = REPO_ROOT / "app"
+README = APP_ROOT / "README.md"
+ENV_EXAMPLE = APP_ROOT / ".env.example"
+FIXTURES = APP_ROOT / "tests" / "aiteam" / "layer1_data" / "fixtures.py"
+REQUIREMENTS_DEV = APP_ROOT / "requirements-dev.txt"
 
 
 def test_backend_verification_docs_match_repo_prerequisites():
