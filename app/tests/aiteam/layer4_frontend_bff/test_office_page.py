@@ -576,10 +576,21 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
                         "employee_display_name": "Rex",
                         "status": "running",
                         "preview": "执行回归测试",
+                        "detail": "正在同步 Layer4 回归结果",
+                        "conversation_id": "conv_rex",
                         "latest_event_cursor": 18,
                         "events_url": "/api/team/runs/run_rex/events?cursor=18",
                         "event_ts": "2026-06-05T12:34:56Z",
-                    }
+                    },
+                    {
+                        "employee_id": "emp_rex",
+                        "employee_display_name": "Rex",
+                        "status": "completed",
+                        "preview": "整理回归结论",
+                        "detail": "已输出结论摘要",
+                        "conversation_id": "conv_rex",
+                        "event_ts": "2026-06-05T11:34:56Z",
+                    },
                 ],
                 "queue": {"queued": 0, "running": 1, "waiting_human": 0, "failed": 0},
                 "generated_cursor": 18,
@@ -597,6 +608,9 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
     assert "任务队列" in result["html"]
     assert "员工详情" in result["html"]
     assert "当前任务" in result["html"]
+    assert "最近对话" in result["html"]
+    assert "历史任务" in result["html"]
+    assert "整理回归结论" in result["html"]
     assert "场景游标: 18" in result["html"]
     assert "活动游标: 18" in result["html"]
     assert "cursor #18" in result["html"] or ">#18<" in result["html"]
@@ -736,8 +750,10 @@ def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
 def test_office_module_switches_detail_panel_when_selecting_another_seat() -> None:
     result = _run_seat_selection_lifecycle()
     assert "员工详情" in result["initialHtml"]
+    assert "历史任务" in result["initialHtml"]
     assert "Rex" in result["initialHtml"]
     assert "执行回归测试" in result["initialHtml"]
     assert "Nova" in result["afterClickHtml"]
     assert "数据科学家" in result["afterClickHtml"]
     assert "等待新任务" in result["afterClickHtml"]
+    assert "暂无历史任务" in result["afterClickHtml"]

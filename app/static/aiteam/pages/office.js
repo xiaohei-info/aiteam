@@ -145,6 +145,52 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function filterTasksBySeat(tasks, seat) {
+    if (!seat) return [];
+    return (tasks || []).filter(function (item) {
+      return String(item && item.employee_id || '') === String(seat.employee_id || '');
+    });
+  }
+
+  function renderRecentConversation(tasks, seat) {
+    var seatTasks = filterTasksBySeat(tasks, seat);
+    var latest = seatTasks[0] || null;
+    if (!latest) {
+      return '<div class="aiteam-office__task-empty">暂无最近对话</div>';
+    }
+    var href = latest.conversation_id
+      ? '/app/chat/' + encodeURIComponent(latest.conversation_id)
+      : taskHref(latest);
+    return '' +
+      '<a class="aiteam-office__task-item" href="' + escapeHtml(href) + '">' +
+      '<div class="aiteam-office__task-main">' +
+      '<div class="aiteam-office__task-title">' + escapeHtml(latest.preview || latest.title || '最近对话') + '</div>' +
+      '<div class="aiteam-office__task-detail">' + escapeHtml(latest.detail || '点击查看最近一轮会话') + '</div>' +
+      '</div>' +
+      '<div class="aiteam-office__task-meta"><span class="aiteam-office__task-progress">' + escapeHtml(latest.event_ts || '刚刚') + '</span></div>' +
+      '</a>';
+  }
+
+  function renderHistoryTasks(tasks, seat) {
+    var seatTasks = filterTasksBySeat(tasks, seat);
+    if (!seatTasks.length) {
+      return '<div class="aiteam-office__task-empty">暂无历史任务</div>';
+    }
+    return seatTasks.map(function (item) {
+      return '' +
+        '<div class="aiteam-office__task-item">' +
+        '<div class="aiteam-office__task-main">' +
+        '<div class="aiteam-office__task-title">' + escapeHtml(item.preview || item.title || '历史任务') + '</div>' +
+        '<div class="aiteam-office__task-detail">' + escapeHtml(item.detail || '等待更多任务详情') + '</div>' +
+        '</div>' +
+        '<div class="aiteam-office__task-meta">' +
+        '<span class="aiteam-office__task-chip is-' + escapeHtml(String(item.status || 'pending').toLowerCase()) + '">' + escapeHtml(taskStatusLabel(String(item.status || 'pending').toLowerCase(), item.progress)) + '</span>' +
+        '<span class="aiteam-office__task-progress">' + escapeHtml(item.event_ts || '刚刚') + '</span>' +
+        '</div>' +
+        '</div>';
+    }).join('');
+  }
+
   function renderTask(item) {
     var progress = Math.max(0, Math.min(100, Number(item.progress) || 0));
     var statusClass = String(item.status || 'pending').toLowerCase();
@@ -271,6 +317,14 @@ window.aiteam = window.aiteam || {};
       '<aside class="aiteam-office__sidebar">' +
       '<div class="aiteam-office__sidebar-card">' +
       renderSeatDetail(selectedSeat) +
+      '<div class="aiteam-detail-section">' +
+      '<h3>最近对话</h3>' +
+      '<div class="aiteam-office__task-list">' + renderRecentConversation(tasks, selectedSeat) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-detail-section">' +
+      '<h3>历史任务</h3>' +
+      '<div class="aiteam-office__task-list">' + renderHistoryTasks(tasks, selectedSeat) + '</div>' +
+      '</div>' +
       '</div>' +
       '<div class="aiteam-office__sidebar-card">' +
       '<div class="aiteam-office__sidebar-title">任务队列</div>' +
