@@ -157,6 +157,94 @@ vm.runInThisContext(moduleSource, {{ filename: {json.dumps(module_file)} }});
     return json.loads(completed.stdout)
 
 
+def _run_system_accounts_action(role: str, action: str, overrides: dict, response_body: dict) -> dict:
+    module_path = ROOT / "static" / "aiteam" / "pages" / "system-accounts.js"
+    api_client_path = ROOT / "static" / "aiteam" / "api-client.js"
+    state_helpers_path = ROOT / "static" / "aiteam" / "state-helpers.js"
+    role_state_path = ROOT / "static" / "aiteam" / "role-state.js"
+
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiSource = fs.readFileSync({json.dumps(str(api_client_path))}, 'utf8');
+const stateSource = fs.readFileSync({json.dumps(str(state_helpers_path))}, 'utf8');
+const roleSource = fs.readFileSync({json.dumps(str(role_state_path))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(module_path))}, 'utf8');
+
+const fetchCalls = [];
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async (url, options) => {{
+  fetchCalls.push({{
+    url: url,
+    method: options.method,
+    body: options.body ? JSON.parse(options.body) : null,
+  }});
+  const isList = url === '/api/system-admin/enterprises' && options.method === 'GET';
+  return {{
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    async text() {{
+      return JSON.stringify(
+        isList
+          ? {{ enterprises: [{{ enterprise_id: 'ent_demo', name: 'Demo', status: 'active', plan: 'pro', balance: 1 }}] }}
+          : {json.dumps(response_body)}
+      );
+    }},
+  }};
+}};
+global.window = {{ aiteam: {{}} }};
+global.window.prompt = () => '';
+global.window.confirm = () => true;
+global.aiteam = global.window.aiteam;
+global.document = {{
+  getElementById(id) {{
+    if (id === 'aiteam-sys-accounts-feedback') return {{ innerHTML: '' }};
+    return null;
+  }}
+}};
+vm.runInThisContext(apiSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(roleSource, {{ filename: 'role-state.js' }});
+aiteam.role.setActiveRole({json.dumps(role)});
+vm.runInThisContext(moduleSource, {{ filename: 'system-accounts.js' }});
+
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelectorAll() {{ return []; }},
+  }};
+  aiteam.pages.systemAccounts.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = await aiteam.pages.systemAccounts.performAction('ent_demo', {json.dumps(action)}, {json.dumps(overrides)});
+  console.log(JSON.stringify({{
+    fetchCalls: fetchCalls,
+    ok: result.ok,
+    status: result.status,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_shell_with_role(pathname: str, role: str) -> dict:
     shell_path = ROOT / "static" / "aiteam" / "page-shell.js"
     script = f"""
@@ -431,6 +519,30 @@ class TestPermissionDeniedState:
         module_source = (ROOT / "static" / "aiteam" / "pages" / "system-accounts.js").read_text(encoding="utf-8")
         assert "system_write" in module_source
         assert "permission_denied" in module_source
+
+    def test_system_accounts_perform_action_posts_canonical_actions_contract(self):
+        result = _run_system_accounts_action(
+            role="system_admin",
+            action="ban",
+            overrides={"reason": "policy"},
+            response_body={
+                "enterprise_id": "ent_demo",
+                "action": "ban",
+                "status": "succeeded",
+                "message": "enterprise action applied",
+                "audit_event_id": "audit_demo",
+            },
+        )
+        assert result["ok"] is True
+        assert result["status"] == 200
+        assert result["fetchCalls"] == [
+            {"url": "/api/system-admin/enterprises", "method": "GET", "body": None},
+            {
+                "url": "/api/system-admin/enterprises/ent_demo/actions",
+                "method": "POST",
+                "body": {"action": "ban", "reason": "policy"},
+            },
+        ]
 
 
 # ═══════════════════════════════════════════════════════

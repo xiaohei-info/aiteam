@@ -9,8 +9,6 @@ from team_panel.transactions.uow import UnitOfWork
 
 from tests.aiteam.layer0_contracts.test_host_routing import _get, _post
 
-pytest_plugins = ["tests.aiteam.layer2_team_panel.conftest"]
-
 
 def _seed_usage_for_employee(db_conn, *, enterprise_id: str, employee_id: str) -> str:
     run_id = f"run_{uuid.uuid4().hex[:10]}"

@@ -6,8 +6,6 @@ from pathlib import Path
 
 import pytest
 
-pytest_plugins = ["tests.aiteam.layer2_team_panel.conftest"]
-
 from tests.aiteam.layer2_team_panel.test_team_api_contracts import (  # noqa: E402
     _get_raw,
     _handler_content_type,

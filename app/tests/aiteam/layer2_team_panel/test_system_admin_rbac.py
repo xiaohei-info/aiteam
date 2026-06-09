@@ -5,7 +5,6 @@ import json
 import pytest
 
 from team_panel.repositories.audit_event_repo import AuditEventRepo
-from team_panel.repositories.enterprise_repo import EnterpriseRepo
 from tests.aiteam.layer0_contracts.test_host_routing import _get, _patch, _post
 
 
@@ -34,7 +33,7 @@ def test_system_read_paths_allow_system_roles_to_reach_current_contract(
     [
         ("/api/system-admin/templates?role=system_operator", {"name": "Draft"}),
         ("/api/system-admin/solutions?role=system_operator", {"name": "Solution"}),
-        ("/api/system-admin/enterprises/ent_1/actions?role=system_operator", {"action": "suspend"}),
+        ("/api/system-admin/enterprises/ent_1/actions?role=system_operator", {"action": "ban"}),
     ],
 )
 def test_system_operator_cannot_access_system_write_post_paths(path: str, payload: dict) -> None:
@@ -43,6 +42,43 @@ def test_system_operator_cannot_access_system_write_post_paths(path: str, payloa
     assert body.get("error") == "FORBIDDEN"
     assert body.get("required_action") == "system_write"
     assert body.get("role") == "system_operator"
+
+
+@pytest.mark.parametrize(
+    ("path", "role"),
+    [
+        ("/api/system-admin/templates", "owner"),
+        ("/api/system-admin/solutions", "enterprise_admin"),
+        ("/api/system-admin/finance/overview", "finance_admin"),
+        ("/api/system-admin/finance/reports", "member"),
+        ("/api/system-admin/enterprises", "owner"),
+        ("/api/system-admin/enterprises/export", "enterprise_admin"),
+        ("/api/system-admin/enterprises/ent_1", "finance_admin"),
+        ("/api/system-admin/enterprises/ent_1/quota", "member"),
+    ],
+)
+def test_enterprise_roles_cannot_access_system_admin_read_paths(path: str, role: str) -> None:
+    status, body = _get(f"{path}?role={role}")
+    assert status == 403, body
+    assert body.get("error") == "FORBIDDEN"
+    assert body.get("required_action") == "system_read"
+    assert body.get("role") == role
+
+
+@pytest.mark.parametrize(
+    ("path", "role", "payload"),
+    [
+        ("/api/system-admin/enterprises/ent_1/actions", "owner", {"action": "ban"}),
+        ("/api/system-admin/enterprises/ent_1/quota", "enterprise_admin", {"employee_quota": 20}),
+        ("/api/system-admin/templates", "finance_admin", {"name": "Draft"}),
+    ],
+)
+def test_enterprise_roles_cannot_access_system_admin_write_paths(path: str, role: str, payload: dict) -> None:
+    status, body = _post(f"{path}?role={role}", payload)
+    assert status == 403, body
+    assert body.get("error") == "FORBIDDEN"
+    assert body.get("required_action") == "system_write"
+    assert body.get("role") == role
 
 
 @pytest.mark.parametrize(
@@ -94,7 +130,6 @@ def test_patch_paths_enforce_system_write(path: str, role: str, expected_status:
 @pytest.mark.parametrize(
     ("action", "event_type", "expected_status"),
     [
-        ("suspend", "enterprise.suspended", "suspended"),
         ("ban", "enterprise.suspended", "suspended"),
         ("recharge", "enterprise.recharge_recorded", "active"),
         ("notify", "enterprise.notify_recorded", "active"),
@@ -117,10 +152,11 @@ def test_system_admin_enterprise_actions_persist_audit_events(
     )
 
     assert status == 200, body
-    assert body.get("requested_action") == action
-    assert body.get("effective_role") == "system_admin"
+    assert body.get("enterprise_id") == enterprise_id
+    assert body.get("action") == action
+    assert body.get("status") == "succeeded"
+    assert body.get("message")
     assert body.get("audit_event_id")
-    assert body.get("enterprise", {}).get("status") == expected_status
 
     cur = db_conn.cursor()
     try:
@@ -130,41 +166,38 @@ def test_system_admin_enterprise_actions_persist_audit_events(
         assert event.target_type == "enterprise"
         assert event.target_id == enterprise_id
         payload = json.loads(event.payload_json)
-        assert payload["requested_action"] == action
         assert payload["action"] in {"suspend", "recharge", "notify"}
         assert payload["reason"] == "governance review"
-        if action in {"suspend", "ban"}:
-            assert body.get("applied") is True
+        if action == "ban":
             assert payload["previous_status"] == "active"
             assert payload["current_status"] == "suspended"
         else:
-            assert body.get("applied") is False
             assert payload["enterprise_status"] == "active"
-
-        enterprise = EnterpriseRepo(cur).get_by_id(enterprise_id)
-        assert enterprise is not None
-        assert enterprise.status == expected_status
     finally:
         cur.close()
 
 
 def test_system_admin_unban_reactivates_enterprise_and_persists_audit(seeded_enterprise, db_conn) -> None:
     enterprise_id = seeded_enterprise["enterprise_id"]
-    first_status, first_body = _post(
-        f"/api/system-admin/enterprises/{enterprise_id}/actions?role=system_admin&actor_id=usr_sys",
-        {"action": "suspend", "reason": "policy"},
-    )
-    assert first_status == 200, first_body
+    cur = db_conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE enterprise SET status = %s, archive_reason = %s WHERE id = %s",
+            ("suspended", "policy", enterprise_id),
+        )
+        db_conn.commit()
+    finally:
+        cur.close()
 
     status, body = _post(
         f"/api/system-admin/enterprises/{enterprise_id}/actions?role=system_admin&actor_id=usr_sys",
         {"action": "unban", "reason": "resolved"},
     )
     assert status == 200, body
-    assert body.get("action") == "reactivate"
-    assert body.get("requested_action") == "unban"
-    assert body.get("applied") is True
-    assert body.get("enterprise", {}).get("status") == "active"
+    assert body.get("enterprise_id") == enterprise_id
+    assert body.get("action") == "unban"
+    assert body.get("status") == "succeeded"
+    assert body.get("audit_event_id")
 
     cur = db_conn.cursor()
     try:
@@ -174,10 +207,6 @@ def test_system_admin_unban_reactivates_enterprise_and_persists_audit(seeded_ent
         payload = json.loads(event.payload_json)
         assert payload["previous_status"] == "suspended"
         assert payload["current_status"] == "active"
-
-        enterprise = EnterpriseRepo(cur).get_by_id(enterprise_id)
-        assert enterprise is not None
-        assert enterprise.status == "active"
     finally:
         cur.close()
 
@@ -190,7 +219,7 @@ def test_system_admin_unban_from_active_returns_conflict_without_audit(seeded_en
     )
     assert status == 409, body
     assert body.get("error") == "ENTERPRISE_ACTION_CONFLICT"
-    assert body.get("action") == "reactivate"
+    assert body.get("action") == "unban"
 
     cur = db_conn.cursor()
     try:

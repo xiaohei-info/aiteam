@@ -45,7 +45,6 @@ const connectorSnapshots = [
       connector_type: 'webhook_target',
       status: 'online',
       scopes: ['invoke'],
-      credential_ref: 'cred://vault/slack/ent_test',
       credential_mask: '已配置',
       credential_state: 'configured',
       rotation_version: 2,
@@ -88,7 +87,6 @@ const connectorSnapshots = [
       connector_type: 'webhook_target',
       status: 'draft',
       scopes: ['invoke'],
-      credential_ref: 'cred://vault/slack/updated',
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
@@ -131,7 +129,6 @@ const connectorSnapshots = [
       connector_type: 'webhook_target',
       status: 'draft',
       scopes: ['invoke'],
-      credential_ref: 'cred://vault/slack/updated',
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
@@ -174,7 +171,6 @@ const connectorSnapshots = [
       connector_type: 'webhook_target',
       status: 'online',
       scopes: ['invoke'],
-      credential_ref: 'cred://vault/slack/updated',
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
@@ -217,7 +213,6 @@ const connectorSnapshots = [
       connector_type: 'webhook_target',
       status: 'online',
       scopes: ['invoke'],
-      credential_ref: 'cred://vault/slack/updated',
       credential_mask: '已轮换',
       credential_state: 'rotated',
       rotation_version: 3,
@@ -332,7 +327,6 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
     name: 'Slack Connector',
     config: {{ tenant_hint: 'acme-updated', channel: '#ops' }},
     credential_input: {{ mode: 'opaque_ref', credential_ref: 'cred://vault/slack/updated' }},
-    credential_ref: 'cred://vault/slack/updated',
   }});
   await new Promise((resolve) => setImmediate(resolve));
   const afterUpdateHtml = container.innerHTML;
@@ -343,7 +337,6 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-connectors.js' }});
     connector_type: 'webhook_target',
     config: {{ tenant_hint: 'acme', channel: '#sales' }},
     credential_input: {{ mode: 'opaque_ref', credential_ref: 'cred://enterprise/new' }},
-    credential_ref: 'cred://enterprise/new',
   }});
   await new Promise((resolve) => setImmediate(resolve));
   await container.lastGrantHandler('conn_truth', {{
@@ -414,14 +407,17 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert result["employeeCalls"] == 1
     assert result["detailCalls"] == 2
     assert result["updatePayload"]["credential_input"]["credential_ref"] == "cred://vault/slack/updated"
+    assert "credential_ref" not in result["updatePayload"]
     assert result["createPayload"]["credential_input"]["credential_ref"] == "cred://enterprise/new"
+    assert "credential_ref" not in result["createPayload"]
     assert result["grantPayload"]["revoke"] == [{"binding_id": "bind_seed"}]
     assert result["testCalls"] == 1
     assert result["statusCalls"] == 1
 
     initial_html = result["initialHtml"]
     assert "凭据显示" in initial_html
-    assert "cred://vault/slack/ent_test" in initial_html
+    assert "凭据引用" not in initial_html
+    assert "cred://vault/slack/ent_test" not in initial_html
     assert "bot_secret: hidden" not in initial_html
     assert "bot_secret: ****" in initial_html
     assert "最近一次连接测试通过" in initial_html
@@ -435,7 +431,7 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert "草稿" in after_update_html
     assert "#ops" in after_update_html
     assert "等待复测" in after_update_html
-    assert "cred://vault/slack/updated" in after_update_html
+    assert "cred://vault/slack/updated" not in after_update_html
 
     after_grant_html = result["afterGrantHtml"]
     assert "后端同步员工" in after_grant_html
