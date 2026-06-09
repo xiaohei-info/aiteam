@@ -53,6 +53,7 @@ const document = {
 
 let getSolutionsCalls = 0;
 let applyCalls = 0;
+const applyPayloads = [];
 const solutionSnapshots = [
   {
     solutions: [{
@@ -103,6 +104,7 @@ const context = {
         },
         applySolution(solutionId, payload) {
           applyCalls += 1;
+          applyPayloads.push({ solutionId, payload });
           return Promise.resolve({
             ok: true,
             data: {
@@ -160,17 +162,22 @@ async function run() {
   assert(host.innerHTML.indexOf('最近应用状态') !== -1, 'page should render truthful backend apply state section');
   assert(host.innerHTML.indexOf('apply_001') !== -1, 'page should render truthful backend last_apply_record_id');
   assert(host.innerHTML.indexOf('emp_seed') !== -1, 'page should render truthful backend created_employee_ids');
+  assert(host.innerHTML.indexOf('追加应用') !== -1, 'page should render append action');
+  assert(host.innerHTML.indexOf('覆盖重建') !== -1, 'page should render replace action');
+  assert(host.innerHTML.indexOf('重新应用') !== -1, 'page should render reapply action');
 
-  await host.lastApplyHandler('sol_truth', { mode: 'append', department_id: 'dept_marketing' });
+  await host.lastApplyHandler('sol_truth', { mode: 'replace', department_id: 'dept_marketing' });
   await nextTick();
 
   assert(applyCalls === 1, 'apply handler should call applySolution');
+  assert(applyPayloads[0].payload.mode === 'replace', 'apply handler should keep selected apply mode');
   assert(getSolutionsCalls === 2, 'apply success should re-fetch solution list');
   assert(host.innerHTML.indexOf('apply_002') !== -1, 'apply success should render backend-refreshed last_apply_record_id');
   assert(host.innerHTML.indexOf('emp_backend') !== -1, 'apply success should render backend-refreshed created_employee_ids');
   assert(host.innerHTML.indexOf('kb_backend') !== -1, 'apply success should render backend-refreshed created_knowledge_base_ids');
   assert(host.innerHTML.indexOf('已应用：4') !== -1, 'apply success should render backend-refreshed apply_count');
   assert(host.innerHTML.indexOf('emp_local') === -1, 'apply success should not leave speculative local employee ids in UI');
+  assert(host.innerHTML.indexOf('最近一次提交：覆盖重建') !== -1, 'page should render last submitted apply mode notice');
 
   if (failed) {
     console.error('admin-solutions.test.js failed');

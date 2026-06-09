@@ -68,11 +68,19 @@ window.aiteam = window.aiteam || {};
     return '网络请求失败';
   }
 
+  function applyModeLabel(mode) {
+    if (mode === 'replace') return '覆盖重建';
+    if (mode === 'reapply') return '重新应用';
+    return '追加应用';
+  }
+
   function createController(container) {
     var state = {
       items: [],
       notice: '',
       pendingSolutionId: '',
+      pendingMode: '',
+      lastSubmittedMode: '',
     };
 
     function setNotice(message) {
@@ -123,7 +131,8 @@ window.aiteam = window.aiteam || {};
         : '暂无发布记录';
       var lastApplyStatus = item.last_apply_status ? item.last_apply_status : '尚无最近应用记录';
       var lastApplyRecord = item.last_apply_record_id ? item.last_apply_record_id : '—';
-      var disabled = state.pendingSolutionId === item.solution_id ? ' disabled' : '';
+      var pending = state.pendingSolutionId === item.solution_id;
+      var disabled = pending ? ' disabled' : '';
       return '<li class="aiteam-skill-card">' +
         '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
         '<div class="aiteam-skill-card__meta">状态：' + esc(item.status) + ' · 标签：' + esc(tags) + '</div>' +
@@ -136,8 +145,11 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近创建知识库</span><span class="aiteam-shell__meta-value">' + esc(createdKnowledge) + '</span></div>' +
         '</div>' +
         '<div class="aiteam-skill-card__actions">' +
-        '<button type="button" class="aiteam-btn" data-role="solution-apply" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>应用方案 (append)</button>' +
+        '<button type="button" class="aiteam-btn" data-role="solution-apply" data-mode="append" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>追加应用</button>' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="replace" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>覆盖重建</button>' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="reapply" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>重新应用</button>' +
         '</div>' +
+        (pending ? '<div class="aiteam-skill-card__meta">正在提交：' + esc(applyModeLabel(state.pendingMode)) + '</div>' : '') +
         '</li>';
     }
 
@@ -147,15 +159,16 @@ window.aiteam = window.aiteam || {};
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener('click', function () {
           var solutionId = this.getAttribute('data-solution-id');
+          var mode = String(this.getAttribute('data-mode') || 'append');
           var defaultDept = '';
           var departmentId = typeof window.prompt === 'function'
             ? window.prompt('请输入目标部门 ID（可留空）', defaultDept)
             : defaultDept;
           if (departmentId === null) return;
           var payload = {
-            mode: 'append',
+            mode: mode,
             department_id: String(departmentId || '').replace(/^\s+|\s+$/g, ''),
-            idempotency_key: 'solution-apply-' + solutionId + '-append',
+            idempotency_key: 'solution-apply-' + solutionId + '-' + mode,
           };
           container.lastApplyHandler(solutionId, payload);
         });
@@ -170,12 +183,14 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">行业 AI 解决方案</h2>' +
-        '<p class="aiteam-shell__panel-body">B06 页面通过 `/api/team/solutions` 读取企业可应用方案，并通过 `POST /api/team/solutions/{id}/apply` 提交。当前仅支持 append 模式；方案创建新员工和知识库，已存在则跳过。页面展示的统计、最近应用状态、员工与知识库结果均以后端列表返回为准；Apply 成功后会重新拉取列表，不在前端推演替换/重应用语义。</p>' +
+        '<p class="aiteam-shell__panel-body">B06 页面通过 `/api/team/solutions` 读取企业可应用方案，并通过 `POST /api/team/solutions/{id}/apply` 提交。当前支持追加应用、覆盖重建、重新应用三种策略；方案创建新员工和知识库，页面展示的统计、最近应用状态、员工与知识库结果均以后端列表返回为准。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用模式</span><span class="aiteam-shell__meta-value">仅支持 append 模式（方案创建新员工和知识库；已存在则跳过）</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用模式</span><span class="aiteam-shell__meta-value">追加应用 / 覆盖重建 / 重新应用</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">原子性</span><span class="aiteam-shell__meta-value">若后端返回失败，则视为全量回滚，不展示局部成功</span></div>' +
+        (state.lastSubmittedMode ? '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近一次提交</span><span class="aiteam-shell__meta-value">' + esc(applyModeLabel(state.lastSubmittedMode)) + '</span></div>' : '') +
         '</div>' +
+        (state.lastSubmittedMode ? '<p class="aiteam-shell__panel-body">最近一次提交：' + esc(applyModeLabel(state.lastSubmittedMode)) + '</p>' : '') +
         '<ul class="aiteam-skills-list">' + cards + '</ul>' +
         '</div>';
       bindEvents();
@@ -203,13 +218,16 @@ window.aiteam = window.aiteam || {};
         return Promise.resolve({ ok: false, status: 0, error: 'missing_applySolution' });
       }
       state.pendingSolutionId = solutionId;
+      state.pendingMode = String(payload && payload.mode || 'append');
       setNotice('');
       render();
       return ns.api.applySolution(solutionId, payload || {}).then(function (result) {
         state.pendingSolutionId = '';
+        state.lastSubmittedMode = state.pendingMode;
+        state.pendingMode = '';
         if (result && result.ok) {
           return refreshList({
-            notice: '行业方案应用已提交：' + solutionId,
+            notice: '行业方案应用已提交：' + solutionId + '（' + applyModeLabel(state.lastSubmittedMode) + '）',
             errorNotice: '行业方案应用成功，但列表刷新失败：',
           }).then(function () {
             return result;

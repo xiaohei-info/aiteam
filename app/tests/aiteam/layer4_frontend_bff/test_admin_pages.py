@@ -99,6 +99,7 @@ EXPECTED_ADMIN_PREFIXES = [
     ("admin-employees.js", ["/api/team/employees", "/api/team/employees/"]),
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
     ("admin-skills.js",    ["/api/team/skills/catalog", "/api/team/skills/installs"]),
+    ("admin-solutions.js", ["/api/team/solutions", "/api/team/solutions/"]),
     ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
 ]
 
@@ -187,6 +188,14 @@ class TestAdminSystemPageRuntimeInit:
             ],
         )
         assert "技能市场读取失败" in result["html"] or "技能市场目录接口未完全就绪" in result["html"]
+
+    def test_admin_solutions_init_executes_with_loaded_dependencies(self):
+        result = _run_page_module(
+            "admin-solutions.js",
+            "adminSolutions",
+            [{"url": "/api/team/solutions", "method": "GET"}],
+        )
+        assert "行业方案接口尚未实现" in result["html"] or "行业方案接口尚未开放" in result["html"]
 
     def test_admin_templates_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
