@@ -564,7 +564,10 @@ window.aiteam = window.aiteam || {};
       '<aside class="aiteam-panel aiteam-group-sidebar">' +
       '<div class="aiteam-panel__header"><h3>群信息与成员栏</h3><a href="/app/workbench">返回工作台</a></div>' +
       '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>群聊头像</h3><span class="aiteam-inline-note">前 4 名成员 · 2×2 宫格</span></div>' + renderGroupAvatarGrid(members) + '</div>' +
+      '<div class="aiteam-detail-kv"><span>群聊名称</span><strong>' + escapeHtml(conversation.title || conversation.conversation_id || '未命名群聊') + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>群聊 ID</span><strong>' + escapeHtml(conversation.conversation_id || '未知') + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>创建人</span><strong>' + escapeHtml(stringValue(conversation.owner_user_id, '未记录')) + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>创建时间</span><strong>' + escapeHtml(stringValue(conversation.created_at, '未记录')) + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>默认协作策略</span><strong>' + escapeHtml(routeModeLabel(conversation.default_route_hint || 'auto')) + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>最近运行状态</span><strong>' + escapeHtml(initialRunStatus || '暂无') + '</strong></div>' +
       '<div class="aiteam-panel aiteam-panel--nested" data-group-settings-card>' +

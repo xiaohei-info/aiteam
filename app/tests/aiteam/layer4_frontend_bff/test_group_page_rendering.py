@@ -488,6 +488,8 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
         {
             "conversation_id": "group_ops",
             "title": "运营协作组",
+            "owner_user_id": "user_founder",
+            "created_at": "2026-06-10T09:00:00Z",
             "display_state": "busy",
             "default_route_hint": "auto",
             "member_count": 4,
@@ -520,6 +522,10 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
     assert 'disabled>踢出员工' not in payload["html"]
     assert 'disabled>解散群聊' not in payload["html"]
     assert "当前正式写接口尚未开放" not in payload["html"]
+    assert "创建人" in payload["html"]
+    assert "user_founder" in payload["html"]
+    assert "创建时间" in payload["html"]
+    assert "2026-06-10T09:00:00Z" in payload["html"]
 
 
 def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None:
