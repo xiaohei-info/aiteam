@@ -41,6 +41,21 @@ window.aiteam = window.aiteam || {};
     }).filter(Boolean);
   }
 
+  function normalizePromptUseTrace(item) {
+    var raw = Array.isArray(item && item.prompt_use_trace) ? item.prompt_use_trace : [];
+    return raw.map(function (entry) {
+      return {
+        run_id: stringValue(entry && entry.run_id, ''),
+        event_id: stringValue(entry && entry.event_id, ''),
+        event_cursor: entry && entry.event_cursor != null ? String(entry.event_cursor) : '',
+        stage: stringValue(entry && entry.stage, ''),
+        used_at: stringValue(entry && entry.used_at, ''),
+      };
+    }).filter(function (entry) {
+      return entry.run_id || entry.event_id || entry.stage;
+    });
+  }
+
   function normalizeMemoryItem(item) {
     return {
       memory_id: stringValue(item && item.memory_id, ''),
@@ -60,6 +75,7 @@ window.aiteam = window.aiteam || {};
       extraction_error_message: stringValue(item && (item.extraction_error_message || item.failure_message), ''),
       audit_events: normalizeAuditEvents(item),
       prompt_plan_refs: normalizePromptRefs(item),
+      prompt_use_trace: normalizePromptUseTrace(item),
     };
   }
 
@@ -118,6 +134,9 @@ window.aiteam = window.aiteam || {};
           var haystack = [entry.content, entry.employee_name, entry.category, entry.extraction_status, entry.review_status]
             .concat(entry.tags || [])
             .concat(entry.prompt_plan_refs || [])
+            .concat((entry.prompt_use_trace || []).map(function (trace) {
+              return [trace.run_id, trace.event_id, trace.stage].join(' ');
+            }))
             .join(' ')
             .toLowerCase();
           return haystack.indexOf(query) !== -1;
@@ -177,6 +196,15 @@ window.aiteam = window.aiteam || {};
 
     function filteredItems() {
       return store.filter(state);
+    }
+
+    function currentRemoteQuery() {
+      return {
+        employee_id: state.employeeId || undefined,
+        q: state.query || undefined,
+        include: 'prompt_use_trace',
+        trace_limit: 5,
+      };
     }
 
     function buildBannerMessages() {
@@ -268,6 +296,15 @@ window.aiteam = window.aiteam || {};
       }).join('') + '</div>';
     }
 
+    function renderPromptUseTrace(item) {
+      if (!item.prompt_use_trace.length) {
+        return '<p class="aiteam-memory__audit-note">当前后端未返回注入痕迹。</p>';
+      }
+      return '<ul class="aiteam-memory__audit-list">' + item.prompt_use_trace.map(function (entry) {
+        return '<li><span>' + escapeHtml(entry.stage || 'unknown_stage') + '</span><span>' + escapeHtml(entry.run_id || 'unknown_run') + '</span><span>' + escapeHtml(entry.used_at || entry.event_id || '未知时间') + '</span></li>';
+      }).join('') + '</ul>';
+    }
+
     function renderCards(items) {
       if (!items.length) {
         return '<div class="aiteam-memory__empty"><p>当前筛选条件下暂无记忆条目。</p></div>';
@@ -290,9 +327,9 @@ window.aiteam = window.aiteam || {};
           '</div>' +
           '<p class="aiteam-memory__content">' + escapeHtml(item.content) + '</p>' +
           extractionWarning +
-          '<div class="aiteam-memory__meta">' +
-          '<span>' + escapeHtml(item.category) + '</span>' +
-          '<span>' + escapeHtml(item.source) + '</span>' +
+        '<div class="aiteam-memory__meta">' +
+        '<span>' + escapeHtml(item.category) + '</span>' +
+        '<span>' + escapeHtml(item.source) + '</span>' +
           visibilityLine +
           reviewLine +
           '<span>' + escapeHtml(item.updated_at || item.created_at || '未知时间') + '</span>' +
@@ -301,6 +338,7 @@ window.aiteam = window.aiteam || {};
             return '<span class="aiteam-memory__tag">' + escapeHtml(tag) + '</span>';
           }).join('') + '</div>' +
           '<div class="aiteam-memory__subsection"><strong>Prompt Plan 引用</strong>' + renderPromptRefs(item) + '</div>' +
+          '<div class="aiteam-memory__subsection"><strong>注入痕迹</strong>' + renderPromptUseTrace(item) + '</div>' +
           '<div class="aiteam-memory__subsection"><strong>审计追踪</strong>' + renderAuditTrace(item) + '</div>' +
           '<div class="aiteam-memory__actions">' +
           '<button type="button" data-role="edit-memory" data-memory-id="' + escapeHtml(item.memory_id) + '">编辑</button>' +
@@ -326,13 +364,13 @@ window.aiteam = window.aiteam || {};
       if (employeeSelect) {
         employeeSelect.addEventListener('change', function () {
           state.employeeId = this.value || '';
-          render();
+          fetchRemoteMemories();
         });
       }
       if (queryInput) {
         queryInput.addEventListener('input', function () {
           state.query = this.value || '';
-          render();
+          fetchRemoteMemories();
         });
       }
       if (addButton) {
@@ -393,7 +431,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel aiteam-memory">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">记忆管理</h2>' +
-        '<p class="aiteam-shell__panel-body">通过 /api/team/memories 管理员工记忆条目，支持搜索、分类筛选、基础 CRUD，以及自动提取失败/审计追踪的可见降级。</p>' +
+        '<p class="aiteam-shell__panel-body">通过 /api/team/memories 管理员工记忆条目，支持搜索、分类筛选、基础 CRUD，以及自动提取失败、审计追踪、Prompt 注入痕迹的可见降级。</p>' +
         '<div class="aiteam-memory__banners">' + bannerMessages.map(function (message) {
           return '<p class="aiteam-memory__banner">' + escapeHtml(message) + '</p>';
         }).join('') + '</div>' +
@@ -514,6 +552,23 @@ window.aiteam = window.aiteam || {};
       });
     }
 
+    function fetchRemoteMemories() {
+      if (!ns.api || !ns.api.getMemories) return Promise.resolve(null);
+      return ns.api.getMemories({
+        query: currentRemoteQuery(),
+      }).then(function (result) {
+        if (!result.ok) {
+          state.bannerMessages = ['加载记忆失败：' + apiErrorMessage(result)];
+          render();
+          return result;
+        }
+        store.replace(normalizePayload(result.data));
+        state.bannerMessages = [];
+        render();
+        return result;
+      });
+    }
+
     return {
       load: function (items) {
         store.replace(items);
@@ -526,7 +581,11 @@ window.aiteam = window.aiteam || {};
       },
       store: store,
       state: state,
-      render: render
+      render: render,
+      __test: {
+        fetchRemoteMemories: fetchRemoteMemories,
+        currentRemoteQuery: currentRemoteQuery,
+      }
     };
   }
 
@@ -535,7 +594,12 @@ window.aiteam = window.aiteam || {};
       if (!container) return;
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载记忆数据...</p></div>';
       var controller = createPageController(container);
-      ns.api.getMemories().then(function (result) {
+      ns.api.getMemories({
+        query: {
+          include: 'prompt_use_trace',
+          trace_limit: 5,
+        },
+      }).then(function (result) {
         if (!result.ok) {
           controller.showError(apiErrorMessage(result));
           return;
@@ -550,6 +614,8 @@ window.aiteam = window.aiteam || {};
       collectEmployees: collectEmployees,
       normalizeAuditEvents: normalizeAuditEvents,
       normalizePromptRefs: normalizePromptRefs,
+      normalizePromptUseTrace: normalizePromptUseTrace,
+      createPageController: createPageController,
     }
   };
 }(window.aiteam));

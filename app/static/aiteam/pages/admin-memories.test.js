@@ -50,13 +50,16 @@ const document = {
   createElement,
 };
 
+const apiCalls = [];
+
 const context = {
   window: {
     prompt() { return null; },
     confirm() { return true; },
     aiteam: {
       api: {
-        getMemories() {
+        getMemories(options) {
+          apiCalls.push({ type: 'getMemories', options: options || null });
           return Promise.resolve({ ok: true, data: { items: [
             {
               memory_id: 'mem_1', employee_id: 'emp_1', employee_name: 'Alice', content: '喜欢简洁回复', importance: 5,
@@ -64,6 +67,7 @@ const context = {
               extraction_status: 'failed', extraction_error_message: 'writeback timeout',
               audit_trace: [{ action: 'created', actor_name: 'admin', timestamp: '2026-06-02T01:00:00Z' }],
               prompt_plan_refs: [{ run_id: 'run_1' }],
+              prompt_use_trace: [{ run_id: 'run_1', event_id: 'evt_mem_1', event_cursor: 1, stage: 'prompt_injected', used_at: '2026-06-02T01:02:00Z' }],
             },
             {
               memory_id: 'mem_2', employee_id: 'emp_2', employee_name: 'Bob', content: '擅长销售', importance: 2,
@@ -129,11 +133,24 @@ assert(store.filter({ query: 'run_1' })[0].memory_id === 'mem_1', 'store.filter 
   const container = createElement('div');
   page.init(container);
   await new Promise((resolve) => setImmediate(resolve));
+  assert(apiCalls.length === 1, 'page should fetch memories once on init');
+  assert(apiCalls[0].options && apiCalls[0].options.query && apiCalls[0].options.query.include === 'prompt_use_trace', 'page should request prompt_use_trace from backend');
+  assert(apiCalls[0].options.query.trace_limit === 5, 'page should request bounded prompt trace size');
   assert(container.innerHTML.indexOf('记忆管理') !== -1, 'page should render heading');
   assert(container.innerHTML.indexOf('自动提取/写回失败') !== -1, 'page should render extraction failure visibility');
   assert(container.innerHTML.indexOf('Prompt Plan 引用') !== -1, 'page should render prompt plan section');
+  assert(container.innerHTML.indexOf('注入痕迹') !== -1, 'page should render prompt injection trace section');
+  assert(container.innerHTML.indexOf('prompt_injected') !== -1, 'page should render prompt injection stage');
   assert(container.innerHTML.indexOf('审计追踪') !== -1, 'page should render audit trace section');
   assert(container.innerHTML.indexOf('当前显示 2 / 2 条记忆') !== -1, 'page should render summary');
+
+  assert(typeof page.__test.createPageController === 'function', 'page should expose controller factory');
+  const controller = page.__test.createPageController(createElement('div'));
+  controller.state.employeeId = 'emp_1';
+  controller.state.query = '简洁';
+  await controller.__test.fetchRemoteMemories();
+  assert(apiCalls[1].options.query.employee_id === 'emp_1', 'controller should forward employee filter to backend');
+  assert(apiCalls[1].options.query.q === '简洁', 'controller should forward search query to backend');
   if (failed) {
     console.error('admin-memories.test.js failed');
     failures.forEach(function (item) { console.error('- ' + item); });

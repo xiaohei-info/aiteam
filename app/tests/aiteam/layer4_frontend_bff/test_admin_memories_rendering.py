@@ -14,11 +14,13 @@ def _run_admin_memories() -> dict:
 const fs = require('fs');
 const vm = require('vm');
 const moduleSource = fs.readFileSync({json.dumps(str(PAGE_PATH))}, 'utf8');
+const apiCalls = [];
 global.window = {{
   aiteam: {{
     pages: {{}},
     api: {{
-      getMemories() {{
+      getMemories(options) {{
+        apiCalls.push(options || null);
         return Promise.resolve({{
           ok: true,
           data: {{
@@ -35,6 +37,7 @@ global.window = {{
                 created_at: '2026-06-01T10:00:00Z',
                 updated_at: '2026-06-02T10:00:00Z',
                 audit_trace: [{{ action: 'created', actor_name: 'owner', timestamp: '2026-06-01T10:00:00Z' }}],
+                prompt_use_trace: [{{ run_id: 'run_1', event_id: 'evt_1', event_cursor: 1, stage: 'prompt_injected', used_at: '2026-06-01T10:01:00Z' }}],
               }},
               {{
                 memory_id: 'mem_2',
@@ -70,7 +73,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-memories.js' }});
   aiteam.pages.adminMemories.init(container);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  console.log(JSON.stringify({{ html: container.innerHTML }}));
+  console.log(JSON.stringify({{ html: container.innerHTML, apiCalls }}));
 }})().catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -82,8 +85,12 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-memories.js' }});
 
 def test_admin_memories_renders_employee_sidebar_and_batch_delete_toolbar() -> None:
     payload = _run_admin_memories()
+    assert payload["apiCalls"][0]["query"]["include"] == "prompt_use_trace"
+    assert payload["apiCalls"][0]["query"]["trace_limit"] == 5
     assert "左侧员工选择器" in payload["html"]
     assert "批量删除" in payload["html"]
     assert "Alice" in payload["html"]
     assert "Bob" in payload["html"]
     assert "工作偏好" in payload["html"] or "preference" in payload["html"]
+    assert "注入痕迹" in payload["html"]
+    assert "prompt_injected" in payload["html"]

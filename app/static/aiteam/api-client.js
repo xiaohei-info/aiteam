@@ -283,6 +283,12 @@ window.aiteam = window.aiteam || {};
     },
 
     getMemories(options) {
+      const query = options && options.query;
+      if (query) {
+        const requestOptions = { ...options };
+        delete requestOptions.query;
+        return this.get(`/memories${buildQuerySuffix(query)}`, requestOptions);
+      }
       return this.get('/memories', options);
     },
 
