@@ -235,6 +235,12 @@ source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
+如果你在仓库根目录执行，也可以直接使用：
+
+```bash
+pip install -r app/requirements-dev.txt
+```
+
 当前新增的 `requirements-dev.txt` 用于补齐本地开发/测试最小依赖，包括：
 - `pytest`
 - `pytest-timeout`
@@ -263,6 +269,29 @@ from run_agent import AIAgent
 print('env ok')
 PY
 ```
+
+### 5.1.9 AI Team pytest 后端前置条件
+
+在跑 `app/tests/aiteam/` 的后端验证前，先确认以下事实：
+
+- 已执行 `pip install -r app/requirements-dev.txt`
+- 当前解释器里可导入 `psycopg2`，也就是 `requirements-dev.txt` 里的 `psycopg2-binary` 已装好
+- `docker` 可用，因为 `app/tests/aiteam/layer1_data/fixtures.py` 在本机 `127.0.0.1:5433` 没有 PostgreSQL 时，会回退到 ephemeral postgres 容器
+- `TEST_DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test`
+
+最小检查命令：
+
+```bash
+cd /home/ubuntu/code/aiteam
+source app/.venv/bin/activate
+python - <<'PY'
+import psycopg2
+print("psycopg2 ok")
+PY
+pytest app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py -q
+```
+
+如果 pytest 在导入 `app/tests/aiteam/conftest.py` 时就报 `ModuleNotFoundError: No module named 'psycopg2'`，说明阻塞点是本地验证环境没装好，而不是 Auth 北向业务逻辑回归。
 
 ---
 
@@ -308,7 +337,7 @@ docker run -d \
 修改 `app/.env`：
 
 ```dotenv
-DATABASE_URL=postgresql://aiteam:***@127.0.0.1:5433/aiteam_test
+DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test
 ```
 
 ### 6.2.2 测试连接串（可选，显式指定时用）
@@ -316,7 +345,7 @@ DATABASE_URL=postgresql://aiteam:***@127.0.0.1:5433/aiteam_test
 修改 `app/.env`：
 
 ```dotenv
-TEST_DATABASE_URL=postgresql://aiteam:***@127.0.0.1:5433/aiteam_test
+TEST_DATABASE_URL=postgresql://aiteam:change-me@127.0.0.1:5433/aiteam_test
 ```
 
 ### 6.2.3 运行 migrations

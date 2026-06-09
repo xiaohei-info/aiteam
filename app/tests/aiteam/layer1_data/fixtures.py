@@ -1,7 +1,9 @@
 """Layer1 test fixtures — provides shared PostgreSQL test infrastructure.
 
-Reuses existing local-PG-or-ephemeral-docker strategy from existing
-layer1 test files to avoid introducing a conflicting bootstrap path.
+AI Team pytest expects `psycopg2` to be importable before conftest loading.
+At runtime this fixture tries PostgreSQL on 127.0.0.1:5433 first, then falls
+back to a disposable Docker postgres container to preserve a single bootstrap
+path for layer1/layer2 tests.
 """
 
 import shutil
