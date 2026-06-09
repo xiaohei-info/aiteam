@@ -167,6 +167,100 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-billing.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_admin_billing_rank_expand_flow() -> dict:
+    page_path = PAGES_DIR / "admin-billing.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+function makeRankRow(employeeId) {{
+  return {{
+    listeners: {{}},
+    getAttribute(name) {{
+      if (name === 'data-employee-id') return employeeId;
+      return null;
+    }},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{
+      if (this.listeners.click) this.listeners.click.call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const rankRows = [makeRankRow('emp_marketing'), makeRankRow('emp_finance')];
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    role: {{
+      getActiveRole() {{ return 'owner'; }},
+      canExportBilling() {{ return true; }},
+    }},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      renderPermissionDenied(container) {{ container.innerHTML = '<div>denied</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      getBillingUsageOverview() {{
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total_tokens: 2847320,
+            total_cost_cents: 39860,
+            period_start: '2026-06-01',
+            period_end: '2026-06-30',
+            by_employee: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', tokens: 1234560, cost_cents: 12840 }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', tokens: 892000, cost_cents: 8920 }},
+            ],
+          }},
+        }});
+      }},
+      getBillingUsageRecords() {{
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total: 3,
+            items: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', run_id: 'run_1', tokens: 420000, cost_cents: 4200, source: 'run_summary', event_ts: '2026-06-03T10:00:00Z' }},
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', run_id: 'run_2', tokens: 380000, cost_cents: 3840, source: 'run_summary', event_ts: '2026-06-10T10:00:00Z' }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', run_id: 'run_3', tokens: 300000, cost_cents: 3020, source: 'run_summary', event_ts: '2026-06-18T10:00:00Z' }},
+            ],
+          }},
+        }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-billing.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll(selector) {{
+      if (selector === '[data-role="billing-rank-row"]') return rankRows;
+      return [];
+    }},
+  }};
+  aiteam.pages.adminBilling.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const beforeHtml = container.innerHTML;
+  rankRows[1].click();
+  const afterHtml = container.innerHTML;
+  console.log(JSON.stringify({{
+    beforeHtml,
+    afterHtml,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_admin_recharge() -> dict:
     page_path = PAGES_DIR / "admin-recharge.js"
     script = f"""
@@ -473,3 +567,14 @@ def test_admin_billing_export_uses_current_filters_and_download_path() -> None:
     assert payload["assignedUrls"] == [payload["exportUrl"]]
     assert "period_start=2026-06-05" in payload["afterHtml"]
     assert "employee_id=emp_finance" in payload["afterHtml"]
+
+
+def test_admin_billing_rank_row_expands_employee_specific_run_details() -> None:
+    payload = _run_admin_billing_rank_expand_flow()
+    assert "run_1" in payload["beforeHtml"]
+    assert "run_2" in payload["beforeHtml"]
+    assert "run_3" in payload["beforeHtml"]
+    assert "当前明细：财务顾问" in payload["afterHtml"]
+    assert "run_3" in payload["afterHtml"]
+    assert "run_1" not in payload["afterHtml"]
+    assert "run_2" not in payload["afterHtml"]

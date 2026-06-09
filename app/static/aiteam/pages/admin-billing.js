@@ -131,6 +131,7 @@ window.aiteam = window.aiteam || {};
       periodStart: '',
       periodEnd: '',
       employeeId: '',
+      detailEmployeeId: '',
       loading: false,
       quickRangeKey: 'this_month',
     };
@@ -163,6 +164,7 @@ window.aiteam = window.aiteam || {};
       var employees = Array.isArray(overview.by_employee) ? overview.by_employee : [];
       var trendItems = aggregateTrend(records);
       var topEmployee = employees.length ? employees[0] : null;
+      var detailEmployeeId = state.detailEmployeeId || state.employeeId || '';
       var periodButtons = [
         { key: 'this_month', label: '本月' },
         { key: 'last_month', label: '上月' },
@@ -176,7 +178,9 @@ window.aiteam = window.aiteam || {};
             var width = topEmployee && Number(topEmployee.tokens) > 0
               ? Math.max(12, Math.round(((Number(item.tokens) || 0) / Number(topEmployee.tokens)) * 100))
               : 12;
-            return '<tr>' +
+            var currentId = item.employee_id || '';
+            var activeClass = detailEmployeeId && detailEmployeeId === currentId ? ' is-active' : '';
+            return '<tr class="aiteam-billing__rank-row' + activeClass + '" data-role="billing-rank-row" data-employee-id="' + esc(currentId) + '">' +
               '<td>' + esc(item.display_name || item.employee_id || '未命名员工') + '</td>' +
               '<td>' + esc(item.employee_id || '') + '</td>' +
               '<td>' + esc(formatNumber(item.tokens)) + '</td>' +
@@ -185,8 +189,22 @@ window.aiteam = window.aiteam || {};
               '</tr>';
           }).join('')
         : '<tr><td colspan="5">当前时间窗口暂无员工消耗排行</td></tr>';
-      var detailRows = records.items && records.items.length
-        ? records.items.map(function (item) {
+      var detailItems = records.items && records.items.length
+        ? records.items.filter(function (item) {
+            return !detailEmployeeId || (item.employee_id || '') === detailEmployeeId;
+          })
+        : [];
+      var detailEmployeeName = null;
+      if (detailEmployeeId) {
+        for (var e = 0; e < employees.length; e += 1) {
+          if ((employees[e].employee_id || '') === detailEmployeeId) {
+            detailEmployeeName = employees[e].display_name || employees[e].employee_id || '未命名员工';
+            break;
+          }
+        }
+      }
+      var detailRows = detailItems.length
+        ? detailItems.map(function (item) {
             return '<tr>' +
               '<td>' + esc(item.display_name || item.employee_id || '未命名员工') + '</td>' +
               '<td>' + esc(item.run_id || '') + '</td>' +
@@ -237,6 +255,7 @@ window.aiteam = window.aiteam || {};
         '</div>' +
         '<div class="aiteam-billing__section">' +
         '<div class="aiteam-billing__section-head">对话 / Run 明细</div>' +
+        (detailEmployeeName ? '<div class="aiteam-shell__panel-body aiteam-billing__subtle">当前明细：' + esc(detailEmployeeName) + '</div>' : '') +
         '<table class="aiteam-table"><thead><tr><th>员工</th><th>Run</th><th>Tokens</th><th>成本</th><th>来源</th><th>时间</th></tr></thead><tbody>' + detailRows + '</tbody></table>' +
         '</div>' +
         '</div>';
@@ -265,6 +284,13 @@ window.aiteam = window.aiteam || {};
         rangeButtons[i].addEventListener('click', function () {
           var key = this.getAttribute('data-range-key') || 'all';
           container.lastQuickRangeHandler(key);
+        });
+      }
+      var rankRows = container.querySelectorAll ? container.querySelectorAll('[data-role="billing-rank-row"]') : [];
+      for (var j = 0; j < rankRows.length; j += 1) {
+        rankRows[j].addEventListener('click', function () {
+          var employeeId = this.getAttribute('data-employee-id') || '';
+          container.lastDetailEmployeeHandler(employeeId);
         });
       }
       if (exportButton && exportButton.addEventListener) {
@@ -310,6 +336,7 @@ window.aiteam = window.aiteam || {};
       state.periodStart = String(payload && payload.period_start || '').trim();
       state.periodEnd = String(payload && payload.period_end || '').trim();
       state.employeeId = String(payload && payload.employee_id || '').trim();
+      state.detailEmployeeId = state.employeeId;
       state.quickRangeKey = '';
       return loadData();
     };
@@ -320,6 +347,12 @@ window.aiteam = window.aiteam || {};
       state.periodStart = range.start;
       state.periodEnd = range.end;
       return loadData();
+    };
+
+    container.lastDetailEmployeeHandler = function (employeeId) {
+      state.detailEmployeeId = String(employeeId || '').trim();
+      render();
+      return state.detailEmployeeId;
     };
 
     container.lastExportHandler = function () {
