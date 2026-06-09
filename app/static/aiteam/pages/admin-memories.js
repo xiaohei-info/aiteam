@@ -191,7 +191,14 @@ window.aiteam = window.aiteam || {};
       query: '',
       category: 'all',
       bannerMessages: [],
-      selectedMemoryIds: []
+      selectedMemoryIds: [],
+      draftMemory: {
+        employee_id: '',
+        content: '',
+        importance: 3,
+        category: 'preference',
+        tags: []
+      }
     };
 
     function filteredItems() {
@@ -231,6 +238,7 @@ window.aiteam = window.aiteam || {};
     function renderToolbar(items) {
       var employees = collectEmployees(store.all());
       var categories = collectCategories(store.all());
+      var draftEmployeeId = state.draftMemory.employee_id || state.employeeId || ((employees[0] && employees[0].employee_id) || '');
       return '<div class="aiteam-memory__toolbar">' +
         '<div class="aiteam-memory__toolbar-row">' +
         '<label class="aiteam-memory__field"><span>员工</span><select data-role="employee-filter">' +
@@ -250,6 +258,15 @@ window.aiteam = window.aiteam || {};
         }).join('') +
         '</div>' +
         '<p class="aiteam-memory__summary">当前显示 ' + items.length + ' / ' + store.all().length + ' 条记忆</p>' +
+        '<div class="aiteam-card aiteam-card--flat">' +
+        '<div class="aiteam-card__row"><strong>新增记忆</strong><span class="aiteam-inline-note">页面内填写内容、重要程度、分类与标签</span></div>' +
+        '<div class="aiteam-card__meta"><span>归属员工</span><span><input class="aiteam-input" data-role="draft-memory-employee" value="' + escapeHtml(draftEmployeeId) + '" placeholder="emp_1"></span></div>' +
+        '<div class="aiteam-card__meta"><span>记忆内容</span><span><input class="aiteam-input" data-role="draft-memory-content" value="' + escapeHtml(state.draftMemory.content) + '" placeholder="输入可写入的长期记忆"></span></div>' +
+        '<div class="aiteam-card__meta"><span>重要程度</span><span><input class="aiteam-input" data-role="draft-memory-importance" type="number" min="1" max="5" value="' + escapeHtml(String(state.draftMemory.importance || 3)) + '"></span></div>' +
+        '<div class="aiteam-card__meta"><span>记忆分类</span><span><input class="aiteam-input" data-role="draft-memory-category" value="' + escapeHtml(state.draftMemory.category || 'preference') + '" placeholder="preference / habit / decision / event"></span></div>' +
+        '<div class="aiteam-card__meta"><span>标签</span><span><input class="aiteam-input" data-role="draft-memory-tags" value="' + escapeHtml((state.draftMemory.tags || []).join(', ')) + '" placeholder="日报, 时效"></span></div>' +
+        '<div class="aiteam-action-row"><button type="button" class="aiteam-btn" data-role="add-memory">保存新增记忆</button></div>' +
+        '</div>' +
         '</div>';
     }
 
@@ -373,9 +390,42 @@ window.aiteam = window.aiteam || {};
           fetchRemoteMemories();
         });
       }
+      var draftEmployeeInput = container.querySelector('[data-role="draft-memory-employee"]');
+      var draftContentInput = container.querySelector('[data-role="draft-memory-content"]');
+      var draftImportanceInput = container.querySelector('[data-role="draft-memory-importance"]');
+      var draftCategoryInput = container.querySelector('[data-role="draft-memory-category"]');
+      var draftTagsInput = container.querySelector('[data-role="draft-memory-tags"]');
       if (addButton) {
         addButton.addEventListener('click', function () {
           createMemory();
+        });
+      }
+      if (draftEmployeeInput) {
+        draftEmployeeInput.addEventListener('input', function () {
+          state.draftMemory.employee_id = this.value || '';
+        });
+      }
+      if (draftContentInput) {
+        draftContentInput.addEventListener('input', function () {
+          state.draftMemory.content = this.value || '';
+        });
+      }
+      if (draftImportanceInput) {
+        draftImportanceInput.addEventListener('input', function () {
+          var next = Number(this.value || 3);
+          state.draftMemory.importance = Math.max(1, Math.min(5, next || 3));
+        });
+      }
+      if (draftCategoryInput) {
+        draftCategoryInput.addEventListener('input', function () {
+          state.draftMemory.category = this.value || 'preference';
+        });
+      }
+      if (draftTagsInput) {
+        draftTagsInput.addEventListener('input', function () {
+          state.draftMemory.tags = String(this.value || '').split(',').map(function (item) {
+            return item.replace(/^\s+|\s+$/g, '');
+          }).filter(Boolean);
         });
       }
       for (var e = 0; e < employeeButtons.length; e++) {
@@ -454,15 +504,15 @@ window.aiteam = window.aiteam || {};
     }
 
     function createMemory() {
-      var employeeId = state.employeeId || (collectEmployees(store.all())[0] || {}).employee_id || '';
-      var content = promptValue('请输入记忆内容', '');
+      var employeeId = state.draftMemory.employee_id || state.employeeId || (collectEmployees(store.all())[0] || {}).employee_id || '';
+      var content = String(state.draftMemory.content || '').trim();
       if (!content) return;
       var payload = {
         employee_id: employeeId,
         content: content,
-        importance: 3,
-        category: 'preference',
-        tags: []
+        importance: Math.max(1, Math.min(5, Number(state.draftMemory.importance) || 3)),
+        category: state.draftMemory.category || 'preference',
+        tags: Array.isArray(state.draftMemory.tags) ? state.draftMemory.tags.slice() : []
       };
       if (!ns.api || !ns.api.createMemory) return;
       ns.api.createMemory(payload).then(function (result) {
@@ -472,6 +522,13 @@ window.aiteam = window.aiteam || {};
           return;
         }
         store.upsert(result.data || payload);
+        state.draftMemory = {
+          employee_id: employeeId,
+          content: '',
+          importance: 3,
+          category: 'preference',
+          tags: []
+        };
         state.bannerMessages = ['已新增记忆，若自动提取链路失败可继续手动维护。'];
         render();
       });
@@ -585,6 +642,17 @@ window.aiteam = window.aiteam || {};
       __test: {
         fetchRemoteMemories: fetchRemoteMemories,
         currentRemoteQuery: currentRemoteQuery,
+        setDraftMemory: function (draft) {
+          state.draftMemory = {
+            employee_id: draft && draft.employee_id || '',
+            content: draft && draft.content || '',
+            importance: draft && draft.importance || 3,
+            category: draft && draft.category || 'preference',
+            tags: Array.isArray(draft && draft.tags) ? draft.tags.slice() : []
+          };
+          return state.draftMemory;
+        },
+        createMemory: createMemory,
       }
     };
   }

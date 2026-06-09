@@ -79,8 +79,8 @@ const context = {
           if (pathname === '/memories') return this.getMemories();
           return Promise.resolve({ ok: false, status: 404, error: 'not found' });
         },
-        createMemory(body) { return Promise.resolve({ ok: true, data: body }); },
-        updateMemory(memoryId, body) { return Promise.resolve({ ok: true, data: { memory_id: memoryId, content: body.content } }); },
+        createMemory(body) { apiCalls.push({ type: 'createMemory', body }); return Promise.resolve({ ok: true, data: body }); },
+        updateMemory(memoryId, body) { apiCalls.push({ type: 'updateMemory', memoryId, body }); return Promise.resolve({ ok: true, data: { memory_id: memoryId, content: body.content } }); },
         deleteMemory() { return Promise.resolve({ ok: true }); },
       },
     },
@@ -143,14 +143,30 @@ assert(store.filter({ query: 'run_1' })[0].memory_id === 'mem_1', 'store.filter 
   assert(container.innerHTML.indexOf('prompt_injected') !== -1, 'page should render prompt injection stage');
   assert(container.innerHTML.indexOf('审计追踪') !== -1, 'page should render audit trace section');
   assert(container.innerHTML.indexOf('当前显示 2 / 2 条记忆') !== -1, 'page should render summary');
+  assert(container.innerHTML.indexOf('重要程度') !== -1, 'page should render inline importance field');
+  assert(container.innerHTML.indexOf('记忆分类') !== -1, 'page should render inline category field');
+  assert(container.innerHTML.indexOf('标签') !== -1, 'page should render inline tags field');
 
   assert(typeof page.__test.createPageController === 'function', 'page should expose controller factory');
   const controller = page.__test.createPageController(createElement('div'));
   controller.state.employeeId = 'emp_1';
   controller.state.query = '简洁';
   await controller.__test.fetchRemoteMemories();
+  controller.__test.setDraftMemory({
+    employee_id: 'emp_1',
+    content: '客户偏好 8 点前收到日报',
+    importance: 4,
+    category: 'preference',
+    tags: ['日报', '时效'],
+  });
+  await controller.__test.createMemory();
   assert(apiCalls[1].options.query.employee_id === 'emp_1', 'controller should forward employee filter to backend');
   assert(apiCalls[1].options.query.q === '简洁', 'controller should forward search query to backend');
+  assert(apiCalls[2].type === 'createMemory', 'controller should create memory from inline draft');
+  assert(apiCalls[2].body.employee_id === 'emp_1', 'create memory should keep selected employee');
+  assert(apiCalls[2].body.importance === 4, 'create memory should keep selected importance');
+  assert(apiCalls[2].body.category === 'preference', 'create memory should keep selected category');
+  assert(apiCalls[2].body.tags.join(',') === '日报,时效', 'create memory should submit tag list');
   if (failed) {
     console.error('admin-memories.test.js failed');
     failures.forEach(function (item) { console.error('- ' + item); });
