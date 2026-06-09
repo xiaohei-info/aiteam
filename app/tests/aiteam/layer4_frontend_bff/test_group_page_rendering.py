@@ -368,6 +368,13 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
     assert "新增员工" in payload["html"]
     assert "踢出员工" in payload["html"]
     assert "解散群聊" in payload["html"]
+    assert 'data-group-add-member' in payload["html"]
+    assert 'data-group-remove-member' in payload["html"]
+    assert 'data-group-archive' in payload["html"]
+    assert 'disabled>新增员工' not in payload["html"]
+    assert 'disabled>踢出员工' not in payload["html"]
+    assert 'disabled>解散群聊' not in payload["html"]
+    assert "当前正式写接口尚未开放" not in payload["html"]
 
 
 def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None:
