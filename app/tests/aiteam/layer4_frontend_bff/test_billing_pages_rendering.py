@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+PAGES_DIR = ROOT / "static" / "aiteam" / "pages"
+
+
+def _run_admin_billing() -> dict:
+    page_path = PAGES_DIR / "admin-billing.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    role: {{
+      getActiveRole() {{ return 'owner'; }},
+      canExportBilling() {{ return true; }},
+    }},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      renderPermissionDenied(container) {{ container.innerHTML = '<div>denied</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      getBillingUsageOverview() {{
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total_tokens: 2847320,
+            total_cost_cents: 39860,
+            period_start: '2026-06-01',
+            period_end: '2026-06-30',
+            by_employee: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', tokens: 1234560, cost_cents: 12840 }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', tokens: 892000, cost_cents: 8920 }},
+            ],
+          }},
+        }});
+      }},
+      getBillingUsageRecords() {{
+        return Promise.resolve({{
+          ok: true,
+          data: {{
+            total: 3,
+            items: [
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', run_id: 'run_1', tokens: 420000, cost_cents: 4200, source: 'run_summary', event_ts: '2026-06-03T10:00:00Z' }},
+              {{ employee_id: 'emp_marketing', display_name: '营销分析师', run_id: 'run_2', tokens: 380000, cost_cents: 3840, source: 'run_summary', event_ts: '2026-06-10T10:00:00Z' }},
+              {{ employee_id: 'emp_finance', display_name: '财务顾问', run_id: 'run_3', tokens: 300000, cost_cents: 3020, source: 'run_summary', event_ts: '2026-06-18T10:00:00Z' }},
+            ],
+          }},
+        }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-billing.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+  }};
+  aiteam.pages.adminBilling.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{ html: container.innerHTML }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def _run_admin_recharge() -> dict:
+    page_path = PAGES_DIR / "admin-recharge.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      get(url) {{
+        if (url === '/api/team/billing/balance') {{
+          return Promise.resolve({{
+            ok: true,
+            data: {{
+              balance: '48.60',
+              balance_cents: 4860,
+              token_balance: 48600,
+              estimated_days_remaining: 7,
+              low_balance_warning: true,
+              low_balance_threshold_cents: 5000,
+              usage_summary: {{ total_tokens: 2847320, total_cost_cents: 39860 }},
+            }},
+          }});
+        }}
+        if (url === '/api/team/billing/recharges') {{
+          return Promise.resolve({{
+            ok: true,
+            data: {{
+              items: [
+                {{ recharge_id: 'rch_1', amount: '100.00', amount_cents: 10000, payment_method: 'wechat_pay', status: 'succeeded', token_credited: 100000, created_at: '2026-06-01T10:00:00Z' }},
+              ],
+            }},
+          }});
+        }}
+        return Promise.resolve({{ ok: false, status: 404 }});
+      }},
+      post() {{
+        return Promise.resolve({{ ok: true, data: {{ recharge_id: 'rch_new' }} }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-recharge.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll() {{ return []; }},
+  }};
+  aiteam.pages.adminRecharge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{ html: container.innerHTML }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
+def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() -> None:
+    payload = _run_admin_billing()
+    assert "本月" in payload["html"]
+    assert "上月" in payload["html"]
+    assert "全部" in payload["html"]
+    assert "每日 Token 消耗趋势" in payload["html"]
+    assert "工资最高员工" in payload["html"]
+    assert "员工工资排行" in payload["html"]
+
+
+def test_admin_recharge_renders_warning_threshold_payment_methods_and_usage_entry() -> None:
+    payload = _run_admin_recharge()
+    assert "低余额预警" in payload["html"]
+    assert "低余额预警阈值" in payload["html"]
+    assert "微信支付" in payload["html"]
+    assert "支付宝" in payload["html"]
+    assert "查看消耗看板" in payload["html"]

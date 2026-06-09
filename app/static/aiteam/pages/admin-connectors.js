@@ -364,14 +364,22 @@ window.aiteam = window.aiteam || {};
         '</div>';
     }
 
-    function renderConnectorListItem(item) {
-      var active = state.selectedConnectorId === item.connector_id ? ' is-active' : '';
+  function renderConnectorListItem(item) {
+    var active = state.selectedConnectorId === item.connector_id ? ' is-active' : '';
       var grantedCount = item.employee_grants.filter(function (grant) { return grant.enabled; }).length;
       return '<button type="button" class="aiteam-skill-card aiteam-skill-card--button' + active + '" data-role="connector-select" data-connector-id="' + esc(item.connector_id) + '">' +
         '<span class="aiteam-skill-card__title">' + esc(item.name) + '</span>' +
         '<span class="aiteam-skill-card__meta">' + esc(item.provider) + ' · ' + esc(item.type) + '</span>' +
         '<span class="aiteam-skill-card__meta">状态：' + esc(statusLabel(item.status)) + ' · 凭据：' + esc(credentialStateLabel(item.credential_state)) + '</span>' +
         '<span class="aiteam-skill-card__meta">授权员工：' + esc(String(grantedCount)) + ' 人</span>' +
+        '</button>';
+    }
+
+    function renderAvailableDefinition(item) {
+      return '<button type="button" class="aiteam-skill-card aiteam-skill-card--button" data-role="connector-definition-preset" data-definition-id="' + esc(item.definition_id) + '">' +
+        '<span class="aiteam-skill-card__title">' + esc(item.display_name) + '</span>' +
+        '<span class="aiteam-skill-card__meta">' + esc(item.provider_code) + ' · ' + esc(item.connector_type) + '</span>' +
+        '<span class="aiteam-skill-card__meta">' + esc(item.auth_scheme) + '</span>' +
         '</button>';
     }
 
@@ -463,6 +471,19 @@ window.aiteam = window.aiteam || {};
         '<h2 class="aiteam-shell__panel-title">连接器中心</h2>' +
         '<p class="aiteam-shell__panel-body">B05 页面按冻结契约展示凭据脱敏、详情编辑、最近测试、状态刷新与员工授权；列表真相以 `/api/team/connectors` 为准，detail/update/test/grants 成功后重新拉取，避免前端残留临时状态。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-info"><p>' + esc(state.notice) + '</p></div>' : '') +
+        '<div class="aiteam-grid aiteam-grid--split">' +
+        '<div class="aiteam-panel">' +
+        '<div class="aiteam-panel__header"><h3>已连接服务</h3><span class="aiteam-inline-note">卡片展示 + 状态</span></div>' +
+        (state.items.length ? state.items.map(renderConnectorListItem).join('') : '<div class="aiteam-state aiteam-state-empty"><p>当前企业暂无已配置连接器</p></div>') +
+        '</div>' +
+        '<div class="aiteam-panel">' +
+        '<div class="aiteam-panel__header"><h3>可用连接器</h3><span class="aiteam-inline-note">预设图标列表 + 自定义 MCP</span></div>' +
+        (state.definitions.length ? state.definitions.map(renderAvailableDefinition).join('') : '<div class="aiteam-state aiteam-state-empty"><p>当前暂无可用预设定义</p></div>') +
+        '<div class="aiteam-shell__meta">' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">自定义MCP服务</span><span class="aiteam-shell__meta-value">填写 MCP Server URL / 名称 / 认证 Token 后新建</span></div>' +
+        '</div>' +
+        '</div>' +
+        '</div>' +
         '<form class="aiteam-shell__meta" data-role="connector-create-form">' +
         '<div class="aiteam-shell__meta-card"><label>预设定义<br><select class="aiteam-input" data-role="connector-definition">' + definitionsMarkup() + '</select></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>连接器名称<br><input class="aiteam-input" type="text" data-role="connector-name" placeholder="例如：公司飞书" value="' + esc(state.createDraft.name) + '"></label></div>' +

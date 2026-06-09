@@ -1094,6 +1094,11 @@ body.aiteam-shell-active .aiteam-shell {
   align-items: start;
 }
 
+.aiteam-grid--settings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
 .aiteam-panel {
   border-radius: 24px;
   padding: 24px;
@@ -2037,6 +2042,7 @@ body.aiteam-shell-active .aiteam-shell {
   .aiteam-metric-grid,
   .aiteam-workbench,
   .aiteam-workbench__metrics,
+  .aiteam-grid--settings,
   .aiteam-grid--split,
   .aiteam-grid--chat,
   .aiteam-grid--chat-3col,

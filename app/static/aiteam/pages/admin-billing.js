@@ -59,6 +59,70 @@ window.aiteam = window.aiteam || {};
     return parts.join('&');
   }
 
+  function currentMonthRange() {
+    var now = new Date();
+    var year = now.getUTCFullYear();
+    var month = now.getUTCMonth();
+    var start = new Date(Date.UTC(year, month, 1));
+    var end = new Date(Date.UTC(year, month + 1, 0));
+    return {
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+    };
+  }
+
+  function previousMonthRange() {
+    var now = new Date();
+    var year = now.getUTCFullYear();
+    var month = now.getUTCMonth();
+    var start = new Date(Date.UTC(year, month - 1, 1));
+    var end = new Date(Date.UTC(year, month, 0));
+    return {
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+    };
+  }
+
+  function allTimeRange() {
+    return { start: '', end: '' };
+  }
+
+  function resolveQuickRange(key) {
+    if (key === 'this_month') return currentMonthRange();
+    if (key === 'last_month') return previousMonthRange();
+    return allTimeRange();
+  }
+
+  function aggregateTrend(records) {
+    var rows = Array.isArray(records && records.items) ? records.items : [];
+    var map = {};
+    rows.forEach(function (item) {
+      var day = stringValue(item.event_ts, '').slice(0, 10) || 'unknown';
+      if (!map[day]) {
+        map[day] = { day: day, tokens: 0, cost_cents: 0 };
+      }
+      map[day].tokens += Number(item.tokens) || 0;
+      map[day].cost_cents += Number(item.cost_cents) || 0;
+    });
+    return Object.keys(map).sort().map(function (day) { return map[day]; });
+  }
+
+  function renderTrend(trendItems) {
+    if (!trendItems.length) {
+      return '<div class="aiteam-inline-empty">当前时间窗口暂无趋势数据</div>';
+    }
+    var maxTokens = trendItems.reduce(function (max, item) {
+      return Math.max(max, Number(item.tokens) || 0);
+    }, 0) || 1;
+    return '<div class="aiteam-billing__trend">' + trendItems.map(function (item) {
+      var height = Math.max(12, Math.round(((Number(item.tokens) || 0) / maxTokens) * 120));
+      return '<div class="aiteam-billing__trend-col">' +
+        '<div class="aiteam-billing__trend-bar" style="height:' + height + 'px"></div>' +
+        '<span class="aiteam-billing__trend-day">' + esc(item.day.slice(5)) + '</span>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
   function createController(container, role) {
     var state = {
       overview: null,
@@ -68,6 +132,7 @@ window.aiteam = window.aiteam || {};
       periodEnd: '',
       employeeId: '',
       loading: false,
+      quickRangeKey: 'this_month',
     };
 
     function setNotice(message) {
@@ -96,16 +161,30 @@ window.aiteam = window.aiteam || {};
       var overview = state.overview || { total_tokens: 0, total_cost_cents: 0, by_employee: [] };
       var records = state.records || { items: [], total: 0 };
       var employees = Array.isArray(overview.by_employee) ? overview.by_employee : [];
+      var trendItems = aggregateTrend(records);
+      var topEmployee = employees.length ? employees[0] : null;
+      var periodButtons = [
+        { key: 'this_month', label: '本月' },
+        { key: 'last_month', label: '上月' },
+        { key: 'all', label: '全部' },
+      ].map(function (item) {
+        var active = state.quickRangeKey === item.key ? ' is-active' : '';
+        return '<button type="button" class="aiteam-pill' + active + '" data-role="billing-range" data-range-key="' + item.key + '">' + item.label + '</button>';
+      }).join('');
       var rankingRows = employees.length
         ? employees.map(function (item) {
+            var width = topEmployee && Number(topEmployee.tokens) > 0
+              ? Math.max(12, Math.round(((Number(item.tokens) || 0) / Number(topEmployee.tokens)) * 100))
+              : 12;
             return '<tr>' +
               '<td>' + esc(item.display_name || item.employee_id || '未命名员工') + '</td>' +
               '<td>' + esc(item.employee_id || '') + '</td>' +
               '<td>' + esc(formatNumber(item.tokens)) + '</td>' +
               '<td>' + esc(formatCents(item.cost_cents)) + '</td>' +
+              '<td><div class="aiteam-billing__rankbar"><span style="width:' + width + '%"></span></div></td>' +
               '</tr>';
           }).join('')
-        : '<tr><td colspan="4">当前时间窗口暂无员工消耗排行</td></tr>';
+        : '<tr><td colspan="5">当前时间窗口暂无员工消耗排行</td></tr>';
       var detailRows = records.items && records.items.length
         ? records.items.map(function (item) {
             return '<tr>' +
@@ -131,6 +210,7 @@ window.aiteam = window.aiteam || {};
         '<h2 class="aiteam-shell__panel-title">工资管理 / Token 消耗</h2>' +
         '<p class="aiteam-shell__panel-body">B04 页面同时展示用量总览、员工排行与按 run 聚合的消耗明细，数据全部来自 Team Panel 的 `usage_ledger` 视图。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
+        '<div class="aiteam-billing__actions">' + periodButtons + '</div>' +
         '<form class="aiteam-shell__meta" data-role="billing-filter-form">' +
         '<div class="aiteam-shell__meta-card"><label>开始日期<br><input class="aiteam-input" type="date" data-role="billing-period-start" value="' + esc(state.periodStart) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>结束日期<br><input class="aiteam-input" type="date" data-role="billing-period-end" value="' + esc(state.periodEnd) + '"></label></div>' +
@@ -144,8 +224,16 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">明细行数</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(records.total || 0)) + '</span></div>' +
         '</div>' +
         '<div class="aiteam-billing__section">' +
-        '<div class="aiteam-billing__section-head">员工排行</div>' +
-        '<table class="aiteam-table"><thead><tr><th>员工</th><th>ID</th><th>Tokens</th><th>成本</th></tr></thead><tbody>' + rankingRows + '</tbody></table>' +
+        '<div class="aiteam-billing__section-head">每日 Token 消耗趋势</div>' +
+        renderTrend(trendItems) +
+        '</div>' +
+        '<div class="aiteam-billing__section">' +
+        '<div class="aiteam-billing__section-head">工资最高员工</div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前窗口最高消耗员工</span><span class="aiteam-shell__meta-value">' + esc(topEmployee ? (topEmployee.display_name || topEmployee.employee_id || '未命名员工') : '—') + '</span></div>' +
+        '</div>' +
+        '<div class="aiteam-billing__section">' +
+        '<div class="aiteam-billing__section-head">员工工资排行</div>' +
+        '<table class="aiteam-table"><thead><tr><th>员工</th><th>ID</th><th>Tokens</th><th>成本</th><th>占比</th></tr></thead><tbody>' + rankingRows + '</tbody></table>' +
         '</div>' +
         '<div class="aiteam-billing__section">' +
         '<div class="aiteam-billing__section-head">对话 / Run 明细</div>' +
@@ -170,6 +258,13 @@ window.aiteam = window.aiteam || {};
             period_end: endInput && endInput.value,
             employee_id: employeeSelect && employeeSelect.value,
           });
+        });
+      }
+      var rangeButtons = container.querySelectorAll ? container.querySelectorAll('[data-role="billing-range"]') : [];
+      for (var i = 0; i < rangeButtons.length; i += 1) {
+        rangeButtons[i].addEventListener('click', function () {
+          var key = this.getAttribute('data-range-key') || 'all';
+          container.lastQuickRangeHandler(key);
         });
       }
       if (exportButton && exportButton.addEventListener) {
@@ -215,6 +310,15 @@ window.aiteam = window.aiteam || {};
       state.periodStart = String(payload && payload.period_start || '').trim();
       state.periodEnd = String(payload && payload.period_end || '').trim();
       state.employeeId = String(payload && payload.employee_id || '').trim();
+      state.quickRangeKey = '';
+      return loadData();
+    };
+
+    container.lastQuickRangeHandler = function (key) {
+      var range = resolveQuickRange(key);
+      state.quickRangeKey = key;
+      state.periodStart = range.start;
+      state.periodEnd = range.end;
       return loadData();
     };
 

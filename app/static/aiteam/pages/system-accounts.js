@@ -39,6 +39,35 @@ window.aiteam = window.aiteam || {};
     return String(value).replace(/^\s+|\s+$/g, '');
   }
 
+  function formatMoney(value) {
+    var num = Number(value);
+    if (!isFinite(num)) return '—';
+    return '¥' + num.toLocaleString('en-US');
+  }
+
+  function formatTokens(value) {
+    var num = Number(value);
+    if (!isFinite(num)) return '—';
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M tokens';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K tokens';
+    return String(num) + ' tokens';
+  }
+
+  function statusLabel(value) {
+    var status = String(value || '').toLowerCase();
+    if (status === 'active' || status === 'normal') return '正常';
+    if (status === 'suspended' || status === 'banned') return '封禁';
+    if (status === 'arrears' || status === 'low_balance') return '欠费';
+    return value || '未知';
+  }
+
+  function statusClass(value) {
+    var status = String(value || '').toLowerCase();
+    if (status === 'active' || status === 'normal') return 'is-ok';
+    if (status === 'suspended' || status === 'banned') return 'is-bad';
+    return 'is-warn';
+  }
+
   function _renderPermissionDenied(container) {
     if (!container) return;
     if (ns.states && ns.states.renderPermissionDenied) {
@@ -122,6 +151,52 @@ window.aiteam = window.aiteam || {};
     return { cancelled: true, error: 'unsupported_action' };
   }
 
+  function filterEnterprises(items, state) {
+    var query = trimText(state.query).toLowerCase();
+    var status = trimText(state.statusFilter).toLowerCase();
+    return (items || []).filter(function (item) {
+      if (status && String(item.status || '').toLowerCase() !== status) return false;
+      if (!query) return true;
+      var haystack = [
+        item.name,
+        item.owner_name,
+        item.owner_phone,
+        item.enterprise_id,
+      ].join(' ').toLowerCase();
+      return haystack.indexOf(query) !== -1;
+    });
+  }
+
+  function buildStats(items) {
+    var total = items.length;
+    var active = items.filter(function (item) { return String(item.status || '').toLowerCase() === 'active'; });
+    var monthNew = items.filter(function (item) {
+      return String(item.created_at || '').slice(0, 7) === '2026-06';
+    });
+    var totalRecharge = items.reduce(function (sum, item) {
+      return sum + (Number(item.total_recharged) || 0);
+    }, 0);
+    return {
+      total: total,
+      monthNew: monthNew.length,
+      active: active.length,
+      rechargeTotal: totalRecharge,
+    };
+  }
+
+  function renderDetail(selected) {
+    if (!selected) {
+      return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业账号详情</span><span class="aiteam-shell__meta-value">选择企业后查看详情</span></div>';
+    }
+    return '' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业账号详情</span><span class="aiteam-shell__meta-value">' + (selected.name || '') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">联系人 / 手机</span><span class="aiteam-shell__meta-value">' + ((selected.owner_name || '—') + ' / ' + (selected.owner_phone || '—')) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">注册时间</span><span class="aiteam-shell__meta-value">' + (selected.created_at || '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">累计充值</span><span class="aiteam-shell__meta-value">' + formatMoney(selected.total_recharged || selected.balance || 0) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">Token消耗</span><span class="aiteam-shell__meta-value">' + formatTokens(selected.total_tokens_used || 0) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + statusLabel(selected.status) + '</span></div>';
+  }
+
   ns.pages.systemAccounts = {
     init: function (container) {
       if (!container) return;
@@ -165,48 +240,108 @@ window.aiteam = window.aiteam || {};
         }
 
         var canMutate = _hasSystemWrite(role);
-        var actionMarkup = canMutate
-          ? function (enterpriseId) {
-              return '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="ban" data-aiteam-eid="' + enterpriseId + '">封禁</button> ' +
-                '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="unban" data-aiteam-eid="' + enterpriseId + '">解封</button> ' +
-                '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="recharge" data-aiteam-eid="' + enterpriseId + '">充值</button> ' +
-                '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="notify" data-aiteam-eid="' + enterpriseId + '">通知</button>';
+        var state = {
+          query: '',
+          statusFilter: '',
+          selectedEnterpriseId: data.enterprises[0].enterprise_id || '',
+        };
+
+        function render() {
+          var filtered = filterEnterprises(data.enterprises, state);
+          var stats = buildStats(data.enterprises);
+          var selected = filtered.find(function (item) { return item.enterprise_id === state.selectedEnterpriseId; }) || filtered[0] || data.enterprises[0];
+          state.selectedEnterpriseId = selected ? selected.enterprise_id : '';
+          var actionMarkup = canMutate
+            ? function (enterpriseId) {
+                return '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="ban" data-aiteam-eid="' + enterpriseId + '">封禁</button> ' +
+                  '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="unban" data-aiteam-eid="' + enterpriseId + '">解封</button> ' +
+                  '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="recharge" data-aiteam-eid="' + enterpriseId + '">充值</button> ' +
+                  '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="notify" data-aiteam-eid="' + enterpriseId + '">通知</button>';
+              }
+            : function () {
+                return '<span class="aiteam-shell__meta-value">只读</span>';
+              };
+
+          var rows = filtered.map(function (e) {
+            var enterpriseId = e.enterprise_id || '';
+            var active = state.selectedEnterpriseId === enterpriseId ? ' class="aiteam-employee-row"' : ' class="aiteam-employee-row"';
+            return '<tr' + active + ' data-enterprise-row="' + enterpriseId + '">' +
+              '<td>' + (e.name || '') + '</td>' +
+              '<td>' + ((e.owner_name || '—') + ' / ' + (e.owner_phone || '—')) + '</td>' +
+              '<td>' + (e.created_at || '') + '</td>' +
+              '<td>' + formatMoney(e.total_recharged || e.balance || 0) + '</td>' +
+              '<td>' + formatTokens(e.total_tokens_used || 0) + '</td>' +
+              '<td><span class="aiteam-office__task-chip ' + statusClass(e.status) + '">' + statusLabel(e.status) + '</span></td>' +
+              '<td>' + actionMarkup(enterpriseId) + '</td>' +
+              '</tr>';
+          }).join('');
+
+          container.innerHTML =
+            '<div class="aiteam-shell__panel">' +
+            '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
+            '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
+            '<p class="aiteam-shell__panel-body">通过 /api/system-admin/enterprises 消费企业账号数据；所有写操作统一走 /actions 正式入口。</p>' +
+            '<div class="aiteam-billing__stats">' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总企业数</span><span class="aiteam-shell__meta-value">' + stats.total + '</span></div>' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">本月新增</span><span class="aiteam-shell__meta-value">' + stats.monthNew + '</span></div>' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">月活企业</span><span class="aiteam-shell__meta-value">' + stats.active + '</span></div>' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总充值</span><span class="aiteam-shell__meta-value">' + formatMoney(stats.rechargeTotal) + '</span></div>' +
+            '</div>' +
+            '<div class="aiteam-shell__meta">' +
+            '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号"></label></div>' +
+            '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">导出</span><span class="aiteam-shell__meta-value">全量导出企业列表（Excel）</span></div>' +
+            '</div>' +
+            '<div class="aiteam-shell__two-column">' +
+            '<div class="aiteam-shell__panel">' +
+            '<table class="aiteam-table"><thead><tr><th>企业名称</th><th>联系人/手机</th><th>注册时间</th><th>累计充值</th><th>Token消耗</th><th>状态</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+            '</div>' +
+            '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">企业账号详情</h3><div class="aiteam-shell__meta">' + renderDetail(selected) + '</div></div>' +
+            '</div>' +
+            (canMutate ? '' : '<p class="aiteam-shell__meta">当前角色仅可查看企业账号，企业操作需要 system_write 权限。</p>') +
+            '<div id="aiteam-sys-accounts-feedback"></div>' +
+            '</div>';
+
+          if (container.querySelector) {
+            var search = container.querySelector('[data-role="enterprise-search"]');
+            var filter = container.querySelector('[data-role="enterprise-status"]');
+            if (search && search.addEventListener) {
+              search.addEventListener('input', function () {
+                state.query = this.value || '';
+                render();
+              });
             }
-          : function () {
-              return '<span class="aiteam-shell__meta-value">只读</span>';
-            };
+            if (filter && filter.addEventListener) {
+              filter.addEventListener('change', function () {
+                state.statusFilter = this.value || '';
+                render();
+              });
+            }
+          }
 
-        var rows = data.enterprises.map(function (e) {
-          var enterpriseId = e.enterprise_id || '';
-          return '<tr>' +
-            '<td>' + enterpriseId + '</td>' +
-            '<td>' + (e.name || '') + '</td>' +
-            '<td>' + (e.status || '') + '</td>' +
-            '<td>' + (e.plan || '') + '</td>' +
-            '<td>' + (typeof e.balance === 'number' ? e.balance : '—') + '</td>' +
-            '<td>' + actionMarkup(enterpriseId) + '</td>' +
-            '</tr>';
-        }).join('');
-
-        container.innerHTML =
-          '<div class="aiteam-shell__panel">' +
-          '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
-          '<p class="aiteam-shell__panel-body">通过 /api/system-admin/enterprises 消费企业账号数据。</p>' +
-          (canMutate ? '' : '<p class="aiteam-shell__meta">当前角色仅可查看企业账号，企业操作需要 system_write 权限。</p>') +
-          '<table class="aiteam-table"><thead><tr><th>企业ID</th><th>名称</th><th>状态</th><th>方案</th><th>余额</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          '<div id="aiteam-sys-accounts-feedback"></div>' +
-          '</div>';
-
-        if (!canMutate || !container.querySelectorAll) return;
-        var buttons = container.querySelectorAll('button[data-aiteam-action]');
-        for (var i = 0; i < buttons.length; i++) {
-          buttons[i].addEventListener('click', function (ev) {
-            var btn = ev.currentTarget;
-            var eid = btn.getAttribute('data-aiteam-eid');
-            var action = btn.getAttribute('data-aiteam-action');
-            ns.pages.systemAccounts.performAction(eid, action);
-          });
+          if (container.querySelectorAll) {
+            var rowsEls = container.querySelectorAll('[data-enterprise-row]');
+            for (var i = 0; i < rowsEls.length; i++) {
+              rowsEls[i].addEventListener('click', function () {
+                state.selectedEnterpriseId = this.getAttribute('data-enterprise-row') || '';
+                render();
+              });
+            }
+            if (canMutate) {
+              var buttons = container.querySelectorAll('button[data-aiteam-action]');
+              for (var j = 0; j < buttons.length; j++) {
+                buttons[j].addEventListener('click', function (ev) {
+                  var btn = ev.currentTarget;
+                  var eid = btn.getAttribute('data-aiteam-eid');
+                  var action = btn.getAttribute('data-aiteam-action');
+                  ns.pages.systemAccounts.performAction(eid, action);
+                });
+              }
+            }
+          }
         }
+
+        render();
       });
     },
 

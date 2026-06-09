@@ -171,7 +171,8 @@ window.aiteam = window.aiteam || {};
       employeeId: '',
       query: '',
       category: 'all',
-      bannerMessages: []
+      bannerMessages: [],
+      selectedMemoryIds: []
     };
 
     function filteredItems() {
@@ -224,6 +225,31 @@ window.aiteam = window.aiteam || {};
         '</div>';
     }
 
+    function renderEmployeeSidebar() {
+      var employees = collectEmployees(store.all());
+      if (!employees.length) {
+        return '<div class="aiteam-inline-empty">左侧员工选择器暂无可用员工</div>';
+      }
+      return '<div class="aiteam-stack">' + employees.map(function (item) {
+        var active = item.employee_id === state.employeeId ? ' is-active' : '';
+        return '<button type="button" class="aiteam-history-item' + active + '" data-role="employee-sidebar" data-employee-id="' + escapeHtml(item.employee_id) + '">' +
+          '<strong class="aiteam-history-item__title">' + escapeHtml(item.employee_name) + '</strong>' +
+          '<span class="aiteam-card__meta">' + escapeHtml(item.employee_id) + '</span>' +
+          '</button>';
+      }).join('') + '</div>';
+    }
+
+    function renderBatchToolbar(items) {
+      var selectedCount = state.selectedMemoryIds.length;
+      return '<div class="aiteam-card aiteam-card--flat">' +
+        '<div class="aiteam-card__row"><strong>批量删除</strong><span class="aiteam-inline-note">已选择 ' + selectedCount + ' / ' + items.length + ' 条</span></div>' +
+        '<div class="aiteam-action-row">' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="clear-selection"' + (selectedCount ? '' : ' disabled') + '>清空选择</button>' +
+        '<button type="button" class="aiteam-btn" data-role="delete-selected"' + (selectedCount ? '' : ' disabled') + '>批量删除</button>' +
+        '</div>' +
+        '</div>';
+    }
+
     function renderAuditTrace(item) {
       if (!item.audit_events.length) {
         return '<p class="aiteam-memory__audit-note">审计追踪未返回，页面展示降级提示并保留人工核查入口。</p>';
@@ -255,9 +281,11 @@ window.aiteam = window.aiteam || {};
         }
         var reviewLine = item.review_status ? '<span>审核：' + escapeHtml(item.review_status) + '</span>' : '';
         var visibilityLine = item.visibility_scope ? '<span>可见范围：' + escapeHtml(item.visibility_scope) + '</span>' : '<span>可见范围：按员工授权过滤</span>';
+        var checked = state.selectedMemoryIds.indexOf(item.memory_id) !== -1 ? ' checked' : '';
         return '<article class="aiteam-memory__card" data-memory-id="' + escapeHtml(item.memory_id) + '">' +
           '<div class="aiteam-memory__card-head">' +
           '<div><h3>' + escapeHtml(item.employee_name) + '</h3><p>' + escapeHtml(item.employee_id) + '</p></div>' +
+          '<label class="aiteam-shell__meta-card"><input type="checkbox" data-role="select-memory" value="' + escapeHtml(item.memory_id) + '"' + checked + '> 选择</label>' +
           '<span class="aiteam-memory__importance">' + escapeHtml(renderStars(item.importance)) + '</span>' +
           '</div>' +
           '<p class="aiteam-memory__content">' + escapeHtml(item.content) + '</p>' +
@@ -288,8 +316,12 @@ window.aiteam = window.aiteam || {};
       var queryInput = container.querySelector('[data-role="query-filter"]');
       var addButton = container.querySelector('[data-role="add-memory"]');
       var categoryButtons = container.querySelectorAll ? container.querySelectorAll('[data-role="category-filter"]') : [];
+      var employeeButtons = container.querySelectorAll ? container.querySelectorAll('[data-role="employee-sidebar"]') : [];
       var editButtons = container.querySelectorAll ? container.querySelectorAll('[data-role="edit-memory"]') : [];
       var deleteButtons = container.querySelectorAll ? container.querySelectorAll('[data-role="delete-memory"]') : [];
+      var selectBoxes = container.querySelectorAll ? container.querySelectorAll('[data-role="select-memory"]') : [];
+      var clearSelection = container.querySelector ? container.querySelector('[data-role="clear-selection"]') : null;
+      var deleteSelected = container.querySelector ? container.querySelector('[data-role="delete-selected"]') : null;
 
       if (employeeSelect) {
         employeeSelect.addEventListener('change', function () {
@@ -308,10 +340,38 @@ window.aiteam = window.aiteam || {};
           createMemory();
         });
       }
+      for (var e = 0; e < employeeButtons.length; e++) {
+        employeeButtons[e].addEventListener('click', function () {
+          state.employeeId = this.getAttribute('data-employee-id') || '';
+          render();
+        });
+      }
       for (var i = 0; i < categoryButtons.length; i++) {
         categoryButtons[i].addEventListener('click', function () {
           state.category = this.getAttribute('data-category') || 'all';
           render();
+        });
+      }
+      for (var s = 0; s < selectBoxes.length; s++) {
+        selectBoxes[s].addEventListener('change', function () {
+          var memoryId = this.value;
+          if (this.checked) {
+            if (state.selectedMemoryIds.indexOf(memoryId) === -1) state.selectedMemoryIds.push(memoryId);
+          } else {
+            state.selectedMemoryIds = state.selectedMemoryIds.filter(function (entry) { return entry !== memoryId; });
+          }
+          render();
+        });
+      }
+      if (clearSelection) {
+        clearSelection.addEventListener('click', function () {
+          state.selectedMemoryIds = [];
+          render();
+        });
+      }
+      if (deleteSelected) {
+        deleteSelected.addEventListener('click', function () {
+          deleteSelectedMemories();
         });
       }
       for (var j = 0; j < editButtons.length; j++) {
@@ -337,8 +397,10 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-memory__banners">' + bannerMessages.map(function (message) {
           return '<p class="aiteam-memory__banner">' + escapeHtml(message) + '</p>';
         }).join('') + '</div>' +
-        renderToolbar(items) +
-        renderCards(items) +
+        '<div class="aiteam-grid aiteam-grid--chat">' +
+        '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>左侧员工选择器</h3><span class="aiteam-inline-note">员工 / 记忆归属</span></div>' + renderEmployeeSidebar() + '</section>' +
+        '<section class="aiteam-panel">' + renderToolbar(items) + renderBatchToolbar(items) + renderCards(items) + '</section>' +
+        '</div>' +
         '</div>';
       bindEvents();
     }
@@ -423,7 +485,31 @@ window.aiteam = window.aiteam || {};
           return;
         }
         store.remove(memoryId);
+        state.selectedMemoryIds = state.selectedMemoryIds.filter(function (entry) { return entry !== memoryId; });
         state.bannerMessages = ['已删除记忆。'];
+        render();
+      });
+    }
+
+    function deleteSelectedMemories() {
+      var ids = state.selectedMemoryIds.slice();
+      if (!ids.length) return;
+      if (!confirmAction('确认批量删除所选记忆吗？')) return;
+      if (!ns.api || !ns.api.deleteMemory) return;
+      var chain = Promise.resolve();
+      ids.forEach(function (memoryId) {
+        chain = chain.then(function () {
+          return ns.api.deleteMemory(memoryId).then(function (result) {
+            if (result && result.ok) {
+              store.remove(memoryId);
+            }
+            return result;
+          });
+        });
+      });
+      chain.then(function () {
+        state.selectedMemoryIds = [];
+        state.bannerMessages = ['已批量删除所选记忆。'];
         render();
       });
     }

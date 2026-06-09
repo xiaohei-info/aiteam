@@ -120,7 +120,7 @@ window.aiteam = window.aiteam || {};
 
     var balanceValue = state.balance && state.balance.balance ? ('¥' + state.balance.balance) : formatCurrencyFromCents(state.balance && state.balance.balance_cents);
     var banner = state.balance && state.balance.low_balance_warning
-      ? '<div class="aiteam-alert aiteam-alert-warning">余额低于预警阈值，请尽快充值，避免对话与运行因低余额被阻断。</div>'
+      ? '<div class="aiteam-alert aiteam-alert-warning">低余额预警：余额低于预警阈值，请尽快充值，避免对话与运行因低余额被阻断。</div>'
       : '<div class="aiteam-alert aiteam-alert-success">余额充足，企业员工运行与会话消费可继续进行。</div>';
     var notice = state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + state.notice + '</p></div>' : '';
 
@@ -136,15 +136,18 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">累计 Tokens</span><span class="aiteam-shell__meta-value">' + formatNumber(state.usageSummary.total_tokens) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">累计消耗</span><span class="aiteam-shell__meta-value">' + formatCurrencyFromCents(state.usageSummary.total_cost_cents) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">预估可用天数</span><span class="aiteam-shell__meta-value">' + (state.balance && state.balance.estimated_days_remaining != null ? state.balance.estimated_days_remaining : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">低余额预警阈值</span><span class="aiteam-shell__meta-value">' + formatCurrencyFromCents(state.balance && state.balance.low_balance_threshold_cents) + '</span></div>' +
       '</div>' +
       '<div class="aiteam-billing__section">' +
       '<div class="aiteam-billing__section-head">发起充值</div>' +
       '<p class="aiteam-shell__panel-body aiteam-billing__subtle">充值请求会 POST 到 /api/team/billing/recharges；mock_pay 会立即到账，其余通道按后端状态展示处理中/到账结果。</p>' +
       '<div class="aiteam-billing__actions">' + packageButtons + '</div>' +
+      '<div class="aiteam-billing__section-head">支付方式</div>' +
       '<div class="aiteam-billing__actions">' + paymentTags + '</div>' +
       '<div class="aiteam-billing__actions">' +
       '<input class="aiteam-input" type="number" min="1" value="' + state.selectedAmountYuan + '" data-recharge-custom-input />' +
       '<button type="button" class="aiteam-button" data-recharge-submit>提交充值</button>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/admin/billing/usage">查看消耗看板</a>' +
       '</div>' +
       '</div>' +
       '<div class="aiteam-billing__section">' +
