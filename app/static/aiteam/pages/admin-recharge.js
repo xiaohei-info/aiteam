@@ -84,8 +84,23 @@ window.aiteam = window.aiteam || {};
       paymentMethods: paymentMethods,
       warningThresholdCents: Number(seed && seed.warningThresholdCents != null ? seed.warningThresholdCents : balance && balance.low_balance_threshold_cents) || 5000,
       warningEnabled: seed && seed.warningEnabled != null ? !!seed.warningEnabled : !!(balance && balance.warning_enabled),
+      lastRechargeResult: seed && seed.lastRechargeResult ? seed.lastRechargeResult : null,
       notice: seed && seed.notice ? seed.notice : '',
     };
+  }
+
+  function renderRechargeResult(result) {
+    if (!result) return '';
+    return '' +
+      '<div class="aiteam-billing__section">' +
+      '<div class="aiteam-billing__section-head">充值结果</div>' +
+      '<div class="aiteam-shell__meta">' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + formatStatus(result.status || 'failed') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">订单号</span><span class="aiteam-shell__meta-value">' + String(result.recharge_id || '-') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">支付方式</span><span class="aiteam-shell__meta-value">' + formatPaymentMethod(result.payment_method) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">到账 Tokens</span><span class="aiteam-shell__meta-value">' + formatNumber(result.token_credited || 0) + '</span></div>' +
+      '</div>' +
+      '</div>';
   }
 
   function renderRecords(records) {
@@ -164,6 +179,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-billing__section-head">最近记录</div>' +
       renderRecords(state.records) +
       '</div>' +
+      renderRechargeResult(state.lastRechargeResult) +
       '</div>';
   }
 
@@ -306,6 +322,12 @@ window.aiteam = window.aiteam || {};
       return ns.api.post('/api/team/billing/recharges', requestBody).then(function (result) {
         if (!result.ok) {
           state.notice = '充值请求提交失败';
+          state.lastRechargeResult = {
+            recharge_id: '-',
+            payment_method: requestBody.payment_method,
+            status: 'failed',
+            token_credited: 0,
+          };
           renderRechargePage(container, state);
           bindInteractions(container, state, ns.pages.adminRecharge);
           return result;
@@ -313,6 +335,12 @@ window.aiteam = window.aiteam || {};
         return loadPageData(container, {
           selectedAmountYuan: amountYuan,
           selectedPaymentMethod: paymentMethod,
+          lastRechargeResult: {
+            recharge_id: (result.data && result.data.recharge_id) || '-',
+            payment_method: paymentMethod,
+            status: (result.data && result.data.status) || (paymentMethod === 'mock_pay' ? 'succeeded' : 'pending'),
+            token_credited: (result.data && result.data.token_credited) || 0,
+          },
           notice: paymentMethod === 'mock_pay' ? '充值已提交并已按后端返回刷新余额与记录' : '充值已提交，等待后端通道完成到账',
         }).then(function (nextState) {
           if (!nextState) return result;

@@ -230,6 +230,96 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-recharge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_admin_recharge_submit_flow(success: bool) -> dict:
+    page_path = PAGES_DIR / "admin-recharge.js"
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(page_path))}, 'utf8');
+const apiCalls = [];
+let balanceResponse = {{
+  balance: '48.60',
+  balance_cents: 4860,
+  token_balance: 48600,
+  estimated_days_remaining: 7,
+  low_balance_warning: true,
+  low_balance_threshold_cents: 5000,
+  warning_enabled: true,
+  usage_summary: {{ total_tokens: 2847320, total_cost_cents: 39860 }},
+}};
+let rechargeItems = [
+  {{ recharge_id: 'rch_1', amount: '100.00', amount_cents: 10000, payment_method: 'wechat_pay', status: 'succeeded', token_credited: 100000, created_at: '2026-06-01T10:00:00Z' }},
+];
+global.window = {{
+  aiteam: {{
+    pages: {{}},
+    states: {{
+      renderLoading(container) {{ container.innerHTML = '<div>loading</div>'; }},
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+    }},
+    api: {{
+      get(url) {{
+        apiCalls.push({{ method: 'GET', url }});
+        if (url === '/api/team/billing/balance') {{
+          return Promise.resolve({{ ok: true, data: balanceResponse }});
+        }}
+        if (url === '/api/team/billing/recharges') {{
+          return Promise.resolve({{ ok: true, data: {{ items: rechargeItems }} }});
+        }}
+        return Promise.resolve({{ ok: false, status: 404 }});
+      }},
+      post(url, body) {{
+        apiCalls.push({{ method: 'POST', url, body }});
+        if ({'true' if success else 'false'}) {{
+          balanceResponse = {{
+            ...balanceResponse,
+            balance: '148.60',
+            balance_cents: 14860,
+            token_balance: 148600,
+            low_balance_warning: false,
+          }};
+          rechargeItems = [
+            {{ recharge_id: 'rch_new', amount: '100.00', amount_cents: 10000, payment_method: body.payment_method, status: 'succeeded', token_credited: 100000, created_at: '2026-06-10T10:00:00Z' }},
+          ].concat(rechargeItems);
+          return Promise.resolve({{ ok: true, data: {{ recharge_id: 'rch_new', status: 'succeeded', token_credited: 100000 }} }});
+        }}
+        return Promise.resolve({{ ok: false, status: 502, error: 'provider_unavailable' }});
+      }},
+      patch() {{
+        return Promise.resolve({{ ok: true, data: {{}} }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'admin-recharge.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll() {{ return []; }},
+  }};
+  aiteam.pages.adminRecharge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const beforeHtml = container.innerHTML;
+  await container.lastSubmitHandler({{ amountYuan: 100, paymentMethod: 'mock_pay', idempotencyKey: 'ui-recharge-001' }});
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    beforeHtml,
+    afterHtml: container.innerHTML,
+    apiCalls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() -> None:
     payload = _run_admin_billing()
     assert "本月" in payload["html"]
@@ -260,3 +350,24 @@ def test_admin_recharge_can_update_low_balance_threshold_and_refresh_notice() ->
     ]
     assert "预警阈值已更新" in payload["afterHtml"]
     assert "¥88.00" in payload["afterHtml"]
+
+
+def test_admin_recharge_submit_success_renders_result_and_refreshes_balance_records() -> None:
+    payload = _run_admin_recharge_submit_flow(True)
+    assert payload["apiCalls"][2] == {
+        "method": "POST",
+        "url": "/api/team/billing/recharges",
+        "body": {"amount": 100, "payment_method": "mock_pay", "idempotency_key": "ui-recharge-001"},
+    }
+    assert "充值结果" in payload["afterHtml"]
+    assert "已到账" in payload["afterHtml"]
+    assert "充值已提交并已按后端返回刷新余额与记录" in payload["afterHtml"]
+    assert "¥148.60" in payload["afterHtml"]
+    assert "rch_new" in payload["afterHtml"]
+
+
+def test_admin_recharge_submit_failure_renders_result_feedback() -> None:
+    payload = _run_admin_recharge_submit_flow(False)
+    assert "充值结果" in payload["afterHtml"]
+    assert "失败" in payload["afterHtml"]
+    assert "充值请求提交失败" in payload["afterHtml"]
