@@ -2,167 +2,226 @@ window.aiteam = window.aiteam || {};
 
 (function registerOfficePage(ns) {
   ns.pages = ns.pages || {};
+  var OFFICE_SCENE_PATH = '/api/team/office/scene';
+  var OFFICE_FEED_PATH = '/api/team/office/feed';
 
-  var PRESENCE_BADGE = {
-    idle: 'aiteam-badge--idle',
-    online: 'aiteam-badge--online',
-    busy: 'aiteam-badge--busy',
-    streaming: 'aiteam-badge--streaming',
-    queued: 'aiteam-badge--queued',
-    waiting_reply: 'aiteam-badge--waiting_reply',
-    offline: 'aiteam-badge--offline',
-    paused: 'aiteam-badge--paused',
-    provisioning: 'aiteam-badge--provisioning',
-    done: 'aiteam-badge--done',
-    failed: 'aiteam-badge--failed',
-  };
-
-  var PRESENCE_LABEL = {
-    idle: '空闲',
-    busy: '忙碌',
-    streaming: '流式',
-    queued: '排队',
-    waiting_reply: '待回复',
-    offline: '离线',
-    paused: '暂停',
-    provisioning: '部署中',
-    done: '完成',
-    failed: '失败',
-  };
-
-  var RUN_BADGE = {
-    queued: 'aiteam-badge--queued',
-    running: 'aiteam-badge--busy',
-    streaming: 'aiteam-badge--streaming',
-    waiting_human: 'aiteam-badge--waiting_reply',
-    completed: 'aiteam-badge--done',
-    succeeded: 'aiteam-badge--done',
-    failed: 'aiteam-badge--failed',
-    error: 'aiteam-badge--failed',
-  };
-
-  function escapeHtml(str) {
-    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
-  function renderSeatCard(seat) {
-    var state = seat.presence && seat.presence.state ? seat.presence.state : 'idle';
-    var badgeClass = PRESENCE_BADGE[state] || 'aiteam-badge--idle';
-    var stateLabel = PRESENCE_LABEL[state] || state;
-    var taskPreview = seat.presence && seat.presence.current_task ? escapeHtml(seat.presence.current_task) : '';
+  function stringValue(value, fallback) {
+    var text = String(value == null ? '' : value).trim();
+    return text || (fallback || '');
+  }
+
+  function seatPresenceState(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.state) return String(raw.state).toLowerCase();
+    return String(raw || seat && seat.status || 'idle').toLowerCase();
+  }
+
+  function seatTaskPreview(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.current_task) return String(raw.current_task);
+    return stringValue(seat && seat.current_task, '等待任务');
+  }
+
+  function seatEventCursor(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.latest_event_cursor != null) return raw.latest_event_cursor;
+    return seat && seat.latest_event_cursor != null ? seat.latest_event_cursor : null;
+  }
+
+  function seatEventsUrl(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.events_url) return String(raw.events_url);
+    return stringValue(seat && seat.events_url, '');
+  }
+
+  function seatStatusLabel(value) {
+    if (value === 'busy' || value === 'running' || value === 'working' || value === 'streaming') return '忙碌';
+    if (value === 'online' || value === 'active') return '在线';
+    if (value === 'offline' || value === 'paused') return '离线';
+    if (value === 'failed' || value === 'error') return '异常';
+    return '空闲';
+  }
+
+  function taskStatusLabel(value, progress) {
+    if (value === 'done' || value === 'completed' || value === 'succeeded' || Number(progress) >= 100) return '已完成';
+    if (value === 'running' || value === 'busy' || value === 'streaming') return '进行中';
+    if (value === 'failed' || value === 'error') return '失败';
+    return '待处理';
+  }
+
+  function taskHref(item) {
+    if (item && item.conversation_id) return '/app/chat/' + encodeURIComponent(item.conversation_id);
+    if (item && item.employee_id) return '/admin/employees/' + encodeURIComponent(item.employee_id);
+    return '#';
+  }
+
+  function renderSeat(seat) {
+    var href = taskHref(seat);
+    var badgeClass = seatPresenceState(seat);
+    var cursorVal = seatEventCursor(seat);
+    var cursorUrl = seatEventsUrl(seat);
     var cursorHtml = '';
-    if (seat.presence && seat.presence.latest_event_cursor != null) {
-      var cursorVal = seat.presence.latest_event_cursor;
-      var eventsUrl = seat.presence.events_url;
-      if (eventsUrl) {
-        cursorHtml = '<a class="aiteam-seat-card__cursor-link" href="' + escapeHtml(eventsUrl) + '">cursor #' + cursorVal + '</a>';
-      } else {
-        cursorHtml = '<span class="aiteam-seat-card__cursor">cursor #' + cursorVal + '</span>';
-      }
+    if (cursorVal != null) {
+      cursorHtml = cursorUrl
+        ? '<div class="aiteam-office__task-detail"><a href="' + escapeHtml(cursorUrl) + '">cursor #' + escapeHtml(String(cursorVal)) + '</a></div>'
+        : '<div class="aiteam-office__task-detail">cursor #' + escapeHtml(String(cursorVal)) + '</div>';
     }
-    return (
-      '<div class="aiteam-seat-card">' +
-      '<h4 class="aiteam-seat-card__name">' + escapeHtml(seat.display_name || seat.employee_id || '—') + '</h4>' +
-      '<p class="aiteam-seat-card__role">' + escapeHtml(seat.role_name || '') + '</p>' +
-      '<span class="aiteam-seat-card__presence aiteam-badge ' + badgeClass + '">' + stateLabel + '</span>' +
-      (taskPreview ? '<p class="aiteam-seat-card__task">' + taskPreview + '</p>' : '') +
-      (cursorHtml ? '<p class="aiteam-seat-card__cursor-row">' + cursorHtml + '</p>' : '') +
-      '</div>'
-    );
+    return '' +
+      '<a class="aiteam-office__seat" href="' + escapeHtml(href) + '">' +
+      '<div class="aiteam-office__seat-header">' +
+      '<span class="aiteam-office__seat-name">' + escapeHtml(seat.display_name || seat.employee_id || '未命名员工') + '</span>' +
+      '<span class="aiteam-office__seat-status is-' + escapeHtml(badgeClass) + '">' + escapeHtml(seatStatusLabel(badgeClass)) + '</span>' +
+      '</div>' +
+      '<div class="aiteam-office__seat-role">' + escapeHtml(seat.role_name || '数字员工') + '</div>' +
+      '<div class="aiteam-office__task-bubble">' + escapeHtml(seatTaskPreview(seat)) + '</div>' +
+      cursorHtml +
+      '</a>';
   }
 
-  function renderFeedItem(item) {
-    var badgeClass = RUN_BADGE[item.status] || 'aiteam-badge--idle';
-    var statusLabel = item.status || 'unknown';
-    var timeStr = item.event_ts ? item.event_ts.substring(11, 19) : '';
+  function renderTask(item) {
+    var progress = Math.max(0, Math.min(100, Number(item.progress) || 0));
+    var statusClass = String(item.status || 'pending').toLowerCase();
+    var cursorVal = item.latest_event_cursor;
     var cursorHtml = '';
-    if (item.latest_event_cursor != null && item.events_url) {
-      cursorHtml = '<a class="aiteam-feed-item__cursor-link" href="' + escapeHtml(item.events_url) + '">#' + item.latest_event_cursor + '</a>';
+    if (cursorVal != null && item.events_url) {
+      cursorHtml = '<a class="aiteam-office__task-progress" href="' + escapeHtml(item.events_url) + '">#' + escapeHtml(String(cursorVal)) + '</a>';
+    } else if (cursorVal != null) {
+      cursorHtml = '<span class="aiteam-office__task-progress">#' + escapeHtml(String(cursorVal)) + '</span>';
+    } else {
+      cursorHtml = '<span class="aiteam-office__task-progress">' + escapeHtml(String(progress)) + '%</span>';
     }
-    return (
-      '<div class="aiteam-feed-item">' +
-      '<span class="aiteam-feed-item__employee">' + escapeHtml(item.employee_display_name || item.employee_id || '—') + '</span>' +
-      '<span class="aiteam-badge ' + badgeClass + '">' + statusLabel + '</span>' +
-      '<span class="aiteam-feed-item__preview">' + escapeHtml(item.preview || '') + '</span>' +
-      '<span class="aiteam-feed-item__time">' + escapeHtml(timeStr) + '</span>' +
-      (cursorHtml ? '<span class="aiteam-feed-item__cursor">' + cursorHtml + '</span>' : '') +
-      '</div>'
-    );
+    return '' +
+      '<a class="aiteam-office__task-item" href="' + escapeHtml(taskHref(item)) + '">' +
+      '<div class="aiteam-office__task-main">' +
+      '<div class="aiteam-office__task-title">' + escapeHtml(item.title || item.preview || '待处理任务') + '</div>' +
+      '<div class="aiteam-office__task-detail">' + escapeHtml((item.employee_display_name || item.employee_name || item.display_name || '系统') + ' · ' + (item.detail || item.preview || '等待更新')) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-office__task-meta">' +
+      '<span class="aiteam-office__task-chip is-' + escapeHtml(statusClass) + '">' + escapeHtml(taskStatusLabel(statusClass, progress)) + '</span>' +
+      cursorHtml +
+      '</div>' +
+      '</a>';
   }
 
-  function renderSummary(stats) {
-    return (
-      '<div class="aiteam-office-summary">' +
-      '<div class="aiteam-office-stat"><div class="aiteam-office-stat__value">' + (stats.online_employee_count || 0) + '</div><div class="aiteam-office-stat__label">在线员工</div></div>' +
-      '<div class="aiteam-office-stat"><div class="aiteam-office-stat__value">' + (stats.busy_employee_count || 0) + '</div><div class="aiteam-office-stat__label">忙碌员工</div></div>' +
-      '<div class="aiteam-office-stat"><div class="aiteam-office-stat__value">' + (stats.running_task_count || 0) + '</div><div class="aiteam-office-stat__label">运行中任务</div></div>' +
-      '<div class="aiteam-office-stat"><div class="aiteam-office-stat__value">' + (stats.queue_depth || 0) + '</div><div class="aiteam-office-stat__label">排队任务</div></div>' +
-      '<div class="aiteam-office-stat"><div class="aiteam-office-stat__value">' + (stats.waiting_reply_count || 0) + '</div><div class="aiteam-office-stat__label">待回复</div></div>' +
-      '</div>'
-    );
+  function renderTaskList(tasks) {
+    if (!tasks.length) {
+      return '<div class="aiteam-office__task-empty">当前暂无运行中的任务队列</div>';
+    }
+    return tasks.map(renderTask).join('');
   }
 
-  function renderScene(scene) {
-    var summaryHtml = scene.summary ? renderSummary(scene.summary) : '';
-    var seats = scene.seats || [];
-    var seatsHtml = seats.length
-      ? '<div class="aiteam-office-seats">' + seats.map(renderSeatCard).join('') + '</div>'
-      : '<div class="aiteam-state aiteam-state-empty"><p>暂无工位数据</p></div>';
-    return summaryHtml +
-      '<h3 class="aiteam-section-title">工位状态</h3>' +
-      seatsHtml;
-  }
-
-  function renderFeed(feed) {
-    var items = feed.items || [];
-    var queue = feed.queue || {};
-    var queueSummary = (queue.queued || 0) + (queue.running || 0) + (queue.waiting_human || 0) + (queue.failed || 0) > 0
-      ? '<p style="font-size:12px;color:#94a3b8;margin-bottom:12px;">队列: 排队 ' + (queue.queued || 0) + ' / 运行中 ' + (queue.running || 0) + ' / 待回复 ' + (queue.waiting_human || 0) + ' / 失败 ' + (queue.failed || 0) + '</p>'
-      : '';
-    var feedHtml = items.length
-      ? '<div class="aiteam-feed-list">' + items.map(renderFeedItem).join('') + '</div>'
-      : '<div class="aiteam-state aiteam-state-empty"><p>暂无活动记录</p></div>';
-    return '<div class="aiteam-section-spacer"></div>' +
-      '<h3 class="aiteam-section-title">活动流</h3>' +
-      queueSummary +
-      feedHtml;
+  function renderLegend() {
+    return '' +
+      '<ul class="aiteam-office__legend">' +
+      '<li><span class="aiteam-office__legend-dot is-busy"></span> 忙碌：正在执行任务</li>' +
+      '<li><span class="aiteam-office__legend-dot is-online"></span> 在线：可立即响应</li>' +
+      '<li><span class="aiteam-office__legend-dot is-idle"></span> 空闲：等待新任务</li>' +
+      '<li><span class="aiteam-office__legend-dot is-offline"></span> 离线：当前不可用</li>' +
+      '</ul>';
   }
 
   function renderSeamMeta(sceneData, feedData) {
-    var sceneCursor = (sceneData && sceneData.generated_cursor != null) ? sceneData.generated_cursor : '—';
-    var feedCursor = (feedData && feedData.generated_cursor != null) ? feedData.generated_cursor : '—';
+    var sceneCursor = sceneData && sceneData.generated_cursor != null ? sceneData.generated_cursor : '—';
+    var feedCursor = feedData && feedData.generated_cursor != null ? feedData.generated_cursor : '—';
     var refreshMs = (feedData && feedData.refresh_hint_ms) || (sceneData && sceneData.refresh_hint_ms) || 0;
     var refreshSec = refreshMs ? (refreshMs / 1000).toFixed(1) : '—';
-    return (
+    return '' +
       '<div class="aiteam-office-seam-meta">' +
-      '<span class="aiteam-office-seam-meta__item">场景游标: ' + sceneCursor + '</span>' +
-      '<span class="aiteam-office-seam-meta__item">活动游标: ' + feedCursor + '</span>' +
-      '<span class="aiteam-office-seam-meta__item">刷新间隔: ' + refreshSec + 's</span>' +
-      '</div>'
-    );
+      '<span class="aiteam-office-seam-meta__item">场景游标: ' + escapeHtml(String(sceneCursor)) + '</span>' +
+      '<span class="aiteam-office-seam-meta__item">活动游标: ' + escapeHtml(String(feedCursor)) + '</span>' +
+      '<span class="aiteam-office-seam-meta__item">刷新间隔: ' + escapeHtml(String(refreshSec)) + 's</span>' +
+      '</div>';
+  }
+
+  function renderOffice(sceneData, feedData) {
+    var summary = sceneData && sceneData.summary ? sceneData.summary : {};
+    var seats = Array.isArray(sceneData && sceneData.seats) ? sceneData.seats : [];
+    var tasks = Array.isArray(feedData && feedData.items) ? feedData.items : [];
+    return '' +
+      '<section class="aiteam-office">' +
+      '<div class="aiteam-shell__panel aiteam-office__panel">' +
+      '<div class="aiteam-office__toolbar">' +
+      '<div>' +
+      '<p class="aiteam-shell__panel-kicker">企业前台 · 办公室动态</p>' +
+      '<h2 class="aiteam-shell__panel-title">企业办公室</h2>' +
+      '<p class="aiteam-shell__panel-body">等距办公室画布、任务队列与实时状态统一映射到 Team Panel 办公视图聚合接口。</p>' +
+      '</div>' +
+      '<div class="aiteam-office__toolbar-actions">' +
+      '<div class="aiteam-office__badge">在线 ' + escapeHtml(String(summary.online_employee_count || 0)) + '</div>' +
+      '<div class="aiteam-office__badge">队列 ' + escapeHtml(String(summary.running_task_count || 0)) + '</div>' +
+      '<button type="button" class="aiteam-office__fullscreen" data-office-fullscreen>全屏查看</button>' +
+      '</div>' +
+      '</div>' +
+      renderSeamMeta(sceneData, feedData) +
+      '<div class="aiteam-office__layout">' +
+      '<div class="aiteam-office__stage-wrap">' +
+      '<div class="aiteam-office__stage" data-office-root>' +
+      (seats.length ? seats.map(renderSeat).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
+      '</div>' +
+      '</div>' +
+      '<aside class="aiteam-office__sidebar">' +
+      '<div class="aiteam-office__sidebar-card">' +
+      '<div class="aiteam-office__sidebar-title">任务队列</div>' +
+      '<div class="aiteam-office__task-list">' + renderTaskList(tasks) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-office__sidebar-card">' +
+      '<div class="aiteam-office__sidebar-title">状态说明</div>' +
+      renderLegend() +
+      '</div>' +
+      '</aside>' +
+      '</div>' +
+      '</div>' +
+      '</section>';
+  }
+
+  function updateFullscreenButton(root, button) {
+    if (!root || !button) return;
+    var expanded = root.classList && root.classList.contains('is-fullscreen');
+    button.textContent = expanded ? '退出全屏' : '全屏查看';
+  }
+
+  function bindFullscreen(container) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var root = container.querySelector('[data-office-root]');
+    var button = container.querySelector('[data-office-fullscreen]');
+    if (!root || !button || typeof button.addEventListener !== 'function') return;
+    updateFullscreenButton(root, button);
+    button.addEventListener('click', function () {
+      if (!root.classList) return;
+      if (root.classList.contains('is-fullscreen')) {
+        root.classList.remove('is-fullscreen');
+      } else {
+        root.classList.add('is-fullscreen');
+      }
+      updateFullscreenButton(root, button);
+    });
+  }
+
+  function renderOfficeInto(container, sceneData, feedData) {
+    container.innerHTML = renderOffice(sceneData, feedData);
+    bindFullscreen(container);
   }
 
   function doRefresh(container) {
     if (!container) return;
     Promise.all([
+      // Canonical office northbound routes: /api/team/office/scene + /api/team/office/feed
       ns.api.getOfficeScene(),
       ns.api.getOfficeFeed(),
     ]).then(function (results) {
       var sceneResult = results[0];
       var feedResult = results[1];
       if (!sceneResult.ok || !feedResult.ok) return;
-
-      var sceneData = sceneResult.data;
-      var feedData = feedResult.data;
-      container.innerHTML =
-        '<div class="aiteam-shell__panel">' +
-        '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
-        '<h2 class="aiteam-shell__panel-title">办公室</h2>' +
-        '<p class="aiteam-shell__panel-body">通过 /api/team/office/scene 与 /api/team/office/feed 消费实时办公视图。</p>' +
-        renderSeamMeta(sceneData, feedData) +
-        renderScene(sceneData) +
-        renderFeed(feedData) +
-        '</div>';
+      renderOfficeInto(container, sceneResult.data || {}, feedResult.data || {});
     });
   }
 
@@ -188,30 +247,21 @@ window.aiteam = window.aiteam || {};
       self._stopPolling();
 
       Promise.all([
+        // Canonical office northbound routes: /api/team/office/scene + /api/team/office/feed
         ns.api.getOfficeScene(),
         ns.api.getOfficeFeed(),
       ]).then(function (results) {
         var sceneResult = results[0];
         var feedResult = results[1];
-
         if (!sceneResult.ok || !feedResult.ok) {
           var errResult = !sceneResult.ok ? sceneResult : feedResult;
           ns.states.handleApiResult(errResult, container, function () {});
           return;
         }
 
-        var sceneData = sceneResult.data;
-        var feedData = feedResult.data;
-
-        container.innerHTML =
-          '<div class="aiteam-shell__panel">' +
-          '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
-          '<h2 class="aiteam-shell__panel-title">办公室</h2>' +
-          '<p class="aiteam-shell__panel-body">通过 /api/team/office/scene 与 /api/team/office/feed 消费实时办公视图。</p>' +
-          renderSeamMeta(sceneData, feedData) +
-          renderScene(sceneData) +
-          renderFeed(feedData) +
-          '</div>';
+        var sceneData = sceneResult.data || {};
+        var feedData = feedResult.data || {};
+        renderOfficeInto(container, sceneData, feedData);
 
         var refreshMs = feedData.refresh_hint_ms || sceneData.refresh_hint_ms;
         if (refreshMs) {

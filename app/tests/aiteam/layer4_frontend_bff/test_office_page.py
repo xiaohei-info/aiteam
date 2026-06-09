@@ -217,6 +217,9 @@ def test_office_module_uses_team_panel_office_routes() -> None:
     source = _read(OFFICE_MODULE_PATH)
     assert "/api/team/office/scene" in source or "getOfficeScene" in source
     assert "/api/team/office/feed" in source or "getOfficeFeed" in source
+    assert "aiteam-office__stage" in source
+    assert "data-office-fullscreen" in source
+    assert "企业办公室" in source
     for forbidden in FORBIDDEN_ROUTES:
         assert forbidden not in source
 
@@ -265,8 +268,9 @@ def test_office_module_renders_empty_scene_when_scene_is_empty() -> None:
             },
         },
     )
-    assert "暂无工位数据" in result["html"]
-    assert "暂无活动记录" in result["html"]
+    assert "企业办公室" in result["html"]
+    assert "data-office-root" in result["html"]
+    assert "当前暂无运行中的任务队列" in result["html"]
     assert "刷新间隔: 10.0s" in result["html"]
 
 
@@ -334,11 +338,13 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
     assert "Rex" in result["html"]
     assert "Nova" in result["html"]
     assert "执行回归测试" in result["html"]
-    assert "在线员工" in result["html"]
+    assert "企业办公室" in result["html"]
+    assert "全屏查看" in result["html"]
+    assert "aiteam-office__stage" in result["html"]
+    assert "任务队列" in result["html"]
     assert "场景游标: 18" in result["html"]
     assert "活动游标: 18" in result["html"]
-    assert "cursor #18" in result["html"]
-    assert ">#18<" in result["html"]
+    assert "cursor #18" in result["html"] or ">#18<" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]
 
 
@@ -383,7 +389,8 @@ def test_office_module_handles_empty_feed_without_preview() -> None:
         },
     )
     assert "Orion" in result["html"]
-    assert "暂无活动记录" in result["html"]
+    assert "企业办公室" in result["html"]
+    assert "当前暂无运行中的任务队列" in result["html"]
 
 
 def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
@@ -391,4 +398,6 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert result["beforeStop"] == [15000]
     assert result["cleared"] == [1]
     assert result["pollTimerCleared"] is True
+    assert "企业办公室" in result["html"]
+    assert "全屏查看" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]

@@ -1122,6 +1122,312 @@ body.aiteam-shell-active .aiteam-shell {
   font-size: 18px;
 }
 
+.aiteam-workbench {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 20px;
+  min-height: 680px;
+}
+
+.aiteam-workbench__sidebar,
+.aiteam-workbench__main {
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.74);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.26);
+}
+
+.aiteam-workbench__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+}
+
+.aiteam-workbench__sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aiteam-workbench__section-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.aiteam-workbench__search {
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.aiteam-workbench__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 320px;
+}
+
+.aiteam-workbench__employee-row {
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  overflow: hidden;
+}
+
+.aiteam-workbench__employee-row.is-selected {
+  border-color: rgba(96, 165, 250, 0.6);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.24);
+}
+
+.aiteam-workbench__employee {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 16px 16px 12px;
+  cursor: pointer;
+}
+
+.aiteam-workbench__employee:hover,
+.aiteam-workbench__employee:focus-visible {
+  background: rgba(30, 41, 59, 0.42);
+  outline: none;
+}
+
+.aiteam-workbench__employee-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.aiteam-workbench__employee-ident {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.aiteam-workbench__presence {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.14);
+}
+
+.aiteam-workbench__presence.is-active,
+.aiteam-workbench__presence.is-online {
+  background: #34d399;
+}
+
+.aiteam-workbench__presence.is-busy {
+  background: #60a5fa;
+}
+
+.aiteam-workbench__presence.is-idle {
+  background: #e2e8f0;
+}
+
+.aiteam-workbench__presence.is-offline {
+  background: #f9a8d4;
+}
+
+.aiteam-workbench__employee-role,
+.aiteam-workbench__employee-preview {
+  color: #94a3b8;
+}
+
+.aiteam-workbench__employee-role {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.aiteam-workbench__employee-preview {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.aiteam-workbench__unread {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #2563eb;
+  color: #eff6ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aiteam-workbench__employee-actions,
+.aiteam-workbench__sidebar-actions,
+.aiteam-workbench__quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.aiteam-workbench__employee-actions {
+  padding: 0 16px 14px;
+}
+
+.aiteam-workbench__employee-link,
+.aiteam-workbench__quick-links a {
+  border: 0;
+  background: rgba(30, 41, 59, 0.62);
+  color: #dbeafe;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.aiteam-workbench__main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+}
+
+.aiteam-workbench__hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.aiteam-workbench__hero-title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.1;
+}
+
+.aiteam-workbench__hero-desc {
+  margin: 12px 0 0;
+  color: #cbd5e1;
+  line-height: 1.7;
+}
+
+.aiteam-workbench__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.aiteam-workbench__metric {
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.aiteam-workbench__metric span {
+  display: block;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.aiteam-workbench__metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 24px;
+}
+
+.aiteam-workbench__employee-hero-card {
+  border-radius: 24px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.22), transparent 35%),
+    rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+}
+
+.aiteam-workbench__employee-hero-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.aiteam-workbench__employee-hero-top h3 {
+  margin: 6px 0 0;
+  font-size: 28px;
+}
+
+.aiteam-workbench__eyebrow {
+  color: #93c5fd;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.aiteam-workbench__quick-menu {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.aiteam-workbench__empty,
+.aiteam-workbench__empty-mini {
+  border-radius: 20px;
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.45);
+  color: #94a3b8;
+}
+
+.aiteam-workbench__empty {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.aiteam-workbench__empty-icon {
+  font-size: 32px;
+}
+
+.aiteam-workbench__empty-mini {
+  padding: 20px;
+  text-align: center;
+}
+
+.aiteam-group-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aiteam-group-avatar-grid__cell {
+  min-height: 74px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(30, 41, 59, 0.5);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+}
+
+.aiteam-group-avatar-grid__cell strong {
+  font-size: 18px;
+}
+
+.aiteam-group-avatar-grid__cell span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .aiteam-panel__header a {
   color: #93c5fd;
   font-size: 13px;
@@ -1716,6 +2022,8 @@ body.aiteam-shell-active .aiteam-shell {
   }
 
   .aiteam-page__hero,
+  .aiteam-workbench__hero,
+  .aiteam-workbench__employee-hero-top,
   .aiteam-panel__header,
   .aiteam-card__row,
   .aiteam-detail-kv,
@@ -1727,6 +2035,8 @@ body.aiteam-shell-active .aiteam-shell {
   }
 
   .aiteam-metric-grid,
+  .aiteam-workbench,
+  .aiteam-workbench__metrics,
   .aiteam-grid--split,
   .aiteam-grid--chat,
   .aiteam-grid--chat-3col,
@@ -1769,4 +2079,3 @@ body.aiteam-shell-active .aiteam-shell {
   background: rgba(15, 23, 42, 0.48);
   color: #cbd5e1;
 }
-

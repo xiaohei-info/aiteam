@@ -11,7 +11,7 @@ EXPECTED_PAGE_MODULES = {
     "app-marketplace.js": ["getTalentTemplates", "立即招募", "RATE_LIMITED"],
     "app-template-detail.js": ["getTemplate", "default_memory_config", "立即招募"],
     "app-chat.js": ["getConversation", "createRun", "tool_call", "getRunEvents"],
-    "app-group.js": ["getGroupConversation", "routing_decided", "task_created", "result_merged", "成员管理", "群设置", "协作反馈", "多员工协作", "runtime:", "子任务", "runtime_handle", "单员工会话", "协作根任务", "提及选择 / 协作状态"],
+    "app-group.js": ["getGroupConversation", "routing_decided", "task_created", "result_merged", "成员管理", "群设置", "协作反馈", "多员工协作", "runtime:", "子任务", "runtime_handle", "单员工会话", "协作根任务", "提及选择 / 协作状态", "新建群聊", "新增员工", "踢出员工", "解散群聊", "2×2 宫格"],
 }
 
 FORBIDDEN_RUNTIME_ROUTES = [

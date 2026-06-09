@@ -4,86 +4,269 @@ window.aiteam = window.aiteam || {};
   ns.pages = ns.pages || {};
   var escapeHtml = (ns.util && ns.util.escapeHtml) || function (value) { return String(value == null ? '' : value); };
 
-  function cardLink(href, label, note) {
+  function stringValue(value, fallback) {
+    var text = String(value == null ? '' : value).trim();
+    return text || (fallback || '');
+  }
+
+  function employeePresence(employee) {
+    return stringValue(employee && (employee.presence || employee.status), 'idle').toLowerCase();
+  }
+
+  function employeePresenceLabel(employee) {
+    var value = employeePresence(employee);
+    var map = {
+      active: '在线',
+      online: '在线',
+      busy: '忙碌',
+      idle: '空闲',
+      offline: '离线',
+      waiting_reply: '待回复',
+    };
+    return map[value] || value;
+  }
+
+  function employeeListQuery(employee) {
+    return [
+      employee.display_name,
+      employee.employee_id,
+      employee.role_name,
+      employee.last_message_preview,
+    ].join(' ').toLowerCase();
+  }
+
+  function filterEmployees(employees, query) {
+    var needle = stringValue(query, '').toLowerCase();
+    if (!needle) return employees.slice();
+    return employees.filter(function (employee) {
+      return employeeListQuery(employee).indexOf(needle) !== -1;
+    });
+  }
+
+  function quickLink(href, label, note) {
     return '<a class="aiteam-card-link" href="' + href + '">' +
       '<span class="aiteam-card-link__label">' + escapeHtml(label) + '</span>' +
       '<span class="aiteam-card-link__note">' + escapeHtml(note || '') + '</span>' +
       '</a>';
   }
 
-  function employeeCard(employee) {
-    var chatHref = employee.conversation_id ? '/app/chat/' + encodeURIComponent(employee.conversation_id) : '/admin/employees';
-    return '<article class="aiteam-card">' +
-      '<div class="aiteam-card__row"><div><h3 class="aiteam-card__title">' + escapeHtml(employee.display_name || employee.employee_id || '未命名员工') + '</h3>' +
-      '<p class="aiteam-card__sub">' + escapeHtml(employee.role_name || '待配置岗位') + '</p></div>' +
-      '<span class="aiteam-badge">' + escapeHtml(employee.status || employee.presence || 'idle') + '</span></div>' +
-      '<p class="aiteam-card__body">' + escapeHtml(employee.last_message_preview || '暂无最近消息') + '</p>' +
-      '<div class="aiteam-card__meta"><span>未读 ' + escapeHtml(employee.unread_count || 0) + '</span><span>' + escapeHtml(employee.presence || 'idle') + '</span></div>' +
-      '<div class="aiteam-action-row">' +
-      cardLink(chatHref, employee.conversation_id ? '继续对话' : '去配置员工', employee.conversation_id ? '打开私聊' : '企业后台') +
-      cardLink('/admin/employees', '员工管理', '绑定技能 / 知识 / 记忆') +
+  function renderEmployeeRow(employee, selected) {
+    var presence = employeePresence(employee);
+    var unread = Number(employee.unread_count) || 0;
+    var chatHref = employee.conversation_id ? '/app/chat/' + encodeURIComponent(employee.conversation_id) : '/admin/employees/' + encodeURIComponent(employee.employee_id || '');
+    return '' +
+      '<div class="aiteam-workbench__employee-row' + (selected ? ' is-selected' : '') + '">' +
+      '<button type="button" class="aiteam-workbench__employee" data-select-employee="' + escapeHtml(employee.employee_id || '') + '">' +
+      '<div class="aiteam-workbench__employee-head">' +
+      '<div class="aiteam-workbench__employee-ident">' +
+      '<span class="aiteam-workbench__presence is-' + escapeHtml(presence) + '"></span>' +
+      '<strong>' + escapeHtml(employee.display_name || employee.employee_id || '未命名员工') + '</strong>' +
       '</div>' +
-      '</article>';
+      (unread ? '<span class="aiteam-workbench__unread">' + escapeHtml(String(unread)) + '</span>' : '') +
+      '</div>' +
+      '<div class="aiteam-workbench__employee-role">' + escapeHtml(employee.role_name || '待配置岗位') + '</div>' +
+      '<div class="aiteam-workbench__employee-preview">' + escapeHtml(employee.last_message_preview || '暂无最近消息') + '</div>' +
+      '</button>' +
+      '<div class="aiteam-workbench__employee-actions">' +
+      '<a class="aiteam-workbench__employee-link" href="' + escapeHtml(chatHref) + '">继续对话</a>' +
+      '<button type="button" class="aiteam-workbench__employee-link" data-workbench-menu="' + escapeHtml(employee.employee_id || '') + '">快捷操作</button>' +
+      '</div>' +
+      '</div>';
   }
 
-  function groupCard(group) {
-    var href = group.conversation_id ? '/app/group/' + encodeURIComponent(group.conversation_id) : '/app/group';
-    return '<article class="aiteam-card aiteam-card--group">' +
-      '<div class="aiteam-card__row"><div><h3 class="aiteam-card__title">' + escapeHtml(group.title || '未命名协作组') + '</h3>' +
-      '<p class="aiteam-card__sub">成员 ' + escapeHtml(group.member_count || 0) + ' · 运行中 ' + escapeHtml(group.running_count || 0) + '</p></div>' +
-      '<span class="aiteam-badge">群聊</span></div>' +
-      '<p class="aiteam-card__body">' + escapeHtml(group.last_message_preview || '暂无群聊动态') + '</p>' +
-      '<div class="aiteam-action-row">' + cardLink(href, '打开群聊', '查看时间线') + '</div>' +
-      '</article>';
+  function renderGroups(groups) {
+    if (!groups.length) {
+      return '<div class="aiteam-inline-empty">还没有群聊协作会话，先在群聊页创建协作组。</div>';
+    }
+    return groups.map(function (group) {
+      var href = group.conversation_id ? '/app/group/' + encodeURIComponent(group.conversation_id) : '/app/group';
+      return '' +
+        '<article class="aiteam-card aiteam-card--group">' +
+        '<div class="aiteam-card__row"><div><h3 class="aiteam-card__title">' + escapeHtml(group.title || '未命名协作组') + '</h3>' +
+        '<p class="aiteam-card__sub">成员 ' + escapeHtml(group.member_count || 0) + ' · 运行中 ' + escapeHtml(group.running_count || 0) + '</p></div>' +
+        '<span class="aiteam-badge">群聊</span></div>' +
+        '<p class="aiteam-card__body">' + escapeHtml(group.last_message_preview || '暂无群聊动态') + '</p>' +
+        '<div class="aiteam-action-row">' + quickLink(href, '打开群聊', '查看时间线') + '</div>' +
+        '</article>';
+    }).join('');
   }
 
-  function renderWorkbench(container, data) {
-    var employees = Array.isArray(data.employees) ? data.employees : [];
-    var groups = Array.isArray(data.groups) ? data.groups : [];
+  function renderEmptyShell(enterpriseName) {
+    return '' +
+      '<section class="aiteam-workbench" data-workbench-shell="1">' +
+      '<aside class="aiteam-workbench__sidebar">' +
+      '<div class="aiteam-workbench__sidebar-top">' +
+      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
+      '</div>' +
+      '<div class="aiteam-workbench__empty" data-workbench-empty="1">' +
+      '<div class="aiteam-workbench__empty-icon">🤖</div>' +
+      '<strong>暂无数字员工</strong>' +
+      '<p>前往人才市场招募</p>' +
+      '<a class="aiteam-button" href="/app/marketplace">前往人才市场</a>' +
+      '</div>' +
+      '</aside>' +
+      '<section class="aiteam-workbench__main" data-workbench-main="1">' +
+      '<div class="aiteam-workbench__hero">' +
+      '<div>' +
+      '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterpriseName || '企业工作台') + '</h1>' +
+      '<p class="aiteam-workbench__hero-desc">从左侧选择员工开始对话，或前往人才市场招募你的第一个数字员工。</p>' +
+      '</div>' +
+      '<div class="aiteam-hero-actions">' +
+      '<a class="aiteam-button" href="/app/marketplace">+ 前往人才市场</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/app/org">查看组织架构</a>' +
+      '</div>' +
+      '</div>' +
+      '</section>' +
+      '</section>';
+  }
+
+  function renderMainStage(data, state, selectedEmployee, filteredEmployees) {
     var enterprise = data.enterprise || {};
     var digest = data.office_digest || {};
+    var groups = Array.isArray(data.groups) ? data.groups : [];
+    var chatHref = selectedEmployee && selectedEmployee.conversation_id
+      ? '/app/chat/' + encodeURIComponent(selectedEmployee.conversation_id)
+      : '/admin/employees/' + encodeURIComponent((selectedEmployee && selectedEmployee.employee_id) || '');
 
-    if (!enterprise || !employees.length) {
-      ns.states.renderEmpty(
-        container,
-        '你还没有数字员工，先去人才市场招募第一位成员。',
-        '<div class="aiteam-action-row"><a class="aiteam-button" href="/app/marketplace">前往人才市场</a></div>'
-      );
-      return;
-    }
+    var employeePanel = selectedEmployee ? (
+      '<div class="aiteam-workbench__employee-hero-card">' +
+      '<div class="aiteam-workbench__employee-hero-top">' +
+      '<div>' +
+      '<p class="aiteam-workbench__eyebrow">当前选中员工</p>' +
+      '<h3>' + escapeHtml(selectedEmployee.display_name || selectedEmployee.employee_id || '未命名员工') + '</h3>' +
+      '<p>' + escapeHtml(selectedEmployee.role_name || '待配置岗位') + ' · ' + escapeHtml(employeePresenceLabel(selectedEmployee)) + '</p>' +
+      '</div>' +
+      '<span class="aiteam-badge">' + escapeHtml(employeePresenceLabel(selectedEmployee)) + '</span>' +
+      '</div>' +
+      '<p class="aiteam-workbench__hero-desc">' + escapeHtml(selectedEmployee.last_message_preview || '从这里继续当前员工的最近会话，或前往后台做深度配置。') + '</p>' +
+      '<div class="aiteam-hero-actions">' +
+      '<a class="aiteam-button" href="' + escapeHtml(chatHref) + '">继续对话</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/admin/employees/' + encodeURIComponent(selectedEmployee.employee_id || '') + '">查看详情</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/admin/employees">员工管理</a>' +
+      '</div>' +
+      '<div class="aiteam-workbench__quick-menu">' +
+      '<span>快捷操作</span>' +
+      '<div class="aiteam-workbench__quick-links">' +
+      '<a href="/admin/employees/' + encodeURIComponent(selectedEmployee.employee_id || '') + '">查看详情</a>' +
+      '<a href="/admin/employees">设置为星标</a>' +
+      '<a href="/admin/employees">解雇</a>' +
+      '</div>' +
+      '</div>' +
+      '</div>'
+    ) : (
+      '<div class="aiteam-workbench__employee-hero-card">' +
+      '<p class="aiteam-workbench__hero-desc">从左侧选择员工开始对话。</p>' +
+      '</div>'
+    );
 
-    container.innerHTML =
-      '<section class="aiteam-page">' +
-      '<div class="aiteam-page__hero">' +
-      '<div><p class="aiteam-page__eyebrow">P02 · 工作台</p><h2 class="aiteam-page__title">' + escapeHtml(enterprise.name || '企业工作台') + '</h2>' +
-      '<p class="aiteam-page__desc">聚合员工、群聊和办公室动态入口，全部来自 Team Panel 北向工作台聚合接口。</p></div>' +
+    return '' +
+      '<section class="aiteam-workbench__main" data-workbench-main="1">' +
+      '<div class="aiteam-workbench__hero">' +
+      '<div>' +
+      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterprise.name || '企业工作台') + '</h1>' +
+      '<p class="aiteam-workbench__hero-desc">从左侧列表进入私聊，在这里统一查看员工状态、群聊入口和任务摘要。</p>' +
+      '</div>' +
       '<div class="aiteam-hero-actions">' +
       '<a class="aiteam-button" href="/app/marketplace">招募新成员</a>' +
       '<a class="aiteam-button aiteam-button--ghost" href="/app/org">查看组织架构</a>' +
-      '</div></div>' +
-      '<div class="aiteam-metric-grid">' +
-      '<article class="aiteam-metric"><span class="aiteam-metric__label">在线员工</span><strong class="aiteam-metric__value">' + escapeHtml(digest.online_employee_count || employees.length) + '</strong></article>' +
-      '<article class="aiteam-metric"><span class="aiteam-metric__label">运行中任务</span><strong class="aiteam-metric__value">' + escapeHtml(digest.running_task_count || 0) + '</strong></article>' +
-      '<article class="aiteam-metric"><span class="aiteam-metric__label">群聊协作</span><strong class="aiteam-metric__value">' + escapeHtml(groups.length) + '</strong></article>' +
-      '<article class="aiteam-metric"><span class="aiteam-metric__label">快捷入口</span><strong class="aiteam-metric__value">4</strong></article>' +
       '</div>' +
-      '<div class="aiteam-grid aiteam-grid--split">' +
-      '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>员工私聊入口</h3><a href="/admin/employees">去后台配置</a></div>' + employees.map(employeeCard).join('') + '</section>' +
-      '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>协作与导航</h3><a href="/app/office">办公室动态</a></div>' +
-      '<div class="aiteam-action-grid">' +
-      cardLink('/app/office', '办公室动态', '查看 Presence 点位') +
-      cardLink('/app/org', '组织架构', '部门与岗位映射') +
-      cardLink('/admin/employees', '员工配置', '模型 / 技能 / 知识') +
-      cardLink('/app/marketplace', '人才市场', '继续招募') +
       '</div>' +
-      '<div class="aiteam-stack">' + (groups.length ? groups.map(groupCard).join('') : '<div class="aiteam-inline-empty">还没有群聊协作会话，先在群聊页创建协作组。</div>') + '</div>' +
-      '</section>' +
+      '<div class="aiteam-workbench__metrics">' +
+      '<div class="aiteam-workbench__metric"><span>在线员工</span><strong>' + escapeHtml(digest.online_employee_count || filteredEmployees.length || 0) + '</strong></div>' +
+      '<div class="aiteam-workbench__metric"><span>运行中任务</span><strong>' + escapeHtml(digest.running_task_count || 0) + '</strong></div>' +
+      '<div class="aiteam-workbench__metric"><span>群聊协作</span><strong>' + escapeHtml(groups.length) + '</strong></div>' +
+      '<div class="aiteam-workbench__metric"><span>当前筛选</span><strong>' + escapeHtml(filteredEmployees.length) + '</strong></div>' +
+      '</div>' +
+      employeePanel +
+      '<div class="aiteam-panel">' +
+      '<div class="aiteam-panel__header"><h3>最近群聊</h3><a href="/app/group">进入群聊</a></div>' +
+      '<div class="aiteam-stack">' + renderGroups(groups) + '</div>' +
       '</div>' +
       '</section>';
   }
 
+  function renderWorkbench(container, data, state) {
+    var employees = Array.isArray(data.employees) ? data.employees : [];
+    var filteredEmployees = filterEmployees(employees, state.query);
+    var enterprise = data.enterprise || {};
+
+    if (!employees.length) {
+      container.innerHTML = renderEmptyShell(enterprise.name || '企业工作台');
+      return;
+    }
+
+    if (!state.selectedEmployeeId || !filteredEmployees.some(function (employee) { return employee.employee_id === state.selectedEmployeeId; })) {
+      state.selectedEmployeeId = filteredEmployees.length ? filteredEmployees[0].employee_id : '';
+    }
+
+    var selectedEmployee = filteredEmployees.find(function (employee) {
+      return employee.employee_id === state.selectedEmployeeId;
+    }) || employees[0] || null;
+
+    container.innerHTML =
+      '<section class="aiteam-workbench" data-workbench-shell="1">' +
+      '<aside class="aiteam-workbench__sidebar">' +
+      '<div class="aiteam-workbench__sidebar-top">' +
+      '<div>' +
+      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
+      '</div>' +
+      '<input class="aiteam-input aiteam-workbench__search" data-workbench-search="1" type="search" placeholder="搜索员工或岗位..." value="' + escapeHtml(state.query || '') + '">' +
+      '</div>' +
+      '<div class="aiteam-workbench__list" data-workbench-list="1">' +
+      (filteredEmployees.length
+        ? filteredEmployees.map(function (employee) {
+            return renderEmployeeRow(employee, employee.employee_id === state.selectedEmployeeId);
+          }).join('')
+        : '<div class="aiteam-workbench__empty-mini">当前筛选下没有匹配员工</div>') +
+      '</div>' +
+      '<div class="aiteam-workbench__sidebar-actions">' +
+      quickLink('/app/marketplace', '前往人才市场', '继续招募') +
+      quickLink('/app/office', '办公室动态', '查看状态') +
+      '</div>' +
+      '</aside>' +
+      renderMainStage(data, state, selectedEmployee, filteredEmployees) +
+      '</section>';
+  }
+
+  function bindEvents(container, data, state) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var searchInput = container.querySelector('[data-workbench-search]');
+    if (searchInput && searchInput.addEventListener) {
+      searchInput.addEventListener('input', function () {
+        state.query = this.value || '';
+        renderWorkbench(container, data, state);
+        bindEvents(container, data, state);
+      });
+    }
+
+    if (!container.querySelectorAll) return;
+    var buttons = container.querySelectorAll('[data-select-employee]');
+    for (var i = 0; i < buttons.length; i += 1) {
+      buttons[i].addEventListener('click', function () {
+        state.selectedEmployeeId = this.getAttribute('data-select-employee') || '';
+        renderWorkbench(container, data, state);
+        bindEvents(container, data, state);
+      });
+    }
+  }
+
+  function mountWorkbench(container, data) {
+    var employees = Array.isArray(data && data.employees) ? data.employees : [];
+    var state = {
+      query: '',
+      selectedEmployeeId: employees.length ? employees[0].employee_id : '',
+    };
+    renderWorkbench(container, data || {}, state);
+    bindEvents(container, data || {}, state);
+  }
+
   ns.pages.appWorkbench = {
-    render: renderWorkbench,
+    render: function (container, data) {
+      mountWorkbench(container, data || {});
+    },
     init: function (container) {
       if (!container) return;
       ns.states.renderLoading(container, '加载工作台聚合视图...');
@@ -92,7 +275,7 @@ window.aiteam = window.aiteam || {};
           ns.states.handleApiResult(result, container, function () {});
           return;
         }
-        renderWorkbench(container, result.data || {});
+        mountWorkbench(container, result.data || {});
       });
     },
   };

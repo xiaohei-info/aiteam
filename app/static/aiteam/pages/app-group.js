@@ -193,6 +193,17 @@ window.aiteam = window.aiteam || {};
       '</article>';
   }
 
+  function renderGroupAvatarGrid(members) {
+    var previewMembers = listValue(members).slice(0, 4);
+    if (!previewMembers.length) {
+      return '<div class="aiteam-inline-empty">当前群聊 contract 没有返回可展示成员。</div>';
+    }
+    return '<div class="aiteam-group-avatar-grid" aria-label="群聊头像 2×2 宫格">' + previewMembers.map(function (member) {
+      var initial = memberLabel(member).slice(0, 1) || '?';
+      return '<div class="aiteam-group-avatar-grid__cell"><strong>' + escapeHtml(initial) + '</strong><span>' + escapeHtml(memberLabel(member)) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
   function renderLatestDecision(decision, state) {
     if (!decision) {
       return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>最近协作决策</strong>' + badge('暂无') + '</div><p class="aiteam-card__sub">还没有 route_decision，首条群聊消息提交后会出现协作方式与候选成员。</p></div>';
@@ -353,6 +364,7 @@ window.aiteam = window.aiteam || {};
       '<p class="aiteam-page__desc">群成员栏、@输入、协作时间线、任务树/协作气泡与群设置入口统一在同一页呈现；所有读取都基于 Team Panel group conversation / run timeline contract。</p>' +
       '</div>' +
       '<div class="aiteam-hero-actions">' + heroBadges +
+      '<a class="aiteam-button" href="/app/group">新建群聊</a>' +
       '<button type="button" class="aiteam-button aiteam-button--ghost" data-group-open-settings>群设置</button>' +
       '<a class="aiteam-button aiteam-button--ghost" href="/app/org">成员管理</a>' +
       '</div>' +
@@ -401,6 +413,7 @@ window.aiteam = window.aiteam || {};
       '</section>' +
       '<aside class="aiteam-panel aiteam-group-sidebar">' +
       '<div class="aiteam-panel__header"><h3>群信息与成员栏</h3><a href="/app/workbench">返回工作台</a></div>' +
+      '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>群聊头像</h3><span class="aiteam-inline-note">前 4 名成员 · 2×2 宫格</span></div>' + renderGroupAvatarGrid(members) + '</div>' +
       '<div class="aiteam-detail-kv"><span>群聊 ID</span><strong>' + escapeHtml(conversation.conversation_id || '未知') + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>默认协作策略</span><strong>' + escapeHtml(routeModeLabel(conversation.default_route_hint || 'auto')) + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>最近运行状态</span><strong>' + escapeHtml(initialRunStatus || '暂无') + '</strong></div>' +
@@ -411,6 +424,12 @@ window.aiteam = window.aiteam || {};
       '<a class="aiteam-card-link" href="/app/org"><span class="aiteam-card-link__label">成员管理入口</span><span class="aiteam-card-link__note">通过组织架构页查看归属与调整团队结构</span></a>' +
       '<a class="aiteam-card-link" href="/admin/employees"><span class="aiteam-card-link__label">群设置配套入口</span><span class="aiteam-card-link__note">前往员工后台核对角色、模型与技能配置</span></a>' +
       '</div>' +
+      '<div class="aiteam-route-feedback__chips">' +
+      '<button class="aiteam-filter-chip" type="button" disabled>新增员工</button>' +
+      '<button class="aiteam-filter-chip" type="button" disabled>踢出员工</button>' +
+      '<button class="aiteam-filter-chip" type="button" disabled>解散群聊</button>' +
+      '</div>' +
+      '<p class="aiteam-inline-note">当前正式写接口尚未开放，因此保留 新增员工 / 踢出员工 / 解散群聊 的产品位，但不伪造未实现写语义。</p>' +
       '</div>' +
       '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>成员栏</h3><span class="aiteam-inline-note">' + escapeHtml(String(conversation.member_count || members.length || 0)) + ' 名成员</span></div><div class="aiteam-member-list" data-group-members></div></div>' +
       '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>任务树 / 协作区</h3><span class="aiteam-inline-note">显示父子任务、执行成员与 runtime task 句柄</span></div><ul class="aiteam-task-tree" data-group-task-tree></ul></div>' +
