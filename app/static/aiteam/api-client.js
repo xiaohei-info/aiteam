@@ -323,5 +323,17 @@ window.aiteam = window.aiteam || {};
     deleteMemory(memoryId, options) {
       return this.delete(`/memories/${encodeURIComponent(memoryId)}`, options);
     },
+
+    getSystemEnterpriseDetail(enterpriseId, options) {
+      return this.get(`/api/system-admin/enterprises/${encodeURIComponent(enterpriseId)}`, options);
+    },
+
+    getSystemEnterpriseQuota(enterpriseId, options) {
+      return this.get(`/api/system-admin/enterprises/${encodeURIComponent(enterpriseId)}/quota`, options);
+    },
+
+    getSystemEnterpriseExport(options) {
+      return this.get('/api/system-admin/enterprises/export', options);
+    },
   };
 }(window.aiteam));

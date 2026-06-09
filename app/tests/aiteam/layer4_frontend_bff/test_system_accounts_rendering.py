@@ -20,6 +20,7 @@ const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf
 const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
 const roleStateSource = fs.readFileSync({json.dumps(str(ROLE_STATE_PATH))}, 'utf8');
 const moduleSource = fs.readFileSync({json.dumps(str(PAGE_PATH))}, 'utf8');
+const fetchCalls = [];
 global.Headers = class Headers {{
   constructor(init) {{
     this.map = new Map();
@@ -31,6 +32,7 @@ global.Headers = class Headers {{
   set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
 }};
 global.fetch = async (url, options) => {{
+  fetchCalls.push({{ url, method: (options && options.method) || 'GET' }});
   if (url === '/api/system-admin/enterprises') {{
     return {{
       ok: true,
@@ -46,6 +48,48 @@ global.fetch = async (url, options) => {{
         page: 1,
         limit: 20,
         has_more: false,
+      }}); }},
+    }};
+  }}
+  if (url === '/api/system-admin/enterprises/ent_1') {{
+    return {{
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async text() {{ return JSON.stringify({{
+        id: 'ent_1',
+        name: '太乙知行AI科技',
+        slug: 'taiyi',
+        status: 'active',
+        owner_user_id: 'usr_1',
+        created_at: '2026-01-15',
+      }}); }},
+    }};
+  }}
+  if (url === '/api/system-admin/enterprises/ent_1/quota') {{
+    return {{
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async text() {{ return JSON.stringify({{
+        id: 'ent_1',
+        employee_quota: 120,
+        storage_quota_mb: 2048,
+        api_rate_limit: 300,
+      }}); }},
+    }};
+  }}
+  if (url === '/api/system-admin/enterprises/export') {{
+    return {{
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async text() {{ return JSON.stringify({{
+        items: [
+          {{ id: 'ent_1', name: '太乙知行AI科技', status: 'active' }},
+          {{ id: 'ent_2', name: '豪恩声学', status: 'active' }},
+        ],
+        total: 2,
       }}); }},
     }};
   }}
@@ -67,7 +111,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'system-accounts.js' }});
   aiteam.pages.systemAccounts.init(container);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  console.log(JSON.stringify({{ html: container.innerHTML }}));
+  console.log(JSON.stringify({{ html: container.innerHTML, fetchCalls }}));
 }})().catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -79,6 +123,10 @@ vm.runInThisContext(moduleSource, {{ filename: 'system-accounts.js' }});
 
 def test_system_accounts_renders_stat_cards_search_and_detail_region() -> None:
     payload = _run_system_accounts()
+    assert {"url": "/api/system-admin/enterprises", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/ent_1", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/ent_1/quota", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/export", "method": "GET"} in payload["fetchCalls"]
     assert "总企业数" in payload["html"]
     assert "本月新增" in payload["html"]
     assert "月活企业" in payload["html"]
@@ -86,3 +134,6 @@ def test_system_accounts_renders_stat_cards_search_and_detail_region() -> None:
     assert "搜索企业名称/手机号" in payload["html"]
     assert "企业账号详情" in payload["html"]
     assert "太乙知行AI科技" in payload["html"]
+    assert "企业配额" in payload["html"]
+    assert "员工上限" in payload["html"]
+    assert "导出视图" in payload["html"]

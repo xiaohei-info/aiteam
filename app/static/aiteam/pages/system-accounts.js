@@ -197,6 +197,17 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + statusLabel(selected.status) + '</span></div>';
   }
 
+  function renderQuota(detailQuota) {
+    if (!detailQuota) {
+      return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业配额</span><span class="aiteam-shell__meta-value">正在加载</span></div>';
+    }
+    return '' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业配额</span><span class="aiteam-shell__meta-value">企业 ' + (detailQuota.id || '-') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">员工上限</span><span class="aiteam-shell__meta-value">' + (detailQuota.employee_quota != null ? detailQuota.employee_quota : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">存储配额</span><span class="aiteam-shell__meta-value">' + (detailQuota.storage_quota_mb != null ? detailQuota.storage_quota_mb + ' MB' : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">API 限流</span><span class="aiteam-shell__meta-value">' + (detailQuota.api_rate_limit != null ? detailQuota.api_rate_limit : '—') + '</span></div>';
+  }
+
   ns.pages.systemAccounts = {
     init: function (container) {
       if (!container) return;
@@ -244,13 +255,33 @@ window.aiteam = window.aiteam || {};
           query: '',
           statusFilter: '',
           selectedEnterpriseId: data.enterprises[0].enterprise_id || '',
+          selectedDetail: null,
+          selectedQuota: null,
+          exportItems: [],
         };
+
+        function refreshSelectedEnterpriseData() {
+          if (!state.selectedEnterpriseId || !ns.api || !ns.api.getSystemEnterpriseDetail || !ns.api.getSystemEnterpriseQuota || !ns.api.getSystemEnterpriseExport) {
+            return Promise.resolve();
+          }
+          return Promise.all([
+            ns.api.getSystemEnterpriseDetail(state.selectedEnterpriseId),
+            ns.api.getSystemEnterpriseQuota(state.selectedEnterpriseId),
+            ns.api.getSystemEnterpriseExport(),
+          ]).then(function (results) {
+            if (results[0] && results[0].ok) state.selectedDetail = results[0].data || null;
+            if (results[1] && results[1].ok) state.selectedQuota = results[1].data || null;
+            if (results[2] && results[2].ok) state.exportItems = (results[2].data && results[2].data.items) || [];
+          });
+        }
 
         function render() {
           var filtered = filterEnterprises(data.enterprises, state);
           var stats = buildStats(data.enterprises);
           var selected = filtered.find(function (item) { return item.enterprise_id === state.selectedEnterpriseId; }) || filtered[0] || data.enterprises[0];
           state.selectedEnterpriseId = selected ? selected.enterprise_id : '';
+          if (state.selectedDetail && state.selectedDetail.id !== state.selectedEnterpriseId) state.selectedDetail = null;
+          if (state.selectedQuota && state.selectedQuota.id !== state.selectedEnterpriseId) state.selectedQuota = null;
           var actionMarkup = canMutate
             ? function (enterpriseId) {
                 return '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="ban" data-aiteam-eid="' + enterpriseId + '">封禁</button> ' +
@@ -290,13 +321,13 @@ window.aiteam = window.aiteam || {};
             '<div class="aiteam-shell__meta">' +
             '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号"></label></div>' +
             '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
-            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">导出</span><span class="aiteam-shell__meta-value">全量导出企业列表（Excel）</span></div>' +
+            '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">导出视图</span><span class="aiteam-shell__meta-value">当前导出样本 ' + state.exportItems.length + ' 条</span></div>' +
             '</div>' +
             '<div class="aiteam-shell__two-column">' +
             '<div class="aiteam-shell__panel">' +
             '<table class="aiteam-table"><thead><tr><th>企业名称</th><th>联系人/手机</th><th>注册时间</th><th>累计充值</th><th>Token消耗</th><th>状态</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' +
             '</div>' +
-            '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">企业账号详情</h3><div class="aiteam-shell__meta">' + renderDetail(selected) + '</div></div>' +
+            '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">企业账号详情</h3><div class="aiteam-shell__meta">' + renderDetail(state.selectedDetail || selected) + renderQuota(state.selectedQuota) + '</div></div>' +
             '</div>' +
             (canMutate ? '' : '<p class="aiteam-shell__meta">当前角色仅可查看企业账号，企业操作需要 system_write 权限。</p>') +
             '<div id="aiteam-sys-accounts-feedback"></div>' +
@@ -324,7 +355,7 @@ window.aiteam = window.aiteam || {};
             for (var i = 0; i < rowsEls.length; i++) {
               rowsEls[i].addEventListener('click', function () {
                 state.selectedEnterpriseId = this.getAttribute('data-enterprise-row') || '';
-                render();
+                refreshSelectedEnterpriseData().then(render);
               });
             }
             if (canMutate) {
@@ -341,7 +372,7 @@ window.aiteam = window.aiteam || {};
           }
         }
 
-        render();
+        refreshSelectedEnterpriseData().then(render);
       });
     },
 
