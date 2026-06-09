@@ -107,6 +107,7 @@ EXPECTED_ADMIN_PREFIXES = [
 EXPECTED_SYSTEM_PREFIXES = [
     ("system-health.js",   ["/api/system-admin/"]),
     ("system-accounts.js", ["/api/system-admin/enterprises", "/api/system-admin/enterprises/"]),
+    ("system-finance.js",  ["/api/system-admin/finance/overview", "/api/system-admin/finance/reports"]),
 ]
 
 FORBIDDEN_PREFIXES = [
@@ -230,6 +231,14 @@ class TestAdminSystemPageRuntimeInit:
         )
         assert "企业账号 API 尚未实现" in result["html"]
 
+    def test_system_finance_init_executes_with_loaded_dependencies(self):
+        result = _run_page_module(
+            "system-finance.js",
+            "systemFinance",
+            [{"url": "/api/system-admin/finance/overview", "method": "GET"}],
+        )
+        assert "平台财务聚合 API 尚未实现" in result["html"] or "平台财务数据加载失败" in result["html"]
+
 
 class TestDynamicPageLoading:
     """L4-S04-T08: page-shell loads admin/system modules for matching paths."""
@@ -253,6 +262,8 @@ class TestDynamicPageLoading:
                 "\"/system/accounts\"" in content), "page-shell must route /system/accounts"
         assert ("'/system/health'" in content or
                 "\"/system/health\"" in content), "page-shell must route /system/health"
+        assert ("'/system/finance'" in content or
+                "\"/system/finance\"" in content), "page-shell must route /system/finance"
 
     def test_page_shell_loads_admin_employees_module(self):
         shell_path = os.path.join(AITEAM_STATIC, "page-shell.js")

@@ -71,6 +71,82 @@ vm.runInThisContext(moduleSource, {{ filename: 'system-finance.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_system_finance_export_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(PAGE_PATH))}, 'utf8');
+const assignedUrls = [];
+const overviewCalls = [];
+global.window = {{
+  location: {{
+    assign(url) {{ assignedUrls.push(url); }},
+  }},
+  aiteam: {{
+    pages: {{}},
+    states: {{
+      handleApiResult(result, container) {{ container.innerHTML = '<div>' + (result && result.status || 'error') + '</div>'; }},
+      renderEmpty(container, message) {{ container.innerHTML = '<div>' + message + '</div>'; }},
+    }},
+    api: {{
+      get(url) {{
+        overviewCalls.push(url);
+        if (url.indexOf('/api/system-admin/finance/overview') === 0) {{
+          return Promise.resolve({{
+            ok: true,
+            data: {{
+              summary: {{
+                total_revenue: 486200,
+                total_cost: 299800,
+                total_profit: 186400,
+                paying_enterprise_count: 876,
+              }},
+              trend: [
+                {{ period: '2026-01', revenue: 120000, cost: 80000 }},
+                {{ period: '2026-02', revenue: 140000, cost: 86000 }},
+                {{ period: '2026-03', revenue: 226200, cost: 133800 }},
+              ],
+              top_enterprises: [
+                {{ enterprise_name: '太乙知行AI科技', cost: 5000 }},
+                {{ enterprise_name: '豪恩声学', cost: 2000 }},
+              ],
+            }},
+          }});
+        }}
+        return Promise.resolve({{ ok: false, status: 404 }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'system-finance.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector() {{ return null; }},
+    querySelectorAll() {{ return []; }},
+  }};
+  aiteam.pages.systemFinance.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const beforeHtml = container.innerHTML;
+  const lastExportUrl = container.lastExportHandler();
+  console.log(JSON.stringify({{
+    beforeHtml,
+    afterHtml: container.innerHTML,
+    lastExportUrl,
+    assignedUrls,
+    overviewCalls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def test_system_finance_renders_core_stat_cards_trend_and_top_enterprises() -> None:
     payload = _run_system_finance()
     assert "总充值金额" in payload["html"]
@@ -83,3 +159,10 @@ def test_system_finance_renders_core_stat_cards_trend_and_top_enterprises() -> N
     assert "月度收入趋势" in payload["html"]
     assert "TOP 5 消费企业" in payload["html"]
     assert "太乙知行AI科技" in payload["html"]
+
+
+def test_system_finance_exposes_export_report_entry() -> None:
+    payload = _run_system_finance_export_flow()
+    assert "导出报表" in payload["beforeHtml"]
+    assert payload["lastExportUrl"] == "/api/system-admin/finance/reports"
+    assert payload["assignedUrls"] == ["/api/system-admin/finance/reports"]

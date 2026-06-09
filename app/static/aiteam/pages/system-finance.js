@@ -2,6 +2,7 @@ window.aiteam = window.aiteam || {};
 
 (function registerSystemFinancePage(ns) {
   ns.pages = ns.pages || {};
+  var FINANCE_REPORTS_PATH = '/api/system-admin/finance/reports';
 
   function money(value) {
     var num = Number(value);
@@ -82,6 +83,7 @@ window.aiteam = window.aiteam || {};
       '<button type="button" class="aiteam-pill is-active">本月</button>' +
       '<button type="button" class="aiteam-pill">本年</button>' +
       '<button type="button" class="aiteam-pill">全部</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-system-finance-export>导出报表</button>' +
       '</div>' +
       '<div class="aiteam-billing__stats">' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总充值金额</span><span class="aiteam-shell__meta-value">' + money(revenue) + '</span></div>' +
@@ -102,11 +104,29 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function bindFinanceActions(container) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var exportButton = container.querySelector('[data-system-finance-export]');
+    if (exportButton && typeof exportButton.addEventListener === 'function') {
+      exportButton.addEventListener('click', function () {
+        if (typeof container.lastExportHandler === 'function') {
+          container.lastExportHandler();
+        }
+      });
+    }
+  }
+
   ns.pages.systemFinance = {
     init: function (container) {
       if (!container) return;
 
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载平台财务数据...</p></div>';
+      container.lastExportHandler = function () {
+        if (window.location && typeof window.location.assign === 'function') {
+          window.location.assign(FINANCE_REPORTS_PATH);
+        }
+        return FINANCE_REPORTS_PATH;
+      };
 
       ns.api.get('/api/system-admin/finance/overview').then(function (result) {
         if (!result.ok) {
@@ -122,6 +142,7 @@ window.aiteam = window.aiteam || {};
           return;
         }
         renderOverview(container, result.data);
+        bindFinanceActions(container);
       });
     }
   };
