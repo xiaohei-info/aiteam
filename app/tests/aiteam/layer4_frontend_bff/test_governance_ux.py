@@ -82,6 +82,7 @@ def _run_page_with_role(
     role: str,
     fetch_status: int,
     fetch_body: str,
+    browser_state: dict | None = None,
     after_init_js: str = "return {};",
 ) -> dict:
     """Load a page module with role-state and a mock fetch, run init, return html."""
@@ -89,6 +90,7 @@ def _run_page_with_role(
     api_client_path = ROOT / "static" / "aiteam" / "api-client.js"
     state_helpers_path = ROOT / "static" / "aiteam" / "state-helpers.js"
     role_state_path = ROOT / "static" / "aiteam" / "role-state.js"
+    browser_state_json = json.dumps(browser_state or {})
 
     script = f"""
 const fs = require('fs');
@@ -127,17 +129,63 @@ vm.runInThisContext(stateSource, {{ filename: 'state-helpers.js' }});
 vm.runInThisContext(roleSource, {{ filename: 'role-state.js' }});
 aiteam.role.setActiveRole({json.dumps(role)});
 vm.runInThisContext(moduleSource, {{ filename: {json.dumps(module_file)} }});
+const browserState = {browser_state_json};
+
+function createEventTarget(initialValue) {{
+  return {{
+    value: initialValue || '',
+    listeners: {{}},
+    addEventListener(type, handler) {{
+      this.listeners[type] = handler;
+    }},
+    dispatch(type) {{
+      if (this.listeners[type]) {{
+        this.listeners[type].call(this, {{ currentTarget: this, target: this }});
+      }}
+    }},
+  }};
+}}
+
+async function flushTurns(count) {{
+  for (let i = 0; i < count; i += 1) {{
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+}}
+
+async function applyBrowserState(nodes) {{
+  if (!browserState || !browserState.createdRange) return;
+  const createdRangeInput = nodes['[data-role="enterprise-created-range"]'];
+  for (let i = 0; i < 10; i += 1) {{
+    if (createdRangeInput.listeners && createdRangeInput.listeners.input) break;
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+  createdRangeInput.value = browserState.createdRange;
+  if (createdRangeInput.listeners && createdRangeInput.listeners.input) {{
+    createdRangeInput.listeners.input.call(createdRangeInput, {{ currentTarget: createdRangeInput, target: createdRangeInput }});
+  }}
+}}
 
 (async () => {{
-  const container = {{ innerHTML: '' }};
+  const nodes = {{
+    '[data-role="enterprise-search"]': createEventTarget(''),
+    '[data-role="enterprise-status"]': createEventTarget(''),
+    '[data-role="enterprise-created-range"]': createEventTarget(''),
+  }};
+  const container = {{
+    innerHTML: '',
+    querySelector(selector) {{ return nodes[selector] || null; }},
+    querySelectorAll() {{ return []; }},
+  }};
   const handler = aiteam.pages[{json.dumps(handler_name)}];
   if (handler && handler.init) {{
     handler.init(container);
   }}
-  await new Promise((resolve) => setImmediate(resolve));
+  await flushTurns(4);
+  await applyBrowserState(nodes);
   const extra = await (async () => {
     {after_init_js}
   })();
+  await flushTurns(2);
   console.log(JSON.stringify({{
     html: container.innerHTML,
     fetchCalls: fetchCalls,
@@ -525,15 +573,26 @@ class TestPermissionDeniedState:
         assert "system_write" in module_source
         assert "permission_denied" in module_source
 
-    def test_system_accounts_system_operator_keeps_readonly_actions(self):
+    def test_system_accounts_system_operator_keeps_readonly_actions_after_created_range_rerender(self):
         result = _run_page_with_role(
             "system-accounts.js",
             "systemAccounts",
             role="system_operator",
             fetch_status=200,
-            fetch_body=json.dumps({"enterprises": [{"enterprise_id": "ent_acme", "name": "Acme", "status": "active"}]}),
+            browser_state={"createdRange": "2026-02-01 ~ 2026-02-28"},
+            fetch_body=json.dumps(
+                {
+                    "enterprises": [
+                        {"enterprise_id": "ent_old", "name": "Old Co", "status": "active", "created_at": "2026-01-15"},
+                        {"enterprise_id": "ent_focus", "name": "Focus Co", "status": "active", "created_at": "2026-02-20"},
+                    ]
+                }
+            ),
         )
-        assert "只读" in result["html"]
+        assert 'data-enterprise-row="ent_focus"' in result["html"]
+        assert 'data-enterprise-row="ent_old"' not in result["html"]
+        assert result["html"].count("只读") == 1
+        assert 'data-aiteam-action="' not in result["html"]
 
     def test_system_accounts_perform_action_posts_canonical_actions_contract(self):
         result = _run_system_accounts_action(
