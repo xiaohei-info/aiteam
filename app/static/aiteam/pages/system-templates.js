@@ -51,16 +51,18 @@ window.aiteam = window.aiteam || {};
       return '<div class="aiteam-inline-empty">选择一个模板后查看用户端预览。</div>';
     }
     var tags = Array.isArray(item.tags) ? item.tags : [];
+    var previewModel = item.default_model || ((item.default_model_ref || {}).model) || '—';
+    var previewDescription = item.description || ((item.prompt_pack || {}).description) || '暂无岗位描述';
     return '' +
       '<div class="aiteam-detail-section">' +
       '<h3>用户端预览</h3>' +
       '<div class="aiteam-chat-summary__hero">' +
       '<h3>' + (item.name || '') + '</h3>' +
-      '<p>' + (item.description || '暂无岗位描述') + '</p>' +
+      '<p>' + previewDescription + '</p>' +
       '</div>' +
       '<div class="aiteam-detail-kv">' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">角色标识</span><span class="aiteam-shell__meta-value">' + (item.role_name || item.role || '—') + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">默认模型</span><span class="aiteam-shell__meta-value">' + (item.default_model || item.model || '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">默认模型</span><span class="aiteam-shell__meta-value">' + previewModel + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + (tags.length ? tags.join(' / ') : '—') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布状态</span><span class="aiteam-shell__meta-value">' + (item.status || item.publish_state || 'draft') + '</span></div>' +
       '</div>' +

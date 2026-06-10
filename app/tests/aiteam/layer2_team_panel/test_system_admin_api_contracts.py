@@ -104,6 +104,13 @@ class TestSystemTemplates:
         assert patched["name"] == "Ops Specialist v2"
         assert patched["publish_record"]["is_published"] is True
 
+    def test_system_template_projection_exposes_preview_fields(self, seeded_enterprise):
+        status, body = _get(_system_admin_path("/api/system-admin/templates"))
+        assert status == 200, body
+        seeded = next(item for item in body["items"] if item["template_id"] == seeded_enterprise["template_id"])
+        assert seeded["description"]
+        assert seeded["default_model"] or seeded["default_model_ref"]
+
 
 class TestSystemSolutions:
     def test_get_solutions_returns_seeded_solution(self, seeded_enterprise):

@@ -211,6 +211,17 @@ class TestTalentMarketTemplates:
         assert "items" in body
         assert body["items"][0]["template_id"] == seeded_enterprise["template_id"]
 
+    def test_unpublished_template_is_hidden_from_team_marketplace(self, seeded_enterprise):
+        template_id = seeded_enterprise["template_id"]
+        patch_status, patched = _patch(
+            f"/api/system-admin/templates/{template_id}?role=system_admin",
+            {"publish_action": "unpublish"},
+        )
+        assert patch_status == 200, patched
+        status, body = _get("/api/team/templates")
+        assert status == 200, body
+        assert all(item["template_id"] != template_id for item in body["items"])
+
 
 class TestTalentTemplateDetail:
     """S06-T03: GET /api/team/talent-market/templates/{id}."""

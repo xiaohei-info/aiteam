@@ -315,6 +315,29 @@ def test_system_templates_preview_switches_between_template_profiles() -> None:
     assert "gpt-4.1" in payload["secondPreviewHtml"]
 
 
+def test_system_templates_preview_uses_flattened_field_fallbacks() -> None:
+    payload = _run_page(
+        "system-templates.js",
+        "/api/system-admin/templates",
+        {
+            "items": [
+                {
+                    "template_id": "tpl_ops",
+                    "name": "运营专家",
+                    "role_name": "ops_specialist",
+                    "status": "published",
+                    "version_no": 2,
+                    "prompt_pack": {"description": "负责 SOP 执行与流程巡检"},
+                    "default_model_ref": {"provider": "openai", "model": "gpt-4.1-mini"},
+                    "tags": ["运营"],
+                }
+            ]
+        },
+    )
+    assert "负责 SOP 执行与流程巡检" in payload["html"]
+    assert "gpt-4.1-mini" in payload["html"]
+
+
 def test_system_solutions_preview_switches_between_solution_cards() -> None:
     payload = _run_system_solutions_preview_flow()
     assert "预览效果：当前页面已保留产品位" not in payload["firstPreviewHtml"]

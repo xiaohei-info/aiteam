@@ -27,6 +27,8 @@ def list_templates(uow) -> dict[str, Any]:
     for template in templates:
         audits = uow.audit_events().list_by_target("template", template.id, limit=20)
         publish_record = _latest_publish_record(audits)
+        prompt_pack = _parse_json(template.prompt_pack_json, {})
+        default_model_ref = _parse_json(template.default_model_json, {})
         items.append(
             {
                 "template_id": template.id,
@@ -34,10 +36,13 @@ def list_templates(uow) -> dict[str, Any]:
                 "category_code": template.category_code,
                 "role_name": template.role_name,
                 "status": template.status,
+                "description": prompt_pack.get("description") or template.name,
+                "default_model": default_model_ref.get("model"),
+                "tags": [template.category_code] if template.category_code else [],
                 "version_no": template.version_no,
                 "source_type": template.source_type,
-                "prompt_pack": _parse_json(template.prompt_pack_json, {}),
-                "default_model_ref": _parse_json(template.default_model_json, {}),
+                "prompt_pack": prompt_pack,
+                "default_model_ref": default_model_ref,
                 "default_binding": _parse_json(template.default_binding_json, {}),
                 "publish_record": publish_record,
                 "recruit_count": recruit_counts.get(template.id, 0),

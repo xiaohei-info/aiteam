@@ -1377,7 +1377,7 @@ def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         repo = AgentTemplateRepo(cur)
-        templates = repo.list_all()
+        templates = [template for template in repo.list_all() if template.deleted_at is None and template.status == "published"]
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         employee_counts: dict[str, int] = {}
