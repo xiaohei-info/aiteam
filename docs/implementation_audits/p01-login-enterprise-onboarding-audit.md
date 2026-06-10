@@ -92,6 +92,7 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 
 - `GET /health` 返回 `status: ok`
 - 浏览器可打开 `http://127.0.0.1:8788/login`
+- 浏览器页面标题为 `Hermes — Sign in`
 - 浏览器实际触发了：
   - `POST /api/auth/login/wechat/init`
   - `GET /api/auth/login/wechat/poll?...`
@@ -104,6 +105,10 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 - 登录页真实可访问
 - mock 微信登录主链真实可走
 - 登录成功后的 onboarding 承接路由真实存在
+
+限制：
+
+- 当前会话环境未提供可直接落库的浏览器截图工具链，因此本轮保留了真实访问与请求链证据，但没有把截图文件提交到仓库
 
 ## 按 spec_id 的当前审计
 
