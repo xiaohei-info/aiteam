@@ -39,6 +39,14 @@ window.aiteam = window.aiteam || {};
     return String(value).replace(/^\s+|\s+$/g, '');
   }
 
+  function escapeHtmlAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
   function formatMoney(value) {
     var num = Number(value);
     if (!isFinite(num)) return '—';
@@ -371,7 +379,7 @@ window.aiteam = window.aiteam || {};
             '<div class="aiteam-shell__meta">' +
             '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号/邮箱<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号/邮箱"></label></div>' +
             '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="arrears"' + (state.statusFilter === 'arrears' ? ' selected' : '') + '>欠费</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
-            '<div class="aiteam-shell__meta-card"><label>注册时间范围<br><input class="aiteam-input" type="text" data-role="enterprise-created-range" value="' + state.createdRange + '" placeholder="YYYY-MM-DD ~ YYYY-MM-DD"></label></div>' +
+            '<div class="aiteam-shell__meta-card"><label>注册时间范围<br><input class="aiteam-input" type="text" data-role="enterprise-created-range" value="' + escapeHtmlAttr(state.createdRange) + '" placeholder="YYYY-MM-DD ~ YYYY-MM-DD"></label></div>' +
             '<div class="aiteam-shell__meta-card">' + renderExportSummary(state.exportItems) + '</div>' +
             '</div>' +
             '<div class="aiteam-shell__two-column">' +

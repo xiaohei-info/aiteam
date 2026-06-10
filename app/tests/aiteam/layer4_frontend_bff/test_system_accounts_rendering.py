@@ -188,3 +188,18 @@ def test_system_accounts_filters_by_created_range_in_browser_state() -> None:
     assert "豪恩声学" in payload["html"]
     assert "太乙知行AI科技" not in payload["html"]
     assert "示例企业C" not in payload["html"]
+
+
+def test_system_accounts_escapes_created_range_when_re_rendering_input_value() -> None:
+    payload = _run_system_accounts(
+        after_init_js="""
+  const createdRangeInput = container.querySelector('[data-role="enterprise-created-range"]');
+  if (createdRangeInput) {
+    createdRangeInput.value = '2026-02-01 ~ 2026-02-28" data-breakout="x';
+    createdRangeInput.dispatch('input');
+  }
+  return {};
+""",
+    )
+    assert '&quot; data-breakout=&quot;x' in payload["html"]
+    assert 'value="2026-02-01 ~ 2026-02-28" data-breakout="x"' not in payload["html"]
