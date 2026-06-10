@@ -26,7 +26,13 @@ _ALLOWED_WORKBENCH_ROLES = {
 
 
 
-def get_workbench_view(uow: UnitOfWork, enterprise_id: str, *, role: str = EnterpriseRole.MEMBER) -> WorkbenchView:
+def get_workbench_view(
+    uow: UnitOfWork,
+    enterprise_id: str,
+    *,
+    role: str = EnterpriseRole.MEMBER,
+    user_id: str | None = None,
+) -> WorkbenchView:
     """Build the workbench aggregate view for an enterprise."""
     normalized_role = _normalize_role(role)
     if normalized_role not in _ALLOWED_WORKBENCH_ROLES:
@@ -55,6 +61,8 @@ def get_workbench_view(uow: UnitOfWork, enterprise_id: str, *, role: str = Enter
         uow,
         [conversation.id for conversation in conversations if conversation.type == "group"],
     )
+    starred_employee_ids = _starred_employee_ids(uow, enterprise_id, user_id)
+    unread_counts = _conversation_unread_counts(uow, enterprise_id, user_id, conversations)
 
     sorted_conversations = sorted(
         conversations,
@@ -72,6 +80,7 @@ def get_workbench_view(uow: UnitOfWork, enterprise_id: str, *, role: str = Enter
             latest_event=latest_event_by_run.get((latest_run_by_conversation.get(conversation.id) or TeamRun(id="", enterprise_id="")).id),
             member_count=conversation_member_counts.get(conversation.id, 0),
             task_digest=task_digest_by_run.get((latest_run_by_conversation.get(conversation.id) or TeamRun(id="", enterprise_id="")).id, _empty_task_digest()),
+            unread_count=unread_counts.get(conversation.id, 0),
         )
         for conversation in sorted_conversations
     ]
@@ -89,6 +98,8 @@ def get_workbench_view(uow: UnitOfWork, enterprise_id: str, *, role: str = Enter
             latest_run=latest_run_by_employee.get(employee.id),
             knowledge_base_count=knowledge_counts.get(employee.id, 0),
             running_task_count=running_task_counts_by_employee.get(employee.id, 0),
+            unread_count=unread_counts.get(conversation_by_employee.get(employee.id).id, 0) if conversation_by_employee.get(employee.id) is not None else 0,
+            is_starred=employee.id in starred_employee_ids,
         )
         for employee in employees
     ]
@@ -167,6 +178,12 @@ def get_workbench_view(uow: UnitOfWork, enterprise_id: str, *, role: str = Enter
 
 def serialize_workbench_view(view: WorkbenchView, *, enterprise_name: str, plan_tier: str = "mvp") -> dict:
     payload = asdict(view)
+    payload["employees"] = [_serialize_workbench_employee_item(item) for item in view.employees]
+    payload["my_team"] = {
+        **(payload.get("my_team") or {}),
+        "items": [_serialize_workbench_employee_item(item) for item in view.my_team.get("items", [])],
+    }
+    payload["groups"] = [_serialize_workbench_group_item(item) for item in view.groups]
     payload["enterprise"] = {
         "enterprise_id": view.enterprise_id,
         "name": enterprise_name,
@@ -263,16 +280,50 @@ def _conversation_member_counts(uow: UnitOfWork, conversation_ids: list[str]) ->
     cur.execute(
         "SELECT conversation_id, COUNT(*) "
         "FROM conversation_member "
-        "WHERE conversation_id = ANY(%s) AND deleted_at IS NULL AND status = 'active' "
+        "WHERE conversation_id = ANY(%s) AND status = 'active' "
         "GROUP BY conversation_id",
         (conversation_ids,),
     )
     return {conversation_id: count for conversation_id, count in cur.fetchall()}
 
 
+def _starred_employee_ids(uow: UnitOfWork, enterprise_id: str, user_id: str | None) -> set[str]:
+    if not user_id:
+        return set()
+    return uow.workbench_employee_preferences().list_starred_employee_ids(enterprise_id, user_id)
+
+
+def _conversation_unread_counts(
+    uow: UnitOfWork,
+    enterprise_id: str,
+    user_id: str | None,
+    conversations: list[Conversation],
+) -> dict[str, int]:
+    if not user_id:
+        return {}
+    state_map = uow.conversation_read_states().list_by_user(
+        enterprise_id,
+        user_id,
+        [conversation.id for conversation in conversations],
+    )
+    unread_counts: dict[str, int] = {}
+    for conversation in conversations:
+        last_message_at = conversation.last_message_at or conversation.updated_at or conversation.created_at
+        if not last_message_at or not conversation.last_message_preview:
+            unread_counts[conversation.id] = 0
+            continue
+        state = state_map.get(conversation.id)
+        if state is None or not state.last_read_at:
+            unread_counts[conversation.id] = 1
+            continue
+        unread_counts[conversation.id] = 1 if last_message_at > state.last_read_at else 0
+    return unread_counts
+
+
 
 def _build_employee_item(employee, *, conversation: Conversation | None, latest_run: TeamRun | None,
-                         knowledge_base_count: int, running_task_count: int) -> WorkbenchEmployeeItem:
+                         knowledge_base_count: int, running_task_count: int,
+                         unread_count: int, is_starred: bool) -> WorkbenchEmployeeItem:
     presence = "idle"
     latest_run_status = latest_run.status if latest_run else None
     if employee.status != EmployeeStatus.ACTIVE:
@@ -284,6 +335,13 @@ def _build_employee_item(employee, *, conversation: Conversation | None, latest_
 
     conversation_id = conversation.id if conversation else None
     navigation_target = f"/app/chat/{conversation_id}" if conversation_id else "/app/workbench"
+    last_active_at = ""
+    if conversation is not None:
+        last_active_at = conversation.last_message_at or conversation.updated_at or conversation.created_at
+    if not last_active_at and latest_run is not None:
+        last_active_at = latest_run.finished_at or latest_run.started_at or latest_run.updated_at or latest_run.created_at
+    if not last_active_at:
+        last_active_at = employee.updated_at or employee.created_at or ""
     return WorkbenchEmployeeItem(
         employee_id=employee.id,
         display_name=employee.display_name,
@@ -292,7 +350,11 @@ def _build_employee_item(employee, *, conversation: Conversation | None, latest_
         presence=presence,
         avatar_url=employee.avatar_url,
         last_message_preview=(conversation.last_message_preview or "") if conversation else "",
+        unread_count=unread_count,
+        pinned=is_starred,
+        is_starred=is_starred,
         conversation_id=conversation_id,
+        last_active_at=last_active_at,
         latest_run_status=latest_run_status,
         running_task_count=running_task_count,
         knowledge_base_count=knowledge_base_count,
@@ -302,7 +364,7 @@ def _build_employee_item(employee, *, conversation: Conversation | None, latest_
 
 
 def _build_conversation_item(conversation: Conversation, *, latest_run: TeamRun | None, latest_event,
-                             member_count: int, task_digest: dict) -> WorkbenchConversationItem:
+                             member_count: int, task_digest: dict, unread_count: int) -> WorkbenchConversationItem:
     latest_run_status = latest_run.status if latest_run else None
     has_delta = latest_event is not None and latest_event.event_type == "message_delta"
     target_prefix = "/app/group" if conversation.type == "group" else "/app/chat"
@@ -316,6 +378,29 @@ def _build_conversation_item(conversation: Conversation, *, latest_run: TeamRun 
         updated_at=conversation.updated_at or conversation.last_message_at or conversation.created_at,
         navigation_target=f"{target_prefix}/{conversation.id}",
         latest_run_status=latest_run_status,
+        unread_count=unread_count,
         member_count=member_count,
         task_status_digest=task_digest,
     )
+
+
+def _serialize_workbench_employee_item(item: WorkbenchEmployeeItem | dict) -> dict:
+    payload = dict(item) if isinstance(item, dict) else asdict(item)
+    payload["is_starred"] = bool(payload.get("is_starred", payload.get("pinned", False)))
+    payload["last_active_at"] = str(payload.get("last_active_at") or "")
+    payload["unread_count"] = int(payload.get("unread_count") or 0)
+    return payload
+
+
+def _serialize_workbench_group_item(item: WorkbenchConversationItem | dict) -> dict:
+    payload = dict(item) if isinstance(item, dict) else asdict(item)
+    digest = payload.get("task_status_digest") or {}
+    return {
+        "conversation_id": payload.get("id"),
+        "title": payload.get("title", ""),
+        "member_count": int(payload.get("member_count") or 0),
+        "running_count": int(digest.get("running") or 0),
+        "last_message_preview": payload.get("last_preview", ""),
+        "unread_count": int(payload.get("unread_count") or 0),
+        "navigation_target": payload.get("navigation_target", ""),
+    }

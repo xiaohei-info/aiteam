@@ -90,6 +90,7 @@ def test_api_client_exposes_team_panel_endpoint_helpers() -> None:
     source = _client_source()
     expected_snippets = [
         "return this.get('/workbench'",
+        "return this.post('/workbench/state'",
         "return this.get('/talent-market/templates'",
         "return this.post('/recruitments'",
         "return this.get(`/conversations/${encodeURIComponent(conversationId)}`",

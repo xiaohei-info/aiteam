@@ -259,6 +259,8 @@ def clean_tables(db_conn):
         cur.execute("TRUNCATE TABLE run_event CASCADE")
         cur.execute("TRUNCATE TABLE audit_event CASCADE")
         cur.execute("TRUNCATE TABLE runtime_binding CASCADE")
+        cur.execute("TRUNCATE TABLE conversation_read_state CASCADE")
+        cur.execute("TRUNCATE TABLE workbench_employee_preference CASCADE")
         cur.execute("TRUNCATE TABLE scheduled_job CASCADE")
         cur.execute("TRUNCATE TABLE team_task CASCADE")
         cur.execute("TRUNCATE TABLE team_run CASCADE")

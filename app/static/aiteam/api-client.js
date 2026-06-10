@@ -107,6 +107,10 @@ window.aiteam = window.aiteam || {};
       return this.get('/workbench');
     },
 
+    updateWorkbenchState(body, options) {
+      return this.post('/workbench/state', body, options);
+    },
+
     getOfficeScene() {
       return this.get('/office/scene');
     },

@@ -285,6 +285,31 @@ class EmployeeConnectorBinding:
     deleted_at: Optional[str] = None
 
 
+@dataclass
+class WorkbenchEmployeePreference:
+    enterprise_id: str
+    user_id: str
+    employee_id: str
+    is_starred: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+
+
+@dataclass
+class ConversationReadState:
+    enterprise_id: str
+    user_id: str
+    conversation_id: str
+    last_read_message_id: Optional[str] = None
+    last_read_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+    updated_by: str = ""
+
+
 # ═══════════════════════════════════════════════════════════════════
 # L1-S03: Conversation / TeamRun / TeamTask aggregates
 # ═══════════════════════════════════════════════════════════════════

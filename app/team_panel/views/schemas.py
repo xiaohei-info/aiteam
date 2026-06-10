@@ -20,7 +20,9 @@ class WorkbenchEmployeeItem:
     last_message_preview: str = ""
     unread_count: int = 0
     pinned: bool = False
+    is_starred: bool = False
     conversation_id: str | None = None
+    last_active_at: str = ""
     latest_run_status: str | None = None
     running_task_count: int = 0
     knowledge_base_count: int = 0
