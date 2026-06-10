@@ -4047,6 +4047,12 @@ def handle_get(handler, parsed) -> bool:
         stripped = parsed._replace(path=parsed.path[len("/session"):])
         return _serve_static(handler, stripped)
 
+    for prefix in _AI_TEAM_PAGE_PREFIXES:
+        static_prefix = prefix + "/static/"
+        if parsed.path.startswith(static_prefix):
+            stripped = parsed._replace(path=parsed.path[len(prefix):])
+            return _serve_static(handler, stripped)
+
     # Firefox Android resolves <link rel="manifest"> against the page URL
     # before the dynamic <base href> script runs when installing from
     # /session/<id>, producing requests like /session/manifest.json.

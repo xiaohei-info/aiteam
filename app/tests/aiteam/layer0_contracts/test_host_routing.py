@@ -215,6 +215,22 @@ def test_auth_northbound_routes_no_longer_return_404_or_501():
         assert status != 501, f"{method} {path}: expected host dispatch to handle route, got {status}: {body}"
 
 
+def test_app_scoped_static_assets_resolve_to_real_static_files():
+    from api.routes import handle_get
+
+    handler = _FakeHandler()
+    parsed = urlparse("http://example.com/app/static/style.css")
+    handled = handle_get(handler, parsed)
+
+    assert handled is True
+    assert handler.status == 200
+    content_type = next((value for key, value in handler.sent_headers if key.lower() == "content-type"), "")
+    assert "text/css" in content_type
+    body = handler.body.decode("utf-8")
+    assert "box-sizing:border-box" in body
+    assert '<div id="aiteam-app"' not in body
+
+
 # ── S02-T02: admin namespaces route real endpoints and keep stubs for unknowns ──
 
 def test_enterprise_admin_known_namespace_routes_return_real_json():

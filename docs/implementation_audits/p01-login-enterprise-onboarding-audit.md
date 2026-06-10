@@ -105,10 +105,18 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 - 登录页真实可访问
 - mock 微信登录主链真实可走
 - 登录成功后的 onboarding 承接路由真实存在
+- `/app/static/style.css` 与 `/app/static/aiteam/styles.css` 已返回真实 CSS，不再错误返回 HTML
+
+### 页面截图资产
+
+- 登录页截图： [login-page.png](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/docs/implementation_audits/assets/p01/login-page.png)
+- 登录页结构快照： [login-page-snapshot.md](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/docs/implementation_audits/assets/p01/login-page-snapshot.md)
+- onboarding workbench 截图： [workbench-onboarding.png](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/docs/implementation_audits/assets/p01/workbench-onboarding.png)
+- onboarding workbench 结构快照： [workbench-onboarding-snapshot.md](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/docs/implementation_audits/assets/p01/workbench-onboarding-snapshot.md)
 
 限制：
 
-- 当前会话环境未提供可直接落库的浏览器截图工具链，因此本轮保留了真实访问与请求链证据，但没有把截图文件提交到仓库
+- 当前已有截图与结构快照，但仍没有“整套手工录屏”证据；若要做到更强 PM 材料，建议后续补录屏
 
 ## 按 spec_id 的当前审计
 
