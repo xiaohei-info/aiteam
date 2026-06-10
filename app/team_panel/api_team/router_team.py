@@ -462,6 +462,9 @@ def _get_full_catalog() -> list[dict]:
 # ── B02 skill install handlers ───────────────────────────────────────────────
 
 def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -521,6 +524,9 @@ def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
 
 
 def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -530,10 +536,13 @@ def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]
         install_repo = EnterpriseSkillInstallRepo(cur)
         installs = install_repo.list_by_enterprise(enterprise.id)
         skill_repo = EmployeeSkillBindingRepo(cur)
+        audit_repo = AuditEventRepo(cur)
         items = []
         for inst in installs:
             grants = skill_repo.list_by_skill_code(enterprise.id, inst.skill_code)
             cat_entry = next((e for e in _get_full_catalog() if e["skill_code"] == inst.skill_code), None)
+            latest_audits = audit_repo.list_by_target("enterprise_skill_install", inst.id, limit=1)
+            latest_audit = latest_audits[0] if latest_audits else None
             items.append({
                 "install_id": inst.id,
                 "skill_code": inst.skill_code,
@@ -544,6 +553,8 @@ def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]
                 "latest_version": inst.latest_version,
                 "scope_mode": inst.scope_mode,
                 "install_status": inst.install_status,
+                "audit_status": latest_audit.event_type if latest_audit else "",
+                "audit_recorded_at": latest_audit.created_at if latest_audit else None,
                 "tags": cat_entry["tags"] if cat_entry else [],
                 "grants": [
                     {"skill_code": g.skill_code, "employee_id": g.employee_id, "enabled": g.enabled}
@@ -555,9 +566,12 @@ def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]
         cur.close()
 
 
-def _handle_skill_install_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
+def _handle_skill_install_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
     skill_code = str(body.get("skill_code") or "").strip()
     if not skill_code:
         return 400, {"error": "MISSING_SKILL_CODE", "message": "skill_code is required"}
@@ -645,9 +659,12 @@ def _handle_skill_install_post(conn, path: str, body: dict | None) -> tuple[int,
         cur.close()
 
 
-def _handle_skill_install_patch(conn, path: str, install_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_skill_install_patch(conn, path: str, query: str, install_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         install_repo = EnterpriseSkillInstallRepo(cur)
@@ -726,7 +743,10 @@ def _handle_skill_install_patch(conn, path: str, install_id: str, body: dict | N
         cur.close()
 
 
-def _handle_skill_install_delete(conn, path: str, install_id: str) -> tuple[int, dict]:
+def _handle_skill_install_delete(conn, path: str, query: str, install_id: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         install_repo = EnterpriseSkillInstallRepo(cur)
@@ -1454,7 +1474,6 @@ def _template_memory_config(template: AgentTemplate) -> dict:
         return memory
     return {"type": "conversation scoped", "max_tokens": 8000}
 
-
 def _template_tags(template: AgentTemplate) -> list[str]:
     prompt_pack = _template_prompt_pack(template)
     tags = prompt_pack.get("tags")
@@ -1466,6 +1485,9 @@ def _template_tags(template: AgentTemplate) -> list[str]:
 
 
 def _handle_talent_templates(conn, path: str, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         repo = AgentTemplateRepo(cur)
@@ -1533,12 +1555,15 @@ def _handle_talent_templates(conn, path: str, query: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[int, dict]:
+def _handle_talent_template_detail(conn, path: str, query: str, template_id: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         repo = AgentTemplateRepo(cur)
         t = repo.get_by_id(template_id)
-        if t is None:
+        if t is None or t.status != "published" or t.deleted_at is not None:
             return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
@@ -1567,9 +1592,12 @@ def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[i
         cur.close()
 
 
-def _handle_recruitments_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
+def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
     template_id = body.get("template_id", "")
     display_name = body.get("display_name", "Employee")
     idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
@@ -4015,13 +4043,13 @@ def handle_team_route(
         admin_tmpl_id = _match_prefix(sub, "/templates/")
         tmpl_id = _match_prefix(sub, "/talent-market/templates/")
         if method == "GET" and admin_tmpl_id is not None and "/" not in admin_tmpl_id:
-            route_handler = lambda conn, template_id=admin_tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
+            route_handler = lambda conn, template_id=admin_tmpl_id: _handle_talent_template_detail(conn, sub, query, template_id)
         elif method == "GET" and tmpl_id is not None and "/" not in tmpl_id:
-            route_handler = lambda conn, template_id=tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
+            route_handler = lambda conn, template_id=tmpl_id: _handle_talent_template_detail(conn, sub, query, template_id)
 
     # ── recruitments ──
     if route_handler is None and method == "POST" and _match_exact(sub, "/recruitments"):
-        route_handler = lambda conn: _handle_recruitments_post(conn, sub, body)
+        route_handler = lambda conn: _handle_recruitments_post(conn, sub, query, body)
 
     # ── org/assignments/{id} patch ──
     if route_handler is None:
@@ -4195,19 +4223,19 @@ def handle_team_route(
         route_handler = lambda conn: _handle_skill_installs_list(conn, sub, query)
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/skills/installs"):
-        route_handler = lambda conn: _handle_skill_install_post(conn, sub, body)
+        route_handler = lambda conn: _handle_skill_install_post(conn, sub, query, body)
 
     # ── skills/installs/{id} patch ──
     if route_handler is None:
         skill_install_patch = _match_prefix(sub, "/skills/installs/")
         if method == "PATCH" and skill_install_patch is not None and "/" not in skill_install_patch:
-            route_handler = lambda conn, matched=skill_install_patch: _handle_skill_install_patch(conn, sub, matched, body)
+            route_handler = lambda conn, matched=skill_install_patch: _handle_skill_install_patch(conn, sub, query, matched, body)
 
     # ── skills/installs/{id} delete ──
     if route_handler is None:
         skill_install_delete = _match_prefix(sub, "/skills/installs/")
         if method == "DELETE" and skill_install_delete is not None and "/" not in skill_install_delete:
-            route_handler = lambda conn, matched=skill_install_delete: _handle_skill_install_delete(conn, sub, matched)
+            route_handler = lambda conn, matched=skill_install_delete: _handle_skill_install_delete(conn, sub, query, matched)
 
     # ── memories list/create/update/delete ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/memories"):

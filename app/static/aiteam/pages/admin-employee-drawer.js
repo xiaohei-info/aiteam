@@ -28,6 +28,8 @@ window.aiteam = window.aiteam || {};
   var _statusNotice = '';
   var _statusActionLoading = '';
   var _suppressHistorySync = false;
+  var _configNoticeByTab = {};
+  var _configLoadingByTab = {};
 
   function _createEl(tag, cls, attrs) {
     var el = document.createElement(tag);
@@ -327,6 +329,175 @@ window.aiteam = window.aiteam || {};
     }).join('') + '</ul>';
   }
 
+  function _configNotice(tabId) {
+    return _configNoticeByTab[tabId] || '';
+  }
+
+  function _setConfigNotice(tabId, message) {
+    _configNoticeByTab[tabId] = message || '';
+  }
+
+  function _isConfigLoading(tabId) {
+    return !!_configLoadingByTab[tabId];
+  }
+
+  function _parseCommaList(value) {
+    return String(value || '').split(',').map(function (item) {
+      return item.replace(/^\s+|\s+$/g, '');
+    }).filter(Boolean);
+  }
+
+  function _applyLocalEmployeePatch(patch) {
+    if (!_employeeData || !patch) return;
+    if (Object.prototype.hasOwnProperty.call(patch, 'display_name')) {
+      _employeeData.displayName = _stringValue(patch.display_name, '未设置');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'model_provider')) {
+      _employeeData.modelProvider = _stringValue(patch.model_provider, '未设置');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'model_name')) {
+      _employeeData.modelName = _stringValue(patch.model_name, '未设置');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'prompt_system')) {
+      _employeeData.systemPrompt = _stringValue(patch.prompt_system, '未设置');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'prompt_opening_message')) {
+      _employeeData.openingMessage = _stringValue(patch.prompt_opening_message, '—');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'prompt_version')) {
+      _employeeData.promptVersion = patch.prompt_version == null ? '—' : String(patch.prompt_version);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'prompt_behavior_rules_json')) {
+      _employeeData.behaviorRuleLabels = _parseBehaviorRuleLabels(patch.prompt_behavior_rules_json);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'knowledge_base_ids')) {
+      _employeeData.knowledgeIds = (patch.knowledge_base_ids || []).slice();
+      _employeeData.knowledge = (_employeeData.knowledgeIds || []).map(function (knowledgeId) {
+        return { name: knowledgeId, status: 'enabled', meta: 'read' };
+      });
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'memory_mode') ||
+        Object.prototype.hasOwnProperty.call(patch, 'memory_provider_code') ||
+        Object.prototype.hasOwnProperty.call(patch, 'memory_retention_days') ||
+        Object.prototype.hasOwnProperty.call(patch, 'memory_writeback_enabled')) {
+      _employeeData.memory = {
+        mode: Object.prototype.hasOwnProperty.call(patch, 'memory_mode') ? patch.memory_mode : (_employeeData.memory && _employeeData.memory.mode) || '未设置',
+        providerCode: Object.prototype.hasOwnProperty.call(patch, 'memory_provider_code') ? _stringValue(patch.memory_provider_code, '未设置') : (_employeeData.memory && _employeeData.memory.providerCode) || '未设置',
+        retentionDays: Object.prototype.hasOwnProperty.call(patch, 'memory_retention_days') ? (patch.memory_retention_days == null ? '未设置' : String(patch.memory_retention_days)) : (_employeeData.memory && _employeeData.memory.retentionDays) || '未设置',
+        writebackEnabled: Object.prototype.hasOwnProperty.call(patch, 'memory_writeback_enabled') ? _displayFlag(patch.memory_writeback_enabled) : (_employeeData.memory && _employeeData.memory.writebackEnabled) || '未设置',
+        bindingVersion: (_employeeData.memory && _employeeData.memory.bindingVersion) || '—',
+        maxTokens: (_employeeData.memory && _employeeData.memory.maxTokens) || '未设置',
+      };
+      _employeeData.memoryItems = [
+        { name: '模式', status: _employeeData.memory.mode },
+        { name: 'Provider', status: _employeeData.memory.providerCode },
+        { name: '保留天数', status: _employeeData.memory.retentionDays },
+        { name: '自动写回', status: _employeeData.memory.writebackEnabled },
+        { name: '绑定版本', status: _employeeData.memory.bindingVersion },
+        { name: '容量上限', status: _employeeData.memory.maxTokens },
+      ];
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'connector_ids')) {
+      _employeeData.connectorNames = (patch.connector_ids || []).slice();
+      _employeeData.connectors = (_employeeData.connectorNames || []).map(function (connectorId) {
+        return { name: connectorId, status: 'enabled', meta: '', accessMode: 'invoke' };
+      });
+    }
+    if (patch.scheduled_job) {
+      var scheduledJobId = patch.scheduled_job.scheduled_job_id || (_employeeData.scheduledJobs[0] && _employeeData.scheduledJobs[0].scheduled_job_id) || 'job_local';
+      _employeeData.scheduledJobs = [Object.assign({
+        scheduled_job_id: scheduledJobId,
+        consecutive_failures: 0,
+        max_consecutive_failures: 3,
+        last_run_status: null,
+        last_run_at: null,
+        last_success_at: null,
+        runtime_job_id: '待创建',
+        notification_policy: {},
+      }, patch.scheduled_job)];
+    }
+  }
+
+  function _saveEmployeePatch(tabId, patch, successMessage) {
+    if (!_employeeData || !ns.api || !ns.api.updateEmployee || _isConfigLoading(tabId)) {
+      return Promise.resolve(null);
+    }
+    _configLoadingByTab[tabId] = true;
+    _setConfigNotice(tabId, '');
+    _renderTabContent();
+    return ns.api.updateEmployee(_lastEmployeeId, patch).then(function (result) {
+      _configLoadingByTab[tabId] = false;
+      if (!result.ok) {
+        _setConfigNotice(tabId, '保存失败：' + _apiErrorMsg(result));
+        _renderTabContent();
+        return result;
+      }
+      _applyLocalEmployeePatch(patch);
+      _setConfigNotice(tabId, successMessage);
+      _renderTabContent();
+      return result;
+    });
+  }
+
+  function _configActionsMarkup(tabId, buttonLabel) {
+    return '<div class="aiteam-drawer__binding-actions">' +
+      '<button type="button" class="aiteam-btn" data-config-save="' + _escapeHtml(tabId) + '"' + (_isConfigLoading(tabId) ? ' disabled' : '') + '>' + buttonLabel + '</button>' +
+      '</div>' +
+      (_configNotice(tabId) ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_configNotice(tabId)) + '</p>' : '');
+  }
+
+  function _wireConfigButtons() {
+    if (!_drawer || !_drawer.querySelectorAll) return;
+    var buttons = _drawer.querySelectorAll('[data-config-save]');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function () {
+        var tabId = this.getAttribute('data-config-save');
+        if (tabId === 'profile') {
+          _saveEmployeePatch('profile', {
+            display_name: document.getElementById('aiteam-profile-display-name-input') ? document.getElementById('aiteam-profile-display-name-input').value : '',
+          }, '基础资料已保存');
+        } else if (tabId === 'model') {
+          _saveEmployeePatch('model', {
+            model_provider: document.getElementById('aiteam-model-provider-input') ? document.getElementById('aiteam-model-provider-input').value : '',
+            model_name: document.getElementById('aiteam-model-name-input') ? document.getElementById('aiteam-model-name-input').value : '',
+          }, '模型配置已保存');
+        } else if (tabId === 'prompt') {
+          _saveEmployeePatch('prompt', {
+            prompt_version: Number((document.getElementById('aiteam-prompt-version-input') || {}).value || 0) || 0,
+            prompt_system: document.getElementById('aiteam-prompt-system-input') ? document.getElementById('aiteam-prompt-system-input').value : '',
+            prompt_behavior_rules_json: document.getElementById('aiteam-prompt-rules-input') ? document.getElementById('aiteam-prompt-rules-input').value : '',
+            prompt_opening_message: document.getElementById('aiteam-prompt-opening-input') ? document.getElementById('aiteam-prompt-opening-input').value : '',
+          }, '提示词配置已保存');
+        } else if (tabId === 'knowledge') {
+          _saveEmployeePatch('knowledge', {
+            knowledge_base_ids: _parseCommaList(document.getElementById('aiteam-knowledge-ids-input') ? document.getElementById('aiteam-knowledge-ids-input').value : ''),
+          }, '知识库绑定已保存');
+        } else if (tabId === 'memory') {
+          _saveEmployeePatch('memory', {
+            memory_mode: document.getElementById('aiteam-memory-mode-input') ? document.getElementById('aiteam-memory-mode-input').value : '',
+            memory_provider_code: document.getElementById('aiteam-memory-provider-input') ? document.getElementById('aiteam-memory-provider-input').value : '',
+            memory_retention_days: Number((document.getElementById('aiteam-memory-retention-input') || {}).value || 0) || null,
+            memory_writeback_enabled: !!((document.getElementById('aiteam-memory-writeback-input') || {}).checked),
+          }, '记忆配置已保存');
+        } else if (tabId === 'connectors') {
+          _saveEmployeePatch('connectors', {
+            connector_ids: _parseCommaList(document.getElementById('aiteam-connector-ids-input') ? document.getElementById('aiteam-connector-ids-input').value : ''),
+          }, '连接器绑定已保存');
+        } else if (tabId === 'loop') {
+          _saveEmployeePatch('loop', {
+            scheduled_job: {
+              scheduled_job_id: document.getElementById('aiteam-loop-job-id-input') ? document.getElementById('aiteam-loop-job-id-input').value : '',
+              name: document.getElementById('aiteam-loop-name-input') ? document.getElementById('aiteam-loop-name-input').value : '',
+              goal: document.getElementById('aiteam-loop-goal-input') ? document.getElementById('aiteam-loop-goal-input').value : '',
+              schedule_expr: document.getElementById('aiteam-loop-cron-input') ? document.getElementById('aiteam-loop-cron-input').value : '',
+              status: document.getElementById('aiteam-loop-status-input') ? document.getElementById('aiteam-loop-status-input').value : 'enabled',
+            },
+          }, 'Loop 配置已保存');
+        }
+      });
+    }
+  }
+
   function _renderEnterpriseSkillAssignments() {
     var assigned = _employeeData && _employeeData.skillCodes ? _employeeData.skillCodes : [];
     if (_skillInstallState === 'loading') {
@@ -442,6 +613,11 @@ window.aiteam = window.aiteam || {};
           _fieldRow('在线态', d.presence) +
           _fieldRow('Profile', d.profileName) +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">编辑员工名称</span>' +
+          '<input id="aiteam-profile-display-name-input" class="aiteam-input" value="' + _escapeHtml(d.displayName === '未设置' ? '' : d.displayName) + '">' +
+          '</div>' +
+          _configActionsMarkup('profile', '保存基础资料') +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">运行安全操作</span>' +
           '<div class="aiteam-drawer__prompt-text">通过 PATCH /api/team/employees/{id} 提交变更。当前支持字段：display_name、status、skills_add/skills_remove、model_provider、model_name、prompt_version、prompt_system/prompt_behavior_rules_json/prompt_opening_message、memory_mode/memory_provider_code/memory_retention_days/memory_writeback_enabled、knowledge_base_ids、connector_ids、scheduled_job/scheduled_job_action。</div>' +
           (_statusNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_statusNotice) + '</p>' : '') +
@@ -459,6 +635,15 @@ window.aiteam = window.aiteam || {};
           '<h3 class="aiteam-drawer__section-title">模型配置</h3>' +
           _fieldRow('Provider', d.modelProvider) +
           _fieldRow('模型名称', d.modelName) +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">编辑 Provider</span>' +
+          '<input id="aiteam-model-provider-input" class="aiteam-input" value="' + _escapeHtml(d.modelProvider === '未设置' ? '' : d.modelProvider) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">编辑模型名称</span>' +
+          '<input id="aiteam-model-name-input" class="aiteam-input" value="' + _escapeHtml(d.modelName === '未设置' ? '' : d.modelName) + '">' +
+          '</div>' +
+          _configActionsMarkup('model', '保存模型配置') +
           '</div>';
       },
       prompt: function () {
@@ -479,6 +664,23 @@ window.aiteam = window.aiteam || {};
           '<span class="aiteam-drawer__field-label">行为规则</span>' +
           behavior +
           '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">版本号</span>' +
+          '<input id="aiteam-prompt-version-input" class="aiteam-input" value="' + _escapeHtml(d.promptVersion === '—' ? '' : d.promptVersion) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">系统提示词编辑</span>' +
+          '<textarea id="aiteam-prompt-system-input" class="aiteam-input">' + _escapeHtml(d.systemPrompt === '未设置' ? '' : d.systemPrompt) + '</textarea>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">行为规则 JSON</span>' +
+          '<textarea id="aiteam-prompt-rules-input" class="aiteam-input">' + _escapeHtml((d.behaviorRuleLabels || []).join(', ')) + '</textarea>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">开场白编辑</span>' +
+          '<textarea id="aiteam-prompt-opening-input" class="aiteam-input">' + _escapeHtml(d.openingMessage === '—' ? '' : d.openingMessage) + '</textarea>' +
+          '</div>' +
+          _configActionsMarkup('prompt', '保存提示词') +
           '</div>';
       },
       skills: function () {
@@ -497,12 +699,34 @@ window.aiteam = window.aiteam || {};
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">知识库绑定</h3>' +
           _bindingList(d.knowledge, '暂无已绑定知识库') +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">知识库 ID（逗号分隔）</span>' +
+          '<input id="aiteam-knowledge-ids-input" class="aiteam-input" value="' + _escapeHtml((d.knowledgeIds || []).join(', ')) + '">' +
+          '</div>' +
+          _configActionsMarkup('knowledge', '保存知识库绑定') +
           '</div>';
       },
       memory: function () {
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">记忆策略</h3>' +
           _bindingList(d.memoryItems, '暂无记忆配置') +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">记忆模式</span>' +
+          '<input id="aiteam-memory-mode-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.mode !== '未设置' ? d.memory.mode : '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">Provider Code</span>' +
+          '<input id="aiteam-memory-provider-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.providerCode !== '未设置' ? d.memory.providerCode : '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">保留天数</span>' +
+          '<input id="aiteam-memory-retention-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.retentionDays !== '未设置' ? d.memory.retentionDays : '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field">' +
+          '<span class="aiteam-drawer__field-label">自动写回</span>' +
+          '<input id="aiteam-memory-writeback-input" type="checkbox"' + (d.memory && d.memory.writebackEnabled === '开启' ? ' checked' : '') + '>' +
+          '</div>' +
+          _configActionsMarkup('memory', '保存记忆配置') +
           '</div>' +
           '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">使用摘要</h3>' +
@@ -513,13 +737,37 @@ window.aiteam = window.aiteam || {};
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">连接器绑定</h3>' +
           _bindingList(d.connectors, '暂无已绑定连接器') +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">连接器 ID（逗号分隔）</span>' +
+          '<input id="aiteam-connector-ids-input" class="aiteam-input" value="' + _escapeHtml((d.connectorNames || []).join(', ')) + '">' +
+          '</div>' +
+          _configActionsMarkup('connectors', '保存连接器绑定') +
           '</div>';
       },
       loop: function () {
+        var job = d.scheduledJobs && d.scheduledJobs[0] ? d.scheduledJobs[0] : {};
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">Loop 配置</h3>' +
           '<p class="aiteam-drawer__desc">Scheduled Job 由 /api/team/employees/{id} 聚合返回，修改时通过 scheduled_job / scheduled_job_action PATCH 字段提交。</p>' +
           _scheduledJobsMarkup(d.scheduledJobs) +
+          '<input id="aiteam-loop-job-id-input" type="hidden" value="' + _escapeHtml(job.scheduled_job_id || '') + '">' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">任务名称</span>' +
+          '<input id="aiteam-loop-name-input" class="aiteam-input" value="' + _escapeHtml(job.name || '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">执行目标</span>' +
+          '<input id="aiteam-loop-goal-input" class="aiteam-input" value="' + _escapeHtml(job.goal || '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">Cron</span>' +
+          '<input id="aiteam-loop-cron-input" class="aiteam-input" value="' + _escapeHtml(job.schedule_expr || '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">状态</span>' +
+          '<input id="aiteam-loop-status-input" class="aiteam-input" value="' + _escapeHtml(job.status || 'enabled') + '">' +
+          '</div>' +
+          _configActionsMarkup('loop', '保存 Loop 配置') +
           '</div>' +
           '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">运行摘要</h3>' +
@@ -539,6 +787,7 @@ window.aiteam = window.aiteam || {};
     if (_activeTab === 'profile') {
       _wireStatusButtons();
     }
+    _wireConfigButtons();
   }
 
   function _switchTab(tabId) {
@@ -658,6 +907,8 @@ window.aiteam = window.aiteam || {};
     _skillActionLoading = null;
     _statusNotice = '';
     _statusActionLoading = '';
+    _configNoticeByTab = {};
+    _configLoadingByTab = {};
 
     close();
     _suppressHistorySync = options.syncUrl === false;
@@ -709,6 +960,13 @@ window.aiteam = window.aiteam || {};
     normalizeEmployeePayload: normalizeEmployeePayload,
     __test: {
       normalizeEmployeePayload: normalizeEmployeePayload,
+      saveProfileConfig: function (patch) { return _saveEmployeePatch('profile', patch, '基础资料已保存'); },
+      saveModelConfig: function (patch) { return _saveEmployeePatch('model', patch, '模型配置已保存'); },
+      savePromptConfig: function (patch) { return _saveEmployeePatch('prompt', patch, '提示词配置已保存'); },
+      saveKnowledgeConfig: function (patch) { return _saveEmployeePatch('knowledge', patch, '知识库绑定已保存'); },
+      saveMemoryConfig: function (patch) { return _saveEmployeePatch('memory', patch, '记忆配置已保存'); },
+      saveConnectorConfig: function (patch) { return _saveEmployeePatch('connectors', patch, '连接器绑定已保存'); },
+      saveScheduledJobConfig: function (patch) { return _saveEmployeePatch('loop', patch, 'Loop 配置已保存'); },
     },
   };
 }(window.aiteam));

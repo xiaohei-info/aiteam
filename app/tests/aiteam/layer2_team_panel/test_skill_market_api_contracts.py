@@ -25,6 +25,11 @@ class TestSkillCatalog:
         assert body['items'][0]['skill_code'] == 'web-search'
         assert body['items'][0]['installed']['scope_mode'] == 'selected_employees'
 
+    def test_get_skill_catalog_requires_manage_employees_for_finance_admin(self, seeded_enterprise):
+        status, body = _get('/api/team/skills/catalog?role=finance_admin')
+        assert status == 403, body
+        assert body['required_action'] == 'manage_employees'
+
 
 class TestSkillInstalls:
     def test_post_install_creates_authorized_skill_install(self, seeded_enterprise):
@@ -64,6 +69,8 @@ class TestSkillInstalls:
         install = body['items'][0]
         for key in ('install_id', 'skill_code', 'scope_mode', 'version', 'grants'):
             assert key in install
+        assert install["audit_status"] == "skill.install"
+        assert install["audit_recorded_at"]
 
     def test_patch_install_updates_version_and_scope(self, seeded_enterprise):
         _, created = _post('/api/team/skills/installs', {
@@ -104,3 +111,12 @@ class TestSkillInstalls:
         status, body = _patch(f"/api/team/employees/{seeded_enterprise['employee_id']}", {'skills_add': ['not-installed']})
         assert status == 403, body
         assert body['error'] == 'SKILL_NOT_AUTHORIZED'
+
+    def test_skill_install_mutations_require_manage_employees_for_member(self, seeded_enterprise):
+        status, body = _post('/api/team/skills/installs?role=member', {
+            'skill_code': 'slides',
+            'display_name': 'Slides',
+            'scope_mode': 'all_employees',
+        })
+        assert status == 403, body
+        assert body['required_action'] == 'manage_employees'

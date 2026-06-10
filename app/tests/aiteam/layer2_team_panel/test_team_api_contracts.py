@@ -285,6 +285,11 @@ class TestTalentMarketTemplates:
         assert "items" in body
         assert body["items"][0]["template_id"] == seeded_enterprise["template_id"]
 
+    def test_admin_templates_alias_requires_manage_employees_for_finance_admin(self, seeded_enterprise):
+        status, body = _get("/api/team/templates?role=finance_admin")
+        assert status == 403, body
+        assert body["required_action"] == "manage_employees"
+
     def test_templates_support_keyword_category_sort_and_pagination(self, seeded_enterprise, db_conn):
         cur = db_conn.cursor()
         try:
@@ -333,6 +338,11 @@ class TestTalentMarketTemplates:
                 ),
             )
             cur.execute(
+                "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)",
+                ("tpl_draft_only", "草稿模板", "ops", "operator", "draft", "{}", "{}", "{}", 1, "system"),
+            )
+            cur.execute(
                 "INSERT INTO recruitment_order (id, enterprise_id, template_id, status, requested_by, created_employee_id, error_code, error_message, idempotency_key) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
@@ -365,6 +375,10 @@ class TestTalentMarketTemplates:
         status, body = _get("/api/team/talent-market/templates?tag=协作")
         assert status == 200, body
         assert [item["template_id"] for item in body["items"]] == ["tpl_ops_v1"]
+
+        status, body = _get("/api/team/templates")
+        assert status == 200, body
+        assert all(item["template_id"] != "tpl_draft_only" for item in body["items"])
 
     def test_template_list_uses_prompt_pack_tags_instead_of_category_only(self, seeded_enterprise):
         status, body = _get("/api/team/talent-market/templates")
@@ -406,6 +420,27 @@ class TestTalentTemplateDetail:
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["template_id"] == tpl_id
         assert body["default_skills"] == ["web_search", "slides"]
+
+    def test_admin_template_detail_requires_manage_employees_for_member(self, seeded_enterprise):
+        tpl_id = seeded_enterprise["template_id"]
+        status, body = _get(f"/api/team/templates/{tpl_id}?role=member")
+        assert status == 403, body
+        assert body["required_action"] == "manage_employees"
+
+    def test_admin_template_alias_returns_404_for_unpublished_template(self, seeded_enterprise, db_conn):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)",
+                ("tpl_draft_detail", "草稿详情模板", "ops", "operator", "draft", "{}", "{}", "{}", 1, "system"),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+        status, body = _get("/api/team/templates/tpl_draft_detail")
+        assert status == 404, body
+        assert body["error"] == "TEMPLATE_NOT_FOUND"
 
 
 class TestConversationDetail:
