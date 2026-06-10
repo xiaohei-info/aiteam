@@ -211,6 +211,11 @@ class TestTalentMarketTemplates:
         assert "items" in body
         assert body["items"][0]["template_id"] == seeded_enterprise["template_id"]
 
+    def test_admin_templates_alias_requires_manage_employees_for_finance_admin(self, seeded_enterprise):
+        status, body = _get("/api/team/templates?role=finance_admin")
+        assert status == 403, body
+        assert body["required_action"] == "manage_employees"
+
     def test_admin_templates_alias_hides_unpublished_templates(self, seeded_enterprise, db_conn):
         cur = db_conn.cursor()
         try:
@@ -259,6 +264,12 @@ class TestTalentTemplateDetail:
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert body["template_id"] == tpl_id
         assert body["default_skills"] == ["web_search", "slides"]
+
+    def test_admin_template_detail_requires_manage_employees_for_member(self, seeded_enterprise):
+        tpl_id = seeded_enterprise["template_id"]
+        status, body = _get(f"/api/team/templates/{tpl_id}?role=member")
+        assert status == 403, body
+        assert body["required_action"] == "manage_employees"
 
     def test_admin_template_alias_returns_404_for_unpublished_template(self, seeded_enterprise, db_conn):
         cur = db_conn.cursor()
