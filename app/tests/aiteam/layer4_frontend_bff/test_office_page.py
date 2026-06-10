@@ -674,6 +674,8 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
                         "presence": {
                             "state": "busy",
                             "current_task": "执行回归测试",
+                            "conversation_type": "private",
+                            "navigation_target": "/app/chat/conv_rex",
                             "latest_event_cursor": 18,
                             "events_url": "/api/team/runs/run_rex/events?cursor=18",
                         },
@@ -704,6 +706,8 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
                         "status": "running",
                         "preview": "执行回归测试",
                         "detail": "正在同步 Layer4 回归结果",
+                        "conv_type": "private",
+                        "navigation_target": "/app/chat/conv_rex",
                         "conversation_id": "conv_rex",
                         "latest_event_cursor": 18,
                         "events_url": "/api/team/runs/run_rex/events?cursor=18",
@@ -715,6 +719,8 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
                         "status": "completed",
                         "preview": "整理回归结论",
                         "detail": "已输出结论摘要",
+                        "conv_type": "private",
+                        "navigation_target": "/app/chat/conv_rex",
                         "conversation_id": "conv_rex",
                         "event_ts": "2026-06-05T11:34:56Z",
                     },
@@ -862,6 +868,8 @@ def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
                         "status": "running",
                         "preview": "执行回归测试",
                         "detail": "正在同步 Layer4 回归结果",
+                        "conv_type": "private",
+                        "navigation_target": "/app/chat/conv_rex",
                         "conversation_id": "conv_rex",
                         "latest_event_cursor": 21,
                         "events_url": "/api/team/runs/run_rex/events?cursor=21",
@@ -883,6 +891,68 @@ def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
     assert "2026-06-05T12:34:56Z" in result["html"]
     assert "正在同步 Layer4 回归结果" in result["html"]
     assert 'href="/app/chat/conv_rex"' in result["html"]
+
+
+def test_office_module_routes_group_context_to_group_page() -> None:
+    result = _run_office_module(
+        {
+            "ok": True,
+            "status": 200,
+            "body": {
+                "summary": {
+                    "online_employee_count": 1,
+                    "busy_employee_count": 1,
+                    "running_task_count": 1,
+                    "queue_depth": 0,
+                    "waiting_reply_count": 0,
+                },
+                "seats": [
+                    {
+                        "employee_id": "emp_rex",
+                        "display_name": "Rex",
+                        "role_name": "代码工程师",
+                        "presence": {
+                            "state": "busy",
+                            "current_task": "处理预算评审群消息",
+                            "conversation_id": "group_budget",
+                            "conversation_type": "group",
+                            "navigation_target": "/app/group/group_budget",
+                            "latest_event_cursor": 18,
+                            "events_url": "/api/team/runs/run_group/events?cursor=18",
+                        },
+                    }
+                ],
+                "generated_cursor": 18,
+                "refresh_hint_ms": 15000,
+            },
+        },
+        {
+            "ok": True,
+            "status": 200,
+            "body": {
+                "items": [
+                    {
+                        "employee_id": "emp_rex",
+                        "employee_display_name": "Rex",
+                        "status": "running",
+                        "preview": "预算评审群",
+                        "detail": "正在同步多人协作结论",
+                        "conv_type": "group",
+                        "conversation_id": "group_budget",
+                        "navigation_target": "/app/group/group_budget",
+                        "latest_event_cursor": 18,
+                        "events_url": "/api/team/runs/run_group/events?cursor=18",
+                        "event_ts": "2026-06-05T12:34:56Z",
+                    }
+                ],
+                "queue": {"queued": 0, "running": 1, "waiting_human": 0, "failed": 0},
+                "generated_cursor": 18,
+                "refresh_hint_ms": 15000,
+            },
+        },
+    )
+    assert 'href="/app/group/group_budget"' in result["html"]
+    assert 'href="/app/chat/group_budget"' not in result["html"]
 
 
 def test_office_module_switches_detail_panel_when_selecting_another_seat() -> None:

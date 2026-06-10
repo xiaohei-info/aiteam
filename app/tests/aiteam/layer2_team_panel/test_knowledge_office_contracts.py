@@ -66,6 +66,29 @@ def _seed_employee(db_conn, emp_id: str, ent_id: str) -> str:
     return emp_id
 
 
+def _seed_conversation(
+    db_conn,
+    conv_id: str,
+    ent_id: str,
+    *,
+    conv_type: str = "private",
+    title: str = "Test Conversation",
+    entry_employee_id: str | None = None,
+    preview: str = "",
+) -> str:
+    cur = db_conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO conversation (id, enterprise_id, type, status, title, entry_employee_id, last_message_preview, created_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (conv_id, ent_id, conv_type, "active", title, entry_employee_id, preview, "user_001"),
+        )
+        db_conn.commit()
+    finally:
+        cur.close()
+    return conv_id
+
+
 def _seed_knowledge_binding(db_conn, bind_id: str, ent_id: str, employee_id: str, kb_id: str) -> str:
     cur = db_conn.cursor()
     try:
@@ -275,6 +298,30 @@ class TestOfficeFeed:
         assert item["status"] == "running"
         assert "preview" in item
 
+    def test_office_feed_exposes_group_navigation_target(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        emp_id = f"emp_{uuid.uuid4().hex[:8]}"
+        _seed_employee(db_conn, emp_id, ent_id)
+        conv_id = f"conv_group_{uuid.uuid4().hex[:8]}"
+        _seed_conversation(
+            db_conn,
+            conv_id,
+            ent_id,
+            conv_type="group",
+            title="预算评审群",
+            entry_employee_id=emp_id,
+            preview="群聊协作中",
+        )
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        _seed_run(db_conn, run_id, ent_id, emp_id, conv_id=conv_id, status="running")
+        _seed_run_event(db_conn, f"evt_{uuid.uuid4().hex[:8]}", run_id, ent_id, emp_id, "task_started", 4, "群聊协作中")
+        _, body = _get("/api/team/office/feed")
+        item = next(it for it in body["items"] if it["run_id"] == run_id)
+        assert item["conversation_id"] == conv_id
+        assert item["conv_type"] == "group"
+        assert item["navigation_target"] == f"/app/group/{conv_id}"
+
 
 # ── P09 Real-time/event-driven seam ─────────────────────────────────────────
 
@@ -314,6 +361,31 @@ class TestOfficeEventDrivenSeam:
         assert presence["latest_event_cursor"] == 1, f"Expected cursor 1, got {presence['latest_event_cursor']}"
         assert presence["events_url"] is not None, f"Expected events_url, got None"
         assert f"/api/team/runs/{run_id}/events?cursor=1" in presence["events_url"]
+
+    def test_scene_seat_exposes_group_navigation_target(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        emp_id = f"emp_{uuid.uuid4().hex[:8]}"
+        _seed_employee(db_conn, emp_id, ent_id)
+        conv_id = f"conv_group_{uuid.uuid4().hex[:8]}"
+        _seed_conversation(
+            db_conn,
+            conv_id,
+            ent_id,
+            conv_type="group",
+            title="预算评审群",
+            entry_employee_id=emp_id,
+            preview="群聊协作中",
+        )
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        _seed_run(db_conn, run_id, ent_id, emp_id, conv_id=conv_id, status="running")
+        _seed_run_event(db_conn, f"evt_{uuid.uuid4().hex[:8]}", run_id, ent_id, emp_id, "task_started", 2, "群聊协作中")
+        _, body = _get("/api/team/office/scene")
+        seat = next(s for s in body["seats"] if s["employee_id"] == emp_id)
+        presence = seat["presence"]
+        assert presence["conversation_id"] == conv_id
+        assert presence["conversation_type"] == "group"
+        assert presence["navigation_target"] == f"/app/group/{conv_id}"
 
     def test_scene_seat_cursor_zero_without_run(self, db_conn):
         ent_id = f"ent_{uuid.uuid4().hex[:8]}"

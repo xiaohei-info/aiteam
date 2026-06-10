@@ -49,6 +49,13 @@ def _presence_state(employee_status: str, run_status: str | None, latest_event_t
     return "idle"
 
 
+def _conversation_target(conversation) -> str:
+    if not conversation:
+        return ""
+    prefix = "/app/group" if conversation.type == "group" else "/app/chat"
+    return f"{prefix}/{conversation.id}"
+
+
 def get_office_scene(uow: UnitOfWork, enterprise_id: str) -> dict:
     employees = uow.employees().list_by_enterprise(enterprise_id)
     conversations = {conv.id: conv for conv in uow.conversations().list_by_enterprise(enterprise_id)}
@@ -104,6 +111,8 @@ def get_office_scene(uow: UnitOfWork, enterprise_id: str) -> dict:
                     "state": state,
                     "current_run_id": latest_run.id if latest_run else None,
                     "conversation_id": latest_run.conversation_id if latest_run else None,
+                    "conversation_type": latest_conversation.type if latest_conversation else None,
+                    "navigation_target": _conversation_target(latest_conversation),
                     "queue_depth": len([run for run in employee_runs if run.status in _ACTIVE_RUN_STATUSES]),
                     "last_response_at": latest_event.event_ts if latest_event else (latest_run.updated_at if latest_run else None),
                     "current_task": preview or None,
@@ -150,6 +159,8 @@ def get_office_feed(uow: UnitOfWork, enterprise_id: str, *, limit: int = 20) -> 
             {
                 "run_id": run.id,
                 "conversation_id": run.conversation_id,
+                "conv_type": conversation.type if conversation else "private",
+                "navigation_target": _conversation_target(conversation),
                 "employee_id": run.entry_employee_id,
                 "employee_display_name": employee.display_name if employee else None,
                 "status": run.status,

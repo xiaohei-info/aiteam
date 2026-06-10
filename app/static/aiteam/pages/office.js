@@ -62,8 +62,23 @@ window.aiteam = window.aiteam || {};
     return '待处理';
   }
 
+  function resolveConversationHref(conversationId, convType, navigationTarget) {
+    var explicit = stringValue(navigationTarget, '');
+    if (explicit) return explicit;
+    if (!conversationId) return '';
+    if (String(convType || '').toLowerCase() === 'group') {
+      return '/app/group/' + encodeURIComponent(conversationId);
+    }
+    return '/app/chat/' + encodeURIComponent(conversationId);
+  }
+
   function taskHref(item) {
-    if (item && item.conversation_id) return '/app/chat/' + encodeURIComponent(item.conversation_id);
+    var target = resolveConversationHref(
+      item && item.conversation_id,
+      item && item.conv_type,
+      item && item.navigation_target
+    );
+    if (target) return target;
     if (item && item.employee_id) return '/admin/employees/' + encodeURIComponent(item.employee_id);
     return '#';
   }
@@ -128,7 +143,11 @@ window.aiteam = window.aiteam || {};
     }
     var status = seatPresenceState(seat);
     var employeeHref = seat.employee_id ? '/admin/employees/' + encodeURIComponent(seat.employee_id) : '#';
-    var chatHref = seat.conversation_id ? '/app/chat/' + encodeURIComponent(seat.conversation_id) : employeeHref;
+    var chatHref = resolveConversationHref(
+      seat.conversation_id,
+      seat.conversation_type,
+      seat.navigation_target
+    ) || employeeHref;
     return '' +
       '<div class="aiteam-detail-section">' +
       '<h3>员工详情</h3>' +
@@ -158,9 +177,11 @@ window.aiteam = window.aiteam || {};
     if (!latest) {
       return '<div class="aiteam-office__task-empty">暂无最近对话</div>';
     }
-    var href = latest.conversation_id
-      ? '/app/chat/' + encodeURIComponent(latest.conversation_id)
-      : taskHref(latest);
+    var href = resolveConversationHref(
+      latest.conversation_id,
+      latest.conv_type,
+      latest.navigation_target
+    ) || taskHref(latest);
     return '' +
       '<a class="aiteam-office__task-item" href="' + escapeHtml(href) + '">' +
       '<div class="aiteam-office__task-main">' +
