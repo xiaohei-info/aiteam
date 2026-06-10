@@ -31,6 +31,14 @@ MAX_ACTIVE_DEVICES = 5
 DEFAULT_ENTERPRISE_ID = "ent_001"
 DEFAULT_ENTERPRISE_NAME = "Acme AI Lab"
 SECONDARY_ENTERPRISE = {"enterprise_id": "ent_002", "name": "Beta Corp", "role": "member"}
+_ENTERPRISE_INVITES = {
+    "INV-ACME01": {
+        "enterprise_id": "ent_existing_acme",
+        "name": "Acme AI Lab",
+        "slug": "acme-ai-lab",
+        "role": "member",
+    }
+}
 
 _LOCK = threading.RLock()
 _SERVICE = AuthService()
@@ -341,11 +349,7 @@ def handle_logout(access_token: str | None, refresh_token: str | None, *, all_de
 def handle_me(access_token: str | None) -> AuthResult:
     with _LOCK:
         _prune_expired_state()
-        if not access_token:
-            raise AuthRouteError("Unauthorized", status=401)
-        record = _ACCESS_TOKENS.get(access_token)
-        if record is None or record["expires_at"] <= time.time():
-            raise AuthRouteError("Unauthorized", status=401)
+        record = _require_access_record(access_token)
         profile = dict(record["profile"])
         body: dict[str, Any] = {
             "user_id": profile["user_id"],
@@ -357,6 +361,52 @@ def handle_me(access_token: str | None) -> AuthResult:
         if body["current_enterprise"] is None:
             body["onboarding"] = {"action": "create_or_join_enterprise"}
         return AuthResult(200, body, [])
+
+
+def handle_create_enterprise(access_token: str | None, body: dict[str, Any] | None) -> AuthResult:
+    with _LOCK:
+        _prune_expired_state()
+        record = _require_access_record(access_token)
+        payload = body or {}
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise AuthRouteError("Enterprise name is required", status=400)
+        raw_slug = str(payload.get("slug") or "").strip()
+        enterprise_summary = {
+            "enterprise_id": f"ent_{secrets.token_hex(4)}",
+            "name": name,
+            "slug": _slugify_enterprise_name(raw_slug or name),
+            "role": "owner",
+        }
+        _bind_profile_to_enterprise(record, enterprise_summary)
+        return AuthResult(201, dict(enterprise_summary), [])
+
+
+def handle_join_enterprise(access_token: str | None, body: dict[str, Any] | None) -> AuthResult:
+    with _LOCK:
+        _prune_expired_state()
+        record = _require_access_record(access_token)
+        invite_code = str((body or {}).get("invite_code") or "").strip().upper()
+        invite = _ENTERPRISE_INVITES.get(invite_code)
+        if invite is None:
+            raise AuthRouteError("Invite code is invalid or expired", status=404)
+        enterprise_id = invite["enterprise_id"]
+        profile = record["profile"]
+        if any(item.get("enterprise_id") == enterprise_id for item in profile.get("enterprises", [])):
+            raise AuthRouteError("Already joined this enterprise", status=409)
+        enterprise_summary = dict(invite)
+        _bind_profile_to_enterprise(record, enterprise_summary)
+        return AuthResult(200, enterprise_summary, [])
+
+
+def handle_current_enterprise(access_token: str | None) -> AuthResult:
+    with _LOCK:
+        _prune_expired_state()
+        record = _require_access_record(access_token)
+        current_enterprise = record["profile"].get("current_enterprise")
+        if current_enterprise is None:
+            raise AuthRouteError("Current enterprise not found", status=404)
+        return AuthResult(200, dict(current_enterprise), [])
 
 
 def access_token_from_headers(headers: Any) -> str | None:
@@ -376,6 +426,15 @@ def refresh_token_from_headers(headers: Any) -> str | None:
 
 def _new_state(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(6)}"
+
+
+def _require_access_record(access_token: str | None) -> dict[str, Any]:
+    if not access_token:
+        raise AuthRouteError("Unauthorized", status=401)
+    record = _ACCESS_TOKENS.get(access_token)
+    if record is None or record["expires_at"] <= time.time():
+        raise AuthRouteError("Unauthorized", status=401)
+    return record
 
 
 def _prune_expired_state() -> None:
@@ -545,6 +604,36 @@ def _device_name(user_agent: str) -> str:
 
 def _user_id_for_phone(phone: str) -> str:
     return f"usr_{hashlib.sha256(phone.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _slugify_enterprise_name(raw: str) -> str:
+    normalized = "".join(ch.lower() if ch.isalnum() else "-" for ch in raw.strip())
+    collapsed = "-".join(part for part in normalized.split("-") if part)
+    return collapsed or f"enterprise-{secrets.token_hex(2)}"
+
+
+def _bind_profile_to_enterprise(record: dict[str, Any], enterprise_summary: dict[str, Any]) -> None:
+    session_id = str(record["session_id"])
+    user_id = str(record["user_id"])
+    summary = dict(enterprise_summary)
+
+    def _apply(profile: dict[str, Any]) -> None:
+        enterprises = [item for item in profile.get("enterprises", []) if item.get("enterprise_id") != summary["enterprise_id"]]
+        enterprises.append(dict(summary))
+        profile["current_enterprise"] = {
+            "enterprise_id": summary["enterprise_id"],
+            "name": summary["name"],
+            "role": summary["role"],
+        }
+        profile["enterprises"] = enterprises
+        profile.pop("onboarding", None)
+
+    for access_record in _ACCESS_TOKENS.values():
+        if str(access_record["session_id"]) == session_id and str(access_record["user_id"]) == user_id:
+            _apply(access_record["profile"])
+    for refresh_record in _REFRESH_TOKENS.values():
+        if str(refresh_record["session_id"]) == session_id and str(refresh_record["user_id"]) == user_id:
+            _apply(refresh_record["profile"])
 
 
 def _iso_to_epoch(value: str) -> float:
