@@ -95,28 +95,37 @@ def get_platform_finance_overview(
     enterprise_map = {enterprise.id: enterprise for enterprise in uow.enterprises().list_all()}
     aggregate = _aggregate_finance(uow, enterprise_map=enterprise_map, period_start=start, period_end=end)
     top_enterprises = sorted(
-        aggregate["enterprise_rows"], key=lambda item: (-item["cost_cents"], item["enterprise_id"])
+        aggregate["enterprise_rows"], key=lambda item: (-item["revenue_cents"], item["enterprise_id"])
     )[:5]
+    summary = {
+        "total_revenue_cents": aggregate["total_revenue_cents"],
+        "total_cost_cents": aggregate["total_cost_cents"],
+        "total_profit_cents": aggregate["total_revenue_cents"] - aggregate["total_cost_cents"],
+        "paying_enterprise_count": aggregate["paying_enterprise_count"],
+    }
     return {
         "period_start": start,
         "period_end": end,
         "total_tokens": aggregate["total_tokens"],
-        "total_revenue_cents": aggregate["total_cost_cents"],
-        "total_cost_cents": aggregate["total_cost_cents"],
-        "total_profit_cents": 0,
-        "enterprise_count": len(aggregate["enterprise_rows"]),
+        "summary": summary,
+        "trend": aggregate["trend_rows"],
         "top_enterprises": [
             {
                 "enterprise_id": row["enterprise_id"],
                 "enterprise_name": row["enterprise_name"],
                 "tokens": row["tokens"],
-                "revenue_cents": row["cost_cents"],
+                "revenue_cents": row["revenue_cents"],
                 "cost_cents": row["cost_cents"],
-                "profit_cents": 0,
+                "profit_cents": row["profit_cents"],
                 "run_count": row["run_count"],
             }
             for row in top_enterprises
         ],
+        "total_revenue_cents": aggregate["total_revenue_cents"],
+        "total_cost_cents": aggregate["total_cost_cents"],
+        "total_profit_cents": summary["total_profit_cents"],
+        "enterprise_count": len(aggregate["enterprise_rows"]),
+        "paying_enterprise_count": summary["paying_enterprise_count"],
     }
 
 
@@ -129,25 +138,35 @@ def get_platform_finance_reports(
     start, end = _resolve_window(period_start, period_end)
     enterprise_map = {enterprise.id: enterprise for enterprise in uow.enterprises().list_all()}
     aggregate = _aggregate_finance(uow, enterprise_map=enterprise_map, period_start=start, period_end=end)
+    enterprises = sorted(
+        [
+            {
+                "enterprise_id": row["enterprise_id"],
+                "enterprise_name": row["enterprise_name"],
+                "tokens": row["tokens"],
+                "revenue_cents": row["revenue_cents"],
+                "cost_cents": row["cost_cents"],
+                "profit_cents": row["profit_cents"],
+                "run_count": row["run_count"],
+            }
+            for row in aggregate["enterprise_rows"]
+        ],
+        key=lambda item: (-item["revenue_cents"], item["enterprise_id"]),
+    )
+    summary = {
+        "total_revenue_cents": aggregate["total_revenue_cents"],
+        "total_cost_cents": aggregate["total_cost_cents"],
+        "total_profit_cents": aggregate["total_revenue_cents"] - aggregate["total_cost_cents"],
+        "paying_enterprise_count": aggregate["paying_enterprise_count"],
+    }
     return {
         "period_start": start,
         "period_end": end,
+        "summary": summary,
+        "trend": aggregate["trend_rows"],
+        "top_enterprises": enterprises[:5],
         "trends": aggregate["trend_rows"],
-        "enterprises": sorted(
-            [
-                {
-                    "enterprise_id": row["enterprise_id"],
-                    "enterprise_name": row["enterprise_name"],
-                    "tokens": row["tokens"],
-                    "revenue_cents": row["cost_cents"],
-                    "cost_cents": row["cost_cents"],
-                    "profit_cents": 0,
-                    "run_count": row["run_count"],
-                }
-                for row in aggregate["enterprise_rows"]
-            ],
-            key=lambda item: (-item["cost_cents"], item["enterprise_id"]),
-        ),
+        "enterprises": enterprises,
     }
 
 
@@ -164,21 +183,62 @@ def _aggregate_finance(uow, *, enterprise_map, period_start: str, period_end: st
     enterprise_rows: dict[str, dict[str, Any]] = {}
     trend_rows: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "date": "",
+        "period": "",
         "tokens": 0,
+        "revenue": 0,
+        "cost": 0,
         "revenue_cents": 0,
         "cost_cents": 0,
         "profit_cents": 0,
         "run_count": 0,
     })
     total_tokens = 0
+    total_revenue_cents = 0
     total_cost_cents = 0
+    paying_enterprise_count = 0
 
     for enterprise_id, enterprise in enterprise_map.items():
         runs = [
             run for run in uow.team_runs().list_by_enterprise(enterprise_id)
             if period_start <= (run.created_at or "")[:10] < period_end
         ]
+        revenue_cents = _recharge_revenue_cents(
+            uow,
+            enterprise_id=enterprise_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
         if not runs:
+            if revenue_cents <= 0:
+                continue
+            row = enterprise_rows.setdefault(
+                enterprise_id,
+                {
+                    "enterprise_id": enterprise_id,
+                    "enterprise_name": enterprise.name,
+                    "tokens": 0,
+                    "revenue_cents": 0,
+                    "cost_cents": 0,
+                    "profit_cents": 0,
+                    "run_count": 0,
+                },
+            )
+            row["revenue_cents"] += revenue_cents
+            row["profit_cents"] = row["revenue_cents"] - row["cost_cents"]
+            total_revenue_cents += revenue_cents
+            paying_enterprise_count += 1
+            for day, amount in _recharge_revenue_by_day(
+                uow,
+                enterprise_id=enterprise_id,
+                period_start=period_start,
+                period_end=period_end,
+            ).items():
+                trend = trend_rows[day]
+                trend["date"] = day
+                trend["period"] = day
+                trend["revenue"] += amount
+                trend["revenue_cents"] += amount
+                trend["profit_cents"] = trend["revenue_cents"] - trend["cost_cents"]
             continue
         employee_events = {
             run.id: uow.run_events().list_by_run(run.id, after_cursor=0, limit=500)
@@ -190,10 +250,27 @@ def _aggregate_finance(uow, *, enterprise_map, period_start: str, period_end: st
                 "enterprise_id": enterprise_id,
                 "enterprise_name": enterprise.name,
                 "tokens": 0,
+                "revenue_cents": 0,
                 "cost_cents": 0,
+                "profit_cents": 0,
                 "run_count": 0,
             },
         )
+        row["revenue_cents"] += revenue_cents
+        total_revenue_cents += revenue_cents
+        if revenue_cents > 0:
+            paying_enterprise_count += 1
+        for day, amount in _recharge_revenue_by_day(
+            uow,
+            enterprise_id=enterprise_id,
+            period_start=period_start,
+            period_end=period_end,
+        ).items():
+            trend = trend_rows[day]
+            trend["date"] = day
+            trend["period"] = day
+            trend["revenue"] += amount
+            trend["revenue_cents"] += amount
         for run in runs:
             tokens = _parse_tokens_from_json(run.result_summary_json)
             cost_cents = _parse_cost_cents_from_json(run.result_summary_json)
@@ -209,17 +286,57 @@ def _aggregate_finance(uow, *, enterprise_map, period_start: str, period_end: st
             day = (run.created_at or "")[:10]
             trend = trend_rows[day]
             trend["date"] = day
+            trend["period"] = day
             trend["tokens"] += tokens
-            trend["revenue_cents"] += cost_cents
+            trend["cost"] += cost_cents
             trend["cost_cents"] += cost_cents
             trend["run_count"] += 1
+        row["profit_cents"] = row["revenue_cents"] - row["cost_cents"]
+
+    for trend in trend_rows.values():
+        trend["profit_cents"] = trend["revenue_cents"] - trend["cost_cents"]
 
     return {
         "total_tokens": total_tokens,
+        "total_revenue_cents": total_revenue_cents,
         "total_cost_cents": total_cost_cents,
+        "paying_enterprise_count": paying_enterprise_count,
         "enterprise_rows": list(enterprise_rows.values()),
         "trend_rows": sorted(trend_rows.values(), key=lambda item: item["date"]),
     }
+
+
+def _recharge_revenue_cents(uow, *, enterprise_id: str, period_start: str, period_end: str) -> int:
+    uow.cur.execute(
+        """
+        SELECT COALESCE(SUM(amount_cents), 0)
+        FROM recharge_order
+        WHERE enterprise_id = %s
+          AND status = 'succeeded'
+          AND created_at::date >= %s::date
+          AND created_at::date < %s::date
+        """,
+        (enterprise_id, period_start, period_end),
+    )
+    row = uow.cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _recharge_revenue_by_day(uow, *, enterprise_id: str, period_start: str, period_end: str) -> dict[str, int]:
+    uow.cur.execute(
+        """
+        SELECT created_at::date::text AS day, COALESCE(SUM(amount_cents), 0)
+        FROM recharge_order
+        WHERE enterprise_id = %s
+          AND status = 'succeeded'
+          AND created_at::date >= %s::date
+          AND created_at::date < %s::date
+        GROUP BY day
+        ORDER BY day
+        """,
+        (enterprise_id, period_start, period_end),
+    )
+    return {str(day): int(amount or 0) for day, amount in uow.cur.fetchall()}
 
 
 def _count_employee_templates(uow) -> dict[str, int]:
