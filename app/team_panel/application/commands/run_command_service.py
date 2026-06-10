@@ -52,6 +52,9 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
         input_message_json=json.dumps(normalized_message_payload, ensure_ascii=False),
         created_by=employee_id or "system",
     )
+    knowledge_preview = _build_knowledge_preview(uow, employee_id or conv.entry_employee_id or "")
+    if knowledge_preview is not None:
+        run.result_summary_json = json.dumps(knowledge_preview, ensure_ascii=False)
     uow.team_runs().create(run)
 
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -96,6 +99,40 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
             "profile_name": gw_response.runtime_handle.profile_name,
             "session_id": gw_response.runtime_handle.session_id,
         },
+    }
+
+
+def _build_knowledge_preview(uow, employee_id: str) -> dict | None:
+    if not employee_id:
+        return None
+
+    bindings = [
+        binding
+        for binding in uow.employee_knowledge_bindings().list_by_employee(employee_id)
+        if getattr(binding, "enabled", True)
+    ]
+    if not bindings:
+        return None
+
+    citations = []
+    for binding in bindings:
+        kb = uow.knowledge_bases().get_by_id(binding.knowledge_base_id)
+        docs = uow.knowledge_documents().list_by_kb(binding.knowledge_base_id, status="ready")
+        for doc in docs[:1]:
+            citations.append(
+                {
+                    "title": doc.display_name or doc.file_name or (kb.name if kb is not None else binding.knowledge_base_id),
+                    "knowledge_base_id": binding.knowledge_base_id,
+                    "document_id": doc.id,
+                    "source_type": "knowledge_document",
+                }
+            )
+    if not citations:
+        return None
+
+    return {
+        "summary": "已参考知识库内容整理初步回答。",
+        "citations": citations,
     }
 
 

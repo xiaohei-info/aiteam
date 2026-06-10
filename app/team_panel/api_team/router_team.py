@@ -1791,13 +1791,16 @@ def _serialize_private_history(
             assistant_created_at = run.finished_at or run.updated_at or run.created_at or _today_iso()
 
         if assistant_preview:
+            has_knowledge_citations = bool(
+                assistant_payload.get("citations") or assistant_payload.get("references")
+            )
             envelopes.append(
                 {
                     "message_id": f"msg_{run.id}_assistant",
                     "cursor": 0,
                     "run_id": run.id,
-                    "role": "assistant" if run.status == "succeeded" else "system",
-                    "sender_type": "employee" if run.status == "succeeded" else "system",
+                    "role": "assistant" if run.status == "succeeded" or has_knowledge_citations else "system",
+                    "sender_type": "employee" if run.status == "succeeded" or has_knowledge_citations else "system",
                     "sender_id": run.entry_employee_id or "",
                     "status": run.status,
                     "created_at": assistant_created_at,
