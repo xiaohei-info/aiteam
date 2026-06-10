@@ -109,6 +109,89 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-workbench.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_workbench_search_filter_lifecycle(payload: dict, search_value: str) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(WORKBENCH_MODULE_PATH))}, 'utf8');
+
+function makeSearchInput() {{
+  return {{
+    value: '',
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatchInput() {{
+      if (this.listeners.input) this.listeners.input.call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+
+function makeEmployeeButton(employeeId) {{
+  return {{
+    employeeId,
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    getAttribute(name) {{ return name === 'data-select-employee' ? this.employeeId : null; }},
+  }};
+}}
+
+global.window = {{
+  location: {{ search: '' }},
+  aiteam: {{
+    util: {{
+      escapeHtml(value) {{
+        return String(value == null ? '' : value);
+      }},
+    }},
+    pages: {{}},
+    states: {{
+      renderEmpty(container, message, actionHtml) {{
+        container.innerHTML = '<div data-state-empty="1"><p>' + message + '</p>' + (actionHtml || '') + '</div>';
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'app-workbench.js' }});
+
+const searchInput = makeSearchInput();
+let employeeButtons = [];
+const container = {{
+  _html: '',
+  get innerHTML() {{
+    return this._html;
+  }},
+  set innerHTML(value) {{
+    this._html = String(value || '');
+    const matches = [...this._html.matchAll(/data-select-employee="([^"]+)"/g)];
+    employeeButtons = matches.map((match) => makeEmployeeButton(match[1]));
+  }},
+  querySelector(selector) {{
+    if (selector === '[data-workbench-search]') return searchInput;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-select-employee]') return employeeButtons;
+    return [];
+  }},
+}};
+
+aiteam.pages.appWorkbench.render(container, {json.dumps(payload, ensure_ascii=False)});
+const initialHtml = container.innerHTML;
+searchInput.value = {json.dumps(search_value)};
+searchInput.dispatchInput();
+const filteredHtml = container.innerHTML;
+console.log(JSON.stringify({{ initialHtml, filteredHtml }}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_workbench_empty_state_uses_prd_split_shell_instead_of_generic_empty_state() -> None:
     result = _run_workbench(
         {
@@ -368,6 +451,42 @@ def test_workbench_starred_employee_is_sorted_to_top_and_context_menu_matches_pr
     assert "查看详情" in result["html"]
     assert "设置为星标" in result["html"]
     assert "解雇" in result["html"]
+
+
+def test_workbench_search_with_no_match_clears_selected_employee_panel() -> None:
+    result = _run_workbench_search_filter_lifecycle(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                },
+                {
+                    "employee_id": "emp_nova",
+                    "display_name": "Nova",
+                    "role_name": "数据科学家",
+                    "status": "active",
+                    "presence": "online",
+                    "conversation_id": "conv_nova",
+                    "last_message_preview": "等待新的分析任务",
+                    "unread_count": 0,
+                },
+            ],
+            "groups": [],
+            "office_digest": {"online_employee_count": 2, "running_task_count": 1},
+        },
+        "zzz-no-match",
+    )
+    assert "当前选中员工" in result["initialHtml"]
+    assert "当前筛选下没有匹配员工" in result["filteredHtml"]
+    assert "当前选中员工" not in result["filteredHtml"]
 
 
 def test_workbench_init_keeps_prd_shell_when_permission_denied() -> None:

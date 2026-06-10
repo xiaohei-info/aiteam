@@ -311,7 +311,7 @@ window.aiteam = window.aiteam || {};
     var taskDigest = data.task_status_digest || {};
     var chatHref = selectedEmployee && selectedEmployee.conversation_id
       ? '/app/chat/' + encodeURIComponent(selectedEmployee.conversation_id)
-      : '/admin/employees/' + encodeURIComponent((selectedEmployee && selectedEmployee.employee_id) || '');
+      : '/app/workbench';
 
     var employeePanel = selectedEmployee ? (
       '<div class="aiteam-workbench__employee-hero-card">' +
@@ -398,7 +398,7 @@ window.aiteam = window.aiteam || {};
 
     var selectedEmployee = filteredEmployees.find(function (employee) {
       return employee.employee_id === state.selectedEmployeeId;
-    }) || employees[0] || null;
+    }) || null;
 
     container.innerHTML =
       '<section class="aiteam-workbench" data-workbench-shell="1">' +
