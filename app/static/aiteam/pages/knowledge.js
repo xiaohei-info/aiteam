@@ -119,7 +119,59 @@ window.aiteam = window.aiteam || {};
     );
   }
 
-  function bindUploadForm() {
+  function setFeedback(id, html, fallbackEl) {
+    var next = document.getElementById(id);
+    if (next) {
+      next.innerHTML = html;
+      return;
+    }
+    if (fallbackEl) fallbackEl.innerHTML = html;
+  }
+
+  function renderKnowledgeInto(container, kbList, employees) {
+    var cards = kbList.map(renderKbCard).join('');
+    var uploadHtml = renderUploadForm(kbList);
+    var searchHtml = renderSearchForm(kbList);
+    var bindHtml = renderBindingForm(kbList, employees);
+
+    container.__aiteamKnowledgeKbList = kbList || [];
+    container.__aiteamKnowledgeEmployees = employees || [];
+    container.innerHTML =
+      '<div class="aiteam-shell__panel">' +
+      '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
+      '<h2 class="aiteam-shell__panel-title">知识库</h2>' +
+      '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
+      '<div class="aiteam-kb-grid">' + cards + '</div>' +
+      uploadHtml +
+      searchHtml +
+      bindHtml +
+      '<div class="aiteam-upload-form__feedback" id="kb-retry-feedback"></div>' +
+      '</div>';
+
+    bindUploadForm(container);
+    bindSearchForm();
+    bindEmployeeForm(container.__aiteamKnowledgeKbList);
+    bindRetryButtons(container);
+  }
+
+  function reloadKnowledgeBases(container) {
+    if (!container || !ns.api || typeof ns.api.getKnowledgeBases !== 'function') {
+      return Promise.resolve(null);
+    }
+    return ns.api.getKnowledgeBases().then(function (result) {
+      if (!result || !result.ok || !result.data) return null;
+      renderKnowledgeInto(
+        container,
+        (result.data.knowledge_bases || []),
+        container.__aiteamKnowledgeEmployees || []
+      );
+      return result;
+    }).catch(function () {
+      return null;
+    });
+  }
+
+  function bindUploadForm(container) {
     var btn = document.getElementById('kb-upload-submit');
     if (!btn || !ns.api || typeof ns.api.upload !== 'function' || typeof ns.api.postKnowledgeDocument !== 'function') return;
     btn.addEventListener('click', function () {
@@ -160,7 +212,10 @@ window.aiteam = window.aiteam || {};
       }).then(function (result) {
         if (result === null) return;
         if (result && result.ok) {
-          feedback.innerHTML = '<span style="color:#4ade80">上传成功 — 文档 ID: ' + result.data.document_id + ', 状态: ' + result.data.status + '</span>';
+          var successHtml = '<span style="color:#4ade80">上传成功 — 文档 ID: ' + result.data.document_id + ', 状态: ' + result.data.status + '</span>';
+          return reloadKnowledgeBases(container).then(function () {
+            setFeedback('kb-upload-feedback', successHtml, feedback);
+          });
         } else if (result) {
           feedback.innerHTML = '<span style="color:#f87171">文档登记失败: ' + (result.error || '未知错误') + '</span>';
         }
@@ -282,9 +337,12 @@ window.aiteam = window.aiteam || {};
           retry: true,
         }).then(function (result) {
           if (feedback) {
-            feedback.innerHTML = result && result.ok
-              ? '<span style="color:#4ade80">重试成功</span>'
-              : '<span style="color:#f87171">重试失败: ' + ((result && result.error) || '未知错误') + '</span>';
+            if (result && result.ok) {
+              return reloadKnowledgeBases(container).then(function () {
+                setFeedback('kb-retry-feedback', '<span style="color:#4ade80">重试成功</span>', feedback);
+              });
+            }
+            feedback.innerHTML = '<span style="color:#f87171">重试失败: ' + ((result && result.error) || '未知错误') + '</span>';
           }
         }).catch(function () {
           if (feedback) feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
@@ -320,27 +378,7 @@ window.aiteam = window.aiteam || {};
         var employees = employeeResult && employeeResult.ok && employeeResult.data
           ? (employeeResult.data.employees || [])
           : [];
-        var cards = kbList.map(renderKbCard).join('');
-        var uploadHtml = renderUploadForm(kbList);
-        var searchHtml = renderSearchForm(kbList);
-        var bindHtml = renderBindingForm(kbList, employees);
-
-        container.innerHTML =
-          '<div class="aiteam-shell__panel">' +
-          '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
-          '<h2 class="aiteam-shell__panel-title">知识库</h2>' +
-          '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
-          '<div class="aiteam-kb-grid">' + cards + '</div>' +
-          uploadHtml +
-          searchHtml +
-          bindHtml +
-          '<div class="aiteam-upload-form__feedback" id="kb-retry-feedback"></div>' +
-          '</div>';
-
-        bindUploadForm();
-        bindSearchForm();
-        bindEmployeeForm(kbList);
-        bindRetryButtons(container);
+        renderKnowledgeInto(container, kbList, employees);
       }).catch(function () {
         ns.states.renderError(container, '知识库数据加载失败');
       });

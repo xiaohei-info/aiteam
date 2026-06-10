@@ -71,7 +71,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
-def _run_upload_lifecycle(upload_result: dict, document_result: dict) -> dict:
+def _run_upload_lifecycle(upload_result: dict, document_result: dict, kb_responses: list[dict] | None = None) -> dict:
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
@@ -79,6 +79,22 @@ const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf
 const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
 const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
 const calls = [];
+const kbResponses = {json.dumps(kb_responses or [{
+  "ok": True,
+  "status": 200,
+  "data": {
+    "knowledge_bases": [{
+      "knowledge_base_id": "kb_sales",
+      "name": "销售知识库",
+      "description": "销售资料",
+      "status": "active",
+      "document_count": 0,
+      "documents": [],
+      "employee_bindings": [],
+    }],
+  },
+}])};
+let kbCallCount = 0;
 function makeElement(initial) {{
   return Object.assign({{
     value: '',
@@ -128,21 +144,11 @@ vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
 vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
 (async () => {{
   const container = {{ innerHTML: '' }};
-  aiteam.api.getKnowledgeBases = async () => ({{
-    ok: true,
-    status: 200,
-    data: {{
-      knowledge_bases: [{{
-        knowledge_base_id: 'kb_sales',
-        name: '销售知识库',
-        description: '销售资料',
-        status: 'active',
-        document_count: 0,
-        documents: [],
-        employee_bindings: [],
-      }}],
-    }},
-  }});
+  aiteam.api.getKnowledgeBases = async () => {{
+    const index = Math.min(kbCallCount, kbResponses.length - 1);
+    kbCallCount += 1;
+    return kbResponses[index];
+  }};
   aiteam.api.upload = async (body) => {{
     calls.push({{ kind: 'upload', body }});
     return {json.dumps(upload_result)};
@@ -161,6 +167,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     html: container.innerHTML,
     feedback: elements['kb-upload-feedback'].innerHTML,
     calls,
+    kbCallCount,
   }}));
 }})().catch((error) => {{
   console.error(error);
@@ -286,7 +293,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
-def _run_retry_lifecycle(document_result: dict) -> dict:
+def _run_retry_lifecycle(document_result: dict, kb_responses: list[dict] | None = None) -> dict:
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
@@ -294,6 +301,32 @@ const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf
 const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
 const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
 const calls = [];
+const kbResponses = {json.dumps(kb_responses or [{
+  "ok": True,
+  "status": 200,
+  "data": {
+    "knowledge_bases": [{
+      "knowledge_base_id": "kb_sales",
+      "name": "销售知识库",
+      "description": "销售资料",
+      "status": "active",
+      "document_count": 1,
+      "documents": [{
+        "document_id": "doc_err",
+        "asset_id": "ast_err",
+        "display_name": "失败文档",
+        "file_name": "error.pdf",
+        "file_type": "application/pdf",
+        "file_size": 2048,
+        "status": "error",
+        "error_code": "INGEST_FAILED",
+        "error_message": "insert timeout",
+      }],
+      "employee_bindings": [],
+    }],
+  },
+}])};
+let kbCallCount = 0;
 function makeElement(initial) {{
   return Object.assign({{
     value: '',
@@ -354,16 +387,31 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
       return [];
     }},
   }};
+  aiteam.api.getKnowledgeBases = async () => {{
+    const index = Math.min(kbCallCount, kbResponses.length - 1);
+    kbCallCount += 1;
+    return kbResponses[index];
+  }};
+  aiteam.api.getEmployees = async () => ({{
+    ok: true,
+    status: 200,
+    data: {{ employees: [] }},
+  }});
   aiteam.api.postKnowledgeDocument = async (kbId, body) => {{
     calls.push({{ kbId, body }});
     return {json.dumps(document_result)};
   }};
-  aiteam.pages.knowledge.__bindRetryButtons(container);
+  aiteam.pages.knowledge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   await retryButton.click();
   await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   console.log(JSON.stringify({{
+    html: container.innerHTML,
     feedback: feedback.innerHTML,
     calls,
+    kbCallCount,
   }}));
 }})().catch((error) => {{
   console.error(error);
@@ -576,6 +624,81 @@ def test_knowledge_module_uploads_asset_then_posts_document() -> None:
     assert "ingesting" in result["feedback"]
 
 
+def test_knowledge_module_refreshes_list_after_upload_success() -> None:
+    result = _run_upload_lifecycle(
+        {
+            "ok": True,
+            "status": 201,
+            "data": {
+                "asset_id": "ast_001",
+                "name": "faq.pdf",
+                "size": 4096,
+                "mime_type": "application/pdf",
+                "storage_key": "aiteam/uploads/ast_001/faq.pdf",
+            },
+        },
+        {
+            "ok": True,
+            "status": 201,
+            "data": {
+                "document_id": "doc_001",
+                "status": "ingesting",
+                "ingestion_job_id": "ing_001",
+            },
+        },
+        [
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [
+                        {
+                            "knowledge_base_id": "kb_sales",
+                            "name": "销售知识库",
+                            "description": "销售资料",
+                            "status": "active",
+                            "document_count": 0,
+                            "documents": [],
+                            "employee_bindings": [],
+                        }
+                    ]
+                },
+            },
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [
+                        {
+                            "knowledge_base_id": "kb_sales",
+                            "name": "销售知识库",
+                            "description": "销售资料",
+                            "status": "active",
+                            "document_count": 1,
+                            "documents": [
+                                {
+                                    "document_id": "doc_001",
+                                    "asset_id": "ast_001",
+                                    "display_name": "FAQ 文档",
+                                    "file_name": "faq.pdf",
+                                    "file_type": "application/pdf",
+                                    "file_size": 4096,
+                                    "status": "ready",
+                                    "chunk_count": 12,
+                                }
+                            ],
+                            "employee_bindings": [],
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+    assert result["kbCallCount"] == 2
+    assert "FAQ 文档" in result["html"]
+    assert "ready" in result["html"]
+
+
 def test_knowledge_module_shows_upload_error_before_document_post() -> None:
     result = _run_upload_lifecycle(
         {
@@ -696,6 +819,82 @@ def test_knowledge_module_retry_posts_retry_payload_and_shows_feedback() -> None
         }
     ]
     assert "重试成功" in result["feedback"]
+
+
+def test_knowledge_module_refreshes_list_after_retry_success() -> None:
+    result = _run_retry_lifecycle(
+        {
+            "ok": True,
+            "status": 201,
+            "data": {
+                "document_id": "doc_err",
+                "status": "ingesting",
+                "ingestion_job_id": "ing_retry",
+            },
+        },
+        [
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [
+                        {
+                            "knowledge_base_id": "kb_sales",
+                            "name": "销售知识库",
+                            "description": "销售资料",
+                            "status": "active",
+                            "document_count": 1,
+                            "documents": [
+                                {
+                                    "document_id": "doc_err",
+                                    "asset_id": "ast_err",
+                                    "display_name": "失败文档",
+                                    "file_name": "error.pdf",
+                                    "file_type": "application/pdf",
+                                    "file_size": 2048,
+                                    "status": "error",
+                                    "error_code": "INGEST_FAILED",
+                                    "error_message": "insert timeout",
+                                }
+                            ],
+                            "employee_bindings": [],
+                        }
+                    ]
+                },
+            },
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [
+                        {
+                            "knowledge_base_id": "kb_sales",
+                            "name": "销售知识库",
+                            "description": "销售资料",
+                            "status": "active",
+                            "document_count": 1,
+                            "documents": [
+                                {
+                                    "document_id": "doc_err",
+                                    "asset_id": "ast_err",
+                                    "display_name": "失败文档",
+                                    "file_name": "error.pdf",
+                                    "file_type": "application/pdf",
+                                    "file_size": 2048,
+                                    "status": "ready",
+                                    "chunk_count": 9,
+                                }
+                            ],
+                            "employee_bindings": [],
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+    assert result["kbCallCount"] == 2
+    assert "失败文档" in result["html"]
+    assert "ready" in result["html"]
 
 
 def test_knowledge_module_queries_knowledge_and_renders_answer_with_citations() -> None:

@@ -291,6 +291,39 @@ class TestKnowledgeDocumentPost:
         assert second["status"] == "ingesting"
         assert second["ingestion_job_id"] != first["ingestion_job_id"]
 
+    def test_knowledge_bases_list_advances_ingesting_document_to_ready(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        kb_id = f"kb_{uuid.uuid4().hex[:8]}"
+        _seed_kb(db_conn, kb_id, ent_id, "Support KB")
+        _, created = _post(
+            f"/api/team/knowledge-bases/{kb_id}/documents",
+            {"asset_id": f"ast_{uuid.uuid4().hex[:8]}", "display_name": "faq.pdf"},
+        )
+
+        status, body = _get("/api/team/knowledge-bases")
+        assert status == 200, body
+        kb = next(item for item in body["knowledge_bases"] if item["knowledge_base_id"] == kb_id)
+        doc = next(item for item in kb["documents"] if item["document_id"] == created["document_id"])
+        assert doc["status"] == "ready"
+        assert doc["rag_document_id"].startswith("rag_")
+        assert doc["chunk_count"] >= 1
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "SELECT status, rag_document_id, chunk_count FROM knowledge_ingestion_job WHERE id = %s",
+                (created["ingestion_job_id"],),
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+
+        assert row is not None
+        assert row[0] == "completed"
+        assert str(row[1]).startswith("rag_")
+        assert int(row[2]) >= 1
+
     def test_knowledge_bases_list_includes_document_error_message(self, db_conn):
         ent_id = f"ent_{uuid.uuid4().hex[:8]}"
         _seed_enterprise(db_conn, ent_id)

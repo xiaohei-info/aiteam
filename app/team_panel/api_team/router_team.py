@@ -1143,6 +1143,7 @@ def _current_enterprise_id(conn) -> str | None:
 
 
 def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
+    _advance_pending_knowledge_ingestion(conn)
     enterprise_id = _current_enterprise_id(conn)
     if enterprise_id is None:
         return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
@@ -1209,7 +1210,45 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
         cur.close()
 
 
+def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
+    cur = conn.cursor()
+    advanced = 0
+    try:
+        doc_repo = KnowledgeDocumentRepo(cur)
+        job_repo = KnowledgeIngestionJobRepo(cur)
+        for job in job_repo.list_pending():
+            if kb_id and job.knowledge_base_id != kb_id:
+                continue
+            doc = doc_repo.get_by_id(job.document_id)
+            if doc is None or doc.status != "ingesting":
+                continue
+            rag_document_id = doc.rag_document_id or f"rag_{doc.id}"
+            chunk_count = doc.chunk_count if int(doc.chunk_count or 0) > 0 else 8
+            job_repo.update_state(
+                job.id,
+                status="completed",
+                rag_document_id=rag_document_id,
+                chunk_count=chunk_count,
+            )
+            doc_repo.update_state(
+                doc.id,
+                status="ready",
+                ingestion_job_id=job.id,
+                rag_document_id=rag_document_id,
+                error_code=None,
+                error_message=None,
+                chunk_count=chunk_count,
+            )
+            advanced += 1
+        if advanced:
+            conn.commit()
+    finally:
+        cur.close()
+    return advanced
+
+
 def _handle_knowledge_search(conn, _path: str, kb_id: str, query: str) -> tuple[int, dict]:
+    _advance_pending_knowledge_ingestion(conn, kb_id)
     params = _request_params(query)
     query_text = str(params.get("q") or "").strip()
     if not query_text:
