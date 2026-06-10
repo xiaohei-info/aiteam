@@ -120,6 +120,13 @@ class TestSystemSolutions:
         assert seeded["template_ids"] == [seeded_enterprise["template_id"]]
         assert seeded["solution_stats"]["template_count"] == 1
 
+    def test_system_solution_projection_flattens_apply_stats(self, seeded_enterprise):
+        status, body = _get(_system_admin_path("/api/system-admin/solutions"))
+        assert status == 200, body
+        seeded = next(item for item in body["items"] if item["solution_id"] == seeded_enterprise["solution_id"])
+        assert seeded["solution_stats"]["template_count"] == len(seeded["template_ids"])
+        assert "publish_record" in seeded
+
     def test_post_solution_then_patch_publish(self, seeded_enterprise):
         status, created = _post(
             "/api/system-admin/solutions?role=system_admin",

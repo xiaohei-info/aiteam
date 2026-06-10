@@ -3133,6 +3133,8 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
                 )
         items = []
         for row in rows:
+            if row[2] != "published":
+                continue
             tags = row[3] if isinstance(row[3], list) else []
             solution_id = row[0]
             template_ids = [

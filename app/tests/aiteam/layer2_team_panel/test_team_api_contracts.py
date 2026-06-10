@@ -1416,6 +1416,18 @@ class TestSolutionsList:
         assert isinstance(body["solutions"], list)
         assert "total" in body
 
+    def test_unpublished_solution_is_hidden_from_team_solution_list(self, seeded_enterprise):
+        solution_id = seeded_enterprise["solution_id"]
+        patch_status, patched = _patch(
+            f"/api/system-admin/solutions/{solution_id}?role=system_admin",
+            {"publish_action": "unpublish"},
+        )
+        assert patch_status == 200, patched
+
+        status, body = _get("/api/team/solutions")
+        assert status == 200, body
+        assert all(item["solution_id"] != solution_id for item in body["solutions"])
+
     def test_solutions_list_reflects_apply_records_and_template_stats(self, seeded_enterprise):
         payload = {
             "mode": "append",
