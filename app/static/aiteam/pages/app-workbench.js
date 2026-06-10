@@ -11,6 +11,55 @@ window.aiteam = window.aiteam || {};
       '</a>';
   }
 
+  function stateActionLink(href, label, ghost) {
+    var className = ghost ? 'aiteam-button aiteam-button--ghost' : 'aiteam-button';
+    return '<a class="' + className + '" href="' + escapeHtml(href || '/app/workbench') + '">' + escapeHtml(label || '返回工作台') + '</a>';
+  }
+
+  function renderStateCard(container, eyebrow, title, message, actionsHtml) {
+    container.innerHTML =
+      '<section class="aiteam-page">' +
+      '<div class="aiteam-page__hero">' +
+      '<div><p class="aiteam-page__eyebrow">' + escapeHtml(eyebrow || 'P02 · 工作台') + '</p>' +
+      '<h2 class="aiteam-page__title">' + escapeHtml(title || '工作台') + '</h2>' +
+      '<p class="aiteam-page__desc">' + escapeHtml(message || '') + '</p></div>' +
+      '<div class="aiteam-hero-actions">' + (actionsHtml || '') + '</div>' +
+      '</div>' +
+      '</section>';
+  }
+
+  function onboardingAction() {
+    try {
+      var href = (window.location && window.location.href) || '/app/workbench';
+      return new URL(href, href).searchParams.get('onboarding') || '';
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function renderOnboardingState(container, data) {
+    var emptyState = data && data.empty_state ? data.empty_state : {};
+    renderStateCard(
+      container,
+      'P01 · 企业引导',
+      '创建或加入企业',
+      emptyState.message || '先完成企业空间初始化，再进入工作台和协作入口。',
+      stateActionLink(emptyState.cta_target || '/app/marketplace', emptyState.cta_label || '前往人才市场') +
+        stateActionLink('/app/org', '了解组织视图', true)
+    );
+  }
+
+  function renderEmptyWorkbench(container, emptyState) {
+    var state = emptyState || {};
+    renderStateCard(
+      container,
+      'P02 · 工作台',
+      state.title || '你还没有数字员工',
+      state.message || '先去人才市场招募第一位成员。',
+      stateActionLink(state.cta_target || '/app/marketplace', state.cta_label || '前往人才市场')
+    );
+  }
+
   function employeeCard(employee) {
     var chatHref = employee.conversation_id ? '/app/chat/' + encodeURIComponent(employee.conversation_id) : '/admin/employees';
     return '<article class="aiteam-card">' +
@@ -42,13 +91,20 @@ window.aiteam = window.aiteam || {};
     var groups = Array.isArray(data.groups) ? data.groups : [];
     var enterprise = data.enterprise || {};
     var digest = data.office_digest || {};
+    var emptyState = data.empty_state || null;
+
+    if (onboardingAction() === 'create_or_join_enterprise') {
+      renderOnboardingState(container, data || {});
+      return;
+    }
+
+    if (emptyState) {
+      renderEmptyWorkbench(container, emptyState);
+      return;
+    }
 
     if (!enterprise || !employees.length) {
-      ns.states.renderEmpty(
-        container,
-        '你还没有数字员工，先去人才市场招募第一位成员。',
-        '<div class="aiteam-action-row"><a class="aiteam-button" href="/app/marketplace">前往人才市场</a></div>'
-      );
+      renderEmptyWorkbench(container, null);
       return;
     }
 
