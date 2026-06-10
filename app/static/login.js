@@ -103,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function _defaultPostLoginPath(profile) {
     if (profile && profile.current_enterprise) return '/app/workbench';
-    if (profile && profile.onboarding && profile.onboarding.action === 'create_or_join_enterprise') return '/app/workbench';
+    if (profile && profile.onboarding && profile.onboarding.action === 'create_or_join_enterprise') return '/app/workbench?onboarding=create_or_join_enterprise';
     return '/app/workbench';
   }
 

@@ -2,7 +2,37 @@ window.aiteam = window.aiteam || {};
 
 (function registerWorkbenchPage(ns) {
   ns.pages = ns.pages || {};
+  var ONBOARDING_ACTION = 'create_or_join_enterprise';
   var escapeHtml = (ns.util && ns.util.escapeHtml) || function (value) { return String(value == null ? '' : value); };
+
+  function onboardingActionFromLocation() {
+    try {
+      return new URLSearchParams((window.location && window.location.search) || '').get('onboarding') || '';
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function renderOnboarding(container, enterprise) {
+    container.innerHTML =
+      '<div class="aiteam-state aiteam-state-info" data-onboarding="' + ONBOARDING_ACTION + '">' +
+      '<p><strong>创建或加入企业</strong></p>' +
+      '<p>登录已进入企业引导阶段，请先完成企业创建或加入后再进入正式工作台。</p>' +
+      '<div class="aiteam-action-row">' +
+      '<a class="aiteam-button" href="/onboarding">继续企业引导</a>' +
+      (enterprise && enterprise.name ? '<a class="aiteam-button aiteam-button--ghost" href="/app/workbench">查看 ' + escapeHtml(enterprise.name) + ' 工作台</a>' : '') +
+      '</div>' +
+      '</div>';
+  }
+
+  function renderBackendEmptyState(container, emptyState) {
+    var title = emptyState.title ? '<p><strong>' + escapeHtml(emptyState.title) + '</strong></p>' : '';
+    var message = '<p>' + escapeHtml(emptyState.message || emptyState.title || '暂无数据') + '</p>';
+    container.innerHTML = '<div class="aiteam-state aiteam-state-empty">' +
+      title + message +
+      '<div class="aiteam-action-row"><a class="aiteam-button" href="' + escapeHtml(emptyState.cta_target || '/app/marketplace') + '">' + escapeHtml(emptyState.cta_label || '继续') + '</a></div>' +
+      '</div>';
+  }
 
   function cardLink(href, label, note) {
     return '<a class="aiteam-card-link" href="' + href + '">' +
@@ -41,7 +71,18 @@ window.aiteam = window.aiteam || {};
     var employees = Array.isArray(data.employees) ? data.employees : [];
     var groups = Array.isArray(data.groups) ? data.groups : [];
     var enterprise = data.enterprise || {};
+    var emptyState = data.empty_state || null;
     var digest = data.office_digest || {};
+
+    if (onboardingActionFromLocation() === ONBOARDING_ACTION) {
+      renderOnboarding(container, enterprise);
+      return;
+    }
+
+    if (emptyState && !employees.length) {
+      renderBackendEmptyState(container, emptyState);
+      return;
+    }
 
     if (!enterprise || !employees.length) {
       ns.states.renderEmpty(

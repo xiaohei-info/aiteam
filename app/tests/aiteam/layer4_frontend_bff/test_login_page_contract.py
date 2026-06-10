@@ -208,3 +208,9 @@ def test_login_page_does_not_start_wechat_login_on_load():
     assert not any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
     assert not any("/api/auth/login/wechat/callback" in call["url"] for call in result["fetchCalls"])
     assert result["href"] == "http://localhost/login"
+
+
+def test_login_page_routes_enterprise_onboarding_to_explicit_workbench_state():
+    source = (ROOT / "static" / "login.js").read_text(encoding="utf-8")
+    assert "onboarding.action === 'create_or_join_enterprise'" in source
+    assert "/app/workbench?onboarding=create_or_join_enterprise" in source
