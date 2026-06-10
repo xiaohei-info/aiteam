@@ -319,7 +319,9 @@ async function run() {
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('治理审计') !== -1, 'profile tab should render governance audit section');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('employee.updated') !== -1, 'profile tab should render recent employee audit event types');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('scheduled_job.pause') !== -1, 'profile tab should render scheduled job governance audit event types');
+  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('保存基础资料') !== -1, 'profile tab should render save action for basic profile fields');
 
+  assert(drawer.__test && typeof drawer.__test.saveProfileConfig === 'function', 'drawer test hooks should expose saveProfileConfig');
   assert(drawer.__test && typeof drawer.__test.saveModelConfig === 'function', 'drawer test hooks should expose saveModelConfig');
   assert(drawer.__test && typeof drawer.__test.savePromptConfig === 'function', 'drawer test hooks should expose savePromptConfig');
   assert(drawer.__test && typeof drawer.__test.saveKnowledgeConfig === 'function', 'drawer test hooks should expose saveKnowledgeConfig');
@@ -327,6 +329,7 @@ async function run() {
   assert(drawer.__test && typeof drawer.__test.saveConnectorConfig === 'function', 'drawer test hooks should expose saveConnectorConfig');
   assert(drawer.__test && typeof drawer.__test.saveScheduledJobConfig === 'function', 'drawer test hooks should expose saveScheduledJobConfig');
 
+  await drawer.__test.saveProfileConfig({ display_name: 'Governed Analyst' });
   await drawer.__test.saveModelConfig({ model_provider: 'anthropic', model_name: 'claude-3-7-sonnet' });
   await drawer.__test.savePromptConfig({
     prompt_version: 13,
@@ -351,13 +354,14 @@ async function run() {
     },
   });
 
-  assert(context.window.aiteam.__updateEmployeeCalls.length >= 6, 'drawer save helpers should call updateEmployee for editable tabs');
-  assert(context.window.aiteam.__updateEmployeeCalls[0].body.model_provider === 'anthropic', 'model save should PATCH model_provider');
-  assert(context.window.aiteam.__updateEmployeeCalls[1].body.prompt_system === 'Use evidence first', 'prompt save should PATCH prompt_system');
-  assert(context.window.aiteam.__updateEmployeeCalls[2].body.knowledge_base_ids.length === 2, 'knowledge save should PATCH knowledge_base_ids');
-  assert(context.window.aiteam.__updateEmployeeCalls[3].body.memory_provider_code === 'memx', 'memory save should PATCH memory settings');
-  assert(context.window.aiteam.__updateEmployeeCalls[4].body.connector_ids[1] === 'conn_search', 'connector save should PATCH connector_ids');
-  assert(context.window.aiteam.__updateEmployeeCalls[5].body.scheduled_job.name === 'Morning Ops Loop', 'loop save should PATCH scheduled_job');
+  assert(context.window.aiteam.__updateEmployeeCalls.length >= 7, 'drawer save helpers should call updateEmployee for editable tabs');
+  assert(context.window.aiteam.__updateEmployeeCalls[0].body.display_name === 'Governed Analyst', 'profile save should PATCH display_name');
+  assert(context.window.aiteam.__updateEmployeeCalls[1].body.model_provider === 'anthropic', 'model save should PATCH model_provider');
+  assert(context.window.aiteam.__updateEmployeeCalls[2].body.prompt_system === 'Use evidence first', 'prompt save should PATCH prompt_system');
+  assert(context.window.aiteam.__updateEmployeeCalls[3].body.knowledge_base_ids.length === 2, 'knowledge save should PATCH knowledge_base_ids');
+  assert(context.window.aiteam.__updateEmployeeCalls[4].body.memory_provider_code === 'memx', 'memory save should PATCH memory settings');
+  assert(context.window.aiteam.__updateEmployeeCalls[5].body.connector_ids[1] === 'conn_search', 'connector save should PATCH connector_ids');
+  assert(context.window.aiteam.__updateEmployeeCalls[6].body.scheduled_job.name === 'Morning Ops Loop', 'loop save should PATCH scheduled_job');
 
   drawer.close();
   assert(host.children.length === 0, 'close should remove overlay and drawer');

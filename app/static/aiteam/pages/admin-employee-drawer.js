@@ -349,6 +349,9 @@ window.aiteam = window.aiteam || {};
 
   function _applyLocalEmployeePatch(patch) {
     if (!_employeeData || !patch) return;
+    if (Object.prototype.hasOwnProperty.call(patch, 'display_name')) {
+      _employeeData.displayName = _stringValue(patch.display_name, '未设置');
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'model_provider')) {
       _employeeData.modelProvider = _stringValue(patch.model_provider, '未设置');
     }
@@ -449,7 +452,11 @@ window.aiteam = window.aiteam || {};
     for (var i = 0; i < buttons.length; i++) {
       buttons[i].addEventListener('click', function () {
         var tabId = this.getAttribute('data-config-save');
-        if (tabId === 'model') {
+        if (tabId === 'profile') {
+          _saveEmployeePatch('profile', {
+            display_name: document.getElementById('aiteam-profile-display-name-input') ? document.getElementById('aiteam-profile-display-name-input').value : '',
+          }, '基础资料已保存');
+        } else if (tabId === 'model') {
           _saveEmployeePatch('model', {
             model_provider: document.getElementById('aiteam-model-provider-input') ? document.getElementById('aiteam-model-provider-input').value : '',
             model_name: document.getElementById('aiteam-model-name-input') ? document.getElementById('aiteam-model-name-input').value : '',
@@ -605,6 +612,11 @@ window.aiteam = window.aiteam || {};
           _fieldRow('岗位', d.roleName) +
           _fieldRow('在线态', d.presence) +
           _fieldRow('Profile', d.profileName) +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">编辑员工名称</span>' +
+          '<input id="aiteam-profile-display-name-input" class="aiteam-input" value="' + _escapeHtml(d.displayName === '未设置' ? '' : d.displayName) + '">' +
+          '</div>' +
+          _configActionsMarkup('profile', '保存基础资料') +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">运行安全操作</span>' +
           '<div class="aiteam-drawer__prompt-text">通过 PATCH /api/team/employees/{id} 提交变更。当前支持字段：display_name、status、skills_add/skills_remove、model_provider、model_name、prompt_version、prompt_system/prompt_behavior_rules_json/prompt_opening_message、memory_mode/memory_provider_code/memory_retention_days/memory_writeback_enabled、knowledge_base_ids、connector_ids、scheduled_job/scheduled_job_action。</div>' +
@@ -948,6 +960,7 @@ window.aiteam = window.aiteam || {};
     normalizeEmployeePayload: normalizeEmployeePayload,
     __test: {
       normalizeEmployeePayload: normalizeEmployeePayload,
+      saveProfileConfig: function (patch) { return _saveEmployeePatch('profile', patch, '基础资料已保存'); },
       saveModelConfig: function (patch) { return _saveEmployeePatch('model', patch, '模型配置已保存'); },
       savePromptConfig: function (patch) { return _saveEmployeePatch('prompt', patch, '提示词配置已保存'); },
       saveKnowledgeConfig: function (patch) { return _saveEmployeePatch('knowledge', patch, '知识库绑定已保存'); },
