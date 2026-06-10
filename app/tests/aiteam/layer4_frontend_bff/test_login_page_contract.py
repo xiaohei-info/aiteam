@@ -23,14 +23,24 @@ def test_login_page_shell_mentions_qr_lifecycle_and_agreements():
     assert "Refresh QR code" in source
 
 
-def _run_login_page_node(*, phone: str = "", trigger_phone_send: bool = False) -> dict:
+def _run_login_page_node(
+    *,
+    phone: str = "",
+    code: str = "",
+    trigger_phone_send: bool = False,
+    trigger_phone_verify: bool = False,
+    me_payload: dict | None = None,
+) -> dict:
     login_js = ROOT / "static" / "login.js"
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
 const runtime = {{
   phone: {json.dumps(phone)},
+  code: {json.dumps(code)},
   triggerPhoneSend: {json.dumps(trigger_phone_send)},
+  triggerPhoneVerify: {json.dumps(trigger_phone_verify)},
+  mePayload: {json.dumps(me_payload or {"current_enterprise": None, "onboarding": {"action": "create_or_join_enterprise"}})},
 }};
 const timerQueue = [];
 function AbortController() {{
@@ -201,6 +211,9 @@ const context = {{
     if (String(url).indexOf('/api/auth/status') !== -1) {{
       return Promise.resolve({{ ok: true, json: async () => ({{ passkeys_enabled: false }}) }});
     }}
+    if (String(url).indexOf('/api/me') !== -1) {{
+      return Promise.resolve({{ ok: true, json: async () => runtime.mePayload }});
+    }}
     if (String(url).indexOf('/api/auth/login/wechat/init') !== -1) {{
       return Promise.resolve({{ ok: true, json: async () => ({{ state: 'wx_test', qr_url: '/mock/wechat-qr?state=wx_test', expires_in: 300 }}) }});
     }}
@@ -209,6 +222,9 @@ const context = {{
     }}
     if (String(url).indexOf('/api/auth/login/phone/send-code') !== -1) {{
       return Promise.resolve({{ ok: true, json: async () => ({{ expires_in: 300 }}) }});
+    }}
+    if (String(url).indexOf('/api/auth/login/phone/verify') !== -1) {{
+      return Promise.resolve({{ ok: true, json: async () => ({{ access_token: 'at_phone_success', expires_in: 900 }}) }});
     }}
     return Promise.resolve({{ ok: true, json: async () => ({{}}) }});
   }},
@@ -228,12 +244,22 @@ Promise.resolve()
     if (runtime.phone) {{
       elements['phone'].value = runtime.phone;
     }}
+    if (runtime.code) {{
+      elements['phone-code'].value = runtime.code;
+    }}
     if (runtime.triggerPhoneSend) {{
       elements['phone-send-code'].dispatchEvent({{
         type: 'click',
         preventDefault() {{}},
       }});
       for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    }}
+    if (runtime.triggerPhoneVerify) {{
+      elements['phone-verify'].dispatchEvent({{
+        type: 'click',
+        preventDefault() {{}},
+      }});
+      await flushRuntime(24);
     }}
   }})
   .then(() => {{
@@ -282,3 +308,16 @@ def test_login_page_applies_phone_send_cooldown_feedback():
     assert result["phoneSendDisabled"] is True
     assert "Resend in" in result["phoneSendText"]
     assert "resend in" in result["phoneStatus"].lower()
+
+
+def test_login_page_redirects_new_user_to_workbench_onboarding_hint():
+    result = _run_login_page_node(
+        phone="13800138000",
+        code="888888",
+        trigger_phone_verify=True,
+        me_payload={"current_enterprise": None, "onboarding": {"action": "create_or_join_enterprise"}},
+    )
+
+    assert any("/api/auth/login/phone/verify" in call["url"] for call in result["fetchCalls"])
+    assert any("/api/me" in call["url"] for call in result["fetchCalls"])
+    assert result["href"] == "http://localhost/app/workbench?onboarding=create_or_join_enterprise"

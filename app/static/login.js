@@ -144,7 +144,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function _defaultPostLoginPath(profile) {
     if (profile && profile.current_enterprise) return '/app/workbench';
-    if (profile && profile.onboarding && profile.onboarding.action === 'create_or_join_enterprise') return '/app/workbench';
+    if (profile && profile.onboarding && profile.onboarding.action === 'create_or_join_enterprise') {
+      return '/app/workbench?onboarding=create_or_join_enterprise';
+    }
     return '/app/workbench';
   }
 
@@ -167,7 +169,8 @@ document.addEventListener('DOMContentLoaded', function () {
     try {
       profile = await loadProfile(payload && payload.access_token);
     } catch (_) {}
-    window.location.href = _safeNextPath() !== './' ? _safeNextPath() : _defaultPostLoginPath(profile);
+    var target = _safeNextPath() !== './' ? _safeNextPath() : _defaultPostLoginPath(profile);
+    window.location.href = scopedUrl(target);
   }
 
   async function requestJson(path, options) {

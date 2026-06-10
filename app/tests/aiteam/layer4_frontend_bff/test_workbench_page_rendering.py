@@ -8,12 +8,15 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKBENCH_MODULE_PATH = ROOT / "static" / "aiteam" / "pages" / "app-workbench.js"
 
 
-def _run_workbench(payload: dict) -> dict:
+def _run_workbench(payload: dict, *, search: str = "") -> dict:
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
 const moduleSource = fs.readFileSync({json.dumps(str(WORKBENCH_MODULE_PATH))}, 'utf8');
 global.window = {{
+  location: {{
+    search: {json.dumps(search)},
+  }},
   aiteam: {{
     util: {{
       escapeHtml(value) {{
@@ -130,6 +133,68 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
     assert "data-workbench-starred" in result["html"]
     assert 'href="/app/group"' in result["html"]
     assert 'href="/app/org"' in result["html"]
+
+
+def test_workbench_renders_enterprise_onboarding_hint_when_login_redirect_marks_it() -> None:
+    result = _run_workbench(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                }
+            ],
+            "groups": [],
+            "office_digest": {"online_employee_count": 1, "running_task_count": 0},
+            "onboarding_hint": {
+                "action": "create_or_join_enterprise",
+                "title": "完成企业入驻后再开始使用",
+                "message": "你已登录成功，下一步需要创建企业或加入已有企业空间。",
+                "primary_label": "创建企业",
+                "primary_target": "/admin/settings?tab=enterprise",
+                "secondary_label": "加入企业",
+                "secondary_target": "/admin/settings?tab=invites",
+            },
+        }
+    )
+    assert "完成企业入驻后再开始使用" in result["html"]
+    assert "创建企业或加入已有企业空间" in result["html"]
+    assert 'href="/admin/settings?tab=enterprise"' in result["html"]
+    assert 'href="/admin/settings?tab=invites"' in result["html"]
+
+
+def test_workbench_reads_enterprise_onboarding_hint_from_location_query() -> None:
+    result = _run_workbench(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                }
+            ],
+            "groups": [],
+            "office_digest": {"online_employee_count": 1, "running_task_count": 0},
+        },
+        search="?onboarding=create_or_join_enterprise",
+    )
+    assert "完成企业入驻后再开始使用" in result["html"]
+    assert "创建企业或加入已有企业空间" in result["html"]
+    assert 'href="/admin/settings?tab=enterprise"' in result["html"]
+    assert 'href="/admin/settings?tab=invites"' in result["html"]
 
 
 def test_workbench_starred_employee_is_sorted_to_top_and_context_menu_matches_prd_actions() -> None:

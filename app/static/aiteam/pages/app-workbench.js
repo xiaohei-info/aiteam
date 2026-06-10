@@ -69,6 +69,45 @@ window.aiteam = window.aiteam || {};
       '</a>';
   }
 
+  function resolveOnboardingHint(data) {
+    if (data && data.onboarding_hint && data.onboarding_hint.action) {
+      return data.onboarding_hint;
+    }
+    try {
+      var search = window && window.location && window.location.search ? String(window.location.search) : '';
+      var action = new URLSearchParams(search).get('onboarding');
+      if (action === 'create_or_join_enterprise') {
+        return {
+          action: action,
+          title: '完成企业入驻后再开始使用',
+          message: '你已登录成功，下一步需要创建企业或加入已有企业空间。',
+          primary_label: '创建企业',
+          primary_target: '/admin/settings?tab=enterprise',
+          secondary_label: '加入企业',
+          secondary_target: '/admin/settings?tab=invites',
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function renderOnboardingHint(data) {
+    var hint = resolveOnboardingHint(data);
+    if (!hint) return '';
+    return '' +
+      '<article class="aiteam-card aiteam-card--onboarding" data-workbench-onboarding="1">' +
+      '<div class="aiteam-card__row">' +
+      '<div><p class="aiteam-workbench__eyebrow">登录成功 · 下一步</p><h3 class="aiteam-card__title">' + escapeHtml(hint.title || '完成企业入驻后再开始使用') + '</h3></div>' +
+      '<span class="aiteam-badge">企业入驻</span>' +
+      '</div>' +
+      '<p class="aiteam-card__body">' + escapeHtml(hint.message || '你已登录成功，下一步需要创建企业或加入已有企业空间。') + '</p>' +
+      '<div class="aiteam-hero-actions">' +
+      '<a class="aiteam-button" href="' + escapeHtml(hint.primary_target || '/admin/settings?tab=enterprise') + '">' + escapeHtml(hint.primary_label || '创建企业') + '</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(hint.secondary_target || '/admin/settings?tab=invites') + '">' + escapeHtml(hint.secondary_label || '加入企业') + '</a>' +
+      '</div>' +
+      '</article>';
+  }
+
   function renderRail() {
     var items = [
       { key: 'chat', label: '私聊', title: '私聊', icon: '💬', href: '/app/workbench', active: true },
@@ -168,6 +207,7 @@ window.aiteam = window.aiteam || {};
       '<a class="aiteam-button aiteam-button--ghost" href="/app/org">查看组织架构</a>' +
       '</div>' +
       '</div>' +
+      renderOnboardingHint({}) +
       '</section>' +
       '</section>';
   }
@@ -224,6 +264,7 @@ window.aiteam = window.aiteam || {};
       '<a class="aiteam-button aiteam-button--ghost" href="/app/org">查看组织架构</a>' +
       '</div>' +
       '</div>' +
+      renderOnboardingHint(data) +
       '<div class="aiteam-workbench__metrics">' +
       '<div class="aiteam-workbench__metric"><span>在线员工</span><strong>' + escapeHtml(digest.online_employee_count || filteredEmployees.length || 0) + '</strong></div>' +
       '<div class="aiteam-workbench__metric"><span>运行中任务</span><strong>' + escapeHtml(digest.running_task_count || 0) + '</strong></div>' +
