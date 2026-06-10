@@ -58,6 +58,13 @@ def test_org_tree_returns_unassigned_members(seeded_enterprise, db_conn):
     assert body["stats"]["unassigned_employee_count"] >= 1
 
 
+def test_org_tree_rejects_member_role(seeded_enterprise):
+    status, body = _get("/api/team/org/tree?role=member")
+    assert status == 403, body
+    assert body["error"] == "FORBIDDEN"
+    assert body["required_action"] == "manage_employees"
+
+
 def test_org_assignment_patch_updates_department_and_position(seeded_enterprise, db_conn):
     enterprise_id = seeded_enterprise["enterprise_id"]
     _insert_department(db_conn, enterprise_id, "dept_strategy", "策略部")
@@ -72,6 +79,31 @@ def test_org_assignment_patch_updates_department_and_position(seeded_enterprise,
     assert body["position_title"] == "策略分析师"
     assert body["department"]["department_id"] == "dept_strategy"
     assert body["department"]["name"] == "策略部"
+
+
+def test_org_assignment_patch_allows_enterprise_admin(seeded_enterprise, db_conn):
+    enterprise_id = seeded_enterprise["enterprise_id"]
+    _insert_department(db_conn, enterprise_id, "dept_enable", "启用部门")
+
+    status, body = _patch(
+        f"/api/team/org/assignments/{seeded_enterprise['employee_id']}?role=enterprise_admin",
+        {"department_id": "dept_enable"},
+    )
+    assert status == 200, body
+    assert body["department_id"] == "dept_enable"
+
+
+def test_org_assignment_patch_rejects_finance_admin(seeded_enterprise, db_conn):
+    enterprise_id = seeded_enterprise["enterprise_id"]
+    _insert_department(db_conn, enterprise_id, "dept_finance_block", "财务不可改部门")
+
+    status, body = _patch(
+        f"/api/team/org/assignments/{seeded_enterprise['employee_id']}?role=finance_admin",
+        {"department_id": "dept_finance_block"},
+    )
+    assert status == 403, body
+    assert body["error"] == "FORBIDDEN"
+    assert body["required_action"] == "manage_employees"
 
 
 def test_org_assignment_patch_rejects_invalid_field(seeded_enterprise):

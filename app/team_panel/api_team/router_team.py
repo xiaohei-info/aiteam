@@ -2673,7 +2673,10 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
         return 409, {"error": "RUN_ABORT_CONFLICT", "message": str(exc)}
 
 
-def _handle_org_tree(conn, path: str) -> tuple[int, dict]:
+def _handle_org_tree(conn, path: str, query: str) -> tuple[int, dict]:
+    _role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -2727,9 +2730,12 @@ def _handle_org_tree(conn, path: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_org_assignment_patch(conn, path: str, assignment_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_org_assignment_patch(conn, path: str, assignment_id: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    _role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
 
     allowed_fields = {"department_id", "position_title", "visibility_scope"}
     for key in body:
@@ -3972,7 +3978,7 @@ def handle_team_route(
 
     # ── org/tree ──
     elif method == "GET" and _match_exact(sub, "/org/tree"):
-        route_handler = lambda conn: _handle_org_tree(conn, sub)
+        route_handler = lambda conn: _handle_org_tree(conn, sub, query)
 
     # ── enterprise admin templates alias + talent-market/templates ──
     elif method == "GET" and (_match_exact(sub, "/templates") or _match_exact(sub, "/talent-market/templates")):
@@ -3995,7 +4001,7 @@ def handle_team_route(
     if route_handler is None:
         org_assignment_id = _match_prefix(sub, "/org/assignments/")
         if method == "PATCH" and org_assignment_id is not None and "/" not in org_assignment_id:
-            route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, body)
+            route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, query, body)
 
     # ── solutions/{id}/apply ──
     if route_handler is None:
