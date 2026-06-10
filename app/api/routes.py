@@ -2885,39 +2885,39 @@ _LOGIN_PAGE_HTML = """<!doctype html>
 <title>{{BOT_NAME}} — {{LOGIN_TITLE}}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#1a1a2e;color:#e8e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#16213e;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:36px 32px;
-  width:min(440px,calc(100vw - 32px));text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
-.logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(145deg,#e8a030,#e94560);
+.card{background:#161b22;border:1px solid #30363d;border-radius:16px;padding:36px 32px;
+  width:min(440px,calc(100vw - 32px));text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#2f81f7,#39c5cf);
   display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;color:#fff;
-  margin:0 auto 12px;box-shadow:0 2px 12px rgba(233,69,96,.3)}
+  margin:0 auto 12px;box-shadow:0 0 12px rgba(47,129,247,.4)}
 h1{font-size:18px;font-weight:600;margin-bottom:4px}
-.sub{font-size:12px;color:#8888aa;margin-bottom:20px}
+.sub{font-size:12px;color:#656d76;margin-bottom:20px}
 .auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
-.auth-tab{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#b9bfd8}
-.auth-tab.is-active{background:rgba(124,185,255,.15);border-color:rgba(124,185,255,.3);color:#7cb9ff}
+.auth-tab{background:#1c2333;border:1px solid #30363d;color:#8b949e}
+.auth-tab.is-active{background:rgba(47,129,247,.15);border-color:rgba(47,129,247,.4);color:#58a6ff}
 .auth-panel{display:none;text-align:left}
 .auth-panel.is-active{display:block}
-.auth-copy{font-size:12px;line-height:1.6;color:#b9bfd8;margin-bottom:14px}
+.auth-copy{font-size:12px;line-height:1.6;color:#8b949e;margin-bottom:14px}
 .auth-row{display:flex;gap:10px}
 .auth-row > *{flex:1}
-.auth-status{font-size:12px;line-height:1.5;color:#b9bfd8;min-height:18px;margin:10px 0 0}
-.auth-link{display:inline-flex;align-items:center;gap:4px;margin-top:10px;color:#7cb9ff;font-size:12px;text-decoration:none}
+.auth-status{font-size:12px;line-height:1.5;color:#8b949e;min-height:18px;margin:10px 0 0}
+.auth-link{display:inline-flex;align-items:center;gap:4px;margin-top:10px;color:#58a6ff;font-size:12px;text-decoration:none}
 .auth-link:hover{text-decoration:underline}
-.muted-link{display:inline-flex;justify-content:center;margin-top:14px;background:transparent;border:none;color:#b9bfd8}
-.password-panel{display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.muted-link{display:inline-flex;justify-content:center;margin-top:14px;background:transparent;border:none;color:#8b949e}
+.password-panel{display:none;margin-top:14px;padding-top:14px;border-top:1px solid #30363d}
 .password-panel.is-open{display:block}
-input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.1);
-  background:rgba(255,255,255,.04);color:#e8e8f0;font-size:14px;outline:none;margin-bottom:14px;
+input{width:100%;padding:10px 14px;border-radius:8px;border:1px solid #30363d;
+  background:#0d1117;color:#e6edf3;font-size:14px;outline:none;margin-bottom:14px;
   transition:border-color .15s}
-input:focus{border-color:rgba(124,185,255,.5);box-shadow:0 0 0 3px rgba(124,185,255,.1)}
-button{width:100%;padding:10px;border-radius:10px;border:none;background:rgba(124,185,255,.15);
-  border:1px solid rgba(124,185,255,.3);color:#7cb9ff;font-size:14px;font-weight:600;cursor:pointer;
+input:focus{border-color:rgba(47,129,247,.6);box-shadow:0 0 0 3px rgba(47,129,247,.12)}
+button{width:100%;padding:10px;border-radius:8px;border:none;background:rgba(47,129,247,.15);
+  border:1px solid rgba(47,129,247,.4);color:#58a6ff;font-size:14px;font-weight:600;cursor:pointer;
   transition:all .15s}
-button:hover{background:rgba(124,185,255,.25)}
-.passkey-login{margin-top:10px;background:rgba(255,255,255,.04);border-color:rgba(232,160,48,.35);color:#e8a030}
-.err{color:#e94560;font-size:12px;margin-top:10px;display:none}
+button:hover{background:rgba(47,129,247,.28)}
+.passkey-login{margin-top:10px;background:#1c2333;border-color:rgba(227,179,65,.4);color:#e3b341}
+.err{color:#f85149;font-size:12px;margin-top:10px;display:none}
 </style></head><body>
 <div class="card">
   <div class="logo">{{BOT_NAME_INITIAL}}</div>

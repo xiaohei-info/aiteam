@@ -194,6 +194,18 @@ body.aiteam-shell-active .aiteam-shell {
   padding: 40px 48px;
 }
 
+/* Global link reset inside the app shell — kills browser-default blue/underline
+   on unstyled anchors (marketplace cards, office tiles, etc.). Component classes
+   (.aiteam-button, .aiteam-panel__header a, …) override with their own color. */
+.aiteam-shell__main a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.aiteam-shell__main a:hover {
+  text-decoration: none;
+}
+
 .aiteam-shell__panel {
   max-width: 920px;
   border-radius: 24px;
@@ -2050,6 +2062,28 @@ body.aiteam-shell-active .aiteam-shell {
   box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.12) inset;
 }
 
+/* ===== IM bubble layout (Phase 2) ===== */
+.aiteam-chat-transcript .aiteam-message {
+  max-width: 76%;
+  align-self: flex-start;
+  border-radius: 4px 14px 14px 14px;
+  background: var(--ait-bg3);
+  border-color: var(--ait-border);
+}
+
+.aiteam-chat-transcript .aiteam-message--user {
+  align-self: flex-end;
+  border-radius: 14px 4px 14px 14px;
+  background: var(--ait-brand-dim);
+  border-color: rgba(47, 129, 247, 0.4);
+}
+
+.aiteam-chat-transcript .aiteam-message--system {
+  align-self: center;
+  max-width: 90%;
+  background: rgba(139, 148, 158, 0.12);
+}
+
 .aiteam-quote {
   margin: 0 0 12px;
   color: #bfdbfe;
@@ -2358,3 +2392,493 @@ body.aiteam-shell-active .aiteam-shell {
   background: rgba(13, 17, 23, 0.48);
   color: #c9d1d9;
 }
+
+/* ===================================================================
+   Phase 3 — Talent marketplace cards + recruit animation
+   =================================================================== */
+.aiteam-marketplace-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.aiteam-marketplace-card__status {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+}
+
+.aiteam-marketplace-card__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--ait-green);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aiteam-marketplace-card__pill {
+  display: inline-flex;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--ait-bg4);
+  border: 1px solid var(--ait-border);
+  color: var(--ait-text2);
+  font-size: 12px;
+}
+
+.aiteam-marketplace-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aiteam-marketplace-card__hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aiteam-marketplace-card__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--ait-radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: linear-gradient(135deg, var(--ait-brand), #39c5cf);
+  flex-shrink: 0;
+}
+
+.aiteam-marketplace-card__heading .aiteam-card__title {
+  margin: 0;
+  color: var(--ait-text);
+}
+
+.aiteam-marketplace-card__meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aiteam-marketplace-card__meta span {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ait-bg4);
+  color: var(--ait-text2);
+  font-size: 12px;
+}
+
+.aiteam-marketplace-card__recruiters {
+  margin: 0;
+  color: var(--ait-text3);
+  font-size: 12px;
+}
+
+.aiteam-marketplace-card__footer,
+.aiteam-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aiteam-tag-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.aiteam-marketplace-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.aiteam-filter-chip {
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--ait-bg3);
+  border: 1px solid var(--ait-border);
+  color: var(--ait-text2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.aiteam-filter-chip:hover {
+  color: var(--ait-text);
+  border-color: var(--ait-border2);
+}
+
+.aiteam-filter-chip.is-active {
+  background: var(--ait-brand-dim);
+  border-color: var(--ait-brand);
+  color: var(--ait-accent);
+}
+
+/* Recruit animation: pulse while pending, flash + lift on success */
+.aiteam-marketplace-card.is-recruiting {
+  border-color: rgba(47, 129, 247, 0.5);
+  animation: ait-recruit-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ait-recruit-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(47, 129, 247, 0.0); }
+  50% { box-shadow: 0 0 0 4px rgba(47, 129, 247, 0.22); }
+}
+
+.aiteam-marketplace-card.is-recruited {
+  border-color: rgba(63, 185, 80, 0.4);
+  animation: ait-recruit-success 0.6s ease-out;
+}
+
+@keyframes ait-recruit-success {
+  0% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5); transform: scale(1); }
+  40% { box-shadow: 0 0 0 6px rgba(63, 185, 80, 0.28); transform: scale(1.015); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.0); transform: scale(1); }
+}
+
+/* ===================================================================
+   Phase 4 + 6 — Layout helpers for admin / system / group / template
+   (classes emitted by page modules that previously had no CSS)
+   =================================================================== */
+.aiteam-card--flat {
+  background: var(--ait-bg3);
+  border: 1px solid var(--ait-border);
+  box-shadow: none;
+}
+
+.aiteam-shell__two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+/* monospace id chips */
+.aiteam-eid,
+.aiteam-template-id,
+.aiteam-solution-id {
+  font-family: 'SFMono-Regular', ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: var(--ait-text2);
+  background: var(--ait-bg4);
+  border: 1px solid var(--ait-border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+/* daily trend bars (billing / finance) */
+.aiteam-billing__trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 140px;
+  padding: 12px 0;
+}
+
+.aiteam-billing__trend-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.aiteam-billing__trend-bar {
+  width: 70%;
+  min-height: 4px;
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg, var(--ait-brand), rgba(47, 129, 247, 0.35));
+}
+
+.aiteam-billing__trend-day {
+  font-size: 11px;
+  color: var(--ait-text3);
+}
+
+/* employee drawer summary grid */
+.aiteam-drawer__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.aiteam-drawer__summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--ait-radius-lg);
+  background: var(--ait-bg3);
+  border: 1px solid var(--ait-border);
+}
+
+.aiteam-drawer__summary-label {
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+.aiteam-drawer__summary-value {
+  font-size: 16px;
+  color: var(--ait-text);
+}
+
+.aiteam-drawer__field--block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aiteam-drawer__state {
+  padding: 16px;
+  border-radius: var(--ait-radius-lg);
+  background: var(--ait-bg3);
+  border: 1px solid var(--ait-border);
+  color: var(--ait-text2);
+}
+
+/* collaboration task tree (group) */
+.aiteam-task-tree__item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0 10px 14px;
+}
+
+.aiteam-task-tree__rail {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--ait-border);
+}
+
+.aiteam-task-tree__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aiteam-task-tree__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aiteam-task-tree__preview {
+  margin: 0;
+  color: var(--ait-text2);
+  font-size: 13px;
+}
+
+.aiteam-task-tree__runtime,
+.aiteam-task-tree__children {
+  font-size: 11px;
+  color: var(--ait-text3);
+}
+
+.aiteam-badge--task {
+  background: var(--ait-brand-dim);
+  color: var(--ait-accent);
+  border: 1px solid rgba(47, 129, 247, 0.35);
+}
+
+.aiteam-route-feedback__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* template detail (P03 → detail) */
+.aiteam-template-detail__section {
+  margin-top: 20px;
+  padding: 20px;
+  border-radius: var(--ait-radius-lg);
+  background: var(--ait-bg3);
+  border: 1px solid var(--ait-border);
+}
+
+.aiteam-template-detail__section-kicker {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ait-accent);
+  margin-bottom: 8px;
+}
+
+.aiteam-template-detail__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.aiteam-template-detail__tab-panel {
+  margin-top: 12px;
+}
+
+.aiteam-template-detail__stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--ait-radius-lg);
+  background: var(--ait-bg4);
+  border: 1px solid var(--ait-border);
+}
+
+.aiteam-template-detail__stat-card strong {
+  font-size: 22px;
+  color: var(--ait-text);
+}
+
+.aiteam-template-detail__stat-card span {
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+/* ===================================================================
+   Phase 4 — Org structure tree
+   =================================================================== */
+.aiteam-org__tree {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aiteam-org__department {
+  border: 1px solid var(--ait-border);
+  border-radius: var(--ait-radius-lg);
+  background: var(--ait-bg3);
+  padding: 16px 18px;
+}
+
+.aiteam-org__department--unassigned {
+  border-style: dashed;
+  background: var(--ait-bg2);
+}
+
+.aiteam-org__department-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.aiteam-org__department-title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--ait-text);
+}
+
+.aiteam-org__department-count {
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+.aiteam-org__department-description {
+  margin: 0 0 12px;
+  color: var(--ait-text2);
+  font-size: 13px;
+}
+
+.aiteam-org__member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiteam-org__member {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--ait-radius);
+  background: var(--ait-bg4);
+  border: 1px solid var(--ait-border);
+}
+
+.aiteam-org__member-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aiteam-org__member-name {
+  color: var(--ait-text);
+}
+
+.aiteam-org__member-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+.aiteam-org__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ait-bg2);
+  border: 1px solid var(--ait-border);
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+/* nested sub-departments get an indent rail */
+.aiteam-org__children {
+  margin-top: 14px;
+  padding-left: 18px;
+  border-left: 2px solid var(--ait-border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.aiteam-org__editor {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aiteam-org__editor-label {
+  font-size: 12px;
+  color: var(--ait-text2);
+}
+
+.aiteam-org__editor-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.aiteam-org__empty-hint,
+.aiteam-org__hint {
+  color: var(--ait-text3);
+  font-size: 13px;
+}
+
+.aiteam-office { display: block; }
