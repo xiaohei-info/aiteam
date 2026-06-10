@@ -57,6 +57,7 @@
 pytest app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py -q
 pytest app/tests/aiteam/layer4_frontend_bff/test_login_page_contract.py -q
 pytest app/tests/aiteam/layer4_frontend_bff/test_workbench_page_rendering.py -q
+pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 ```
 
 最新结果：
@@ -64,12 +65,24 @@ pytest app/tests/aiteam/layer4_frontend_bff/test_workbench_page_rendering.py -q
 - `test_auth_northbound_routes.py` → `8 passed`
 - `test_login_page_contract.py` → `8 passed`
 - `test_workbench_page_rendering.py` → `11 passed`
+- `test_login_enterprise_onboarding_flow.py` → `2 passed`
 
 证据文件：
 
 - [app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/app/tests/aiteam/layer2_team_panel/test_auth_northbound_routes.py)
 - [app/tests/aiteam/layer4_frontend_bff/test_login_page_contract.py](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/app/tests/aiteam/layer4_frontend_bff/test_login_page_contract.py)
 - [app/tests/aiteam/layer4_frontend_bff/test_workbench_page_rendering.py](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/app/tests/aiteam/layer4_frontend_bff/test_workbench_page_rendering.py)
+- [app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py](/Users/chiangguantik/.codex/worktrees/8f3a/aiteam/app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py)
+
+### Layer5 主路径证据
+
+新增了更高层的业务 flow 证明：
+
+- 手机号登录 → `/api/me` 返回 `onboarding.action`
+- 创建企业 → `current_enterprise` 建立
+- 邀请码加入企业 → `current_enterprise` 建立
+
+这条证据比单独的 layer2/layer4 contract 更接近业务闭环。
 
 ## 真实运行证据
 
@@ -97,7 +110,7 @@ pytest app/tests/aiteam/layer4_frontend_bff/test_workbench_page_rendering.py -q
 | `P01-F01` | `开发侧基本满足` | 登录页默认扫码态、手机号 Tab、主文案与 CTA 有 contract 覆盖；真实页可访问 | 缺 PRD 原型逐项对照截图/录屏 |
 | `P01-F02` | `开发侧基本满足` | 微信扫码 init/poll/callback、二维码失效提示、验证码发送/冷却/校验 已有 layer2/layer4 证据 | 缺更完整的扫码生命周期展示证据与手工验收 |
 | `P01-F03` | `开发侧较强满足` | refresh rotation、replay 失效、device limit、IP cooldown 都已覆盖 | 缺更明确的前端会话失效产品反馈证据 |
-| `P01-F04` | `主链已闭环` | create/join/current-enterprise + workbench onboarding 交互已实现并测试通过 | 缺 QA/PM 场景签收材料 |
+| `P01-F04` | `主链已闭环` | create/join/current-enterprise + workbench onboarding 交互 + layer5 登录入户主路径 已实现并测试通过 | 缺 QA/PM 场景签收材料 |
 | `P01-F05` | `部分满足，仍需补强` | 验证码错误、二维码失效、无效邀请码、重复加入冲突已有自动化证据 | 仍缺更系统化的失败矩阵与产品级恢复证据 |
 
 ## 最近提交
