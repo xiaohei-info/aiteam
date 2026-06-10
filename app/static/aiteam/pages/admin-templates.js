@@ -3,6 +3,15 @@ window.aiteam = window.aiteam || {};
 (function registerAdminTemplatesPage(ns) {
   ns.pages = ns.pages || {};
 
+  function renderPermissionDenied(container) {
+    if (!container) return;
+    if (ns.states && ns.states.renderPermissionDenied) {
+      ns.states.renderPermissionDenied(container);
+      return;
+    }
+    container.innerHTML = '<div class="aiteam-state aiteam-state-denied"><p>您没有权限访问此内容</p></div>';
+  }
+
   function esc(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -160,6 +169,11 @@ window.aiteam = window.aiteam || {};
   ns.pages.adminTemplates = {
     init: function (container) {
       if (!container) return;
+      var role = ns.role ? ns.role.getActiveRole() : '';
+      if (role && (!ns.role || !ns.role.hasPermission || !ns.role.hasPermission(role, 'manage_employees'))) {
+        renderPermissionDenied(container);
+        return;
+      }
       if (!ns.api || !ns.api.getAdminTemplates || !ns.api.recruit) {
         container.innerHTML = '<div class="aiteam-state aiteam-state-error"><p>后台人才市场 API client 未加载</p></div>';
         return;

@@ -403,6 +403,8 @@ class TestRoleAwareNavigation:
     def test_owner_sees_all_admin_nav(self):
         result = _run_role_state_node({"mode": "nav_items", "role": "owner"})
         assert "员工" in result["adminItems"]
+        assert "技能" in result["adminItems"]
+        assert "人才市场" in result["adminItems"]
         assert "连接器" in result["adminItems"]
         assert "费用" in result["adminItems"]
         assert result["sections"]["admin"] is True
@@ -410,6 +412,8 @@ class TestRoleAwareNavigation:
     def test_finance_admin_sees_only_billing_nav(self):
         result = _run_role_state_node({"mode": "nav_items", "role": "finance_admin"})
         assert "员工" not in result["adminItems"], "finance_admin must not see employee nav"
+        assert "技能" not in result["adminItems"], "finance_admin must not see skills nav"
+        assert "人才市场" not in result["adminItems"], "finance_admin must not see templates nav"
         assert "连接器" not in result["adminItems"], "finance_admin must not see connector nav"
         assert "费用" in result["adminItems"], "finance_admin must see billing nav"
         assert result["sections"]["admin"] is True
@@ -422,6 +426,8 @@ class TestRoleAwareNavigation:
     def test_enterprise_admin_sees_employee_connector_nav(self):
         result = _run_role_state_node({"mode": "nav_items", "role": "enterprise_admin"})
         assert "员工" in result["adminItems"]
+        assert "技能" in result["adminItems"]
+        assert "人才市场" in result["adminItems"]
         assert "连接器" in result["adminItems"]
         assert "费用" not in result["adminItems"], "enterprise_admin must not see billing nav"
         assert result["sections"]["admin"] is True
@@ -471,6 +477,26 @@ class TestPermissionDeniedState:
         )
         assert "aiteam-state-denied" in result["html"]
         assert "您没有权限访问此内容" in result["html"]
+        assert result["fetchCalls"] == []
+
+    def test_finance_admin_gets_denied_on_skills_page(self):
+        result = _run_page_with_role(
+            "admin-skills.js", "adminSkills",
+            role="finance_admin",
+            fetch_status=200,
+            fetch_body=json.dumps({"items": []}),
+        )
+        assert "aiteam-state-denied" in result["html"]
+        assert result["fetchCalls"] == []
+
+    def test_member_gets_denied_on_templates_page(self):
+        result = _run_page_with_role(
+            "admin-templates.js", "adminTemplates",
+            role="member",
+            fetch_status=200,
+            fetch_body=json.dumps({"items": []}),
+        )
+        assert "aiteam-state-denied" in result["html"]
         assert result["fetchCalls"] == []
 
     def test_owner_sees_employee_page(self):

@@ -75,6 +75,8 @@ var aiteam = window.aiteam;
     if (section === 'admin') {
       if (_hasPermission(role, 'manage_employees')) {
         items.push({ label: '员工', href: '/admin/employees', note: 'Employees' });
+        items.push({ label: '技能', href: '/admin/skills', note: 'Skills' });
+        items.push({ label: '人才市场', href: '/admin/templates', note: 'Templates' });
       }
       if (_hasPermission(role, 'manage_connectors')) {
         items.push({ label: '连接器', href: '/admin/connectors', note: 'Connectors' });

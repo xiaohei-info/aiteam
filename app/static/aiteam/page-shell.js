@@ -69,6 +69,7 @@ window.aiteam = window.aiteam || {};
   function _hasPathAccess(pathname, role) {
     if (!pathname || !role || !ns.role || !ns.role.hasPermission) return true;
     if (pathname.indexOf('/admin/employees') === 0) return ns.role.hasPermission(role, 'manage_employees');
+    if (pathname.indexOf('/admin/skills') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/templates') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/connectors') === 0) return ns.role.hasPermission(role, 'manage_connectors');
     if (pathname.indexOf('/admin/billing') === 0) return ns.role.hasPermission(role, 'view_billing');
