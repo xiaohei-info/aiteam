@@ -3,10 +3,16 @@ from __future__ import annotations
 
 from ..repositories.employee_repo import EmployeeRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
+from .router_team_settings_billing import (
+    handle_delete_admin_invite,
+    handle_get_admin_invites,
+    handle_post_admin_invite,
+)
 from .router_team import (
     _database_unavailable_response,
     _require_permission,
     _billing_usage_overview_payload,
+    _match_prefix,
 )
 from ..transactions.db import create_connection
 
@@ -64,6 +70,36 @@ def _handle_billing_usage(conn, query: str) -> tuple[int, dict]:
     payload["canonical_path"] = "/api/team/billing/usage/overview"
     return 200, payload
 
+
+def _handle_admin_invites_get(conn, query: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    status, payload = handle_get_admin_invites(conn, "/invites")
+    if status == 200:
+        payload["effective_role"] = role
+    return status, payload
+
+
+def _handle_admin_invites_post(conn, query: str, body: dict | None) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    status, payload = handle_post_admin_invite(conn, "/invites", body)
+    if status in (200, 201):
+        payload["effective_role"] = role
+    return status, payload
+
+
+def _handle_admin_invites_delete(conn, query: str, invite_id: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    status, payload = handle_delete_admin_invite(conn, "/invites", invite_id)
+    if status == 200:
+        payload["effective_role"] = role
+    return status, payload
+
 def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple[int, dict]:
     """Returns (status_code, response_dict)."""
     sub = path[len("/api/enterprise-admin"):] if path.startswith("/api/enterprise-admin") else path
@@ -94,6 +130,46 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
             return _database_unavailable_response()
         try:
             return _handle_billing_usage(conn, query)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if method == "GET" and _match_exact(sub, "/invites"):
+        try:
+            conn = _make_conn()
+        except Exception:
+            return _database_unavailable_response()
+        try:
+            return _handle_admin_invites_get(conn, query)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if method == "POST" and _match_exact(sub, "/invites"):
+        try:
+            conn = _make_conn()
+        except Exception:
+            return _database_unavailable_response()
+        try:
+            return _handle_admin_invites_post(conn, query, body)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    invite_id = _match_prefix(sub, "/invites/")
+    if method == "DELETE" and invite_id is not None and "/" not in invite_id:
+        try:
+            conn = _make_conn()
+        except Exception:
+            return _database_unavailable_response()
+        try:
+            return _handle_admin_invites_delete(conn, query, invite_id)
         finally:
             try:
                 conn.close()

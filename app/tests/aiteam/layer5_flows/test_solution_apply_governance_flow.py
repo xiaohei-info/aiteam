@@ -145,18 +145,89 @@ def test_solution_apply_requires_bound_solution_template(db_conn, seeded_enterpr
     assert body["error"] == "SOLUTION_TEMPLATE_BINDING_MISSING"
 
 
-def test_solution_apply_accepts_replace_and_reapply_modes(db_conn, seeded_enterprise):
-    """Replace and reapply modes are accepted as compat aliases for append.
-    They must not 400 with UNSUPPORTED_MODE."""
-    for mode in ("replace", "reapply"):
-        payload = {
-            "mode": mode,
-            "department_id": "dept_retail",
-            "idempotency_key": f"solution-apply-{mode}-{uuid.uuid4().hex[:6]}",
-        }
-        status, body = _post(
-            f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
-            payload,
-        )
-        assert status == 201, f"mode={mode}: expected 201, got {status}: {body}"
-        assert body["status"] == "succeeded"
+def test_solution_apply_replace_archives_previous_solution_employees(db_conn, seeded_enterprise):
+    append_payload = {
+        "mode": "append",
+        "department_id": "dept_retail",
+        "idempotency_key": f"solution-apply-append-{uuid.uuid4().hex[:6]}",
+    }
+    append_status, append_body = _post(
+        f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+        append_payload,
+    )
+    assert append_status == 201, append_body
+    previous_employee_id = append_body["created_employee_ids"][0]
+
+    replace_payload = {
+        "mode": "replace",
+        "department_id": "dept_retail",
+        "idempotency_key": f"solution-apply-replace-{uuid.uuid4().hex[:6]}",
+    }
+    replace_status, replace_body = _post(
+        f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+        replace_payload,
+    )
+    assert replace_status == 201, replace_body
+    replacement_employee_id = replace_body["created_employee_ids"][0]
+    assert replacement_employee_id != previous_employee_id
+    assert replace_body["mode"] == "replace"
+
+    with UnitOfWork(db_conn) as uow:
+        previous_employee = uow.employees().get_by_id(previous_employee_id)
+        replacement_employee = uow.employees().get_by_id(replacement_employee_id)
+        previous_bindings = uow.employee_knowledge_bindings().list_by_employee(previous_employee_id)
+        replacement_bindings = uow.employee_knowledge_bindings().list_by_employee(replacement_employee_id)
+        apply_records = uow.solution_apply_records().list_by_solution(seeded_enterprise["solution_id"])
+
+        assert previous_employee is not None
+        assert previous_employee.status == "archived"
+        assert replacement_employee is not None
+        assert replacement_employee.status == "active"
+        assert previous_bindings == []
+        assert len(replacement_bindings) == 1
+        latest_record = next(record for record in apply_records if record.id == replace_body["apply_record_id"])
+        assert latest_record.mode == "replace"
+
+
+def test_solution_apply_reapply_keeps_previous_solution_employees_and_adds_new_batch(db_conn, seeded_enterprise):
+    append_payload = {
+        "mode": "append",
+        "department_id": "dept_retail",
+        "idempotency_key": f"solution-apply-append-{uuid.uuid4().hex[:6]}",
+    }
+    append_status, append_body = _post(
+        f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+        append_payload,
+    )
+    assert append_status == 201, append_body
+    previous_employee_id = append_body["created_employee_ids"][0]
+
+    reapply_payload = {
+        "mode": "reapply",
+        "department_id": "dept_retail",
+        "idempotency_key": f"solution-apply-reapply-{uuid.uuid4().hex[:6]}",
+    }
+    reapply_status, reapply_body = _post(
+        f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+        reapply_payload,
+    )
+    assert reapply_status == 201, reapply_body
+    reapplied_employee_id = reapply_body["created_employee_ids"][0]
+    assert reapplied_employee_id != previous_employee_id
+    assert reapply_body["mode"] == "reapply"
+
+    with UnitOfWork(db_conn) as uow:
+        previous_employee = uow.employees().get_by_id(previous_employee_id)
+        reapplied_employee = uow.employees().get_by_id(reapplied_employee_id)
+        previous_bindings = uow.employee_knowledge_bindings().list_by_employee(previous_employee_id)
+        reapplied_bindings = uow.employee_knowledge_bindings().list_by_employee(reapplied_employee_id)
+        apply_records = uow.solution_apply_records().list_by_solution(seeded_enterprise["solution_id"])
+
+        assert previous_employee is not None
+        assert previous_employee.status == "active"
+        assert reapplied_employee is not None
+        assert reapplied_employee.status == "active"
+        assert len(previous_bindings) == 1
+        assert len(reapplied_bindings) == 1
+        latest_record = next(record for record in apply_records if record.id == reapply_body["apply_record_id"])
+        assert latest_record.mode == "reapply"

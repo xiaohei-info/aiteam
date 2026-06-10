@@ -100,7 +100,7 @@ EXPECTED_ADMIN_PREFIXES = [
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
     ("admin-skills.js",    ["/api/team/skills/catalog", "/api/team/skills/installs"]),
     ("admin-solutions.js", ["/api/team/solutions", "/api/team/solutions/"]),
-    ("admin-settings.js",  ["/api/team/settings", "/api/team/settings/admin-invites"]),
+    ("admin-settings.js",  ["/api/team/settings", "/api/enterprise-admin/invites"]),
     ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
 ]
 

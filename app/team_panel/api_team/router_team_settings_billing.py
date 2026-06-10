@@ -178,6 +178,23 @@ def _fetch_admin_invites(cur, enterprise_id: str) -> list[dict]:
     ]
 
 
+def handle_get_admin_invites(conn, path: str) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        enterprise, error = _ensure_enterprise(cur)
+        if error is not None:
+            return error
+        assert enterprise is not None
+        items = _fetch_admin_invites(cur, enterprise.id)
+        return 200, {
+            "enterprise_id": enterprise.id,
+            "items": items,
+            "total": len(items),
+        }
+    finally:
+        cur.close()
+
+
 def _fetch_admin_members(cur, enterprise_id: str) -> list[dict]:
     cur.execute(
         """

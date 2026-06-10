@@ -1564,10 +1564,33 @@ def _next_solution_profile_name(cur, enterprise_id: str, enterprise_slug: str, s
 
 def _extract_template_knowledge_bases(template: AgentTemplate) -> list[str]:
     bindings = _load_payload(template.default_binding_json)
-    knowledge_bases = bindings.get("knowledge_bases") if isinstance(bindings, dict) else []
-    if not isinstance(knowledge_bases, list):
+    if not isinstance(bindings, dict):
         return []
-    return [str(kb_id) for kb_id in knowledge_bases if kb_id]
+
+    knowledge_ids: list[str] = []
+    seen: set[str] = set()
+
+    binding_items = bindings.get("knowledge_bindings")
+    if isinstance(binding_items, list):
+        for item in binding_items:
+            if not isinstance(item, dict):
+                continue
+            knowledge_id = str(item.get("knowledge_id") or "").strip()
+            if not knowledge_id or knowledge_id in seen:
+                continue
+            seen.add(knowledge_id)
+            knowledge_ids.append(knowledge_id)
+
+    legacy_items = bindings.get("knowledge_bases")
+    if isinstance(legacy_items, list):
+        for item in legacy_items:
+            knowledge_id = str(item or "").strip()
+            if not knowledge_id or knowledge_id in seen:
+                continue
+            seen.add(knowledge_id)
+            knowledge_ids.append(knowledge_id)
+
+    return knowledge_ids
 
 
 def _resolve_solution_template(cur, solution_id: str) -> tuple[AgentTemplate | None, tuple[int, dict] | None]:
@@ -1611,7 +1634,6 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
     mode = str(body.get("mode") or "append")
     if mode not in ("append", "replace", "reapply"):
         return 400, {"error": "UNSUPPORTED_MODE", "message": f"Mode '{mode}' is not supported; use append, replace, or reapply"}
-    write_mode = "append" if mode in ("replace", "reapply") else mode
 
     apply_key = f"solution_apply:{solution_id}:{idempotency_key}"
     cur = conn.cursor()
@@ -1633,16 +1655,47 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
         if existing_record is not None:
             return 200, {
                 "apply_record_id": existing_record.id,
+                "mode": existing_record.mode,
                 "status": existing_record.status,
                 "created_employee_ids": _load_json_list(existing_record.created_employee_ids_json),
                 "created_knowledge_base_ids": _load_json_list(existing_record.created_knowledge_base_ids_json),
             }
+
+        previous_records = [
+            record
+            for record in record_repo.list_by_solution(solution_id)
+            if record.enterprise_id == enterprise.id and record.status == "succeeded"
+        ]
+        previous_employee_ids: list[str] = []
+        seen_employee_ids: set[str] = set()
+        for record in previous_records:
+            for previous_employee_id in _load_json_list(record.created_employee_ids_json):
+                if previous_employee_id in seen_employee_ids:
+                    continue
+                seen_employee_ids.add(previous_employee_id)
+                previous_employee_ids.append(previous_employee_id)
 
         knowledge_base_ids = _extract_template_knowledge_bases(template)
         employee_id = f"emp_{uuid.uuid4().hex[:12]}"
         apply_record_id = f"sol_apply_{uuid.uuid4().hex[:8]}"
         display_name = template.role_name or template.name or "Solution Employee"
         profile_name = _next_solution_profile_name(cur, enterprise.id, enterprise.slug, solution_id, display_name)
+        replaced_employee_ids: list[str] = []
+
+        employee_repo = EmployeeRepo(cur)
+        kb_repo = EmployeeKnowledgeBindingRepo(cur)
+        if mode == "replace":
+            for previous_employee_id in previous_employee_ids:
+                previous_employee = employee_repo.get_by_id(previous_employee_id)
+                if previous_employee is None or previous_employee.enterprise_id != enterprise.id:
+                    continue
+                if previous_employee.status != EmployeeStatus.ARCHIVED:
+                    previous_employee.archive("solution replaced")
+                    previous_employee.updated_by = "solution_apply"
+                    employee_repo.update_status(previous_employee)
+                for binding in kb_repo.list_by_employee(previous_employee_id):
+                    kb_repo.delete(binding.id)
+                replaced_employee_ids.append(previous_employee_id)
 
         record_repo.create(
             SolutionApplyRecord(
@@ -1650,7 +1703,7 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 enterprise_id=enterprise.id,
                 solution_id=solution_id,
                 idempotency_key=idempotency_key,
-                mode=write_mode,
+                mode=mode,
                 status="succeeded",
                 requested_by="solution_apply",
                 department_id=str(body.get("department_id") or "") or None,
@@ -1660,7 +1713,7 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 updated_by="solution_apply",
             )
         )
-        EmployeeRepo(cur).create(
+        employee_repo.create(
             Employee(
                 id=employee_id,
                 enterprise_id=enterprise.id,
@@ -1674,7 +1727,6 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 updated_by="solution_apply",
             )
         )
-        kb_repo = EmployeeKnowledgeBindingRepo(cur)
         for knowledge_base_id in knowledge_base_ids:
             kb_repo.create(
                 EmployeeKnowledgeBinding(
@@ -1704,6 +1756,8 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                         "mode": mode,
                         "department_id": body.get("department_id"),
                         "template_id": template.id,
+                        "replaced_employee_ids": replaced_employee_ids,
+                        "reapplied_from_employee_ids": previous_employee_ids if mode == "reapply" else [],
                         "created_employee_ids": [employee_id],
                         "created_knowledge_base_ids": knowledge_base_ids,
                         "apply_record_id": apply_record_id,
@@ -1716,7 +1770,10 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
         conn.commit()
         return 201, {
             "apply_record_id": apply_record_id,
+            "mode": mode,
             "status": "succeeded",
+            "replaced_employee_ids": replaced_employee_ids,
+            "reapplied_from_employee_ids": previous_employee_ids if mode == "reapply" else [],
             "created_employee_ids": [employee_id],
             "created_knowledge_base_ids": knowledge_base_ids,
         }

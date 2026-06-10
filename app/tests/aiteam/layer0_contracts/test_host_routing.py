@@ -222,6 +222,7 @@ def test_enterprise_admin_known_namespace_routes_return_real_json():
     for path in [
         "/api/enterprise-admin/employees?role=owner",
         "/api/enterprise-admin/billing/usage?role=owner",
+        "/api/enterprise-admin/invites?role=owner",
     ]:
         status, body = _get(path)
         assert status != 501, f"GET {path}: should not be 501 stub, got {status}: {body}"
@@ -301,8 +302,26 @@ def test_system_admin_unknown_namespace_still_returns_501_json():
         assert body.get("error") == "not_implemented"
 
 
-def test_enterprise_admin_namespace_post_returns_501_json():
-    """POST /api/enterprise-admin/* must also return 501 JSON."""
+def test_enterprise_admin_invites_post_returns_real_json():
+    payload = {
+        "phone": "13900003333",
+        "role": "enterprise_admin",
+        "permissions": {"employees": True},
+        "idempotency_key": "enterprise-admin-invite-001",
+    }
+    status, body = _post("/api/enterprise-admin/invites", payload)
+    assert status != 501, body
+    assert body.get("error") != "not_implemented"
+
+
+def test_enterprise_admin_invites_delete_returns_real_json():
+    delete_status, delete_body = _delete("/api/enterprise-admin/invites/invite_probe")
+    assert delete_status != 501, delete_body
+    assert delete_body.get("error") != "not_implemented"
+
+
+def test_enterprise_admin_unknown_post_still_returns_501_json():
+    """Unknown POST /api/enterprise-admin/* must still return 501 JSON."""
     status, body = _post("/api/enterprise-admin/members", {})
     assert status == 501
     assert body.get("error") == "not_implemented"
