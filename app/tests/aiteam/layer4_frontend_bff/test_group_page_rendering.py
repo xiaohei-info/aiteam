@@ -215,6 +215,103 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     return json.loads(completed.stdout)
 
 
+def _run_group_launcher_with_noncanonical_ids_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
+const apiCalls = [];
+function makeNode(initialValue = '') {{
+  return {{
+    value: initialValue,
+    checked: false,
+    listeners: {{}},
+    textContent: '',
+    innerHTML: '',
+    disabled: false,
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatch(type) {{
+      if (this.listeners[type]) this.listeners[type].call(this, {{ currentTarget: this, preventDefault() {{}} }});
+    }},
+  }};
+}}
+const titleInput = makeNode('真实成员ID群');
+const createButton = makeNode();
+const statusNode = makeNode();
+const memberInputs = {{
+  emp_alpha: Object.assign(makeNode(''), {{ checked: false, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_alpha' : null; }} }}),
+  emp_beta: Object.assign(makeNode(''), {{ checked: false, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_beta' : null; }} }}),
+  emp_gamma: Object.assign(makeNode(''), {{ checked: false, getAttribute(name) {{ return name === 'data-group-create-member' ? 'emp_gamma' : null; }} }}),
+}};
+const employees = [
+  {{ employee_id: 'emp_alpha', display_name: 'Alpha', role_name: '产品经理', status: 'active' }},
+  {{ employee_id: 'emp_beta', display_name: 'Beta', role_name: '工程师', status: 'active' }},
+  {{ employee_id: 'emp_gamma', display_name: 'Gamma', role_name: '研究员', status: 'active' }},
+];
+const container = {{
+  innerHTML: '',
+  querySelector(selector) {{
+    if (selector === '[data-group-create-title]') return titleInput;
+    if (selector === '[data-group-create-launch]') return createButton;
+    if (selector === '[data-group-create-status]') return statusNode;
+    return null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-group-create-member]') return [memberInputs.emp_alpha, memberInputs.emp_beta, memberInputs.emp_gamma];
+    return [];
+  }},
+}};
+global.window = {{
+  location: {{ pathname: '/app/group', href: 'http://example.test/app/group' }},
+  localStorage: {{ getItem() {{ return ''; }}, setItem() {{}}, removeItem() {{}} }},
+  aiteam: {{
+    util: {{ escapeHtml(value) {{ return String(value == null ? '' : value); }} }},
+    states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
+    timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
+    api: {{
+      getEmployees() {{
+        apiCalls.push({{ method: 'GET', path: '/api/team/employees' }});
+        return Promise.resolve({{ ok: true, data: {{ items: employees }} }});
+      }},
+      createGroupConversation(body) {{
+        apiCalls.push({{ method: 'POST', path: '/api/team/group-conversations', body }});
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_real_ids' }} }});
+      }},
+      getGroupConversation() {{
+        return Promise.resolve({{ ok: true, data: {{ conversation_id: 'group_real_ids', title: '真实成员ID群', members: [] }} }});
+      }},
+      getRunEvents() {{
+        return Promise.resolve({{ ok: true, data: {{ items: [], next_cursor: 0, latest_event_cursor: 0, run_status: 'idle' }} }});
+      }},
+    }},
+    pages: {{}},
+  }},
+}};
+global.document = {{ baseURI: 'http://example.test/app/group' }};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
+aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
+  const launcherHtml = container.innerHTML;
+  titleInput.value = '真实成员ID群';
+  titleInput.dispatch('input');
+  createButton.dispatch('click');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  console.log(JSON.stringify({{
+    launcherHtml,
+    createDisabled: createButton.disabled,
+    statusText: statusNode.textContent,
+    apiCalls,
+  }}));
+}}).catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_group_launcher_member_limit_flow() -> dict:
     script = f"""
 const fs = require('fs');
@@ -1007,6 +1104,17 @@ def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None
     assert "已选成员：Bob、Cara" in payload["updatedLauncherHtml"]
     assert "新品启动群" in payload["html"]
     assert "成员管理" in payload["html"]
+
+
+def test_group_page_launcher_defaults_to_first_two_real_employee_ids() -> None:
+    payload = _run_group_launcher_with_noncanonical_ids_flow()
+    assert "已选成员：Alpha、Beta" in payload["launcherHtml"]
+    assert payload["createDisabled"] is False
+    assert payload["statusText"] == "正在创建群聊..."
+    assert payload["apiCalls"][1]["body"] == {
+        "title": "真实成员ID群",
+        "member_employee_ids": ["emp_alpha", "emp_beta"],
+    }
 
 
 def test_group_page_launcher_enforces_ten_member_cap_with_visible_feedback() -> None:

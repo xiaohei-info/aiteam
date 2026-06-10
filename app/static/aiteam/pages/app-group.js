@@ -305,7 +305,7 @@ window.aiteam = window.aiteam || {};
     var launcherState = {
       title: '新建群聊',
       employeeItems: [],
-      selectedEmployeeIds: ['emp_test', 'emp_member'],
+      selectedEmployeeIds: [],
       limitMessage: '',
     };
 
