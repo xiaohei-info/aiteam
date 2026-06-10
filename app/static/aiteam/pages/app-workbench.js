@@ -157,7 +157,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-workbench__context-menu" data-workbench-context-menu="' + escapeHtml(employee.employee_id || '') + '">' +
       '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '">查看详情</a>' +
-      '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '?focus=star">设置为星标</a>' +
+      '<button type="button" class="aiteam-workbench__employee-link" data-workbench-toggle-star="' + escapeHtml(employee.employee_id || '') + '" data-workbench-starred-state="' + (starred ? '1' : '0') + '">' + (starred ? '取消星标' : '设置为星标') + '</button>' +
       '<a class="aiteam-workbench__employee-link" href="/admin/employees/' + encodeURIComponent(employee.employee_id || '') + '?action=dismiss">解雇</a>' +
       '</div>' +
       '</div>';
@@ -229,7 +229,62 @@ window.aiteam = window.aiteam || {};
     }).join('');
   }
 
-  function renderEmptyShell(enterpriseName) {
+  function getEmployeeRecord(data, employeeId) {
+    var employees = Array.isArray(data && data.employees) ? data.employees : [];
+    for (var i = 0; i < employees.length; i += 1) {
+      if (String(employees[i] && employees[i].employee_id || '') === String(employeeId || '')) {
+        return employees[i];
+      }
+    }
+    return null;
+  }
+
+  function syncConversationUnread(data, conversationId, unreadCount) {
+    var employees = Array.isArray(data && data.employees) ? data.employees : [];
+    for (var i = 0; i < employees.length; i += 1) {
+      if (String(employees[i] && employees[i].conversation_id || '') === String(conversationId || '')) {
+        employees[i].unread_count = unreadCount;
+      }
+    }
+    var recentConversations = Array.isArray(data && data.recent_conversations) ? data.recent_conversations : [];
+    for (var j = 0; j < recentConversations.length; j += 1) {
+      var item = recentConversations[j] || {};
+      if (String(item.id || item.conversation_id || '') === String(conversationId || '')) {
+        item.unread_count = unreadCount;
+      }
+    }
+    var groups = Array.isArray(data && data.groups) ? data.groups : [];
+    for (var k = 0; k < groups.length; k += 1) {
+      if (String(groups[k] && groups[k].conversation_id || '') === String(conversationId || '')) {
+        groups[k].unread_count = unreadCount;
+      }
+    }
+  }
+
+  function syncEmployeeStarState(data, employeeId, isStarred) {
+    var employee = getEmployeeRecord(data, employeeId);
+    if (!employee) return;
+    employee.is_starred = !!isStarred;
+    employee.pinned = !!isStarred;
+  }
+
+  function persistWorkbenchState(payload, onSuccess) {
+    if (!ns.api || typeof ns.api.updateWorkbenchState !== 'function') return;
+    ns.api.updateWorkbenchState(payload).then(function (result) {
+      if (!result || !result.ok) return;
+      if (typeof onSuccess === 'function') onSuccess(result.data || {});
+    });
+  }
+
+  function renderEmptyShell(enterpriseName, emptyState) {
+    var state = emptyState || {};
+    var title = stringValue(state.title, '暂无数字员工');
+    var message = stringValue(state.message, '前往人才市场招募');
+    var ctaLabel = stringValue(state.cta_label, '前往人才市场');
+    var ctaTarget = stringValue(state.cta_target, '/app/marketplace');
+    var heroDesc = state.code === 'NO_ENTERPRISE'
+      ? '完成企业入驻后再开始使用，或先前往人才市场了解可招募成员。'
+      : '从左侧选择员工开始对话，或前往人才市场招募你的第一个数字员工。';
     return '' +
       '<section class="aiteam-workbench" data-workbench-shell="1">' +
       renderRail() +
@@ -240,19 +295,19 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-workbench__empty" data-workbench-empty="1">' +
       '<div class="aiteam-workbench__empty-icon">🤖</div>' +
-      '<strong>暂无数字员工</strong>' +
-      '<p>前往人才市场招募</p>' +
-      '<a class="aiteam-button" href="/app/marketplace">前往人才市场</a>' +
+      '<strong>' + escapeHtml(title) + '</strong>' +
+      '<p>' + escapeHtml(message) + '</p>' +
+      '<a class="aiteam-button" href="' + escapeHtml(ctaTarget) + '">' + escapeHtml(ctaLabel) + '</a>' +
       '</div>' +
       '</aside>' +
       '<section class="aiteam-workbench__main" data-workbench-main="1">' +
       '<div class="aiteam-workbench__hero">' +
       '<div>' +
       '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterpriseName || '企业工作台') + '</h1>' +
-      '<p class="aiteam-workbench__hero-desc">从左侧选择员工开始对话，或前往人才市场招募你的第一个数字员工。</p>' +
+      '<p class="aiteam-workbench__hero-desc">' + escapeHtml(heroDesc) + '</p>' +
       '</div>' +
       '<div class="aiteam-hero-actions">' +
-      '<a class="aiteam-button" href="/app/marketplace">+ 前往人才市场</a>' +
+      '<a class="aiteam-button" href="' + escapeHtml(ctaTarget) + '">' + escapeHtml(ctaLabel === '前往人才市场' ? '+ 前往人才市场' : ctaLabel) + '</a>' +
       '<a class="aiteam-button aiteam-button--ghost" href="/app/org">查看组织架构</a>' +
       '</div>' +
       '</div>' +
@@ -388,7 +443,7 @@ window.aiteam = window.aiteam || {};
     var enterprise = data.enterprise || {};
 
     if (!employees.length) {
-      container.innerHTML = renderEmptyShell(enterprise.name || '企业工作台');
+      container.innerHTML = renderEmptyShell(enterprise.name || '企业工作台', data.empty_state || null);
       return;
     }
 
@@ -443,8 +498,35 @@ window.aiteam = window.aiteam || {};
     for (var i = 0; i < buttons.length; i += 1) {
       buttons[i].addEventListener('click', function () {
         state.selectedEmployeeId = this.getAttribute('data-select-employee') || '';
+        var employee = getEmployeeRecord(data, state.selectedEmployeeId);
         renderWorkbench(container, data, state);
         bindEvents(container, data, state);
+        if (employee && employee.conversation_id && Number(employee.unread_count) > 0) {
+          persistWorkbenchState(
+            { conversation_id: employee.conversation_id, mark_read: true },
+            function () {
+              syncConversationUnread(data, employee.conversation_id, 0);
+              renderWorkbench(container, data, state);
+              bindEvents(container, data, state);
+            }
+          );
+        }
+      });
+    }
+
+    var starButtons = container.querySelectorAll('[data-workbench-toggle-star]');
+    for (var j = 0; j < starButtons.length; j += 1) {
+      starButtons[j].addEventListener('click', function () {
+        var employeeId = this.getAttribute('data-workbench-toggle-star') || '';
+        var currentState = this.getAttribute('data-workbench-starred-state') === '1';
+        persistWorkbenchState(
+          { employee_id: employeeId, is_starred: !currentState },
+          function () {
+            syncEmployeeStarState(data, employeeId, !currentState);
+            renderWorkbench(container, data, state);
+            bindEvents(container, data, state);
+          }
+        );
       });
     }
   }

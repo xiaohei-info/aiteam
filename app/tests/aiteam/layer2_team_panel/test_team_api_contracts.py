@@ -144,8 +144,73 @@ class TestWorkbench:
         employees = body["employees"]
         assert len(employees) >= 1
         emp = employees[0]
-        for key in ("employee_id", "display_name", "role_name", "status", "presence"):
+        for key in ("employee_id", "display_name", "role_name", "status", "presence", "unread_count", "last_active_at", "is_starred"):
             assert key in emp, f"Missing {key} in employee: {emp}"
+
+    def test_workbench_groups_match_frontend_contract_shape(self, uow, clean_tables_with_enterprise):
+        from team_panel.application.commands.conversation_service import create_group_conversation, submit_group_message
+
+        with uow:
+            conv_id = create_group_conversation(
+                uow,
+                "ent_test",
+                "Ops Sync",
+                ["emp_test", "emp_member", "emp_planner"],
+                "user_test",
+            )
+            submit_group_message(
+                uow,
+                conv_id,
+                "协作组同步一下最新排期",
+                "orchestration",
+                "workbench-group-contract-001",
+                "emp_test",
+            )
+
+        status, body = _get("/api/team/workbench")
+        assert status == 200, body
+        group = next(item for item in body["groups"] if item["conversation_id"] == conv_id)
+        for key in ("conversation_id", "title", "member_count", "running_count", "last_message_preview"):
+            assert key in group, f"Missing {key} in group: {group}"
+
+    def test_workbench_state_post_updates_starred_and_read_state(self, seeded_enterprise):
+        create_status, created = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message_text": "请整理本周任务摘要",
+                "idempotency_key": "idem_workbench_state_read_001",
+            },
+        )
+        assert create_status == 201, created
+
+        before_status, before = _get("/api/team/workbench?actor_id=user_test")
+        assert before_status == 200, before
+        employee = next(item for item in before["employees"] if item["employee_id"] == seeded_enterprise["employee_id"])
+        assert employee["is_starred"] is False
+        assert employee["unread_count"] >= 1
+
+        update_status, update = _post(
+            "/api/team/workbench/state?actor_id=user_test",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "is_starred": True,
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "mark_read": True,
+            },
+        )
+        assert update_status == 200, update
+        assert update["employee_id"] == seeded_enterprise["employee_id"]
+        assert update["is_starred"] is True
+        assert update["conversation_id"] == seeded_enterprise["conversation_id"]
+        assert update["unread_count"] == 0
+
+        after_status, after = _get("/api/team/workbench?actor_id=user_test")
+        assert after_status == 200, after
+        employee = next(item for item in after["employees"] if item["employee_id"] == seeded_enterprise["employee_id"])
+        assert employee["is_starred"] is True
+        assert employee["unread_count"] == 0
 
     def test_workbench_exposes_navigation_permissions_and_task_digest(self, seeded_enterprise):
         _, body = _get("/api/team/workbench")
@@ -177,6 +242,15 @@ class TestWorkbench:
         _, body = _get("/api/team/workbench")
         assert body["navigation"]["org"]["target"] == "/app/org"
         assert body["permissions"]["can_view_admin"] is True
+
+    def test_workbench_without_enterprise_returns_distinct_empty_state(self, clean_tables):
+        status, body = _get("/api/team/workbench")
+        assert status == 200, body
+        assert body["enterprise"] is None
+        assert body["employees"] == []
+        assert body["empty_state"]["code"] == "NO_ENTERPRISE"
+        assert body["empty_state"]["title"] == "还没有企业空间"
+        assert body["empty_state"]["message"] == "当前还没有可用的企业工作台。"
 
 
 class TestTalentMarketTemplates:
@@ -211,6 +285,93 @@ class TestTalentMarketTemplates:
         assert "items" in body
         assert body["items"][0]["template_id"] == seeded_enterprise["template_id"]
 
+    def test_templates_support_keyword_category_sort_and_pagination(self, seeded_enterprise, db_conn):
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)",
+                (
+                    "tpl_finance_v1",
+                    "Finance Advisor",
+                    "finance",
+                    "财务分析",
+                    "published",
+                    json.dumps(
+                        {
+                            "description": "擅长预算、核算与报表复盘",
+                            "tags": ["财务", "预算"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    json.dumps({"provider": "openai", "model": "gpt-4.1-mini"}, ensure_ascii=False),
+                    json.dumps({"skills": ["forecasting"]}, ensure_ascii=False),
+                    1,
+                    "system",
+                ),
+            )
+            cur.execute(
+                "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)",
+                (
+                    "tpl_ops_v1",
+                    "Ops Planner",
+                    "operations",
+                    "运营增长",
+                    "published",
+                    json.dumps(
+                        {
+                            "description": "擅长 SOP、排期与协作推进",
+                            "tags": ["运营", "协作"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    json.dumps({"provider": "anthropic", "model": "claude-3.7-sonnet"}, ensure_ascii=False),
+                    json.dumps({"skills": ["reporting"]}, ensure_ascii=False),
+                    1,
+                    "system",
+                ),
+            )
+            cur.execute(
+                "INSERT INTO recruitment_order (id, enterprise_id, template_id, status, requested_by, created_employee_id, error_code, error_message, idempotency_key) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    "ord_finance_hot",
+                    seeded_enterprise["enterprise_id"],
+                    "tpl_finance_v1",
+                    "succeeded",
+                    "user_test",
+                    seeded_enterprise["employee_id"],
+                    None,
+                    None,
+                    str(uuid.uuid4()),
+                ),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get("/api/team/talent-market/templates?q=预算&category=finance&sort_by=popularity&page=1&page_size=1")
+        assert status == 200, body
+        assert body["total"] == 1
+        assert body["page"] == 1
+        assert body["page_size"] == 1
+        assert body["has_more"] is False
+        assert body["sort_by"] == "popularity"
+        assert body["sort_order"] == "desc"
+        assert [item["template_id"] for item in body["items"]] == ["tpl_finance_v1"]
+        assert body["items"][0]["tags"] == ["财务", "预算"]
+
+        status, body = _get("/api/team/talent-market/templates?tag=协作")
+        assert status == 200, body
+        assert [item["template_id"] for item in body["items"]] == ["tpl_ops_v1"]
+
+    def test_template_list_uses_prompt_pack_tags_instead_of_category_only(self, seeded_enterprise):
+        status, body = _get("/api/team/talent-market/templates")
+        assert status == 200, body
+        template = next(item for item in body["items"] if item["template_id"] == seeded_enterprise["template_id"])
+        assert template["tags"] == ["营销", "策略"]
+
 
 class TestTalentTemplateDetail:
     """S06-T03: GET /api/team/talent-market/templates/{id}."""
@@ -237,6 +398,7 @@ class TestTalentTemplateDetail:
         assert body["connector_requirements"] == [{"connector_type": "web_search", "required": False}]
         assert body["default_memory_config"]["max_tokens"] == 8000
         assert body["price_tier"] == "standard"
+        assert body["tags"] == ["营销", "策略"]
 
     def test_admin_template_alias_returns_same_detail_shape(self, seeded_enterprise):
         tpl_id = seeded_enterprise["template_id"]

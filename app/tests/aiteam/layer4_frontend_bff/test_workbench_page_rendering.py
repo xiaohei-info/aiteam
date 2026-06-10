@@ -192,6 +192,102 @@ console.log(JSON.stringify({{ initialHtml, filteredHtml }}));
     return json.loads(completed.stdout)
 
 
+def _run_workbench_state_interaction(payload: dict, *, select_employee_id: str = "", toggle_star_employee_id: str = "") -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(WORKBENCH_MODULE_PATH))}, 'utf8');
+
+function makeButton(attrs) {{
+  return {{
+    attrs,
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    getAttribute(name) {{ return this.attrs[name] || null; }},
+    click() {{ if (this.listeners.click) this.listeners.click.call(this, {{ currentTarget: this, preventDefault() {{}} }}); }},
+  }};
+}}
+
+const stateCalls = [];
+let employeeButtons = [];
+let starButtons = [];
+const container = {{
+  _html: '',
+  get innerHTML() {{
+    return this._html;
+  }},
+  set innerHTML(value) {{
+    this._html = String(value || '');
+    const employeeMatches = [...this._html.matchAll(/data-select-employee="([^"]+)"/g)];
+    employeeButtons = employeeMatches.map((match) => makeButton({{ 'data-select-employee': match[1] }}));
+    const starMatches = [...this._html.matchAll(/data-workbench-toggle-star="([^"]+)"[^>]*data-workbench-starred-state="([^"]+)"/g)];
+    starButtons = starMatches.map((match) => makeButton({{
+      'data-workbench-toggle-star': match[1],
+      'data-workbench-starred-state': match[2],
+    }}));
+  }},
+  querySelector() {{ return null; }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-select-employee]') return employeeButtons;
+    if (selector === '[data-workbench-toggle-star]') return starButtons;
+    return [];
+  }},
+}};
+
+global.window = {{
+  location: {{ search: '' }},
+  aiteam: {{
+    util: {{
+      escapeHtml(value) {{
+        return String(value == null ? '' : value);
+      }},
+    }},
+    api: {{
+      updateWorkbenchState(payload) {{
+        stateCalls.push(payload);
+        return Promise.resolve({{ ok: true, data: payload }});
+      }},
+    }},
+    pages: {{}},
+    states: {{
+      renderEmpty(container, message, actionHtml) {{
+        container.innerHTML = '<div data-state-empty="1"><p>' + message + '</p>' + (actionHtml || '') + '</div>';
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'app-workbench.js' }});
+
+(async () => {{
+  aiteam.pages.appWorkbench.render(container, {json.dumps(payload, ensure_ascii=False)});
+  const initialHtml = container.innerHTML;
+  if ({json.dumps(select_employee_id)}) {{
+    const target = employeeButtons.find((item) => item.getAttribute('data-select-employee') === {json.dumps(select_employee_id)});
+    if (target) target.click();
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+  if ({json.dumps(toggle_star_employee_id)}) {{
+    const targetStar = starButtons.find((item) => item.getAttribute('data-workbench-toggle-star') === {json.dumps(toggle_star_employee_id)});
+    if (targetStar) targetStar.click();
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{ initialHtml, finalHtml: container.innerHTML, stateCalls }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_workbench_empty_state_uses_prd_split_shell_instead_of_generic_empty_state() -> None:
     result = _run_workbench(
         {
@@ -209,6 +305,28 @@ def test_workbench_empty_state_uses_prd_split_shell_instead_of_generic_empty_sta
     assert "前往人才市场" in result["html"]
     assert "从左侧选择员工开始对话" in result["html"]
     assert "data-state-empty" not in result["html"]
+
+
+def test_workbench_empty_state_prefers_backend_empty_state_copy() -> None:
+    result = _run_workbench(
+        {
+            "enterprise": None,
+            "employees": [],
+            "groups": [],
+            "office_digest": {"online_employee_count": 0, "running_task_count": 0},
+            "empty_state": {
+                "code": "NO_ENTERPRISE",
+                "title": "还没有企业空间",
+                "message": "当前还没有可用的企业工作台。",
+                "cta_label": "前往人才市场",
+                "cta_target": "/app/marketplace",
+            },
+        }
+    )
+    assert "还没有企业空间" in result["html"]
+    assert "当前还没有可用的企业工作台。" in result["html"]
+    assert "暂无数字员工" not in result["html"]
+    assert "从左侧选择员工开始对话" not in result["html"]
 
 
 def test_workbench_populated_state_renders_search_employee_list_and_main_stage() -> None:
@@ -487,6 +605,48 @@ def test_workbench_search_with_no_match_clears_selected_employee_panel() -> None
     assert "当前选中员工" in result["initialHtml"]
     assert "当前筛选下没有匹配员工" in result["filteredHtml"]
     assert "当前选中员工" not in result["filteredHtml"]
+
+
+def test_workbench_select_employee_marks_read_and_toggle_star_persists_state() -> None:
+    result = _run_workbench_state_interaction(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                    "last_active_at": "2026-06-10T08:00:00Z",
+                    "is_starred": False,
+                },
+                {
+                    "employee_id": "emp_nova",
+                    "display_name": "Nova",
+                    "role_name": "数据科学家",
+                    "status": "active",
+                    "presence": "online",
+                    "conversation_id": "conv_nova",
+                    "last_message_preview": "等待新的分析任务",
+                    "unread_count": 0,
+                    "last_active_at": "2026-06-10T07:00:00Z",
+                    "is_starred": False,
+                },
+            ],
+            "groups": [],
+            "office_digest": {"online_employee_count": 2, "running_task_count": 1},
+        },
+        select_employee_id="emp_rex",
+        toggle_star_employee_id="emp_nova",
+    )
+    assert result["stateCalls"][0] == {"conversation_id": "conv_rex", "mark_read": True}
+    assert result["stateCalls"][1] == {"employee_id": "emp_nova", "is_starred": True}
+    assert 'aiteam-workbench__unread">2<' not in result["finalHtml"]
+    assert result["finalHtml"].index("Nova") < result["finalHtml"].index("Rex")
 
 
 def test_workbench_init_keeps_prd_shell_when_permission_denied() -> None:

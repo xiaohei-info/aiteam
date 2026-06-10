@@ -41,6 +41,8 @@ from ..domain.entities import (
     RunEvent,
     SolutionApplyRecord,
     TeamRun,
+    ConversationReadState,
+    WorkbenchEmployeePreference,
 )
 from ..domain.enums import EmployeeStatus
 from ..repositories.agent_template_repo import AgentTemplateRepo
@@ -70,6 +72,7 @@ from ..repositories.runtime_binding_repo import RuntimeBindingRepo
 from ..repositories.scheduled_job_repo import ScheduledJobRepo
 from ..repositories.team_task_repo import TeamTaskRepo
 from ..repositories.team_run_repo import TeamRunRepo
+from ..repositories.workbench_state_repo import ConversationReadStateRepo, WorkbenchEmployeePreferenceRepo
 from ..transactions.uow import UnitOfWork
 from ..application.commands.conversation_service import (
     add_group_member,
@@ -1077,6 +1080,15 @@ def _resolve_workbench_role(request_context: dict | None = None) -> str:
     return "member"
 
 
+def _resolve_workbench_user_id(enterprise: Enterprise | None, query: str, body: dict | None = None) -> str:
+    actor_id = _request_actor_id(query, body)
+    if actor_id and actor_id != "governance_api":
+        return actor_id
+    if enterprise is not None and enterprise.owner_user_id:
+        return str(enterprise.owner_user_id)
+    return "owner"
+
+
 def _handle_workbench(conn, path: str, query: str, request_context: dict | None = None) -> tuple[int, dict]:
     with UnitOfWork(conn) as uow:
         enterprise = next(iter(uow.enterprises().list_all()), None)
@@ -1127,10 +1139,80 @@ def _handle_workbench(conn, path: str, query: str, request_context: dict | None 
             }
 
         try:
-            view = get_workbench_view(uow, enterprise.id, role=_resolve_workbench_role(request_context))
+            view = get_workbench_view(
+                uow,
+                enterprise.id,
+                role=_resolve_workbench_role(request_context),
+                user_id=_resolve_workbench_user_id(enterprise, query),
+            )
         except WorkbenchAccessError:
             return 403, _workbench_error("PERMISSION_DENIED", "当前账号没有查看工作台的权限")
         return 200, serialize_workbench_view(view, enterprise_name=enterprise.name)
+
+
+def _handle_workbench_state_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    employee_id = str(body.get("employee_id") or "").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    is_starred = body.get("is_starred")
+    mark_read = bool(body.get("mark_read"))
+    if not employee_id and not conversation_id:
+        return 400, {"error": "MISSING_TARGET", "message": "employee_id or conversation_id is required"}
+    if employee_id and not isinstance(is_starred, bool) and not conversation_id:
+        return 400, {"error": "INVALID_STARRED", "message": "is_starred must be a boolean when employee_id is provided"}
+
+    with UnitOfWork(conn) as uow:
+        enterprise = next(iter(uow.enterprises().list_all()), None)
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        user_id = _resolve_workbench_user_id(enterprise, query, body)
+        response: dict[str, object] = {
+            "enterprise_id": enterprise.id,
+            "user_id": user_id,
+        }
+
+        if employee_id:
+            employee = uow.employees().get_by_id(employee_id)
+            if employee is None or employee.enterprise_id != enterprise.id:
+                return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {employee_id} not found"}
+            if not isinstance(is_starred, bool):
+                return 400, {"error": "INVALID_STARRED", "message": "is_starred must be a boolean"}
+            uow.workbench_employee_preferences().upsert_starred(
+                WorkbenchEmployeePreference(
+                    enterprise_id=enterprise.id,
+                    user_id=user_id,
+                    employee_id=employee_id,
+                    is_starred=is_starred,
+                    created_by=user_id,
+                    updated_by=user_id,
+                )
+            )
+            response["employee_id"] = employee_id
+            response["is_starred"] = is_starred
+
+        if conversation_id:
+            conversation = uow.conversations().get_by_id(conversation_id)
+            if conversation is None or conversation.enterprise_id != enterprise.id:
+                return 404, {"error": "CONVERSATION_NOT_FOUND", "message": f"Conversation {conversation_id} not found"}
+            if not mark_read:
+                return 400, {"error": "INVALID_READ_STATE", "message": "mark_read must be true when conversation_id is provided"}
+            uow.conversation_read_states().upsert_read_state(
+                ConversationReadState(
+                    enterprise_id=enterprise.id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    last_read_message_id=conversation.latest_message_id,
+                    last_read_at=conversation.last_message_at or _today_iso(),
+                    created_by=user_id,
+                    updated_by=user_id,
+                )
+            )
+            response["conversation_id"] = conversation_id
+            response["mark_read"] = True
+            response["unread_count"] = 0
+
+        return 200, response
 
 
 def _current_enterprise_id(conn) -> str | None:
@@ -1373,11 +1455,45 @@ def _template_memory_config(template: AgentTemplate) -> dict:
     return {"type": "conversation scoped", "max_tokens": 8000}
 
 
-def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
+def _template_tags(template: AgentTemplate) -> list[str]:
+    prompt_pack = _template_prompt_pack(template)
+    tags = prompt_pack.get("tags")
+    if isinstance(tags, list):
+        normalized = [str(tag).strip() for tag in tags if str(tag or "").strip()]
+        if normalized:
+            return normalized
+    return [template.category_code] if template.category_code else []
+
+
+def _handle_talent_templates(conn, path: str, query: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         repo = AgentTemplateRepo(cur)
-        templates = repo.list_all()
+        qs = parse_qs(query)
+        category = str(qs.get("category", [""])[0] or "").strip() or None
+        keyword = str(qs.get("q", [""])[0] or "").strip() or None
+        tag = str(qs.get("tag", [""])[0] or "").strip() or None
+        sort_by = str(qs.get("sort_by", ["popularity"])[0] or "popularity").strip().lower()
+        sort_order = str(qs.get("sort_order", ["desc"])[0] or "desc").strip().lower()
+        try:
+            page = max(1, int(qs.get("page", [1])[0]))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(100, int(qs.get("page_size", [20])[0])))
+        except (TypeError, ValueError):
+            page_size = 20
+        offset = (page - 1) * page_size
+        templates, total = repo.list_filtered(
+            status="published",
+            category_code=category,
+            keyword=keyword,
+            tag=tag,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=page_size,
+            offset=offset,
+        )
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         employee_counts: dict[str, int] = {}
@@ -1398,7 +1514,7 @@ def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
                 "description": (_template_prompt_pack(t).get("description") or t.name),
                 "default_model_ref": _template_model_ref(t),
                 "skills": list(_template_default_bindings(t).get("skills") or []),
-                "tags": [t.category_code] if t.category_code else [],
+                "tags": _template_tags(t),
                 "recruit_count": recruit_counts.get(t.id, 0),
                 "is_recruited": employee_counts.get(t.id, 0) > 0,
             }
@@ -1406,10 +1522,12 @@ def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
         ]
         return 200, {
             "items": items,
-            "page": 1,
-            "page_size": 20,
-            "total": len(items),
-            "has_more": False,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": offset + page_size < total,
+            "sort_by": sort_by if sort_by in {"created_at", "name", "popularity", "recruit_count"} else "popularity",
+            "sort_order": "asc" if sort_order == "asc" else "desc",
         }
     finally:
         cur.close()
@@ -1441,7 +1559,7 @@ def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[i
             "default_memory_config": _template_memory_config(t),
             "knowledge_bindings": _template_knowledge_bindings(t),
             "connector_requirements": _template_connector_requirements(t),
-            "tags": [t.category_code] if t.category_code else [],
+            "tags": _template_tags(t),
             "price_tier": prompt_pack.get("price_tier") or "standard",
             "usage_stats": {"total_recruits": total_recruits, "active_instances": active_instances},
         }
@@ -3875,6 +3993,8 @@ def handle_team_route(
     # ── workbench ──
     if method == "GET" and _match_exact(sub, "/workbench"):
         route_handler = lambda conn: _handle_workbench(conn, sub, query, request_context)
+    elif method == "POST" and _match_exact(sub, "/workbench/state"):
+        route_handler = lambda conn: _handle_workbench_state_post(conn, sub, query, body)
 
     # ── office scene/feed ──
     elif method == "GET" and _match_exact(sub, "/office/scene"):
@@ -3888,7 +4008,7 @@ def handle_team_route(
 
     # ── enterprise admin templates alias + talent-market/templates ──
     elif method == "GET" and (_match_exact(sub, "/templates") or _match_exact(sub, "/talent-market/templates")):
-        route_handler = lambda conn: _handle_talent_templates(conn, sub)
+        route_handler = lambda conn: _handle_talent_templates(conn, sub, query)
 
     # ── enterprise admin templates alias + talent-market/templates/{id} ──
     else:

@@ -33,6 +33,7 @@ from ..repositories.solution_template_binding_repo import SolutionTemplateBindin
 from ..repositories.team_run_repo import TeamRunRepo
 from ..repositories.usage_ledger_repo import UsageLedgerRepo
 from ..repositories.team_task_repo import TeamTaskRepo
+from ..repositories.workbench_state_repo import ConversationReadStateRepo, WorkbenchEmployeePreferenceRepo
 
 
 class UnitOfWork:
@@ -169,3 +170,9 @@ class UnitOfWork:
 
     def audit_events(self) -> AuditEventRepo:
         return AuditEventRepo(self.cur)
+
+    def workbench_employee_preferences(self) -> WorkbenchEmployeePreferenceRepo:
+        return WorkbenchEmployeePreferenceRepo(self.cur)
+
+    def conversation_read_states(self) -> ConversationReadStateRepo:
+        return ConversationReadStateRepo(self.cur)
