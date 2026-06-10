@@ -212,6 +212,108 @@ vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_initial_failure_recovery_lifecycle() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(OFFICE_MODULE_PATH))}, 'utf8');
+const intervals = [];
+const responses = [
+  {{ ok: false, status: 503, statusText: 'Service Unavailable', body: {{ error: 'office unavailable' }} }},
+  {{ ok: false, status: 503, statusText: 'Service Unavailable', body: {{ error: 'office unavailable' }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    summary: {{ online_employee_count: 1, busy_employee_count: 1, running_task_count: 1, queue_depth: 0, waiting_reply_count: 0 }},
+    seats: [{{
+      employee_id: 'emp_rex',
+      display_name: 'Rex',
+      role_name: '代码工程师',
+      presence: {{ state: 'busy', current_task: '恢复后的任务', latest_event_cursor: 18, events_url: '/api/team/runs/run_recover/events?cursor=18' }},
+    }}],
+    generated_cursor: 18,
+    refresh_hint_ms: 12000,
+  }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    items: [{{
+      employee_id: 'emp_rex',
+      employee_display_name: 'Rex',
+      status: 'running',
+      preview: '恢复后的任务',
+      detail: '办公室页已自动恢复',
+      conv_type: 'private',
+      conversation_id: 'conv_recover',
+      navigation_target: '/app/chat/conv_recover',
+      latest_event_cursor: 18,
+      events_url: '/api/team/runs/run_recover/events?cursor=18',
+      event_ts: '2026-06-05T12:34:56Z',
+    }}],
+    queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
+    generated_cursor: 18,
+    refresh_hint_ms: 12000,
+  }} }},
+];
+global.window = {{ aiteam: {{}} }};
+global.aiteam = global.window.aiteam;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  const next = responses.shift();
+  return {{
+    ok: next.ok,
+    status: next.status,
+    statusText: next.statusText,
+    async text() {{ return JSON.stringify(next.body); }},
+  }};
+}};
+global.setInterval = (fn, ms) => {{
+  const handle = {{ fn, ms, id: intervals.length + 1 }};
+  intervals.push(handle);
+  return handle;
+}};
+global.clearInterval = () => {{}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.pages.office.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const afterInitHtml = container.innerHTML;
+  const intervalMs = intervals.map((handle) => handle.ms);
+  if (intervals[0] && typeof intervals[0].fn === 'function') {{
+    intervals[0].fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+  console.log(JSON.stringify({{
+    afterInitHtml,
+    afterRecoverHtml: container.innerHTML,
+    intervalMs,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_viewport_controls_lifecycle() -> dict:
     script = f"""
 const fs = require('fs');
@@ -1065,6 +1167,15 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert "企业办公室" in result["html"]
     assert "全屏查看" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]
+
+
+def test_office_module_recovers_from_initial_load_failure_via_polling() -> None:
+    result = _run_initial_failure_recovery_lifecycle()
+    assert "办公室数据暂时不可用" in result["afterInitHtml"]
+    assert result["intervalMs"] == [5000]
+    assert "Rex" in result["afterRecoverHtml"]
+    assert "恢复后的任务" in result["afterRecoverHtml"]
+    assert "办公室数据暂时不可用" not in result["afterRecoverHtml"]
 
 
 def test_office_module_supports_zoom_pan_and_viewport_reset() -> None:

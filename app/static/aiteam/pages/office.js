@@ -8,6 +8,7 @@ window.aiteam = window.aiteam || {};
   var VIEWPORT_MAX_SCALE = 1.6;
   var VIEWPORT_SCALE_STEP = 0.15;
   var VIEWPORT_PAN_STEP = 80;
+  var OFFICE_FALLBACK_REFRESH_MS = 5000;
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -622,30 +623,64 @@ window.aiteam = window.aiteam || {};
 
   function doRefresh(container) {
     if (!container) return;
-    Promise.all([
+    return Promise.all([
       // Canonical office northbound routes: /api/team/office/scene + /api/team/office/feed
       ns.api.getOfficeScene(),
       ns.api.getOfficeFeed(),
     ]).then(function (results) {
       var sceneResult = results[0];
       var feedResult = results[1];
-      if (!sceneResult.ok || !feedResult.ok) return;
-      renderOfficeInto(container, sceneResult.data || {}, feedResult.data || {});
+      if (!sceneResult.ok || !feedResult.ok) return null;
+      var sceneData = sceneResult.data || {};
+      var feedData = feedResult.data || {};
+      renderOfficeInto(container, sceneData, feedData);
+      return {
+        refreshMs: feedData.refresh_hint_ms || sceneData.refresh_hint_ms || OFFICE_FALLBACK_REFRESH_MS,
+      };
+    }).catch(function () {
+      return null;
     });
   }
 
   ns.pages.office = {
     _pollTimer: null,
+    _pollTimerMs: null,
 
     _stopPolling: function () {
       if (this._pollTimer) {
         clearInterval(this._pollTimer);
         this._pollTimer = null;
       }
+      this._pollTimerMs = null;
+    },
+
+    _ensurePolling: function (container, refreshMs) {
+      var nextMs = Number(refreshMs) > 0 ? Number(refreshMs) : OFFICE_FALLBACK_REFRESH_MS;
+      if (this._pollTimer && this._pollTimerMs === nextMs) {
+        return;
+      }
+      this._stopPolling();
+      var self = this;
+      this._pollTimerMs = nextMs;
+      this._pollTimer = setInterval(function () {
+        self._refreshData(container);
+      }, nextMs);
+    },
+
+    _renderLoadError: function (container, message) {
+      if (!container) return;
+      container.innerHTML = renderOfficeError(message);
+      this._ensurePolling(container, OFFICE_FALLBACK_REFRESH_MS);
     },
 
     _refreshData: function (container) {
-      doRefresh(container);
+      var self = this;
+      return doRefresh(container).then(function (info) {
+        if (info && info.refreshMs) {
+          self._ensurePolling(container, info.refreshMs);
+        }
+        return info;
+      });
     },
 
     _applyViewportState: function (container, nextState) {
@@ -682,7 +717,7 @@ window.aiteam = window.aiteam || {};
         if (!sceneResult.ok || !feedResult.ok) {
           var errResult = !sceneResult.ok ? sceneResult : feedResult;
           var message = (errResult && errResult.error) || '请求失败';
-          container.innerHTML = renderOfficeError(message);
+          self._renderLoadError(container, message);
           return;
         }
 
@@ -691,13 +726,9 @@ window.aiteam = window.aiteam || {};
         renderOfficeInto(container, sceneData, feedData);
 
         var refreshMs = feedData.refresh_hint_ms || sceneData.refresh_hint_ms;
-        if (refreshMs) {
-          self._pollTimer = setInterval(function () {
-            self._refreshData(container);
-          }, refreshMs);
-        }
+        self._ensurePolling(container, refreshMs || OFFICE_FALLBACK_REFRESH_MS);
       }).catch(function () {
-        container.innerHTML = renderOfficeError('办公室数据加载失败');
+        self._renderLoadError(container, '办公室数据加载失败');
       });
     },
   };
