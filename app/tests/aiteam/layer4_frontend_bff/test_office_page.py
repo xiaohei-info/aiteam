@@ -476,7 +476,15 @@ const responses = [
         employee_id: 'emp_rex',
         display_name: 'Rex',
         role_name: '代码工程师',
-        presence: {{ state: 'busy', current_task: '执行回归测试', latest_event_cursor: 12, events_url: '/api/team/runs/run_1/events?cursor=12' }},
+        presence: {{
+          state: 'busy',
+          current_task: '执行回归测试',
+          conversation_id: 'conv_rex',
+          conversation_type: 'private',
+          navigation_target: '/app/chat/conv_rex',
+          latest_event_cursor: 12,
+          events_url: '/api/team/runs/run_1/events?cursor=12'
+        }},
       }},
       {{
         employee_id: 'emp_nova',
@@ -961,6 +969,7 @@ def test_office_module_switches_detail_panel_when_selecting_another_seat() -> No
     assert "历史任务" in result["initialHtml"]
     assert "Rex" in result["initialHtml"]
     assert "执行回归测试" in result["initialHtml"]
+    assert 'href="/app/chat/conv_rex"' in result["initialHtml"]
     assert "Nova" in result["afterClickHtml"]
     assert "数据科学家" in result["afterClickHtml"]
     assert "等待新任务" in result["afterClickHtml"]

@@ -47,6 +47,24 @@ window.aiteam = window.aiteam || {};
     return stringValue(seat && seat.events_url, '');
   }
 
+  function seatConversationId(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.conversation_id) return String(raw.conversation_id);
+    return stringValue(seat && seat.conversation_id, '');
+  }
+
+  function seatConversationType(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.conversation_type) return String(raw.conversation_type);
+    return stringValue(seat && seat.conversation_type, '');
+  }
+
+  function seatNavigationTarget(seat) {
+    var raw = seat && seat.presence;
+    if (raw && typeof raw === 'object' && raw.navigation_target) return String(raw.navigation_target);
+    return stringValue(seat && seat.navigation_target, '');
+  }
+
   function seatStatusLabel(value) {
     if (value === 'busy' || value === 'running' || value === 'working' || value === 'streaming') return '忙碌';
     if (value === 'online' || value === 'active') return '在线';
@@ -144,9 +162,9 @@ window.aiteam = window.aiteam || {};
     var status = seatPresenceState(seat);
     var employeeHref = seat.employee_id ? '/admin/employees/' + encodeURIComponent(seat.employee_id) : '#';
     var chatHref = resolveConversationHref(
-      seat.conversation_id,
-      seat.conversation_type,
-      seat.navigation_target
+      seatConversationId(seat),
+      seatConversationType(seat),
+      seatNavigationTarget(seat)
     ) || employeeHref;
     return '' +
       '<div class="aiteam-detail-section">' +
