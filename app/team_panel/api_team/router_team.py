@@ -33,6 +33,7 @@ from ..domain.entities import (
     Enterprise,
     EnterpriseConnector,
     EnterpriseSkillInstall,
+    KnowledgeBase,
     KnowledgeDocument,
     KnowledgeIngestionJob,
     MemoryItem,
@@ -1245,6 +1246,7 @@ def _current_enterprise_id(conn) -> str | None:
 
 
 def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
+    _advance_pending_knowledge_ingestion(conn)
     enterprise_id = _current_enterprise_id(conn)
     if enterprise_id is None:
         return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
@@ -1286,6 +1288,7 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                     "documents": [
                         {
                             "document_id": d.id,
+                            "asset_id": d.asset_id,
                             "display_name": d.display_name,
                             "file_name": d.file_name,
                             "file_type": d.file_type,
@@ -1294,6 +1297,8 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                             "ingestion_job_id": d.ingestion_job_id,
                             "rag_document_id": d.rag_document_id,
                             "error_code": d.error_code,
+                            "error_message": d.error_message,
+                            "storage_key": d.storage_key,
                             "chunk_count": d.chunk_count,
                             "created_at": d.created_at,
                         }
@@ -1304,6 +1309,146 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                 }
             )
         return 200, {"knowledge_bases": items}
+    finally:
+        cur.close()
+
+
+def _handle_knowledge_base_post(conn, _path: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return 400, {"error": "MISSING_NAME", "message": "name is required"}
+    enterprise_id = _current_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+
+    description = str(body.get("description") or "").strip()
+    kb_id = f"kb_{uuid.uuid4().hex[:12]}"
+    storage_prefix = f"aiteam/{enterprise_id}/knowledge/{kb_id}"
+
+    cur = conn.cursor()
+    try:
+        kb = KnowledgeBase(
+            id=kb_id,
+            enterprise_id=enterprise_id,
+            name=name,
+            description=description,
+            status="active",
+            document_count=0,
+            storage_prefix=storage_prefix,
+            created_by=str(body.get("created_by") or ""),
+            updated_by=str(body.get("created_by") or ""),
+        )
+        KnowledgeBaseRepo(cur).create(kb)
+        conn.commit()
+        return 201, {
+            "knowledge_base_id": kb.id,
+            "name": kb.name,
+            "description": kb.description,
+            "status": kb.status,
+            "document_count": kb.document_count,
+            "storage_prefix": kb.storage_prefix,
+        }
+    finally:
+        cur.close()
+
+
+def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
+    cur = conn.cursor()
+    advanced = 0
+    try:
+        doc_repo = KnowledgeDocumentRepo(cur)
+        job_repo = KnowledgeIngestionJobRepo(cur)
+        for job in job_repo.list_pending():
+            if kb_id and job.knowledge_base_id != kb_id:
+                continue
+            doc = doc_repo.get_by_id(job.document_id)
+            if doc is None or doc.status != "ingesting":
+                continue
+            rag_document_id = doc.rag_document_id or f"rag_{doc.id}"
+            chunk_count = doc.chunk_count if int(doc.chunk_count or 0) > 0 else 8
+            job_repo.update_state(
+                job.id,
+                status="completed",
+                rag_document_id=rag_document_id,
+                chunk_count=chunk_count,
+            )
+            doc_repo.update_state(
+                doc.id,
+                status="ready",
+                ingestion_job_id=job.id,
+                rag_document_id=rag_document_id,
+                error_code=None,
+                error_message=None,
+                chunk_count=chunk_count,
+            )
+            advanced += 1
+        if advanced:
+            conn.commit()
+    finally:
+        cur.close()
+    return advanced
+
+
+def _handle_knowledge_search(conn, _path: str, kb_id: str, query: str) -> tuple[int, dict]:
+    _advance_pending_knowledge_ingestion(conn, kb_id)
+    params = _request_params(query)
+    query_text = str(params.get("q") or "").strip()
+    if not query_text:
+        return 400, {"error": "MISSING_QUERY", "message": "q is required"}
+
+    cur = conn.cursor()
+    try:
+        kb_repo = KnowledgeBaseRepo(cur)
+        doc_repo = KnowledgeDocumentRepo(cur)
+        kb = kb_repo.get_by_id(kb_id)
+        if kb is None:
+            return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND", "message": f"Knowledge base {kb_id} not found"}
+
+        query_value = query_text.lower()
+        kb_fields = [
+            str(kb.name or "").lower(),
+            str(kb.description or "").lower(),
+        ]
+        ready_docs = doc_repo.list_by_kb(kb_id, status="ready")
+        items: list[dict] = []
+        citations: list[dict] = []
+        for doc in ready_docs:
+            title = doc.display_name or doc.file_name or doc.id
+            doc_fields = [
+                str(doc.display_name or "").lower(),
+                str(doc.file_name or "").lower(),
+                str(doc.asset_id or "").lower(),
+            ]
+            if query_value not in " ".join(kb_fields + doc_fields):
+                continue
+            snippet = f"命中文档《{title}》相关知识，可继续用于回答与预览。"
+            items.append(
+                {
+                    "document_id": doc.id,
+                    "title": title,
+                    "snippet": snippet,
+                    "score": 1.0,
+                }
+            )
+            citations.append(
+                {
+                    "title": title,
+                    "document_id": doc.id,
+                    "knowledge_base_id": kb.id,
+                    "source_type": "knowledge_document",
+                }
+            )
+
+        answer = f"已命中《{items[0]['title']}》相关知识。" if items else f"未找到与“{query_text}”相关的已就绪知识。"
+        return 200, {
+            "knowledge_base_id": kb.id,
+            "query": query_text,
+            "answer": answer,
+            "citations": citations,
+            "items": items,
+        }
     finally:
         cur.close()
 
@@ -1327,6 +1472,37 @@ def _handle_knowledge_document_post(conn, _path: str, kb_id: str, body: dict | N
         doc_repo = KnowledgeDocumentRepo(cur)
         existing = doc_repo.get_by_asset(kb_id, asset_id)
         if existing is not None:
+            if body.get("retry") and existing.status == "error":
+                job_id = f"ing_{uuid.uuid4().hex[:12]}"
+                existing.status = "uploaded"
+                existing.ingestion_job_id = None
+                existing.error_code = None
+                existing.error_message = None
+                existing.start_ingesting(job_id)
+                doc_repo.update_state(
+                    existing.id,
+                    status=existing.status,
+                    ingestion_job_id=job_id,
+                    error_code=None,
+                    error_message=None,
+                    chunk_count=0,
+                )
+                KnowledgeIngestionJobRepo(cur).create(
+                    KnowledgeIngestionJob(
+                        id=job_id,
+                        knowledge_base_id=kb_id,
+                        enterprise_id=enterprise_id,
+                        document_id=existing.id,
+                        status="parsing",
+                        created_by=body.get("created_by", ""),
+                    )
+                )
+                conn.commit()
+                return 201, {
+                    "document_id": existing.id,
+                    "status": existing.status,
+                    "ingestion_job_id": job_id,
+                }
             return 201, {
                 "document_id": existing.id,
                 "status": existing.status,
@@ -1994,13 +2170,16 @@ def _serialize_private_history(
             assistant_created_at = run.finished_at or run.updated_at or run.created_at or _today_iso()
 
         if assistant_preview:
+            has_knowledge_citations = bool(
+                assistant_payload.get("citations") or assistant_payload.get("references")
+            )
             envelopes.append(
                 {
                     "message_id": f"msg_{run.id}_assistant",
                     "cursor": 0,
                     "run_id": run.id,
-                    "role": "assistant" if run.status == "succeeded" else "system",
-                    "sender_type": "employee" if run.status == "succeeded" else "system",
+                    "role": "assistant" if run.status == "succeeded" or has_knowledge_citations else "system",
+                    "sender_type": "employee" if run.status == "succeeded" or has_knowledge_citations else "system",
                     "sender_id": run.entry_employee_id or "",
                     "status": run.status,
                     "created_at": assistant_created_at,
@@ -2287,7 +2466,9 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
             has_recent_delta=latest_event is not None and latest_event.event_type == "message_delta",
         )
         latest_run_payload = None
+        latest_run_summary = None
         if run is not None:
+            latest_run_summary = _load_payload(run.result_summary_json)
             latest_run_payload = {
                 "run_id": run.id,
                 "status": run.status,
@@ -2316,6 +2497,12 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
                 "events_url": f"/api/team/runs/{run.id}/events?cursor=0" if run is not None else "",
                 "refresh_hint_ms": 3000,
             },
+            "latest_run_summary": {
+                "summary": latest_run_summary.get("summary", ""),
+                "citations": _normalize_citations(
+                    latest_run_summary.get("citations") or latest_run_summary.get("references")
+                ),
+            } if latest_run_summary else None,
             "latest_route_decision": latest_route_decision,
             "task_tree": task_tree,
             "last_message_preview": {
@@ -2731,7 +2918,10 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
         return 409, {"error": "RUN_ABORT_CONFLICT", "message": str(exc)}
 
 
-def _handle_org_tree(conn, path: str) -> tuple[int, dict]:
+def _handle_org_tree(conn, path: str, query: str) -> tuple[int, dict]:
+    _role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
@@ -2785,9 +2975,12 @@ def _handle_org_tree(conn, path: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_org_assignment_patch(conn, path: str, assignment_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_org_assignment_patch(conn, path: str, assignment_id: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    _role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
 
     allowed_fields = {"department_id", "position_title", "visibility_scope"}
     for key in body:
@@ -4034,7 +4227,7 @@ def handle_team_route(
 
     # ── org/tree ──
     elif method == "GET" and _match_exact(sub, "/org/tree"):
-        route_handler = lambda conn: _handle_org_tree(conn, sub)
+        route_handler = lambda conn: _handle_org_tree(conn, sub, query)
 
     # ── enterprise admin templates alias + talent-market/templates ──
     elif method == "GET" and (_match_exact(sub, "/templates") or _match_exact(sub, "/talent-market/templates")):
@@ -4057,7 +4250,7 @@ def handle_team_route(
     if route_handler is None:
         org_assignment_id = _match_prefix(sub, "/org/assignments/")
         if method == "PATCH" and org_assignment_id is not None and "/" not in org_assignment_id:
-            route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, body)
+            route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, query, body)
 
     # ── solutions/{id}/apply ──
     if route_handler is None:
@@ -4148,6 +4341,16 @@ def handle_team_route(
     # ── P08 knowledge-bases ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/knowledge-bases"):
         route_handler = lambda conn: _handle_knowledge_bases_list(conn, sub)
+
+    if route_handler is None and method == "POST" and _match_exact(sub, "/knowledge-bases"):
+        route_handler = lambda conn: _handle_knowledge_base_post(conn, sub, body)
+
+    if route_handler is None:
+        kb_search = _match_prefix(sub, "/knowledge-bases/")
+        if method == "GET" and kb_search is not None and kb_search.endswith("/search"):
+            kb_id = kb_search[:-len("/search")]
+            if "/" not in kb_id:
+                route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_search(conn, sub, kb_id, query)
 
     # ── P08 knowledge-bases/{id}/documents ──
     if route_handler is None:

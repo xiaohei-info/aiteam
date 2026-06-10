@@ -52,6 +52,13 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
         input_message_json=json.dumps(normalized_message_payload, ensure_ascii=False),
         created_by=employee_id or "system",
     )
+    knowledge_preview = build_knowledge_preview_for_employees(
+        uow,
+        [employee_id or conv.entry_employee_id or ""],
+        query_text=message_text,
+    )
+    if knowledge_preview is not None:
+        run.result_summary_json = json.dumps(knowledge_preview, ensure_ascii=False)
     uow.team_runs().create(run)
 
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
@@ -96,6 +103,48 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
             "profile_name": gw_response.runtime_handle.profile_name,
             "session_id": gw_response.runtime_handle.session_id,
         },
+    }
+
+
+def build_knowledge_preview_for_employees(uow, employee_ids: list[str], *, query_text: str = "") -> dict | None:
+    citations = []
+    seen = set()
+    for employee_id in employee_ids:
+        if not employee_id or employee_id in seen:
+            continue
+        seen.add(employee_id)
+        bindings = [
+            binding
+            for binding in uow.employee_knowledge_bindings().list_by_employee(employee_id)
+            if getattr(binding, "enabled", True)
+        ]
+        for binding in bindings:
+            kb = uow.knowledge_bases().get_by_id(binding.knowledge_base_id)
+            docs = uow.knowledge_documents().list_by_kb(binding.knowledge_base_id, status="ready")
+            for doc in docs[:1]:
+                citations.append(
+                    {
+                        "title": doc.display_name or doc.file_name or (kb.name if kb is not None else binding.knowledge_base_id),
+                        "knowledge_base_id": binding.knowledge_base_id,
+                        "document_id": doc.id,
+                        "source_type": "knowledge_document",
+                        "snippet": "来自知识库文档预览",
+                    }
+                )
+    if not citations:
+        return None
+
+    titles = [item["title"] for item in citations[:3] if item.get("title")]
+    if len(titles) == 1:
+        summary = f"已参考《{titles[0]}》整理初步回答。"
+    elif titles:
+        summary = "已参考" + "、".join(f"《{title}》" for title in titles) + "整理初步回答。"
+    else:
+        summary = "已参考知识库内容整理初步回答。"
+
+    return {
+        "summary": summary,
+        "citations": citations,
     }
 
 

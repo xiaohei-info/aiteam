@@ -1,4 +1,4 @@
-"""Regression tests for PR #1505 — /session/static/* must serve static assets, not the HTML index.
+"""Regression tests for shell-route relative static aliases.
 
 Bug shape (pre-fix):
   Browsers visiting /session/<id> resolved relative `<link rel="stylesheet" href="static/style.css">`
@@ -9,6 +9,11 @@ Bug shape (pre-fix):
 Fix: handle_get() now intercepts /session/static/* BEFORE the catch-all and delegates to
 _serve_static() with the /session prefix stripped. check_auth() also exempts /session/static/*
 from auth (same policy as /static/*).
+
+The same shell-template pattern also affects `/app/*`, `/admin/*`, and `/system/*`
+routes once they render the shared HTML shell with a dynamic `<base href>`. Relative
+`static/...` links from those routes resolve to `/app/static/*`, `/admin/static/*`,
+and `/system/static/*`. These aliases must also serve real assets instead of the HTML shell.
 
 These tests pin both the routing fix AND the auth exemption so a future refactor of either
 path can't silently re-introduce the MIME-type bug.
@@ -153,3 +158,40 @@ def test_session_static_favicon_512_returns_png():
     # PNG signature: first 8 bytes are \x89PNG\r\n\x1a\n
     body = bytes(handler.body)
     assert body[:4] == b"\x89PNG", "favicon-512.png must start with PNG signature"
+
+
+def test_app_static_css_returns_text_css_mime():
+    """/app/static/style.css must resolve to the real stylesheet, not the shell HTML.
+
+    `/app/office` and sibling shell routes currently render the shared HTML shell. When
+    the page contains relative `static/...` links, browsers resolve them against `/app/`,
+    producing `/app/static/*` requests. Those requests must be handled before the generic
+    `/app/*` HTML catch-all.
+    """
+    from api.routes import handle_get
+
+    handler = _FakeHandler()
+    parsed = urlparse("http://example.com/app/static/style.css")
+    assert handle_get(handler, parsed) is True
+    assert handler.status == 200
+    ct = handler.header("Content-Type") or ""
+    assert ct.startswith("text/css"), f"expected text/css, got {ct!r}"
+    assert b"<!doctype html>" not in handler.body[:200].lower()
+
+
+def test_app_static_auth_exemption(monkeypatch):
+    """/app/static/* must be auth-exempt just like /static/* and /session/static/*."""
+    monkeypatch.setenv("HERMES_WEBUI_PASSWORD", "test-password")
+
+    from api.auth import check_auth, _invalidate_password_hash_cache
+
+    _invalidate_password_hash_cache()
+
+    handler = _FakeHandler()
+    assert check_auth(handler, SimpleNamespace(path="/app/static/style.css", query="")) is True
+
+    handler = _FakeHandler()
+    assert check_auth(handler, SimpleNamespace(path="/admin/static/aiteam/styles.css", query="")) is True
+
+    handler = _FakeHandler()
+    assert check_auth(handler, SimpleNamespace(path="/system/static/ui.js", query="")) is True

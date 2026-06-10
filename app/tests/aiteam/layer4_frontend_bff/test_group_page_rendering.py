@@ -1063,6 +1063,10 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
                 "latest_event_cursor": 5,
                 "runtime_handle": {"kind": "kanban_task", "task_id": "task_root_1"},
             },
+            "latest_run_summary": {
+                "summary": "已参考《群聊手册》整理初步回答。",
+                "citations": [{"title": "群聊手册"}],
+            },
             "timeline": {"run_id": "run_group_1", "latest_event_cursor": 5},
             "latest_route_decision": {"route_mode": "orchestration", "candidate_employee_ids": ["emp_2", "emp_3"]},
             "task_tree": {"items": []},
@@ -1087,6 +1091,9 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
     assert "user_founder" in payload["html"]
     assert "创建时间" in payload["html"]
     assert "2026-06-10T09:00:00Z" in payload["html"]
+    assert "最近知识引用" in payload["html"]
+    assert "已参考《群聊手册》整理初步回答。" in payload["html"]
+    assert "群聊手册" in payload["html"]
 
 
 def test_group_page_root_launcher_creates_group_and_loads_conversation() -> None:

@@ -123,6 +123,17 @@ window.aiteam = window.aiteam || {};
       return this.get('/knowledge-bases', options);
     },
 
+    postKnowledgeBase(body, options) {
+      return this.post('/knowledge-bases', body, options);
+    },
+
+    getKnowledgeSearch(kbId, query, options) {
+      return this.get(
+        `/knowledge-bases/${encodeURIComponent(kbId)}/search${buildQuerySuffix({ q: query })}`,
+        options,
+      );
+    },
+
     postKnowledgeDocument(kbId, body, options) {
       return this.post(`/knowledge-bases/${encodeURIComponent(kbId)}/documents`, body, options);
     },

@@ -6,7 +6,7 @@ Covers the first flow slice from the Layer5 stitching plan:
 - an employee knowledge binding does not break the chat run path
 """
 
-from team_panel.domain.entities import EmployeeKnowledgeBinding
+from team_panel.domain.entities import EmployeeKnowledgeBinding, KnowledgeBase, KnowledgeDocument
 from team_panel.transactions.uow import UnitOfWork
 
 from tests.aiteam.layer0_contracts.test_host_routing import _get, _post
@@ -73,6 +73,7 @@ def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):
     assert [item["role"] for item in conv["messages"]["items"]] == ["user", "assistant"]
     assert conv["messages"]["items"][0]["text"] == "请基于企业知识库总结入职流程。"
     assert conv["messages"]["items"][1]["citations"][0]["title"] == "入职手册"
+    assert conv["messages"]["items"][1]["text"] == "已根据企业知识库整理出入职流程。"
     assert conv["employee_summary"]["employee_id"] == seeded_private_chat["employee_id"]
     assert conv["employee_summary"]["usage_summary"]["total_runs"] >= 1
 
@@ -147,6 +148,31 @@ def test_private_chat_retry_and_abort_contract(seeded_enterprise):
 
 def test_knowledge_binding_does_not_break_chat(seeded_enterprise, db_conn):
     with UnitOfWork(db_conn) as uow:
+        uow.knowledge_bases().create(
+            KnowledgeBase(
+                id="kb_onboarding_docs",
+                enterprise_id=seeded_enterprise["enterprise_id"],
+                name="入职知识库",
+                description="新员工入职资料",
+                status="active",
+                document_count=1,
+                storage_prefix="aiteam/ent_test/kb_onboarding_docs",
+            )
+        )
+        uow.knowledge_documents().create(
+            KnowledgeDocument(
+                id="doc_onboarding_001",
+                knowledge_base_id="kb_onboarding_docs",
+                enterprise_id=seeded_enterprise["enterprise_id"],
+                asset_id="asset_onboarding_001",
+                display_name="入职手册",
+                file_name="onboarding.pdf",
+                file_type="application/pdf",
+                status="ready",
+                chunk_count=12,
+                storage_key="aiteam/uploads/asset_onboarding_001/onboarding.pdf",
+            )
+        )
         uow.employee_knowledge_bindings().create(
             EmployeeKnowledgeBinding(
                 id="kb_bind_l5_private_chat",
@@ -169,3 +195,10 @@ def test_knowledge_binding_does_not_break_chat(seeded_enterprise, db_conn):
     assert body["status"] == "queued"
     assert body["run_id"].startswith("run_")
     assert body.get("error") is None
+
+    detail_status, conv = _get(f"/api/team/conversations/{seeded_enterprise['conversation_id']}")
+    assert detail_status == 200, conv
+    assert len(conv["messages"]["items"]) == 2
+    assert conv["messages"]["items"][1]["role"] == "assistant"
+    assert conv["messages"]["items"][1]["citations"][0]["title"] == "入职手册"
+    assert conv["messages"]["items"][1]["text"] == "已参考《入职手册》整理初步回答。"

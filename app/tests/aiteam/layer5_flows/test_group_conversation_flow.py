@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from urllib.parse import urlparse
+from team_panel.domain.entities import EmployeeKnowledgeBinding, KnowledgeBase, KnowledgeDocument
+from team_panel.transactions.uow import UnitOfWork
 
 try:
     from tests.aiteam.layer0_contracts.test_host_routing import _get, _post
@@ -278,6 +280,66 @@ def test_group_message_flow_requires_sender_identity(uow, clean_tables_with_ente
         "error": "MISSING_SENDER_ID",
         "message": "sender_id is required",
     }
+
+
+def test_group_message_flow_surfaces_knowledge_citations(clean_tables_with_enterprise, db_conn):
+    with UnitOfWork(db_conn) as uow:
+        conv_id = create_group_conversation(
+            uow,
+            "ent_test",
+            "L5 Knowledge Group",
+            ["emp_test", "emp_member"],
+            "user_test",
+        )
+        uow.knowledge_bases().create(
+            KnowledgeBase(
+                id="kb_group_docs",
+                enterprise_id="ent_test",
+                name="群聊知识库",
+                description="群聊资料",
+                status="active",
+                document_count=1,
+                storage_prefix="aiteam/ent_test/kb_group_docs",
+            )
+        )
+        uow.knowledge_documents().create(
+            KnowledgeDocument(
+                id="doc_group_001",
+                knowledge_base_id="kb_group_docs",
+                enterprise_id="ent_test",
+                asset_id="asset_group_001",
+                display_name="群聊手册",
+                file_name="group.pdf",
+                file_type="application/pdf",
+                status="ready",
+                chunk_count=8,
+                storage_key="aiteam/uploads/asset_group_001/group.pdf",
+            )
+        )
+        uow.employee_knowledge_bindings().create(
+            EmployeeKnowledgeBinding(
+                id="kb_bind_l5_group",
+                enterprise_id="ent_test",
+                employee_id="emp_test",
+                knowledge_base_id="kb_group_docs",
+            )
+        )
+
+    status, body = _post(
+        f"/api/team/group-conversations/{conv_id}/messages",
+        {
+            "message": {"text": "请基于群聊知识库给出建议", "attachments": []},
+            "route_hint": "single_agent",
+            "idempotency_key": "l5-group-kb-001",
+            "sender_id": "emp_test",
+        },
+    )
+    assert status == 201, body
+
+    detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
+    assert detail_status == 200, detail
+    assert detail["latest_run_summary"]["summary"] == "已参考《群聊手册》整理初步回答。"
+    assert detail["latest_run_summary"]["citations"][0]["title"] == "群聊手册"
 
 
 def test_group_message_flow_inactive_conversation_returns_409(uow, clean_tables_with_enterprise):

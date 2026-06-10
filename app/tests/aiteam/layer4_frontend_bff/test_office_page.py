@@ -212,6 +212,108 @@ vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_initial_failure_recovery_lifecycle() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(OFFICE_MODULE_PATH))}, 'utf8');
+const intervals = [];
+const responses = [
+  {{ ok: false, status: 503, statusText: 'Service Unavailable', body: {{ error: 'office unavailable' }} }},
+  {{ ok: false, status: 503, statusText: 'Service Unavailable', body: {{ error: 'office unavailable' }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    summary: {{ online_employee_count: 1, busy_employee_count: 1, running_task_count: 1, queue_depth: 0, waiting_reply_count: 0 }},
+    seats: [{{
+      employee_id: 'emp_rex',
+      display_name: 'Rex',
+      role_name: '代码工程师',
+      presence: {{ state: 'busy', current_task: '恢复后的任务', latest_event_cursor: 18, events_url: '/api/team/runs/run_recover/events?cursor=18' }},
+    }}],
+    generated_cursor: 18,
+    refresh_hint_ms: 12000,
+  }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    items: [{{
+      employee_id: 'emp_rex',
+      employee_display_name: 'Rex',
+      status: 'running',
+      preview: '恢复后的任务',
+      detail: '办公室页已自动恢复',
+      conv_type: 'private',
+      conversation_id: 'conv_recover',
+      navigation_target: '/app/chat/conv_recover',
+      latest_event_cursor: 18,
+      events_url: '/api/team/runs/run_recover/events?cursor=18',
+      event_ts: '2026-06-05T12:34:56Z',
+    }}],
+    queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
+    generated_cursor: 18,
+    refresh_hint_ms: 12000,
+  }} }},
+];
+global.window = {{ aiteam: {{}} }};
+global.aiteam = global.window.aiteam;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  const next = responses.shift();
+  return {{
+    ok: next.ok,
+    status: next.status,
+    statusText: next.statusText,
+    async text() {{ return JSON.stringify(next.body); }},
+  }};
+}};
+global.setInterval = (fn, ms) => {{
+  const handle = {{ fn, ms, id: intervals.length + 1 }};
+  intervals.push(handle);
+  return handle;
+}};
+global.clearInterval = () => {{}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.pages.office.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const afterInitHtml = container.innerHTML;
+  const intervalMs = intervals.map((handle) => handle.ms);
+  if (intervals[0] && typeof intervals[0].fn === 'function') {{
+    intervals[0].fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  }}
+  console.log(JSON.stringify({{
+    afterInitHtml,
+    afterRecoverHtml: container.innerHTML,
+    intervalMs,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_viewport_controls_lifecycle() -> dict:
     script = f"""
 const fs = require('fs');
@@ -651,6 +753,181 @@ vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_pointer_navigation_lifecycle() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(OFFICE_MODULE_PATH))}, 'utf8');
+const responses = [
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    summary: {{ online_employee_count: 1, busy_employee_count: 1, running_task_count: 1, queue_depth: 0, waiting_reply_count: 0 }},
+    seats: [{{
+      employee_id: 'emp_rex',
+      display_name: 'Rex',
+      role_name: '代码工程师',
+      presence: {{
+        state: 'busy',
+        current_task: '执行回归测试',
+        latest_event_cursor: 12,
+        events_url: '/api/team/runs/run_1/events?cursor=12'
+      }},
+    }}],
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    items: [{{
+      employee_id: 'emp_rex',
+      employee_display_name: 'Rex',
+      status: 'running',
+      preview: 'Layer4 前端回归',
+      conv_type: 'private',
+      conversation_id: 'conv_rex',
+      navigation_target: '/app/chat/conv_rex',
+      latest_event_cursor: 12,
+      events_url: '/api/team/runs/run_1/events?cursor=12',
+      event_ts: '2026-06-05T12:34:56Z',
+    }}],
+    queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+];
+function makeClassList() {{
+  const set = new Set();
+  return {{
+    contains(name) {{ return set.has(name); }},
+    add(name) {{ set.add(name); }},
+    remove(name) {{ set.delete(name); }},
+  }};
+}}
+function makeButton(name) {{
+  return {{
+    name,
+    textContent: '',
+    disabled: false,
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) this.listeners.click({{ preventDefault() {{}} }}); }},
+  }};
+}}
+function makeInteractiveRoot() {{
+  return {{
+    style: {{}},
+    classList: makeClassList(),
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    dispatch(type, event) {{
+      if (this.listeners[type]) this.listeners[type](event);
+    }},
+  }};
+}}
+const root = makeInteractiveRoot();
+const fullScreenButton = makeButton('fullscreen');
+const zoomInButton = makeButton('zoomIn');
+const zoomOutButton = makeButton('zoomOut');
+const resetButton = makeButton('reset');
+const panLeftButton = makeButton('panLeft');
+const panRightButton = makeButton('panRight');
+const panUpButton = makeButton('panUp');
+const panDownButton = makeButton('panDown');
+const label = {{ textContent: '' }};
+const selectorMap = {{
+  '[data-office-root]': root,
+  '[data-office-fullscreen]': fullScreenButton,
+  '[data-office-zoom-in]': zoomInButton,
+  '[data-office-zoom-out]': zoomOutButton,
+  '[data-office-zoom-reset]': resetButton,
+  '[data-office-pan-left]': panLeftButton,
+  '[data-office-pan-right]': panRightButton,
+  '[data-office-pan-up]': panUpButton,
+  '[data-office-pan-down]': panDownButton,
+  '[data-office-viewport-label]': label,
+}};
+global.window = {{ aiteam: {{}} }};
+global.aiteam = global.window.aiteam;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  const next = responses.shift();
+  return {{
+    ok: next.ok,
+    status: next.status,
+    statusText: next.statusText,
+    async text() {{ return JSON.stringify(next.body); }},
+  }};
+}};
+global.setInterval = () => null;
+global.clearInterval = () => {{}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector(selector) {{
+      return selectorMap[selector] || null;
+    }},
+    querySelectorAll() {{
+      return [];
+    }},
+  }};
+  aiteam.pages.office.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const initialTransform = root.style.transform || '';
+  const initialLabel = label.textContent || '';
+  root.dispatch('wheel', {{
+    deltaY: -120,
+    preventDefault() {{}},
+  }});
+  const afterWheelTransform = root.style.transform || '';
+  const afterWheelLabel = label.textContent || '';
+  root.dispatch('mousedown', {{
+    clientX: 100,
+    clientY: 100,
+    preventDefault() {{}},
+  }});
+  root.dispatch('mousemove', {{
+    clientX: 150,
+    clientY: 140,
+    preventDefault() {{}},
+  }});
+  root.dispatch('mouseup', {{
+    preventDefault() {{}},
+  }});
+  const afterDragTransform = root.style.transform || '';
+  console.log(JSON.stringify({{
+    initialTransform,
+    initialLabel,
+    afterWheelTransform,
+    afterWheelLabel,
+    afterDragTransform,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_api_client_exposes_office_helpers() -> None:
     source = _read(API_CLIENT_PATH)
     assert "getOfficeScene()" in source
@@ -695,6 +972,9 @@ def test_office_module_renders_error_when_office_api_unavailable() -> None:
         {"url": "/api/team/office/scene", "method": "GET"},
         {"url": "/api/team/office/feed", "method": "GET"},
     ]
+    assert "企业办公室" in result["html"]
+    assert "data-office-root" in result["html"]
+    assert "办公室数据暂时不可用" in result["html"]
     assert "Not Implemented" in result["html"]
 
 
@@ -828,6 +1108,10 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
     assert "活动游标: 18" in result["html"]
     assert "cursor #18" in result["html"] or ">#18<" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]
+    assert "拖拽平移" in result["html"]
+    assert "滚轮缩放" in result["html"]
+    assert "aiteam-office__scene-viewport" in result["html"]
+    assert "aiteam-office__scene-floor" in result["html"]
 
 
 def test_office_module_handles_empty_feed_without_preview() -> None:
@@ -883,6 +1167,15 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert "企业办公室" in result["html"]
     assert "全屏查看" in result["html"]
     assert "刷新间隔: 15.0s" in result["html"]
+
+
+def test_office_module_recovers_from_initial_load_failure_via_polling() -> None:
+    result = _run_initial_failure_recovery_lifecycle()
+    assert "办公室数据暂时不可用" in result["afterInitHtml"]
+    assert result["intervalMs"] == [5000]
+    assert "Rex" in result["afterRecoverHtml"]
+    assert "恢复后的任务" in result["afterRecoverHtml"]
+    assert "办公室数据暂时不可用" not in result["afterRecoverHtml"]
 
 
 def test_office_module_supports_zoom_pan_and_viewport_reset() -> None:
@@ -1047,3 +1340,12 @@ def test_office_module_switches_detail_panel_when_selecting_another_seat() -> No
     assert "数据科学家" in result["afterClickHtml"]
     assert "等待新任务" in result["afterClickHtml"]
     assert "暂无历史任务" in result["afterClickHtml"]
+
+
+def test_office_module_supports_pointer_drag_and_wheel_navigation() -> None:
+    result = _run_pointer_navigation_lifecycle()
+    assert result["initialTransform"] == "translate(0px, 0px) scale(1)"
+    assert result["initialLabel"] == "100%"
+    assert result["afterWheelTransform"] == "translate(0px, 0px) scale(1.15)"
+    assert result["afterWheelLabel"] == "115%"
+    assert result["afterDragTransform"] == "translate(50px, 40px) scale(1.15)"
