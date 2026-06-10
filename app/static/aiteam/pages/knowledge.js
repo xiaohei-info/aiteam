@@ -52,7 +52,9 @@ window.aiteam = window.aiteam || {};
       '<h4 class="aiteam-upload-form__title">上传文档</h4>' +
       '<div class="aiteam-upload-form__row">' +
       '<select class="aiteam-upload-form__input" id="kb-upload-select">' + options + '</select>' +
-      '<input class="aiteam-upload-form__input" id="kb-upload-asset-id" placeholder="Asset ID（必填）">' +
+      '<input class="aiteam-upload-form__input" id="kb-upload-file-name" placeholder="文件名（必填）">' +
+      '<input class="aiteam-upload-form__input" id="kb-upload-mime-type" placeholder="MIME Type（选填）">' +
+      '<input class="aiteam-upload-form__input" id="kb-upload-size" placeholder="文件大小 Bytes（选填）">' +
       '<input class="aiteam-upload-form__input" id="kb-upload-display-name" placeholder="文档名称（选填）">' +
       '<button class="aiteam-upload-form__btn" id="kb-upload-submit">提交</button>' +
       '</div>' +
@@ -63,27 +65,48 @@ window.aiteam = window.aiteam || {};
 
   function bindUploadForm() {
     var btn = document.getElementById('kb-upload-submit');
-    if (!btn) return;
+    if (!btn || !ns.api || typeof ns.api.upload !== 'function' || typeof ns.api.postKnowledgeDocument !== 'function') return;
     btn.addEventListener('click', function () {
       var kbId = document.getElementById('kb-upload-select').value;
-      var assetId = document.getElementById('kb-upload-asset-id').value.trim();
+      var fileName = document.getElementById('kb-upload-file-name').value.trim();
+      var mimeType = document.getElementById('kb-upload-mime-type').value.trim() || 'application/octet-stream';
+      var sizeValue = document.getElementById('kb-upload-size').value.trim();
+      var fileSize = Number(sizeValue || 0);
       var displayName = document.getElementById('kb-upload-display-name').value.trim();
       var feedback = document.getElementById('kb-upload-feedback');
 
-      if (!assetId) {
-        feedback.innerHTML = '<span style="color:#f87171">请输入 Asset ID</span>';
+      if (!fileName) {
+        feedback.innerHTML = '<span style="color:#f87171">请输入文件名</span>';
         return;
       }
 
-      feedback.innerHTML = '提交中...';
-      var body = { asset_id: assetId };
-      if (displayName) body.display_name = displayName;
+      feedback.innerHTML = '上传中...';
+      ns.api.upload({
+        name: fileName,
+        mime_type: mimeType,
+        size: Number.isFinite(fileSize) ? fileSize : 0,
+      }).then(function (uploadResult) {
+        if (!uploadResult || !uploadResult.ok || !uploadResult.data || !uploadResult.data.asset_id) {
+          feedback.innerHTML = '<span style="color:#f87171">上传失败: ' + ((uploadResult && uploadResult.error) || '未知错误') + '</span>';
+          return null;
+        }
 
-      ns.api.postKnowledgeDocument(kbId, body).then(function (result) {
-        if (result.ok) {
+        feedback.innerHTML = '文档登记中...';
+        var body = {
+          asset_id: uploadResult.data.asset_id,
+          file_name: uploadResult.data.name || fileName,
+          mime_type: uploadResult.data.mime_type || mimeType,
+          size: uploadResult.data.size != null ? uploadResult.data.size : (Number.isFinite(fileSize) ? fileSize : 0),
+          storage_key: uploadResult.data.storage_key || '',
+        };
+        if (displayName) body.display_name = displayName;
+        return ns.api.postKnowledgeDocument(kbId, body);
+      }).then(function (result) {
+        if (result === null) return;
+        if (result && result.ok) {
           feedback.innerHTML = '<span style="color:#4ade80">上传成功 — 文档 ID: ' + result.data.document_id + ', 状态: ' + result.data.status + '</span>';
-        } else {
-          feedback.innerHTML = '<span style="color:#f87171">上传失败: ' + (result.error || '未知错误') + '</span>';
+        } else if (result) {
+          feedback.innerHTML = '<span style="color:#f87171">文档登记失败: ' + (result.error || '未知错误') + '</span>';
         }
       }).catch(function () {
         feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
