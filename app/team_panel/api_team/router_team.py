@@ -819,6 +819,55 @@ def _require_permission(query: str, body: dict | None, action: str) -> tuple[str
     return role, None
 
 
+def _trusted_membership_role(cur, *, access_token: str | None, enterprise_id: str | None) -> str | None:
+    if not access_token or not enterprise_id:
+        return None
+    try:
+        from .router_auth import _ACCESS_TOKENS
+    except Exception:
+        return None
+
+    record = _ACCESS_TOKENS.get(access_token)
+    if not isinstance(record, dict):
+        return None
+    user_id = str(record.get("user_id") or "").strip()
+    if not user_id:
+        profile = record.get("profile")
+        if isinstance(profile, dict):
+            user_id = str(profile.get("user_id") or "").strip()
+    if not user_id:
+        return None
+
+    cur.execute(
+        "SELECT role FROM membership "
+        "WHERE enterprise_id=%s AND user_id=%s AND status='active' AND deleted_at IS NULL "
+        "LIMIT 1",
+        (enterprise_id, user_id),
+    )
+    row = cur.fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _require_connector_permission(
+    cur,
+    *,
+    enterprise_id: str | None,
+    request_context: dict | None,
+    action: str = "manage_connectors",
+) -> tuple[str | None, tuple[int, dict] | None]:
+    role = _trusted_membership_role(
+        cur,
+        access_token=str((request_context or {}).get("access_token") or "").strip() or None,
+        enterprise_id=enterprise_id,
+    )
+    if role is None:
+        role = "member"
+    allowed, reason = check_permission(role, action)
+    if not allowed:
+        return None, _forbidden(role, action, reason)
+    return role, None
+
+
 def _usage_window(query: str, body: dict | None = None) -> tuple[str, str]:
     params = _request_params(query, body)
     period_start = str(params.get("period_start") or "2000-01-01")
@@ -3147,13 +3196,20 @@ def _serialize_connector(connector, grants_by_connector: dict[str, list[dict]]) 
     }
 
 
-def _handle_connector_detail(conn, path: str, connector_id: str) -> tuple[int, dict]:
+def _handle_connector_detail(conn, path: str, connector_id: str, request_context: dict | None = None) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         repo = EnterpriseConnectorRepo(cur)
         connector = repo.get_by_id(connector_id)
         if connector is None or connector.enterprise_id != enterprise.id:
@@ -3163,7 +3219,7 @@ def _handle_connector_detail(conn, path: str, connector_id: str) -> tuple[int, d
         cur.close()
 
 
-def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | None, request_context: dict | None = None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
     cur = conn.cursor()
@@ -3172,6 +3228,13 @@ def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | Non
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         repo = EnterpriseConnectorRepo(cur)
         connector = repo.get_by_id(connector_id)
         if connector is None or connector.enterprise_id != enterprise.id:
@@ -3224,11 +3287,22 @@ def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | Non
         cur.close()
 
 
-def _handle_connector_status(conn, path: str, connector_id: str) -> tuple[int, dict]:
+def _handle_connector_status(conn, path: str, connector_id: str, request_context: dict | None = None) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
+        enterprises = EnterpriseRepo(cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
-        if connector is None:
+        if connector is None or connector.enterprise_id != enterprise.id:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
         return 200, {
             "connector_id": connector.id,
@@ -3241,13 +3315,20 @@ def _handle_connector_status(conn, path: str, connector_id: str) -> tuple[int, d
         cur.close()
 
 
-def _handle_connectors_list(conn, path: str) -> tuple[int, dict]:
+def _handle_connectors_list(conn, path: str, request_context: dict | None = None) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 200, {"connectors": [], "definitions": []}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         connector_repo = EnterpriseConnectorRepo(cur)
         definition_repo = ConnectorDefinitionRepo(cur)
         connectors = connector_repo.list_by_enterprise(enterprise.id)
@@ -3275,7 +3356,7 @@ def _handle_connectors_list(conn, path: str) -> tuple[int, dict]:
         cur.close()
 
 
-def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connectors_post(conn, path: str, body: dict | None, request_context: dict | None = None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
     cur = conn.cursor()
@@ -3284,6 +3365,13 @@ def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, di
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         name = body.get("name", "Connector")
         provider_code = body.get("provider_code", body.get("provider", "custom"))
         connector_type = body.get("connector_type", body.get("type", "api_key_connector"))
@@ -3317,12 +3405,23 @@ def _handle_connectors_post(conn, path: str, body: dict | None) -> tuple[int, di
         cur.close()
 
 
-def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dict]:
+def _handle_connector_test(conn, path: str, connector_id: str, request_context: dict | None = None) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
+        enterprises = EnterpriseRepo(cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         repo = EnterpriseConnectorRepo(cur)
         connector = repo.get_by_id(connector_id)
-        if connector is None:
+        if connector is None or connector.enterprise_id != enterprise.id:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
         cur.execute(
             "UPDATE enterprise_connector SET last_validated_at=now(), last_test_result_json=%s::jsonb WHERE id=%s",
@@ -3357,7 +3456,7 @@ def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dic
         cur.close()
 
 
-def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dict | None) -> tuple[int, dict]:
+def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dict | None, request_context: dict | None = None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
     cur = conn.cursor()
@@ -3366,8 +3465,15 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dic
         enterprise = enterprises[0] if enterprises else None
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
         connector = EnterpriseConnectorRepo(cur).get_by_id(connector_id)
-        if connector is None:
+        if connector is None or connector.enterprise_id != enterprise.id:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
         grant = body.get("grant")
         revoke = body.get("revoke")
@@ -3396,6 +3502,34 @@ def _handle_connector_grants_patch(conn, path: str, connector_id: str, body: dic
                 except ValueError as exc:
                     results["errors"].append({"binding_id": binding_id, "error": str(exc)})
         return 200, results
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def _handle_connector_delete(conn, path: str, connector_id: str, request_context: dict | None = None) -> tuple[int, dict]:
+    cur = conn.cursor()
+    try:
+        enterprises = EnterpriseRepo(cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        role, denial = _require_connector_permission(
+            cur,
+            enterprise_id=enterprise.id,
+            request_context=request_context,
+        )
+        if denial is not None:
+            return denial
+        connector_repo = EnterpriseConnectorRepo(cur)
+        connector = connector_repo.get_by_id(connector_id)
+        if connector is None or connector.enterprise_id != enterprise.id:
+            return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        connector_repo.delete(connector_id)
+        conn.commit()
+        return 200, {"connector_id": connector_id, "status": "deleted"}
     except Exception:
         conn.rollback()
         raise
@@ -3471,7 +3605,6 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             repo.update_status(emp)
 
             if skills_add:
-                # B01 Phase 3 behavior change: reject unauthorized skill additions.
                 for skill_code in skills_add:
                     install = uow.enterprise_skill_installs().get_active_by_skill_code(emp.enterprise_id, skill_code)
                     if not install:
@@ -3553,19 +3686,24 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
 
             connector_ids = body.get("connector_ids")
             if connector_ids is not None:
+                connector_repo = uow.enterprise_connectors()
+                normalized_connector_ids = list(dict.fromkeys(connector_ids))
+                for connector_id in normalized_connector_ids:
+                    connector = connector_repo.get_by_id(connector_id)
+                    if connector is None or connector.enterprise_id != emp.enterprise_id:
+                        return 400, {
+                            "error": "INVALID_CONNECTOR_BINDING",
+                            "message": f"Connector {connector_id} is not available for employee {emp_id}",
+                        }
+                    if connector.status != "online":
+                        return 400, {
+                            "error": "INVALID_CONNECTOR_BINDING",
+                            "message": f"EnterpriseConnector {connector_id} is {connector.status}, must be online",
+                        }
                 for binding in uow.employee_connector_bindings().list_by_employee(emp_id):
                     uow.employee_connector_bindings().delete(binding.id)
-                for connector_id in connector_ids:
-                    uow.employee_connector_bindings().create(
-                        EmployeeConnectorBinding(
-                            id=f"cb_{uuid.uuid4().hex[:12]}",
-                            enterprise_id=emp.enterprise_id,
-                            employee_id=emp_id,
-                            connector_id=connector_id,
-                            enabled=True,
-                            access_mode="invoke",
-                        )
-                    )
+                for connector_id in normalized_connector_ids:
+                    grant_connector(uow, emp.enterprise_id, emp_id, connector_id, "invoke")
 
             scheduled_job_payload = body.get("scheduled_job")
             scheduled_job_action = str(body.get("scheduled_job_action") or "").strip()
@@ -3685,53 +3823,39 @@ def handle_team_route(
     Returns (status_code, response_dict) for JSON responses,
     or (status_code, body_text, content_type) for non-JSON responses (e.g. SSE).
     """
-    # Strip /api/team prefix — the dispatch already matched the prefix
     sub = path[len("/api/team"):] if path.startswith("/api/team") else path
     if not sub:
         sub = "/"
 
-    # Parse query string from the sub-path (if present)
     query = ""
     if "?" in sub:
         sub, query = sub.split("?", 1)
 
     route_handler = None
 
-    # ── workbench ──
     if method == "GET" and _match_exact(sub, "/workbench"):
         route_handler = lambda conn: _handle_workbench(conn, sub, query, request_context)
-
-    # ── office scene/feed ──
     elif method == "GET" and _match_exact(sub, "/office/scene"):
         route_handler = lambda conn: _handle_office_scene(conn, sub)
     elif method == "GET" and _match_exact(sub, "/office/feed"):
         route_handler = lambda conn: _handle_office_feed(conn, sub)
-
-    # ── org/tree ──
     elif method == "GET" and _match_exact(sub, "/org/tree"):
         route_handler = lambda conn: _handle_org_tree(conn, sub)
-
-    # ── talent-market/templates ──
     elif method == "GET" and _match_exact(sub, "/talent-market/templates"):
         route_handler = lambda conn: _handle_talent_templates(conn, sub)
-
-    # ── talent-market/templates/{id} ──
     else:
         tmpl_id = _match_prefix(sub, "/talent-market/templates/")
         if method == "GET" and tmpl_id is not None and "/" not in tmpl_id:
             route_handler = lambda conn, template_id=tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
 
-    # ── recruitments ──
     if route_handler is None and method == "POST" and _match_exact(sub, "/recruitments"):
         route_handler = lambda conn: _handle_recruitments_post(conn, sub, body)
 
-    # ── org/assignments/{id} patch ──
     if route_handler is None:
         org_assignment_id = _match_prefix(sub, "/org/assignments/")
         if method == "PATCH" and org_assignment_id is not None and "/" not in org_assignment_id:
             route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, body)
 
-    # ── solutions/{id}/apply ──
     if route_handler is None:
         solution_apply = _match_prefix(sub, "/solutions/")
         if method == "POST" and solution_apply is not None and solution_apply.endswith("/apply"):
@@ -3739,13 +3863,11 @@ def handle_team_route(
             if "/" not in solution_id:
                 route_handler = lambda conn, matched_solution_id=solution_id: _handle_solution_apply_post(conn, sub, matched_solution_id, body)
 
-    # ── conversations/{id} ──
     if route_handler is None:
         conv_id = _match_prefix(sub, "/conversations/")
         if method == "GET" and conv_id is not None and "/" not in conv_id:
             route_handler = lambda conn, conversation_id=conv_id: _handle_conversation_detail(conn, f"{sub}?{query}" if query else sub, conversation_id)
 
-    # ── group-conversations/{id}/messages ──
     if route_handler is None:
         group_message = _match_prefix(sub, "/group-conversations/")
         if method == "POST" and group_message is not None and group_message.endswith("/messages"):
@@ -3753,53 +3875,44 @@ def handle_team_route(
             if "/" not in conv_id:
                 route_handler = lambda conn, conversation_id=conv_id: _handle_group_conversation_message_post(conn, sub, conversation_id, body)
 
-    # ── group-conversations/{id} ──
     if route_handler is None:
         group_detail = _match_prefix(sub, "/group-conversations/")
         if method == "GET" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_detail(conn, sub, conversation_id)
 
-    # ── runs POST ──
     if route_handler is None and method == "POST" and _match_exact(sub, "/runs"):
         route_handler = lambda conn: _handle_runs_post(conn, sub, body)
 
-    # ── runs/{id}/stream ──
     if route_handler is None:
         run_stream = _match_prefix(sub, "/runs/")
         if method == "GET" and run_stream is not None and run_stream.endswith("/stream"):
             run_id = run_stream[:-len("/stream")]
             route_handler = lambda conn, matched_run_id=run_id: _handle_run_stream(conn, sub, matched_run_id, query)
 
-    # ── runs/{id}/events ──
     if route_handler is None:
         run_events = _match_prefix(sub, "/runs/")
         if method == "GET" and run_events is not None and run_events.endswith("/events"):
             run_id = run_events[:-len("/events")]
             route_handler = lambda conn, matched_run_id=run_id: _handle_run_events(conn, sub, matched_run_id, query)
 
-    # ── runs/{id}/retry ──
     if route_handler is None:
         run_retry = _match_prefix(sub, "/runs/")
         if method == "POST" and run_retry is not None and run_retry.endswith("/retry"):
             run_id = run_retry[:-len("/retry")]
             route_handler = lambda conn, matched_run_id=run_id: _handle_run_retry_post(conn, sub, matched_run_id, body)
 
-    # ── runs/{id}/abort ──
     if route_handler is None:
         run_abort = _match_prefix(sub, "/runs/")
         if method == "POST" and run_abort is not None and run_abort.endswith("/abort"):
             run_id = run_abort[:-len("/abort")]
             route_handler = lambda conn, matched_run_id=run_id: _handle_run_abort_post(conn, sub, matched_run_id, body)
 
-    # ── uploads ──
     if route_handler is None and method == "POST" and _match_exact(sub, "/uploads"):
         route_handler = lambda conn: _handle_uploads_post(conn, sub, body)
 
-    # ── P08 knowledge-bases ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/knowledge-bases"):
         route_handler = lambda conn: _handle_knowledge_bases_list(conn, sub)
 
-    # ── P08 knowledge-bases/{id}/documents ──
     if route_handler is None:
         kb_doc = _match_prefix(sub, "/knowledge-bases/")
         if method == "POST" and kb_doc is not None and kb_doc.endswith("/documents"):
@@ -3807,7 +3920,6 @@ def handle_team_route(
             if "/" not in kb_id:
                 route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_document_post(conn, sub, kb_id, body)
 
-    # ── billing usage overview / records ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/overview"):
         route_handler = lambda conn: _handle_billing_usage_overview(conn, query)
 
@@ -3817,45 +3929,45 @@ def handle_team_route(
     if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/records/export"):
         route_handler = lambda conn: _handle_billing_usage_records(conn, f"{query}&format=csv" if query else "format=csv")
 
-    # ── B06 solutions list ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/solutions"):
         route_handler = lambda conn: _handle_solutions_list(conn, sub)
 
-    # ── B05 connectors list/create/test/grants ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_list(conn, sub)
+        route_handler = lambda conn: _handle_connectors_list(conn, sub, request_context)
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_post(conn, sub, body)
+        route_handler = lambda conn: _handle_connectors_post(conn, sub, body, request_context)
 
     if route_handler is None:
         connector_status = _match_prefix(sub, "/connectors/")
         if method == "GET" and connector_status is not None and connector_status.endswith("/status"):
             connector_id = connector_status[:-len("/status")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_status(conn, sub, matched_connector_id)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_status(conn, sub, matched_connector_id, request_context)
 
     if route_handler is None:
         connector_test = _match_prefix(sub, "/connectors/")
         if method == "POST" and connector_test is not None and connector_test.endswith("/test"):
             connector_id = connector_test[:-len("/test")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id, request_context)
 
     if route_handler is None:
         connector_detail = _match_prefix(sub, "/connectors/")
         if connector_detail is not None and "/" not in connector_detail:
             if method == "GET":
-                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id)
+                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id, request_context)
             elif method == "PATCH":
-                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_patch(conn, sub, matched_connector_id, body)
+                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_patch(conn, sub, matched_connector_id, body, request_context)
+            elif method == "DELETE":
+                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_delete(conn, sub, matched_connector_id, request_context)
 
     if route_handler is None:
         connector_grants = _match_prefix(sub, "/connectors/")
         if method == "PATCH" and connector_grants is not None and connector_grants.endswith("/grants"):
             connector_id = connector_grants[:-len("/grants")]
             if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, body)
+                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, body, request_context)
 
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees/export"):
         route_handler = lambda conn: _handle_employees_export(conn, query)
@@ -3863,31 +3975,25 @@ def handle_team_route(
     if route_handler is None and method == "GET" and _match_exact(sub, "/audit-events"):
         route_handler = lambda conn: _handle_audit_events(conn, query)
 
-    # ── memories list/create/update ──
-    # ── skills catalog ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/skills/catalog"):
         route_handler = lambda conn: _handle_skill_catalog(conn, sub, query)
 
-    # ── skills installs list/create ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/skills/installs"):
         route_handler = lambda conn: _handle_skill_installs_list(conn, sub, query)
 
     if route_handler is None and method == "POST" and _match_exact(sub, "/skills/installs"):
         route_handler = lambda conn: _handle_skill_install_post(conn, sub, body)
 
-    # ── skills/installs/{id} patch ──
     if route_handler is None:
         skill_install_patch = _match_prefix(sub, "/skills/installs/")
         if method == "PATCH" and skill_install_patch is not None and "/" not in skill_install_patch:
             route_handler = lambda conn, matched=skill_install_patch: _handle_skill_install_patch(conn, sub, matched, body)
 
-    # ── skills/installs/{id} delete ──
     if route_handler is None:
         skill_install_delete = _match_prefix(sub, "/skills/installs/")
         if method == "DELETE" and skill_install_delete is not None and "/" not in skill_install_delete:
             route_handler = lambda conn, matched=skill_install_delete: _handle_skill_install_delete(conn, sub, matched)
 
-    # ── memories list/create/update/delete ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/memories"):
         route_handler = lambda conn: _handle_memory_list(conn, sub, query)
 
@@ -3908,24 +4014,19 @@ def handle_team_route(
         elif method == "DELETE" and memory_id_route is not None and "/" not in memory_id_route:
             route_handler = lambda conn, matched_memory_id=memory_id_route: _handle_memory_delete(conn, sub, matched_memory_id)
 
-
-    # ── employees/{id} detail ──
     if route_handler is None:
         emp_id_detail = _match_prefix(sub, "/employees/")
         if method == "GET" and emp_id_detail is not None and "/" not in emp_id_detail:
             route_handler = lambda conn, employee_id=emp_id_detail: _handle_employee_detail(conn, sub, employee_id, query)
 
-    # ── employees/{id} patch ──
     if route_handler is None:
         emp_id_patch = _match_prefix(sub, "/employees/")
         if method == "PATCH" and emp_id_patch is not None and "/" not in emp_id_patch:
             route_handler = lambda conn, employee_id=emp_id_patch: _handle_employee_patch(conn, sub, employee_id, query, body)
 
-    # ── employees list ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees"):
         route_handler = lambda conn: _handle_employee_list(conn, sub, query)
 
-    # ── settings ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/settings"):
         route_handler = lambda conn: handle_get_settings(conn, sub)
 
@@ -3935,7 +4036,6 @@ def handle_team_route(
     if route_handler is None and method == "POST" and _match_exact(sub, "/settings/admin-invites"):
         route_handler = lambda conn: handle_post_admin_invite(conn, sub, body)
 
-    # ── billing/balance + billing/recharges ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/billing/balance"):
         route_handler = lambda conn: handle_get_billing_balance(conn, sub)
 

@@ -247,3 +247,13 @@ def test_sixth_device_revokes_oldest_refresh_family():
     )
     assert evicted_refresh.status == 401
     assert "login again" in _handler_json(evicted_refresh)["error"].lower()
+
+
+def test_aiteam_request_context_includes_access_token():
+    import api.routes as routes
+
+    handler = _FakeHandler()
+    handler.headers["Authorization"] = "Bearer at_test_context"
+    context = routes._build_aiteam_request_context(handler)
+
+    assert context["access_token"] == "at_test_context"

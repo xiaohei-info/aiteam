@@ -94,6 +94,77 @@ def _get_raw(parsed_path: str) -> "_FakeHandler":
     return handler
 
 
+_DEFAULT_TEST_USER_ID = "user_test"
+
+
+def _make_auth_handler() -> "_FakeHandler":
+    handler = _FakeHandler()
+    handler.headers.update(_auth_headers(access_token=_issue_test_access_token(_DEFAULT_TEST_USER_ID)))
+    return handler
+
+
+def _get(parsed_path: str) -> tuple[int, dict]:
+    from api.routes import handle_get
+
+    handler = _make_auth_handler()
+    parsed = urlparse(f"http://example.com{parsed_path}")
+    handle_get(handler, parsed)
+    return handler.status, handler.get_json()
+
+
+def _post(parsed_path: str, body: dict | None = None) -> tuple[int, dict]:
+    from api.routes import handle_post
+
+    handler = _make_auth_handler()
+    if body is not None:
+        raw = json.dumps(body).encode("utf-8")
+        handler.headers["Content-Length"] = str(len(raw))
+        handler.rfile = type("_BytesIO", (), {"read": lambda self, n: raw})()
+    parsed = urlparse(f"http://example.com{parsed_path}")
+    handle_post(handler, parsed)
+    return handler.status, handler.get_json()
+
+
+def _patch(parsed_path: str, body: dict | None = None) -> tuple[int, dict]:
+    from api.routes import handle_patch
+
+    handler = _make_auth_handler()
+    if body is not None:
+        raw = json.dumps(body).encode("utf-8")
+        handler.headers["Content-Length"] = str(len(raw))
+        handler.rfile = type("_BytesIO", (), {"read": lambda self, n: raw})()
+    parsed = urlparse(f"http://example.com{parsed_path}")
+    handle_patch(handler, parsed)
+    return handler.status, handler.get_json()
+
+
+def _auth_headers(*, access_token: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    return headers
+
+
+def _issue_test_access_token(user_id: str, *, enterprise_id: str = "ent_test") -> str:
+    import team_panel.api_team.router_auth as router_auth
+
+    access_token = f"at_test_{uuid.uuid4().hex[:10]}"
+    router_auth._ACCESS_TOKENS[access_token] = {
+        "session_id": f"sess_{uuid.uuid4().hex[:8]}",
+        "enterprise_id": enterprise_id,
+        "user_id": user_id,
+        "family_id": f"fam_{uuid.uuid4().hex[:8]}",
+        "expires_at": 4102444800,
+        "profile": {
+            "user_id": user_id,
+            "nickname": user_id,
+            "current_enterprise": enterprise_id,
+            "enterprises": [{"enterprise_id": enterprise_id}],
+        },
+    }
+    return access_token
+
+
 # ═══════════════════════════════════════════════════════
 # Batch 1: GET endpoints
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1051,6 +1122,22 @@ class TestEmployeePatch:
         assert scheduled_job["max_consecutive_failures"] == 4
         assert scheduled_job["notification_policy"] == {"on_failure": "email"}
 
+    def test_patch_connector_ids_rejects_non_online_connector(self, seeded_enterprise):
+        create_status, create_resp = _post(
+            "/api/team/connectors",
+            {"name": "Offline Connector", "provider_code": "test", "type": "oauth_connector"},
+        )
+        assert create_status == 201, create_resp
+
+        emp_id = seeded_enterprise["employee_id"]
+        status, resp = _patch(
+            f"/api/team/employees/{emp_id}?role=owner&actor_id=user_test",
+            {"connector_ids": [create_resp["connector_id"]]},
+        )
+        assert status == 400, resp
+        assert resp["error"] == "INVALID_CONNECTOR_BINDING"
+        assert "must be online" in resp["message"]
+
     def test_patch_scheduled_job_action_pause_resume_archive(self, seeded_enterprise):
         emp_id = seeded_enterprise["employee_id"]
         create_status, create_resp = _patch(
@@ -1332,6 +1419,49 @@ class TestConnectorsIntegration:
         assert "definitions" in body
         assert isinstance(body["connectors"], list)
         assert isinstance(body["definitions"], list)
+
+    def test_member_cannot_spoof_owner_for_connector_routes_without_trusted_membership(self, seeded_enterprise):
+        access_token = _issue_test_access_token("usr_member")
+        handler = _FakeHandler()
+        handler.headers.update(_auth_headers(access_token=access_token))
+        parsed = urlparse("http://example.com/api/team/connectors?role=owner")
+
+        from api.routes import handle_get
+
+        handle_get(handler, parsed)
+        body = handler.get_json()
+        assert handler.status == 403, body
+        assert body["required_action"] == "manage_connectors"
+        assert body["role"] == "member"
+
+    def test_owner_membership_can_access_connector_routes_without_role_query(self, seeded_enterprise):
+        access_token = _issue_test_access_token("user_test")
+        handler = _FakeHandler()
+        handler.headers.update(_auth_headers(access_token=access_token))
+        parsed = urlparse("http://example.com/api/team/connectors")
+
+        from api.routes import handle_get
+
+        handle_get(handler, parsed)
+        body = handler.get_json()
+        assert handler.status == 200, body
+        assert "connectors" in body
+
+    def test_finance_admin_cannot_spoof_owner_for_connector_create(self, seeded_enterprise):
+        access_token = _issue_test_access_token("usr_finance")
+        handler = _FakeHandler()
+        handler.headers.update(_auth_headers(access_token=access_token))
+        raw = json.dumps({"name": "Forbidden", "provider_code": "test", "role": "owner"}).encode("utf-8")
+        handler.headers["Content-Length"] = str(len(raw))
+        handler.rfile = type("_BytesIO", (), {"read": lambda self, n: raw})()
+        parsed = urlparse("http://example.com/api/team/connectors?role=owner")
+
+        from api.routes import handle_post
+
+        handle_post(handler, parsed)
+        body = handler.get_json()
+        assert handler.status == 403, body
+        assert body["role"] == "finance_admin"
 
     def test_post_connector_returns_201(self, seeded_enterprise):
         status, resp = _post(

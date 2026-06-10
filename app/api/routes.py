@@ -3850,6 +3850,7 @@ def _build_aiteam_request_context(handler) -> dict:
     request_context = {
         "webui_auth_enabled": False,
         "webui_authenticated": False,
+        "access_token": None,
     }
     try:
         from api.auth import is_auth_enabled, parse_cookie, verify_session
@@ -3857,6 +3858,12 @@ def _build_aiteam_request_context(handler) -> dict:
         request_context["webui_auth_enabled"] = bool(is_auth_enabled())
         cookie_val = parse_cookie(handler)
         request_context["webui_authenticated"] = bool(cookie_val and verify_session(cookie_val))
+    except Exception:
+        pass
+    try:
+        from team_panel.api_team.router_auth import access_token_from_headers
+
+        request_context["access_token"] = access_token_from_headers(handler.headers)
     except Exception:
         pass
     return request_context

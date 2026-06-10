@@ -52,6 +52,22 @@ def clean_tables_with_enterprise(clean_tables, db_conn):
             (data["enterprise_id"], "test-corp", "Test Corp", "active", "user_test"),
         )
         cur.execute(
+            "INSERT INTO membership (id, enterprise_id, user_id, role, status, created_by) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("m_owner", data["enterprise_id"], "user_test", "owner", "active", "seed"),
+        )
+        cur.execute(
+            "INSERT INTO membership (id, enterprise_id, user_id, role, status, created_by) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("m_member", data["enterprise_id"], "usr_member", "member", "active", "seed"),
+        )
+        cur.execute(
+            "INSERT INTO membership (id, enterprise_id, user_id, role, status, created_by) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("m_finance", data["enterprise_id"], "usr_finance", "finance_admin", "active", "seed"),
+        )
+        cur.execute(
+            "INSERT INTO membership (id, enterprise_id, user_id, role, status, created_by) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("m_enterprise", data["enterprise_id"], "usr_enterprise", "enterprise_admin", "active", "seed"),
+        )
+        cur.execute(
             "INSERT INTO agent_template (id, name, category_code, role_name, status, prompt_pack_json, default_model_json, default_binding_json, version_no, source_type) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 data["template_id"],
