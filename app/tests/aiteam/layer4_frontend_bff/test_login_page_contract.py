@@ -29,6 +29,8 @@ def _run_login_page_node(
     code: str = "",
     trigger_phone_send: bool = False,
     trigger_phone_verify: bool = False,
+    trigger_phone_tab: bool = False,
+    phone_verify_should_fail: bool = False,
     me_payload: dict | None = None,
 ) -> dict:
     login_js = ROOT / "static" / "login.js"
@@ -40,6 +42,8 @@ const runtime = {{
   code: {json.dumps(code)},
   triggerPhoneSend: {json.dumps(trigger_phone_send)},
   triggerPhoneVerify: {json.dumps(trigger_phone_verify)},
+  triggerPhoneTab: {json.dumps(trigger_phone_tab)},
+  phoneVerifyShouldFail: {json.dumps(phone_verify_should_fail)},
   mePayload: {json.dumps(me_payload or {"current_enterprise": None, "onboarding": {"action": "create_or_join_enterprise"}})},
 }};
 const timerQueue = [];
@@ -224,6 +228,9 @@ const context = {{
       return Promise.resolve({{ ok: true, json: async () => ({{ expires_in: 300 }}) }});
     }}
     if (String(url).indexOf('/api/auth/login/phone/verify') !== -1) {{
+      if (runtime.phoneVerifyShouldFail) {{
+        return Promise.resolve({{ ok: false, json: async () => ({{ error: 'Invalid phone verification code' }}) }});
+      }}
       return Promise.resolve({{ ok: true, json: async () => ({{ access_token: 'at_phone_success', expires_in: 900 }}) }});
     }}
     return Promise.resolve({{ ok: true, json: async () => ({{}}) }});
@@ -246,6 +253,13 @@ Promise.resolve()
     }}
     if (runtime.code) {{
       elements['phone-code'].value = runtime.code;
+    }}
+    if (runtime.triggerPhoneTab) {{
+      authTabs[1].dispatchEvent({{
+        type: 'click',
+        preventDefault() {{}},
+      }});
+      await Promise.resolve();
     }}
     if (runtime.triggerPhoneSend) {{
       elements['phone-send-code'].dispatchEvent({{
@@ -272,6 +286,9 @@ Promise.resolve()
       phoneSendDisabled: elements['phone-send-code'].disabled,
       phoneSendText: elements['phone-send-code'].textContent,
       phoneStatus: elements['phone-status'].textContent,
+      phonePanelActive: authPanels[1].classList.contains('is-active'),
+      wechatPanelActive: authPanels[0].classList.contains('is-active'),
+      errorText: elements['err'].textContent,
     }}));
   }})
   .catch((error) => {{
@@ -298,13 +315,16 @@ def test_login_page_starts_wechat_login_on_load():
     assert result["wechatHref"].endswith("/mock/wechat-qr?state=wx_test")
     assert result["wechatDisplay"] == "inline-flex"
     assert "QR" in result["wechatStatus"] or "二维码" in result["wechatStatus"]
+    assert result["wechatPanelActive"] is True
+    assert result["phonePanelActive"] is False
     assert result["href"] == "http://localhost/login"
 
 
 def test_login_page_applies_phone_send_cooldown_feedback():
-    result = _run_login_page_node(phone="13800138000", trigger_phone_send=True)
+    result = _run_login_page_node(phone="13800138000", trigger_phone_send=True, trigger_phone_tab=True)
 
     assert any("/api/auth/login/phone/send-code" in call["url"] for call in result["fetchCalls"])
+    assert result["phonePanelActive"] is True
     assert result["phoneSendDisabled"] is True
     assert "Resend in" in result["phoneSendText"]
     assert "resend in" in result["phoneStatus"].lower()
@@ -321,3 +341,26 @@ def test_login_page_redirects_new_user_to_workbench_onboarding_hint():
     assert any("/api/auth/login/phone/verify" in call["url"] for call in result["fetchCalls"])
     assert any("/api/me" in call["url"] for call in result["fetchCalls"])
     assert result["href"] == "http://localhost/app/workbench?onboarding=create_or_join_enterprise"
+
+
+def test_login_page_switches_to_phone_entry_when_phone_tab_selected():
+    result = _run_login_page_node(trigger_phone_tab=True)
+
+    assert result["phonePanelActive"] is True
+    assert result["wechatPanelActive"] is False
+
+
+def test_login_page_surfaces_phone_verify_failure_for_retry():
+    result = _run_login_page_node(
+        phone="13800138000",
+        code="000000",
+        trigger_phone_tab=True,
+        trigger_phone_verify=True,
+        phone_verify_should_fail=True,
+    )
+
+    assert any("/api/auth/login/phone/verify" in call["url"] for call in result["fetchCalls"])
+    assert result["href"] == "http://localhost/login"
+    assert result["phonePanelActive"] is True
+    assert "invalid phone verification code" in result["phoneStatus"].lower()
+    assert "invalid phone verification code" in result["errorText"].lower()

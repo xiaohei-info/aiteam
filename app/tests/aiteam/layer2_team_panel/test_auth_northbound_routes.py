@@ -378,3 +378,38 @@ def test_onboarding_join_enterprise_rejects_invalid_code():
 
     assert join_handler.status == 404
     assert "invite" in _handler_json(join_handler)["error"].lower()
+
+
+def test_onboarding_join_enterprise_rejects_duplicate_membership():
+    send_handler = _request(
+        "POST",
+        "/api/auth/login/phone/send-code",
+        body={"phone": "13800138103"},
+        client_ip="198.51.100.123",
+    )
+    assert send_handler.status == 200
+    verify_handler = _request(
+        "POST",
+        "/api/auth/login/phone/verify",
+        body={"phone": "13800138103", "code": "888888"},
+        headers={"User-Agent": "Safari QA"},
+        client_ip="198.51.100.123",
+    )
+    access_token = _handler_json(verify_handler)["access_token"]
+
+    first_join_handler = _request(
+        "POST",
+        "/api/auth/onboarding/join-enterprise",
+        body={"invite_code": "INV-ACME01"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert first_join_handler.status == 200
+
+    second_join_handler = _request(
+        "POST",
+        "/api/auth/onboarding/join-enterprise",
+        body={"invite_code": "INV-ACME01"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert second_join_handler.status == 409
+    assert "already" in _handler_json(second_join_handler)["error"].lower()
