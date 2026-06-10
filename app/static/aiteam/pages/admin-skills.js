@@ -108,7 +108,7 @@ window.aiteam = window.aiteam || {};
       : '版本 ' + esc(item.version) + ' · 来源 ' + esc(item.source);
     var auditLine = item.audit_status
       ? '<div class="aiteam-skill-card__meta">审计状态：' + esc(item.audit_status) + '</div>'
-      : '<div class="aiteam-skill-card__meta">审计追踪：当前后端未返回安装审计字段，前端保留可见降级提示。</div>';
+      : '<div class="aiteam-skill-card__meta">审计状态：暂缺</div>';
     var updatedLine = item.updated_at
       ? '<div class="aiteam-skill-card__meta">最近安装时间：' + esc(item.updated_at) + '</div>'
       : '';

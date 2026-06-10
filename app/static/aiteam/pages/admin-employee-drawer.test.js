@@ -176,9 +176,21 @@ const employeeResponse = {
 const context = {
   window: {
     aiteam: {
+      __updateEmployeeCalls: [],
       api: {
         getEmployee() {
           return Promise.resolve({ ok: true, data: employeeResponse });
+        },
+        updateEmployee(employeeId, body) {
+          context.window.aiteam.__updateEmployeeCalls.push({ employeeId, body });
+          return Promise.resolve({
+            ok: true,
+            data: Object.assign({
+              employee_id: employeeId,
+              status: employeeResponse.status,
+              display_name: employeeResponse.display_name,
+            }, body),
+          });
         },
         getSkillInstalls() {
           return Promise.resolve({ ok: true, data: { items: [
@@ -307,6 +319,45 @@ async function run() {
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('治理审计') !== -1, 'profile tab should render governance audit section');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('employee.updated') !== -1, 'profile tab should render recent employee audit event types');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('scheduled_job.pause') !== -1, 'profile tab should render scheduled job governance audit event types');
+
+  assert(drawer.__test && typeof drawer.__test.saveModelConfig === 'function', 'drawer test hooks should expose saveModelConfig');
+  assert(drawer.__test && typeof drawer.__test.savePromptConfig === 'function', 'drawer test hooks should expose savePromptConfig');
+  assert(drawer.__test && typeof drawer.__test.saveKnowledgeConfig === 'function', 'drawer test hooks should expose saveKnowledgeConfig');
+  assert(drawer.__test && typeof drawer.__test.saveMemoryConfig === 'function', 'drawer test hooks should expose saveMemoryConfig');
+  assert(drawer.__test && typeof drawer.__test.saveConnectorConfig === 'function', 'drawer test hooks should expose saveConnectorConfig');
+  assert(drawer.__test && typeof drawer.__test.saveScheduledJobConfig === 'function', 'drawer test hooks should expose saveScheduledJobConfig');
+
+  await drawer.__test.saveModelConfig({ model_provider: 'anthropic', model_name: 'claude-3-7-sonnet' });
+  await drawer.__test.savePromptConfig({
+    prompt_version: 13,
+    prompt_system: 'Use evidence first',
+    prompt_behavior_rules_json: '{"tone":"direct"}',
+    prompt_opening_message: '开始前先核对事实。',
+  });
+  await drawer.__test.saveKnowledgeConfig({ knowledge_base_ids: ['kb_ops', 'kb_marketing_001'] });
+  await drawer.__test.saveMemoryConfig({
+    memory_mode: 'external',
+    memory_provider_code: 'memx',
+    memory_retention_days: 30,
+    memory_writeback_enabled: false,
+  });
+  await drawer.__test.saveConnectorConfig({ connector_ids: ['conn_docs', 'conn_search'] });
+  await drawer.__test.saveScheduledJobConfig({
+    scheduled_job: {
+      name: 'Morning Ops Loop',
+      goal: 'Check alerts',
+      schedule_expr: '0 8 * * *',
+      status: 'enabled',
+    },
+  });
+
+  assert(context.window.aiteam.__updateEmployeeCalls.length >= 6, 'drawer save helpers should call updateEmployee for editable tabs');
+  assert(context.window.aiteam.__updateEmployeeCalls[0].body.model_provider === 'anthropic', 'model save should PATCH model_provider');
+  assert(context.window.aiteam.__updateEmployeeCalls[1].body.prompt_system === 'Use evidence first', 'prompt save should PATCH prompt_system');
+  assert(context.window.aiteam.__updateEmployeeCalls[2].body.knowledge_base_ids.length === 2, 'knowledge save should PATCH knowledge_base_ids');
+  assert(context.window.aiteam.__updateEmployeeCalls[3].body.memory_provider_code === 'memx', 'memory save should PATCH memory settings');
+  assert(context.window.aiteam.__updateEmployeeCalls[4].body.connector_ids[1] === 'conn_search', 'connector save should PATCH connector_ids');
+  assert(context.window.aiteam.__updateEmployeeCalls[5].body.scheduled_job.name === 'Morning Ops Loop', 'loop save should PATCH scheduled_job');
 
   drawer.close();
   assert(host.children.length === 0, 'close should remove overlay and drawer');

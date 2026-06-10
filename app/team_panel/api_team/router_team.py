@@ -527,10 +527,13 @@ def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]
         install_repo = EnterpriseSkillInstallRepo(cur)
         installs = install_repo.list_by_enterprise(enterprise.id)
         skill_repo = EmployeeSkillBindingRepo(cur)
+        audit_repo = AuditEventRepo(cur)
         items = []
         for inst in installs:
             grants = skill_repo.list_by_skill_code(enterprise.id, inst.skill_code)
             cat_entry = next((e for e in _get_full_catalog() if e["skill_code"] == inst.skill_code), None)
+            latest_audits = audit_repo.list_by_target("enterprise_skill_install", inst.id, limit=1)
+            latest_audit = latest_audits[0] if latest_audits else None
             items.append({
                 "install_id": inst.id,
                 "skill_code": inst.skill_code,
@@ -541,6 +544,8 @@ def _handle_skill_installs_list(conn, path: str, query: str) -> tuple[int, dict]
                 "latest_version": inst.latest_version,
                 "scope_mode": inst.scope_mode,
                 "install_status": inst.install_status,
+                "audit_status": latest_audit.event_type if latest_audit else "",
+                "audit_recorded_at": latest_audit.created_at if latest_audit else None,
                 "tags": cat_entry["tags"] if cat_entry else [],
                 "grants": [
                     {"skill_code": g.skill_code, "employee_id": g.employee_id, "enabled": g.enabled}
@@ -1377,7 +1382,10 @@ def _handle_talent_templates(conn, path: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
         repo = AgentTemplateRepo(cur)
-        templates = repo.list_all()
+        templates = [
+            template for template in repo.list_by_status("published")
+            if template.deleted_at is None
+        ]
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None
         employee_counts: dict[str, int] = {}
@@ -1420,7 +1428,7 @@ def _handle_talent_template_detail(conn, path: str, template_id: str) -> tuple[i
     try:
         repo = AgentTemplateRepo(cur)
         t = repo.get_by_id(template_id)
-        if t is None:
+        if t is None or t.status != "published" or t.deleted_at is not None:
             return 404, {"error": "TEMPLATE_NOT_FOUND", "message": f"Template {template_id} not found"}
         enterprises = EnterpriseRepo(cur).list_all()
         enterprise = enterprises[0] if enterprises else None

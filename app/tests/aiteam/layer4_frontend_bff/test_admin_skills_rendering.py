@@ -29,7 +29,7 @@ global.window = {{
       getSkillInstalls() {{
         apiCalls.push({{ method: 'GET', url: '/api/team/skills/installs' }});
         return Promise.resolve({{ ok: true, data: {{ items: [
-          {{ install_id: 'inst_1', skill_id: 'skill_excel', name: 'Excel分析', version: '1.2.0', latest_version: '1.3.0', update_available: true, source: 'skillhub', visibility: 'enterprise', granted_employee_ids: ['emp_1'], grants: [{{ employee_id: 'emp_1', enabled: true }}] }},
+          {{ install_id: 'inst_1', skill_id: 'skill_excel', name: 'Excel分析', version: '1.2.0', latest_version: '1.3.0', update_available: true, source: 'skillhub', visibility: 'enterprise', audit_status: 'skill.install', granted_employee_ids: ['emp_1'], grants: [{{ employee_id: 'emp_1', enabled: true }}] }},
         ] }} }});
       }},
       installSkill(payload) {{
@@ -78,3 +78,5 @@ def test_admin_skills_renders_install_scope_and_source_badges() -> None:
     assert "clawhub.io" in payload["html"]
     assert "升级到最新" in payload["html"]
     assert "编辑授权员工" in payload["html"]
+    assert "审计状态：skill.install" in payload["html"]
+    assert "后端未返回安装审计字段" not in payload["html"]

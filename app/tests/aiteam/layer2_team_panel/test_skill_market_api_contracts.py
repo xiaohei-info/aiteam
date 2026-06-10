@@ -64,6 +64,8 @@ class TestSkillInstalls:
         install = body['items'][0]
         for key in ('install_id', 'skill_code', 'scope_mode', 'version', 'grants'):
             assert key in install
+        assert install["audit_status"] == "skill.install"
+        assert install["audit_recorded_at"]
 
     def test_patch_install_updates_version_and_scope(self, seeded_enterprise):
         _, created = _post('/api/team/skills/installs', {
