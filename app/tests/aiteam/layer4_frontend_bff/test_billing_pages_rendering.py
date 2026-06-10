@@ -516,6 +516,13 @@ def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() ->
     assert "导出报表" in payload["html"]
 
 
+def test_admin_billing_trend_bars_expose_daily_employee_breakdown_tooltip() -> None:
+    payload = _run_admin_billing()
+    assert "title=\"2026-06-03" in payload["html"]
+    assert "营销分析师" in payload["html"]
+    assert "420000 tokens" in payload["html"]
+
+
 def test_admin_recharge_renders_warning_threshold_payment_methods_and_usage_entry() -> None:
     payload = _run_admin_recharge()
     assert "低余额预警" in payload["html"]

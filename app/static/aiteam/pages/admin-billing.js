@@ -99,10 +99,17 @@ window.aiteam = window.aiteam || {};
     rows.forEach(function (item) {
       var day = stringValue(item.event_ts, '').slice(0, 10) || 'unknown';
       if (!map[day]) {
-        map[day] = { day: day, tokens: 0, cost_cents: 0 };
+        map[day] = { day: day, tokens: 0, cost_cents: 0, breakdown: [] };
       }
-      map[day].tokens += Number(item.tokens) || 0;
-      map[day].cost_cents += Number(item.cost_cents) || 0;
+      var tokens = Number(item.tokens) || 0;
+      var costCents = Number(item.cost_cents) || 0;
+      map[day].tokens += tokens;
+      map[day].cost_cents += costCents;
+      map[day].breakdown.push({
+        employee_name: stringValue(item.display_name, item.employee_id || '未命名员工'),
+        tokens: tokens,
+        cost_cents: costCents,
+      });
     });
     return Object.keys(map).sort().map(function (day) { return map[day]; });
   }
@@ -116,8 +123,12 @@ window.aiteam = window.aiteam || {};
     }, 0) || 1;
     return '<div class="aiteam-billing__trend">' + trendItems.map(function (item) {
       var height = Math.max(12, Math.round(((Number(item.tokens) || 0) / maxTokens) * 120));
+      var breakdown = Array.isArray(item.breakdown) ? item.breakdown : [];
+      var tooltip = [item.day].concat(breakdown.map(function (entry) {
+        return entry.employee_name + ' ' + formatNumber(entry.tokens) + ' tokens';
+      })).join(' | ');
       return '<div class="aiteam-billing__trend-col">' +
-        '<div class="aiteam-billing__trend-bar" style="height:' + height + 'px"></div>' +
+        '<div class="aiteam-billing__trend-bar" title="' + esc(tooltip) + '" style="height:' + height + 'px"></div>' +
         '<span class="aiteam-billing__trend-day">' + esc(item.day.slice(5)) + '</span>' +
         '</div>';
     }).join('') + '</div>';
