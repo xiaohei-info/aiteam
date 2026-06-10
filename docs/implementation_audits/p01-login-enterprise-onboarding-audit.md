@@ -65,7 +65,7 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 - `test_auth_northbound_routes.py` → `8 passed`
 - `test_login_page_contract.py` → `8 passed`
 - `test_workbench_page_rendering.py` → `11 passed`
-- `test_login_enterprise_onboarding_flow.py` → `2 passed`
+- `test_login_enterprise_onboarding_flow.py` → `4 passed`
 
 证据文件：
 
@@ -81,6 +81,8 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 - 手机号登录 → `/api/me` 返回 `onboarding.action`
 - 创建企业 → `current_enterprise` 建立
 - 邀请码加入企业 → `current_enterprise` 建立
+- 无效邀请码 → 保持 `onboarding.action=create_or_join_enterprise`
+- 重复加入同一企业 → 返回 `409` 且不破坏当前企业状态
 
 这条证据比单独的 layer2/layer4 contract 更接近业务闭环。
 
@@ -111,7 +113,7 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 | `P01-F02` | `开发侧基本满足` | 微信扫码 init/poll/callback、二维码失效提示、验证码发送/冷却/校验 已有 layer2/layer4 证据 | 缺更完整的扫码生命周期展示证据与手工验收 |
 | `P01-F03` | `开发侧较强满足` | refresh rotation、replay 失效、device limit、IP cooldown 都已覆盖 | 缺更明确的前端会话失效产品反馈证据 |
 | `P01-F04` | `主链已闭环` | create/join/current-enterprise + workbench onboarding 交互 + layer5 登录入户主路径 已实现并测试通过 | 缺 QA/PM 场景签收材料 |
-| `P01-F05` | `部分满足，仍需补强` | 验证码错误、二维码失效、无效邀请码、重复加入冲突已有自动化证据 | 仍缺更系统化的失败矩阵与产品级恢复证据 |
+| `P01-F05` | `开发侧证据明显增强，但仍未最终收口` | 验证码错误、二维码失效、无效邀请码、重复加入冲突已有 layer2/layer4/layer5 自动化证据 | 仍缺更完整的产品级失败矩阵与 QA/PM 证据 |
 
 ## 最近提交
 
@@ -122,6 +124,6 @@ pytest app/tests/aiteam/layer5_flows/test_login_enterprise_onboarding_flow.py -q
 
 ## 下一步建议
 
-1. 继续补 `P01-F05` 的失败矩阵证据，优先扫码超时/异常恢复。
-2. 补一轮真实页面截图或录屏，把 `P01-F01/F02/F04` 的产品级证据补齐。
+1. 若继续补代码，优先补扫码超时这一格失败矩阵的更高层证据。
+2. 补一轮真实页面截图或录屏，把 `P01-F01/F02/F04/F05` 的产品级证据补齐。
 3. 若要追求 `accepted_verified`，需要把当前开发证据再整理成 QA / PM 可签收的材料，而不是只停在测试绿。
