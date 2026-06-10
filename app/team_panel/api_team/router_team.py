@@ -2087,7 +2087,9 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
             has_recent_delta=latest_event is not None and latest_event.event_type == "message_delta",
         )
         latest_run_payload = None
+        latest_run_summary = None
         if run is not None:
+            latest_run_summary = _load_payload(run.result_summary_json)
             latest_run_payload = {
                 "run_id": run.id,
                 "status": run.status,
@@ -2116,6 +2118,12 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
                 "events_url": f"/api/team/runs/{run.id}/events?cursor=0" if run is not None else "",
                 "refresh_hint_ms": 3000,
             },
+            "latest_run_summary": {
+                "summary": latest_run_summary.get("summary", ""),
+                "citations": _normalize_citations(
+                    latest_run_summary.get("citations") or latest_run_summary.get("references")
+                ),
+            } if latest_run_summary else None,
             "latest_route_decision": latest_route_decision,
             "task_tree": task_tree,
             "last_message_preview": {

@@ -238,6 +238,18 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function renderLatestRunSummary(summary) {
+    if (!summary || (!summary.summary && !(summary.citations && summary.citations.length))) {
+      return '';
+    }
+    var citations = Array.isArray(summary.citations) ? summary.citations : [];
+    return '<div class="aiteam-card aiteam-card--flat">' +
+      '<div class="aiteam-card__row"><strong>最近知识引用</strong>' + badge(citations.length ? ('引用 ' + citations.length) : '摘要') + '</div>' +
+      '<p class="aiteam-card__sub">' + escapeHtml(summary.summary || '已生成知识库引用摘要') + '</p>' +
+      (citations.length ? '<div class="aiteam-route-feedback__chips">' + citations.map(function (item) { return badge(item.title || item.label || '引用来源'); }).join('') + '</div>' : '') +
+      '</div>';
+  }
+
   function routeDecisionMessage(event, state) {
     var payload = event.payload || {};
     var decision = payload.route_decision || state.conversation.latest_route_decision || {};
@@ -619,6 +631,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-panel aiteam-panel--nested" data-group-settings-card>' +
       '<div class="aiteam-panel__header"><h3>群设置</h3><span class="aiteam-inline-note">当前可见 contract</span></div>' +
       renderLatestDecision(conversation.latest_route_decision, state) +
+      renderLatestRunSummary(conversation.latest_run_summary) +
       '<div class="aiteam-stack">' +
       '<a class="aiteam-card-link" href="/app/org"><span class="aiteam-card-link__label">成员管理入口</span><span class="aiteam-card-link__note">通过组织架构页查看归属与调整团队结构</span></a>' +
       '<a class="aiteam-card-link" href="/admin/employees"><span class="aiteam-card-link__label">群设置配套入口</span><span class="aiteam-card-link__note">前往员工后台核对角色、模型与技能配置</span></a>' +

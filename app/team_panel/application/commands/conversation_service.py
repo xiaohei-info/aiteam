@@ -3,6 +3,7 @@
 import json
 import uuid
 
+from team_panel.application.commands.run_command_service import build_knowledge_preview_for_employees
 from team_panel.domain.entities import (
     AuditEvent,
     Conversation,
@@ -260,6 +261,11 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
         }),
         created_by=sender_id,
     )
+    knowledge_preview = build_knowledge_preview_for_employees(uow, candidate_employee_ids)
+    if knowledge_preview is not None:
+        route_payload = json.loads(run.result_summary_json or "{}")
+        route_payload.update(knowledge_preview)
+        run.result_summary_json = json.dumps(route_payload, ensure_ascii=False)
     uow.team_runs().create(run)
 
     # ── Call gateway ───────────────────────────────────────────────

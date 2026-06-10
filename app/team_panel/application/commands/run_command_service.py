@@ -52,7 +52,7 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
         input_message_json=json.dumps(normalized_message_payload, ensure_ascii=False),
         created_by=employee_id or "system",
     )
-    knowledge_preview = _build_knowledge_preview(uow, employee_id or conv.entry_employee_id or "")
+    knowledge_preview = build_knowledge_preview_for_employees(uow, [employee_id or conv.entry_employee_id or ""])
     if knowledge_preview is not None:
         run.result_summary_json = json.dumps(knowledge_preview, ensure_ascii=False)
     uow.team_runs().create(run)
@@ -102,31 +102,30 @@ def create_run(uow, conversation_id: str, employee_id: str | None,
     }
 
 
-def _build_knowledge_preview(uow, employee_id: str) -> dict | None:
-    if not employee_id:
-        return None
-
-    bindings = [
-        binding
-        for binding in uow.employee_knowledge_bindings().list_by_employee(employee_id)
-        if getattr(binding, "enabled", True)
-    ]
-    if not bindings:
-        return None
-
+def build_knowledge_preview_for_employees(uow, employee_ids: list[str]) -> dict | None:
     citations = []
-    for binding in bindings:
-        kb = uow.knowledge_bases().get_by_id(binding.knowledge_base_id)
-        docs = uow.knowledge_documents().list_by_kb(binding.knowledge_base_id, status="ready")
-        for doc in docs[:1]:
-            citations.append(
-                {
-                    "title": doc.display_name or doc.file_name or (kb.name if kb is not None else binding.knowledge_base_id),
-                    "knowledge_base_id": binding.knowledge_base_id,
-                    "document_id": doc.id,
-                    "source_type": "knowledge_document",
-                }
-            )
+    seen = set()
+    for employee_id in employee_ids:
+        if not employee_id or employee_id in seen:
+            continue
+        seen.add(employee_id)
+        bindings = [
+            binding
+            for binding in uow.employee_knowledge_bindings().list_by_employee(employee_id)
+            if getattr(binding, "enabled", True)
+        ]
+        for binding in bindings:
+            kb = uow.knowledge_bases().get_by_id(binding.knowledge_base_id)
+            docs = uow.knowledge_documents().list_by_kb(binding.knowledge_base_id, status="ready")
+            for doc in docs[:1]:
+                citations.append(
+                    {
+                        "title": doc.display_name or doc.file_name or (kb.name if kb is not None else binding.knowledge_base_id),
+                        "knowledge_base_id": binding.knowledge_base_id,
+                        "document_id": doc.id,
+                        "source_type": "knowledge_document",
+                    }
+                )
     if not citations:
         return None
 
