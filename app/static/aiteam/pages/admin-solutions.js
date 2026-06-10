@@ -45,6 +45,7 @@ window.aiteam = window.aiteam || {};
       expected_value: stringValue(item && (item.expected_value || item.expected_value_summary), ''),
       default_skill_bundle: item && item.default_skill_bundle,
       default_kb_blueprint: item && item.default_kb_blueprint,
+      template_summaries: Array.isArray(item && item.template_summaries) ? item.template_summaries.slice() : [],
       publish_record: item && item.publish_record || null,
       last_apply_record_id: stringValue(item && item.last_apply_record_id, ''),
       last_apply_status: stringValue(item && item.last_apply_status, ''),
@@ -80,6 +81,21 @@ window.aiteam = window.aiteam || {};
     if (item && item.expected_value) return item.expected_value;
     if (item && item.tags && item.tags.length) return '预期帮助企业在 ' + item.tags.join(' / ') + ' 场景下缩短落地时间并稳定复用模板能力。';
     return '预期帮助企业快速落地一套可复用的行业 AI 协作能力。';
+  }
+
+  function renderTemplatePreview(item) {
+    var templates = Array.isArray(item && item.template_summaries) ? item.template_summaries : [];
+    if (!templates.length) {
+      return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">待创建员工预览</span><span class="aiteam-shell__meta-value">当前方案尚未返回模板预览</span></div>';
+    }
+    return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">待创建员工预览</span><span class="aiteam-shell__meta-value">' +
+      templates.map(function (template) {
+        var modelRef = template && template.default_model_ref ? template.default_model_ref : {};
+        var modelName = stringValue(modelRef.model, '未配置模型');
+        return stringValue(template.name, '未命名员工') + ' / ' +
+          stringValue(template.role_name, '未设置角色') + ' / ' +
+          modelName;
+      }).join('； ') + '</span></div>';
   }
 
   function createController(container) {
@@ -154,6 +170,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">方案描述</span><span class="aiteam-shell__meta-value">' + esc(item.description) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">包含 AI 员工</span><span class="aiteam-shell__meta-value">' + esc(item.template_ids.join(', ') || '待绑定模板') + '</span></div>' +
+        renderTemplatePreview(item) +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">预期价值</span><span class="aiteam-shell__meta-value">' + esc(expectedValueText(item)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">原子回滚</span><span class="aiteam-shell__meta-value">失败时整体回滚，不保留局部创建结果</span></div>' +
         '</div>' +

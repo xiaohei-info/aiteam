@@ -3119,6 +3119,7 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
         )
         rows = cur.fetchall()
         binding_repo = SolutionTemplateBindingRepo(cur)
+        template_repo = AgentTemplateRepo(cur)
         apply_record_repo = SolutionApplyRecordRepo(cur)
         audit_repo = AuditEventRepo(cur)
         solution_apply_employee_counts: dict[str, int] = {}
@@ -3139,6 +3140,17 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
                 for binding in binding_repo.list_by_solution(solution_id)
                 if binding.enabled
             ]
+            template_summaries = []
+            for template_id in template_ids:
+                template = template_repo.get_by_id(template_id)
+                if template is None:
+                    continue
+                template_summaries.append({
+                    "template_id": template.id,
+                    "name": template.name,
+                    "role_name": template.role_name,
+                    "default_model_ref": _template_model_ref(template),
+                })
             apply_records = apply_record_repo.list_by_solution(solution_id)
             latest_apply = apply_records[0] if apply_records else None
             active_employee_count = sum(
@@ -3160,6 +3172,7 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
                 "status": row[2],
                 "tags": tags if isinstance(tags, list) else [],
                 "template_ids": template_ids,
+                "template_summaries": template_summaries,
                 "template_count": len(template_ids),
                 "apply_count": len(apply_records),
                 "active_employee_count": active_employee_count,

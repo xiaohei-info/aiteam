@@ -1428,6 +1428,14 @@ class TestSolutionsList:
         assert solution["solution_stats"]["apply_count"] == 1
         assert solution["solution_stats"]["active_employee_count"] == 1
         assert solution["solution_stats"]["template_count"] == 1
+        assert solution["template_summaries"] == [
+            {
+                "template_id": seeded_enterprise["template_id"],
+                "name": "Marketing Analyst",
+                "role_name": "市场分析",
+                "default_model_ref": {"provider": "openai", "model": "gpt-4o"},
+            }
+        ]
 
 
 class TestConnectorsIntegration:

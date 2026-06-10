@@ -30,6 +30,20 @@ global.window = {{
             description: '覆盖门店运营、销售分析与复购增长',
             tags: ['零售', '增长'],
             template_ids: ['tpl_ops', 'tpl_sales'],
+            template_summaries: [
+              {{
+                template_id: 'tpl_ops',
+                name: '门店运营专员',
+                role_name: '门店运营',
+                default_model_ref: {{ provider: 'openai', model: 'gpt-4o' }},
+              }},
+              {{
+                template_id: 'tpl_sales',
+                name: '销售分析师',
+                role_name: '销售分析',
+                default_model_ref: {{ provider: 'anthropic', model: 'claude-3-7-sonnet' }},
+              }},
+            ],
             template_count: 2,
             apply_count: 4,
             active_employee_count: 3,
@@ -76,6 +90,11 @@ def test_admin_solutions_renders_detail_and_atomic_apply_hints() -> None:
     assert "行业 AI 解决方案" in payload["html"]
     assert "方案描述" in payload["html"]
     assert "包含 AI 员工" in payload["html"]
+    assert "待创建员工预览" in payload["html"]
+    assert "门店运营专员" in payload["html"]
+    assert "销售分析师" in payload["html"]
+    assert "gpt-4o" in payload["html"]
+    assert "claude-3-7-sonnet" in payload["html"]
     assert "预期价值" in payload["html"]
     assert "失败时整体回滚" in payload["html"]
     assert "已应用" in payload["html"]
