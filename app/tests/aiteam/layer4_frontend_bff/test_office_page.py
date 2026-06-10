@@ -334,6 +334,133 @@ vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_fullscreen_shortcut_lifecycle() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(OFFICE_MODULE_PATH))}, 'utf8');
+const responses = [
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    summary: {{ online_employee_count: 1, busy_employee_count: 1, running_task_count: 1, queue_depth: 0, waiting_reply_count: 0 }},
+    seats: [{{
+      employee_id: 'emp_rex',
+      display_name: 'Rex',
+      role_name: '代码工程师',
+      presence: {{ state: 'busy', current_task: '执行回归测试', latest_event_cursor: 12, events_url: '/api/team/runs/run_1/events?cursor=12' }},
+    }}],
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+  {{ ok: true, status: 200, statusText: 'OK', body: {{
+    items: [{{
+      employee_id: 'emp_rex',
+      employee_display_name: 'Rex',
+      status: 'running',
+      preview: 'Layer4 前端回归',
+      latest_event_cursor: 12,
+      events_url: '/api/team/runs/run_1/events?cursor=12',
+      event_ts: '2026-06-05T12:34:56Z',
+    }}],
+    queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
+    generated_cursor: 12,
+    refresh_hint_ms: 15000,
+  }} }},
+];
+function makeClassList() {{
+  const set = new Set();
+  return {{
+    contains(name) {{ return set.has(name); }},
+    add(name) {{ set.add(name); }},
+    remove(name) {{ set.delete(name); }},
+  }};
+}}
+function makeButton(name) {{
+  return {{
+    name,
+    textContent: '',
+    disabled: false,
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) this.listeners.click({{ preventDefault() {{}} }}); }},
+  }};
+}}
+const root = {{ style: {{}}, classList: makeClassList() }};
+const fullScreenButton = makeButton('fullscreen');
+const selectorMap = {{
+  '[data-office-root]': root,
+  '[data-office-fullscreen]': fullScreenButton,
+}};
+const documentListeners = {{}};
+global.window = {{ aiteam: {{}} }};
+global.document = {{
+  addEventListener(type, handler) {{ documentListeners[type] = handler; }},
+}};
+global.aiteam = global.window.aiteam;
+global.window.document = global.document;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  const next = responses.shift();
+  return {{
+    ok: next.ok,
+    status: next.status,
+    statusText: next.statusText,
+    async text() {{ return JSON.stringify(next.body); }},
+  }};
+}};
+global.setInterval = () => null;
+global.clearInterval = () => {{}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'office.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelector(selector) {{
+      return selectorMap[selector] || null;
+    }},
+  }};
+  aiteam.pages.office.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const before = fullScreenButton.textContent;
+  documentListeners.keydown({{ key: 'f', target: {{ tagName: 'DIV' }}, preventDefault() {{}} }});
+  const afterOpen = fullScreenButton.textContent;
+  const expanded = root.classList.contains('is-fullscreen');
+  documentListeners.keydown({{ key: 'F', target: {{ tagName: 'DIV' }}, preventDefault() {{}} }});
+  const afterClose = fullScreenButton.textContent;
+  const collapsed = !root.classList.contains('is-fullscreen');
+  console.log(JSON.stringify({{
+    before,
+    afterOpen,
+    afterClose,
+    expanded,
+    collapsed,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_seat_selection_lifecycle() -> dict:
     script = f"""
 const fs = require('fs');
@@ -683,6 +810,15 @@ def test_office_module_supports_zoom_pan_and_viewport_reset() -> None:
     assert result["zoomedLabel"] == "115%"
     assert result["resetTransform"] == "translate(0px, 0px) scale(1)"
     assert result["resetLabel"] == "100%"
+
+
+def test_office_module_supports_f_shortcut_for_fullscreen_toggle() -> None:
+    result = _run_fullscreen_shortcut_lifecycle()
+    assert result["before"] == "全屏查看"
+    assert result["afterOpen"] == "退出全屏"
+    assert result["afterClose"] == "全屏查看"
+    assert result["expanded"] is True
+    assert result["collapsed"] is True
 
 
 def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:

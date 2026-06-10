@@ -354,6 +354,16 @@ window.aiteam = window.aiteam || {};
     button.textContent = expanded ? '退出全屏' : '全屏查看';
   }
 
+  function toggleFullscreen(root, button) {
+    if (!root || !root.classList) return;
+    if (root.classList.contains('is-fullscreen')) {
+      root.classList.remove('is-fullscreen');
+    } else {
+      root.classList.add('is-fullscreen');
+    }
+    updateFullscreenButton(root, button);
+  }
+
   function bindFullscreen(container) {
     if (!container || typeof container.querySelector !== 'function') return;
     var root = container.querySelector('[data-office-root]');
@@ -361,14 +371,33 @@ window.aiteam = window.aiteam || {};
     if (!root || !button || typeof button.addEventListener !== 'function') return;
     updateFullscreenButton(root, button);
     button.addEventListener('click', function () {
-      if (!root.classList) return;
-      if (root.classList.contains('is-fullscreen')) {
-        root.classList.remove('is-fullscreen');
-      } else {
-        root.classList.add('is-fullscreen');
-      }
-      updateFullscreenButton(root, button);
+      toggleFullscreen(root, button);
     });
+  }
+
+  function bindFullscreenShortcut(container) {
+    if (typeof document === 'undefined' || !document || typeof document.addEventListener !== 'function') return;
+    if (ns.pages.office && ns.pages.office._fullscreenShortcutHandler && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('keydown', ns.pages.office._fullscreenShortcutHandler);
+    }
+    var handler = function (event) {
+      var key = String(event && event.key || '').toLowerCase();
+      if (key !== 'f') return;
+      var target = event && event.target;
+      var tagName = String(target && target.tagName || '').toUpperCase();
+      if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') return;
+      if (target && target.isContentEditable) return;
+      if (!container || typeof container.querySelector !== 'function') return;
+      var root = container.querySelector('[data-office-root]');
+      var button = container.querySelector('[data-office-fullscreen]');
+      if (!root || !button) return;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      toggleFullscreen(root, button);
+    };
+    if (ns.pages.office) {
+      ns.pages.office._fullscreenShortcutHandler = handler;
+    }
+    document.addEventListener('keydown', handler);
   }
 
   function applyViewportState(container, nextState) {
@@ -460,6 +489,7 @@ window.aiteam = window.aiteam || {};
     container.__aiteamOfficeSelectedSeatId = selectedSeat ? (selectedSeat.employee_id || '') : '';
     container.innerHTML = renderOffice(sceneData, feedData, view, container.__aiteamOfficeSelectedSeatId);
     bindFullscreen(container);
+    bindFullscreenShortcut(container);
     bindViewportControls(container);
     bindSeatSelection(container);
   }
