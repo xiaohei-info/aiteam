@@ -135,6 +135,76 @@ def test_workbench_populated_state_renders_search_employee_list_and_main_stage()
     assert 'href="/app/org"' in result["html"]
 
 
+def test_workbench_renders_recent_conversations_and_task_digest_panels() -> None:
+    result = _run_workbench(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [
+                {
+                    "employee_id": "emp_rex",
+                    "display_name": "Rex",
+                    "role_name": "代码工程师",
+                    "status": "active",
+                    "presence": "busy",
+                    "conversation_id": "conv_rex",
+                    "last_message_preview": "已整理本周回归结论",
+                    "unread_count": 2,
+                }
+            ],
+            "groups": [
+                {
+                    "conversation_id": "group_ops",
+                    "title": "运营协作组",
+                    "member_count": 3,
+                    "running_count": 1,
+                    "last_message_preview": "等待补充结论",
+                }
+            ],
+            "recent_conversations": [
+                {
+                    "id": "conv_rex",
+                    "title": "Rex 私聊",
+                    "conv_type": "private",
+                    "display_state": "busy",
+                    "last_preview": "已整理本周回归结论",
+                    "navigation_target": "/app/chat/conv_rex",
+                    "latest_run_status": "running",
+                    "member_count": 1,
+                    "task_status_digest": {"total": 1, "running": 1},
+                },
+                {
+                    "id": "group_ops",
+                    "title": "运营协作组",
+                    "conv_type": "group",
+                    "display_state": "resolved",
+                    "last_preview": "等待补充结论",
+                    "navigation_target": "/app/group/group_ops",
+                    "latest_run_status": "succeeded",
+                    "member_count": 3,
+                    "task_status_digest": {"total": 4, "succeeded": 3, "running": 1},
+                },
+            ],
+            "task_status_digest": {
+                "total": 6,
+                "running": 2,
+                "queued": 1,
+                "succeeded": 3,
+                "failed": 0,
+            },
+            "office_digest": {"online_employee_count": 1, "running_task_count": 2},
+        }
+    )
+    assert "最近会话" in result["html"]
+    assert "Rex 私聊" in result["html"]
+    assert "运营协作组" in result["html"]
+    assert 'href="/app/chat/conv_rex"' in result["html"]
+    assert 'href="/app/group/group_ops"' in result["html"]
+    assert "任务摘要" in result["html"]
+    assert "运行中 2" in result["html"]
+    assert "排队中 1" in result["html"]
+    assert "已完成 3" in result["html"]
+
+
 def test_workbench_renders_enterprise_onboarding_hint_when_login_redirect_marks_it() -> None:
     result = _run_workbench(
         {

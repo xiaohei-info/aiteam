@@ -180,6 +180,55 @@ window.aiteam = window.aiteam || {};
     }).join('');
   }
 
+  function conversationTypeLabel(item) {
+    return item && item.conv_type === 'group' ? '群聊' : '私聊';
+  }
+
+  function runStatusLabel(status) {
+    var map = {
+      queued: '排队中',
+      routing: '路由中',
+      submitting: '提交中',
+      running: '运行中',
+      waiting_human: '待回复',
+      succeeded: '已完成',
+      failed: '失败',
+      cancelled: '已取消',
+    };
+    return map[String(status || '')] || stringValue(status, '未知');
+  }
+
+  function renderRecentConversations(items) {
+    var conversations = Array.isArray(items) ? items : [];
+    if (!conversations.length) {
+      return '<div class="aiteam-inline-empty">最近会话会在产生私聊或群聊后显示在这里。</div>';
+    }
+    return conversations.slice(0, 4).map(function (item) {
+      return '' +
+        '<article class="aiteam-card aiteam-card--flat">' +
+        '<div class="aiteam-card__row"><div><h3 class="aiteam-card__title">' + escapeHtml(item.title || '未命名会话') + '</h3>' +
+        '<p class="aiteam-card__sub">' + escapeHtml(conversationTypeLabel(item)) + ' · ' + escapeHtml(stringValue(item.display_state, 'idle')) + '</p></div>' +
+        '<span class="aiteam-badge">' + escapeHtml(runStatusLabel(item.latest_run_status)) + '</span></div>' +
+        '<p class="aiteam-card__body">' + escapeHtml(item.last_preview || '暂无最近消息') + '</p>' +
+        '<div class="aiteam-card__meta"><span>成员 ' + escapeHtml(String(item.member_count || 0)) + '</span><span>任务 ' + escapeHtml(String((item.task_status_digest && item.task_status_digest.total) || 0)) + '</span></div>' +
+        '<div class="aiteam-action-row">' + quickLink(item.navigation_target || '/app/workbench', item.conv_type === 'group' ? '打开群聊' : '继续对话', '进入最近上下文') + '</div>' +
+        '</article>';
+    }).join('');
+  }
+
+  function renderTaskDigest(digest) {
+    var value = digest || {};
+    var rows = [
+      { label: '运行中', value: Number(value.running) || 0 },
+      { label: '排队中', value: Number(value.queued) || 0 },
+      { label: '已完成', value: Number(value.succeeded) || 0 },
+      { label: '失败', value: Number(value.failed) || 0 },
+    ];
+    return rows.map(function (row) {
+      return '<div class="aiteam-detail-kv"><span>' + escapeHtml(row.label) + '</span><strong>' + escapeHtml(row.label + ' ' + String(row.value)) + '</strong></div>';
+    }).join('');
+  }
+
   function renderEmptyShell(enterpriseName) {
     return '' +
       '<section class="aiteam-workbench" data-workbench-shell="1">' +
@@ -216,6 +265,8 @@ window.aiteam = window.aiteam || {};
     var enterprise = data.enterprise || {};
     var digest = data.office_digest || {};
     var groups = Array.isArray(data.groups) ? data.groups : [];
+    var recentConversations = Array.isArray(data.recent_conversations) ? data.recent_conversations : [];
+    var taskDigest = data.task_status_digest || {};
     var chatHref = selectedEmployee && selectedEmployee.conversation_id
       ? '/app/chat/' + encodeURIComponent(selectedEmployee.conversation_id)
       : '/admin/employees/' + encodeURIComponent((selectedEmployee && selectedEmployee.employee_id) || '');
@@ -272,6 +323,16 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-workbench__metric"><span>当前筛选</span><strong>' + escapeHtml(filteredEmployees.length) + '</strong></div>' +
       '</div>' +
       employeePanel +
+      '<div class="aiteam-panel">' +
+      '<div class="aiteam-panel__header"><h3>最近会话</h3><a href="' + escapeHtml(chatHref) + '">进入当前会话</a></div>' +
+      '<div class="aiteam-stack">' + renderRecentConversations(recentConversations) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-panel">' +
+      '<div class="aiteam-panel__header"><h3>任务摘要</h3><a href="/app/office">查看办公室动态</a></div>' +
+      '<div class="aiteam-stack">' +
+      renderTaskDigest(taskDigest) +
+      '</div>' +
+      '</div>' +
       '<div class="aiteam-panel">' +
       '<div class="aiteam-panel__header"><h3>最近群聊</h3><a href="/app/group">进入群聊</a></div>' +
       '<div class="aiteam-stack">' + renderGroups(groups) + '</div>' +
