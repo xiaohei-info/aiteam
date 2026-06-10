@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from urllib.parse import parse_qs, urlparse
 
 from api.system_health import build_system_health_payload
@@ -67,6 +68,27 @@ def _match_exact(path: str, target: str) -> bool:
     return path == target or path.rstrip("/") == target
 
 
+def _parse_created_range_filters(query: dict[str, str]) -> tuple[str | None, str | None, tuple[int, dict] | None]:
+    created_from = query.get("created_from", "").strip() or None
+    created_to = query.get("created_to", "").strip() or None
+
+    for field_name, value in (("created_from", created_from), ("created_to", created_to)):
+        if not value:
+            continue
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return None, None, (
+                400,
+                {
+                    "error": "INVALID_REQUEST",
+                    "message": f"{field_name} must be a valid YYYY-MM-DD date",
+                },
+            )
+
+    return created_from, created_to, None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Route handlers
 # ═══════════════════════════════════════════════════════════════════
@@ -77,8 +99,9 @@ def _handle_list_enterprises(path: str) -> tuple[int, dict]:
     limit = int(query.get("limit", "20"))
     name = query.get("name", "").strip() or None
     status = query.get("status", "").strip() or None
-    created_from = query.get("created_from", "").strip() or None
-    created_to = query.get("created_to", "").strip() or None
+    created_from, created_to, error = _parse_created_range_filters(query)
+    if error:
+        return error
 
     conn = _make_conn()
     try:
@@ -418,6 +441,9 @@ def _handle_export_enterprises(path: str) -> tuple[int, dict]:
     query = _parse_query(path)
     name = query.get("name", "").strip() or None
     status = query.get("status", "").strip() or None
+    created_from, created_to, error = _parse_created_range_filters(query)
+    if error:
+        return error
 
     conn = _make_conn()
     try:
@@ -425,7 +451,12 @@ def _handle_export_enterprises(path: str) -> tuple[int, dict]:
         try:
             repo = EnterpriseRepo(cur)
             items, total = repo.list_with_filter(
-                name=name, status=status, page=1, limit=10000,
+                name=name,
+                status=status,
+                created_from=created_from,
+                created_to=created_to,
+                page=1,
+                limit=10000,
             )
             return 200, {
                 "items": [
