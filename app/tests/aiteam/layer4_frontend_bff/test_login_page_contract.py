@@ -15,11 +15,45 @@ def test_login_page_mentions_wechat_and_phone_auth():
     assert "/api/auth/login/phone/verify" in source
 
 
-def _run_login_page_node() -> dict:
+def test_login_page_shell_mentions_qr_lifecycle_and_agreements():
+    source = (ROOT / "api" / "routes.py").read_text(encoding="utf-8")
+    assert "QR codes stay valid for 3 minutes" in source
+    assert "By signing in you agree to the Service Agreement and Privacy Policy." in source
+    assert "Codes expire in 5 minutes and can be resent after 60 seconds." in source
+    assert "Refresh QR code" in source
+
+
+def _run_login_page_node(*, phone: str = "", trigger_phone_send: bool = False) -> dict:
     login_js = ROOT / "static" / "login.js"
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
+const runtime = {{
+  phone: {json.dumps(phone)},
+  triggerPhoneSend: {json.dumps(trigger_phone_send)},
+}};
+const timerQueue = [];
+function AbortController() {{
+  this.signal = {{}};
+}}
+AbortController.prototype.abort = function () {{}};
+
+function queueTimer(fn) {{
+  if (typeof fn === 'function') {{
+    timerQueue.push(fn);
+  }}
+  return timerQueue.length;
+}}
+
+async function flushRuntime(turns) {{
+  for (let i = 0; i < turns; i += 1) {{
+    await Promise.resolve();
+    if (timerQueue.length) {{
+      const next = timerQueue.shift();
+      next();
+    }}
+  }}
+}}
 
 function createClassList() {{
   const values = new Set();
@@ -147,14 +181,16 @@ const context = {{
   window: {{
     location: locationState,
     PublicKeyCredential: null,
+    AbortController,
     setTimeout(fn, _ms) {{
-      return 1;
+      return queueTimer(fn);
     }},
     clearTimeout(_id) {{}},
   }},
+  AbortController,
   navigator: {{}},
   setTimeout(fn, _ms) {{
-    return 1;
+    return queueTimer(fn);
   }},
   clearTimeout(_id) {{}},
   fetch(url, options) {{
@@ -164,6 +200,15 @@ const context = {{
     }}
     if (String(url).indexOf('/api/auth/status') !== -1) {{
       return Promise.resolve({{ ok: true, json: async () => ({{ passkeys_enabled: false }}) }});
+    }}
+    if (String(url).indexOf('/api/auth/login/wechat/init') !== -1) {{
+      return Promise.resolve({{ ok: true, json: async () => ({{ state: 'wx_test', qr_url: '/mock/wechat-qr?state=wx_test', expires_in: 300 }}) }});
+    }}
+    if (String(url).indexOf('/api/auth/login/wechat/poll') !== -1) {{
+      return Promise.resolve({{ ok: true, json: async () => ({{ status: 'pending' }}) }});
+    }}
+    if (String(url).indexOf('/api/auth/login/phone/send-code') !== -1) {{
+      return Promise.resolve({{ ok: true, json: async () => ({{ expires_in: 300 }}) }});
     }}
     return Promise.resolve({{ ok: true, json: async () => ({{}}) }});
   }},
@@ -177,13 +222,30 @@ vm.createContext(context);
 vm.runInContext(fs.readFileSync({json.dumps(str(login_js))}, 'utf8'), context, {{ filename: 'login.js' }});
 
 Promise.resolve()
-  .then(() => domHandlers['DOMContentLoaded']())
-  .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+  .then(async () => {{
+    domHandlers['DOMContentLoaded']();
+    await flushRuntime(24);
+    if (runtime.phone) {{
+      elements['phone'].value = runtime.phone;
+    }}
+    if (runtime.triggerPhoneSend) {{
+      elements['phone-send-code'].dispatchEvent({{
+        type: 'click',
+        preventDefault() {{}},
+      }});
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    }}
+  }})
   .then(() => {{
     process.stdout.write(JSON.stringify({{
       fetchCalls,
       href: context.window.location.href,
       wechatStatus: elements['wechat-status'].textContent,
+      wechatHref: elements['wechat-qr-link'].href,
+      wechatDisplay: elements['wechat-qr-link'].style.display,
+      phoneSendDisabled: elements['phone-send-code'].disabled,
+      phoneSendText: elements['phone-send-code'].textContent,
+      phoneStatus: elements['phone-status'].textContent,
     }}));
   }})
   .catch((error) => {{
@@ -201,10 +263,22 @@ Promise.resolve()
     return json.loads(completed.stdout)
 
 
-def test_login_page_does_not_start_wechat_login_on_load():
+def test_login_page_starts_wechat_login_on_load():
     result = _run_login_page_node()
 
-    assert not any("/api/auth/login/wechat/init" in call["url"] for call in result["fetchCalls"])
-    assert not any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
+    assert any("/api/auth/login/wechat/init" in call["url"] for call in result["fetchCalls"])
+    assert any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
     assert not any("/api/auth/login/wechat/callback" in call["url"] for call in result["fetchCalls"])
+    assert result["wechatHref"].endswith("/mock/wechat-qr?state=wx_test")
+    assert result["wechatDisplay"] == "inline-flex"
+    assert "QR" in result["wechatStatus"] or "二维码" in result["wechatStatus"]
     assert result["href"] == "http://localhost/login"
+
+
+def test_login_page_applies_phone_send_cooldown_feedback():
+    result = _run_login_page_node(phone="13800138000", trigger_phone_send=True)
+
+    assert any("/api/auth/login/phone/send-code" in call["url"] for call in result["fetchCalls"])
+    assert result["phoneSendDisabled"] is True
+    assert "Resend in" in result["phoneSendText"]
+    assert "resend in" in result["phoneStatus"].lower()

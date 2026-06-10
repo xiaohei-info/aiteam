@@ -2928,13 +2928,14 @@ button:hover{background:rgba(124,185,255,.25)}
     <button type="button" class="auth-tab" data-auth-tab="phone">Phone code</button>
   </div>
   <section class="auth-panel is-active" data-auth-panel="wechat">
-    <p class="auth-copy">Scan with WeChat to sign in, then continue into your enterprise workspace.</p>
-    <button type="button" id="wechat-start">Refresh QR state</button>
+    <p class="auth-copy">Scan with WeChat to sign in, then continue into your enterprise workspace. QR codes stay valid for 3 minutes.</p>
+    <button type="button" id="wechat-start">Refresh QR code</button>
     <p class="auth-status" id="wechat-status">Preparing WeChat sign-in…</p>
-    <a id="wechat-qr-link" class="auth-link" href="#" target="_blank" rel="noopener" style="display:none">Open mock QR state</a>
+    <a id="wechat-qr-link" class="auth-link" href="#" target="_blank" rel="noopener" style="display:none">Open QR code</a>
+    <p class="auth-copy" style="margin-top:10px;margin-bottom:0;color:#8888aa">By signing in you agree to the Service Agreement and Privacy Policy.</p>
   </section>
   <section class="auth-panel" data-auth-panel="phone">
-    <p class="auth-copy">Send a phone verification code first, then verify to continue. Test environments use code <strong>888888</strong>.</p>
+    <p class="auth-copy">Send a phone verification code first, then verify to continue. Codes expire in 5 minutes and can be resent after 60 seconds. Test environments use code <strong>888888</strong>.</p>
     <input type="tel" id="phone" placeholder="Phone number" autocomplete="tel">
     <div class="auth-row">
       <input type="text" id="phone-code" placeholder="Verification code" inputmode="numeric" autocomplete="one-time-code">

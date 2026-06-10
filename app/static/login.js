@@ -23,6 +23,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var activeWechatController = null;
   var activeWechatPollTimer = null;
   var pendingWechatState = '';
+  var phoneCooldownTimer = null;
+  var phoneCooldownRemaining = 0;
 
   if (!form) return;
 
@@ -86,6 +88,45 @@ document.addEventListener('DOMContentLoaded', function () {
       activeWechatController.abort();
       activeWechatController = null;
     }
+  }
+
+  function _setPhoneSendButton(label, disabled) {
+    if (!phoneSendBtn) return;
+    phoneSendBtn.textContent = label;
+    phoneSendBtn.disabled = !!disabled;
+  }
+
+  function clearPhoneCooldown() {
+    if (phoneCooldownTimer !== null) {
+      clearTimeout(phoneCooldownTimer);
+      phoneCooldownTimer = null;
+    }
+    phoneCooldownRemaining = 0;
+    _setPhoneSendButton('Send code', false);
+  }
+
+  function startPhoneCooldown(seconds) {
+    phoneCooldownRemaining = Math.max(0, Number(seconds) || 0);
+    if (phoneCooldownRemaining <= 0) {
+      clearPhoneCooldown();
+      return;
+    }
+    _setPhoneSendButton('Resend in ' + phoneCooldownRemaining + 's', true);
+    setStatus(phoneStatus, 'Verification code sent. You can resend in ' + phoneCooldownRemaining + 's.', false);
+    if (phoneCooldownTimer !== null) {
+      clearTimeout(phoneCooldownTimer);
+    }
+    phoneCooldownTimer = window.setTimeout(function tickPhoneCooldown() {
+      phoneCooldownRemaining -= 1;
+      if (phoneCooldownRemaining <= 0) {
+        clearPhoneCooldown();
+        setStatus(phoneStatus, 'Verification code sent. You can resend now.', false);
+        return;
+      }
+      _setPhoneSendButton('Resend in ' + phoneCooldownRemaining + 's', true);
+      setStatus(phoneStatus, 'Verification code sent. You can resend in ' + phoneCooldownRemaining + 's.', false);
+      phoneCooldownTimer = window.setTimeout(tickPhoneCooldown, 1000);
+    }, 1000);
   }
 
   function _safeNextPath() {
@@ -297,22 +338,33 @@ document.addEventListener('DOMContentLoaded', function () {
       setStatus(phoneStatus, 'Phone number is required.', true);
       return;
     }
-    if (phoneSendBtn) phoneSendBtn.disabled = true;
+    if (phoneCooldownRemaining > 0) {
+      setStatus(phoneStatus, 'Verification code sent. You can resend in ' + phoneCooldownRemaining + 's.', false);
+      return;
+    }
+    _setPhoneSendButton('Sending…', true);
     setStatus(phoneStatus, 'Sending verification code…', false);
     try {
-      await requestJson('/api/auth/login/phone/send-code', {
+      var payload = await requestJson('/api/auth/login/phone/send-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone }),
         credentials: 'include',
       });
-      setStatus(phoneStatus, 'Verification code sent. Use 888888 in test environments.', false);
+      startPhoneCooldown(60);
+      if (payload && payload.expires_in) {
+        setStatus(phoneStatus, 'Verification code sent. Use 888888 in test environments. Code valid for ' + payload.expires_in + 's. You can resend in 60s.', false);
+      }
       if (phoneCodeInput) phoneCodeInput.focus();
     } catch (ex) {
+      var cooldownSeconds = ex && typeof ex.cooldown_seconds === 'number' ? ex.cooldown_seconds : 0;
+      if (cooldownSeconds > 0) {
+        startPhoneCooldown(cooldownSeconds);
+        return;
+      }
       setStatus(phoneStatus, ex && ex.message ? ex.message : connFailed, true);
       showErr(ex && ex.message ? ex.message : connFailed);
-    } finally {
-      if (phoneSendBtn) phoneSendBtn.disabled = false;
+      clearPhoneCooldown();
     }
   }
 
@@ -425,5 +477,6 @@ document.addEventListener('DOMContentLoaded', function () {
   })();
 
   setActiveTab('wechat');
-  setStatus(wechatStatus, 'Click "Refresh QR state" to start WeChat sign-in.', false);
+  setStatus(wechatStatus, 'Preparing WeChat sign-in…', false);
+  runWechatLogin();
 });
