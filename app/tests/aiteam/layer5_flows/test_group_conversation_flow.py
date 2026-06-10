@@ -296,7 +296,7 @@ def test_group_message_flow_surfaces_knowledge_citations(clean_tables_with_enter
 
     detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
     assert detail_status == 200, detail
-    assert detail["latest_run_summary"]["summary"] == "已参考知识库内容整理初步回答。"
+    assert detail["latest_run_summary"]["summary"] == "已参考《群聊手册》整理初步回答。"
     assert detail["latest_run_summary"]["citations"][0]["title"] == "群聊手册"
 
 

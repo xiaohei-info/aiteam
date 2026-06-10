@@ -73,6 +73,7 @@ def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):
     assert [item["role"] for item in conv["messages"]["items"]] == ["user", "assistant"]
     assert conv["messages"]["items"][0]["text"] == "请基于企业知识库总结入职流程。"
     assert conv["messages"]["items"][1]["citations"][0]["title"] == "入职手册"
+    assert conv["messages"]["items"][1]["text"] == "已根据企业知识库整理出入职流程。"
     assert conv["employee_summary"]["employee_id"] == seeded_private_chat["employee_id"]
     assert conv["employee_summary"]["usage_summary"]["total_runs"] >= 1
 
@@ -200,4 +201,4 @@ def test_knowledge_binding_does_not_break_chat(seeded_enterprise, db_conn):
     assert len(conv["messages"]["items"]) == 2
     assert conv["messages"]["items"][1]["role"] == "assistant"
     assert conv["messages"]["items"][1]["citations"][0]["title"] == "入职手册"
-    assert "知识库" in conv["messages"]["items"][1]["text"]
+    assert conv["messages"]["items"][1]["text"] == "已参考《入职手册》整理初步回答。"

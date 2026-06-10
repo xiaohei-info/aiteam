@@ -261,7 +261,11 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
         }),
         created_by=sender_id,
     )
-    knowledge_preview = build_knowledge_preview_for_employees(uow, candidate_employee_ids)
+    knowledge_preview = build_knowledge_preview_for_employees(
+        uow,
+        candidate_employee_ids,
+        query_text=message_text,
+    )
     if knowledge_preview is not None:
         route_payload = json.loads(run.result_summary_json or "{}")
         route_payload.update(knowledge_preview)
