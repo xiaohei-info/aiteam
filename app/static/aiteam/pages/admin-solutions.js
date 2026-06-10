@@ -129,6 +129,7 @@ window.aiteam = window.aiteam || {};
       pendingSolutionId: '',
       pendingMode: '',
       lastSubmittedMode: '',
+      lastApplyResult: null,
       previewSolutionId: '',
       previewPayload: null,
     };
@@ -147,6 +148,24 @@ window.aiteam = window.aiteam || {};
     function clearPreview() {
       state.previewSolutionId = '';
       state.previewPayload = null;
+    }
+
+    function summarizeApplyResult(data, mode, solutionId) {
+      var payload = data && typeof data === 'object' ? data : {};
+      var bits = ['行业方案应用已提交：' + solutionId + '（' + applyModeLabel(mode) + '）'];
+      var createdEmployees = Array.isArray(payload.created_employee_ids) ? payload.created_employee_ids.filter(Boolean) : [];
+      var replacedEmployees = Array.isArray(payload.replaced_employee_ids) ? payload.replaced_employee_ids.filter(Boolean) : [];
+      var reappliedEmployees = Array.isArray(payload.reapplied_from_employee_ids) ? payload.reapplied_from_employee_ids.filter(Boolean) : [];
+      if (replacedEmployees.length) {
+        bits.push('已归档旧员工：' + replacedEmployees.join(', '));
+      }
+      if (reappliedEmployees.length) {
+        bits.push('重新应用基线：' + reappliedEmployees.join(', '));
+      }
+      if (createdEmployees.length) {
+        bits.push('新建员工：' + createdEmployees.join(', '));
+      }
+      return bits.join('；');
     }
 
     function upsertSolution(solutionId, patch) {
@@ -272,6 +291,7 @@ window.aiteam = window.aiteam || {};
         (state.lastSubmittedMode ? '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近一次提交</span><span class="aiteam-shell__meta-value">' + esc(applyModeLabel(state.lastSubmittedMode)) + '</span></div>' : '') +
         '</div>' +
         (state.lastSubmittedMode ? '<p class="aiteam-shell__panel-body">最近一次提交：' + esc(applyModeLabel(state.lastSubmittedMode)) + '</p>' : '') +
+        (state.lastApplyResult ? '<p class="aiteam-shell__panel-body">' + esc(state.lastApplyResult) + '</p>' : '') +
         '<ul class="aiteam-skills-list">' + cards + '</ul>' +
         '<div class="aiteam-shell__panel-body">没有我的行业？告诉我们：提交你的业务场景，我们会补充对应的行业 AI 解决方案。</div>' +
         '</div>';
@@ -309,13 +329,15 @@ window.aiteam = window.aiteam || {};
         state.lastSubmittedMode = state.pendingMode;
         state.pendingMode = '';
         if (result && result.ok) {
+          state.lastApplyResult = summarizeApplyResult(result.data, state.lastSubmittedMode, solutionId);
           return refreshList({
-            notice: '行业方案应用已提交：' + solutionId + '（' + applyModeLabel(state.lastSubmittedMode) + '）',
+            notice: state.lastApplyResult,
             errorNotice: '行业方案应用成功，但列表刷新失败：',
           }).then(function () {
             return result;
           });
         }
+        state.lastApplyResult = null;
         setNotice('行业方案应用失败：' + apiErrorMessage(result));
         render();
         return result;

@@ -134,7 +134,12 @@ global.window = {{
       }},
       applySolution() {{
         applyCalls += 1;
-        return Promise.resolve({{ ok: true, data: {{}} }});
+        return Promise.resolve({{ ok: true, data: {{
+          mode: 'reapply',
+          created_employee_ids: ['emp_new_a'],
+          replaced_employee_ids: [],
+          reapplied_from_employee_ids: ['emp_backend', 'emp_legacy'],
+        }} }});
       }},
     }},
     states: {{
@@ -209,3 +214,5 @@ def test_admin_solutions_requires_apply_preview_confirmation_before_submit() -> 
     assert payload["applyCallsBeforeConfirm"] == 0
     assert payload["applyCallsAfterConfirm"] == 1
     assert "行业方案应用已提交" in payload["finalHtml"]
+    assert "重新应用基线：emp_backend, emp_legacy" in payload["finalHtml"]
+    assert "新建员工：emp_new_a" in payload["finalHtml"]
