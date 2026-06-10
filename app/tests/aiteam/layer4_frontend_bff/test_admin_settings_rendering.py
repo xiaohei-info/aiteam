@@ -142,8 +142,8 @@ def test_admin_settings_renders_account_admin_and_other_setting_sections() -> No
             "low_balance_email": True,
         },
     }
-    assert any(call["method"] == "POST" and call["url"] == "/api/team/settings/admin-invites" for call in payload["apiCalls"])
-    assert any(call["method"] == "DELETE" and call["url"] == "/api/team/settings/admin-invites/inv1" for call in payload["apiCalls"])
+    assert any(call["method"] == "POST" and call["url"] == "/api/enterprise-admin/invites" for call in payload["apiCalls"])
+    assert any(call["method"] == "DELETE" and call["url"] == "/api/enterprise-admin/invites/inv1" for call in payload["apiCalls"])
     assert "账户管理" in payload["html"]
     assert "子管理员账号" in payload["html"]
     assert "其他设置" in payload["html"]

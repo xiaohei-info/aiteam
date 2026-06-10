@@ -1295,6 +1295,40 @@ class TestSettingsAndBillingB08B09:
         assert settings_status == 200, settings_body
         assert any(item["invite_id"] == body["invite_id"] for item in settings_body["admin_invites"])
 
+    def test_enterprise_admin_invites_list_post_and_delete_follow_canonical_namespace(self, seeded_enterprise):
+        list_status, list_body = _get("/api/enterprise-admin/invites?role=owner")
+        assert list_status == 200, list_body
+        assert "items" in list_body
+        assert isinstance(list_body["items"], list)
+
+        payload = {
+            "phone": "13900003333",
+            "role": "enterprise_admin",
+            "permissions": {"employees": True, "audit": True},
+            "idempotency_key": "invite-enterprise-admin-001",
+        }
+        create_status, create_body = _post("/api/enterprise-admin/invites?role=owner", payload)
+        assert create_status == 201, create_body
+        assert create_body["status"] == "pending"
+        assert create_body["phone"] == payload["phone"]
+
+        repeat_status, repeat_body = _post("/api/enterprise-admin/invites?role=owner", payload)
+        assert repeat_status == 200, repeat_body
+        assert repeat_body["invite_id"] == create_body["invite_id"]
+
+        list_status, list_body = _get("/api/enterprise-admin/invites?role=owner")
+        assert list_status == 200, list_body
+        assert any(item["invite_id"] == create_body["invite_id"] for item in list_body["items"])
+
+        delete_status, delete_body = _delete(f"/api/enterprise-admin/invites/{create_body['invite_id']}?role=owner")
+        assert delete_status == 200, delete_body
+        assert delete_body["invite_id"] == create_body["invite_id"]
+        assert delete_body["status"] == "revoked"
+
+        list_status, list_body = _get("/api/enterprise-admin/invites?role=owner")
+        assert list_status == 200, list_body
+        assert not any(item["invite_id"] == create_body["invite_id"] for item in list_body["items"])
+
     def test_delete_admin_invite_revokes_and_hides_from_settings(self, seeded_enterprise):
         payload = {
             "phone": "13900002222",

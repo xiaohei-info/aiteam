@@ -221,7 +221,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
       '<h2 class="aiteam-shell__panel-title">企业设置</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 /api/team/settings 与 /api/team/settings/admin-invites 管理企业资料、邀请、帮助反馈与通知策略。</p>' +
+      '<p class="aiteam-shell__panel-body">通过 /api/team/settings 与 /api/enterprise-admin/invites 管理企业资料、邀请、帮助反馈与通知策略。</p>' +
       (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(notice) + '</p></div>' : '') +
       '<div class="aiteam-grid aiteam-grid--settings">' +
       renderAccountSection(data) +
@@ -383,7 +383,7 @@ window.aiteam = window.aiteam || {};
       };
 
       container.lastInviteHandler = function (payload) {
-        return ns.api.post('/api/team/settings/admin-invites', payload || {}).then(function (result) {
+        return ns.api.post('/api/enterprise-admin/invites', payload || {}).then(function (result) {
           if (result && result.ok) {
             var invite = Object.assign({}, payload || {}, result.data || {});
             settingsData = Object.assign({}, settingsData || {});
@@ -397,7 +397,7 @@ window.aiteam = window.aiteam || {};
       };
 
       container.lastDeleteInviteHandler = function (inviteId) {
-        return ns.api.delete('/api/team/settings/admin-invites/' + encodeURIComponent(inviteId)).then(function (result) {
+        return ns.api.delete('/api/enterprise-admin/invites/' + encodeURIComponent(inviteId)).then(function (result) {
           if (result && result.ok) {
             settingsData = Object.assign({}, settingsData || {});
             settingsData.admin_invites = (settingsData.admin_invites || []).filter(function (item) {
