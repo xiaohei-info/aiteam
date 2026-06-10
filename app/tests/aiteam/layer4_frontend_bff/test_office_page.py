@@ -233,7 +233,10 @@ def test_office_module_renders_error_when_office_api_unavailable() -> None:
         {"url": "/api/team/office/scene", "method": "GET"},
         {"url": "/api/team/office/feed", "method": "GET"},
     ]
-    assert "Not Implemented" in result["html"]
+    assert "预览模式 · 等待 /api/team/office/* 聚合接口" in result["html"]
+    assert "办公室动态" in result["html"]
+    assert "任务队列" in result["html"]
+    assert "工位详情" in result["html"]
 
 
 def test_office_module_renders_empty_scene_when_scene_is_empty() -> None:
@@ -265,9 +268,10 @@ def test_office_module_renders_empty_scene_when_scene_is_empty() -> None:
             },
         },
     )
-    assert "暂无工位数据" in result["html"]
-    assert "暂无活动记录" in result["html"]
-    assert "刷新间隔: 10.0s" in result["html"]
+    assert "预览模式 · 等待 /api/team/office/* 聚合接口" in result["html"]
+    assert "Rex" in result["html"]
+    assert "执行自动化回归测试" in result["html"]
+    assert "点击工位查看详情" in result["html"]
 
 
 def test_office_module_renders_live_scene_for_canonical_backend_payload() -> None:
@@ -334,12 +338,14 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
     assert "Rex" in result["html"]
     assert "Nova" in result["html"]
     assert "执行回归测试" in result["html"]
-    assert "在线员工" in result["html"]
-    assert "场景游标: 18" in result["html"]
-    assert "活动游标: 18" in result["html"]
-    assert "cursor #18" in result["html"]
-    assert ">#18<" in result["html"]
-    assert "刷新间隔: 15.0s" in result["html"]
+    assert "办公室动态" in result["html"]
+    assert "2 位在线" in result["html"]
+    assert "1 个任务执行中" in result["html"]
+    assert "任务队列" in result["html"]
+    assert "状态统计" in result["html"]
+    assert "实时日志" in result["html"]
+    assert "工位详情" in result["html"]
+    assert "预览模式" not in result["html"]
 
 
 def test_office_module_handles_empty_feed_without_preview() -> None:
@@ -383,7 +389,8 @@ def test_office_module_handles_empty_feed_without_preview() -> None:
         },
     )
     assert "Orion" in result["html"]
-    assert "暂无活动记录" in result["html"]
+    assert "当前暂无运行中的任务队列" in result["html"]
+    assert "预览模式" not in result["html"]
 
 
 def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
@@ -391,4 +398,5 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert result["beforeStop"] == [15000]
     assert result["cleared"] == [1]
     assert result["pollTimerCleared"] is True
-    assert "刷新间隔: 15.0s" in result["html"]
+    assert "全屏查看" in result["html"]
+    assert "任务队列" in result["html"]
