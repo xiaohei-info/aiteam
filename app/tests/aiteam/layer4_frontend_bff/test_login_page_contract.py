@@ -31,6 +31,7 @@ def _run_login_page_node(
     trigger_phone_verify: bool = False,
     trigger_phone_tab: bool = False,
     phone_verify_should_fail: bool = False,
+    wechat_poll_status: str = "pending",
     me_payload: dict | None = None,
 ) -> dict:
     login_js = ROOT / "static" / "login.js"
@@ -44,6 +45,7 @@ const runtime = {{
   triggerPhoneVerify: {json.dumps(trigger_phone_verify)},
   triggerPhoneTab: {json.dumps(trigger_phone_tab)},
   phoneVerifyShouldFail: {json.dumps(phone_verify_should_fail)},
+  wechatPollStatus: {json.dumps(wechat_poll_status)},
   mePayload: {json.dumps(me_payload or {"current_enterprise": None, "onboarding": {"action": "create_or_join_enterprise"}})},
 }};
 const timerQueue = [];
@@ -222,7 +224,7 @@ const context = {{
       return Promise.resolve({{ ok: true, json: async () => ({{ state: 'wx_test', qr_url: '/mock/wechat-qr?state=wx_test', expires_in: 300 }}) }});
     }}
     if (String(url).indexOf('/api/auth/login/wechat/poll') !== -1) {{
-      return Promise.resolve({{ ok: true, json: async () => ({{ status: 'pending' }}) }});
+      return Promise.resolve({{ ok: true, json: async () => ({{ status: runtime.wechatPollStatus }}) }});
     }}
     if (String(url).indexOf('/api/auth/login/phone/send-code') !== -1) {{
       return Promise.resolve({{ ok: true, json: async () => ({{ expires_in: 300 }}) }});
@@ -317,6 +319,17 @@ def test_login_page_starts_wechat_login_on_load():
     assert "QR" in result["wechatStatus"] or "二维码" in result["wechatStatus"]
     assert result["wechatPanelActive"] is True
     assert result["phonePanelActive"] is False
+    assert result["href"] == "http://localhost/login"
+
+
+def test_login_page_surfaces_qr_expired_state_with_refresh_path():
+    result = _run_login_page_node(wechat_poll_status="expired")
+
+    assert any("/api/auth/login/wechat/init" in call["url"] for call in result["fetchCalls"])
+    assert any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
+    assert result["wechatPanelActive"] is True
+    assert "expired" in result["wechatStatus"].lower()
+    assert result["wechatDisplay"] == "inline-flex"
     assert result["href"] == "http://localhost/login"
 
 
