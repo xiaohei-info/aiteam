@@ -225,6 +225,62 @@ class TestKnowledgeDocumentPost:
         assert status == 404, f"Expected 404, got {status}: {resp}"
         assert resp.get("error") == "KNOWLEDGE_BASE_NOT_FOUND"
 
+    def test_post_document_retry_restarts_error_document(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        kb_id = f"kb_{uuid.uuid4().hex[:8]}"
+        _seed_kb(db_conn, kb_id, ent_id)
+        asset_id = f"ast_{uuid.uuid4().hex[:8]}"
+        _, first = _post(f"/api/team/knowledge-bases/{kb_id}/documents", {"asset_id": asset_id, "display_name": "faq.pdf"})
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE knowledge_document SET status = 'error', error_code = 'INGEST_FAILED', error_message = 'insert timeout' WHERE id = %s",
+                (first["document_id"],),
+            )
+            cur.execute(
+                "UPDATE knowledge_ingestion_job SET status = 'failed', error_message = 'insert timeout' WHERE id = %s",
+                (first["ingestion_job_id"],),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, second = _post(
+            f"/api/team/knowledge-bases/{kb_id}/documents",
+            {"asset_id": asset_id, "display_name": "faq.pdf", "retry": True},
+        )
+        assert status == 201, f"Expected 201, got {status}: {second}"
+        assert second["document_id"] == first["document_id"]
+        assert second["status"] == "ingesting"
+        assert second["ingestion_job_id"] != first["ingestion_job_id"]
+
+    def test_knowledge_bases_list_includes_document_error_message(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        kb_id = f"kb_{uuid.uuid4().hex[:8]}"
+        _seed_kb(db_conn, kb_id, ent_id, "Support KB")
+        asset_id = f"ast_{uuid.uuid4().hex[:8]}"
+        _, first = _post(f"/api/team/knowledge-bases/{kb_id}/documents", {"asset_id": asset_id, "display_name": "faq.pdf"})
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE knowledge_document SET status = 'error', error_code = 'INGEST_FAILED', error_message = 'insert timeout' WHERE id = %s",
+                (first["document_id"],),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get("/api/team/knowledge-bases")
+        assert status == 200, body
+        kb = next(item for item in body["knowledge_bases"] if item["knowledge_base_id"] == kb_id)
+        doc = next(item for item in kb["documents"] if item["document_id"] == first["document_id"])
+        assert doc["error_code"] == "INGEST_FAILED"
+        assert doc["error_message"] == "insert timeout"
+
 
 # ── P09 Office Scene ───────────────────────────────────────────────────────
 

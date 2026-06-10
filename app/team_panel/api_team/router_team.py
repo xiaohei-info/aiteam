@@ -1184,6 +1184,7 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                     "documents": [
                         {
                             "document_id": d.id,
+                            "asset_id": d.asset_id,
                             "display_name": d.display_name,
                             "file_name": d.file_name,
                             "file_type": d.file_type,
@@ -1192,6 +1193,8 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                             "ingestion_job_id": d.ingestion_job_id,
                             "rag_document_id": d.rag_document_id,
                             "error_code": d.error_code,
+                            "error_message": d.error_message,
+                            "storage_key": d.storage_key,
                             "chunk_count": d.chunk_count,
                             "created_at": d.created_at,
                         }
@@ -1225,6 +1228,37 @@ def _handle_knowledge_document_post(conn, _path: str, kb_id: str, body: dict | N
         doc_repo = KnowledgeDocumentRepo(cur)
         existing = doc_repo.get_by_asset(kb_id, asset_id)
         if existing is not None:
+            if body.get("retry") and existing.status == "error":
+                job_id = f"ing_{uuid.uuid4().hex[:12]}"
+                existing.status = "uploaded"
+                existing.ingestion_job_id = None
+                existing.error_code = None
+                existing.error_message = None
+                existing.start_ingesting(job_id)
+                doc_repo.update_state(
+                    existing.id,
+                    status=existing.status,
+                    ingestion_job_id=job_id,
+                    error_code=None,
+                    error_message=None,
+                    chunk_count=0,
+                )
+                KnowledgeIngestionJobRepo(cur).create(
+                    KnowledgeIngestionJob(
+                        id=job_id,
+                        knowledge_base_id=kb_id,
+                        enterprise_id=enterprise_id,
+                        document_id=existing.id,
+                        status="parsing",
+                        created_by=body.get("created_by", ""),
+                    )
+                )
+                conn.commit()
+                return 201, {
+                    "document_id": existing.id,
+                    "status": existing.status,
+                    "ingestion_job_id": job_id,
+                }
             return 201, {
                 "document_id": existing.id,
                 "status": existing.status,

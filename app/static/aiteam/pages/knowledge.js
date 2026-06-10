@@ -14,10 +14,24 @@ window.aiteam = window.aiteam || {};
   function renderDocumentItem(d) {
     var badgeClass = BADGE_MAP[d.status] || 'aiteam-badge--idle';
     var chunkInfo = (d.chunk_count != null) ? ' | ' + d.chunk_count + ' chunks' : '';
+    var errorHtml = d.error_message
+      ? '<div class="aiteam-kb-card__doc-meta">失败原因：' + (d.error_message || '') + '</div>'
+      : '';
+    var retryHtml = d.status === 'error'
+      ? '<button class="aiteam-upload-form__btn" type="button" data-kb-retry ' +
+        'data-kb-retry-kb="' + (d.knowledge_base_id || '') + '" ' +
+        'data-kb-retry-asset-id="' + (d.asset_id || '') + '" ' +
+        'data-kb-retry-display-name="' + (d.display_name || '') + '" ' +
+        'data-kb-retry-file-name="' + (d.file_name || '') + '" ' +
+        'data-kb-retry-mime-type="' + (d.file_type || '') + '" ' +
+        'data-kb-retry-size="' + String(d.file_size != null ? d.file_size : '') + '">重试入库</button>'
+      : '';
     return (
       '<div class="aiteam-kb-card__doc-item">' +
       '<span class="aiteam-kb-card__doc-name">' + (d.display_name || d.file_name || d.document_id || '—') + '</span>' +
       '<span class="aiteam-kb-card__doc-meta"><span class="aiteam-badge ' + badgeClass + '">' + (d.status || 'unknown') + '</span>' + chunkInfo + '</span>' +
+      errorHtml +
+      retryHtml +
       '</div>'
     );
   }
@@ -27,7 +41,11 @@ window.aiteam = window.aiteam || {};
   }
 
   function renderKbCard(kb) {
-    var docItems = (kb.documents || []).map(renderDocumentItem).join('');
+    var docItems = (kb.documents || []).map(function (doc) {
+      var item = Object.assign({}, doc || {});
+      item.knowledge_base_id = kb.knowledge_base_id;
+      return renderDocumentItem(item);
+    }).join('');
     var bindings = (kb.employee_bindings || []).map(renderBindingTag).join('');
     return (
       '<div class="aiteam-kb-card">' +
@@ -171,6 +189,40 @@ window.aiteam = window.aiteam || {};
     });
   }
 
+  function bindRetryButtons(container) {
+    if (!container || !container.querySelectorAll || !ns.api || typeof ns.api.postKnowledgeDocument !== 'function') return;
+    var buttons = container.querySelectorAll('[data-kb-retry]');
+    for (var i = 0; i < buttons.length; i += 1) {
+      var button = buttons[i];
+      button.addEventListener('click', function () {
+        var feedback = document.getElementById('kb-retry-feedback');
+        var kbId = button.getAttribute('data-kb-retry-kb') || '';
+        var assetId = button.getAttribute('data-kb-retry-asset-id') || '';
+        var displayName = button.getAttribute('data-kb-retry-display-name') || '';
+        var fileName = button.getAttribute('data-kb-retry-file-name') || '';
+        var mimeType = button.getAttribute('data-kb-retry-mime-type') || '';
+        var sizeValue = Number(button.getAttribute('data-kb-retry-size') || 0);
+        if (feedback) feedback.innerHTML = '重试中...';
+        ns.api.postKnowledgeDocument(kbId, {
+          asset_id: assetId,
+          display_name: displayName,
+          file_name: fileName,
+          mime_type: mimeType,
+          size: Number.isFinite(sizeValue) ? sizeValue : 0,
+          retry: true,
+        }).then(function (result) {
+          if (feedback) {
+            feedback.innerHTML = result && result.ok
+              ? '<span style="color:#4ade80">重试成功</span>'
+              : '<span style="color:#f87171">重试失败: ' + ((result && result.error) || '未知错误') + '</span>';
+          }
+        }).catch(function () {
+          if (feedback) feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
+        });
+      });
+    }
+  }
+
   ns.pages.knowledge = {
     init: function (container) {
       if (!container) return;
@@ -210,13 +262,16 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-kb-grid">' + cards + '</div>' +
           uploadHtml +
           bindHtml +
+          '<div class="aiteam-upload-form__feedback" id="kb-retry-feedback"></div>' +
           '</div>';
 
         bindUploadForm();
         bindEmployeeForm(kbList);
+        bindRetryButtons(container);
       }).catch(function () {
         ns.states.renderError(container, '知识库数据加载失败');
       });
     },
+    __bindRetryButtons: bindRetryButtons,
   };
 }(window.aiteam));

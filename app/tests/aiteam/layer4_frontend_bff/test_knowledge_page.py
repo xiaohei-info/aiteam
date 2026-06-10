@@ -286,6 +286,99 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_retry_lifecycle(document_result: dict) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
+const calls = [];
+function makeElement(initial) {{
+  return Object.assign({{
+    value: '',
+    innerHTML: '',
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) return this.listeners.click({{ preventDefault() {{}} }}); }},
+    getAttribute() {{ return null; }},
+  }}, initial || {{}});
+}}
+const retryButton = makeElement({{
+  getAttribute(name) {{
+    if (name === 'data-kb-retry-kb') return 'kb_sales';
+    if (name === 'data-kb-retry-asset-id') return 'ast_err';
+    if (name === 'data-kb-retry-display-name') return '失败文档';
+    if (name === 'data-kb-retry-file-name') return 'error.pdf';
+    if (name === 'data-kb-retry-mime-type') return 'application/pdf';
+    if (name === 'data-kb-retry-size') return '2048';
+    return null;
+  }},
+}});
+const feedback = makeElement();
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  return {{
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    async text() {{ return JSON.stringify({{ ok: true }}); }},
+  }};
+}};
+global.window = {{ aiteam: {{}} }};
+global.document = {{
+  getElementById(id) {{
+    if (id === 'kb-retry-feedback') return feedback;
+    return null;
+  }},
+}};
+global.window.document = global.document;
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
+(async () => {{
+  const container = {{
+    innerHTML: '',
+    querySelectorAll(selector) {{
+      if (selector === '[data-kb-retry]') return [retryButton];
+      return [];
+    }},
+  }};
+  aiteam.api.postKnowledgeDocument = async (kbId, body) => {{
+    calls.push({{ kbId, body }});
+    return {json.dumps(document_result)};
+  }};
+  aiteam.pages.knowledge.__bindRetryButtons(container);
+  await retryButton.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    feedback: feedback.innerHTML,
+    calls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_knowledge_module_exists() -> None:
     assert KNOWLEDGE_MODULE_PATH.exists(), f"Missing knowledge module: {KNOWLEDGE_MODULE_PATH}"
 
@@ -306,6 +399,7 @@ def test_knowledge_module_renders_cards_and_upload_form() -> None:
                         "documents": [
                             {
                                 "document_id": "doc_1",
+                                "asset_id": "ast_1",
                                 "display_name": "FAQ",
                                 "status": "ready",
                                 "chunk_count": 12,
@@ -430,6 +524,71 @@ def test_knowledge_module_shows_document_registration_error() -> None:
     assert len(result["calls"]) == 2
     assert "文档登记失败" in result["feedback"]
     assert "KNOWLEDGE_BASE_NOT_FOUND" in result["feedback"]
+
+
+def test_knowledge_module_renders_error_message_and_retry_button() -> None:
+    result = _run_knowledge_module(
+        {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "knowledge_bases": [
+                    {
+                        "knowledge_base_id": "kb_sales",
+                        "name": "销售知识库",
+                        "description": "销售资料",
+                        "status": "active",
+                        "document_count": 1,
+                        "documents": [
+                            {
+                                "document_id": "doc_err",
+                                "asset_id": "ast_err",
+                                "display_name": "失败文档",
+                                "file_name": "error.pdf",
+                                "file_type": "application/pdf",
+                                "file_size": 2048,
+                                "status": "error",
+                                "error_code": "INGEST_FAILED",
+                                "error_message": "insert timeout",
+                            }
+                        ],
+                        "employee_bindings": [],
+                    }
+                ]
+            },
+        }
+    )
+    assert "insert timeout" in result["html"]
+    assert "重试入库" in result["html"]
+    assert "data-kb-retry" in result["html"]
+
+
+def test_knowledge_module_retry_posts_retry_payload_and_shows_feedback() -> None:
+    result = _run_retry_lifecycle(
+        {
+            "ok": True,
+            "status": 201,
+            "data": {
+                "document_id": "doc_err",
+                "status": "ingesting",
+                "ingestion_job_id": "ing_retry",
+            },
+        }
+    )
+    assert result["calls"] == [
+        {
+            "kbId": "kb_sales",
+            "body": {
+                "asset_id": "ast_err",
+                "display_name": "失败文档",
+                "file_name": "error.pdf",
+                "mime_type": "application/pdf",
+                "size": 2048,
+                "retry": True,
+            },
+        }
+    ]
+    assert "重试成功" in result["feedback"]
 
 
 def test_knowledge_module_renders_binding_form_and_patches_employee_knowledge_ids() -> None:
