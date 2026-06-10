@@ -1209,6 +1209,67 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
         cur.close()
 
 
+def _handle_knowledge_search(conn, _path: str, kb_id: str, query: str) -> tuple[int, dict]:
+    params = _request_params(query)
+    query_text = str(params.get("q") or "").strip()
+    if not query_text:
+        return 400, {"error": "MISSING_QUERY", "message": "q is required"}
+
+    cur = conn.cursor()
+    try:
+        kb_repo = KnowledgeBaseRepo(cur)
+        doc_repo = KnowledgeDocumentRepo(cur)
+        kb = kb_repo.get_by_id(kb_id)
+        if kb is None:
+            return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND", "message": f"Knowledge base {kb_id} not found"}
+
+        query_value = query_text.lower()
+        kb_fields = [
+            str(kb.name or "").lower(),
+            str(kb.description or "").lower(),
+        ]
+        ready_docs = doc_repo.list_by_kb(kb_id, status="ready")
+        items: list[dict] = []
+        citations: list[dict] = []
+        for doc in ready_docs:
+            title = doc.display_name or doc.file_name or doc.id
+            doc_fields = [
+                str(doc.display_name or "").lower(),
+                str(doc.file_name or "").lower(),
+                str(doc.asset_id or "").lower(),
+            ]
+            if query_value not in " ".join(kb_fields + doc_fields):
+                continue
+            snippet = f"命中文档《{title}》相关知识，可继续用于回答与预览。"
+            items.append(
+                {
+                    "document_id": doc.id,
+                    "title": title,
+                    "snippet": snippet,
+                    "score": 1.0,
+                }
+            )
+            citations.append(
+                {
+                    "title": title,
+                    "document_id": doc.id,
+                    "knowledge_base_id": kb.id,
+                    "source_type": "knowledge_document",
+                }
+            )
+
+        answer = f"已命中《{items[0]['title']}》相关知识。" if items else f"未找到与“{query_text}”相关的已就绪知识。"
+        return 200, {
+            "knowledge_base_id": kb.id,
+            "query": query_text,
+            "answer": answer,
+            "citations": citations,
+            "items": items,
+        }
+    finally:
+        cur.close()
+
+
 def _handle_knowledge_document_post(conn, _path: str, kb_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -3986,6 +4047,13 @@ def handle_team_route(
     # ── P08 knowledge-bases ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/knowledge-bases"):
         route_handler = lambda conn: _handle_knowledge_bases_list(conn, sub)
+
+    if route_handler is None:
+        kb_search = _match_prefix(sub, "/knowledge-bases/")
+        if method == "GET" and kb_search is not None and kb_search.endswith("/search"):
+            kb_id = kb_search[:-len("/search")]
+            if "/" not in kb_id:
+                route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_search(conn, sub, kb_id, query)
 
     # ── P08 knowledge-bases/{id}/documents ──
     if route_handler is None:

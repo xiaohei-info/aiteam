@@ -101,6 +101,24 @@ window.aiteam = window.aiteam || {};
     );
   }
 
+  function renderSearchForm(kbList) {
+    var options = kbList.map(function (kb) {
+      return '<option value="' + kb.knowledge_base_id + '">' + (kb.name || kb.knowledge_base_id) + '</option>';
+    }).join('');
+    return (
+      '<div class="aiteam-upload-form">' +
+      '<h4 class="aiteam-upload-form__title">知识查询</h4>' +
+      '<div class="aiteam-upload-form__row">' +
+      '<select class="aiteam-upload-form__input" id="kb-search-select">' + options + '</select>' +
+      '<input class="aiteam-upload-form__input" id="kb-search-query" placeholder="输入查询内容">' +
+      '<button class="aiteam-upload-form__btn" id="kb-search-submit">查询</button>' +
+      '</div>' +
+      '<div class="aiteam-upload-form__feedback" id="kb-search-feedback"></div>' +
+      '<div class="aiteam-kb-card__doc-list" id="kb-search-results"></div>' +
+      '</div>'
+    );
+  }
+
   function bindUploadForm() {
     var btn = document.getElementById('kb-upload-submit');
     if (!btn || !ns.api || typeof ns.api.upload !== 'function' || typeof ns.api.postKnowledgeDocument !== 'function') return;
@@ -148,6 +166,58 @@ window.aiteam = window.aiteam || {};
         }
       }).catch(function () {
         feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
+      });
+    });
+  }
+
+  function renderSearchResults(data) {
+    var citations = (data.citations || []).map(function (item) {
+      return '<span class="aiteam-kb-card__binding-tag">' + (item.title || item.document_id || '—') + '</span>';
+    }).join('');
+    var items = (data.items || []).map(function (item) {
+      return (
+        '<div class="aiteam-kb-card__doc-item">' +
+        '<span class="aiteam-kb-card__doc-name">' + (item.title || item.document_id || '—') + '</span>' +
+        '<div class="aiteam-kb-card__doc-meta">' + (item.snippet || '') + '</div>' +
+        '</div>'
+      );
+    }).join('');
+    return (
+      '<div class="aiteam-kb-card">' +
+      '<div class="aiteam-kb-card__doc-meta">' + (data.answer || '') + '</div>' +
+      (citations ? '<div class="aiteam-kb-card__bindings">' + citations + '</div>' : '') +
+      (items ? '<div class="aiteam-kb-card__doc-list">' + items + '</div>' : '') +
+      '</div>'
+    );
+  }
+
+  function bindSearchForm() {
+    var btn = document.getElementById('kb-search-submit');
+    if (!btn || !ns.api || typeof ns.api.getKnowledgeSearch !== 'function') return;
+    btn.addEventListener('click', function () {
+      var kbId = document.getElementById('kb-search-select').value;
+      var query = document.getElementById('kb-search-query').value.trim();
+      var feedback = document.getElementById('kb-search-feedback');
+      var results = document.getElementById('kb-search-results');
+      if (!kbId || !query) {
+        feedback.innerHTML = '<span style="color:#f87171">请输入知识库和查询内容</span>';
+        if (results) results.innerHTML = '';
+        return;
+      }
+
+      feedback.innerHTML = '查询中...';
+      if (results) results.innerHTML = '';
+      ns.api.getKnowledgeSearch(kbId, query).then(function (result) {
+        if (result && result.ok && result.data) {
+          feedback.innerHTML = '<span style="color:#4ade80">查询成功</span>';
+          if (results) results.innerHTML = renderSearchResults(result.data);
+        } else {
+          feedback.innerHTML = '<span style="color:#f87171">查询失败: ' + ((result && result.error) || '未知错误') + '</span>';
+          if (results) results.innerHTML = '';
+        }
+      }).catch(function () {
+        feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
+        if (results) results.innerHTML = '';
       });
     });
   }
@@ -252,6 +322,7 @@ window.aiteam = window.aiteam || {};
           : [];
         var cards = kbList.map(renderKbCard).join('');
         var uploadHtml = renderUploadForm(kbList);
+        var searchHtml = renderSearchForm(kbList);
         var bindHtml = renderBindingForm(kbList, employees);
 
         container.innerHTML =
@@ -261,11 +332,13 @@ window.aiteam = window.aiteam || {};
           '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
           '<div class="aiteam-kb-grid">' + cards + '</div>' +
           uploadHtml +
+          searchHtml +
           bindHtml +
           '<div class="aiteam-upload-form__feedback" id="kb-retry-feedback"></div>' +
           '</div>';
 
         bindUploadForm();
+        bindSearchForm();
         bindEmployeeForm(kbList);
         bindRetryButtons(container);
       }).catch(function () {

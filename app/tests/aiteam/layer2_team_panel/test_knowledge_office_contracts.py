@@ -162,6 +162,41 @@ class TestKnowledgeBasesList:
         assert len(kb["employee_bindings"]) == 1
         assert kb["employee_bindings"][0]["employee_id"] == emp_id
 
+    def test_knowledge_search_returns_answer_and_citations_for_ready_doc(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        kb_id = f"kb_{uuid.uuid4().hex[:8]}"
+        _seed_kb(db_conn, kb_id, ent_id, "入职知识库")
+        body = {"asset_id": f"ast_{uuid.uuid4().hex[:8]}", "display_name": "入职手册"}
+        _, created = _post(f"/api/team/knowledge-bases/{kb_id}/documents", body)
+
+        cur = db_conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE knowledge_document SET status = 'ready', chunk_count = 12 WHERE id = %s",
+                (created["document_id"],),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, payload = _get(f"/api/team/knowledge-bases/{kb_id}/search?q=入职")
+        assert status == 200, payload
+        assert payload["knowledge_base_id"] == kb_id
+        assert payload["query"] == "入职"
+        assert payload["answer"] == "已命中《入职手册》相关知识。"
+        assert payload["citations"][0]["title"] == "入职手册"
+        assert payload["items"][0]["document_id"] == created["document_id"]
+
+    def test_knowledge_search_rejects_empty_query(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+        kb_id = f"kb_{uuid.uuid4().hex[:8]}"
+        _seed_kb(db_conn, kb_id, ent_id, "Support KB")
+        status, payload = _get(f"/api/team/knowledge-bases/{kb_id}/search?q=")
+        assert status == 400, payload
+        assert payload["error"] == "MISSING_QUERY"
+
 
 # ── P08 Document POST ──────────────────────────────────────────────────────
 

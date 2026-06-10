@@ -379,6 +379,111 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_search_lifecycle(search_result: dict) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
+const calls = [];
+function makeElement(initial) {{
+  return Object.assign({{
+    value: '',
+    innerHTML: '',
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) return this.listeners.click({{ preventDefault() {{}} }}); }},
+  }}, initial || {{}});
+}}
+const elements = {{
+  'kb-search-select': makeElement({{ value: 'kb_sales' }}),
+  'kb-search-query': makeElement({{ value: '入职' }}),
+  'kb-search-submit': makeElement(),
+  'kb-search-feedback': makeElement(),
+  'kb-search-results': makeElement(),
+}};
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  return {{
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    async text() {{ return JSON.stringify({{ ok: true }}); }},
+  }};
+}};
+global.window = {{ aiteam: {{}} }};
+global.document = {{
+  getElementById(id) {{
+    return elements[id] || null;
+  }},
+}};
+global.window.document = global.document;
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.api.getKnowledgeBases = async () => ({{
+    ok: true,
+    status: 200,
+    data: {{
+      knowledge_bases: [{{
+        knowledge_base_id: 'kb_sales',
+        name: '销售知识库',
+        description: '销售资料',
+        status: 'active',
+        document_count: 1,
+        documents: [],
+        employee_bindings: [],
+      }}],
+    }},
+  }});
+  aiteam.api.getEmployees = async () => ({{
+    ok: true,
+    status: 200,
+    data: {{ employees: [] }},
+  }});
+  aiteam.api.getKnowledgeSearch = async (kbId, query) => {{
+    calls.push({{ kbId, query }});
+    return {json.dumps(search_result)};
+  }};
+  aiteam.pages.knowledge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await elements['kb-search-submit'].click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    html: container.innerHTML,
+    feedback: elements['kb-search-feedback'].innerHTML,
+    results: elements['kb-search-results'].innerHTML,
+    calls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_knowledge_module_exists() -> None:
     assert KNOWLEDGE_MODULE_PATH.exists(), f"Missing knowledge module: {KNOWLEDGE_MODULE_PATH}"
 
@@ -417,6 +522,8 @@ def test_knowledge_module_renders_cards_and_upload_form() -> None:
     assert "上传文档" in result["html"]
     assert "kb-upload-submit" in result["html"]
     assert "kb-upload-file-name" in result["html"]
+    assert "知识查询" in result["html"]
+    assert "kb-search-submit" in result["html"]
 
 
 def test_knowledge_module_uploads_asset_then_posts_document() -> None:
@@ -589,6 +696,47 @@ def test_knowledge_module_retry_posts_retry_payload_and_shows_feedback() -> None
         }
     ]
     assert "重试成功" in result["feedback"]
+
+
+def test_knowledge_module_queries_knowledge_and_renders_answer_with_citations() -> None:
+    result = _run_search_lifecycle(
+        {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "knowledge_base_id": "kb_sales",
+                "query": "入职",
+                "answer": "已命中《入职手册》相关知识。",
+                "citations": [{"title": "入职手册"}],
+                "items": [
+                    {
+                        "document_id": "doc_001",
+                        "title": "入职手册",
+                        "snippet": "第一天请先完成账号激活与制度学习。",
+                    }
+                ],
+            },
+        }
+    )
+    assert result["calls"] == [{"kbId": "kb_sales", "query": "入职"}]
+    assert "查询成功" in result["feedback"]
+    assert "已命中《入职手册》相关知识。" in result["results"]
+    assert "入职手册" in result["results"]
+    assert "第一天请先完成账号激活与制度学习。" in result["results"]
+
+
+def test_knowledge_module_shows_query_error() -> None:
+    result = _run_search_lifecycle(
+        {
+            "ok": False,
+            "status": 400,
+            "data": None,
+            "error": "MISSING_QUERY",
+        }
+    )
+    assert result["calls"] == [{"kbId": "kb_sales", "query": "入职"}]
+    assert "查询失败" in result["feedback"]
+    assert "MISSING_QUERY" in result["feedback"]
 
 
 def test_knowledge_module_renders_binding_form_and_patches_employee_knowledge_ids() -> None:
