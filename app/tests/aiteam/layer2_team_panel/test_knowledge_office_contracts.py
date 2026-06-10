@@ -198,6 +198,36 @@ class TestKnowledgeBasesList:
         assert payload["error"] == "MISSING_QUERY"
 
 
+class TestKnowledgeBasePost:
+    """POST /api/team/knowledge-bases."""
+
+    def test_post_knowledge_base_creates_new_base(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+
+        status, body = _post(
+            "/api/team/knowledge-bases",
+            {"name": "新知识库", "description": "用于新员工资料"},
+        )
+        assert status == 201, body
+        assert body["knowledge_base_id"].startswith("kb_")
+        assert body["name"] == "新知识库"
+        assert body["description"] == "用于新员工资料"
+        assert body["status"] == "active"
+        assert body["document_count"] == 0
+
+    def test_post_knowledge_base_requires_name(self, db_conn):
+        ent_id = f"ent_{uuid.uuid4().hex[:8]}"
+        _seed_enterprise(db_conn, ent_id)
+
+        status, body = _post(
+            "/api/team/knowledge-bases",
+            {"description": "缺名称"},
+        )
+        assert status == 400, body
+        assert body["error"] == "MISSING_NAME"
+
+
 # ── P08 Document POST ──────────────────────────────────────────────────────
 
 class TestKnowledgeDocumentPost:

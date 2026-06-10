@@ -101,6 +101,21 @@ window.aiteam = window.aiteam || {};
     );
   }
 
+  function renderCreateKbForm() {
+    return (
+      '<div class="aiteam-upload-form">' +
+      '<h4 class="aiteam-upload-form__title">创建知识库</h4>' +
+      '<div class="aiteam-upload-form__row">' +
+      '<input class="aiteam-upload-form__input" id="kb-create-name" placeholder="知识库名称（必填）">' +
+      '<input class="aiteam-upload-form__input" id="kb-create-description" placeholder="知识库说明（选填）">' +
+      '<button class="aiteam-upload-form__btn" id="kb-create-submit">创建</button>' +
+      '</div>' +
+      '<div class="aiteam-upload-form__feedback" id="kb-create-feedback"></div>' +
+      '<div class="aiteam-kb-card__doc-meta">支持格式：PDF / Word / TXT / Markdown / Excel / CSV</div>' +
+      '</div>'
+    );
+  }
+
   function renderSearchForm(kbList) {
     var options = kbList.map(function (kb) {
       return '<option value="' + kb.knowledge_base_id + '">' + (kb.name || kb.knowledge_base_id) + '</option>';
@@ -168,6 +183,31 @@ window.aiteam = window.aiteam || {};
       return result;
     }).catch(function () {
       return null;
+    });
+  }
+
+  function bindCreateKbForm(container) {
+    var btn = document.getElementById('kb-create-submit');
+    if (!btn || !ns.api || typeof ns.api.postKnowledgeBase !== 'function') return;
+    btn.addEventListener('click', function () {
+      var name = document.getElementById('kb-create-name').value.trim();
+      var description = document.getElementById('kb-create-description').value.trim();
+      var feedback = document.getElementById('kb-create-feedback');
+      if (!name) {
+        feedback.innerHTML = '<span style="color:#f87171">请输入知识库名称</span>';
+        return;
+      }
+      feedback.innerHTML = '创建中...';
+      ns.api.postKnowledgeBase({ name: name, description: description }).then(function (result) {
+        if (result && result.ok) {
+          return reloadKnowledgeBases(container).then(function () {
+            setFeedback('kb-create-feedback', '<span style="color:#4ade80">创建成功</span>', feedback);
+          });
+        }
+        feedback.innerHTML = '<span style="color:#f87171">创建失败: ' + ((result && result.error) || '未知错误') + '</span>';
+      }).catch(function () {
+        feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
+      });
     });
   }
 
@@ -351,6 +391,19 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  function renderEmptyKnowledgeState(container, employees) {
+    container.__aiteamKnowledgeKbList = [];
+    container.__aiteamKnowledgeEmployees = employees || [];
+    container.innerHTML =
+      '<div class="aiteam-shell__panel">' +
+      '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
+      '<h2 class="aiteam-shell__panel-title">知识库</h2>' +
+      '<p class="aiteam-shell__panel-body">当前还没有可用知识库，先创建知识库，再继续上传文档和绑定员工。</p>' +
+      renderCreateKbForm() +
+      '</div>';
+    bindCreateKbForm(container);
+  }
+
   ns.pages.knowledge = {
     init: function (container) {
       if (!container) return;
@@ -371,7 +424,12 @@ window.aiteam = window.aiteam || {};
         var kbList = (data && data.knowledge_bases) || [];
 
         if (!kbList.length) {
-          ns.states.renderEmpty(container, '暂无知识库数据');
+          renderEmptyKnowledgeState(
+            container,
+            employeeResult && employeeResult.ok && employeeResult.data
+              ? (employeeResult.data.employees || [])
+              : []
+          );
           return;
         }
 

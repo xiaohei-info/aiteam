@@ -33,6 +33,7 @@ from ..domain.entities import (
     Enterprise,
     EnterpriseConnector,
     EnterpriseSkillInstall,
+    KnowledgeBase,
     KnowledgeDocument,
     KnowledgeIngestionJob,
     MemoryItem,
@@ -1206,6 +1207,47 @@ def _handle_knowledge_bases_list(conn, _path: str) -> tuple[int, dict]:
                 }
             )
         return 200, {"knowledge_bases": items}
+    finally:
+        cur.close()
+
+
+def _handle_knowledge_base_post(conn, _path: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return 400, {"error": "MISSING_NAME", "message": "name is required"}
+    enterprise_id = _current_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+
+    description = str(body.get("description") or "").strip()
+    kb_id = f"kb_{uuid.uuid4().hex[:12]}"
+    storage_prefix = f"aiteam/{enterprise_id}/knowledge/{kb_id}"
+
+    cur = conn.cursor()
+    try:
+        kb = KnowledgeBase(
+            id=kb_id,
+            enterprise_id=enterprise_id,
+            name=name,
+            description=description,
+            status="active",
+            document_count=0,
+            storage_prefix=storage_prefix,
+            created_by=str(body.get("created_by") or ""),
+            updated_by=str(body.get("created_by") or ""),
+        )
+        KnowledgeBaseRepo(cur).create(kb)
+        conn.commit()
+        return 201, {
+            "knowledge_base_id": kb.id,
+            "name": kb.name,
+            "description": kb.description,
+            "status": kb.status,
+            "document_count": kb.document_count,
+            "storage_prefix": kb.storage_prefix,
+        }
     finally:
         cur.close()
 
@@ -4092,6 +4134,9 @@ def handle_team_route(
     # ── P08 knowledge-bases ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/knowledge-bases"):
         route_handler = lambda conn: _handle_knowledge_bases_list(conn, sub)
+
+    if route_handler is None and method == "POST" and _match_exact(sub, "/knowledge-bases"):
+        route_handler = lambda conn: _handle_knowledge_base_post(conn, sub, body)
 
     if route_handler is None:
         kb_search = _match_prefix(sub, "/knowledge-bases/")

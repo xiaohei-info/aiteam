@@ -71,6 +71,102 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_create_kb_lifecycle(post_result: dict, kb_responses: list[dict]) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
+const calls = [];
+let kbCallCount = 0;
+const kbResponses = {json.dumps(kb_responses)};
+function makeElement(initial) {{
+  return Object.assign({{
+    value: '',
+    innerHTML: '',
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) return this.listeners.click({{ preventDefault() {{}} }}); }},
+  }}, initial || {{}});
+}}
+const elements = {{
+  'kb-create-name': makeElement({{ value: '新知识库' }}),
+  'kb-create-description': makeElement({{ value: '用于新员工资料' }}),
+  'kb-create-submit': makeElement(),
+  'kb-create-feedback': makeElement(),
+}};
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  return {{
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    async text() {{ return JSON.stringify({{ ok: true }}); }},
+  }};
+}};
+global.window = {{ aiteam: {{}} }};
+global.document = {{
+  getElementById(id) {{
+    return elements[id] || null;
+  }},
+}};
+global.window.document = global.document;
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.api.getKnowledgeBases = async () => {{
+    const index = Math.min(kbCallCount, kbResponses.length - 1);
+    kbCallCount += 1;
+    return kbResponses[index];
+  }};
+  aiteam.api.getEmployees = async () => ({{
+    ok: true,
+    status: 200,
+    data: {{ employees: [] }},
+  }});
+  aiteam.api.postKnowledgeBase = async (body) => {{
+    calls.push(body);
+    return {json.dumps(post_result)};
+  }};
+  aiteam.pages.knowledge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await elements['kb-create-submit'].click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    html: container.innerHTML,
+    feedback: elements['kb-create-feedback'].innerHTML,
+    calls,
+    kbCallCount,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_upload_lifecycle(upload_result: dict, document_result: dict, kb_responses: list[dict] | None = None) -> dict:
     script = f"""
 const fs = require('fs');
@@ -534,6 +630,66 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
 
 def test_knowledge_module_exists() -> None:
     assert KNOWLEDGE_MODULE_PATH.exists(), f"Missing knowledge module: {KNOWLEDGE_MODULE_PATH}"
+
+
+def test_knowledge_module_renders_create_form_when_empty() -> None:
+    result = _run_knowledge_module(
+        {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "knowledge_bases": [],
+            },
+        }
+    )
+    assert "创建知识库" in result["html"]
+    assert "kb-create-submit" in result["html"]
+
+
+def test_knowledge_module_creates_kb_and_refreshes_list() -> None:
+    result = _run_create_kb_lifecycle(
+        {
+            "ok": True,
+            "status": 201,
+            "data": {
+                "knowledge_base_id": "kb_new",
+                "name": "新知识库",
+                "description": "用于新员工资料",
+                "status": "active",
+                "document_count": 0,
+            },
+        },
+        [
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [],
+                },
+            },
+            {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "knowledge_bases": [
+                        {
+                            "knowledge_base_id": "kb_new",
+                            "name": "新知识库",
+                            "description": "用于新员工资料",
+                            "status": "active",
+                            "document_count": 0,
+                            "documents": [],
+                            "employee_bindings": [],
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+    assert result["calls"] == [{"name": "新知识库", "description": "用于新员工资料"}]
+    assert result["kbCallCount"] == 2
+    assert "新知识库" in result["html"]
+    assert "创建成功" in result["feedback"]
 
 
 def test_knowledge_module_renders_cards_and_upload_form() -> None:
