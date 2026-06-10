@@ -163,7 +163,12 @@ window.aiteam = window.aiteam || {};
       });
     }
 
-    return { load: load };
+    return {
+      load: load,
+      __test: {
+        recruitTemplate: recruitTemplate,
+      },
+    };
   }
 
   ns.pages.adminTemplates = {
@@ -179,6 +184,11 @@ window.aiteam = window.aiteam || {};
         return;
       }
       createController(container).load();
+    },
+    __test: {
+      createController: createController,
+      normalizeItems: normalizeItems,
+      normalizeTemplate: normalizeTemplate,
     },
   };
 }(window.aiteam));
