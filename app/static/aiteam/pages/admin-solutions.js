@@ -98,6 +98,30 @@ window.aiteam = window.aiteam || {};
       }).join('； ') + '</span></div>';
   }
 
+  function renderApplyPreview(item, payload) {
+    if (!item || !payload) return '';
+    var templates = Array.isArray(item.template_summaries) ? item.template_summaries : [];
+    var previewItems = templates.length
+      ? templates.map(function (template) {
+          var modelRef = template && template.default_model_ref ? template.default_model_ref : {};
+          return '<li><strong>' + esc(stringValue(template.name, '未命名员工')) + '</strong> · ' +
+            esc(stringValue(template.role_name, '未设置角色')) + ' · ' +
+            esc(stringValue(modelRef.model, '未配置模型')) + '</li>';
+        }).join('')
+      : '<li>当前方案尚未返回模板预览</li>';
+    return '' +
+      '<div class="aiteam-state aiteam-state-empty" data-role="solution-apply-preview">' +
+      '<p><strong>应用前确认</strong></p>' +
+      '<p>即将以 <strong>' + esc(applyModeLabel(payload.mode)) + '</strong> 模式应用 <strong>' + esc(item.name || '未命名方案') + '</strong>。</p>' +
+      '<p>目标部门：' + esc(stringValue(payload.department_id, '未指定')) + '</p>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">待创建员工预览</span><span class="aiteam-shell__meta-value"><ul>' + previewItems + '</ul></span></div>' +
+      '<div class="aiteam-action-row">' +
+      '<button type="button" class="aiteam-btn" data-role="solution-confirm-apply">确认应用</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-cancel-preview">取消</button>' +
+      '</div>' +
+      '</div>';
+  }
+
   function createController(container) {
     var state = {
       items: [],
@@ -105,6 +129,8 @@ window.aiteam = window.aiteam || {};
       pendingSolutionId: '',
       pendingMode: '',
       lastSubmittedMode: '',
+      previewSolutionId: '',
+      previewPayload: null,
     };
 
     function setNotice(message) {
@@ -116,6 +142,11 @@ window.aiteam = window.aiteam || {};
         if (state.items[i].solution_id === solutionId) return state.items[i];
       }
       return null;
+    }
+
+    function clearPreview() {
+      state.previewSolutionId = '';
+      state.previewPayload = null;
     }
 
     function upsertSolution(solutionId, patch) {
@@ -207,7 +238,19 @@ window.aiteam = window.aiteam || {};
             department_id: String(departmentId || '').replace(/^\s+|\s+$/g, ''),
             idempotency_key: 'solution-apply-' + solutionId + '-' + mode,
           };
-          container.lastApplyHandler(solutionId, payload);
+          container.lastPreviewHandler(solutionId, payload);
+        });
+      }
+      var confirmButton = container.querySelector ? container.querySelector('[data-role="solution-confirm-apply"]') : null;
+      if (confirmButton && typeof confirmButton.addEventListener === 'function') {
+        confirmButton.addEventListener('click', function () {
+          container.lastConfirmApplyHandler();
+        });
+      }
+      var cancelButton = container.querySelector ? container.querySelector('[data-role="solution-cancel-preview"]') : null;
+      if (cancelButton && typeof cancelButton.addEventListener === 'function') {
+        cancelButton.addEventListener('click', function () {
+          container.lastCancelPreviewHandler();
         });
       }
     }
@@ -222,6 +265,7 @@ window.aiteam = window.aiteam || {};
         '<h2 class="aiteam-shell__panel-title">行业 AI 解决方案</h2>' +
         '<p class="aiteam-shell__panel-body">B06 页面通过 `/api/team/solutions` 读取企业可应用方案，并通过 `POST /api/team/solutions/{id}/apply` 提交。当前支持追加应用、覆盖重建、重新应用三种策略；方案创建新员工和知识库，页面展示的统计、最近应用状态、员工与知识库结果均以后端列表返回为准。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
+        renderApplyPreview(findSolution(state.previewSolutionId), state.previewPayload) +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用模式</span><span class="aiteam-shell__meta-value">追加应用 / 覆盖重建 / 重新应用</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">原子性</span><span class="aiteam-shell__meta-value">若后端返回失败，则视为全量回滚，不展示局部成功</span></div>' +
@@ -255,6 +299,7 @@ window.aiteam = window.aiteam || {};
         render();
         return Promise.resolve({ ok: false, status: 0, error: 'missing_applySolution' });
       }
+      clearPreview();
       state.pendingSolutionId = solutionId;
       state.pendingMode = String(payload && payload.mode || 'append');
       setNotice('');
@@ -275,6 +320,27 @@ window.aiteam = window.aiteam || {};
         render();
         return result;
       });
+    };
+
+    container.lastPreviewHandler = function (solutionId, payload) {
+      state.previewSolutionId = solutionId;
+      state.previewPayload = Object.assign({}, payload || {});
+      setNotice('');
+      render();
+      return Promise.resolve({ ok: true, preview: true });
+    };
+
+    container.lastConfirmApplyHandler = function () {
+      if (!state.previewSolutionId || !state.previewPayload) {
+        return Promise.resolve({ ok: false, status: 0, error: 'missing_preview' });
+      }
+      return container.lastApplyHandler(state.previewSolutionId, state.previewPayload);
+    };
+
+    container.lastCancelPreviewHandler = function () {
+      clearPreview();
+      render();
+      return Promise.resolve({ ok: true, cancelled: true });
     };
 
     function load() {
