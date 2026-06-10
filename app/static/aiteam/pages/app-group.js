@@ -599,7 +599,7 @@ window.aiteam = window.aiteam || {};
       '<button class="aiteam-button aiteam-button--ghost" type="button" data-group-reconnect>重新补拉</button>' +
       '<button class="aiteam-button" type="submit">发送群聊消息</button>' +
       '</div>' +
-      '<p class="aiteam-inline-note">当前 northbound contract 仍要求显式传入 sender_id；成员增删/解散群聊的正式写接口尚未开放，因此这里提供群设置入口和成员管理跳转，不伪造未实现写语义。</p>' +
+      '<p class="aiteam-inline-note">当前 northbound contract 仍要求显式传入 sender_id；成员增删与解散群聊动作已通过 Team Panel northbound API 落地，这里可直接完成群管理操作。</p>' +
       '</form>' +
       '</div>' +
       '<div class="aiteam-panel aiteam-panel--nested">' +

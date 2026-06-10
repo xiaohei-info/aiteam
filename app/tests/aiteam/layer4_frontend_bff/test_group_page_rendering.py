@@ -984,6 +984,7 @@ def test_group_page_renders_new_group_entry_avatar_grid_and_member_actions() -> 
     assert 'disabled>新增员工' not in payload["html"]
     assert 'disabled>踢出员工' not in payload["html"]
     assert 'disabled>解散群聊' not in payload["html"]
+    assert "尚未开放" not in payload["html"]
     assert "当前正式写接口尚未开放" not in payload["html"]
     assert "创建人" in payload["html"]
     assert "user_founder" in payload["html"]
