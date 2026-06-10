@@ -261,6 +261,48 @@ window.aiteam = window.aiteam || {};
       '</section>';
   }
 
+  function extractResultError(result) {
+    var payload = result && result.data && typeof result.data === 'object' ? result.data : null;
+    var errorObj = payload && payload.error && typeof payload.error === 'object' ? payload.error : null;
+    return {
+      code: String((errorObj && errorObj.code) || (payload && payload.error) || ''),
+      message: String((errorObj && errorObj.message) || (result && result.error) || ''),
+    };
+  }
+
+  function renderStatusShell(kind, enterpriseName, title, message, actionsHtml) {
+    return '' +
+      '<section class="aiteam-workbench" data-workbench-shell="1">' +
+      renderRail() +
+      '<aside class="aiteam-workbench__sidebar">' +
+      '<div class="aiteam-workbench__sidebar-top">' +
+      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
+      '</div>' +
+      '<div class="aiteam-workbench__empty" data-workbench-empty="' + escapeHtml(kind) + '">' +
+      '<div class="aiteam-workbench__empty-icon">' + (kind === 'denied' ? '🔒' : '⚠️') + '</div>' +
+      '<strong>' + escapeHtml(title) + '</strong>' +
+      '<p>' + escapeHtml(message) + '</p>' +
+      '<div class="aiteam-hero-actions">' +
+      '<a class="aiteam-button" href="/app/marketplace">前往人才市场</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/app/group">查看群聊</a>' +
+      '</div>' +
+      '</div>' +
+      '</aside>' +
+      '<section class="aiteam-workbench__main" data-workbench-main="1">' +
+      '<div class="aiteam-workbench__hero">' +
+      '<div>' +
+      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterpriseName || '企业工作台') + '</h1>' +
+      '<p class="aiteam-workbench__hero-desc">从左侧导航继续访问其他入口，当前私聊工作台状态如下。</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="aiteam-state aiteam-state-' + escapeHtml(kind) + '"><p>' + escapeHtml(message) + '</p></div>' +
+      (actionsHtml || '') +
+      '</section>' +
+      '</section>';
+  }
+
   function renderMainStage(data, state, selectedEmployee, filteredEmployees) {
     var enterprise = data.enterprise || {};
     var digest = data.office_digest || {};
@@ -426,7 +468,22 @@ window.aiteam = window.aiteam || {};
       ns.states.renderLoading(container, '加载工作台聚合视图...');
       ns.api.getWorkbench().then(function (result) {
         if (!result.ok) {
-          ns.states.handleApiResult(result, container, function () {});
+          var errorMeta = extractResultError(result);
+          if (result.status === 403 || errorMeta.code === 'PERMISSION_DENIED') {
+            container.innerHTML = renderStatusShell(
+              'denied',
+              '企业工作台',
+              '暂无工作台访问权限',
+              errorMeta.message || '当前账号没有查看工作台的权限'
+            );
+            return;
+          }
+          container.innerHTML = renderStatusShell(
+            'error',
+            '企业工作台',
+            '工作台加载失败',
+            errorMeta.message || '加载工作台失败，请稍后刷新重试。'
+          );
           return;
         }
         mountWorkbench(container, result.data || {});

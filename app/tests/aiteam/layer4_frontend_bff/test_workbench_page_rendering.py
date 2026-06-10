@@ -46,6 +46,69 @@ console.log(JSON.stringify({{ html: container.innerHTML }}));
     return json.loads(completed.stdout)
 
 
+def _run_workbench_init(result: dict) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(ROOT / "static" / "aiteam" / "api-client.js"))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(ROOT / "static" / "aiteam" / "state-helpers.js"))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(WORKBENCH_MODULE_PATH))}, 'utf8');
+
+global.window = {{
+  location: {{ search: '' }},
+  aiteam: {{
+    util: {{
+      escapeHtml(value) {{
+        return String(value == null ? '' : value);
+      }},
+    }},
+    pages: {{}},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  return {{
+    ok: {json.dumps(result.get("ok", False))},
+    status: {json.dumps(result.get("status", 0))},
+    statusText: {json.dumps(result.get("status_text", "Forbidden"))},
+    async text() {{
+      return {json.dumps(json.dumps(result.get("body")))};
+    }},
+  }};
+}};
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'app-workbench.js' }});
+
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.pages.appWorkbench.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{ html: container.innerHTML }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_workbench_empty_state_uses_prd_split_shell_instead_of_generic_empty_state() -> None:
     result = _run_workbench(
         {
@@ -305,3 +368,47 @@ def test_workbench_starred_employee_is_sorted_to_top_and_context_menu_matches_pr
     assert "查看详情" in result["html"]
     assert "设置为星标" in result["html"]
     assert "解雇" in result["html"]
+
+
+def test_workbench_init_keeps_prd_shell_when_permission_denied() -> None:
+    result = _run_workbench_init(
+        {
+            "ok": False,
+            "status": 403,
+            "status_text": "Forbidden",
+            "body": {
+                "error": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "当前账号没有查看工作台的权限",
+                    "retryable": False,
+                }
+            },
+        }
+    )
+    assert "data-workbench-shell" in result["html"]
+    assert "data-workbench-rail" in result["html"]
+    assert "当前账号没有查看工作台的权限" in result["html"]
+    assert "aiteam-state-denied" in result["html"]
+    assert "私聊" in result["html"]
+
+
+def test_workbench_init_keeps_prd_shell_when_load_fails() -> None:
+    result = _run_workbench_init(
+        {
+            "ok": False,
+            "status": 500,
+            "status_text": "Internal Server Error",
+            "body": {
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "工作台聚合暂时不可用",
+                    "retryable": True,
+                }
+            },
+        }
+    )
+    assert "data-workbench-shell" in result["html"]
+    assert "data-workbench-rail" in result["html"]
+    assert "工作台聚合暂时不可用" in result["html"]
+    assert "aiteam-state-error" in result["html"]
+    assert "查看群聊" in result["html"]
