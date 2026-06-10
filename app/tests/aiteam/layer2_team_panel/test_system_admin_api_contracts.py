@@ -70,6 +70,36 @@ def _seed_second_enterprise(db_conn, *, template_id: str) -> dict:
     return {"enterprise_id": enterprise_id, "employee_id": employee_id}
 
 
+def _seed_recharge(db_conn, *, enterprise_id: str, amount_cents: int, idempotency_key: str) -> None:
+    cur = db_conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO recharge_order (
+                id, enterprise_id, order_no, amount_cents, payment_method, status,
+                token_credited, idempotency_key, mock_provider, provider_reference, created_by, completed_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            """,
+            (
+                f"recharge_{uuid.uuid4().hex[:10]}",
+                enterprise_id,
+                f"RCG{uuid.uuid4().hex[:12].upper()}",
+                amount_cents,
+                "mock_pay",
+                "succeeded",
+                amount_cents * 10,
+                idempotency_key,
+                True,
+                f"mock://{idempotency_key}",
+                "test_seed",
+            ),
+        )
+        db_conn.commit()
+    finally:
+        cur.close()
+
+
 class TestSystemTemplates:
     def test_get_templates_returns_seeded_template(self, seeded_enterprise):
         status, body = _get(_system_admin_path("/api/system-admin/templates"))
@@ -104,6 +134,13 @@ class TestSystemTemplates:
         assert patched["name"] == "Ops Specialist v2"
         assert patched["publish_record"]["is_published"] is True
 
+    def test_system_template_projection_exposes_preview_fields(self, seeded_enterprise):
+        status, body = _get(_system_admin_path("/api/system-admin/templates"))
+        assert status == 200, body
+        seeded = next(item for item in body["items"] if item["template_id"] == seeded_enterprise["template_id"])
+        assert seeded["description"]
+        assert seeded["default_model"] or seeded["default_model_ref"]
+
 
 class TestSystemSolutions:
     def test_get_solutions_returns_seeded_solution(self, seeded_enterprise):
@@ -112,6 +149,13 @@ class TestSystemSolutions:
         seeded = next(item for item in body["items"] if item["solution_id"] == seeded_enterprise["solution_id"])
         assert seeded["template_ids"] == [seeded_enterprise["template_id"]]
         assert seeded["solution_stats"]["template_count"] == 1
+
+    def test_system_solution_projection_flattens_apply_stats(self, seeded_enterprise):
+        status, body = _get(_system_admin_path("/api/system-admin/solutions"))
+        assert status == 200, body
+        seeded = next(item for item in body["items"] if item["solution_id"] == seeded_enterprise["solution_id"])
+        assert seeded["solution_stats"]["template_count"] == len(seeded["template_ids"])
+        assert "publish_record" in seeded
 
     def test_post_solution_then_patch_publish(self, seeded_enterprise):
         status, created = _post(
@@ -138,6 +182,12 @@ class TestSystemSolutions:
 
 class TestSystemFinance:
     def test_finance_overview_and_reports_are_reproducible(self, db_conn, seeded_enterprise):
+        _seed_recharge(
+            db_conn,
+            enterprise_id=seeded_enterprise["enterprise_id"],
+            amount_cents=2000,
+            idempotency_key="recharge-finance-1",
+        )
         _seed_usage(
             db_conn,
             enterprise_id=seeded_enterprise["enterprise_id"],
@@ -148,6 +198,12 @@ class TestSystemFinance:
             event_cost=2,
         )
         second = _seed_second_enterprise(db_conn, template_id=seeded_enterprise["template_id"])
+        _seed_recharge(
+            db_conn,
+            enterprise_id=second["enterprise_id"],
+            amount_cents=1000,
+            idempotency_key="recharge-finance-2",
+        )
         _seed_usage(
             db_conn,
             enterprise_id=second["enterprise_id"],
@@ -163,20 +219,28 @@ class TestSystemFinance:
         )
         assert status == 200, overview
         assert overview["total_tokens"] == 49
-        assert overview["total_revenue_cents"] == 11
+        assert overview["summary"]["total_revenue_cents"] == 3000
+        assert overview["summary"]["total_cost_cents"] == 11
+        assert overview["summary"]["total_profit_cents"] == 2989
+        assert overview["summary"]["paying_enterprise_count"] == 2
+        assert overview["total_revenue_cents"] == 3000
         assert overview["total_cost_cents"] == 11
-        assert overview["total_profit_cents"] == 0
+        assert overview["total_profit_cents"] == 2989
         assert overview["enterprise_count"] == 2
         assert len(overview["top_enterprises"]) == 2
-        assert overview["top_enterprises"][0]["cost_cents"] >= overview["top_enterprises"][1]["cost_cents"]
+        assert overview["top_enterprises"][0]["revenue_cents"] >= overview["top_enterprises"][1]["revenue_cents"]
 
         report_status, reports = _get(
             _system_admin_path("/api/system-admin/finance/reports?period_start=2000-01-01&period_end=2099-12-31")
         )
         assert report_status == 200, reports
-        assert len(reports["trends"]) >= 1
-        trend_total = sum(item["cost_cents"] for item in reports["trends"])
-        enterprise_total = sum(item["cost_cents"] for item in reports["enterprises"])
-        assert trend_total == 11
-        assert enterprise_total == 11
-        assert reports["enterprises"][0]["cost_cents"] >= reports["enterprises"][1]["cost_cents"]
+        assert reports["summary"]["total_revenue_cents"] == 3000
+        assert reports["summary"]["total_cost_cents"] == 11
+        assert reports["summary"]["total_profit_cents"] == 2989
+        assert len(reports["trend"]) >= 1
+        trend_revenue_total = sum(item["revenue"] for item in reports["trend"])
+        trend_cost_total = sum(item["cost"] for item in reports["trend"])
+        top_revenue_total = sum(item["revenue_cents"] for item in reports["top_enterprises"])
+        assert trend_revenue_total == 3000
+        assert trend_cost_total == 11
+        assert top_revenue_total == 3000

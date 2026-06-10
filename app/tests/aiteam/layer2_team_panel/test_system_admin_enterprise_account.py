@@ -105,6 +105,32 @@ class TestSystemAdminSearchEnterprises:
         # No archived enterprises in seed data
         assert body.get("total", 0) == 0
 
+    def test_filter_by_created_range_returns_matching_enterprise(self, seeded_enterprise):
+        _, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises?created_from=2026-01-01&created_to=2099-12-31"
+            )
+        )
+        ids = [item["id"] for item in body["enterprises"]]
+        assert seeded_enterprise["enterprise_id"] in ids
+
+    def test_filter_by_created_range_excludes_out_of_window(self, seeded_enterprise):
+        _, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises?created_from=2099-01-01&created_to=2099-12-31"
+            )
+        )
+        assert body["total"] == 0
+
+    def test_filter_by_created_range_rejects_invalid_created_from(self, seeded_enterprise):
+        status, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises?created_from=not-a-date&created_to=2099-12-31"
+            )
+        )
+        assert status == 400, f"Expected 400, got {status}: {body}"
+        assert body["error"] == "INVALID_REQUEST"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # T03: Enterprise detail
@@ -263,6 +289,23 @@ class TestSystemAdminExportEnterprises:
     def test_export_filters_by_status(self, seeded_enterprise):
         _, body = _get(_system_admin_path("/api/system-admin/enterprises/export?status=active"))
         assert body.get("total", 0) >= 1
+
+    def test_export_filter_by_created_range_excludes_out_of_window(self, seeded_enterprise):
+        _, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises/export?created_from=2099-01-01&created_to=2099-12-31"
+            )
+        )
+        assert body["total"] == 0
+
+    def test_export_filter_by_created_range_rejects_invalid_created_to(self, seeded_enterprise):
+        status, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises/export?created_from=2026-01-01&created_to=bad-date"
+            )
+        )
+        assert status == 400, f"Expected 400, got {status}: {body}"
+        assert body["error"] == "INVALID_REQUEST"
 
 
 # ═══════════════════════════════════════════════════════════════════

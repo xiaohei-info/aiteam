@@ -386,6 +386,17 @@ class TestTalentMarketTemplates:
         template = next(item for item in body["items"] if item["template_id"] == seeded_enterprise["template_id"])
         assert template["tags"] == ["营销", "策略"]
 
+    def test_unpublished_template_is_hidden_from_team_marketplace(self, seeded_enterprise):
+        template_id = seeded_enterprise["template_id"]
+        patch_status, patched = _patch(
+            f"/api/system-admin/templates/{template_id}?role=system_admin",
+            {"publish_action": "unpublish"},
+        )
+        assert patch_status == 200, patched
+        status, body = _get("/api/team/templates")
+        assert status == 200, body
+        assert all(item["template_id"] != template_id for item in body["items"])
+
 
 class TestTalentTemplateDetail:
     """S06-T03: GET /api/team/talent-market/templates/{id}."""
@@ -1635,6 +1646,18 @@ class TestSolutionsList:
         assert "solutions" in body
         assert isinstance(body["solutions"], list)
         assert "total" in body
+
+    def test_unpublished_solution_is_hidden_from_team_solution_list(self, seeded_enterprise):
+        solution_id = seeded_enterprise["solution_id"]
+        patch_status, patched = _patch(
+            f"/api/system-admin/solutions/{solution_id}?role=system_admin",
+            {"publish_action": "unpublish"},
+        )
+        assert patch_status == 200, patched
+
+        status, body = _get("/api/team/solutions")
+        assert status == 200, body
+        assert all(item["solution_id"] != solution_id for item in body["solutions"])
 
     def test_solutions_list_reflects_apply_records_and_template_stats(self, seeded_enterprise):
         payload = {

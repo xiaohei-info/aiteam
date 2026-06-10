@@ -39,6 +39,14 @@ window.aiteam = window.aiteam || {};
     return String(value).replace(/^\s+|\s+$/g, '');
   }
 
+  function escapeHtmlAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
   function formatMoney(value) {
     var num = Number(value);
     if (!isFinite(num)) return '—';
@@ -151,19 +159,31 @@ window.aiteam = window.aiteam || {};
     return { cancelled: true, error: 'unsupported_action' };
   }
 
+  function _withinCreatedRange(item, rawRange) {
+    var range = trimText(rawRange);
+    if (!range) return true;
+    var parts = range.split('~');
+    if (parts.length !== 2) return true;
+    var start = trimText(parts[0]);
+    var end = trimText(parts[1]);
+    var created = String(item.created_at || '').slice(0, 10);
+    if (start && created < start) return false;
+    if (end && created > end) return false;
+    return true;
+  }
+
   function filterEnterprises(items, state) {
-    var query = trimText(state.query).toLowerCase();
-    var status = trimText(state.statusFilter).toLowerCase();
     return (items || []).filter(function (item) {
-      if (status && String(item.status || '').toLowerCase() !== status) return false;
-      if (!query) return true;
+      if (!_withinCreatedRange(item, state.createdRange)) return false;
+      if (state.statusFilter && String(item.status || '').toLowerCase() !== state.statusFilter) return false;
+      if (!state.query) return true;
       var haystack = [
         item.name,
         item.owner_name,
         item.owner_phone,
         item.enterprise_id,
       ].join(' ').toLowerCase();
-      return haystack.indexOf(query) !== -1;
+      return haystack.indexOf(trimText(state.query).toLowerCase()) !== -1;
     });
   }
 
@@ -291,6 +311,7 @@ window.aiteam = window.aiteam || {};
         var state = {
           query: '',
           statusFilter: '',
+          createdRange: '',
           selectedEnterpriseId: data.enterprises[0].enterprise_id || '',
           selectedDetail: null,
           selectedQuota: null,
@@ -358,7 +379,7 @@ window.aiteam = window.aiteam || {};
             '<div class="aiteam-shell__meta">' +
             '<div class="aiteam-shell__meta-card"><label>搜索企业名称/手机号/邮箱<br><input class="aiteam-input" type="search" data-role="enterprise-search" value="' + state.query + '" placeholder="搜索企业名称/手机号/邮箱"></label></div>' +
             '<div class="aiteam-shell__meta-card"><label>状态筛选<br><select class="aiteam-input" data-role="enterprise-status"><option value="">全部</option><option value="active"' + (state.statusFilter === 'active' ? ' selected' : '') + '>正常</option><option value="arrears"' + (state.statusFilter === 'arrears' ? ' selected' : '') + '>欠费</option><option value="suspended"' + (state.statusFilter === 'suspended' ? ' selected' : '') + '>封禁</option></select></label></div>' +
-            '<div class="aiteam-shell__meta-card"><label>注册时间范围<br><input class="aiteam-input" type="text" data-role="enterprise-created-range" value="" placeholder="YYYY-MM-DD ~ YYYY-MM-DD"></label></div>' +
+            '<div class="aiteam-shell__meta-card"><label>注册时间范围<br><input class="aiteam-input" type="text" data-role="enterprise-created-range" value="' + escapeHtmlAttr(state.createdRange) + '" placeholder="YYYY-MM-DD ~ YYYY-MM-DD"></label></div>' +
             '<div class="aiteam-shell__meta-card">' + renderExportSummary(state.exportItems) + '</div>' +
             '</div>' +
             '<div class="aiteam-shell__two-column">' +
@@ -382,6 +403,7 @@ window.aiteam = window.aiteam || {};
           if (container.querySelector) {
             var search = container.querySelector('[data-role="enterprise-search"]');
             var filter = container.querySelector('[data-role="enterprise-status"]');
+            var createdRangeInput = container.querySelector('[data-role="enterprise-created-range"]');
             if (search && search.addEventListener) {
               search.addEventListener('input', function () {
                 state.query = this.value || '';
@@ -391,6 +413,12 @@ window.aiteam = window.aiteam || {};
             if (filter && filter.addEventListener) {
               filter.addEventListener('change', function () {
                 state.statusFilter = this.value || '';
+                render();
+              });
+            }
+            if (createdRangeInput && createdRangeInput.addEventListener) {
+              createdRangeInput.addEventListener('input', function () {
+                state.createdRange = this.value || '';
                 render();
               });
             }
