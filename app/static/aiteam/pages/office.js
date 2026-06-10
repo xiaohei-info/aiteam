@@ -216,8 +216,13 @@ window.aiteam = window.aiteam || {};
       return '<div class="aiteam-office__task-empty">暂无历史任务</div>';
     }
     return seatTasks.map(function (item) {
+      var href = resolveConversationHref(
+        item.conversation_id,
+        item.conv_type,
+        item.navigation_target
+      ) || taskHref(item);
       return '' +
-        '<div class="aiteam-office__task-item">' +
+        '<a class="aiteam-office__task-item" href="' + escapeHtml(href) + '">' +
         '<div class="aiteam-office__task-main">' +
         '<div class="aiteam-office__task-title">' + escapeHtml(item.preview || item.title || '历史任务') + '</div>' +
         '<div class="aiteam-office__task-detail">' + escapeHtml(item.detail || '等待更多任务详情') + '</div>' +
@@ -226,7 +231,7 @@ window.aiteam = window.aiteam || {};
         '<span class="aiteam-office__task-chip is-' + escapeHtml(String(item.status || 'pending').toLowerCase()) + '">' + escapeHtml(taskStatusLabel(String(item.status || 'pending').toLowerCase(), item.progress)) + '</span>' +
         '<span class="aiteam-office__task-progress">' + escapeHtml(item.event_ts || '刚刚') + '</span>' +
         '</div>' +
-        '</div>';
+        '</a>';
     }).join('');
   }
 

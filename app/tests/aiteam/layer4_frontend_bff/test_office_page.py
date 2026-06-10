@@ -121,15 +121,33 @@ const responses = [
     refresh_hint_ms: 15000,
   }} }},
   {{ ok: true, status: 200, statusText: 'OK', body: {{
-    items: [{{
-      employee_id: 'emp_rex',
-      employee_display_name: 'Rex',
-      status: 'running',
-      preview: 'Layer4 前端回归',
-      latest_event_cursor: 12,
-      events_url: '/api/team/runs/run_1/events?cursor=12',
-      event_ts: '2026-06-05T12:34:56Z',
-    }}],
+    items: [
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'running',
+        preview: 'Layer4 前端回归',
+        conv_type: 'private',
+        conversation_id: 'conv_rex',
+        navigation_target: '/app/chat/conv_rex',
+        latest_event_cursor: 12,
+        events_url: '/api/team/runs/run_1/events?cursor=12',
+        event_ts: '2026-06-05T12:34:56Z',
+      }},
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'completed',
+        preview: '预算评审群总结',
+        detail: '已同步多人协作结论',
+        conv_type: 'group',
+        conversation_id: 'group_budget',
+        navigation_target: '/app/group/group_budget',
+        latest_event_cursor: 8,
+        events_url: '/api/team/runs/run_group/events?cursor=8',
+        event_ts: '2026-06-05T11:34:56Z',
+      }}
+    ],
     queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
     generated_cursor: 12,
     refresh_hint_ms: 15000,
@@ -214,15 +232,33 @@ const responses = [
     refresh_hint_ms: 15000,
   }} }},
   {{ ok: true, status: 200, statusText: 'OK', body: {{
-    items: [{{
-      employee_id: 'emp_rex',
-      employee_display_name: 'Rex',
-      status: 'running',
-      preview: 'Layer4 前端回归',
-      latest_event_cursor: 12,
-      events_url: '/api/team/runs/run_1/events?cursor=12',
-      event_ts: '2026-06-05T12:34:56Z',
-    }}],
+    items: [
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'running',
+        preview: 'Layer4 前端回归',
+        conv_type: 'private',
+        conversation_id: 'conv_rex',
+        navigation_target: '/app/chat/conv_rex',
+        latest_event_cursor: 12,
+        events_url: '/api/team/runs/run_1/events?cursor=12',
+        event_ts: '2026-06-05T12:34:56Z',
+      }},
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'completed',
+        preview: '预算评审群总结',
+        detail: '已同步多人协作结论',
+        conv_type: 'group',
+        conversation_id: 'group_budget',
+        navigation_target: '/app/group/group_budget',
+        latest_event_cursor: 8,
+        events_url: '/api/team/runs/run_group/events?cursor=8',
+        event_ts: '2026-06-05T11:34:56Z',
+      }}
+    ],
     queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
     generated_cursor: 12,
     refresh_hint_ms: 15000,
@@ -354,15 +390,33 @@ const responses = [
     refresh_hint_ms: 15000,
   }} }},
   {{ ok: true, status: 200, statusText: 'OK', body: {{
-    items: [{{
-      employee_id: 'emp_rex',
-      employee_display_name: 'Rex',
-      status: 'running',
-      preview: 'Layer4 前端回归',
-      latest_event_cursor: 12,
-      events_url: '/api/team/runs/run_1/events?cursor=12',
-      event_ts: '2026-06-05T12:34:56Z',
-    }}],
+    items: [
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'running',
+        preview: 'Layer4 前端回归',
+        conv_type: 'private',
+        conversation_id: 'conv_rex',
+        navigation_target: '/app/chat/conv_rex',
+        latest_event_cursor: 12,
+        events_url: '/api/team/runs/run_1/events?cursor=12',
+        event_ts: '2026-06-05T12:34:56Z',
+      }},
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'completed',
+        preview: '预算评审群总结',
+        detail: '已同步多人协作结论',
+        conv_type: 'group',
+        conversation_id: 'group_budget',
+        navigation_target: '/app/group/group_budget',
+        latest_event_cursor: 8,
+        events_url: '/api/team/runs/run_group/events?cursor=8',
+        event_ts: '2026-06-05T11:34:56Z',
+      }}
+    ],
     queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
     generated_cursor: 12,
     refresh_hint_ms: 15000,
@@ -497,15 +551,33 @@ const responses = [
     refresh_hint_ms: 15000,
   }} }},
   {{ ok: true, status: 200, statusText: 'OK', body: {{
-    items: [{{
-      employee_id: 'emp_rex',
-      employee_display_name: 'Rex',
-      status: 'running',
-      preview: 'Layer4 前端回归',
-      latest_event_cursor: 12,
-      events_url: '/api/team/runs/run_1/events?cursor=12',
-      event_ts: '2026-06-05T12:34:56Z',
-    }}],
+    items: [
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'running',
+        preview: 'Layer4 前端回归',
+        conv_type: 'private',
+        conversation_id: 'conv_rex',
+        navigation_target: '/app/chat/conv_rex',
+        latest_event_cursor: 12,
+        events_url: '/api/team/runs/run_1/events?cursor=12',
+        event_ts: '2026-06-05T12:34:56Z',
+      }},
+      {{
+        employee_id: 'emp_rex',
+        employee_display_name: 'Rex',
+        status: 'completed',
+        preview: '预算评审群总结',
+        detail: '已同步多人协作结论',
+        conv_type: 'group',
+        conversation_id: 'group_budget',
+        navigation_target: '/app/group/group_budget',
+        latest_event_cursor: 8,
+        events_url: '/api/team/runs/run_group/events?cursor=8',
+        event_ts: '2026-06-05T11:34:56Z',
+      }}
+    ],
     queue: {{ queued: 0, running: 1, waiting_human: 0, failed: 0 }},
     generated_cursor: 12,
     refresh_hint_ms: 15000,
@@ -970,6 +1042,7 @@ def test_office_module_switches_detail_panel_when_selecting_another_seat() -> No
     assert "Rex" in result["initialHtml"]
     assert "执行回归测试" in result["initialHtml"]
     assert 'href="/app/chat/conv_rex"' in result["initialHtml"]
+    assert 'href="/app/group/group_budget"' in result["initialHtml"]
     assert "Nova" in result["afterClickHtml"]
     assert "数据科学家" in result["afterClickHtml"]
     assert "等待新任务" in result["afterClickHtml"]
