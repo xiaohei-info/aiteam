@@ -74,7 +74,6 @@ from ..transactions.uow import UnitOfWork
 from ..application.commands.conversation_service import submit_group_message
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
 from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
-from ..application.policies.permission_service import check_permission
 from ..application.queries.billing_view_service import get_billing_view
 from ..application.queries.employee_admin_view_service import get_employee_admin_view
 from ..application.commands.run_command_service import create_run
@@ -93,6 +92,14 @@ from ..api_team.router_team_settings_billing import (
     handle_patch_settings,
     handle_post_admin_invite,
     handle_post_billing_recharge,
+)
+from . import router_team_billing_usage, router_team_connectors, router_team_talent
+from .router_common import (
+    _forbidden,
+    _request_actor_id,
+    _request_params,
+    _request_role,
+    _require_permission,
 )
 
 from agent_gateway.contracts import (
@@ -758,65 +765,6 @@ def _match_prefix(path: str, prefix: str) -> str | None:
 
 def _match_exact(path: str, target: str) -> bool:
     return path == target or path.rstrip("/") == target
-
-
-def _request_params(query: str, body: dict | None = None) -> dict:
-    params = {key: values[0] for key, values in parse_qs(query, keep_blank_values=True).items() if values}
-    if isinstance(body, dict):
-        for key in (
-            "role",
-            "actor_role",
-            "enterprise_role",
-            "system_role",
-            "actor_id",
-            "request_id",
-            "period_start",
-            "period_end",
-            "employee_id",
-            "target_type",
-            "target_id",
-            "limit",
-            "format",
-        ):
-            value = body.get(key)
-            if value not in (None, ""):
-                params[key] = value
-    return params
-
-
-def _request_role(query: str, body: dict | None = None) -> str:
-    params = _request_params(query, body)
-    for key in ("actor_role", "role", "enterprise_role", "system_role"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    return "owner"
-
-
-def _request_actor_id(query: str, body: dict | None = None) -> str:
-    params = _request_params(query, body)
-    for key in ("actor_id", "user_id", "requester_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    return "governance_api"
-
-
-def _forbidden(role: str, action: str, reason: str) -> tuple[int, dict]:
-    return 403, {
-        "error": "FORBIDDEN",
-        "message": reason,
-        "required_action": action,
-        "role": role or "",
-    }
-
-
-def _require_permission(query: str, body: dict | None, action: str) -> tuple[str | None, tuple[int, dict] | None]:
-    role = _request_role(query, body)
-    allowed, reason = check_permission(role, action)
-    if not allowed:
-        return None, _forbidden(role, action, reason)
-    return role, None
 
 
 def _usage_window(query: str, body: dict | None = None) -> tuple[str, str]:
@@ -3697,47 +3645,34 @@ def handle_team_route(
 
     route_handler = None
 
+    for resolver in (
+        router_team_talent.resolve_team_route,
+        router_team_billing_usage.resolve_team_route,
+        router_team_connectors.resolve_team_route,
+    ):
+        route_handler = resolver(sub, method, query, body)
+        if route_handler is not None:
+            break
+
     # ── workbench ──
-    if method == "GET" and _match_exact(sub, "/workbench"):
+    if route_handler is None and method == "GET" and _match_exact(sub, "/workbench"):
         route_handler = lambda conn: _handle_workbench(conn, sub, query, request_context)
 
     # ── office scene/feed ──
-    elif method == "GET" and _match_exact(sub, "/office/scene"):
+    elif route_handler is None and method == "GET" and _match_exact(sub, "/office/scene"):
         route_handler = lambda conn: _handle_office_scene(conn, sub)
-    elif method == "GET" and _match_exact(sub, "/office/feed"):
+    elif route_handler is None and method == "GET" and _match_exact(sub, "/office/feed"):
         route_handler = lambda conn: _handle_office_feed(conn, sub)
 
     # ── org/tree ──
-    elif method == "GET" and _match_exact(sub, "/org/tree"):
+    elif route_handler is None and method == "GET" and _match_exact(sub, "/org/tree"):
         route_handler = lambda conn: _handle_org_tree(conn, sub)
-
-    # ── talent-market/templates ──
-    elif method == "GET" and _match_exact(sub, "/talent-market/templates"):
-        route_handler = lambda conn: _handle_talent_templates(conn, sub)
-
-    # ── talent-market/templates/{id} ──
-    else:
-        tmpl_id = _match_prefix(sub, "/talent-market/templates/")
-        if method == "GET" and tmpl_id is not None and "/" not in tmpl_id:
-            route_handler = lambda conn, template_id=tmpl_id: _handle_talent_template_detail(conn, sub, template_id)
-
-    # ── recruitments ──
-    if route_handler is None and method == "POST" and _match_exact(sub, "/recruitments"):
-        route_handler = lambda conn: _handle_recruitments_post(conn, sub, body)
 
     # ── org/assignments/{id} patch ──
     if route_handler is None:
         org_assignment_id = _match_prefix(sub, "/org/assignments/")
         if method == "PATCH" and org_assignment_id is not None and "/" not in org_assignment_id:
             route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, body)
-
-    # ── solutions/{id}/apply ──
-    if route_handler is None:
-        solution_apply = _match_prefix(sub, "/solutions/")
-        if method == "POST" and solution_apply is not None and solution_apply.endswith("/apply"):
-            solution_id = solution_apply[:-len("/apply")]
-            if "/" not in solution_id:
-                route_handler = lambda conn, matched_solution_id=solution_id: _handle_solution_apply_post(conn, sub, matched_solution_id, body)
 
     # ── conversations/{id} ──
     if route_handler is None:
@@ -3806,56 +3741,6 @@ def handle_team_route(
             kb_id = kb_doc[:-len("/documents")]
             if "/" not in kb_id:
                 route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_document_post(conn, sub, kb_id, body)
-
-    # ── billing usage overview / records ──
-    if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/overview"):
-        route_handler = lambda conn: _handle_billing_usage_overview(conn, query)
-
-    if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/records"):
-        route_handler = lambda conn: _handle_billing_usage_records(conn, query)
-
-    if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/records/export"):
-        route_handler = lambda conn: _handle_billing_usage_records(conn, f"{query}&format=csv" if query else "format=csv")
-
-    # ── B06 solutions list ──
-    if route_handler is None and method == "GET" and _match_exact(sub, "/solutions"):
-        route_handler = lambda conn: _handle_solutions_list(conn, sub)
-
-    # ── B05 connectors list/create/test/grants ──
-    if route_handler is None and method == "GET" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_list(conn, sub)
-
-    if route_handler is None and method == "POST" and _match_exact(sub, "/connectors"):
-        route_handler = lambda conn: _handle_connectors_post(conn, sub, body)
-
-    if route_handler is None:
-        connector_status = _match_prefix(sub, "/connectors/")
-        if method == "GET" and connector_status is not None and connector_status.endswith("/status"):
-            connector_id = connector_status[:-len("/status")]
-            if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_status(conn, sub, matched_connector_id)
-
-    if route_handler is None:
-        connector_test = _match_prefix(sub, "/connectors/")
-        if method == "POST" and connector_test is not None and connector_test.endswith("/test"):
-            connector_id = connector_test[:-len("/test")]
-            if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_test(conn, sub, matched_connector_id)
-
-    if route_handler is None:
-        connector_detail = _match_prefix(sub, "/connectors/")
-        if connector_detail is not None and "/" not in connector_detail:
-            if method == "GET":
-                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_detail(conn, sub, matched_connector_id)
-            elif method == "PATCH":
-                route_handler = lambda conn, matched_connector_id=connector_detail: _handle_connector_patch(conn, sub, matched_connector_id, body)
-
-    if route_handler is None:
-        connector_grants = _match_prefix(sub, "/connectors/")
-        if method == "PATCH" and connector_grants is not None and connector_grants.endswith("/grants"):
-            connector_id = connector_grants[:-len("/grants")]
-            if "/" not in connector_id:
-                route_handler = lambda conn, matched_connector_id=connector_id: _handle_connector_grants_patch(conn, sub, matched_connector_id, body)
 
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees/export"):
         route_handler = lambda conn: _handle_employees_export(conn, query)

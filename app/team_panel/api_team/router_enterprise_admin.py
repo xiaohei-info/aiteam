@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from ..repositories.employee_repo import EmployeeRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
+from .router_common import _require_permission
 from .router_team import (
     _database_unavailable_response,
-    _require_permission,
     _billing_usage_overview_payload,
 )
 from ..transactions.db import create_connection

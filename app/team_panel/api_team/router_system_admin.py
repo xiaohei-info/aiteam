@@ -14,7 +14,7 @@ from ..domain.entities import AuditEvent
 from ..repositories.audit_event_repo import AuditEventRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..transactions.db import create_connection
-from .router_team import (
+from .router_common import (
     _request_actor_id,
     _request_params,
     _request_role,
