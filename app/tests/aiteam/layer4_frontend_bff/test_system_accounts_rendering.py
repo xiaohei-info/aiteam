@@ -12,7 +12,7 @@ STATE_HELPERS_PATH = ROOT / "static" / "aiteam" / "state-helpers.js"
 ROLE_STATE_PATH = ROOT / "static" / "aiteam" / "role-state.js"
 
 
-def _run_system_accounts() -> dict:
+def _run_system_accounts(after_init_js: str = "return {};") -> dict:
     script = f"""
 const fs = require('fs');
 const vm = require('vm');
@@ -101,17 +101,42 @@ vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
 vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
 vm.runInThisContext(roleStateSource, {{ filename: 'role-state.js' }});
 vm.runInThisContext(moduleSource, {{ filename: 'system-accounts.js' }});
+
+function createEventTarget(initialValue) {{
+  return {{
+    value: initialValue || '',
+    listeners: {{}},
+    addEventListener(type, handler) {{
+      this.listeners[type] = handler;
+    }},
+    dispatch(type) {{
+      if (this.listeners[type]) {{
+        this.listeners[type].call(this, {{ currentTarget: this, target: this }});
+      }}
+    }},
+  }};
+}}
+
 (async () => {{
+  const nodes = {{
+    '[data-role="enterprise-search"]': createEventTarget(''),
+    '[data-role="enterprise-status"]': createEventTarget(''),
+    '[data-role="enterprise-created-range"]': createEventTarget(''),
+  }};
   const container = {{
     innerHTML: '',
-    querySelector() {{ return null; }},
+    querySelector(selector) {{ return nodes[selector] || null; }},
     querySelectorAll() {{ return []; }},
   }};
   aiteam.role.setActiveRole('system_admin');
   aiteam.pages.systemAccounts.init(container);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  console.log(JSON.stringify({{ html: container.innerHTML, fetchCalls }}));
+  const extra = await (async () => {{
+    {after_init_js}
+  }})();
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{ html: container.innerHTML, fetchCalls, extra }}));
 }})().catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -145,3 +170,21 @@ def test_system_accounts_renders_stat_cards_search_and_detail_region() -> None:
     assert "员工上限" in payload["html"]
     assert "导出视图" in payload["html"]
     assert "导出 Excel" in payload["html"]
+
+
+def test_system_accounts_filters_by_created_range_in_browser_state() -> None:
+    payload = _run_system_accounts(
+        after_init_js="""
+  const createdRangeInput = container.querySelector('[data-role="enterprise-created-range"]');
+  if (createdRangeInput) {
+    createdRangeInput.value = '2026-02-01 ~ 2026-02-28';
+    createdRangeInput.dispatch('input');
+  }
+  return {};
+""",
+    )
+    assert "YYYY-MM-DD ~ YYYY-MM-DD" in payload["html"]
+    assert 'data-role="enterprise-created-range"' in payload["html"]
+    assert "豪恩声学" in payload["html"]
+    assert "太乙知行AI科技" not in payload["html"]
+    assert "示例企业C" not in payload["html"]

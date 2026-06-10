@@ -525,6 +525,16 @@ class TestPermissionDeniedState:
         assert "system_write" in module_source
         assert "permission_denied" in module_source
 
+    def test_system_accounts_system_operator_keeps_readonly_actions(self):
+        result = _run_page_with_role(
+            "system-accounts.js",
+            "systemAccounts",
+            role="system_operator",
+            fetch_status=200,
+            fetch_body=json.dumps({"enterprises": [{"enterprise_id": "ent_acme", "name": "Acme", "status": "active"}]}),
+        )
+        assert "只读" in result["html"]
+
     def test_system_accounts_perform_action_posts_canonical_actions_contract(self):
         result = _run_system_accounts_action(
             role="system_admin",
