@@ -323,6 +323,38 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function renderOfficeError(message) {
+    var shell = renderOffice(
+      {
+        summary: {
+          online_employee_count: 0,
+          running_task_count: 0,
+        },
+        seats: [],
+        generated_cursor: 0,
+        refresh_hint_ms: 0,
+      },
+      {
+        items: [],
+        queue: {
+          queued: 0,
+          running: 0,
+          waiting_human: 0,
+          failed: 0,
+        },
+        generated_cursor: 0,
+        refresh_hint_ms: 0,
+      },
+      { scale: 1, offsetX: 0, offsetY: 0 },
+      ''
+    );
+    return (
+      '<div class="aiteam-state aiteam-state-error"><p>办公室数据暂时不可用</p><p>' +
+      escapeHtml(message || '加载失败，请稍后重试') +
+      '</p></div>' + shell
+    );
+  }
+
   function renderOffice(sceneData, feedData, viewportState, selectedSeatId) {
     var summary = sceneData && sceneData.summary ? sceneData.summary : {};
     var seats = Array.isArray(sceneData && sceneData.seats) ? sceneData.seats : [];
@@ -355,10 +387,18 @@ window.aiteam = window.aiteam || {};
       renderSeamMeta(sceneData, feedData) +
       '<div class="aiteam-office__layout">' +
       '<div class="aiteam-office__stage-wrap">' +
+      '<div class="aiteam-office__scene-meta">' +
+      '<div class="aiteam-office__scene-title">办公室场景</div>' +
+      '<div class="aiteam-office__scene-hint">拖拽平移 · 滚轮缩放 · 工位点击查看详情</div>' +
+      '</div>' +
+      '<div class="aiteam-office__scene-viewport">' +
+      '<div class="aiteam-office__scene-floor">' +
       '<div class="aiteam-office__stage" data-office-root style="transform:' + escapeHtml(viewportTransform(view)) + ';transform-origin:center center;">' +
       (seats.length ? seats.map(function (seat) {
         return renderSeat(seat, selectedSeat && String(selectedSeat.employee_id || '') === String(seat.employee_id || ''));
       }).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
+      '</div>' +
+      '</div>' +
       '</div>' +
       '</div>' +
       '<aside class="aiteam-office__sidebar">' +
@@ -516,6 +556,44 @@ window.aiteam = window.aiteam || {};
     applyViewportState(container, container.__aiteamOfficeViewportState || { scale: 1, offsetX: 0, offsetY: 0 });
   }
 
+  function bindPointerNavigation(container) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var root = container.querySelector('[data-office-root]');
+    if (!root || typeof root.addEventListener !== 'function') return;
+    var dragState = { active: false, x: 0, y: 0 };
+
+    root.addEventListener('wheel', function (event) {
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      var delta = event && Number(event.deltaY) < 0 ? VIEWPORT_SCALE_STEP : -VIEWPORT_SCALE_STEP;
+      zoomViewport(container, delta);
+    });
+
+    root.addEventListener('mousedown', function (event) {
+      dragState.active = true;
+      dragState.x = Number(event && event.clientX) || 0;
+      dragState.y = Number(event && event.clientY) || 0;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    });
+
+    root.addEventListener('mousemove', function (event) {
+      if (!dragState.active) return;
+      var nextX = Number(event && event.clientX) || 0;
+      var nextY = Number(event && event.clientY) || 0;
+      panViewport(container, nextX - dragState.x, nextY - dragState.y);
+      dragState.x = nextX;
+      dragState.y = nextY;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    });
+
+    function stopDragging(event) {
+      dragState.active = false;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    }
+
+    root.addEventListener('mouseup', stopDragging);
+    root.addEventListener('mouseleave', stopDragging);
+  }
+
   function bindSeatSelection(container) {
     if (!container || typeof container.querySelectorAll !== 'function') return;
     var buttons = container.querySelectorAll('[data-office-seat-select]');
@@ -538,6 +616,7 @@ window.aiteam = window.aiteam || {};
     bindFullscreen(container);
     bindFullscreenShortcut(container);
     bindViewportControls(container);
+    bindPointerNavigation(container);
     bindSeatSelection(container);
   }
 
@@ -602,7 +681,8 @@ window.aiteam = window.aiteam || {};
         var feedResult = results[1];
         if (!sceneResult.ok || !feedResult.ok) {
           var errResult = !sceneResult.ok ? sceneResult : feedResult;
-          ns.states.handleApiResult(errResult, container, function () {});
+          var message = (errResult && errResult.error) || '请求失败';
+          container.innerHTML = renderOfficeError(message);
           return;
         }
 
@@ -617,7 +697,7 @@ window.aiteam = window.aiteam || {};
           }, refreshMs);
         }
       }).catch(function () {
-        ns.states.renderError(container, '办公室数据加载失败');
+        container.innerHTML = renderOfficeError('办公室数据加载失败');
       });
     },
   };
