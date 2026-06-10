@@ -38,6 +38,43 @@ window.aiteam = window.aiteam || {};
     system: { title: '系统后台', subtitle: '平台运营' },
   };
 
+  // ── Icon rail metadata (Phase 1) ──
+  // Page icons keyed by href prefix; falls back to a neutral glyph.
+  var NAV_ICONS = {
+    '/app/workbench': '🧭',
+    '/app/marketplace': '🤝',
+    '/app/chat': '💬',
+    '/app/group': '👥',
+    '/app/knowledge': '📚',
+    '/app/org': '🌐',
+    '/app/office': '🏢',
+    '/admin/employees': '🧑‍💼',
+    '/admin/solutions': '🏭',
+    '/admin/skills': '🧩',
+    '/admin/templates': '🛒',
+    '/admin/memories': '🧠',
+    '/admin/connectors': '🔌',
+    '/admin/billing/usage': '💰',
+    '/admin/billing/recharge': '💳',
+    '/admin/settings': '⚙️',
+    '/system/accounts': '🏢',
+    '/system/templates': '🎓',
+    '/system/solutions': '🏭',
+    '/system/finance': '📊',
+    '/system/health': '❤️',
+  };
+
+  // Section switcher: glyph + landing route for each section.
+  var SECTION_META = {
+    app: { icon: '🏠', label: '企业前台', href: '/app/workbench' },
+    admin: { icon: '🏢', label: '企业后台', href: '/admin/employees' },
+    system: { icon: '🛠️', label: '系统后台', href: '/system/accounts' },
+  };
+
+  function _navIcon(href) {
+    return NAV_ICONS[href] || '•';
+  }
+
   // ── Role-aware nav filtering ──
   function _filteredNavItems(section) {
     var role = ns.role ? ns.role.getActiveRole() : '';
@@ -126,16 +163,33 @@ window.aiteam = window.aiteam || {};
       var currentPath = window.location.pathname;
       var nav = document.getElementById('aiteam-nav');
       if (nav) {
-        // ── Role-aware navigation ──
+        // ── Role-aware navigation (icon rail) ──
         var pages = _filteredNavItems(section);
         nav.innerHTML = pages.map(function (p) {
           var activeClass = (currentPath === p.href || currentPath.indexOf(p.href + '/') === 0)
             ? ' is-active'
             : '';
           return (
-            '<a href="' + p.href + '" class="aiteam-shell__link' + activeClass + '">' +
-            '<span class="aiteam-shell__link-label">' + p.label + '</span>' +
-            '<span class="aiteam-shell__link-note">' + p.note + '</span>' +
+            '<a href="' + p.href + '" class="aiteam-rail__item' + activeClass + '" title="' + p.label + '">' +
+            _navIcon(p.href) +
+            '<span class="aiteam-rail__tip">' + p.label + '<span class="aiteam-rail__tip-note"> · ' + p.note + '</span></span>' +
+            '</a>'
+          );
+        }).join('');
+      }
+
+      // ── Section switcher (role-aware) ──
+      var sectionsEl = document.getElementById('aiteam-rail-sections');
+      if (sectionsEl) {
+        sectionsEl.innerHTML = ['app', 'admin', 'system'].filter(function (s) {
+          return _isSectionVisible(s);
+        }).map(function (s) {
+          var meta = SECTION_META[s];
+          var activeClass = (s === section) ? ' is-active' : '';
+          return (
+            '<a href="' + meta.href + '" class="aiteam-rail__item' + activeClass + '" title="' + meta.label + '">' +
+            meta.icon +
+            '<span class="aiteam-rail__tip">' + meta.label + '</span>' +
             '</a>'
           );
         }).join('');
@@ -155,9 +209,11 @@ window.aiteam = window.aiteam || {};
         pathToModule['/app/org'] = 'app-org.js';
         pathToModule['/app/office'] = 'office.js';
         pathToModule['/app/knowledge'] = 'knowledge.js';
-        pathToModule['/app/workbench'] = 'app-workbench.js';
-        pathToModule['/app/marketplace'] = 'app-marketplace.js';
-        pathToModule['/app/group'] = 'app-group.js';
+        // NOTE: /app/workbench, /app/marketplace, /app/group are intentionally
+        // NOT registered here — they resolve via the regex table below, which
+        // also sets _appRouteHandler so the onload handler can be found.
+        // Registering them statically left _appRouteHandler null and fell
+        // through to "页面模块加载失败".
         pathToModule['/admin/employees'] = 'admin-employees.js';
         pathToModule['/admin/solutions'] = 'admin-solutions.js';
         pathToModule['/admin/skills'] = 'admin-skills.js';

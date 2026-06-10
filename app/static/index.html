@@ -1402,13 +1402,15 @@
 </div>
 <div id="aiteam-app" class="aiteam-shell" hidden>
   <div class="aiteam-shell__frame">
-    <aside class="aiteam-shell__nav" aria-label="AI Team navigation">
-      <div class="aiteam-shell__brand">
-        <div class="aiteam-shell__eyebrow">AI Team</div>
-        <h1 class="aiteam-shell__title" id="aiteam-shell-title">工作台</h1>
-        <p class="aiteam-shell__subtitle" id="aiteam-shell-subtitle">企业前台</p>
-      </div>
-      <nav id="aiteam-nav" class="aiteam-shell__links"></nav>
+    <aside class="aiteam-shell__rail" aria-label="AI Team navigation">
+      <a class="aiteam-rail__logo" href="/app/workbench" title="AI Team">A</a>
+      <nav id="aiteam-nav" class="aiteam-rail__nav"></nav>
+      <div class="aiteam-rail__spacer"></div>
+      <div id="aiteam-rail-sections" class="aiteam-rail__sections"></div>
+      <a class="aiteam-rail__item" href="/admin/settings" title="设置">⚙️<span class="aiteam-rail__tip">设置</span></a>
+      <div class="aiteam-rail__avatar" title="我的资料">荆</div>
+      <span id="aiteam-shell-title" hidden></span>
+      <span id="aiteam-shell-subtitle" hidden></span>
     </aside>
     <main id="aiteam-main" class="aiteam-shell__main" tabindex="-1"></main>
   </div>
