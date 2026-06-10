@@ -9,8 +9,11 @@ import ast
 import csv
 import json
 import io
+import logging
 import os
 import uuid
+
+logger = logging.getLogger(__name__)
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1354,7 +1357,30 @@ def _handle_knowledge_base_post(conn, _path: str, body: dict | None) -> tuple[in
         cur.close()
 
 
+def _read_asset_text(doc) -> str:
+    """Resolve the uploaded asset file for a knowledge document and read it."""
+    candidates = []
+    if doc.asset_id:
+        candidates.append(_asset_file_path(doc.asset_id, doc.file_name or ""))
+        asset_dir = _UPLOADS_ROOT / doc.asset_id
+        if asset_dir.is_dir():
+            candidates.extend(sorted(asset_dir.iterdir()))
+    if doc.storage_key:
+        # storage_key convention: aiteam/uploads/{asset_id}/{name}
+        rel = str(doc.storage_key).removeprefix("aiteam/uploads/")
+        candidates.append(_UPLOADS_ROOT / rel)
+    for p in candidates:
+        if p and p.is_file():
+            return p.read_text(encoding="utf-8", errors="replace")
+    raise FileNotFoundError(
+        f"asset file not found for document {doc.id} (asset_id={doc.asset_id})"
+    )
+
+
 def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
+    """Run real LightRAG ingestion (chunk + embed) for pending jobs."""
+    from team_panel.integration import lightrag_service
+
     cur = conn.cursor()
     advanced = 0
     try:
@@ -1367,7 +1393,26 @@ def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
             if doc is None or doc.status != "ingesting":
                 continue
             rag_document_id = doc.rag_document_id or f"rag_{doc.id}"
-            chunk_count = doc.chunk_count if int(doc.chunk_count or 0) > 0 else 8
+            try:
+                text = _read_asset_text(doc)
+                chunk_count = lightrag_service.ingest_document(
+                    job.knowledge_base_id, rag_document_id, text,
+                    file_name=doc.file_name or doc.display_name or doc.id,
+                )
+            except Exception as exc:  # noqa: BLE001 — ingest failure is a doc state
+                logger.warning("[kb] ingestion failed for %s: %s", doc.id, exc)
+                job_repo.update_state(job.id, status="failed")
+                doc_repo.update_state(
+                    doc.id,
+                    status="error",
+                    ingestion_job_id=job.id,
+                    rag_document_id=rag_document_id,
+                    error_code="INGESTION_FAILED",
+                    error_message=str(exc)[:500],
+                    chunk_count=0,
+                )
+                advanced += 1
+                continue
             job_repo.update_state(
                 job.id,
                 status="completed",
@@ -1406,42 +1451,58 @@ def _handle_knowledge_search(conn, _path: str, kb_id: str, query: str) -> tuple[
         if kb is None:
             return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND", "message": f"Knowledge base {kb_id} not found"}
 
-        query_value = query_text.lower()
-        kb_fields = [
-            str(kb.name or "").lower(),
-            str(kb.description or "").lower(),
-        ]
+        # Real semantic retrieval via LightRAG (vector index over chunks).
+        from team_panel.integration import lightrag_service
+
         ready_docs = doc_repo.list_by_kb(kb_id, status="ready")
+        docs_by_rag_id = {
+            (doc.rag_document_id or f"rag_{doc.id}"): doc for doc in ready_docs
+        }
+        try:
+            result = lightrag_service.query(kb_id, query_text, top_k=5)
+        except Exception as exc:  # noqa: BLE001 — engine error surfaces as 502
+            logger.warning("[kb] lightrag query failed for %s: %s", kb_id, exc)
+            return 502, {
+                "error": "RETRIEVAL_FAILED",
+                "message": f"知识检索引擎异常: {str(exc)[:200]}",
+            }
+
         items: list[dict] = []
         citations: list[dict] = []
-        for doc in ready_docs:
-            title = doc.display_name or doc.file_name or doc.id
-            doc_fields = [
-                str(doc.display_name or "").lower(),
-                str(doc.file_name or "").lower(),
-                str(doc.asset_id or "").lower(),
-            ]
-            if query_value not in " ".join(kb_fields + doc_fields):
-                continue
-            snippet = f"命中文档《{title}》相关知识，可继续用于回答与预览。"
+        seen_docs: set[str] = set()
+        for chunk in result.get("chunks", []):
+            rag_doc_id = chunk.get("doc_id") or ""
+            doc = docs_by_rag_id.get(rag_doc_id)
+            title = (
+                (doc.display_name or doc.file_name or doc.id)
+                if doc else (chunk.get("file_name") or rag_doc_id or "未知文档")
+            )
+            document_id = doc.id if doc else rag_doc_id
             items.append(
                 {
-                    "document_id": doc.id,
+                    "document_id": document_id,
                     "title": title,
-                    "snippet": snippet,
-                    "score": 1.0,
+                    "snippet": chunk.get("content") or "",
+                    "score": round(float(chunk.get("score") or 0.0), 4),
                 }
             )
-            citations.append(
-                {
-                    "title": title,
-                    "document_id": doc.id,
-                    "knowledge_base_id": kb.id,
-                    "source_type": "knowledge_document",
-                }
-            )
+            if document_id not in seen_docs:
+                seen_docs.add(document_id)
+                citations.append(
+                    {
+                        "title": title,
+                        "document_id": document_id,
+                        "knowledge_base_id": kb.id,
+                        "source_type": "knowledge_document",
+                    }
+                )
 
-        answer = f"已命中《{items[0]['title']}》相关知识。" if items else f"未找到与“{query_text}”相关的已就绪知识。"
+        answer = str(result.get("answer") or "").strip()
+        if not answer:
+            answer = (
+                f"已检索到 {len(items)} 段相关内容，最相关:「{items[0]['snippet'][:120]}…」"
+                if items else f"未找到与“{query_text}”相关的已就绪知识。"
+            )
         return 200, {
             "knowledge_base_id": kb.id,
             "query": query_text,
@@ -2622,6 +2683,11 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
                 idempotency_key,
                 sender_id,
             )
+        # 群聊 single_agent 路由同样进入真实执行; orchestration 由执行器按
+        # 单 planner 路径处理 (Phase 1 收敛, 详见 runtime_executor)。
+        from agent_gateway.runtime_executor import execute_run_async
+        if result.get("run_id"):
+            execute_run_async(result["run_id"])
         return 201, result
     except ValueError as exc:
         message = str(exc)
@@ -2703,6 +2769,9 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
                 idempotency_key,
                 message_payload=message_payload,
             )
+        # 结果回流主链: 提交后触发真实 Hermes 执行 (executor 对非 queued run 幂等跳过)
+        from agent_gateway.runtime_executor import execute_run_async
+        execute_run_async(result["run_id"])
         return 201, result
     except ValueError as exc:
         message = str(exc)
@@ -2825,6 +2894,8 @@ def _handle_run_retry_post(conn, path: str, run_id: str, body: dict | None) -> t
                 message_payload=message_payload,
             )
         result["retry_of_run_id"] = run.id
+        from agent_gateway.runtime_executor import execute_run_async
+        execute_run_async(result["run_id"])
         return 201, result
     except ValueError as exc:
         message = str(exc)
@@ -3043,17 +3114,50 @@ def _handle_org_assignment_patch(conn, path: str, assignment_id: str, query: str
         cur.close()
 
 
+_UPLOADS_ROOT = Path(__file__).resolve().parents[2] / ".state" / "uploads"
+
+
+def _asset_file_path(asset_id: str, name: str) -> Path:
+    safe_name = Path(name or "file.bin").name  # strip any path components
+    return _UPLOADS_ROOT / asset_id / safe_name
+
+
 def _handle_uploads_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
-    # Stub: file upload requires multipart handling in the host layer.
-    # Return contract-shaped response for JSON POST body.
+    """Persist uploaded content to local asset storage.
+
+    JSON contract: accepts ``content_text`` (UTF-8 text) or ``content_base64``;
+    the stored file is what knowledge ingestion later feeds into LightRAG.
+    """
+    body = body or {}
     asset_id = f"ast_{uuid.uuid4().hex[:8]}"
-    name = (body or {}).get("name", "file.bin")
+    name = str(body.get("name") or "file.bin")
+
+    content_text = body.get("content_text")
+    content_b64 = body.get("content_base64")
+    if content_text is None and content_b64 is None:
+        return 400, {
+            "error": "MISSING_CONTENT",
+            "message": "content_text or content_base64 is required",
+        }
+    if content_text is not None:
+        data = str(content_text).encode("utf-8")
+    else:
+        import base64
+        try:
+            data = base64.b64decode(str(content_b64), validate=True)
+        except Exception:
+            return 400, {"error": "INVALID_BASE64", "message": "content_base64 is not valid base64"}
+
+    file_path = _asset_file_path(asset_id, name)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(data)
+
     return 201, {
         "asset_id": asset_id,
-        "name": name,
-        "size": (body or {}).get("size", 0),
-        "mime_type": (body or {}).get("mime_type", "application/octet-stream"),
-        "storage_key": f"aiteam/uploads/{asset_id}/{name}",
+        "name": file_path.name,
+        "size": len(data),
+        "mime_type": body.get("mime_type", "application/octet-stream"),
+        "storage_key": f"aiteam/uploads/{asset_id}/{file_path.name}",
         "preview_url": f"/api/team/uploads/{asset_id}/preview",
     }
 

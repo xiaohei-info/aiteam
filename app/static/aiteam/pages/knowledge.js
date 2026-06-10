@@ -90,9 +90,7 @@ window.aiteam = window.aiteam || {};
       '<h4 class="aiteam-upload-form__title">上传文档</h4>' +
       '<div class="aiteam-upload-form__row">' +
       '<select class="aiteam-upload-form__input" id="kb-upload-select">' + options + '</select>' +
-      '<input class="aiteam-upload-form__input" id="kb-upload-file-name" placeholder="文件名（必填）">' +
-      '<input class="aiteam-upload-form__input" id="kb-upload-mime-type" placeholder="MIME Type（选填）">' +
-      '<input class="aiteam-upload-form__input" id="kb-upload-size" placeholder="文件大小 Bytes（选填）">' +
+      '<input class="aiteam-upload-form__input" id="kb-upload-file" type="file" accept=".txt,.md,.markdown,.csv,.json,.log,.html">' +
       '<input class="aiteam-upload-form__input" id="kb-upload-display-name" placeholder="文档名称（选填）">' +
       '<button class="aiteam-upload-form__btn" id="kb-upload-submit">提交</button>' +
       '</div>' +
@@ -216,23 +214,37 @@ window.aiteam = window.aiteam || {};
     if (!btn || !ns.api || typeof ns.api.upload !== 'function' || typeof ns.api.postKnowledgeDocument !== 'function') return;
     btn.addEventListener('click', function () {
       var kbId = document.getElementById('kb-upload-select').value;
-      var fileName = document.getElementById('kb-upload-file-name').value.trim();
-      var mimeType = document.getElementById('kb-upload-mime-type').value.trim() || 'application/octet-stream';
-      var sizeValue = document.getElementById('kb-upload-size').value.trim();
-      var fileSize = Number(sizeValue || 0);
+      var fileInput = document.getElementById('kb-upload-file');
+      var file = fileInput && fileInput.files && fileInput.files[0];
       var displayName = document.getElementById('kb-upload-display-name').value.trim();
       var feedback = document.getElementById('kb-upload-feedback');
 
-      if (!fileName) {
-        feedback.innerHTML = '<span style="color:#f87171">请输入文件名</span>';
+      if (!file) {
+        feedback.innerHTML = '<span style="color:#f87171">请选择文件</span>';
         return;
       }
 
-      feedback.innerHTML = '上传中...';
+      var fileName = file.name;
+      var mimeType = file.type || 'text/plain';
+      var fileSize = file.size;
+
+      feedback.innerHTML = '读取文件...';
+      var reader = new FileReader();
+      reader.onerror = function () {
+        feedback.innerHTML = '<span style="color:#f87171">文件读取失败</span>';
+      };
+      reader.onload = function () {
+        feedback.innerHTML = '上传中...';
+        uploadAndRegister(String(reader.result || ''));
+      };
+      reader.readAsText(file);
+
+      function uploadAndRegister(contentText) {
       ns.api.upload({
         name: fileName,
         mime_type: mimeType,
         size: Number.isFinite(fileSize) ? fileSize : 0,
+        content_text: contentText,
       }).then(function (uploadResult) {
         if (!uploadResult || !uploadResult.ok || !uploadResult.data || !uploadResult.data.asset_id) {
           feedback.innerHTML = '<span style="color:#f87171">上传失败: ' + ((uploadResult && uploadResult.error) || '未知错误') + '</span>';
@@ -262,6 +274,7 @@ window.aiteam = window.aiteam || {};
       }).catch(function () {
         feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
       });
+      }
     });
   }
 

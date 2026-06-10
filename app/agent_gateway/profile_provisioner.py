@@ -6,15 +6,21 @@ from pathlib import Path
 
 
 def _build_hermes_cli(profile_home: str | Path) -> list[str]:
-    """Return the Hermes CLI command honoring the configured app Python env.
+    """Return the Hermes CLI command honoring the configured app env.
 
-    Preference order:
-    1. HERMES_WEBUI_PYTHON from app/.env / process env
-    2. plain `hermes` on PATH as a compatibility fallback
+    Preference order (app/.env contract, CLAUDE.md §3.2):
+    1. {HERMES_WEBUI_AGENT_DIR}/venv/bin/hermes — the runtime's own CLI
+    2. ~/.hermes/hermes-agent/venv/bin/hermes
+    3. plain `hermes` on PATH as a compatibility fallback
     """
-    python_exe = (os.getenv("HERMES_WEBUI_PYTHON") or "").strip()
-    if python_exe:
-        return [python_exe, "-m", "hermes_cli"]
+    agent_dir = (os.getenv("HERMES_WEBUI_AGENT_DIR") or "").strip()
+    candidates = []
+    if agent_dir:
+        candidates.append(Path(agent_dir) / "venv" / "bin" / "hermes")
+    candidates.append(Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "hermes")
+    for c in candidates:
+        if c.is_file():
+            return [str(c)]
     return ["hermes"]
 
 
