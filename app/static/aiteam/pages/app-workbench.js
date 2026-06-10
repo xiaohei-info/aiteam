@@ -101,10 +101,21 @@ window.aiteam = window.aiteam || {};
       '<span class="aiteam-badge">企业入驻</span>' +
       '</div>' +
       '<p class="aiteam-card__body">' + escapeHtml(hint.message || '你已登录成功，下一步需要创建企业或加入已有企业空间。') + '</p>' +
+      '<form class="aiteam-workbench__onboarding-form" data-workbench-create-enterprise-form="1">' +
+      '<label class="aiteam-workbench__eyebrow" for="workbench-enterprise-name">创建企业</label>' +
       '<div class="aiteam-hero-actions">' +
-      '<a class="aiteam-button" href="' + escapeHtml(hint.primary_target || '/admin/settings?tab=enterprise') + '">' + escapeHtml(hint.primary_label || '创建企业') + '</a>' +
-      '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(hint.secondary_target || '/admin/settings?tab=invites') + '">' + escapeHtml(hint.secondary_label || '加入企业') + '</a>' +
+      '<input class="aiteam-input" id="workbench-enterprise-name" data-workbench-enterprise-name="1" type="text" placeholder="输入企业名称">' +
+      '<button class="aiteam-button" type="submit">' + escapeHtml(hint.primary_label || '创建企业') + '</button>' +
       '</div>' +
+      '</form>' +
+      '<form class="aiteam-workbench__onboarding-form" data-workbench-join-enterprise-form="1">' +
+      '<label class="aiteam-workbench__eyebrow" for="workbench-invite-code">加入企业</label>' +
+      '<div class="aiteam-hero-actions">' +
+      '<input class="aiteam-input" id="workbench-invite-code" data-workbench-invite-code="1" type="text" placeholder="输入邀请码">' +
+      '<button class="aiteam-button aiteam-button--ghost" type="submit">' + escapeHtml(hint.secondary_label || '加入企业') + '</button>' +
+      '</div>' +
+      '</form>' +
+      '<p class="aiteam-card__body" data-workbench-onboarding-error="1"></p>' +
       '</article>';
   }
 
@@ -445,6 +456,49 @@ window.aiteam = window.aiteam || {};
         state.selectedEmployeeId = this.getAttribute('data-select-employee') || '';
         renderWorkbench(container, data, state);
         bindEvents(container, data, state);
+      });
+    }
+
+    var onboardingError = container.querySelector('[data-workbench-onboarding-error]');
+    var createForm = container.querySelector('[data-workbench-create-enterprise-form]');
+    var createNameInput = container.querySelector('[data-workbench-enterprise-name]');
+    if (createForm && createForm.addEventListener) {
+      createForm.addEventListener('submit', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        var enterpriseName = createNameInput ? stringValue(createNameInput.value, '') : '';
+        if (!enterpriseName) {
+          if (onboardingError) onboardingError.textContent = '请输入企业名称';
+          return;
+        }
+        if (onboardingError) onboardingError.textContent = '';
+        ns.api.post('/api/auth/onboarding/create-enterprise', { name: enterpriseName }).then(function (result) {
+          if (!result || !result.ok) {
+            if (onboardingError) onboardingError.textContent = stringValue(result && result.error, '创建企业失败');
+            return;
+          }
+          window.location.href = '/app/workbench';
+        });
+      });
+    }
+
+    var joinForm = container.querySelector('[data-workbench-join-enterprise-form]');
+    var inviteCodeInput = container.querySelector('[data-workbench-invite-code]');
+    if (joinForm && joinForm.addEventListener) {
+      joinForm.addEventListener('submit', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        var inviteCode = inviteCodeInput ? stringValue(inviteCodeInput.value, '') : '';
+        if (!inviteCode) {
+          if (onboardingError) onboardingError.textContent = '请输入邀请码';
+          return;
+        }
+        if (onboardingError) onboardingError.textContent = '';
+        ns.api.post('/api/auth/onboarding/join-enterprise', { invite_code: inviteCode }).then(function (result) {
+          if (!result || !result.ok) {
+            if (onboardingError) onboardingError.textContent = stringValue(result && result.error, '加入企业失败');
+            return;
+          }
+          window.location.href = '/app/workbench';
+        });
       });
     }
   }

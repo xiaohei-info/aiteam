@@ -3828,6 +3828,8 @@ _AI_TEAM_AUTH_POST_PATHS = {
     "/api/auth/login/wechat/callback",
     "/api/auth/login/phone/send-code",
     "/api/auth/login/phone/verify",
+    "/api/auth/onboarding/create-enterprise",
+    "/api/auth/onboarding/join-enterprise",
     "/api/auth/refresh",
     "/api/auth/logout",
 }
@@ -3835,6 +3837,7 @@ _AI_TEAM_AUTH_POST_PATHS = {
 _AI_TEAM_AUTH_GET_PATHS = {
     "/api/auth/login/wechat/poll",
     "/api/me",
+    "/api/enterprises/current",
 }
 
 _AI_TEAM_PAGE_PREFIXES = ("/app", "/admin", "/system")
@@ -3906,6 +3909,9 @@ def _try_aiteam_auth_dispatch(handler, path, method, body=None):
     from team_panel.api_team.router_auth import (
         AuthRouteError,
         access_token_from_headers,
+        handle_create_enterprise,
+        handle_current_enterprise,
+        handle_join_enterprise,
         handle_logout,
         handle_me,
         handle_phone_send_code,
@@ -3952,6 +3958,12 @@ def _try_aiteam_auth_dispatch(handler, path, method, body=None):
                 user_agent=user_agent,
             )
             return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/onboarding/create-enterprise":
+            result = handle_create_enterprise(access_token_from_headers(handler.headers), body)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "POST" and request_path == "/api/auth/onboarding/join-enterprise":
+            result = handle_join_enterprise(access_token_from_headers(handler.headers), body)
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
         if method == "POST" and request_path == "/api/auth/refresh":
             result = handle_refresh(refresh_token_from_headers(handler.headers), client_ip=client_ip, user_agent=user_agent)
             return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
@@ -3966,6 +3978,9 @@ def _try_aiteam_auth_dispatch(handler, path, method, body=None):
             return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
         if method == "GET" and request_path == "/api/me":
             result = handle_me(access_token_from_headers(handler.headers))
+            return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
+        if method == "GET" and request_path == "/api/enterprises/current":
+            result = handle_current_enterprise(access_token_from_headers(handler.headers))
             return _send_json_header_list(handler, result.body, status=result.status, extra_headers=result.headers)
     except AuthRouteError as exc:
         return _send_json_header_list(handler, {"error": str(exc)}, status=exc.status)

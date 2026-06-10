@@ -247,3 +247,134 @@ def test_sixth_device_revokes_oldest_refresh_family():
     )
     assert evicted_refresh.status == 401
     assert "login again" in _handler_json(evicted_refresh)["error"].lower()
+
+
+def test_onboarding_create_enterprise_updates_profile_and_current_enterprise():
+    send_handler = _request(
+        "POST",
+        "/api/auth/login/phone/send-code",
+        body={"phone": "13800138100"},
+        client_ip="198.51.100.120",
+    )
+    assert send_handler.status == 200
+    verify_handler = _request(
+        "POST",
+        "/api/auth/login/phone/verify",
+        body={"phone": "13800138100", "code": "888888"},
+        headers={"User-Agent": "Safari QA"},
+        client_ip="198.51.100.120",
+    )
+    access_token = _handler_json(verify_handler)["access_token"]
+
+    create_handler = _request(
+        "POST",
+        "/api/auth/onboarding/create-enterprise",
+        body={"name": "Acme AI Lab", "slug": "acme-ai-lab"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    create_body = _handler_json(create_handler)
+
+    assert create_handler.status == 201
+    assert create_body["name"] == "Acme AI Lab"
+    assert create_body["slug"] == "acme-ai-lab"
+    assert create_body["role"] == "owner"
+    assert create_body["enterprise_id"].startswith("ent_")
+
+    me_handler = _request(
+        "GET",
+        "/api/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    me_body = _handler_json(me_handler)
+    assert me_handler.status == 200
+    assert me_body["current_enterprise"]["enterprise_id"] == create_body["enterprise_id"]
+    assert me_body["current_enterprise"]["role"] == "owner"
+    assert "onboarding" not in me_body
+
+    current_handler = _request(
+        "GET",
+        "/api/enterprises/current",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    current_body = _handler_json(current_handler)
+    assert current_handler.status == 200
+    assert current_body["enterprise_id"] == create_body["enterprise_id"]
+
+
+def test_onboarding_join_enterprise_updates_profile_and_current_enterprise():
+    send_handler = _request(
+        "POST",
+        "/api/auth/login/phone/send-code",
+        body={"phone": "13800138101"},
+        client_ip="198.51.100.121",
+    )
+    assert send_handler.status == 200
+    verify_handler = _request(
+        "POST",
+        "/api/auth/login/phone/verify",
+        body={"phone": "13800138101", "code": "888888"},
+        headers={"User-Agent": "Safari QA"},
+        client_ip="198.51.100.121",
+    )
+    access_token = _handler_json(verify_handler)["access_token"]
+
+    join_handler = _request(
+        "POST",
+        "/api/auth/onboarding/join-enterprise",
+        body={"invite_code": "INV-ACME01"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    join_body = _handler_json(join_handler)
+
+    assert join_handler.status == 200
+    assert join_body["enterprise_id"] == "ent_existing_acme"
+    assert join_body["name"] == "Acme AI Lab"
+    assert join_body["role"] == "member"
+
+    me_handler = _request(
+        "GET",
+        "/api/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    me_body = _handler_json(me_handler)
+    assert me_handler.status == 200
+    assert me_body["current_enterprise"]["enterprise_id"] == "ent_existing_acme"
+    assert me_body["current_enterprise"]["role"] == "member"
+    assert "onboarding" not in me_body
+
+    current_handler = _request(
+        "GET",
+        "/api/enterprises/current",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    current_body = _handler_json(current_handler)
+    assert current_handler.status == 200
+    assert current_body["enterprise_id"] == "ent_existing_acme"
+
+
+def test_onboarding_join_enterprise_rejects_invalid_code():
+    send_handler = _request(
+        "POST",
+        "/api/auth/login/phone/send-code",
+        body={"phone": "13800138102"},
+        client_ip="198.51.100.122",
+    )
+    assert send_handler.status == 200
+    verify_handler = _request(
+        "POST",
+        "/api/auth/login/phone/verify",
+        body={"phone": "13800138102", "code": "888888"},
+        headers={"User-Agent": "Safari QA"},
+        client_ip="198.51.100.122",
+    )
+    access_token = _handler_json(verify_handler)["access_token"]
+
+    join_handler = _request(
+        "POST",
+        "/api/auth/onboarding/join-enterprise",
+        body={"invite_code": "INV-UNKNOWN"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert join_handler.status == 404
+    assert "invite" in _handler_json(join_handler)["error"].lower()

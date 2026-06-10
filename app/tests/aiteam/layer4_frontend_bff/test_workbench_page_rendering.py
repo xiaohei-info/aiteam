@@ -46,6 +46,169 @@ console.log(JSON.stringify({{ html: container.innerHTML }}));
     return json.loads(completed.stdout)
 
 
+def _run_workbench_onboarding_action(
+    payload: dict,
+    *,
+    search: str = "?onboarding=create_or_join_enterprise",
+    enterprise_name: str = "",
+    invite_code: str = "",
+    trigger_create: bool = False,
+    trigger_join: bool = False,
+    join_should_fail: bool = False,
+) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const moduleSource = fs.readFileSync({json.dumps(str(WORKBENCH_MODULE_PATH))}, 'utf8');
+
+function createElement(id) {{
+  return {{
+    id: id || '',
+    value: '',
+    textContent: '',
+    innerHTML: '',
+    disabled: false,
+    listeners: {{}},
+    style: {{}},
+    addEventListener(type, handler) {{
+      this.listeners[type] = handler;
+    }},
+    dispatch(eventName) {{
+      if (this.listeners[eventName]) {{
+        return this.listeners[eventName].call(this, {{ preventDefault() {{}} }});
+      }}
+      return undefined;
+    }},
+  }};
+}}
+
+const fetchCalls = [];
+const onboardingError = createElement('workbench-onboarding-error');
+const createInput = createElement('workbench-enterprise-name');
+createInput.value = {json.dumps(enterprise_name)};
+const joinInput = createElement('workbench-invite-code');
+joinInput.value = {json.dumps(invite_code)};
+const createForm = createElement('workbench-create-enterprise-form');
+const joinForm = createElement('workbench-join-enterprise-form');
+
+const queryMap = {{
+  '[data-workbench-onboarding-error]': onboardingError,
+  '[data-workbench-enterprise-name]': createInput,
+  '[data-workbench-invite-code]': joinInput,
+  '[data-workbench-create-enterprise-form]': createForm,
+  '[data-workbench-join-enterprise-form]': joinForm,
+}};
+
+global.window = {{
+  location: {{
+    search: {json.dumps(search)},
+    href: 'http://localhost/app/workbench?onboarding=create_or_join_enterprise',
+  }},
+  aiteam: {{
+    util: {{
+      escapeHtml(value) {{
+        return String(value == null ? '' : value);
+      }},
+    }},
+    pages: {{}},
+    states: {{
+      renderEmpty(container, message, actionHtml) {{
+        container.innerHTML = '<div data-state-empty="1"><p>' + message + '</p>' + (actionHtml || '') + '</div>';
+      }},
+    }},
+    api: {{
+      post(path, body) {{
+        fetchCalls.push({{ path, body }});
+        if (path === '/api/auth/onboarding/create-enterprise') {{
+          return Promise.resolve({{
+            ok: true,
+            status: 201,
+            data: {{
+              enterprise_id: 'ent_new',
+              name: body.name,
+              slug: 'acme-ai-lab',
+              role: 'owner',
+            }},
+            error: null,
+          }});
+        }}
+        if (path === '/api/auth/onboarding/join-enterprise') {{
+          if ({json.dumps(join_should_fail)}) {{
+            return Promise.resolve({{
+              ok: false,
+              status: 404,
+              data: null,
+              error: 'Invite code is invalid or expired',
+            }});
+          }}
+          return Promise.resolve({{
+            ok: true,
+            status: 200,
+            data: {{
+              enterprise_id: 'ent_existing_acme',
+              name: 'Acme AI Lab',
+              slug: 'acme-ai-lab',
+              role: 'member',
+            }},
+            error: null,
+          }});
+        }}
+        return Promise.resolve({{ ok: false, status: 500, data: null, error: 'unexpected request' }});
+      }},
+    }},
+  }},
+}};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(moduleSource, {{ filename: 'app-workbench.js' }});
+
+const container = {{
+  _html: '',
+  get innerHTML() {{
+    return this._html;
+  }},
+  set innerHTML(value) {{
+    this._html = String(value || '');
+  }},
+  querySelector(selector) {{
+    return queryMap[selector] || null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-select-employee]') return [];
+    return [];
+  }},
+}};
+
+aiteam.pages.appWorkbench.render(container, {json.dumps(payload, ensure_ascii=False)});
+
+Promise.resolve()
+  .then(async () => {{
+    if ({json.dumps(trigger_create)}) {{
+      await createForm.dispatch('submit');
+    }}
+    if ({json.dumps(trigger_join)}) {{
+      await joinForm.dispatch('submit');
+    }}
+    console.log(JSON.stringify({{
+      html: container.innerHTML,
+      href: window.location.href,
+      onboardingError: onboardingError.textContent,
+      fetchCalls,
+    }}));
+  }})
+  .catch((error) => {{
+    console.error(error && error.stack ? error.stack : String(error));
+    process.exit(1);
+  }});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def _run_workbench_init(result: dict) -> dict:
     script = f"""
 const fs = require('fs');
@@ -382,8 +545,10 @@ def test_workbench_renders_enterprise_onboarding_hint_when_login_redirect_marks_
     )
     assert "完成企业入驻后再开始使用" in result["html"]
     assert "创建企业或加入已有企业空间" in result["html"]
-    assert 'href="/admin/settings?tab=enterprise"' in result["html"]
-    assert 'href="/admin/settings?tab=invites"' in result["html"]
+    assert 'data-workbench-create-enterprise-form="1"' in result["html"]
+    assert 'data-workbench-join-enterprise-form="1"' in result["html"]
+    assert 'data-workbench-enterprise-name="1"' in result["html"]
+    assert 'data-workbench-invite-code="1"' in result["html"]
 
 
 def test_workbench_reads_enterprise_onboarding_hint_from_location_query() -> None:
@@ -409,8 +574,42 @@ def test_workbench_reads_enterprise_onboarding_hint_from_location_query() -> Non
     )
     assert "完成企业入驻后再开始使用" in result["html"]
     assert "创建企业或加入已有企业空间" in result["html"]
-    assert 'href="/admin/settings?tab=enterprise"' in result["html"]
-    assert 'href="/admin/settings?tab=invites"' in result["html"]
+    assert 'data-workbench-create-enterprise-form="1"' in result["html"]
+    assert 'data-workbench-join-enterprise-form="1"' in result["html"]
+
+
+def test_workbench_onboarding_create_enterprise_submits_and_redirects() -> None:
+    result = _run_workbench_onboarding_action(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [],
+            "groups": [],
+            "office_digest": {"online_employee_count": 0, "running_task_count": 0},
+        },
+        enterprise_name="Acme AI Lab",
+        trigger_create=True,
+    )
+
+    assert any(call["path"] == "/api/auth/onboarding/create-enterprise" for call in result["fetchCalls"])
+    assert result["href"] == "/app/workbench"
+
+
+def test_workbench_onboarding_join_enterprise_shows_inline_error_on_invalid_code() -> None:
+    result = _run_workbench_onboarding_action(
+        {
+            "enterprise": {"enterprise_id": "ent_demo", "name": "示例企业"},
+            "employees": [],
+            "groups": [],
+            "office_digest": {"online_employee_count": 0, "running_task_count": 0},
+        },
+        invite_code="INV-UNKNOWN",
+        trigger_join=True,
+        join_should_fail=True,
+    )
+
+    assert any(call["path"] == "/api/auth/onboarding/join-enterprise" for call in result["fetchCalls"])
+    assert result["onboardingError"] == "Invite code is invalid or expired"
+    assert result["href"] == "http://localhost/app/workbench?onboarding=create_or_join_enterprise"
 
 
 def test_workbench_starred_employee_is_sorted_to_top_and_context_menu_matches_prd_actions() -> None:
