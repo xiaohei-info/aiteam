@@ -78,6 +78,8 @@ def test_admin_solutions_renders_detail_and_atomic_apply_hints() -> None:
     assert "包含 AI 员工" in payload["html"]
     assert "预期价值" in payload["html"]
     assert "失败时整体回滚" in payload["html"]
+    assert "已应用" in payload["html"]
     assert "追加应用" in payload["html"]
     assert "覆盖重建" in payload["html"]
     assert "重新应用" in payload["html"]
+    assert "没有我的行业？告诉我们" in payload["html"]

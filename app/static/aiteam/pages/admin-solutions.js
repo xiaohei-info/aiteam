@@ -139,10 +139,13 @@ window.aiteam = window.aiteam || {};
         : '暂无发布记录';
       var lastApplyStatus = item.last_apply_status ? item.last_apply_status : '尚无最近应用记录';
       var lastApplyRecord = item.last_apply_record_id ? item.last_apply_record_id : '—';
+      var appliedBadge = item.apply_count > 0 || lastApplyStatus === 'succeeded'
+        ? '<span class="aiteam-badge">已应用</span>'
+        : '';
       var pending = state.pendingSolutionId === item.solution_id;
       var disabled = pending ? ' disabled' : '';
       return '<li class="aiteam-skill-card">' +
-        '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
+        '<div class="aiteam-card__row"><div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' + appliedBadge + '</div>' +
         '<div class="aiteam-skill-card__meta">状态：' + esc(item.status) + ' · 标签：' + esc(tags) + '</div>' +
         '<div class="aiteam-skill-card__meta">模板数：' + esc(item.template_count) + ' · 已应用：' + esc(item.apply_count) + ' · 激活员工：' + esc(item.active_employee_count) + '</div>' +
         '<div class="aiteam-skill-card__meta">绑定模板：' + esc(item.template_ids.join(', ') || '未绑定') + '</div>' +
@@ -206,6 +209,7 @@ window.aiteam = window.aiteam || {};
         '</div>' +
         (state.lastSubmittedMode ? '<p class="aiteam-shell__panel-body">最近一次提交：' + esc(applyModeLabel(state.lastSubmittedMode)) + '</p>' : '') +
         '<ul class="aiteam-skills-list">' + cards + '</ul>' +
+        '<div class="aiteam-shell__panel-body">没有我的行业？告诉我们：提交你的业务场景，我们会补充对应的行业 AI 解决方案。</div>' +
         '</div>';
       bindEvents();
     }
