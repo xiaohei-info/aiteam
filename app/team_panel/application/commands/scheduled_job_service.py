@@ -1,13 +1,17 @@
 """ScheduledJob command service -- write-side operations for scheduled job lifecycle."""
 
 import json
+import logging
 import uuid
 
+from agent_gateway import profile_capability
 from team_panel.domain.entities import RuntimeBinding, ScheduledJob, TeamRun
 from team_panel.integration.gateway_client import (
     create_scheduled_job as gateway_create_scheduled_job,
     submit_scheduled_job_run,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def create_scheduled_job(uow, enterprise_id: str, employee_id: str,
@@ -73,6 +77,10 @@ def pause_job(uow, job_id: str) -> None:
         raise ValueError(f"ScheduledJob {job_id} not found")
     job.pause()
     uow.scheduled_jobs().update_status(job)
+    if job.runtime_job_id:
+        ok, msg = profile_capability.cron_pause(job.runtime_job_id)
+        if not ok:
+            _logger.warning("cron_pause(%s) failed: %s", job.runtime_job_id, msg)
 
 
 def resume_job(uow, job_id: str) -> None:
@@ -85,6 +93,10 @@ def resume_job(uow, job_id: str) -> None:
     elif job.status != "enabled":
         raise ValueError(f"Cannot resume from {job.status}; must be paused or enabled")
     uow.scheduled_jobs().update_status(job)
+    if job.runtime_job_id:
+        ok, msg = profile_capability.cron_resume(job.runtime_job_id)
+        if not ok:
+            _logger.warning("cron_resume(%s) failed: %s", job.runtime_job_id, msg)
 
 
 def create_scheduled_job_run(uow, job_id: str, idempotency_key: str) -> dict:

@@ -1,19 +1,20 @@
 """Runtime executor — drives real Hermes execution for accepted runs.
 
-Per 业务解决方案设计 §5.2 (Hermes 统一执行底座) and 技术概要设计 §4.3 主链:
-Team Panel accepts the run → Gateway translates → **this module** invokes the
-Hermes runtime (one-shot ``hermes -z`` agent loop) and feeds the resulting
-events back through ``event_ingest_service`` (结果回流主链).
+Primary path (per 业务解决方案设计 §5.2-J "复用 Hermes WebUI 会话承接和后端
+接入框架"): the run executes through the WebUI's own chat chain via
+``webui_runtime_adapter`` — full provider/OAuth resolution, session
+persistence, streaming deltas and tool-call surfacing come from the existing
+base, not from a re-implementation. Fallback path: one-shot ``hermes -z`` CLI
+(used when the WebUI loopback is unreachable, e.g. unit tests).
 
-Scope (Phase 1, 私聊闭环 per CLAUDE.md):
-- single-agent runs: real LLM execution through Hermes' full agent loop
-- employee persona: EmployeePrompt.system_prompt written to the profile's
-  SOUL.md (minimal 上下文系统 mapping per §5.2-B)
-- knowledge injection: enabled KB bindings are queried through the LightRAG
-  service and retrieved chunks are prepended as context (演示场景①)
-
-Environment contract (CLAUDE.md §3.2): hermes binary and home resolve from
-``HERMES_WEBUI_AGENT_DIR`` / ``HERMES_HOME`` in app/.env.
+Responsibilities:
+- employee persona: EmployeePrompt.system_prompt → profile SOUL.md (§5.2-B)
+- employee model mapping: Employee.model_name/model_provider → chat request
+- knowledge injection: enabled KB bindings → LightRAG chunks in prompt (场景①)
+- 结果回流主链: token/tool events stream live into run_event via
+  ``event_ingest_service``; status machine queued→running→terminal
+- 会话承接: the WebUI session_id is persisted on a conversation-scoped
+  RuntimeBinding so follow-up turns share context.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 RUN_TIMEOUT_SECONDS = int(os.getenv("AITEAM_RUN_TIMEOUT_SECONDS", "300"))
+_DELTA_FLUSH_CHARS = 300
+_DELTA_FLUSH_SECONDS = 1.5
 
 
 # ── Hermes environment resolution (app/.env contract) ────────────────────
@@ -109,13 +112,18 @@ def _execute_run(run_id: str) -> None:
             ]
             message_text = _input_message_text(run)
             profile_name = (employee.profile_name if employee and employee.profile_name else employee_id) or "default"
+            model_name = (employee.model_name if employee else "") or ""
+            model_provider = (employee.model_provider if employee else "") or ""
+            conv_binding = uow.runtime_bindings().get_by_owner("conversation", run.conversation_id)
+            webui_session_id = (conv_binding.runtime_session_id if conv_binding else "") or ""
 
             run.status = "running"
             uow.team_runs().update_status(run)
             _ingest(uow, run, "run_started", preview="员工开始处理任务",
-                    payload={"profile_name": profile_name}, employee_id=employee_id)
+                    payload={"profile_name": profile_name, "model": model_name},
+                    employee_id=employee_id)
 
-        # Phase 2 — context assembly (persona + knowledge) and Hermes call.
+        # Phase 2 — context assembly (persona + knowledge), then execute.
         system_prompt = (prompt.system_prompt if prompt else "") or ""
         _provision_profile(profile_name, system_prompt)
         knowledge_block, citations = _retrieve_knowledge(kb_ids, message_text)
@@ -129,10 +137,19 @@ def _execute_run(run_id: str) -> None:
                         payload={"tool": "knowledge_retrieval", "citations": citations},
                         employee_id=employee_id)
 
-        success, output = _invoke_hermes(profile_name, full_prompt)
+        success, output, error, session_id = _run_turn_streaming(
+            conn, run_id, employee_id,
+            profile=profile_name, prompt_text=full_prompt,
+            model=model_name, model_provider=model_provider,
+            webui_session_id=webui_session_id,
+        )
+
+        # Persist conversation-scoped session for 会话承接.
+        if session_id:
+            _persist_conversation_session(conn, run_id, profile_name, session_id)
 
         # Phase 3 — result write-back (message + terminal event + status).
-        _finalize(run_id, success=success, output=output,
+        _finalize(run_id, success=success, output=output, error=error,
                   employee_id=employee_id, citations=citations, conn=conn)
     finally:
         conn.close()
@@ -158,6 +175,124 @@ def _compose_prompt(system_prompt: str, knowledge_block: str, message_text: str)
     return "\n\n".join(parts)
 
 
+# ── Turn execution: WebUI chain first, CLI fallback ───────────────────────
+
+def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
+                        profile: str, prompt_text: str,
+                        model: str, model_provider: str,
+                        webui_session_id: str) -> tuple[bool, str, str, str]:
+    """Returns (success, final_text, error, webui_session_id)."""
+    from agent_gateway import webui_runtime_adapter as webui
+
+    flusher = _DeltaFlusher(conn, run_id, employee_id)
+
+    def on_event(kind: str, payload: dict) -> None:
+        if kind == "token":
+            flusher.add(str(payload.get("text") or ""))
+        elif kind == "tool":
+            flusher.flush()
+            _ingest_standalone(conn, run_id, "tool_call",
+                               preview=f"调用工具 {payload.get('name', '')}",
+                               payload={"tool": payload.get("name", ""),
+                                        "args": payload.get("args") or {},
+                                        "tid": payload.get("tid", "")},
+                               employee_id=employee_id)
+
+    try:
+        result = webui.run_turn(
+            profile=profile, message=prompt_text,
+            model=model, model_provider=model_provider,
+            session_id=webui_session_id or None,
+            on_event=on_event, timeout_seconds=RUN_TIMEOUT_SECONDS,
+        )
+        flusher.flush()
+        return result.success, result.text, result.error, result.session_id
+    except OSError as exc:
+        # WebUI loopback unreachable — degrade to one-shot CLI execution.
+        logger.warning("[executor] webui loopback unavailable (%s); CLI fallback", exc)
+        flusher.flush()
+        ok, out = _invoke_hermes_cli(profile, prompt_text)
+        if ok and out:
+            # CLI returns the whole answer at once; emit it as a single delta
+            # so the northbound timeline contract stays identical.
+            _ingest_standalone(conn, run_id, "message_delta",
+                               preview=out[:200], payload={"delta": out},
+                               employee_id=employee_id)
+        return ok, out, ("" if ok else out), ""
+
+
+class _DeltaFlusher:
+    """Batches streamed tokens into message_delta events (避免逐 token 写库)."""
+
+    def __init__(self, conn, run_id: str, employee_id: str):
+        self._conn = conn
+        self._run_id = run_id
+        self._employee_id = employee_id
+        self._buf: list[str] = []
+        self._chars = 0
+        self._last_flush = time.time()
+
+    def add(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self._buf.append(chunk)
+        self._chars += len(chunk)
+        if self._chars >= _DELTA_FLUSH_CHARS or (time.time() - self._last_flush) >= _DELTA_FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._buf:
+            return
+        delta = "".join(self._buf)
+        self._buf = []
+        self._chars = 0
+        self._last_flush = time.time()
+        _ingest_standalone(self._conn, self._run_id, "message_delta",
+                           preview=delta[:200], payload={"delta": delta},
+                           employee_id=self._employee_id)
+
+
+def _ingest_standalone(conn, run_id: str, event_type: str, *,
+                       preview: str, payload: dict, employee_id: str) -> None:
+    from team_panel.transactions.uow import UnitOfWork
+    try:
+        with UnitOfWork(conn) as uow:
+            run = uow.team_runs().get_by_id(run_id)
+            if run is not None:
+                _ingest(uow, run, event_type, preview=preview,
+                        payload=payload, employee_id=employee_id)
+    except Exception:  # noqa: BLE001 — streaming write must not kill the run
+        logger.exception("[executor] streaming ingest failed (%s)", event_type)
+
+
+def _persist_conversation_session(conn, run_id: str, profile_name: str,
+                                  session_id: str) -> None:
+    from team_panel.domain.entities import RuntimeBinding
+    from team_panel.transactions.uow import UnitOfWork
+    try:
+        with UnitOfWork(conn) as uow:
+            run = uow.team_runs().get_by_id(run_id)
+            if run is None:
+                return
+            binding = uow.runtime_bindings().get_by_owner("conversation", run.conversation_id)
+            if binding is None:
+                uow.runtime_bindings().create(RuntimeBinding(
+                    id=f"binding_{uuid.uuid4().hex[:8]}",
+                    enterprise_id=run.enterprise_id,
+                    owner_type="conversation",
+                    owner_id=run.conversation_id,
+                    profile_name=profile_name,
+                    runtime_kind="session",
+                    runtime_session_id=session_id,
+                ))
+            elif binding.runtime_session_id != session_id:
+                binding.runtime_session_id = session_id
+                binding.mark_synced()
+                uow.runtime_bindings().update_sync(binding)
+    except Exception:  # noqa: BLE001 — continuity is best-effort
+        logger.exception("[executor] conversation session persist failed")
+
+
 # ── Profile provisioning + persona mapping (§5.2-B minimal) ──────────────
 
 def _provision_profile(profile_name: str, system_prompt: str) -> None:
@@ -174,18 +309,6 @@ def _provision_profile(profile_name: str, system_prompt: str) -> None:
             (profile_dir / "SOUL.md").write_text(system_prompt.strip() + "\n", encoding="utf-8")
         except OSError as exc:
             logger.warning("[executor] SOUL.md write failed for %s: %s", profile_name, exc)
-
-
-def _runtime_env(profile_name: str) -> dict:
-    env = dict(os.environ)
-    profile_dir = _profile_home(profile_name)
-    # Run inside the profile home only when it is a usable Hermes home;
-    # otherwise fall back to the shared home (persona still in the prompt).
-    if (profile_dir / "config.yaml").is_file():
-        env["HERMES_HOME"] = str(profile_dir)
-    else:
-        env["HERMES_HOME"] = str(_hermes_home())
-    return env
 
 
 # ── Knowledge retrieval (LightRAG, 演示场景①) ─────────────────────────────
@@ -219,11 +342,13 @@ def _retrieve_knowledge(kb_ids: list[str], question: str) -> tuple[str, list[dic
     return "\n".join(blocks), citations
 
 
-# ── Hermes invocation ─────────────────────────────────────────────────────
+# ── CLI fallback (used when WebUI loopback unreachable) ───────────────────
 
-def _invoke_hermes(profile_name: str, prompt: str) -> tuple[bool, str]:
+def _invoke_hermes_cli(profile_name: str, prompt: str) -> tuple[bool, str]:
     cmd = [_hermes_bin(), "-z", prompt, "--cli"]
-    env = _runtime_env(profile_name)
+    env = dict(os.environ)
+    profile_dir = _profile_home(profile_name)
+    env["HERMES_HOME"] = str(profile_dir if (profile_dir / "config.yaml").is_file() else _hermes_home())
     started = time.time()
     try:
         proc = subprocess.run(
@@ -264,9 +389,6 @@ def _finalize(run_id: str, *, success: bool, output: str,
             employee_id = employee_id or run.entry_employee_id or ""
 
             if success and output:
-                _ingest(uow, run, "message_delta", preview=output[:200],
-                        payload={"delta": output, "citations": citations or []},
-                        employee_id=employee_id)
                 message_id = f"msg_{uuid.uuid4().hex[:12]}"
                 uow.conversation_messages().create(ConversationMessage(
                     id=message_id,
@@ -285,7 +407,8 @@ def _finalize(run_id: str, *, success: bool, output: str,
             terminal = "run_succeeded" if success else "run_failed"
             _ingest(uow, run, terminal,
                     preview=output[:200] if success else (error or output[:200] or "执行失败"),
-                    payload={"success": success, "error": error},
+                    payload={"success": success, "error": error,
+                             "citations": citations or []},
                     employee_id=employee_id)
             run.status = "succeeded" if success else "failed"
             uow.team_runs().update_status(run)

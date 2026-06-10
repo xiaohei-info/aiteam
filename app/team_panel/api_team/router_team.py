@@ -114,6 +114,7 @@ from agent_gateway.contracts import (
     TimelineEventType,
     sse_frame,
 )
+from agent_gateway import profile_capability
 
 _ALLOWED_PATCH_FIELDS = {"display_name", "status", "skills_add", "skills_remove",
                          "model_provider", "model_name", "prompt_version",
@@ -327,6 +328,26 @@ def _sync_skill_grants(cur, *, enterprise_id: str, skill_code: str, scope_mode: 
         grants.append({"skill_code": skill_code, "employee_id": employee_id, "enabled": True})
     grants.sort(key=lambda item: item["employee_id"])
     return grants
+
+
+def _fire_memory_sync(cur, employee_id: str) -> None:
+    """Fire-and-forget: project memory items to Hermes profile MEMORY.md."""
+    import threading
+    try:
+        employee = EmployeeRepo(cur).get_by_id(employee_id)
+        if not employee or not employee.profile_name:
+            return
+        profile_name = employee.profile_name
+        items = list(MemoryItemRepo(cur).list_by_enterprise(
+            employee.enterprise_id, employee_id=employee_id, limit=500
+        ))
+    except Exception:
+        return
+    threading.Thread(
+        target=profile_capability.sync_employee_memory,
+        args=(profile_name, items),
+        daemon=True,
+    ).start()
 
 
 def _prune_memory_overflow(cur, *, enterprise_id: str, employee_id: str, limit: int = 1000) -> list[str]:
@@ -646,6 +667,7 @@ def _handle_skill_install_post(conn, path: str, query: str, body: dict | None) -
             },
         )
         conn.commit()
+        profile_capability.skills_install(skill_code)
         return 201, {
             "install_id": install_id,
             "skill_code": skill_code,
@@ -772,6 +794,7 @@ def _handle_skill_install_delete(conn, path: str, query: str, install_id: str) -
             payload={"skill_code": skill_code, "employee_ids": grants},
         )
         conn.commit()
+        profile_capability.skills_uninstall(skill_code)
         return 200, {"install_id": install_id, "skill_code": skill_code, "status": "uninstalled"}
     except Exception:
         conn.rollback()
@@ -3297,6 +3320,7 @@ def _handle_memory_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
             },
         )
         conn.commit()
+        _fire_memory_sync(cur, employee_id)
         created = repo.get_by_id(memory_id)
         if created is None:
             raise RuntimeError(f"Memory item {memory_id} disappeared after create")
@@ -3390,6 +3414,7 @@ def _handle_memory_patch(conn, path: str, memory_id: str, body: dict | None) -> 
             payload=body,
         )
         conn.commit()
+        _fire_memory_sync(cur, item.employee_id)
         updated = repo.get_by_id(memory_id)
         if updated is None:
             raise RuntimeError(f"Memory item {memory_id} disappeared after update")
@@ -3418,6 +3443,7 @@ def _handle_memory_delete(conn, path: str, memory_id: str) -> tuple[int, dict]:
             payload={"employee_id": item.employee_id},
         )
         conn.commit()
+        _fire_memory_sync(cur, item.employee_id)
         return 200, {"memory_id": memory_id, "status": "deleted"}
     except Exception:
         conn.rollback()
@@ -3944,19 +3970,19 @@ def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dic
         connector = repo.get_by_id(connector_id)
         if connector is None:
             return 404, {"error": "CONNECTOR_NOT_FOUND", "message": f"Connector {connector_id} not found"}
+        if connector.connector_type == "mcp_server":
+            ok, detail = profile_capability.mcp_test(connector.name)
+        else:
+            ok = connector.status == "online"
+            detail = "连接测试已完成"
+        result_str = "passed" if ok else "failed"
+        new_status = "online" if ok else "offline"
         cur.execute(
-            "UPDATE enterprise_connector SET last_validated_at=now(), last_test_result_json=%s::jsonb WHERE id=%s",
+            "UPDATE enterprise_connector SET status=%s, last_validated_at=now(), last_test_result_json=%s::jsonb WHERE id=%s",
             (
+                new_status,
                 json.dumps(
-                    {
-                        "result": "passed" if connector.status == "online" else "failed",
-                        "checked_at": _today_iso(),
-                        "checked_by": "system",
-                        "error_code": "",
-                        "message": "连接测试已完成",
-                        "log_ref": "",
-                        "status": connector.status,
-                    },
+                    {"result": result_str, "checked_at": _today_iso(), "checked_by": "system", "message": detail},
                     ensure_ascii=False,
                 ),
                 connector_id,
@@ -3965,10 +3991,11 @@ def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dic
         conn.commit()
         return 200, {
             "connector_id": connector_id,
-            "ok": connector.status == "online",
-            "status": connector.status,
-            "result": "passed" if connector.status == "online" else "failed",
+            "ok": ok,
+            "status": new_status,
+            "result": result_str,
             "checked_at": _today_iso(),
+            "message": detail,
         }
     except Exception:
         conn.rollback()

@@ -1,7 +1,9 @@
 """Gateway client -- fake seam for Layer 2, replaced by real adapter in Layer 3."""
 
+import logging
 import uuid
 
+from agent_gateway import profile_capability
 from agent_gateway.contracts import (
     GatewayAcceptResponse,
     GroupConversationRunRequest,
@@ -70,18 +72,34 @@ def submit_group_conversation(request: dict) -> GatewayAcceptResponse:
     )
 
 
+_logger = logging.getLogger(__name__)
+
+
 def create_scheduled_job(request: dict) -> RuntimeHandle:
-    """Fake: provision a cron job handle for a ScheduledJob control-plane object."""
+    """Provision a cron job in Hermes via profile_capability, fall back to stub on error."""
     enterprise_id = request.get("enterprise_id", "")
     employee_id = request.get("employee_id", "")
     job_id = request.get("job_id", f"job_{uuid.uuid4().hex[:8]}")
+    schedule_expr = request.get("schedule_expr", "0 9 * * 1-5")
+    goal = request.get("goal", "")
+    name = request.get("name", job_id)
+    profile = employee_id or ""
+    ok, runtime_job_id = profile_capability.cron_create(
+        schedule_expr=schedule_expr,
+        goal=goal,
+        name=name,
+        profile=profile,
+    )
+    if not ok:
+        _logger.warning("cron_create failed for %s: %s; using stub job_id", job_id, runtime_job_id)
+        runtime_job_id = job_id
     return RuntimeHandle(
         enterprise_id=enterprise_id,
         employee_id=employee_id,
         run_id="",
         kind="cron_job",
-        profile_name=employee_id or "fake-profile",
-        job_id=job_id,
+        profile_name=profile or "system",
+        job_id=runtime_job_id,
     )
 
 
