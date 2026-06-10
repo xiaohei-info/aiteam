@@ -77,6 +77,26 @@ shell.init('/admin/employees/emp_7/loop');
 assert(nodes['#aiteam-nav'].innerHTML.indexOf('/admin/employees') !== -1, 'admin nav should include /admin/employees for nested employee detail routes');
 assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/admin-employees.js', 'shell should lazy-load admin-employees.js for nested employee detail routes');
 
+// Regression: /app/workbench must lazy-load app-workbench.js via the regex
+// table (previously fell through to "页面模块加载失败").
+context.window.location.pathname = '/app/workbench';
+shell.init('/app/workbench');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/app-workbench.js', 'shell should lazy-load app-workbench.js for /app/workbench');
+
+context.window.location.pathname = '/app/marketplace';
+shell.init('/app/marketplace');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/app-marketplace.js', 'shell should lazy-load app-marketplace.js for /app/marketplace');
+
+context.window.location.pathname = '/app/group';
+shell.init('/app/group');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/app-group.js', 'shell should lazy-load app-group.js for /app/group');
+
+// Icon rail: nav renders rail items carrying hrefs and tooltips.
+context.window.location.pathname = '/app/workbench';
+shell.init('/app/workbench');
+assert(nodes['#aiteam-nav'].innerHTML.indexOf('aiteam-rail__item') !== -1, 'app nav should render icon-rail items');
+assert(nodes['#aiteam-nav'].innerHTML.indexOf('/app/chat') !== -1, 'app nav should include /app/chat href');
+
 if (failed) {
   console.error('page-shell-admin-routing.test.js failed');
   failures.forEach(function (item) { console.error('- ' + item); });
