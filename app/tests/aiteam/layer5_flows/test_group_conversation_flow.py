@@ -55,6 +55,8 @@ except ImportError:
         return handler.status, handler.get_json()
 
 from team_panel.application.commands.conversation_service import create_group_conversation
+from team_panel.domain.entities import Employee
+from team_panel.domain.enums import EmployeeStatus
 
 
 def test_group_message_flow_single_agent(uow, clean_tables_with_enterprise):
@@ -184,6 +186,46 @@ def test_group_message_flow_idempotency_preserves_first_result(uow, clean_tables
             (body1["run_id"],),
         )
         assert uow.cur.fetchone()[0] == 1
+
+
+def test_group_message_flow_caps_orchestration_candidates_at_three(uow, clean_tables_with_enterprise):
+    with uow:
+        uow.employees().create(Employee(
+            id="emp_4",
+            enterprise_id="ent_test",
+            profile_name="p-emp-4",
+            display_name="Drew",
+            role_name="分析师",
+            status=EmployeeStatus.ACTIVE,
+        ))
+        conv_id = create_group_conversation(
+            uow,
+            "ent_test",
+            "L5 Capped Group",
+            ["emp_test", "emp_member", "emp_planner", "emp_4"],
+            "user_test",
+        )
+
+    status, body = _post(
+        f"/api/team/group-conversations/{conv_id}/messages",
+        {
+            "message": {"text": "请大家一起协作产出周报", "attachments": []},
+            "route_hint": "orchestration",
+            "idempotency_key": "l5-cap-001",
+            "sender_id": "emp_test",
+        },
+    )
+
+    assert status == 201, body
+    assert body["route_decision"]["route_mode"] == "orchestration"
+    assert len(body["route_decision"]["candidate_employee_ids"]) == 3
+    assert len(body["route_decision"]["target_employee_ids"]) == 4
+    assert "emp_planner" in body["route_decision"]["candidate_employee_ids"]
+    assert "emp_planner" in body["route_decision"]["target_employee_ids"]
+
+    detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
+    assert detail_status == 200, detail
+    assert len(detail["latest_route_decision"]["candidate_employee_ids"]) == 3
 
 
 def test_group_message_flow_accepts_actor_id_alias(uow, clean_tables_with_enterprise):

@@ -401,6 +401,23 @@ def _pick_entry_employee_id(decision, sender_id: str) -> str:
 
 
 def _pick_candidate_employee_ids(decision, available_employee_ids: list[str]) -> list[str]:
+    max_candidates = 3
+
+    def _cap_orchestration_targets(employee_ids: list[str]) -> list[str]:
+        if decision.route_mode != "orchestration":
+            return employee_ids
+        if len(employee_ids) <= max_candidates:
+            return employee_ids
+        if decision.planner_employee_id and decision.planner_employee_id in employee_ids:
+            planner_first = [decision.planner_employee_id]
+            planner_first.extend(
+                employee_id
+                for employee_id in employee_ids
+                if employee_id != decision.planner_employee_id
+            )
+            return planner_first[:max_candidates]
+        return employee_ids[:max_candidates]
+
     if decision.target_employee_ids:
         ordered_targets = list(decision.target_employee_ids)
         if decision.route_mode == "orchestration" and decision.planner_employee_id:
@@ -409,15 +426,17 @@ def _pick_candidate_employee_ids(decision, available_employee_ids: list[str]) ->
             for employee_id in available_employee_ids:
                 if employee_id not in ordered and employee_id in ordered_targets:
                     ordered.append(employee_id)
-            return ordered
-        return ordered_targets
+            return _cap_orchestration_targets(ordered)
+        return _cap_orchestration_targets(ordered_targets)
     ordered_available = list(available_employee_ids)
     if decision.route_mode == "single_agent":
         return ordered_available
     if decision.planner_employee_id:
         if decision.planner_employee_id in ordered_available:
-            return [decision.planner_employee_id, *[employee_id for employee_id in ordered_available if employee_id != decision.planner_employee_id]]
-    return ordered_available
+            return _cap_orchestration_targets(
+                [decision.planner_employee_id, *[employee_id for employee_id in ordered_available if employee_id != decision.planner_employee_id]]
+            )
+    return _cap_orchestration_targets(ordered_available)
 
 
 def _create_member(uow, member: ConversationMember) -> None:

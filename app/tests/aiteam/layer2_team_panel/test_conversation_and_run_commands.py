@@ -16,6 +16,8 @@ from team_panel.application.commands.scheduled_job_service import (
     pause_job,
     resume_job,
 )
+from team_panel.domain.entities import Employee
+from team_panel.domain.enums import EmployeeStatus
 from team_panel.integration.gateway_client import submit_group_conversation, submit_run, submit_orchestration
 from agent_gateway.contracts import GatewayAcceptResponse, RuntimeHandle
 
@@ -250,6 +252,39 @@ def test_group_message_mentions_drive_orchestration(uow, clean_tables_with_enter
             "auto", "idem_mention_002", "emp_test",
         )
         assert result2["route_decision"]["route_mode"] == "single_agent"
+
+
+def test_group_message_orchestration_caps_candidate_replies_at_three(uow, clean_tables_with_enterprise):
+    """A single group message must not schedule more than 3 employee replies."""
+    with uow:
+        uow.employees().create(Employee(
+            id="emp_4",
+            enterprise_id="ent_test",
+            profile_name="p-emp-4",
+            display_name="Drew",
+            role_name="分析师",
+            status=EmployeeStatus.ACTIVE,
+        ))
+        conv_id = create_group_conversation(
+            uow, "ent_test", "Capped Group",
+            ["emp_test", "emp_member", "emp_planner", "emp_4"], "user_test",
+        )
+        result = submit_group_message(
+            uow, conv_id, "请大家一起协作完成这份复盘", "orchestration",
+            "idem_group_cap_001", "emp_test",
+        )
+
+        assert result["route_decision"]["route_mode"] == "orchestration"
+        assert len(result["route_decision"]["candidate_employee_ids"]) == 3
+        assert len(result["route_decision"]["target_employee_ids"]) == 4
+        assert "emp_planner" in result["route_decision"]["candidate_employee_ids"]
+        assert "emp_planner" in result["route_decision"]["target_employee_ids"]
+
+        run = uow.team_runs().get_by_id(result["run_id"])
+        assert run is not None
+        result_data = json.loads(run.result_summary_json or "{}")
+        assert len(result_data["candidate_employee_ids"]) == 3
+        assert len(result_data["target_employee_ids"]) == 4
 
 
 def test_group_message_idempotency(uow, clean_tables_with_enterprise):
