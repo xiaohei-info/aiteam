@@ -862,6 +862,7 @@ def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
                         "status": "running",
                         "preview": "执行回归测试",
                         "detail": "正在同步 Layer4 回归结果",
+                        "conversation_id": "conv_rex",
                         "latest_event_cursor": 21,
                         "events_url": "/api/team/runs/run_rex/events?cursor=21",
                         "event_ts": "2026-06-05T12:34:56Z",
@@ -881,6 +882,7 @@ def test_office_module_renders_queue_digest_and_recent_activity_log() -> None:
     assert "最新活动" in result["html"]
     assert "2026-06-05T12:34:56Z" in result["html"]
     assert "正在同步 Layer4 回归结果" in result["html"]
+    assert 'href="/app/chat/conv_rex"' in result["html"]
 
 
 def test_office_module_switches_detail_panel_when_selecting_another_seat() -> None:

@@ -242,14 +242,17 @@ window.aiteam = window.aiteam || {};
       var actor = item.employee_display_name || item.employee_name || item.display_name || '系统';
       var detail = item.detail || item.preview || '等待更新';
       var eventTs = item.event_ts || '刚刚';
+      var href = taskHref(item);
+      var tagName = href && href !== '#' ? 'a' : 'div';
+      var hrefAttr = tagName === 'a' ? ' href="' + escapeHtml(href) + '"' : '';
       return '' +
-        '<div class="aiteam-office__task-item">' +
+        '<' + tagName + ' class="aiteam-office__task-item"' + hrefAttr + '>' +
         '<div class="aiteam-office__task-main">' +
         '<div class="aiteam-office__task-title">' + escapeHtml(actor) + '</div>' +
         '<div class="aiteam-office__task-detail">' + escapeHtml(detail) + '</div>' +
         '</div>' +
         '<div class="aiteam-office__task-meta"><span class="aiteam-office__task-progress">' + escapeHtml(eventTs) + '</span></div>' +
-        '</div>';
+        '</' + tagName + '>';
     }).join('');
   }
 
