@@ -139,11 +139,12 @@ window.aiteam = window.aiteam || {};
         : '暂无发布记录';
       var lastApplyStatus = item.last_apply_status ? item.last_apply_status : '尚无最近应用记录';
       var lastApplyRecord = item.last_apply_record_id ? item.last_apply_record_id : '—';
-      var appliedBadge = item.apply_count > 0 || lastApplyStatus === 'succeeded'
-        ? '<span class="aiteam-badge">已应用</span>'
-        : '';
+      var isApplied = item.apply_count > 0 || lastApplyStatus === 'succeeded';
+      var appliedBadge = isApplied ? '<span class="aiteam-badge">已应用</span>' : '';
       var pending = state.pendingSolutionId === item.solution_id;
       var disabled = pending ? ' disabled' : '';
+      var primaryMode = isApplied ? 'reapply' : 'append';
+      var primaryLabel = isApplied ? '重新应用' : '追加应用';
       return '<li class="aiteam-skill-card">' +
         '<div class="aiteam-card__row"><div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' + appliedBadge + '</div>' +
         '<div class="aiteam-skill-card__meta">状态：' + esc(item.status) + ' · 标签：' + esc(tags) + '</div>' +
@@ -162,9 +163,11 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近创建知识库</span><span class="aiteam-shell__meta-value">' + esc(createdKnowledge) + '</span></div>' +
         '</div>' +
         '<div class="aiteam-skill-card__actions">' +
-        '<button type="button" class="aiteam-btn" data-role="solution-apply" data-mode="append" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>追加应用</button>' +
+        '<button type="button" class="aiteam-btn" data-role="solution-apply" data-mode="' + esc(primaryMode) + '" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>' + esc(primaryLabel) + '</button>' +
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="replace" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>覆盖重建</button>' +
-        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="reapply" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>重新应用</button>' +
+        (isApplied
+          ? '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="append" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>追加应用</button>'
+          : '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="reapply" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>重新应用</button>') +
         '</div>' +
         (pending ? '<div class="aiteam-skill-card__meta">正在提交：' + esc(applyModeLabel(state.pendingMode)) + '</div>' : '') +
         '</li>';
