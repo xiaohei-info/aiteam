@@ -66,6 +66,8 @@ class EnterpriseRepo:
         self,
         name: Optional[str] = None,
         status: Optional[str] = None,
+        created_from: Optional[str] = None,
+        created_to: Optional[str] = None,
         page: int = 1,
         limit: int = 20,
     ) -> tuple[list[Enterprise], int]:
@@ -81,6 +83,14 @@ class EnterpriseRepo:
         if status:
             conditions.append("status = %s")
             params.append(status)
+
+        if created_from:
+            conditions.append("created_at::date >= %s::date")
+            params.append(created_from)
+
+        if created_to:
+            conditions.append("created_at::date <= %s::date")
+            params.append(created_to)
 
         where_clause = " AND ".join(conditions)
 

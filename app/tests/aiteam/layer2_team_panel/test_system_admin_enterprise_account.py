@@ -105,6 +105,23 @@ class TestSystemAdminSearchEnterprises:
         # No archived enterprises in seed data
         assert body.get("total", 0) == 0
 
+    def test_filter_by_created_range_returns_matching_enterprise(self, seeded_enterprise):
+        _, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises?created_from=2026-01-01&created_to=2099-12-31"
+            )
+        )
+        ids = [item["id"] for item in body["enterprises"]]
+        assert seeded_enterprise["enterprise_id"] in ids
+
+    def test_filter_by_created_range_excludes_out_of_window(self, seeded_enterprise):
+        _, body = _get(
+            _system_admin_path(
+                "/api/system-admin/enterprises?created_from=2099-01-01&created_to=2099-12-31"
+            )
+        )
+        assert body["total"] == 0
+
 
 # ═══════════════════════════════════════════════════════════════════
 # T03: Enterprise detail

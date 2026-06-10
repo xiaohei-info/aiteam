@@ -77,6 +77,8 @@ def _handle_list_enterprises(path: str) -> tuple[int, dict]:
     limit = int(query.get("limit", "20"))
     name = query.get("name", "").strip() or None
     status = query.get("status", "").strip() or None
+    created_from = query.get("created_from", "").strip() or None
+    created_to = query.get("created_to", "").strip() or None
 
     conn = _make_conn()
     try:
@@ -84,7 +86,12 @@ def _handle_list_enterprises(path: str) -> tuple[int, dict]:
         try:
             repo = EnterpriseRepo(cur)
             items, total = repo.list_with_filter(
-                name=name, status=status, page=page, limit=limit,
+                name=name,
+                status=status,
+                created_from=created_from,
+                created_to=created_to,
+                page=page,
+                limit=limit,
             )
             return 200, {
                 "enterprises": [
