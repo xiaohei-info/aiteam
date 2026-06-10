@@ -43,6 +43,26 @@ window.aiteam = window.aiteam || {};
     );
   }
 
+  function renderBindingForm(kbList, employees) {
+    var kbOptions = kbList.map(function (kb) {
+      return '<option value="' + kb.knowledge_base_id + '">' + (kb.name || kb.knowledge_base_id) + '</option>';
+    }).join('');
+    var employeeOptions = (employees || []).map(function (employee) {
+      return '<option value="' + employee.employee_id + '">' + (employee.display_name || employee.employee_id) + '</option>';
+    }).join('');
+    return (
+      '<div class="aiteam-upload-form">' +
+      '<h4 class="aiteam-upload-form__title">绑定员工</h4>' +
+      '<div class="aiteam-upload-form__row">' +
+      '<select class="aiteam-upload-form__input" id="kb-bind-kb">' + kbOptions + '</select>' +
+      '<select class="aiteam-upload-form__input" id="kb-bind-employee">' + employeeOptions + '</select>' +
+      '<button class="aiteam-upload-form__btn" id="kb-bind-submit">绑定</button>' +
+      '</div>' +
+      '<div class="aiteam-upload-form__feedback" id="kb-bind-feedback"></div>' +
+      '</div>'
+    );
+  }
+
   function renderUploadForm(kbList) {
     var options = kbList.map(function (kb) {
       return '<option value="' + kb.knowledge_base_id + '">' + (kb.name || kb.knowledge_base_id) + '</option>';
@@ -114,12 +134,54 @@ window.aiteam = window.aiteam || {};
     });
   }
 
+  function currentKnowledgeIdsForEmployee(kbList, employeeId) {
+    return (kbList || []).filter(function (kb) {
+      return Array.isArray(kb.employee_bindings) && kb.employee_bindings.some(function (binding) {
+        return String(binding.employee_id || '') === String(employeeId || '');
+      });
+    }).map(function (kb) {
+      return kb.knowledge_base_id;
+    });
+  }
+
+  function bindEmployeeForm(kbList) {
+    var btn = document.getElementById('kb-bind-submit');
+    if (!btn || !ns.api || typeof ns.api.updateEmployee !== 'function') return;
+    btn.addEventListener('click', function () {
+      var kbId = document.getElementById('kb-bind-kb').value;
+      var employeeId = document.getElementById('kb-bind-employee').value;
+      var feedback = document.getElementById('kb-bind-feedback');
+      if (!kbId || !employeeId) {
+        feedback.innerHTML = '<span style="color:#f87171">请选择知识库和员工</span>';
+        return;
+      }
+
+      var existingIds = currentKnowledgeIdsForEmployee(kbList, employeeId);
+      var nextIds = existingIds.indexOf(kbId) >= 0 ? existingIds.slice() : existingIds.concat([kbId]);
+      feedback.innerHTML = '绑定中...';
+      ns.api.updateEmployee(employeeId, { knowledge_base_ids: nextIds }).then(function (result) {
+        if (result && result.ok) {
+          feedback.innerHTML = '<span style="color:#4ade80">绑定成功</span>';
+        } else {
+          feedback.innerHTML = '<span style="color:#f87171">绑定失败: ' + ((result && result.error) || '未知错误') + '</span>';
+        }
+      }).catch(function () {
+        feedback.innerHTML = '<span style="color:#f87171">网络请求失败</span>';
+      });
+    });
+  }
+
   ns.pages.knowledge = {
     init: function (container) {
       if (!container) return;
       ns.states.renderLoading(container);
 
-      ns.api.getKnowledgeBases().then(function (result) {
+      Promise.all([
+        ns.api.getKnowledgeBases(),
+        ns.api.getEmployees ? ns.api.getEmployees() : Promise.resolve({ ok: true, status: 200, data: { employees: [] } }),
+      ]).then(function (results) {
+        var result = results[0];
+        var employeeResult = results[1];
         if (!result.ok) {
           ns.states.handleApiResult(result, container, function () {});
           return;
@@ -133,8 +195,12 @@ window.aiteam = window.aiteam || {};
           return;
         }
 
+        var employees = employeeResult && employeeResult.ok && employeeResult.data
+          ? (employeeResult.data.employees || [])
+          : [];
         var cards = kbList.map(renderKbCard).join('');
         var uploadHtml = renderUploadForm(kbList);
+        var bindHtml = renderBindingForm(kbList, employees);
 
         container.innerHTML =
           '<div class="aiteam-shell__panel">' +
@@ -143,9 +209,11 @@ window.aiteam = window.aiteam || {};
           '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
           '<div class="aiteam-kb-grid">' + cards + '</div>' +
           uploadHtml +
+          bindHtml +
           '</div>';
 
         bindUploadForm();
+        bindEmployeeForm(kbList);
       }).catch(function () {
         ns.states.renderError(container, '知识库数据加载失败');
       });

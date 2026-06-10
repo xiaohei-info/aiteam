@@ -176,6 +176,116 @@ vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
     return json.loads(completed.stdout)
 
 
+def _run_binding_lifecycle(employee_result: dict, patch_result: dict) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const apiClientSource = fs.readFileSync({json.dumps(str(API_CLIENT_PATH))}, 'utf8');
+const stateHelpersSource = fs.readFileSync({json.dumps(str(STATE_HELPERS_PATH))}, 'utf8');
+const moduleSource = fs.readFileSync({json.dumps(str(KNOWLEDGE_MODULE_PATH))}, 'utf8');
+const calls = [];
+function makeElement(initial) {{
+  return Object.assign({{
+    value: '',
+    innerHTML: '',
+    listeners: {{}},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{ if (this.listeners.click) return this.listeners.click({{ preventDefault() {{}} }}); }},
+  }}, initial || {{}});
+}}
+const elements = {{
+  'kb-bind-kb': makeElement({{ value: 'kb_sales' }}),
+  'kb-bind-employee': makeElement({{ value: 'emp_member' }}),
+  'kb-bind-submit': makeElement(),
+  'kb-bind-feedback': makeElement(),
+}};
+global.Headers = class Headers {{
+  constructor(init) {{
+    this.map = new Map();
+    if (init) {{
+      for (const [key, value] of Object.entries(init)) this.map.set(String(key).toLowerCase(), String(value));
+    }}
+  }}
+  has(name) {{ return this.map.has(String(name).toLowerCase()); }}
+  set(name, value) {{ this.map.set(String(name).toLowerCase(), String(value)); }}
+}};
+global.fetch = async () => {{
+  return {{
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    async text() {{ return JSON.stringify({{ ok: true }}); }},
+  }};
+}};
+global.window = {{ aiteam: {{}} }};
+global.document = {{
+  getElementById(id) {{
+    return elements[id] || null;
+  }},
+}};
+global.window.document = global.document;
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(apiClientSource, {{ filename: 'api-client.js' }});
+vm.runInThisContext(stateHelpersSource, {{ filename: 'state-helpers.js' }});
+vm.runInThisContext(moduleSource, {{ filename: 'knowledge.js' }});
+(async () => {{
+  const container = {{ innerHTML: '' }};
+  aiteam.api.getKnowledgeBases = async () => ({{
+    ok: true,
+    status: 200,
+    data: {{
+      knowledge_bases: [
+        {{
+          knowledge_base_id: 'kb_sales',
+          name: '销售知识库',
+          description: '销售资料',
+          status: 'active',
+          document_count: 0,
+          documents: [],
+          employee_bindings: [],
+        }},
+        {{
+          knowledge_base_id: 'kb_marketing',
+          name: '市场知识库',
+          description: '市场资料',
+          status: 'active',
+          document_count: 0,
+          documents: [],
+          employee_bindings: [{{ employee_id: 'emp_member', display_name: '成员A' }}],
+        }},
+      ],
+    }},
+  }});
+  aiteam.api.getEmployees = async () => ({json.dumps(employee_result)});
+  aiteam.api.updateEmployee = async (employeeId, body) => {{
+    calls.push({{ employeeId, body }});
+    return {json.dumps(patch_result)};
+  }};
+  aiteam.pages.knowledge.init(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await elements['kb-bind-submit'].click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  console.log(JSON.stringify({{
+    html: container.innerHTML,
+    feedback: elements['kb-bind-feedback'].innerHTML,
+    calls,
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 def test_knowledge_module_exists() -> None:
     assert KNOWLEDGE_MODULE_PATH.exists(), f"Missing knowledge module: {KNOWLEDGE_MODULE_PATH}"
 
@@ -320,3 +430,55 @@ def test_knowledge_module_shows_document_registration_error() -> None:
     assert len(result["calls"]) == 2
     assert "文档登记失败" in result["feedback"]
     assert "KNOWLEDGE_BASE_NOT_FOUND" in result["feedback"]
+
+
+def test_knowledge_module_renders_binding_form_and_patches_employee_knowledge_ids() -> None:
+    result = _run_binding_lifecycle(
+        {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "employees": [
+                    {"employee_id": "emp_member", "display_name": "成员A", "role_name": "分析师", "status": "active"},
+                    {"employee_id": "emp_ops", "display_name": "成员B", "role_name": "运营", "status": "active"},
+                ],
+            },
+        },
+        {
+            "ok": True,
+            "status": 200,
+            "data": {"employee_id": "emp_member"},
+        },
+    )
+    assert "绑定员工" in result["html"]
+    assert "kb-bind-submit" in result["html"]
+    assert result["calls"] == [
+        {
+            "employeeId": "emp_member",
+            "body": {"knowledge_base_ids": ["kb_marketing", "kb_sales"]},
+        }
+    ]
+    assert "绑定成功" in result["feedback"]
+
+
+def test_knowledge_module_shows_binding_error() -> None:
+    result = _run_binding_lifecycle(
+        {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "employees": [
+                    {"employee_id": "emp_member", "display_name": "成员A", "role_name": "分析师", "status": "active"},
+                ],
+            },
+        },
+        {
+            "ok": False,
+            "status": 403,
+            "data": None,
+            "error": "PERMISSION_DENIED",
+        },
+    )
+    assert len(result["calls"]) == 1
+    assert "绑定失败" in result["feedback"]
+    assert "PERMISSION_DENIED" in result["feedback"]
