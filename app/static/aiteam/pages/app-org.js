@@ -40,10 +40,6 @@ window.aiteam = window.aiteam || {};
     return firstString(department.name, department.department_name, department.display_name, department.title) || '未命名部门';
   }
 
-  function getDepartmentId(department) {
-    return firstString(department.id, department.department_id, department.code, getDepartmentName(department));
-  }
-
   function getDepartmentChildren(department) {
     var keys = ['children', 'child_departments', 'departments', 'nodes', 'items'];
     for (var i = 0; i < keys.length; i += 1) {
@@ -119,27 +115,6 @@ window.aiteam = window.aiteam || {};
     return firstString(presence) || '状态未知';
   }
 
-  function memberRoleGlyph(role) {
-    var value = firstString(role).toLowerCase();
-    if (value.indexOf('营销') !== -1 || value.indexOf('市场') !== -1) return '🎯';
-    if (value.indexOf('内容') !== -1) return '📢';
-    if (value.indexOf('技术') !== -1 || value.indexOf('工程') !== -1 || value.indexOf('研发') !== -1) return '💻';
-    if (value.indexOf('财务') !== -1) return '📊';
-    if (value.indexOf('研究') !== -1 || value.indexOf('ai') !== -1) return '🧠';
-    return '👤';
-  }
-
-  function getAssignmentLabel(member, departmentName) {
-    var assignment = firstObject(member.assignment, member.org_assignment);
-    return firstString(
-      member.assignment_label,
-      member.assignment_name,
-      member.department_name,
-      assignment && assignment.department_name,
-      departmentName
-    ) || '未分配';
-  }
-
   function countMembers(departments) {
     return toArray(departments).reduce(function (total, department) {
       return total + getDepartmentMembers(department).length + countMembers(getDepartmentChildren(department));
@@ -194,45 +169,6 @@ window.aiteam = window.aiteam || {};
       '</div>',
       '<p class="aiteam-org__hint" data-org-assignment-status="' + escapeHtml(assignmentId) + '"></p>',
       '</div>'
-    ].join('');
-  }
-
-  function renderMember(member, departmentName) {
-    var role = getMemberRole(member);
-    var presence = getPresence(member);
-    return [
-      '<li class="aiteam-org__member">',
-      '<div class="aiteam-org__member-main">',
-      '<span class="aiteam-org__badge">' + escapeHtml(memberRoleGlyph(role)) + '</span>',
-      '<strong class="aiteam-org__member-name">' + escapeHtml(getMemberName(member)) + '</strong>',
-      '<span class="aiteam-org__badge">' + escapeHtml(presenceLabel(presence)) + '</span>',
-      '</div>',
-      '<div class="aiteam-org__member-meta">',
-      '<span class="aiteam-org__member-assignment">归属：' + escapeHtml(getAssignmentLabel(member, departmentName)) + '</span>',
-      role ? '<span class="aiteam-org__member-role">岗位：' + escapeHtml(role) + '</span>' : '',
-      '<span class="aiteam-org__member-role">原始状态：' + escapeHtml(presence) + '</span>',
-      '</div>',
-      renderEditableAssignment(member),
-      '</li>'
-    ].join('');
-  }
-
-  function renderDepartment(department) {
-    var name = getDepartmentName(department);
-    var members = getDepartmentMembers(department);
-    var children = getDepartmentChildren(department);
-    var description = firstString(department.description, department.summary, department.note);
-
-    return [
-      '<article class="aiteam-org__department" data-department-id="' + escapeHtml(getDepartmentId(department)) + '">',
-      '<header class="aiteam-org__department-header">',
-      '<h3 class="aiteam-org__department-title">' + escapeHtml(name) + '</h3>',
-      '<span class="aiteam-org__department-count">' + members.length + ' 位数字员工</span>',
-      '</header>',
-      description ? '<p class="aiteam-org__department-description">' + escapeHtml(description) + '</p>' : '',
-      members.length ? '<ul class="aiteam-org__member-list">' + members.map(function (member) { return renderMember(member, name); }).join('') + '</ul>' : '<p class="aiteam-org__empty-hint">当前部门暂无成员。</p>',
-      children.length ? '<div class="aiteam-org__children">' + children.map(renderDepartment).join('') + '</div>' : '',
-      '</article>'
     ].join('');
   }
 
@@ -309,6 +245,57 @@ window.aiteam = window.aiteam || {};
     ].join('');
   }
 
+  function renderOrgNode(name, role, glyph, rootClass) {
+    return '<div class="aiteam-org__node' + (rootClass ? ' is-root' : '') + '">' +
+      '<div class="aiteam-org__node-avatar">' + escapeHtml(glyph || '🤖') + '</div>' +
+      '<div><div class="aiteam-org__node-name">' + escapeHtml(name) + '</div>' +
+      '<div class="aiteam-org__node-role">' + escapeHtml(role || '') + '</div></div></div>';
+  }
+
+  function renderOrgChart(departments) {
+    var rootHtml = '<div class="aiteam-org__level">' + renderOrgNode('企业团队', '组织根节点', '🏢', true) + '</div>' +
+      '<div class="aiteam-org__line-v"></div>';
+    var deptNodes = departments.map(function (dept) {
+      var name = getDepartmentName(dept);
+      var members = getDepartmentMembers(dept);
+      var memberHtml = members.map(function (m) {
+        return renderOrgNode(getMemberName(m), getMemberRole(m) || presenceLabel(getPresence(m)), '🧑‍💼', false);
+      }).join('');
+      return '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">' +
+        renderOrgNode(name, members.length + ' 位成员', '🗂️', false) +
+        (memberHtml ? '<div class="aiteam-org__line-v"></div><div class="aiteam-org__level">' + memberHtml + '</div>' : '') +
+        '</div>';
+    }).join('');
+    return '<div class="aiteam-org__chart">' + rootHtml + '<div class="aiteam-org__level">' + deptNodes + '</div></div>';
+  }
+
+  function collectMembers(departments, unassignedMembers) {
+    var out = [];
+    (departments || []).forEach(function walk(dept) {
+      getDepartmentMembers(dept).forEach(function (m) { out.push({ member: m, dept: getDepartmentName(dept) }); });
+      getDepartmentChildren(dept).forEach(walk);
+    });
+    (unassignedMembers || []).forEach(function (m) { out.push({ member: m, dept: '待分配' }); });
+    return out;
+  }
+
+  function renderAssignmentEditors(departments, unassignedMembers) {
+    var rows = collectMembers(departments, unassignedMembers).map(function (entry) {
+      var editor = renderEditableAssignment(entry.member);
+      if (!editor) {
+        return '';
+      }
+      return '<div class="aiteam-org__assign-row">' +
+        '<span class="aiteam-org__assign-name">' + escapeHtml(getMemberName(entry.member)) + '</span>' +
+        editor + '</div>';
+    }).filter(Boolean).join('');
+    if (!rows) {
+      return '';
+    }
+    return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>归属调整</strong>' +
+      '<span class="aiteam-inline-note">PATCH 等价交互</span></div>' + rows + '</div>';
+  }
+
   function renderOrg(main, payload) {
     var departments = getPayloadDepartments(payload);
     var unassignedMembers = getUnassignedMembers(payload);
@@ -319,20 +306,6 @@ window.aiteam = window.aiteam || {};
 
     var totalMembers = countMembers(departments) + unassignedMembers.length;
     var totalDepartments = countDepartments(departments);
-    var panels = departments.map(renderDepartment).join('');
-    if (unassignedMembers.length) {
-      panels += [
-        '<article class="aiteam-org__department aiteam-org__department--unassigned">',
-        '<header class="aiteam-org__department-header">',
-        '<h3 class="aiteam-org__department-title">待分配成员</h3>',
-        '<span class="aiteam-org__department-count">' + unassignedMembers.length + ' 位数字员工</span>',
-        '</header>',
-        '<ul class="aiteam-org__member-list">',
-        unassignedMembers.map(function (member) { return renderMember(member, '待分配'); }).join(''),
-        '</ul>',
-        '</article>'
-      ].join('');
-    }
 
     main.innerHTML = [
       '<section class="aiteam-shell__panel aiteam-org">',
@@ -345,8 +318,8 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽调整层级</span><span class="aiteam-shell__meta-value">当前以 PATCH 等价交互承接</span></div>',
       '</div>',
       '<div class="aiteam-grid aiteam-grid--chat">',
-      '<section class="aiteam-panel">' + renderLegend() + '<div class="aiteam-org__tree">' + panels + '</div></section>',
-      '<section class="aiteam-panel">' + renderDeptSummary(departments, unassignedMembers) + '</section>',
+      '<section class="aiteam-panel">' + renderLegend() + renderOrgChart(departments) + '</section>',
+      '<section class="aiteam-panel">' + renderDeptSummary(departments, unassignedMembers) + renderAssignmentEditors(departments, unassignedMembers) + '</section>',
       '</div>',
       '</section>'
     ].join('');
@@ -383,4 +356,6 @@ window.aiteam = window.aiteam || {};
       return loadOrg(main);
     }
   };
+
+  ns.pages.appOrg._renderOrg = renderOrg;
 }(window.aiteam));

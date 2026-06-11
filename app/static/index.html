@@ -7,7 +7,7 @@
 <!-- base href enables subpath mount support; all static paths must stay relative (no leading slash).
      MUST appear before manifest/favicon links so browsers resolve relative URLs against the
      correct base when the page is served from /session/<id> routes. See #2226. -->
-<script>(function(){var path=location.pathname,sessionMarker='/session/',sessionIndex=path.indexOf(sessionMarker),routeMatch=path.match(/^(.*?)(\/(app|admin|system))(?:\/|$)/),p;if(sessionIndex>=0){p=(path.slice(0,sessionIndex+1)||'/');}else if(routeMatch){p=(routeMatch[1]||'')+'/';}else{p=(path.endsWith('/')?path:(path.replace(/\/[^\/]*$/,'/')||'/'));}document.write('<base href="'+location.origin+p+'">');})()</script>
+<script>(function(){var path=location.pathname,sessionMarker='/session/',sessionIndex=path.indexOf(sessionMarker),routeMatch=path.match(/^(.*?)(\/(app|admin|system))(?:\/|$)/),p;if(sessionIndex>=0){p=(path.slice(0,sessionIndex+1)||'/');}else if(routeMatch){p=(routeMatch[1]||'')+'/';}else{p=(path.endsWith('/')?path:(path.replace(/\/[^\/]*$/,'/')||'/'));}var b=location.origin+p;document.write('<base href="'+b+'">');document.write('<link rel="stylesheet" href="'+b+'static/style.css?v=__WEBUI_VERSION__">');document.write('<link rel="stylesheet" href="'+b+'static/aiteam/styles.css?v=__WEBUI_VERSION__">');document.write('<link rel="stylesheet" href="'+b+'static/vendor/katex/0.16.22/katex.min.css">');})()</script>
 <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="static/favicon-32.png">
 <link rel="shortcut icon" href="static/favicon.ico">
@@ -68,11 +68,11 @@
     };
   }
 })()</script>
-<link rel="stylesheet" href="static/style.css?v=__WEBUI_VERSION__">
-<link rel="stylesheet" href="static/aiteam/styles.css?v=__WEBUI_VERSION__">
+<!-- style.css, aiteam/styles.css, katex.min.css are emitted via document.write right after <base>
+       (see bootstrap script above) so the preload scanner cannot speculatively fetch them against
+       the document URL before <base> applies — fixes MIME/ERR_ABORTED noise on /app|/admin|/system
+       deep routes and /session/<id>. CDN/absolute links below are unaffected and stay static. -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" integrity="sha384-LJcOxlx9IMbNXDqJ2axpfEQKkAYbFjJfhXexLfiRJhjDU81mzgkiQq8rkV0j6dVh" crossorigin="anonymous">
-  <!-- KaTeX math rendering CSS (loaded eagerly from vendored assets to prevent font CSP noise) -->
-  <link rel="stylesheet" href="static/vendor/katex/0.16.22/katex.min.css">
   <!-- streaming-markdown: incremental DOM-building markdown parser for live streams -->
   <!-- Self-hosted from npm:streaming-markdown@0.2.15 — no CDN dependency.           -->
   <!-- sha384 of smd.min.js @0.2.15: sha384-T6r95ocN9t3W8tUK2Fa6FPaO7bJryyjyW0WCalrUnpgtm2qXr5xcN4vwPYEJ6vHa -->

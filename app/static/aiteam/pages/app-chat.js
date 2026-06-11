@@ -185,23 +185,36 @@ window.aiteam = window.aiteam || {};
       '</article>';
   }
 
-  function renderToolCall(payload) {
-    payload = payload || {};
-    var toolName = payload.tool_name || payload.tool || payload.name || 'tool_call';
-    var status = normalizeToolStatus(payload);
-    var summary = summarizeToolResult(payload) || '工具调用已触发';
-    var args = summarizeToolArgs(payload);
-    var target = payload.target || payload.resource || payload.endpoint || '';
-    return '<article class="aiteam-tool-card">' +
-      '<div class="aiteam-tool-card__header"><div class="aiteam-tool-card__title">工具调用 · ' + escapeHtml(toolName) + '</div>' + chip(status.label, status.tone) + '</div>' +
-      '<div class="aiteam-tool-card__meta">' +
-      '<span>调用源 ' + escapeHtml(payload.source_type || 'timeline') + '</span>' +
-      (target ? '<span>目标 ' + escapeHtml(String(target)) + '</span>' : '') +
-      (payload.duration != null ? '<span>耗时 ' + escapeHtml(String(payload.duration)) + '</span>' : '') +
-      '</div>' +
-      (args ? '<details class="aiteam-tool-card__details"><summary>查看入参</summary><pre class="aiteam-tool-card__body">' + escapeHtml(args) + '</pre></details>' : '') +
-      '<pre class="aiteam-tool-card__body">' + escapeHtml(summary) + '</pre>' +
-      '</article>';
+  function renderThinking() {
+    return '<div class="aiteam-chat__thinking"><div class="aiteam-chat__thinking-dots">' +
+      '<span class="aiteam-chat__thinking-dot"></span><span class="aiteam-chat__thinking-dot"></span><span class="aiteam-chat__thinking-dot"></span>' +
+      '</div>正在思考中...</div>';
+  }
+
+  function renderTimelineItem(item) {
+    item = item || {};
+    var t = String(item.type || item.kind || '').toLowerCase();
+    if (t === 'tool_call' || t === 'tool') {
+      var name = item.tool_name || item.name || 'tool';
+      var args = item.tool_args != null ? item.tool_args : (item.args != null ? item.args : '');
+      var result = item.tool_result != null ? item.tool_result : '';
+      var statusLabel = item.status_label || '';
+      return '<div class="aiteam-chat__tool-card"><div class="aiteam-chat__tool-head">⚡ 调用工具' +
+        (statusLabel ? ' · ' + escapeHtml(String(statusLabel)) : '') + '</div>' +
+        '<div class="aiteam-chat__tool-call">' + escapeHtml(String(name)) + '(' + escapeHtml(String(args)) + ')</div>' +
+        (result ? '<pre class="aiteam-chat__tool-result">' + escapeHtml(String(result)) + '</pre>' : '') +
+        '</div>';
+    }
+    if (t === 'loop' || t === 'orchestration') {
+      var steps = (item.steps || []).map(function (s) {
+        var cls = s.status === 'done' ? ' is-done' : (s.status === 'running' ? ' is-running' : '');
+        var label = s.status === 'done' ? '✓ 完成' : (s.status === 'running' ? '● 进行中' : '○ 等待');
+        return '<div class="aiteam-chat__loop-step' + cls + '">' + escapeHtml(s.title || '') +
+          '<span class="aiteam-chat__loop-step-status">' + label + '</span></div>';
+      }).join('');
+      return '<div class="aiteam-chat__loop-card"><div class="aiteam-chat__loop-title">🦞 龙虾编排</div>' + steps + '</div>';
+    }
+    return '';
   }
 
   function renderTimelineNotice(event) {
@@ -249,49 +262,46 @@ window.aiteam = window.aiteam || {};
       '</button>';
   }
 
-  function employeeSummaryCard(summary, conversation) {
-    if (!summary) {
+  function renderSummaryPanel(summary, conversation) {
+    summary = summary || {};
+    conversation = conversation || {};
+    if (!summary || (!summary.display_name && !summary.employee_id)) {
       return '<div class="aiteam-inline-empty">当前会话还没有绑定员工摘要。</div>';
     }
     var usage = summary.usage_summary || {};
     var statusCounts = usage.status_counts || {};
     var statusKeys = Object.keys(statusCounts);
+    var completed = statusCounts.succeeded != null ? statusCounts.succeeded : null;
+    var totalRuns = usage.total_runs != null ? usage.total_runs : null;
+    var successRate = (totalRuns && completed != null) ? Math.round((completed / totalRuns) * 100) + '%' : '—';
+    var modelLine = [summary.model_provider, summary.model_name].filter(Boolean).join(' · ') || '未配置';
+    var initial = (summary.display_name || summary.employee_id || 'A').slice(0, 1);
+    var skills = Array.isArray(summary.skills) ? summary.skills : [];
+    var kbs = Array.isArray(summary.knowledge_bases) ? summary.knowledge_bases : [];
+    var memories = Array.isArray(summary.memories) ? summary.memories : (Array.isArray(summary.memory_snippets) ? summary.memory_snippets : []);
     return '<div class="aiteam-chat-summary">' +
       '<div class="aiteam-chat-summary__hero">' +
-      '<div><p class="aiteam-page__eyebrow">员工摘要</p><h3>' + escapeHtml(summary.display_name || summary.employee_id || '未命名员工') + '</h3>' +
-      '<p class="aiteam-card__sub">' + escapeHtml(summary.role_name || '待配置岗位') + '</p></div>' +
-      '<div class="aiteam-chip-row">' +
-      chip(summary.status || 'idle', 'success') +
-      chip((summary.model_provider || 'provider') + ' / ' + (summary.model_name || '未配置模型'), 'brand') +
-      '</div>' +
+      '<div class="aiteam-chat-summary__avatar">' + escapeHtml(initial) + '</div>' +
+      '<div><h3>' + escapeHtml(summary.display_name || summary.employee_id || '未命名员工') + '</h3>' +
+      '<p class="aiteam-card__sub">' + escapeHtml(summary.role_name || '待配置岗位') + '</p>' +
+      '<div class="aiteam-chip-row">' + chip(summary.status || 'idle', 'success') + '</div></div>' +
       '</div>' +
       '<div class="aiteam-chat-stat-grid">' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(usage.total_runs != null ? usage.total_runs : 0) + '</strong><span>累计运行</span></article>' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(statusCounts.succeeded != null ? statusCounts.succeeded : 0) + '</strong><span>成功完成</span></article>' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(conversation.message_count != null ? conversation.message_count : 0) + '</strong><span>历史消息</span></article>' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(String(completed != null ? completed : '—')) + '</strong><span>完成任务</span></article>' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(successRate) + '</strong><span>成功率</span></article>' +
+      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(String(conversation.message_count != null ? conversation.message_count : (totalRuns != null ? totalRuns : '—'))) + '</strong><span>历史消息</span></article>' +
       '</div>' +
-      '<div class="aiteam-detail-section">' +
-      '<h3>业务字段</h3>' +
-      '<div class="aiteam-detail-kv"><span>员工 ID</span><strong>' + escapeHtml(summary.employee_id || '未绑定') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>岗位</span><strong>' + escapeHtml(summary.role_name || '未配置') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>模型</span><strong>' + escapeHtml(summary.model_name || '未配置') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>最近运行</span><strong>' + escapeHtml(formatTime(usage.last_run_at || conversation.created_at)) + '</strong></div>' +
+      '<div class="aiteam-detail-section"><h3>技能</h3>' +
+      (skills.length ? '<div class="aiteam-chip-row">' + skills.map(function (s) { return chip(typeof s === 'string' ? s : (s.name || ''), 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无技能绑定</div>') +
       '</div>' +
-      '<div class="aiteam-detail-section">' +
-      '<h3>技能</h3>' +
-      (Array.isArray(summary.skills) && summary.skills.length ? '<div class="aiteam-chip-row">' + summary.skills.map(function (item) { return chip(item, 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无技能绑定</div>') +
+      '<div class="aiteam-detail-section"><h3>知识库</h3>' +
+      (kbs.length ? '<div class="aiteam-chip-row">' + kbs.map(function (k) { return chip(typeof k === 'string' ? k : (k.name || ''), 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无知识库绑定</div>') +
       '</div>' +
-      '<div class="aiteam-detail-section">' +
-      '<h3>知识库</h3>' +
-      (Array.isArray(summary.knowledge_bases) && summary.knowledge_bases.length ? '<div class="aiteam-chip-row">' + summary.knowledge_bases.map(function (item) { return chip(item, 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无知识库绑定</div>') +
-      '</div>' +
-      '<div class="aiteam-detail-section">' +
-      '<h3>运行状态分布</h3>' +
-      (statusKeys.length ? '<div class="aiteam-chip-row">' + statusKeys.map(function (key) { return chip(key + ' × ' + statusCounts[key], 'brand'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无运行记录</div>') +
-      '</div>' +
-      '<div class="aiteam-action-row">' +
-      '<a class="aiteam-card-link" href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '"><span class="aiteam-card-link__label">配置员工</span><span class="aiteam-card-link__note">前往企业后台查看技能 / 知识 / 模型</span></a>' +
-      '</div>' +
+      (memories.length ? '<div class="aiteam-detail-section"><h3>记忆片段</h3><div class="aiteam-chip-row">' + memories.map(function (m) { return chip(typeof m === 'string' ? m : (m.text || m.summary || ''), 'neutral'); }).join('') + '</div></div>' : '') +
+      '<div class="aiteam-detail-section"><h3>使用模型</h3><div class="aiteam-detail-kv"><span>模型</span><strong>' + escapeHtml(modelLine) + '</strong></div>' +
+      '<div class="aiteam-detail-kv"><span>最近运行</span><strong>' + escapeHtml(formatTime(usage.last_run_at || conversation.created_at)) + '</strong></div></div>' +
+      (statusKeys.length ? '<div class="aiteam-detail-section"><h3>运行状态分布</h3><div class="aiteam-chip-row">' + statusKeys.map(function (key) { return chip(key + ' × ' + statusCounts[key], 'brand'); }).join('') + '</div></div>' : '') +
+      '<div class="aiteam-action-row"><a class="aiteam-card-link" href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '"><span class="aiteam-card-link__label">配置员工</span><span class="aiteam-card-link__note">前往企业后台查看技能 / 知识 / 模型</span></a></div>' +
       '</div>';
   }
 
@@ -384,17 +394,31 @@ window.aiteam = window.aiteam || {};
       if (!state.refs.transcript) return;
       var html = '';
       if (!state.messages.length && !state.liveItems.length && !state.streamingAssistantText) {
-        html = '<div class="aiteam-inline-empty">欢迎开始新的私聊任务。可在左侧历史区回看消息、在右侧查看员工摘要。</div>';
+        html = '<div class="aiteam-inline-empty">欢迎开始新的私聊任务。可在左侧切换智能体、在右侧查看员工摘要。</div>';
       } else {
         html += state.messages.map(function (message) {
           return renderMessageBubble(message, '', state.employeeSummary, state.conversation);
         }).join('');
         html += state.liveItems.map(function (item) {
           if (item.kind === 'tool_call') {
-            return renderToolCall(item.payload);
+            var p = item.payload || {};
+            var st = normalizeToolStatus(p);
+            return renderTimelineItem({
+              type: 'tool_call',
+              tool_name: p.tool_name || p.tool || p.name,
+              tool_args: summarizeToolArgs(p),
+              tool_result: summarizeToolResult(p),
+              status_label: st.label,
+            });
+          }
+          if (item.kind === 'loop' || item.kind === 'orchestration') {
+            return renderTimelineItem({ type: 'loop', steps: (item.payload && item.payload.steps) || item.steps || [] });
           }
           return renderTimelineNotice(item.payload || item);
         }).join('');
+        if (!state.streamingAssistantText && state.runId && !/run_succeeded|run_failed|run_cancelled/.test(state.latestEventType || '')) {
+          html += renderThinking();
+        }
         if (state.streamingAssistantText) {
           html += renderMessageBubble({
             role: 'assistant',
@@ -414,7 +438,7 @@ window.aiteam = window.aiteam || {};
 
     function renderSummary() {
       if (!state.refs.summary) return;
-      state.refs.summary.innerHTML = employeeSummaryCard(state.employeeSummary, state.conversation);
+      state.refs.summary.innerHTML = renderSummaryPanel(state.employeeSummary, state.conversation);
     }
 
     function renderHero() {
@@ -746,19 +770,47 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  function presenceDotClass(status) {
+    var s = String(status || '').toLowerCase();
+    if (s === 'busy' || s === 'running' || s === 'streaming') return 'is-busy';
+    if (s === 'offline' || s === 'paused') return 'is-offline';
+    return 'is-online';
+  }
+
+  function renderAgentList(agents, activeConversationId) {
+    if (!agents || !agents.length) {
+      return '<div class="aiteam-chat__agent-list"><div class="aiteam-inline-empty">暂无可用智能体</div></div>';
+    }
+    var items = agents.map(function (a) {
+      var convId = a.conversation_id || '';
+      var active = convId && String(convId) === String(activeConversationId) ? ' is-active' : '';
+      var href = convId ? '/app/chat/' + encodeURIComponent(convId) : '/app/chat/' + encodeURIComponent(a.employee_id || '');
+      var unread = a.unread_count ? '<div class="aiteam-chat__agent-unread">' + escapeHtml(String(a.unread_count)) + '</div>' : '';
+      return '<a class="aiteam-chat__agent' + active + '" href="' + escapeHtml(href) + '" data-chat-agent="' + escapeHtml(a.employee_id || '') + '">' +
+        '<div class="aiteam-chat__agent-avatar" style="background:' + escapeHtml(a.avatar_bg || 'linear-gradient(135deg,#2563EB,#0EA5E9)') + '">' + escapeHtml(a.avatar || '🤖') +
+        '<span class="aiteam-chat__agent-dot ' + presenceDotClass(a.status) + '"></span></div>' +
+        '<div class="aiteam-chat__agent-info"><div class="aiteam-chat__agent-name">' + escapeHtml(a.display_name || a.employee_id || '智能体') + '</div>' +
+        '<div class="aiteam-chat__agent-role">' + escapeHtml(a.role_name || a.status_text || '数字员工') + '</div></div>' +
+        '<div class="aiteam-chat__agent-meta"><div class="aiteam-chat__agent-time">' + escapeHtml(a.time_label || '') + '</div>' + unread + '</div>' +
+        '</a>';
+    }).join('');
+    return '<div class="aiteam-chat__agent-list">' +
+      '<div class="aiteam-chat__group-label">🤖 数字员工</div>' + items + '</div>';
+  }
+
   function renderChat(container, conversation) {
     var summary = conversation.employee_summary || {};
     var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
     var modelLine = [summary.model_provider, summary.model_name].filter(Boolean).join(' · ');
     container.innerHTML = '<section class="aiteam-page aiteam-page--chat">' +
       '<div class="aiteam-page__hero"><div><p class="aiteam-page__eyebrow">P05 · 单聊对话</p><h2 class="aiteam-page__title">' + escapeHtml(displayName || '单聊会话') + '</h2>' +
-      '<p class="aiteam-page__desc">按 PRD 原型落三栏结构：左侧历史区、中间消息与输入区、右侧员工摘要。数据仅消费 Team Panel 会话详情 / runs / timeline 契约。</p></div>' +
+      '<p class="aiteam-page__desc">按 PRD 原型落三栏结构：左侧智能体列表、中间消息与输入区、右侧员工摘要。数据仅消费 Team Panel 会话详情 / runs / timeline 契约。</p></div>' +
       '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">返回工作台</a></div></div>' +
       '<div class="aiteam-grid aiteam-grid--chat-3col">' +
-      '<aside class="aiteam-panel aiteam-panel--history">' +
-      '<div class="aiteam-panel__header"><div><h3>历史区</h3><p class="aiteam-inline-note">完整历史回溯与引用入口</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
-      '<div class="aiteam-chat-history-meta">' + chip('状态 ' + (conversation.status || 'active'), 'neutral') + chip('共 ' + (conversation.message_count != null ? conversation.message_count : 0) + ' 条', 'brand') + '</div>' +
-      '<div class="aiteam-chat-history" data-chat-history></div>' +
+      '<aside class="aiteam-panel aiteam-panel--agents">' +
+      '<div class="aiteam-panel__header"><div><h3>智能体</h3><p class="aiteam-inline-note">点击切换对应会话</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
+      '<input class="aiteam-chat__agent-search" type="search" placeholder="搜索智能体" data-chat-agent-search>' +
+      renderAgentList(conversation.__agentList || [], conversation.conversation_id) +
       '</aside>' +
       '<section class="aiteam-panel aiteam-panel--conversation">' +
       '<div class="aiteam-chat-topbar" data-chat-hero></div>' +
@@ -817,8 +869,37 @@ window.aiteam = window.aiteam || {};
           ns.states.handleApiResult(result, container, function () {});
           return;
         }
-        renderChat(container, result.data || {});
+        var conv = result.data || {};
+        function finish(agentList) {
+          conv.__agentList = agentList || [];
+          renderChat(container, conv);
+        }
+        if (ns.api && typeof ns.api.getWorkbench === 'function') {
+          ns.api.getWorkbench().then(function (wb) {
+            var employees = (wb && wb.ok && wb.data && Array.isArray(wb.data.employees)) ? wb.data.employees : [];
+            finish(employees.map(function (e) {
+              return {
+                employee_id: e.employee_id,
+                display_name: e.display_name,
+                role_name: e.role_name,
+                status: e.presence || e.status,
+                conversation_id: e.conversation_id,
+                avatar: e.avatar || '🤖',
+                avatar_bg: e.avatar_bg,
+                unread_count: e.unread_count,
+                time_label: e.time_label,
+              };
+            }));
+          }).catch(function () { finish([]); });
+        } else {
+          finish([]);
+        }
       });
     },
   };
+
+  ns.pages.appChat._renderChat = renderChat;
+  ns.pages.appChat._renderTimelineItem = renderTimelineItem;
+  ns.pages.appChat._renderThinking = renderThinking;
+  ns.pages.appChat._renderSummaryPanel = renderSummaryPanel;
 }(window.aiteam));

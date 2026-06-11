@@ -259,6 +259,7 @@ async function run() {
   assert(host.innerHTML.indexOf('搜索专家名称、技能') !== -1, 'page should render the marketplace search copy from the prototype');
   assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render the initial talent card');
   assert(host.innerHTML.indexOf('查看详情') !== -1, 'page should render the detail CTA');
+  assert(host.innerHTML.includes('aiteam-marketplace-card__rating'), 'expected rating element in marketplace card');
 
   host._loadMoreButton.dispatchEvent({ type: 'click' });
   await nextTick();

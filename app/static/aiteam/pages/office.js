@@ -393,13 +393,23 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-office__scene-hint">拖拽平移 · 滚轮缩放 · 工位点击查看详情</div>' +
       '</div>' +
       '<div class="aiteam-office__scene-viewport">' +
-      '<div class="aiteam-office__scene-floor">' +
-      '<div class="aiteam-office__stage" data-office-root style="transform:' + escapeHtml(viewportTransform(view)) + ';transform-origin:center center;">' +
-      (seats.length ? seats.map(function (seat) {
-        return renderSeat(seat, selectedSeat && String(selectedSeat.employee_id || '') === String(seat.employee_id || ''));
-      }).join('') : '<div class="aiteam-office__task-empty">当前暂无工位数据</div>') +
-      '</div>' +
-      '</div>' +
+      (seats.length ?
+        '<div class="aiteam-office__canvas-wrap" data-office-canvas-wrap>' +
+        '<canvas data-office-canvas></canvas>' +
+        '<div class="aiteam-office__tooltip" data-office-tooltip>' +
+        '<div class="aiteam-office__tooltip-head"><span class="aiteam-office__tooltip-avatar" data-office-tt-avatar>🐴</span>' +
+        '<div><div class="aiteam-office__tooltip-name" data-office-tt-name></div><div class="aiteam-office__tooltip-role" data-office-tt-role></div></div></div>' +
+        '<div class="aiteam-office__tooltip-row"><span>状态</span><strong data-office-tt-status></strong></div>' +
+        '<div class="aiteam-office__tooltip-row"><span>当前任务</span><strong data-office-tt-task></strong></div>' +
+        '</div>' +
+        '</div>'
+      :
+        '<div class="aiteam-office__scene-floor">' +
+        '<div class="aiteam-office__stage" data-office-root style="transform:' + escapeHtml(viewportTransform(view)) + ';transform-origin:center center;">' +
+        '<div class="aiteam-office__task-empty">当前暂无工位数据</div>' +
+        '</div>' +
+        '</div>'
+      ) +
       '</div>' +
       '</div>' +
       '<aside class="aiteam-office__sidebar">' +
@@ -431,6 +441,11 @@ window.aiteam = window.aiteam || {};
       renderLegend() +
       '</div>' +
       '</aside>' +
+      '</div>' +
+      '<div class="aiteam-office__bottom">' +
+      '<div class="aiteam-office__bottom-col"><div class="aiteam-office__sidebar-title">🦞 任务队列</div><div class="aiteam-office__task-list">' + renderTaskList(tasks) + '</div></div>' +
+      '<div class="aiteam-office__bottom-col"><div class="aiteam-office__sidebar-title">📊 今日统计</div>' + renderQueueDigest(feedData) + '</div>' +
+      '<div class="aiteam-office__bottom-col"><div class="aiteam-office__sidebar-title">📡 实时日志</div><div class="aiteam-office__task-list">' + renderActivityLog(tasks) + '</div></div>' +
       '</div>' +
       '</div>' +
       '</section>';
@@ -606,6 +621,34 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  function mountCanvas(container, seats) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    if (container.__aiteamOfficeCanvas && typeof container.__aiteamOfficeCanvas.destroy === 'function') {
+      container.__aiteamOfficeCanvas.destroy();
+      container.__aiteamOfficeCanvas = null;
+    }
+    var canvasEl = container.querySelector('[data-office-canvas]');
+    var wrapEl = container.querySelector('[data-office-canvas-wrap]');
+    if (!canvasEl || !wrapEl || !ns.officeCanvas || typeof ns.officeCanvas.mount !== 'function') return;
+    var ttEl = container.querySelector('[data-office-tooltip]');
+    var tooltipRefs = {
+      tooltip: ttEl,
+      avatar: container.querySelector('[data-office-tt-avatar]'),
+      name: container.querySelector('[data-office-tt-name]'),
+      role: container.querySelector('[data-office-tt-role]'),
+      status: container.querySelector('[data-office-tt-status]'),
+      task: container.querySelector('[data-office-tt-task]'),
+    };
+    var agents = ns.officeCanvas.mapSeatsToAgents(seats);
+    container.__aiteamOfficeCanvas = ns.officeCanvas.mount(canvasEl, wrapEl, tooltipRefs, agents, function (agent) {
+      if (!agent) return;
+      var href = agent.conversation_id
+        ? '/app/chat/' + encodeURIComponent(agent.conversation_id)
+        : '/admin/employees/' + encodeURIComponent(agent.id || '');
+      if (typeof window !== 'undefined' && window.location) window.location.href = href;
+    });
+  }
+
   function renderOfficeInto(container, sceneData, feedData) {
     var view = normalizeViewportState(container && container.__aiteamOfficeViewportState);
     container.__aiteamOfficeSceneData = sceneData || {};
@@ -619,6 +662,7 @@ window.aiteam = window.aiteam || {};
     bindViewportControls(container);
     bindPointerNavigation(container);
     bindSeatSelection(container);
+    mountCanvas(container, seats);
   }
 
   function doRefresh(container) {

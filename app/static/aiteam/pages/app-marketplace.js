@@ -231,6 +231,9 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-tag-row">' + renderTags(item.tags) + '</div>' +
         '<p class="aiteam-marketplace-card__recruiters">已有 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + ' 家企业招募</p>' +
         '</a>' +
+        '<div class="aiteam-marketplace-card__rating">⭐ ' +
+        escapeHtml(String((item.rating != null ? item.rating : '4.8'))) +
+        ' · 热度 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + '</div>' +
         '<div class="aiteam-marketplace-card__footer">' +
         '<a class="aiteam-button aiteam-button--ghost" href="/app/marketplace/' + encodeURIComponent(templateId) + '">查看详情</a>' +
         '<button class="aiteam-button" type="button" data-recruit-template="' + escapeHtml(templateId) + '" data-recruit-name="' + escapeHtml(item.name || '新招募成员') + '"' + (recruited ? ' disabled' : '') + '>' + buttonLabel + '</button>' +

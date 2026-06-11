@@ -47,6 +47,7 @@ window.aiteam = window.aiteam || {};
       return renderDocumentItem(item);
     }).join('');
     var bindings = (kb.employee_bindings || []).map(renderBindingTag).join('');
+    var pct = Math.min(100, (kb.document_count || 0) * 10);
     return (
       '<div class="aiteam-kb-card">' +
       '<h3 class="aiteam-kb-card__title">' + (kb.name || '—') + '</h3>' +
@@ -57,6 +58,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       (docItems ? '<div class="aiteam-kb-card__doc-list">' + docItems + '</div>' : '') +
       (bindings ? '<div class="aiteam-kb-card__bindings">' + bindings + '</div>' : '') +
+      '<div class="aiteam-kb-card__bar"><div class="aiteam-kb-card__bar-fill" style="width:' + pct + '%"></div></div>' +
       '</div>'
     );
   }
@@ -147,6 +149,16 @@ window.aiteam = window.aiteam || {};
     var searchHtml = renderSearchForm(kbList);
     var bindHtml = renderBindingForm(kbList, employees);
 
+    var kbCount = kbList.length;
+    var docTotal = kbList.reduce(function (s, kb) { return s + (kb.document_count || 0); }, 0);
+    var statsHtml =
+      '<div class="aiteam-kb-stats">' +
+      '<div class="aiteam-kb-stat"><div class="aiteam-kb-stat__val" style="color:var(--ait-brand)">' + kbCount + '</div><div class="aiteam-kb-stat__label">知识库数量</div></div>' +
+      '<div class="aiteam-kb-stat"><div class="aiteam-kb-stat__val" style="color:var(--ait-green)">' + docTotal + '</div><div class="aiteam-kb-stat__label">文档总数</div></div>' +
+      '<div class="aiteam-kb-stat"><div class="aiteam-kb-stat__val" style="color:#bc8cff">' + (docTotal ? Math.max(1, Math.round(docTotal * 12)) : 0) + '</div><div class="aiteam-kb-stat__label">向量分片(估)</div></div>' +
+      '<div class="aiteam-kb-stat"><div class="aiteam-kb-stat__val" style="color:var(--ait-busy)">' + kbCount + '</div><div class="aiteam-kb-stat__label">活跃库</div></div>' +
+      '</div>';
+
     container.__aiteamKnowledgeKbList = kbList || [];
     container.__aiteamKnowledgeEmployees = employees || [];
     container.innerHTML =
@@ -154,6 +166,7 @@ window.aiteam = window.aiteam || {};
       '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
       '<h2 class="aiteam-shell__panel-title">知识库</h2>' +
       '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
+      statsHtml +
       '<div class="aiteam-kb-grid">' + cards + '</div>' +
       uploadHtml +
       searchHtml +
@@ -456,4 +469,6 @@ window.aiteam = window.aiteam || {};
     },
     __bindRetryButtons: bindRetryButtons,
   };
+
+  ns.pages.knowledge._renderInto = renderKnowledgeInto;
 }(window.aiteam));
