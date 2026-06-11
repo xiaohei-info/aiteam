@@ -136,14 +136,10 @@ window.aiteam = window.aiteam || {};
 
   function renderSeat(seat, selected) {
     var badgeClass = seatPresenceState(seat);
-    var cursorVal = seatEventCursor(seat);
     var cursorUrl = seatEventsUrl(seat);
-    var cursorHtml = '';
-    if (cursorVal != null) {
-      cursorHtml = cursorUrl
-        ? '<div class="aiteam-office__task-detail"><a href="' + escapeHtml(cursorUrl) + '">cursor #' + escapeHtml(String(cursorVal)) + '</a></div>'
-        : '<div class="aiteam-office__task-detail">cursor #' + escapeHtml(String(cursorVal)) + '</div>';
-    }
+    var cursorHtml = cursorUrl
+      ? '<div class="aiteam-office__task-detail"><a href="' + escapeHtml(cursorUrl) + '">查看执行记录</a></div>'
+      : '';
     return '' +
       '<button type="button" class="aiteam-office__seat' + (selected ? ' is-selected' : '') + '" data-office-seat-select="' + escapeHtml(seat.employee_id || '') + '">' +
       '<div class="aiteam-office__seat-header">' +
@@ -239,15 +235,7 @@ window.aiteam = window.aiteam || {};
   function renderTask(item) {
     var progress = Math.max(0, Math.min(100, Number(item.progress) || 0));
     var statusClass = String(item.status || 'pending').toLowerCase();
-    var cursorVal = item.latest_event_cursor;
-    var cursorHtml = '';
-    if (cursorVal != null && item.events_url) {
-      cursorHtml = '<a class="aiteam-office__task-progress" href="' + escapeHtml(item.events_url) + '">#' + escapeHtml(String(cursorVal)) + '</a>';
-    } else if (cursorVal != null) {
-      cursorHtml = '<span class="aiteam-office__task-progress">#' + escapeHtml(String(cursorVal)) + '</span>';
-    } else {
-      cursorHtml = '<span class="aiteam-office__task-progress">' + escapeHtml(String(progress)) + '%</span>';
-    }
+    var cursorHtml = '<span class="aiteam-office__task-progress">' + escapeHtml(String(progress)) + '%</span>';
     return '' +
       '<a class="aiteam-office__task-item" href="' + escapeHtml(taskHref(item)) + '">' +
       '<div class="aiteam-office__task-main">' +
@@ -312,15 +300,11 @@ window.aiteam = window.aiteam || {};
   }
 
   function renderSeamMeta(sceneData, feedData) {
-    var sceneCursor = sceneData && sceneData.generated_cursor != null ? sceneData.generated_cursor : '—';
-    var feedCursor = feedData && feedData.generated_cursor != null ? feedData.generated_cursor : '—';
     var refreshMs = (feedData && feedData.refresh_hint_ms) || (sceneData && sceneData.refresh_hint_ms) || 0;
     var refreshSec = refreshMs ? (refreshMs / 1000).toFixed(1) : '—';
     return '' +
       '<div class="aiteam-office-seam-meta">' +
-      '<span class="aiteam-office-seam-meta__item">场景游标: ' + escapeHtml(String(sceneCursor)) + '</span>' +
-      '<span class="aiteam-office-seam-meta__item">活动游标: ' + escapeHtml(String(feedCursor)) + '</span>' +
-      '<span class="aiteam-office-seam-meta__item">刷新间隔: ' + escapeHtml(String(refreshSec)) + 's</span>' +
+      '<span class="aiteam-office-seam-meta__item">实时刷新: 每 ' + escapeHtml(String(refreshSec)) + 's</span>' +
       '</div>';
   }
 
@@ -369,7 +353,7 @@ window.aiteam = window.aiteam || {};
       '<div>' +
       '<p class="aiteam-shell__panel-kicker">企业前台 · 办公室动态</p>' +
       '<h2 class="aiteam-shell__panel-title">企业办公室</h2>' +
-      '<p class="aiteam-shell__panel-body">等距办公室画布、任务队列与实时状态统一映射到 Team Panel 办公视图聚合接口。</p>' +
+      '<p class="aiteam-shell__panel-body">实时查看数字员工的工作状态、任务队列与团队动态。</p>' +
       '</div>' +
       '<div class="aiteam-office__toolbar-actions">' +
       '<div class="aiteam-office__badge">在线 ' + escapeHtml(String(summary.online_employee_count || 0)) + '</div>' +
@@ -413,6 +397,12 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '</div>' +
       '<aside class="aiteam-office__sidebar">' +
+      '<div class="aiteam-office__sidebar-card">' +
+      '<div class="aiteam-office__sidebar-title">团队工位</div>' +
+      '<div class="aiteam-office__seat-list">' + seats.map(function (seat) {
+        return renderSeat(seat, selectedSeat && String(selectedSeat.employee_id || '') === String(seat.employee_id || ''));
+      }).join('') + '</div>' +
+      '</div>' +
       '<div class="aiteam-office__sidebar-card">' +
       renderSeatDetail(selectedSeat) +
       '<div class="aiteam-detail-section">' +

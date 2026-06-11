@@ -95,7 +95,7 @@ def test_page_shell_defines_match_and_init():
     assert 'matchPath: function' in source
     assert 'init: function' in source
     assert "SECTION_PAGES" in source
-    assert "aiteam-shell__link" in source
+    assert "aiteam-rail__item" in source
 
 
 def test_boot_js_has_aiteam_early_exit():
@@ -129,7 +129,7 @@ def test_index_html_loads_aiteam_dependencies_before_page_shell() -> None:
     [
         ('admin', '/admin', '员工', '企业后台'),
         ('system', '/system', '企业', '系统后台'),
-        ('app', '/app', '工作台', '工作台'),
+        ('app', '/app', '消息中心', '工作台'),
     ],
 )
 def test_page_shell_init_executes_without_missing_global_helpers(route, pathname, expected_nav_label, expected_title):

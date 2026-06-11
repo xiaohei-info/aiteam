@@ -414,7 +414,7 @@ def test_org_page_renders_success_empty_permission_and_error_states() -> None:
     assert '+ 新建部门' in result['success']
     assert '状态图例' in result['success']
     assert '在线 / 离线 / 繁忙' in result['success']
-    assert '拖拽调整层级' in result['success']
+    assert '归属调整' in result['success']
     assert '部门详情' in result['success']
     assert '数字员工' in result['success']
     assert '暂无组织信息' in result['empty']

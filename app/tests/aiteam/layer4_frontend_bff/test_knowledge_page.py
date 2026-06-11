@@ -202,12 +202,16 @@ function makeElement(initial) {{
 }}
 const elements = {{
   'kb-upload-select': makeElement({{ value: 'kb_sales' }}),
-  'kb-upload-file-name': makeElement({{ value: 'faq.pdf' }}),
-  'kb-upload-mime-type': makeElement({{ value: 'application/pdf' }}),
-  'kb-upload-size': makeElement({{ value: '4096' }}),
+  'kb-upload-file': makeElement({{ files: [{{ name: 'faq.pdf', type: 'application/pdf', size: 4096 }}] }}),
   'kb-upload-display-name': makeElement({{ value: 'FAQ 文档' }}),
   'kb-upload-submit': makeElement(),
   'kb-upload-feedback': makeElement(),
+}};
+global.FileReader = class {{
+  readAsText(file) {{
+    this.result = 'FILE CONTENT';
+    setImmediate(() => {{ if (this.onload) this.onload(); }});
+  }}
 }};
 global.Headers = class Headers {{
   constructor(init) {{
@@ -725,7 +729,7 @@ def test_knowledge_module_renders_cards_and_upload_form() -> None:
     assert "Alice" in result["html"]
     assert "上传文档" in result["html"]
     assert "kb-upload-submit" in result["html"]
-    assert "kb-upload-file-name" in result["html"]
+    assert "kb-upload-file" in result["html"]
     assert "知识查询" in result["html"]
     assert "kb-search-submit" in result["html"]
 
@@ -760,6 +764,7 @@ def test_knowledge_module_uploads_asset_then_posts_document() -> None:
                 "name": "faq.pdf",
                 "mime_type": "application/pdf",
                 "size": 4096,
+                "content_text": "FILE CONTENT",
             },
         },
         {
@@ -880,6 +885,7 @@ def test_knowledge_module_shows_upload_error_before_document_post() -> None:
                 "name": "faq.pdf",
                 "mime_type": "application/pdf",
                 "size": 4096,
+                "content_text": "FILE CONTENT",
             },
         }
     ]

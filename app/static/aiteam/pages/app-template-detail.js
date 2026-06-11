@@ -168,7 +168,7 @@ window.aiteam = window.aiteam || {};
 
   function renderCapabilitySection(detail) {
     return '<section class="aiteam-template-detail__section">' +
-      '<div class="aiteam-template-detail__section-head"><h3>能力标签</h3><span>与 P03 列表卡片保持同一模板标签口径</span></div>' +
+      '<div class="aiteam-template-detail__section-head"><h3>能力标签</h3><span>该专家擅长的领域与技能</span></div>' +
       renderTagRow(tagsList(detail)) +
       '</section>';
   }
@@ -337,14 +337,14 @@ window.aiteam = window.aiteam || {};
       '<header class="aiteam-template-detail__header">' +
       '<div class="aiteam-template-detail__header-main">' +
       '<div class="aiteam-template-detail__avatar">' + avatar + '</div>' +
-      '<div class="aiteam-template-detail__identity"><p class="aiteam-page__eyebrow">P04 · 专家详情</p><h2>' + escapeHtml(detail.name || detail.template_id || '模板详情') + '</h2><p>' + escapeHtml(statusText) + '</p></div>' +
+      '<div class="aiteam-template-detail__identity"><p class="aiteam-page__eyebrow">专家详情</p><h2>' + escapeHtml(detail.name || detail.template_id || '模板详情') + '</h2><p>' + escapeHtml(statusText) + '</p></div>' +
       '</div>' +
       '<button class="aiteam-template-detail__close" type="button" aria-label="关闭" data-template-detail-close>✕</button>' +
       '</header>' +
       '<div class="aiteam-template-detail__tabs">' + tabsHtml + '</div>' +
       '<div class="aiteam-template-detail__body">' + bodyHtml + '</div>' +
       '<footer class="aiteam-template-detail__footer">' +
-      '<div class="aiteam-template-detail__footer-copy"><strong>招募前确认</strong><p>模板数据与 Team Panel 详情 DTO 对齐，招募后可在企业后台继续调整技能、知识和记忆策略。</p></div>' +
+      '<div class="aiteam-template-detail__footer-copy"><strong>招募前确认</strong><p>招募后可在企业后台继续调整该员工的技能、知识和记忆策略。</p></div>' +
       '<div class="aiteam-template-detail__footer-actions"><button class="aiteam-button" type="button" data-template-detail-recruit' + ((state.recruited || state.recruiting) ? ' disabled' : '') + '>' + escapeHtml(buttonLabel) + '</button><button class="aiteam-button aiteam-button--ghost" type="button" data-template-detail-dismiss-action>稍后再说</button></div>' +
       '<div class="aiteam-inline-note" data-template-detail-feedback>' + escapeHtml(state.feedback || '') + '</div>' +
       recruitedActions +

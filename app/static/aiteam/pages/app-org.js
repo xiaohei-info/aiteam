@@ -221,7 +221,7 @@ window.aiteam = window.aiteam || {};
     return [
       '<div class="aiteam-card aiteam-card--flat">',
       '<div class="aiteam-card__row"><strong>状态图例</strong><span class="aiteam-inline-note">在线 / 离线 / 繁忙</span></div>',
-      '<div class="aiteam-card__meta"><span>在线 / 离线 / 繁忙</span><span>拖拽调整层级或使用下方等价归属调整控件</span></div>',
+      '<div class="aiteam-card__meta"><span>在线 / 离线 / 繁忙</span><span>可在下方「归属调整」中调整员工所属部门</span></div>',
       '</div>'
     ].join('');
   }
@@ -245,27 +245,37 @@ window.aiteam = window.aiteam || {};
     ].join('');
   }
 
-  function renderOrgNode(name, role, glyph, rootClass) {
+  function renderOrgNode(name, role, glyph, rootClass, presence) {
+    var presenceValue = firstString(presence).toLowerCase();
+    var dot = presenceValue
+      ? '<span class="aiteam-org__node-dot is-' + escapeHtml(presenceValue) + '" title="' + escapeHtml(presenceLabel(presence)) + '"></span>'
+      : '';
     return '<div class="aiteam-org__node' + (rootClass ? ' is-root' : '') + '">' +
-      '<div class="aiteam-org__node-avatar">' + escapeHtml(glyph || '🤖') + '</div>' +
+      '<div class="aiteam-org__node-avatar">' + escapeHtml(glyph || '🤖') + dot + '</div>' +
       '<div><div class="aiteam-org__node-name">' + escapeHtml(name) + '</div>' +
       '<div class="aiteam-org__node-role">' + escapeHtml(role || '') + '</div></div></div>';
+  }
+
+  // 部门列递归渲染：部门节点 → 成员一层 → 子部门一层，保证多级组织完整可见。
+  function renderDeptColumn(dept) {
+    var name = getDepartmentName(dept);
+    var members = getDepartmentMembers(dept);
+    var children = getDepartmentChildren(dept);
+    var memberHtml = members.map(function (m) {
+      return renderOrgNode(getMemberName(m), getMemberRole(m) || presenceLabel(getPresence(m)), '🧑‍💼', false, getPresence(m));
+    }).join('');
+    var childHtml = children.map(renderDeptColumn).join('');
+    return '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">' +
+      renderOrgNode(name, members.length + ' 位成员', '🗂️', false) +
+      (memberHtml ? '<div class="aiteam-org__line-v"></div><div class="aiteam-org__level">' + memberHtml + '</div>' : '') +
+      (childHtml ? '<div class="aiteam-org__line-v"></div><div class="aiteam-org__level">' + childHtml + '</div>' : '') +
+      '</div>';
   }
 
   function renderOrgChart(departments) {
     var rootHtml = '<div class="aiteam-org__level">' + renderOrgNode('企业团队', '组织根节点', '🏢', true) + '</div>' +
       '<div class="aiteam-org__line-v"></div>';
-    var deptNodes = departments.map(function (dept) {
-      var name = getDepartmentName(dept);
-      var members = getDepartmentMembers(dept);
-      var memberHtml = members.map(function (m) {
-        return renderOrgNode(getMemberName(m), getMemberRole(m) || presenceLabel(getPresence(m)), '🧑‍💼', false);
-      }).join('');
-      return '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">' +
-        renderOrgNode(name, members.length + ' 位成员', '🗂️', false) +
-        (memberHtml ? '<div class="aiteam-org__line-v"></div><div class="aiteam-org__level">' + memberHtml + '</div>' : '') +
-        '</div>';
-    }).join('');
+    var deptNodes = departments.map(renderDeptColumn).join('');
     return '<div class="aiteam-org__chart">' + rootHtml + '<div class="aiteam-org__level">' + deptNodes + '</div></div>';
   }
 
@@ -293,7 +303,7 @@ window.aiteam = window.aiteam || {};
       return '';
     }
     return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>归属调整</strong>' +
-      '<span class="aiteam-inline-note">PATCH 等价交互</span></div>' + rows + '</div>';
+      '<span class="aiteam-inline-note">调整员工所属部门</span></div>' + rows + '</div>';
   }
 
   function renderOrg(main, payload) {
@@ -311,11 +321,11 @@ window.aiteam = window.aiteam || {};
       '<section class="aiteam-shell__panel aiteam-org">',
       '<p class="aiteam-shell__panel-kicker">组织架构</p>',
       '<div class="aiteam-panel__header"><h2 class="aiteam-shell__panel-title">组织架构</h2><button type="button" class="aiteam-btn aiteam-btn--secondary" disabled>+ 新建部门</button></div>',
-      '<p class="aiteam-shell__panel-body">查看部门树、数字员工归属与在线状态；当前共享契约已支持读取组织树与等价归属调整，新增部门/右键治理仍保留为显式降级提示。</p>',
+      '<p class="aiteam-shell__panel-body">查看团队结构、数字员工归属与在线状态，可直接调整员工所属部门。</p>',
       '<div class="aiteam-shell__meta">',
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">部门数量</span><span class="aiteam-shell__meta-value">' + totalDepartments + '</span></div>',
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">成员可见数</span><span class="aiteam-shell__meta-value">' + totalMembers + '</span></div>',
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽调整层级</span><span class="aiteam-shell__meta-value">当前以 PATCH 等价交互承接</span></div>',
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">归属调整</span><span class="aiteam-shell__meta-value">可直接调整员工所属部门</span></div>',
       '</div>',
       '<div class="aiteam-grid aiteam-grid--chat">',
       '<section class="aiteam-panel">' + renderLegend() + renderOrgChart(departments) + '</section>',
@@ -350,7 +360,7 @@ window.aiteam = window.aiteam || {};
         return Promise.resolve();
       }
       if (!ns.api || typeof ns.api.getOrgTree !== 'function') {
-        renderState(main, '组织架构不可用', '当前页面缺少 Team Panel 组织接口客户端。', 'error');
+        renderState(main, '组织架构不可用', '组织数据加载失败，请刷新重试。', 'error');
         return Promise.resolve();
       }
       return loadOrg(main);

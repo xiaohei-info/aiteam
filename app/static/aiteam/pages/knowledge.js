@@ -165,7 +165,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">企业前台</p>' +
       '<h2 class="aiteam-shell__panel-title">知识库</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 /api/team/knowledge-bases 消费企业知识库数据。</p>' +
+      '<p class="aiteam-shell__panel-body">AI 智能体的专属知识仓库，支持向量检索与增量更新。</p>' +
       statsHtml +
       '<div class="aiteam-kb-grid">' + cards + '</div>' +
       uploadHtml +

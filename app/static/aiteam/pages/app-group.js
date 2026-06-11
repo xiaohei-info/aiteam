@@ -51,11 +51,11 @@ window.aiteam = window.aiteam || {};
 
   function routeModeDescription(mode) {
     var map = {
-      auto: '由 Team Panel 根据消息内容、@提及与成员能力决定单员工或多员工协作。',
+      auto: '由系统根据消息内容、@提及与成员能力，自动决定单员工执行或多员工协作。',
       single_agent: '本轮消息会优先路由到单个数字员工，不展开任务树协作。',
       orchestration: '本轮消息会进入协作编排，由多个数字员工拆解任务并合并结果。',
     };
-    return map[String(mode || 'auto')] || '等待新的 route_decision。';
+    return map[String(mode || 'auto')] || '等待新的协作决策。';
   }
 
   function routeModeClass(mode) {
@@ -64,7 +64,7 @@ window.aiteam = window.aiteam || {};
   }
 
   function runtimeHandleLabel(runtimeHandle) {
-    if (!runtimeHandle || !runtimeHandle.kind) return '等待 run 句柄';
+    if (!runtimeHandle || !runtimeHandle.kind) return '等待本轮执行';
     if (runtimeHandle.kind === 'session') return '单员工会话';
     if (runtimeHandle.kind === 'kanban_task') return '协作根任务';
     return stringValue(runtimeHandle.kind, '运行句柄');
@@ -137,22 +137,19 @@ window.aiteam = window.aiteam || {};
 
   function timelineRow(event, state) {
     var payload = event.payload || {};
-    var actor = memberLabel(state.memberMap[event.employee_id]) || stringValue(event.employee_id, '系统');
+    var actor = memberLabel(state.memberMap[event.employee_id]) || stringValue(event.employee_id, '');
     var routeMode = payload.route_mode || (payload.route_decision && payload.route_decision.route_mode) || (state.conversation.latest_route_decision && state.conversation.latest_route_decision.route_mode) || 'auto';
-    var meta = [eventTypeLabel(event.event_type || 'timeline')];
-    if (event.event_cursor != null) meta.push('#' + String(event.event_cursor));
-    if (event.employee_id) meta.push(actor);
-    if (event.source_id) meta.push(String(event.source_id));
+    var meta = [];
+    if (actor) meta.push(actor);
     if (/^task_/.test(String(event.event_type || ''))) {
       meta.push(routeModeLabel(routeMode));
     }
     return '<div class="aiteam-timeline-row aiteam-timeline-row--' + escapeHtml(String(event.event_type || 'timeline')) + '">' +
       '<div class="aiteam-timeline-row__top">' +
       '<span class="aiteam-timeline-row__pill aiteam-timeline-row__pill--' + routeModeClass(routeMode) + '">' + escapeHtml(eventTypeLabel(event.event_type || 'timeline')) + '</span>' +
-      '<span class="aiteam-timeline-row__cursor">cursor ' + escapeHtml(String(event.event_cursor != null ? event.event_cursor : '-')) + '</span>' +
       '</div>' +
       '<strong>' + escapeHtml(eventPreview(event, '已记录')) + '</strong>' +
-      '<div class="aiteam-timeline-row__meta">' + escapeHtml(meta.join(' · ')) + '</div>' +
+      (meta.length ? '<div class="aiteam-timeline-row__meta">' + escapeHtml(meta.join(' · ')) + '</div>' : '') +
       '</div>';
   }
 
@@ -168,7 +165,7 @@ window.aiteam = window.aiteam || {};
     var depth = Number(task.depth) || 0;
     var indent = Math.max(0, Math.min(depth, 5)) * 18;
     var childCount = Number(task.childCount) || 0;
-    var runtimeText = task.runtimeTaskId ? '<span class="aiteam-task-tree__runtime">runtime: ' + escapeHtml(task.runtimeTaskId) + '</span>' : '';
+    var runtimeText = task.runtimeTaskId ? '<span class="aiteam-task-tree__runtime" data-runtime-task="' + escapeHtml(task.runtimeTaskId) + '"></span>' : '';
     var childText = childCount ? '<span class="aiteam-task-tree__children">子任务 ' + escapeHtml(String(childCount)) + '</span>' : '';
     return '<li class="aiteam-task-tree__item aiteam-task-tree__item--' + routeModeClass(task.routeMode) + '" style="--task-depth:' + depth + ';margin-left:' + indent + 'px">' +
       '<div class="aiteam-task-tree__rail"></div>' +
@@ -181,29 +178,28 @@ window.aiteam = window.aiteam || {};
       '</li>';
   }
 
+  // 成员栏 — 紧凑行：头像 + 名称/角色 + 状态点 + @提及按钮。
   function renderMemberCard(member) {
     var handle = mentionHandle(member);
-    var extra = member.is_human ? '会话成员' : '可被 @提及';
-    return '<article class="aiteam-member" data-member-id="' + escapeHtml(member.member_id || member.employee_id || '') + '">' +
-      '<div class="aiteam-member__header">' +
-      '<div><strong>' + escapeHtml(memberLabel(member)) + '</strong><span>' + escapeHtml(memberRole(member)) + '</span></div>' +
-      badge(memberStatus(member)) +
-      '</div>' +
-      '<div class="aiteam-member__meta">' +
-      '<span>' + escapeHtml(handle) + '</span>' +
-      '<span>' + escapeHtml(extra) + '</span>' +
-      '</div>' +
-      '<div class="aiteam-action-row">' +
-      '<button class="aiteam-filter-chip" type="button" data-mention="' + escapeHtml(handle) + '">插入提及</button>' +
-      (member.employee_id ? '<a class="aiteam-card-link aiteam-card-link--inline" href="/admin/employees/' + encodeURIComponent(member.employee_id) + '"><span class="aiteam-card-link__label">成员详情</span><span class="aiteam-card-link__note">后台配置入口</span></a>' : '') +
-      '</div>' +
-      '</article>';
+    var status = memberStatus(member);
+    var dotClass = (status === 'busy' || status === 'running') ? 'is-busy' : ((status === 'offline' || status === 'paused') ? 'is-offline' : 'is-online');
+    var initial = memberLabel(member).slice(0, 1) || '?';
+    var detailLink = member.employee_id
+      ? '<a class="aiteam-group-member__link" href="/admin/employees/' + encodeURIComponent(member.employee_id) + '" title="成员详情">⚙</a>'
+      : '';
+    return '<div class="aiteam-group-member" data-member-id="' + escapeHtml(member.member_id || member.employee_id || '') + '">' +
+      '<div class="aiteam-chat__agent-avatar">' + escapeHtml(initial) + '<span class="aiteam-chat__agent-dot ' + dotClass + '"></span></div>' +
+      '<div class="aiteam-group-member__info"><div class="aiteam-group-member__name">' + escapeHtml(memberLabel(member)) + '</div>' +
+      '<div class="aiteam-group-member__role">' + escapeHtml(memberRole(member)) + '</div></div>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-mention="' + escapeHtml(handle) + '" data-mention-id="' + escapeHtml(stringValue(member.employee_id || member.member_ref_id || member.member_id, '')) + '" title="插入提及">@</button>' +
+      detailLink +
+      '</div>';
   }
 
   function renderGroupAvatarGrid(members) {
     var previewMembers = listValue(members).slice(0, 4);
     if (!previewMembers.length) {
-      return '<div class="aiteam-inline-empty">当前群聊 contract 没有返回可展示成员。</div>';
+      return '<div class="aiteam-inline-empty">暂无可展示成员</div>';
     }
     return '<div class="aiteam-group-avatar-grid" aria-label="群聊头像 2×2 宫格">' + previewMembers.map(function (member) {
       var initial = memberLabel(member).slice(0, 1) || '?';
@@ -225,7 +221,7 @@ window.aiteam = window.aiteam || {};
 
   function renderLatestDecision(decision, state) {
     if (!decision) {
-      return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>最近协作决策</strong>' + badge('暂无') + '</div><p class="aiteam-card__sub">还没有 route_decision，首条群聊消息提交后会出现协作方式与候选成员。</p></div>';
+      return '<div class="aiteam-card"><div class="aiteam-card__row"><strong>最近协作决策</strong>' + badge('暂无') + '</div><p class="aiteam-card__sub">发送首条群聊消息后，这里会显示协作方式与参与成员。</p></div>';
     }
     var targets = listValue(decision.candidate_employee_ids || decision.target_employee_ids).map(function (employeeId) {
       return memberLabel(state.memberMap[employeeId]) || employeeId;
@@ -313,6 +309,115 @@ window.aiteam = window.aiteam || {};
     };
   }
 
+  // ── 左侧数字员工/群组列表（与消息中心一致的渲染，群聊页独立加载时复用同一套 class） ──
+  var lastListSections = { pinned: [], groups: [], others: [] };
+
+  function presenceDotClass(status) {
+    var s = String(status || '').toLowerCase();
+    if (s === 'busy' || s === 'running' || s === 'streaming') return 'is-busy';
+    if (s === 'offline' || s === 'paused') return 'is-offline';
+    return 'is-online';
+  }
+
+  function renderListAgentItem(a, activeConversationId) {
+    var convId = a.conversation_id || '';
+    var active = convId && String(convId) === String(activeConversationId) ? ' is-active' : '';
+    var href = convId ? '/app/chat/' + encodeURIComponent(convId) : '/app/chat/' + encodeURIComponent(a.employee_id || '');
+    var unread = a.unread_count ? '<div class="aiteam-chat__agent-unread">' + escapeHtml(String(a.unread_count)) + '</div>' : '';
+    return '<a class="aiteam-chat__agent' + active + '" href="' + escapeHtml(href) + '" data-chat-agent="' + escapeHtml(a.employee_id || '') + '">' +
+      '<div class="aiteam-chat__agent-avatar" style="background:' + escapeHtml(a.avatar_bg || 'linear-gradient(135deg,#2563EB,#0EA5E9)') + '">' + escapeHtml(a.avatar || '🤖') +
+      '<span class="aiteam-chat__agent-dot ' + presenceDotClass(a.status) + '"></span></div>' +
+      '<div class="aiteam-chat__agent-info"><div class="aiteam-chat__agent-name">' + escapeHtml(a.display_name || a.employee_id || '智能体') + '</div>' +
+      '<div class="aiteam-chat__agent-role">' + escapeHtml(a.role_name || '数字员工') + '</div></div>' +
+      '<div class="aiteam-chat__agent-meta"><div class="aiteam-chat__agent-time">' + escapeHtml(a.time_label || '') + '</div>' + unread + '</div>' +
+      '</a>';
+  }
+
+  function renderListGroupItem(g, activeConversationId) {
+    var convId = g.conversation_id || '';
+    var active = convId && String(convId) === String(activeConversationId) ? ' is-active' : '';
+    var href = convId ? '/app/group/' + encodeURIComponent(convId) : '/app/group';
+    var unread = g.unread_count ? '<div class="aiteam-chat__agent-unread">' + escapeHtml(String(g.unread_count)) + '</div>' : '';
+    var role = (g.member_count != null ? (g.member_count + '位成员') : '协作组') + (g.running_count ? ' · ' + g.running_count + '个任务运行中' : '');
+    return '<a class="aiteam-chat__agent' + active + '" href="' + escapeHtml(href) + '" data-chat-group="' + escapeHtml(convId) + '">' +
+      '<div class="aiteam-chat__agent-avatar" style="background:' + escapeHtml(g.avatar_bg || 'linear-gradient(135deg,#F59E0B,#F0883E)') + '">' + escapeHtml(g.avatar || '👥') +
+      '<span class="aiteam-chat__agent-dot ' + presenceDotClass(g.status) + '"></span></div>' +
+      '<div class="aiteam-chat__agent-info"><div class="aiteam-chat__agent-name">' + escapeHtml(g.title || '协作组') + '</div>' +
+      '<div class="aiteam-chat__agent-role">' + escapeHtml(role) + '</div></div>' +
+      '<div class="aiteam-chat__agent-meta"><div class="aiteam-chat__agent-time">' + escapeHtml(g.time_label || '') + '</div>' + unread + '</div>' +
+      '</a>';
+  }
+
+  function renderListSections(sections, activeConversationId) {
+    sections = sections || {};
+    var pinned = sections.pinned || [];
+    var groups = sections.groups || [];
+    var others = sections.others || [];
+    if (!pinned.length && !groups.length && !others.length) {
+      return '<div class="aiteam-chat__agent-list"><div class="aiteam-inline-empty">暂无可用智能体</div></div>';
+    }
+    var html = '';
+    if (pinned.length) {
+      html += '<div class="aiteam-chat__group-label">📌 置顶</div>' + pinned.map(function (a) { return renderListAgentItem(a, activeConversationId); }).join('');
+    }
+    if (groups.length) {
+      html += '<div class="aiteam-chat__group-label">💼 工作群组</div>' + groups.map(function (g) { return renderListGroupItem(g, activeConversationId); }).join('');
+    }
+    if (others.length) {
+      html += '<div class="aiteam-chat__group-label">🤖 其他智能体</div>' + others.map(function (a) { return renderListAgentItem(a, activeConversationId); }).join('');
+    }
+    return '<div class="aiteam-chat__agent-list">' + html + '</div>';
+  }
+
+  function mapWorkbenchToListSections(data) {
+    data = data || {};
+    var employees = Array.isArray(data.employees) ? data.employees : [];
+    var rawGroups = Array.isArray(data.groups) ? data.groups : [];
+    var pinned = [];
+    var others = [];
+    employees.forEach(function (e) {
+      var agent = {
+        employee_id: e.employee_id,
+        display_name: e.display_name,
+        role_name: e.role_name,
+        status: e.presence || e.status,
+        conversation_id: e.conversation_id,
+        avatar: e.avatar || '🤖',
+        avatar_bg: e.avatar_bg,
+        unread_count: e.unread_count,
+        time_label: e.time_label,
+      };
+      if (e.pinned || e.is_starred) pinned.push(agent); else others.push(agent);
+    });
+    var groups = rawGroups.map(function (g) {
+      return {
+        conversation_id: g.conversation_id,
+        title: g.title,
+        member_count: g.member_count,
+        running_count: g.running_count,
+        status: g.presence || g.status,
+        avatar: g.avatar,
+        avatar_bg: g.avatar_bg,
+        unread_count: g.unread_count,
+        time_label: g.time_label,
+      };
+    });
+    return { pinned: pinned, groups: groups, others: others };
+  }
+
+  function bindListSearch(container) {
+    var search = container.querySelector && container.querySelector('[data-chat-agent-search]');
+    if (!search || typeof search.addEventListener !== 'function') return;
+    search.addEventListener('input', function () {
+      var query = String(search.value || '').toLowerCase();
+      Array.prototype.slice.call(container.querySelectorAll('.aiteam-chat__agent')).forEach(function (item) {
+        var nameEl = item.querySelector('.aiteam-chat__agent-name');
+        var name = nameEl ? String(nameEl.textContent || '').toLowerCase() : '';
+        item.style.display = name.indexOf(query) !== -1 ? '' : 'none';
+      });
+    });
+  }
+
   function renderGroupLauncher(container) {
     var launcherState = {
       title: '新建群聊',
@@ -345,10 +450,10 @@ window.aiteam = window.aiteam || {};
       container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
       '<div class="aiteam-page__hero">' +
       '<div>' +
-      '<p class="aiteam-page__eyebrow">P06 · 群聊协作</p>' +
       '<h2 class="aiteam-page__title">新建群聊</h2>' +
-      '<p class="aiteam-page__desc">创建群聊后即可进入群成员栏、@提及、协作时间线与任务树视图。</p>' +
+      '<p class="aiteam-page__desc">选择至少 2 位数字员工组建工作群组，群聊会出现在消息中心列表中。</p>' +
       '</div>' +
+      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/chat">返回消息中心</a></div>' +
       '</div>' +
       '<div class="aiteam-panel">' +
       '<div class="aiteam-panel__header"><h3>创建群聊</h3><span class="aiteam-inline-note" data-group-create-status>' + escapeHtml(launcherState.limitMessage || '填写标题与成员后创建') + '</span></div>' +
@@ -557,101 +662,89 @@ window.aiteam = window.aiteam || {};
       });
 
     var initialRunStatus = conversation.latest_run && conversation.latest_run.status;
-    var heroBadges = [
-      badge(conversation.display_state || 'idle'),
-      badge((conversation.member_count || members.length || 0) + ' 位成员'),
-      badge(routeModeLabel(conversation.default_route_hint || 'auto')),
-      badge(initialRunStatus || '暂无 run'),
-    ].join('');
+    var memberCount = conversation.member_count || members.length || 0;
+    var defaultStatus = memberCount + '位成员 · ' + routeModeLabel(conversation.default_route_hint || 'auto');
 
     container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
-      '<div class="aiteam-page__hero">' +
-      '<div>' +
-      '<p class="aiteam-page__eyebrow">P06 · 群聊协作</p>' +
-      '<h2 class="aiteam-page__title">' + escapeHtml(conversation.title || conversation.conversation_id || '群聊') + '</h2>' +
-      '<p class="aiteam-page__desc">群成员栏、@输入、协作时间线、任务树/协作气泡与群设置入口统一在同一页呈现；所有读取都基于 Team Panel group conversation / run timeline contract。</p>' +
+      '<div class="aiteam-chatwin">' +
+      // ── 左栏：数字员工 / 群组列表（与消息中心一致） ──
+      '<aside class="aiteam-chatwin__left">' +
+      '<div class="aiteam-chatwin__left-head"><span class="aiteam-chatwin__left-title">🤖 数字员工</span>' +
+      '<a class="aiteam-chatwin__add" href="/app/group" title="新建群聊">＋</a></div>' +
+      '<div class="aiteam-chatwin__search"><input type="search" placeholder="🔍 搜索智能体..." data-chat-agent-search></div>' +
+      renderListSections(lastListSections, conversation.conversation_id) +
+      '</aside>' +
+      // ── 中栏：群消息 ──
+      '<section class="aiteam-chatwin__main">' +
+      '<div class="aiteam-chatwin__header">' +
+      '<div class="aiteam-chatwin__havatar" style="background:linear-gradient(135deg,#F59E0B,#F0883E)">👥</div>' +
+      '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(conversation.title || conversation.conversation_id || '群聊') + '</div>' +
+      '<div class="aiteam-chatwin__hstatus" data-group-status>' + escapeHtml(defaultStatus) + '</div></div>' +
+      '<div class="aiteam-chatwin__hactions">' +
+      '<button class="aiteam-chatwin__tool" type="button" data-group-reconnect title="重新同步协作进度">↻</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-group-open-settings title="群设置">⚙️</button>' +
       '</div>' +
-      '<div class="aiteam-hero-actions">' + heroBadges +
-      '<a class="aiteam-button" href="/app/group">新建群聊</a>' +
-      '<button type="button" class="aiteam-button aiteam-button--ghost" data-group-open-settings>群设置</button>' +
-      '<a class="aiteam-button aiteam-button--ghost" href="/app/org">成员管理</a>' +
       '</div>' +
-      '</div>' +
-      '<div class="aiteam-grid aiteam-grid--chat aiteam-group-layout">' +
-      '<section class="aiteam-panel">' +
-      '<div class="aiteam-panel__header"><h3>会话区</h3><span class="aiteam-inline-note" data-group-status>加载群聊 contract...</span></div>' +
-      '<div class="aiteam-card aiteam-card--flat">' +
-      '<div class="aiteam-card__row"><strong>SSE 恢复状态</strong><span class="aiteam-inline-note" data-group-recovery-label>idle</span></div>' +
-      '<p class="aiteam-card__sub" data-group-recovery>实时流稳定后会在这里显示 reconnecting / catching-up / resolved / error。</p>' +
-      '</div>' +
-      '<div class="aiteam-chat-transcript" data-group-transcript></div>' +
-      '<div class="aiteam-panel aiteam-panel--nested">' +
-      '<div class="aiteam-panel__header"><h3>@ 提及与发送</h3><span class="aiteam-inline-note">sender_id / route_hint / message.text</span></div>' +
+      '<div class="aiteam-chat-transcript aiteam-chatwin__transcript" data-group-transcript></div>' +
+      '<div class="aiteam-chatwin__composer">' +
+      '<p class="aiteam-inline-note" data-group-recovery hidden></p>' +
       '<div class="aiteam-mention-strip" data-group-mention-strip></div>' +
-      '<div class="aiteam-route-feedback" data-group-route-feedback>' +
-      '<div class="aiteam-route-feedback__summary">' +
-      '<span class="aiteam-route-feedback__label">协作反馈</span>' +
-      '<strong data-group-route-mode>等待路由决策</strong>' +
+      '<form class="aiteam-chatwin__inputbox" data-group-form>' +
+      '<textarea data-group-input rows="2" placeholder="输入群聊任务，@提及可指定员工优先回复，Enter 发送..."></textarea>' +
+      '<div class="aiteam-chatwin__toolbar">' +
+      '<select class="aiteam-chatwin__route" data-group-route title="协作策略"><option value="auto">自动路由</option><option value="single_agent">单员工</option><option value="orchestration">多员工协作</option></select>' +
+      '<span class="aiteam-chatwin__model" data-group-mention-state hidden></span>' +
+      '<span class="aiteam-chatwin__spacer"></span>' +
+      '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
       '</div>' +
-      '<p class="aiteam-route-feedback__desc" data-group-route-desc>提交群消息后会显示本轮是单员工执行还是多员工协作，以及候选成员。</p>' +
+      '<input type="hidden" data-group-sender value="">' +
+      '</form>' +
+      '</div>' +
+      '</section>' +
+      // ── 右栏：群聊详情 ──
+      '<aside class="aiteam-chatwin__right aiteam-group-sidebar">' +
+      '<div class="aiteam-chatwin__right-head">群聊详情</div>' +
+      '<div class="aiteam-chatwin__right-body">' +
+      '<div class="aiteam-agent-detail__card">' +
+      renderGroupAvatarGrid(members) +
+      '<div class="aiteam-agent-detail__name">' + escapeHtml(conversation.title || conversation.conversation_id || '未命名群聊') + '</div>' +
+      '<div class="aiteam-agent-detail__role">👥 ' + escapeHtml(String(memberCount)) + ' 位成员 · ' + escapeHtml(routeModeLabel(conversation.default_route_hint || 'auto')) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-detail-section"><h3>协作反馈</h3>' +
+      '<div class="aiteam-route-feedback" data-group-route-feedback>' +
+      '<strong data-group-route-mode>等待路由决策</strong>' +
+      '<p class="aiteam-route-feedback__desc" data-group-route-desc>发送群消息后，这里会显示本轮由单员工执行还是多员工协作，以及参与成员。</p>' +
       '<div class="aiteam-route-feedback__chips" data-group-route-targets></div>' +
       '<div class="aiteam-route-feedback__chips" data-group-runtime-handle></div>' +
       '</div>' +
-      '<div class="aiteam-card aiteam-card--flat">' +
-      '<div class="aiteam-card__row"><strong>提及选择 / 协作状态</strong><span class="aiteam-inline-note" data-group-collab-state>display_state / run_status / cursor</span></div>' +
-      '<div class="aiteam-route-feedback__chips" data-group-mention-state></div>' +
+      '<div class="aiteam-route-feedback__chips" data-group-collab-state hidden></div>' +
       '</div>' +
-      '<form class="aiteam-chat-composer" data-group-form>' +
-      '<textarea data-group-input placeholder="输入群聊任务，可使用 @提及触发指定员工优先回复"></textarea>' +
-      '<div class="aiteam-group-controls">' +
-      '<label class="aiteam-group-field"><span>发送者 ID</span><input type="text" data-group-sender placeholder="填写当前会话成员 user_id / actor_id"></label>' +
-      '<label class="aiteam-group-field"><span>协作策略</span><select class="aiteam-select" data-group-route><option value="auto">自动路由</option><option value="single_agent">单员工</option><option value="orchestration">多员工协作</option></select></label>' +
-      '</div>' +
-      '<div class="aiteam-action-row">' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-group-reconnect>重新补拉</button>' +
-      '<button class="aiteam-button" type="submit">发送群聊消息</button>' +
-      '</div>' +
-      '<p class="aiteam-inline-note">当前 northbound contract 仍要求显式传入 sender_id；成员增删与解散群聊动作已通过 Team Panel northbound API 落地，这里可直接完成群管理操作。</p>' +
-      '</form>' +
-      '</div>' +
-      '<div class="aiteam-panel aiteam-panel--nested">' +
-      '<div class="aiteam-panel__header"><h3>协作时间线</h3><span class="aiteam-inline-note">routing_decided / task_* / result_merged</span></div>' +
-      '<div class="aiteam-timeline" data-group-timeline></div>' +
-      '</div>' +
-      '</section>' +
-      '<aside class="aiteam-panel aiteam-group-sidebar">' +
-      '<div class="aiteam-panel__header"><h3>群信息与成员栏</h3><a href="/app/workbench">返回工作台</a></div>' +
-      '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>群聊头像</h3><span class="aiteam-inline-note">前 4 名成员 · 2×2 宫格</span></div>' + renderGroupAvatarGrid(members) + '</div>' +
-      '<div class="aiteam-detail-kv"><span>群聊名称</span><strong>' + escapeHtml(conversation.title || conversation.conversation_id || '未命名群聊') + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>群聊 ID</span><strong>' + escapeHtml(conversation.conversation_id || '未知') + '</strong></div>' +
+      '<div class="aiteam-detail-section"><h3>任务进度</h3><ul class="aiteam-task-tree" data-group-task-tree></ul></div>' +
+      '<div class="aiteam-detail-section"><h3>协作时间线</h3><div class="aiteam-timeline" data-group-timeline></div></div>' +
+      '<div class="aiteam-detail-section"><h3>成员（' + escapeHtml(String(memberCount)) + '）</h3><div class="aiteam-member-list" data-group-members></div></div>' +
+      '<div class="aiteam-detail-section" data-group-settings-card><h3>群设置</h3>' +
       '<div class="aiteam-detail-kv"><span>创建人</span><strong>' + escapeHtml(stringValue(conversation.owner_user_id, '未记录')) + '</strong></div>' +
       '<div class="aiteam-detail-kv"><span>创建时间</span><strong>' + escapeHtml(stringValue(conversation.created_at, '未记录')) + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>默认协作策略</span><strong>' + escapeHtml(routeModeLabel(conversation.default_route_hint || 'auto')) + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>最近运行状态</span><strong>' + escapeHtml(initialRunStatus || '暂无') + '</strong></div>' +
-      '<div class="aiteam-panel aiteam-panel--nested" data-group-settings-card>' +
-      '<div class="aiteam-panel__header"><h3>群设置</h3><span class="aiteam-inline-note">当前可见 contract</span></div>' +
       renderLatestDecision(conversation.latest_route_decision, state) +
       renderLatestRunSummary(conversation.latest_run_summary) +
-      '<div class="aiteam-stack">' +
-      '<a class="aiteam-card-link" href="/app/org"><span class="aiteam-card-link__label">成员管理入口</span><span class="aiteam-card-link__note">通过组织架构页查看归属与调整团队结构</span></a>' +
-      '<a class="aiteam-card-link" href="/admin/employees"><span class="aiteam-card-link__label">群设置配套入口</span><span class="aiteam-card-link__note">前往员工后台核对角色、模型与技能配置</span></a>' +
-      '</div>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><label>待加入员工 ID<br><input class="aiteam-input" type="text" data-group-add-member-input placeholder="emp_planner"></label></div>' +
-      '<div class="aiteam-shell__meta-card"><label>选择移除成员<br><select class="aiteam-input" data-group-remove-member-select>' + removableMemberOptions(members) + '</select></label></div>' +
-      '</div>' +
+      '<div class="aiteam-group-manage">' +
+      '<label class="aiteam-group-field"><span>添加员工</span><input class="aiteam-input" type="text" data-group-add-member-input placeholder="输入员工 ID"></label>' +
+      '<label class="aiteam-group-field"><span>移除成员</span><select class="aiteam-input" data-group-remove-member-select>' + removableMemberOptions(members) + '</select></label>' +
       '<div class="aiteam-route-feedback__chips">' +
       '<button class="aiteam-filter-chip" type="button" data-group-add-member>新增员工</button>' +
       '<button class="aiteam-filter-chip" type="button" data-group-remove-member>踢出员工</button>' +
       '<button class="aiteam-filter-chip" type="button" data-group-archive>解散群聊</button>' +
       '</div>' +
-      '<p class="aiteam-inline-note">成员管理动作现已通过 Team Panel northbound API 落地；若需要批量调整，仍可配合组织架构页与员工后台使用。</p>' +
       '</div>' +
-      '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>成员栏</h3><span class="aiteam-inline-note">' + escapeHtml(String(conversation.member_count || members.length || 0)) + ' 名成员</span></div><div class="aiteam-member-list" data-group-members></div></div>' +
-      '<div class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>任务树 / 协作区</h3><span class="aiteam-inline-note">显示父子任务、执行成员与 runtime task 句柄</span></div><ul class="aiteam-task-tree" data-group-task-tree></ul></div>' +
+      '<div class="aiteam-stack">' +
+      '<a class="aiteam-card-link" href="/app/org"><span class="aiteam-card-link__label">成员管理</span><span class="aiteam-card-link__note">查看组织归属与团队结构</span></a>' +
+      '</div>' +
+      '</div>' +
+      '</div>' +
       '</aside>' +
       '</div>' +
       '</section>';
+    bindListSearch(container);
 
     var transcriptEl = container.querySelector('[data-group-transcript]');
     var timelineEl = container.querySelector('[data-group-timeline]');
@@ -669,7 +762,6 @@ window.aiteam = window.aiteam || {};
     var runtimeHandleEl = container.querySelector('[data-group-runtime-handle]');
     var mentionStateEl = container.querySelector('[data-group-mention-state]');
     var collabStateEl = container.querySelector('[data-group-collab-state]');
-    var recoveryLabelEl = container.querySelector('[data-group-recovery-label]');
     var recoveryEl = container.querySelector('[data-group-recovery]');
 
     if (routeSelect) {
@@ -680,16 +772,18 @@ window.aiteam = window.aiteam || {};
     }
 
     function setStatus(text) {
-      if (statusEl) statusEl.textContent = text || '';
+      if (statusEl) statusEl.textContent = text || defaultStatus;
     }
 
+    // 恢复状态只在连接异常 / 补拉中时给用户一行提示，稳定后自动隐藏。
     function setRecoveryStatus(status, message, error) {
       state.recoveryStatus = stringValue(status, 'idle');
       state.recoveryMessage = stringValue(message, '');
       state.recoveryError = stringValue(error, '');
-      if (recoveryLabelEl) recoveryLabelEl.textContent = state.recoveryStatus;
       if (recoveryEl) {
-        recoveryEl.textContent = state.recoveryError || state.recoveryMessage || '实时流稳定后会在这里显示 reconnecting / catching-up / resolved / error。';
+        var active = state.recoveryStatus === 'reconnecting' || state.recoveryStatus === 'catching-up' || state.recoveryStatus === 'connecting' || state.recoveryStatus === 'error';
+        recoveryEl.textContent = state.recoveryError || state.recoveryMessage || '';
+        recoveryEl.hidden = !active || !(state.recoveryError || state.recoveryMessage);
       }
     }
 
@@ -750,17 +844,27 @@ window.aiteam = window.aiteam || {};
     }
 
     function updateCollaborationState() {
+      // 输入区工具栏：展示当前 @提及选择（提及选择 / 协作状态）。
       if (mentionStateEl) {
         var mentionHandles = selectedMentionHandles();
-        var chips = [badge(collaborationModeLabel(mentionHandles.length))];
-        if (mentionHandles.length) chips.push(badge('已选：' + mentionHandles.join('、')));
-        chips.push(badge('display_state：' + stringValue(state.conversation.display_state, 'idle')));
-        chips.push(badge('恢复：' + state.recoveryStatus));
-        mentionStateEl.innerHTML = chips.join('');
+        if (mentionHandles.length) {
+          mentionStateEl.textContent = collaborationModeLabel(mentionHandles.length) + ' · ' + mentionHandles.join('、');
+          mentionStateEl.hidden = false;
+        } else {
+          mentionStateEl.textContent = '';
+          mentionStateEl.hidden = true;
+        }
       }
+      // 右栏协作状态：仅在有运行时显示执行进度。
       if (collabStateEl) {
         var currentRunStatus = getLatestRunStatus();
-        collabStateEl.textContent = 'display_state：' + stringValue(state.conversation.display_state, 'idle') + ' · run：' + runStatusLabel(currentRunStatus || '暂无 run') + ' · cursor：' + String(state.cursor || 0);
+        if (currentRunStatus) {
+          collabStateEl.innerHTML = badge('执行状态：' + runStatusLabel(currentRunStatus));
+          collabStateEl.hidden = false;
+        } else {
+          collabStateEl.innerHTML = '';
+          collabStateEl.hidden = true;
+        }
       }
     }
 
@@ -768,14 +872,10 @@ window.aiteam = window.aiteam || {};
       state.runtimeHandle = runtimeHandle || state.runtimeHandle;
       if (!runtimeHandleEl) return;
       if (!state.runtimeHandle || !state.runtimeHandle.kind) {
-        runtimeHandleEl.innerHTML = '<span class="aiteam-inline-note">等待本轮 run 返回 runtime_handle。</span>';
+        runtimeHandleEl.innerHTML = '';
         return;
       }
-      var chips = [badge(runtimeHandleLabel(state.runtimeHandle))];
-      if (state.runtimeHandle.session_id) chips.push(badge('session_id: ' + state.runtimeHandle.session_id));
-      if (state.runtimeHandle.task_id) chips.push(badge('task_id: ' + state.runtimeHandle.task_id));
-      if (state.runtimeHandle.profile_name) chips.push(badge('profile: ' + state.runtimeHandle.profile_name));
-      runtimeHandleEl.innerHTML = chips.join('');
+      runtimeHandleEl.innerHTML = badge(runtimeHandleLabel(state.runtimeHandle));
     }
 
     function renderRouteFeedback(decision, sourceRouteHint) {
@@ -806,14 +906,14 @@ window.aiteam = window.aiteam || {};
 
     function renderTimeline() {
       if (timelineEl) {
-        timelineEl.innerHTML = state.timelineNodes.join('') || '<div class="aiteam-inline-empty">协作时间线会在 routing_decided 与 task_* 事件到达后出现。</div>';
+        timelineEl.innerHTML = state.timelineNodes.join('') || '<div class="aiteam-inline-empty">协作开始后，过程记录会在这里展示。</div>';
       }
     }
 
     function renderTaskTree() {
       if (!taskTreeEl) return;
       if (!state.taskOrder.length) {
-        taskTreeEl.innerHTML = '<li class="aiteam-task-tree__item aiteam-task-tree__item--is-auto"><div class="aiteam-task-tree__rail"></div><span class="aiteam-badge aiteam-badge--task">待命</span><div class="aiteam-task-tree__body"><strong>任务树已就绪</strong><span>task_created / task_started / task_completed 会在这里持续更新，单员工路径会保持轻量模式。</span></div></li>';
+        taskTreeEl.innerHTML = '<li class="aiteam-task-tree__item aiteam-task-tree__item--is-auto"><div class="aiteam-task-tree__rail"></div><span class="aiteam-badge aiteam-badge--task">待命</span><div class="aiteam-task-tree__body"><strong>暂无协作任务</strong><span>多员工协作开始后，任务创建、执行与完成进度会在这里持续更新。</span></div></li>';
         return;
       }
       taskTreeEl.innerHTML = state.taskOrder.map(function (taskId) {
@@ -826,7 +926,7 @@ window.aiteam = window.aiteam || {};
     function renderMembers() {
       if (!membersEl || !mentionStripEl) return;
       if (!state.members.length) {
-        membersEl.innerHTML = '<div class="aiteam-inline-empty">当前群聊 contract 没有返回成员列表。</div>';
+        membersEl.innerHTML = '<div class="aiteam-inline-empty">暂无群成员。</div>';
         mentionStripEl.innerHTML = '<span class="aiteam-inline-note">暂无可快捷提及成员</span>';
         return;
       }
@@ -972,10 +1072,10 @@ window.aiteam = window.aiteam || {};
     }
 
     function hydrateHistory(runId, cursor, reason) {
-      setRecoveryStatus('catching-up', reason || '正在补拉断流期间遗漏的协作事件…');
+      setRecoveryStatus('catching-up', reason || '正在同步协作进度…');
       return ns.api.getRunEvents(runId, cursor, 100).then(function (result) {
         if (!result.ok || !result.data || !Array.isArray(result.data.items)) {
-          setRecoveryStatus('error', '', result.error || '补拉失败，请稍后重试。');
+          setRecoveryStatus('error', '', result.error || '同步失败，请稍后重试。');
           return Promise.reject(new Error(result.error || 'catch-up failed'));
         }
         result.data.items.forEach(function (event) {
@@ -987,7 +1087,7 @@ window.aiteam = window.aiteam || {};
           state.conversation.latest_run.status = result.data.run_status;
         }
         if (Number(result.data.latest_event_cursor) > state.cursor) {
-          return hydrateHistory(runId, state.cursor, '检测到后端仍有新事件，继续 catch-up…');
+          return hydrateHistory(runId, state.cursor, '仍有新进展，继续同步…');
         }
         if (isTerminalRunStatus(result.data.run_status)) {
           setRecoveryStatus('resolved', '已补齐断流期间事件，当前 run 已结束。');
@@ -1002,15 +1102,15 @@ window.aiteam = window.aiteam || {};
     function handleTimelineStatus(signal) {
       var phase = stringValue(signal && signal.phase, 'idle');
       if (phase === 'connecting') {
-        setRecoveryStatus('connecting', '正在建立协作 SSE 连接…');
+        setRecoveryStatus('connecting', '正在连接协作进度…');
       } else if (phase === 'live') {
-        setRecoveryStatus('resolved', '实时协作流已恢复，不会重复补拉已消费事件。');
+        setRecoveryStatus('resolved', '实时协作已恢复。');
       } else if (phase === 'reconnecting') {
         setRecoveryStatus('reconnecting', '协作流已断开，正在自动重连…');
       } else if (phase === 'catching_up') {
-        setRecoveryStatus('catching-up', 'SSE 已断流，正在 catch-up 缺失事件…');
+        setRecoveryStatus('catching-up', '连接中断，正在补齐缺失的协作进度…');
       } else if (phase === 'error') {
-        setRecoveryStatus('error', '', (signal && signal.message) || '自动恢复失败，可手动重新补拉。');
+        setRecoveryStatus('error', '', (signal && signal.message) || '自动恢复失败，可点击 ↻ 重新同步。');
       }
       updateCollaborationState();
     }
@@ -1021,26 +1121,26 @@ window.aiteam = window.aiteam || {};
       state.reconnectCount += 1;
       ns.timeline.disconnect();
       state.cursor = Math.max(state.cursor, Number(cursor) || 0);
-      ns.timeline.setCurrentCursor(state.cursor);
-      setStatus(reason || '连接协作时间线中...');
-      return hydrateHistory(runId, state.cursor, reason || '正在补拉协作时间线…').then(function () {
+      setStatus(reason || '正在同步协作进度...');
+      return hydrateHistory(runId, state.cursor, reason || '正在同步协作进度…').then(function () {
         if (isTerminalRunStatus(getLatestRunStatus())) {
-          setStatus('已补齐终态 run 的事件，无需保持 SSE 实时连接。');
+          setStatus('本轮协作已结束。');
           return;
         }
-        ns.timeline.connect(runId, state.cursor, {
-          onEvent: function (event) {
-            handleTimelineEvent(event || {});
+        // 共享 timeline client 契约：connect(runId, cursor, onEvent, { onOpen, onReconnect })
+        ns.timeline.connect(runId, state.cursor, function (event) {
+          handleTimelineEvent(event || {});
+        }, {
+          onOpen: function () {
+            handleTimelineStatus({ phase: 'live' });
           },
-          onStatus: handleTimelineStatus,
-          onReconnect: function (info) {
-            return hydrateHistory(runId, Number(info && info.cursor) || state.cursor, 'SSE 断流，正在 catch-up 缺失事件…').then(function () {
-              return { cursor: state.cursor };
-            });
+          onReconnect: function (resumeCursor) {
+            handleTimelineStatus({ phase: 'catching_up' });
+            return hydrateHistory(runId, Number(resumeCursor) || state.cursor, '连接中断，正在补齐缺失的协作进度…').catch(function () {});
           },
         });
       }).catch(function (error) {
-        setStatus((error && error.message) || '协作时间线恢复失败，请重试。');
+        setStatus((error && error.message) || '协作进度同步失败，请重试。');
       });
     }
 
@@ -1061,25 +1161,40 @@ window.aiteam = window.aiteam || {};
     }
 
     var form = container.querySelector('[data-group-form]');
+    function resolveSenderId() {
+      // 发送者按「记忆值 → 隐藏字段 → 群创建人 → owner」兜底，用户无需手填。
+      return stringValue(state.senderId, '')
+        || (senderInput ? stringValue(senderInput.value, '') : '')
+        || stringValue(conversation.owner_user_id, '')
+        || 'owner';
+    }
     if (form && input && routeSelect) {
+      // Enter 直接发送，Shift+Enter 换行。
+      if (typeof input.addEventListener === 'function') {
+        input.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            if (typeof form.requestSubmit === 'function') {
+              form.requestSubmit();
+            } else if (typeof form.dispatchEvent === 'function' && typeof window.Event === 'function') {
+              form.dispatchEvent(new window.Event('submit', { cancelable: true }));
+            }
+          }
+        });
+      }
       form.addEventListener('submit', function (event) {
         event.preventDefault();
         var text = stringValue(input.value, '');
-        var senderId = senderInput ? stringValue(senderInput.value, '') : state.senderId;
+        var senderId = resolveSenderId();
         if (!text) return;
-        if (!senderId) {
-          setStatus('请先填写 sender_id（当前会话成员 user_id / actor_id）。');
-          if (senderInput) senderInput.focus();
-          return;
-        }
         var selectedHandles = selectedMentionHandles();
         rememberSenderId(senderId);
         state.pendingRouteHint = routeSelect.value;
         renderRouteFeedback(null, routeSelect.value);
         input.value = '';
-        state.transcriptNodes.push(messageBubble('user', '你', '<p>' + escapeHtml(text) + '</p><div class="aiteam-chip-row">' + badge(routeModeLabel(routeSelect.value)) + badge('sender_id: ' + senderId) + (selectedHandles.length ? badge('提及：' + selectedHandles.join('、')) : '') + '</div>'));
+        state.transcriptNodes.push(messageBubble('user', '你', '<p>' + escapeHtml(text) + '</p><div class="aiteam-chip-row">' + badge(routeModeLabel(routeSelect.value)) + (selectedHandles.length ? badge('提及：' + selectedHandles.join('、')) : '') + '</div>'));
         renderTranscript();
-        setStatus('群聊消息已提交，等待 route_decision...');
+        setStatus('消息已发送，正在分配员工...');
         ns.api.submitGroupMessage(state.conversationId, {
           sender_id: senderId,
           route_hint: routeSelect.value,
@@ -1114,14 +1229,14 @@ window.aiteam = window.aiteam || {};
             }
             renderRuntimeHandle(state.runtimeHandle);
             if (result.data.runtime_handle && result.data.runtime_handle.kind === 'session') {
-              setStatus('已命中单员工路径，等待 session 时间线结果。');
+              setStatus('本轮由单员工执行，等待回复...');
             } else if (result.data.runtime_handle && result.data.runtime_handle.kind === 'kanban_task') {
-              setStatus('已进入多员工协作，等待任务树展开。');
+              setStatus('本轮进入多员工协作，任务正在拆解...');
             }
           }
           state.selectedMentionIds = [];
           updateCollaborationState();
-          syncTimeline(result.data && result.data.run_id, state.cursor, '消息已提交，开始同步协作时间线...');
+          syncTimeline(result.data && result.data.run_id, state.cursor, '消息已发送，正在同步协作进度...');
         });
       });
     }
@@ -1130,10 +1245,10 @@ window.aiteam = window.aiteam || {};
     if (reconnectBtn) {
       reconnectBtn.addEventListener('click', function () {
         if (!state.runId) {
-          setStatus('当前没有可补拉的 run。');
+          setStatus('当前没有进行中的协作。');
           return;
         }
-        syncTimeline(state.runId, state.cursor, '正在执行 SSE 断流补拉...');
+        syncTimeline(state.runId, state.cursor, '正在重新同步协作进度...');
       });
     }
 
@@ -1238,12 +1353,12 @@ window.aiteam = window.aiteam || {};
     renderTranscript();
     renderTimeline();
     renderTaskTree();
-    setRecoveryStatus('idle', '实时流稳定后会在这里显示 reconnecting / catching-up / resolved / error。');
+    setRecoveryStatus('idle', '');
     updateCollaborationState();
-    setStatus('display_state：' + stringValue(conversation.display_state, 'idle'));
+    setStatus('');
 
     if (state.runId) {
-      syncTimeline(state.runId, state.cursor, '恢复最近一次协作 run 的时间线...');
+      syncTimeline(state.runId, state.cursor, '正在恢复最近一次协作进度...');
     }
   }
 
@@ -1256,13 +1371,24 @@ window.aiteam = window.aiteam || {};
         renderGroupLauncher(container);
         return;
       }
+      if (container.classList && container.classList.add) {
+        container.classList.add('aiteam-main--flush');
+      }
       ns.states.renderLoading(container, '加载群聊会话...');
       ns.api.getGroupConversation(conversationId).then(function (result) {
         if (!result.ok) {
           ns.states.handleApiResult(result, container, function () {});
           return;
         }
-        renderGroup(container, result.data || {});
+        var conv = result.data || {};
+        if (ns.api && typeof ns.api.getWorkbench === 'function') {
+          ns.api.getWorkbench().then(function (wb) {
+            lastListSections = mapWorkbenchToListSections((wb && wb.ok && wb.data) ? wb.data : {});
+            renderGroup(container, conv);
+          }).catch(function () { renderGroup(container, conv); });
+        } else {
+          renderGroup(container, conv);
+        }
       });
     },
   };

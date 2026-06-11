@@ -264,8 +264,8 @@ window.aiteam = window.aiteam || {};
 
     container.innerHTML = '<section class="aiteam-page">' +
       '<div class="aiteam-page__hero">' +
-      '<div><p class="aiteam-page__eyebrow">P03 · 人才市场</p><h2 class="aiteam-page__title">招募你的数字员工</h2><p class="aiteam-page__desc">搜索专家名称、技能，按分类浏览并直接发起招募。列表数据来自 Team Panel 人才市场接口。</p></div>' +
-      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">回到工作台</a></div>' +
+      '<div><h2 class="aiteam-page__title">🤝 人才市场</h2><p class="aiteam-page__desc">发现并雇用专业 AI 智能体，扩充你的数字员工团队。</p></div>' +
+      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/chat">返回消息中心</a></div>' +
       '</div>' +
       '<section class="aiteam-panel">' +
       '<div class="aiteam-marketplace-toolbar">' +

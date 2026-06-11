@@ -137,10 +137,10 @@ window.aiteam = window.aiteam || {};
       return '消息';
     }
     if (message.role === 'user') {
-      return message.sender_id ? ('你 · ' + message.sender_id) : '你';
+      return '你';
     }
     if (message.role === 'assistant') {
-      return message.sender_id ? ('员工 · ' + message.sender_id) : '员工回复';
+      return '员工';
     }
     return '系统提示';
   }
@@ -262,62 +262,55 @@ window.aiteam = window.aiteam || {};
       '</button>';
   }
 
+  // 右栏「智能体详情」— 对齐 Demo：员工卡片 / 运行统计 / 技能标签 / 记忆片段 / 使用模型。
   function renderSummaryPanel(summary, conversation) {
     summary = summary || {};
     conversation = conversation || {};
     if (!summary || (!summary.display_name && !summary.employee_id)) {
-      return '<div class="aiteam-inline-empty">当前会话还没有绑定员工摘要。</div>';
+      return '<div class="aiteam-inline-empty">选择一个会话后，这里会展示该数字员工的详情。</div>';
     }
     var usage = summary.usage_summary || {};
     var statusCounts = usage.status_counts || {};
-    var statusKeys = Object.keys(statusCounts);
     var completed = statusCounts.succeeded != null ? statusCounts.succeeded : null;
     var totalRuns = usage.total_runs != null ? usage.total_runs : null;
     var successRate = (totalRuns && completed != null) ? Math.round((completed / totalRuns) * 100) + '%' : '—';
+    var avgResponse = usage.avg_response_seconds != null ? (usage.avg_response_seconds + 's') : '—';
     var modelLine = [summary.model_provider, summary.model_name].filter(Boolean).join(' · ') || '未配置';
+    var monthlyTokens = usage.total_tokens != null ? String(usage.total_tokens) : '—';
+    var monthlyCost = usage.total_cost_cents != null ? ('¥ ' + (Number(usage.total_cost_cents) / 100).toFixed(2)) : '—';
     var initial = (summary.display_name || summary.employee_id || 'A').slice(0, 1);
     var skills = Array.isArray(summary.skills) ? summary.skills : [];
     var kbs = Array.isArray(summary.knowledge_bases) ? summary.knowledge_bases : [];
     var memories = Array.isArray(summary.memories) ? summary.memories : (Array.isArray(summary.memory_snippets) ? summary.memory_snippets : []);
     return '<div class="aiteam-chat-summary">' +
-      '<div class="aiteam-chat-summary__hero">' +
-      '<div class="aiteam-chat-summary__avatar">' + escapeHtml(initial) + '</div>' +
-      '<div><h3>' + escapeHtml(summary.display_name || summary.employee_id || '未命名员工') + '</h3>' +
-      '<p class="aiteam-card__sub">' + escapeHtml(summary.role_name || '待配置岗位') + '</p>' +
-      '<div class="aiteam-chip-row">' + chip(summary.status || 'idle', 'success') + '</div></div>' +
+      '<div class="aiteam-agent-detail__card">' +
+      '<div class="aiteam-agent-detail__avatar">' + escapeHtml(initial) + '</div>' +
+      '<div class="aiteam-agent-detail__name">' + escapeHtml(summary.display_name || summary.employee_id || '未命名员工') + '</div>' +
+      '<div class="aiteam-agent-detail__role">🎯 ' + escapeHtml(summary.role_name || '待配置岗位') + '</div>' +
       '</div>' +
+      '<div class="aiteam-detail-section"><h3>运行统计</h3>' +
       '<div class="aiteam-chat-stat-grid">' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(String(completed != null ? completed : '—')) + '</strong><span>完成任务</span></article>' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(successRate) + '</strong><span>成功率</span></article>' +
-      '<article class="aiteam-chat-stat"><strong>' + escapeHtml(String(conversation.message_count != null ? conversation.message_count : (totalRuns != null ? totalRuns : '—'))) + '</strong><span>历史消息</span></article>' +
-      '</div>' +
-      '<div class="aiteam-detail-section"><h3>技能</h3>' +
+      '<article class="aiteam-chat-stat"><strong class="is-green">' + escapeHtml(String(completed != null ? completed : '—')) + '</strong><span>完成任务</span></article>' +
+      '<article class="aiteam-chat-stat"><strong class="is-brand">' + escapeHtml(successRate) + '</strong><span>成功率</span></article>' +
+      '<article class="aiteam-chat-stat"><strong class="is-purple">' + escapeHtml(avgResponse) + '</strong><span>平均响应</span></article>' +
+      '</div></div>' +
+      '<div class="aiteam-detail-section"><h3>技能标签</h3>' +
       (skills.length ? '<div class="aiteam-chip-row">' + skills.map(function (s) { return chip(typeof s === 'string' ? s : (s.name || ''), 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无技能绑定</div>') +
+      '</div>' +
+      '<div class="aiteam-detail-section"><h3>记忆片段</h3>' +
+      (memories.length ? memories.map(function (m) {
+        var text = typeof m === 'string' ? m : (m.text || m.summary || '');
+        return '<div class="aiteam-mem-item"><span class="aiteam-mem-item__icon">💡</span><span>' + escapeHtml(text) + '</span></div>';
+      }).join('') : '<div class="aiteam-inline-empty">暂无记忆片段</div>') +
       '</div>' +
       '<div class="aiteam-detail-section"><h3>知识库</h3>' +
       (kbs.length ? '<div class="aiteam-chip-row">' + kbs.map(function (k) { return chip(typeof k === 'string' ? k : (k.name || ''), 'neutral'); }).join('') + '</div>' : '<div class="aiteam-inline-empty">暂无知识库绑定</div>') +
       '</div>' +
-      (memories.length ? '<div class="aiteam-detail-section"><h3>记忆片段</h3><div class="aiteam-chip-row">' + memories.map(function (m) { return chip(typeof m === 'string' ? m : (m.text || m.summary || ''), 'neutral'); }).join('') + '</div></div>' : '') +
-      '<div class="aiteam-detail-section"><h3>使用模型</h3><div class="aiteam-detail-kv"><span>模型</span><strong>' + escapeHtml(modelLine) + '</strong></div>' +
-      '<div class="aiteam-detail-kv"><span>最近运行</span><strong>' + escapeHtml(formatTime(usage.last_run_at || conversation.created_at)) + '</strong></div></div>' +
-      (statusKeys.length ? '<div class="aiteam-detail-section"><h3>运行状态分布</h3><div class="aiteam-chip-row">' + statusKeys.map(function (key) { return chip(key + ' × ' + statusCounts[key], 'brand'); }).join('') + '</div></div>' : '') +
-      '<div class="aiteam-action-row"><a class="aiteam-card-link" href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '"><span class="aiteam-card-link__label">配置员工</span><span class="aiteam-card-link__note">前往企业后台查看技能 / 知识 / 模型</span></a></div>' +
-      '</div>';
-  }
-
-  function conversationHero(conversation, summary) {
-    var usage = summary && summary.usage_summary ? summary.usage_summary : {};
-    return '<div class="aiteam-chat-hero">' +
-      '<div class="aiteam-chat-hero__identity">' +
-      '<div class="aiteam-chat-hero__avatar">💬</div>' +
-      '<div><h2>' + escapeHtml((summary && summary.display_name) || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id || '单聊会话') + '</h2>' +
-      '<p>' + escapeHtml((summary && summary.role_name) || 'P05 单聊对话') + '</p></div>' +
+      '<div class="aiteam-detail-section"><h3>使用模型</h3>' +
+      '<div class="aiteam-agent-detail__model"><span class="aiteam-agent-detail__model-dot"></span>' + escapeHtml(modelLine) + '</div>' +
+      '<div class="aiteam-agent-detail__model-meta">本月消耗：' + escapeHtml(monthlyTokens) + ' Tokens<br>费用：' + escapeHtml(monthlyCost) + '<br>最近运行：' + escapeHtml(formatTime(usage.last_run_at || conversation.created_at)) + '</div>' +
       '</div>' +
-      '<div class="aiteam-chip-row">' +
-      chip('display_state · ' + (conversation.display_state || 'idle'), 'brand') +
-      chip('消息 ' + (conversation.message_count != null ? conversation.message_count : 0), 'neutral') +
-      chip('最近运行 ' + (usage.total_runs != null ? usage.total_runs : 0), 'neutral') +
-      '</div>' +
+      '<div class="aiteam-detail-section"><a class="aiteam-card-link" href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '"><span class="aiteam-card-link__label">配置员工</span><span class="aiteam-card-link__note">技能 / 知识 / 模型 / 记忆</span></a></div>' +
       '</div>';
   }
 
@@ -334,12 +327,11 @@ window.aiteam = window.aiteam || {};
       pendingAttachments: container.querySelector('[data-chat-pending-attachments]'),
       input: container.querySelector('[data-chat-input]'),
       summary: container.querySelector('[data-chat-summary]'),
-      hero: container.querySelector('[data-chat-hero]'),
     };
 
     function setStatus(text) {
       if (state.refs.status) {
-        state.refs.status.textContent = text || '';
+        state.refs.status.textContent = text || state.defaultStatus || '';
       }
     }
 
@@ -357,12 +349,12 @@ window.aiteam = window.aiteam || {};
     function renderQuoteBanner() {
       if (!state.refs.quoteBanner) return;
       if (!state.selectedQuoteId || !state.selectedQuotePreview) {
-        state.refs.quoteBanner.innerHTML = '<span class="aiteam-inline-note">点击左侧历史记录，可将该消息作为引用上下文发送。</span>';
+        state.refs.quoteBanner.innerHTML = '';
         return;
       }
-      state.refs.quoteBanner.innerHTML = '<div class="aiteam-chat-quote-banner__content">' +
-        '<strong>已引用历史：</strong><span>' + escapeHtml(state.selectedQuotePreview) + '</span></div>' +
-        '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-clear-quote>清除引用</button>';
+      state.refs.quoteBanner.innerHTML = '<div class="aiteam-chat-quote-banner"><div class="aiteam-chat-quote-banner__content">' +
+        '<strong>引用：</strong><span>' + escapeHtml(state.selectedQuotePreview) + '</span></div>' +
+        '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-clear-quote>清除引用</button></div>';
       var clearBtn = state.refs.quoteBanner.querySelector('[data-chat-clear-quote]');
       if (clearBtn) {
         clearBtn.addEventListener('click', function () {
@@ -377,7 +369,7 @@ window.aiteam = window.aiteam || {};
     function renderPendingAttachments() {
       if (!state.refs.pendingAttachments) return;
       if (!state.pendingAttachments.length) {
-        state.refs.pendingAttachments.innerHTML = '<span class="aiteam-inline-note">当前未登记附件。上传后的 asset_id 会随下一次发送一并提交。</span>';
+        state.refs.pendingAttachments.innerHTML = '';
         return;
       }
       state.refs.pendingAttachments.innerHTML = '<div class="aiteam-chat-pending-attachments__header"><strong>待发送附件</strong><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-clear-attachments>清空附件</button></div>' + renderAttachmentList(state.pendingAttachments);
@@ -394,7 +386,7 @@ window.aiteam = window.aiteam || {};
       if (!state.refs.transcript) return;
       var html = '';
       if (!state.messages.length && !state.liveItems.length && !state.streamingAssistantText) {
-        html = '<div class="aiteam-inline-empty">欢迎开始新的私聊任务。可在左侧切换智能体、在右侧查看员工摘要。</div>';
+        html = '<div class="aiteam-inline-empty">开始与这位数字员工对话吧，右侧可查看智能体详情。</div>';
       } else {
         html += state.messages.map(function (message) {
           return renderMessageBubble(message, '', state.employeeSummary, state.conversation);
@@ -441,13 +433,7 @@ window.aiteam = window.aiteam || {};
       state.refs.summary.innerHTML = renderSummaryPanel(state.employeeSummary, state.conversation);
     }
 
-    function renderHero() {
-      if (!state.refs.hero) return;
-      state.refs.hero.innerHTML = conversationHero(state.conversation, state.employeeSummary);
-    }
-
     function renderAll() {
-      renderHero();
       renderHistory();
       renderQuoteBanner();
       renderPendingAttachments();
@@ -548,9 +534,9 @@ window.aiteam = window.aiteam || {};
         applyTimelineEvent(event || {});
       }, {
         onReconnect: function (resumeCursor) {
-          state.statusText = 'SSE 连接中断，正在从 cursor ' + Number(resumeCursor || state.cursor || 0) + ' 补拉...';
+          state.statusText = '连接中断，正在自动恢复...';
           state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });
-          state.liveItems.push({ kind: 'recovery', payload: { event_type: 'heartbeat', preview: '网络抖动后已触发自动补拉，过程记录会从中断 cursor 继续回放。' } });
+          state.liveItems.push({ kind: 'recovery', payload: { event_type: 'heartbeat', preview: '网络抖动后已自动恢复，过程记录会继续回放。' } });
           renderAll();
         },
         onOpen: function (resumeCursor) {
@@ -690,6 +676,16 @@ window.aiteam = window.aiteam || {};
         input.value = '';
         createRun(text);
       });
+      // Enter 直接发送，Shift+Enter 换行 — 与 Demo 交互一致。
+      if (typeof input.addEventListener === 'function') input.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          var text = String(input.value || '').trim();
+          if (!text) return;
+          input.value = '';
+          createRun(text);
+        }
+      });
     }
 
     if (quoteBtn && input) {
@@ -723,14 +719,14 @@ window.aiteam = window.aiteam || {};
 
     if (attachBtn) {
       attachBtn.addEventListener('click', function () {
-        state.statusText = '正在登记附件元数据...';
+        state.statusText = '正在添加附件...';
         renderAll();
         ns.api.upload({ name: 'meeting-notes.txt', size: 128, mime_type: 'text/plain' }).then(function (result) {
           if (result.ok && result.data) {
             state.pendingAttachments = state.pendingAttachments.concat([result.data]);
-            state.statusText = '附件已登记，可随下一次发送提交。';
+            state.statusText = '附件已添加，将随下一条消息发送。';
           } else {
-            state.statusText = result.error || '附件登记失败。';
+            state.statusText = result.error || '附件添加失败。';
           }
           renderAll();
         });
@@ -891,82 +887,100 @@ window.aiteam = window.aiteam || {};
     return { pinned: pinned, groups: groups, others: others };
   }
 
+  // Demo 对齐的消息中心三栏壳：左侧数字员工列表 / 中间会话 / 右侧智能体详情。
   function chatShell(opts) {
     opts = opts || {};
-    var title = opts.title || '消息中心';
-    var desc = opts.desc || '按 PRD 原型落三栏结构：左侧智能体列表、中间消息与输入区、右侧员工摘要。';
     return '<section class="aiteam-page aiteam-page--chat">' +
-      '<div class="aiteam-page__hero"><div><p class="aiteam-page__eyebrow">P05 · 单聊对话</p><h2 class="aiteam-page__title">' + escapeHtml(title) + '</h2>' +
-      '<p class="aiteam-page__desc">' + escapeHtml(desc) + '</p></div>' +
-      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">返回工作台</a></div></div>' +
-      '<div class="aiteam-grid aiteam-grid--chat-3col">' +
-      '<aside class="aiteam-panel aiteam-panel--agents">' +
-      '<div class="aiteam-panel__header"><div><h3>智能体</h3><p class="aiteam-inline-note">点击切换对应会话</p></div></div>' +
-      '<input class="aiteam-chat__agent-search" type="search" placeholder="搜索智能体" data-chat-agent-search>' +
+      '<div class="aiteam-chatwin">' +
+      '<aside class="aiteam-chatwin__left">' +
+      '<div class="aiteam-chatwin__left-head"><span class="aiteam-chatwin__left-title">🤖 数字员工</span>' +
+      '<a class="aiteam-chatwin__add" href="/app/marketplace" title="招募数字员工">＋</a></div>' +
+      '<div class="aiteam-chatwin__search"><input type="search" placeholder="🔍 搜索智能体..." data-chat-agent-search></div>' +
       opts.agentListHtml +
       '</aside>' +
-      opts.mainHtml +
-      opts.summaryHtml +
+      '<section class="aiteam-chatwin__main">' + opts.mainHtml + '</section>' +
+      '<aside class="aiteam-chatwin__right">' +
+      '<div class="aiteam-chatwin__right-head">智能体详情</div>' +
+      '<div class="aiteam-chatwin__right-body" data-chat-summary>' + (opts.summaryHtml || '') + '</div>' +
+      '</aside>' +
       '</div>' +
       '</section>';
+  }
+
+  function bindAgentSearch(container) {
+    var search = container.querySelector('[data-chat-agent-search]');
+    if (!search || typeof search.addEventListener !== 'function') return;
+    search.addEventListener('input', function () {
+      var query = String(search.value || '').toLowerCase();
+      Array.prototype.slice.call(container.querySelectorAll('.aiteam-chat__agent')).forEach(function (item) {
+        var nameEl = item.querySelector('.aiteam-chat__agent-name');
+        var name = nameEl ? String(nameEl.textContent || '').toLowerCase() : '';
+        item.style.display = name.indexOf(query) !== -1 ? '' : 'none';
+      });
+    });
   }
 
   // Landing view for bare /app/chat — agent list + empty-state, no SSE/run binding.
   function renderLanding(container, workbenchData) {
     if (!container) return;
     var sections = mapWorkbenchToSections(workbenchData);
-    var mainHtml = '<section class="aiteam-panel aiteam-panel--conversation">' +
-      '<div class="aiteam-panel__header"><div><h3>消息区</h3><p class="aiteam-inline-note">从左侧选择一个会话开始对话</p></div></div>' +
-      '<div class="aiteam-chat-transcript">' +
-      '<div class="aiteam-inline-empty">从左侧选择一位智能体或工作群组，开始你的私聊任务。还没有员工？前往人才市场招募。</div>' +
+    var mainHtml = '<div class="aiteam-chatwin__header">' +
+      '<div class="aiteam-chatwin__havatar">💬</div>' +
+      '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">消息中心</div>' +
+      '<div class="aiteam-chatwin__hstatus">选择左侧智能体或工作群组开始对话</div></div>' +
       '</div>' +
-      '<div class="aiteam-action-row"><a class="aiteam-button" href="/app/marketplace">前往人才市场</a></div>' +
-      '</section>';
-    var summaryHtml = '<aside class="aiteam-panel aiteam-panel--summary"><div class="aiteam-panel__header"><h3>员工摘要</h3></div>' +
-      '<div class="aiteam-inline-empty">选择一个会话后显示员工摘要。</div></aside>';
+      '<div class="aiteam-chat-transcript aiteam-chatwin__transcript">' +
+      '<div class="aiteam-inline-empty">从左侧选择一位智能体或工作群组，开始你的任务。<br>还没有数字员工？<a href="/app/marketplace">前往人才市场招募</a>。</div>' +
+      '</div>';
     container.innerHTML = chatShell({
-      title: '消息中心',
-      desc: '选择左侧任意智能体或群组进入对话。三段式列表对齐 PRD：置顶 / 工作群组 / 其他智能体。',
       agentListHtml: renderAgentList(sections, ''),
       mainHtml: mainHtml,
-      summaryHtml: summaryHtml,
+      summaryHtml: renderSummaryPanel(null, null),
     });
+    bindAgentSearch(container);
   }
 
   function renderChat(container, conversation) {
     var summary = conversation.employee_summary || {};
     var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
+    var roleName = summary.role_name || '';
     var modelLine = [summary.model_provider, summary.model_name].filter(Boolean).join(' · ');
-    container.innerHTML = '<section class="aiteam-page aiteam-page--chat">' +
-      '<div class="aiteam-page__hero"><div><p class="aiteam-page__eyebrow">P05 · 单聊对话</p><h2 class="aiteam-page__title">' + escapeHtml(displayName || '单聊会话') + '</h2>' +
-      '<p class="aiteam-page__desc">按 PRD 原型落三栏结构：左侧智能体列表、中间消息与输入区、右侧员工摘要。数据仅消费 Team Panel 会话详情 / runs / timeline 契约。</p></div>' +
-      '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">返回工作台</a></div></div>' +
-      '<div class="aiteam-grid aiteam-grid--chat-3col">' +
-      '<aside class="aiteam-panel aiteam-panel--agents">' +
-      '<div class="aiteam-panel__header"><div><h3>智能体</h3><p class="aiteam-inline-note">点击切换对应会话</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
-      '<input class="aiteam-chat__agent-search" type="search" placeholder="搜索智能体" data-chat-agent-search>' +
-      renderAgentList(conversation.__sections || conversation.__agentList || [], conversation.conversation_id) +
-      '</aside>' +
-      '<section class="aiteam-panel aiteam-panel--conversation">' +
-      '<div class="aiteam-chat-topbar" data-chat-hero></div>' +
-      '<div class="aiteam-panel__header"><div><h3>消息区</h3><p class="aiteam-inline-note">' + escapeHtml(modelLine || '等待模型配置') + '</p></div><span data-chat-status class="aiteam-inline-note">display_state：' + escapeHtml(conversation.display_state || 'idle') + '</span></div>' +
-      '<div class="aiteam-chat-transcript" data-chat-transcript></div>' +
-      '<form class="aiteam-chat-composer" data-chat-form>' +
-      '<div class="aiteam-chat-quote-banner" data-chat-quote-banner></div>' +
-      '<div class="aiteam-chat-pending-attachments" data-chat-pending-attachments></div>' +
-      '<textarea data-chat-input placeholder="输入要交给员工处理的任务，支持引用左侧历史记录"></textarea>' +
-      '<div class="aiteam-action-row">' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-quote>引用最新</button>' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-attach>登记附件</button>' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-retry>重试发送</button>' +
-      '<button class="aiteam-button aiteam-button--ghost" type="button" data-chat-abort>停止补拉</button>' +
-      '<button class="aiteam-button" type="submit">发送</button>' +
-      '</div></form></section>' +
-      '<aside class="aiteam-panel aiteam-panel--summary"><div class="aiteam-panel__header"><h3>员工摘要</h3><a href="/admin/employees/' + encodeURIComponent(summary.employee_id || '') + '">后台详情</a></div><div data-chat-summary></div></aside>' +
+    var headerName = roleName ? (displayName + ' · ' + roleName) : (displayName || '会话');
+    var defaultStatus = ['在线', modelLine].filter(Boolean).join(' · ');
+    var initial = (displayName || 'A').slice(0, 1);
+    var mainHtml = '<div class="aiteam-chatwin__header">' +
+      '<div class="aiteam-chatwin__havatar">' + escapeHtml(initial) + '</div>' +
+      '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(headerName) + '</div>' +
+      '<div class="aiteam-chatwin__hstatus" data-chat-status>' + escapeHtml(defaultStatus) + '</div></div>' +
+      '<div class="aiteam-chatwin__hactions">' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-load-more title="加载更早的历史">⇡</button>' +
       '</div>' +
-      '</section>';
+      '</div>' +
+      '<div class="aiteam-chat-transcript aiteam-chatwin__transcript" data-chat-transcript></div>' +
+      '<div class="aiteam-chatwin__composer">' +
+      '<div data-chat-quote-banner></div>' +
+      '<div data-chat-pending-attachments></div>' +
+      '<form class="aiteam-chatwin__inputbox" data-chat-form>' +
+      '<textarea data-chat-input rows="2" placeholder="输入要交给员工处理的任务，Enter 发送，Shift+Enter 换行..."></textarea>' +
+      '<div class="aiteam-chatwin__toolbar">' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-attach title="附件">📎</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-quote title="引用最近一条消息">❝</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-retry title="重试上一轮">↻</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复">⏹</button>' +
+      '<span class="aiteam-chatwin__spacer"></span>' +
+      (modelLine ? '<span class="aiteam-chatwin__model"><span class="aiteam-chatwin__model-dot"></span>' + escapeHtml(modelLine) + '</span>' : '') +
+      '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
+      '</div></form></div>';
+
+    container.innerHTML = chatShell({
+      agentListHtml: renderAgentList(conversation.__sections || conversation.__agentList || [], conversation.conversation_id),
+      mainHtml: mainHtml,
+      summaryHtml: '',
+    });
+    bindAgentSearch(container);
 
     bindChat(container, {
+      defaultStatus: defaultStatus,
       conversationId: conversation.conversation_id,
       employeeId: summary.employee_id || (conversation.employee_ref && conversation.employee_ref.employee_id) || '',
       employeeSummary: summary,
@@ -984,7 +998,7 @@ window.aiteam = window.aiteam || {};
       latestRunStatus: conversation.latest_run && conversation.latest_run.status || '',
       lastMessagePreview: conversation.last_message_preview && conversation.last_message_preview.preview || '',
       pendingAttachments: [],
-      statusText: '会话已加载。',
+      statusText: '',
       refs: {},
     });
   }
@@ -993,6 +1007,9 @@ window.aiteam = window.aiteam || {};
     render: renderChat,
     init: function (container, options) {
       if (!container) return;
+      if (container.classList && container.classList.add) {
+        container.classList.add('aiteam-main--flush');
+      }
       var conversationId = getConversationId(options && options.pathname);
       if (!conversationId) {
         // Bare /app/chat → 消息中心 landing view.

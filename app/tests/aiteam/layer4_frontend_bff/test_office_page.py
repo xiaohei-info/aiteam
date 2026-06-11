@@ -1010,7 +1010,7 @@ def test_office_module_renders_empty_scene_when_scene_is_empty() -> None:
     assert "企业办公室" in result["html"]
     assert "data-office-root" in result["html"]
     assert "当前暂无运行中的任务队列" in result["html"]
-    assert "刷新间隔: 10.0s" in result["html"]
+    assert "实时刷新: 每 10.0s" in result["html"]
 
 
 def test_office_module_renders_live_scene_for_canonical_backend_payload() -> None:
@@ -1104,14 +1104,11 @@ def test_office_module_renders_live_scene_for_canonical_backend_payload() -> Non
     assert "最近对话" in result["html"]
     assert "历史任务" in result["html"]
     assert "整理回归结论" in result["html"]
-    assert "场景游标: 18" in result["html"]
-    assert "活动游标: 18" in result["html"]
-    assert "cursor #18" in result["html"] or ">#18<" in result["html"]
-    assert "刷新间隔: 15.0s" in result["html"]
+    assert "实时刷新: 每 15.0s" in result["html"]
     assert "拖拽平移" in result["html"]
     assert "滚轮缩放" in result["html"]
     assert "aiteam-office__scene-viewport" in result["html"]
-    assert "aiteam-office__scene-floor" in result["html"]
+    assert "aiteam-office__canvas-wrap" in result["html"]
 
 
 def test_office_module_handles_empty_feed_without_preview() -> None:
@@ -1166,7 +1163,7 @@ def test_office_module_polling_lifecycle_uses_refresh_hint() -> None:
     assert result["pollTimerCleared"] is True
     assert "企业办公室" in result["html"]
     assert "全屏查看" in result["html"]
-    assert "刷新间隔: 15.0s" in result["html"]
+    assert "实时刷新: 每 15.0s" in result["html"]
 
 
 def test_office_module_recovers_from_initial_load_failure_via_polling() -> None:

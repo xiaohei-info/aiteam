@@ -264,6 +264,9 @@ window.aiteam = window.aiteam || {};
       if (!wrap || !lCanvas) return;
       lCanvas.width = wrap.clientWidth || 800;
       lCanvas.height = wrap.clientHeight || 480;
+      // 初始视角：把 16×10 地板的几何中心对到画布中心（中心格 c=7.5, r=4.5）。
+      lobbyOffX = -(7.5 - 4.5) * TW * lobbyScale;
+      lobbyOffY = lCanvas.height * 0.5 - lCanvas.height * 0.28 - (7.5 + 4.5) * TH * lobbyScale;
     }
 
     function setTooltipText(ref, value) {

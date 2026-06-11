@@ -218,7 +218,7 @@ window.aiteam = window.aiteam || {};
       return '' +
         '<article class="aiteam-card aiteam-card--flat">' +
         '<div class="aiteam-card__row"><div><h3 class="aiteam-card__title">' + escapeHtml(item.title || '未命名会话') + '</h3>' +
-        '<p class="aiteam-card__sub">' + escapeHtml(conversationTypeLabel(item)) + ' · ' + escapeHtml(stringValue(item.display_state, 'idle')) + '</p></div>' +
+        '<p class="aiteam-card__sub">' + escapeHtml(conversationTypeLabel(item)) + '</p></div>' +
         '<span class="aiteam-badge">' + escapeHtml(runStatusLabel(item.latest_run_status)) + '</span></div>' +
         '<p class="aiteam-card__body">' + escapeHtml(item.last_preview || '暂无最近消息') + '</p>' +
         '<div class="aiteam-card__meta"><span>成员 ' + escapeHtml(String(item.member_count || 0)) + '</span><span>任务 ' + escapeHtml(String((item.task_status_digest && item.task_status_digest.total) || 0)) + '</span></div>' +
@@ -301,7 +301,7 @@ window.aiteam = window.aiteam || {};
       renderRail() +
       '<aside class="aiteam-workbench__sidebar">' +
       '<div class="aiteam-workbench__sidebar-top">' +
-      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<p class="aiteam-page__eyebrow">工作台</p>' +
       '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
       '</div>' +
       '<div class="aiteam-workbench__empty" data-workbench-empty="1">' +
@@ -342,7 +342,7 @@ window.aiteam = window.aiteam || {};
       renderRail() +
       '<aside class="aiteam-workbench__sidebar">' +
       '<div class="aiteam-workbench__sidebar-top">' +
-      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<p class="aiteam-page__eyebrow">工作台</p>' +
       '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
       '</div>' +
       '<div class="aiteam-workbench__empty" data-workbench-empty="' + escapeHtml(kind) + '">' +
@@ -358,7 +358,7 @@ window.aiteam = window.aiteam || {};
       '<section class="aiteam-workbench__main" data-workbench-main="1">' +
       '<div class="aiteam-workbench__hero">' +
       '<div>' +
-      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<p class="aiteam-page__eyebrow">工作台</p>' +
       '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterpriseName || '企业工作台') + '</h1>' +
       '<p class="aiteam-workbench__hero-desc">从左侧导航继续访问其他入口，当前私聊工作台状态如下。</p>' +
       '</div>' +
@@ -414,7 +414,7 @@ window.aiteam = window.aiteam || {};
       '<section class="aiteam-workbench__main" data-workbench-main="1">' +
       '<div class="aiteam-workbench__hero">' +
       '<div>' +
-      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<p class="aiteam-page__eyebrow">工作台</p>' +
       '<h1 class="aiteam-workbench__hero-title">' + escapeHtml(enterprise.name || '企业工作台') + '</h1>' +
       '<p class="aiteam-workbench__hero-desc">从左侧列表进入私聊，在这里统一查看员工状态、群聊入口和任务摘要。</p>' +
       '</div>' +
@@ -472,7 +472,7 @@ window.aiteam = window.aiteam || {};
       '<aside class="aiteam-workbench__sidebar">' +
       '<div class="aiteam-workbench__sidebar-top">' +
       '<div>' +
-      '<p class="aiteam-page__eyebrow">P02 · 工作台</p>' +
+      '<p class="aiteam-page__eyebrow">工作台</p>' +
       '<h2 class="aiteam-workbench__section-title">私聊</h2>' +
       '</div>' +
       '<input class="aiteam-input aiteam-workbench__search" data-workbench-search="1" type="search" placeholder="搜索员工或岗位..." value="' + escapeHtml(state.query || '') + '">' +

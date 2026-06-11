@@ -530,11 +530,11 @@ aiteam.pages.appGroup.render(container, {{
   task_tree: {{ items: [] }},
 }});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(() => {{
-  const initialState = refs.mentionState.innerHTML;
+  const initialState = refs.mentionState.textContent || '';
   buttons[0].click();
-  const selectedState = refs.mentionState.innerHTML;
+  const selectedState = refs.mentionState.textContent || '';
   buttons[0].click();
-  const deselectedState = refs.mentionState.innerHTML;
+  const deselectedState = refs.mentionState.textContent || '';
   console.log(JSON.stringify({{
     initialState,
     selectedState,
@@ -1153,10 +1153,10 @@ def test_group_page_launcher_requires_non_empty_title() -> None:
 
 def test_group_page_mention_toggle_updates_selected_state() -> None:
     payload = _run_group_mention_toggle_flow()
-    assert "未指定提及" in payload["initialState"]
-    assert "已选：@Alice" in payload["selectedState"]
+    assert payload["initialState"] == ""
+    assert "@Alice" in payload["selectedState"]
     assert payload["inputValue"].startswith("@Alice")
-    assert "未指定提及" in payload["deselectedState"]
+    assert payload["deselectedState"] == ""
 
 
 def test_group_page_open_settings_button_scrolls_to_settings_card() -> None:

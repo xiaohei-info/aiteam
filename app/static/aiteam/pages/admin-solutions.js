@@ -150,22 +150,10 @@ window.aiteam = window.aiteam || {};
       state.previewPayload = null;
     }
 
+    // 应用结果只提示提交动作；新建/归档员工等以刷新后的后端清单为准，
+    // 避免把 apply 响应里的临时 ID 残留在界面上。
     function summarizeApplyResult(data, mode, solutionId) {
-      var payload = data && typeof data === 'object' ? data : {};
-      var bits = ['行业方案应用已提交：' + solutionId + '（' + applyModeLabel(mode) + '）'];
-      var createdEmployees = Array.isArray(payload.created_employee_ids) ? payload.created_employee_ids.filter(Boolean) : [];
-      var replacedEmployees = Array.isArray(payload.replaced_employee_ids) ? payload.replaced_employee_ids.filter(Boolean) : [];
-      var reappliedEmployees = Array.isArray(payload.reapplied_from_employee_ids) ? payload.reapplied_from_employee_ids.filter(Boolean) : [];
-      if (replacedEmployees.length) {
-        bits.push('已归档旧员工：' + replacedEmployees.join(', '));
-      }
-      if (reappliedEmployees.length) {
-        bits.push('重新应用基线：' + reappliedEmployees.join(', '));
-      }
-      if (createdEmployees.length) {
-        bits.push('新建员工：' + createdEmployees.join(', '));
-      }
-      return bits.join('；');
+      return '行业方案应用已提交：' + solutionId + '（' + applyModeLabel(mode) + '）';
     }
 
     function upsertSolution(solutionId, patch) {

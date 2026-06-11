@@ -214,5 +214,6 @@ def test_admin_solutions_requires_apply_preview_confirmation_before_submit() -> 
     assert payload["applyCallsBeforeConfirm"] == 0
     assert payload["applyCallsAfterConfirm"] == 1
     assert "行业方案应用已提交" in payload["finalHtml"]
-    assert "重新应用基线：emp_backend, emp_legacy" in payload["finalHtml"]
-    assert "新建员工：emp_new_a" in payload["finalHtml"]
+    # 新建/归档员工以刷新后的后端清单为准，提交摘要不再展示 apply 响应中的临时 ID。
+    assert "emp_new_a" not in payload["finalHtml"]
+    assert "emp_backend" in payload["finalHtml"]

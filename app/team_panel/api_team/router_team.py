@@ -2368,6 +2368,18 @@ def _build_employee_summary(conn, employee_id: str | None) -> dict | None:
     try:
         employee = EmployeeRepo(cur).get_by_id(employee_id)
         enterprise_runs = TeamRunRepo(cur).list_by_enterprise(employee.enterprise_id) if employee is not None else []
+        memory_items = (
+            MemoryItemRepo(cur).list_by_enterprise(
+                employee.enterprise_id,
+                employee_id=employee_id,
+                limit=3,
+                offset=0,
+                sort_by="importance",
+                sort_order="desc",
+            )
+            if employee is not None
+            else []
+        )
     finally:
         cur.close()
 
@@ -2393,6 +2405,10 @@ def _build_employee_summary(conn, employee_id: str | None) -> dict | None:
         "model_name": view.model_name,
         "skills": [skill["skill_code"] for skill in view.skills if skill.get("enabled", True)],
         "knowledge_bases": [item["knowledge_base_id"] for item in view.knowledge_bases if item.get("enabled", True)],
+        "memories": [
+            {"memory_id": item.id, "text": item.content, "category": item.category}
+            for item in memory_items
+        ],
         "usage_summary": {
             "total_runs": len(employee_runs),
             "last_run_at": last_run_at,

@@ -2,15 +2,15 @@ window.aiteam = window.aiteam || {};
 
 (function registerPageShell(ns) {
   // ── Full navigation catalog ──
+  // App 区导航与 Demo 原型保持一致：消息中心 / 人才市场 / 组织架构 / 知识库 / 办公室动态。
+  // 工作台(/app/workbench)与群聊(/app/group/*)路由保留为深链入口，群聊统一从消息中心列表进入。
   var FULL_SECTION_PAGES = {
     app: [
-      { label: '工作台',    href: '/app/workbench',   note: 'Workbench' },
+      { label: '消息中心',  href: '/app/chat',        note: 'Chat' },
       { label: '人才市场',  href: '/app/marketplace', note: 'Talent Market' },
-      { label: '对话',      href: '/app/chat',        note: 'Chat' },
-      { label: '群聊',      href: '/app/group',       note: 'Group' },
-      { label: '知识库',    href: '/app/knowledge',   note: 'Knowledge' },
       { label: '组织架构',  href: '/app/org',         note: 'Org' },
-      { label: '办公室',    href: '/app/office',      note: 'Office' },
+      { label: '知识库',    href: '/app/knowledge',   note: 'Knowledge' },
+      { label: '办公室动态', href: '/app/office',     note: 'Office' },
     ],
     admin: [
       { label: '员工',      href: '/admin/employees',        note: 'Employees' },
@@ -66,7 +66,7 @@ window.aiteam = window.aiteam || {};
 
   // Section switcher: glyph + landing route for each section.
   var SECTION_META = {
-    app: { icon: '🏠', label: '企业前台', href: '/app/workbench' },
+    app: { icon: '🏠', label: '企业前台', href: '/app/chat' },
     admin: { icon: '🏢', label: '企业后台', href: '/admin/employees' },
     system: { icon: '🛠️', label: '系统后台', href: '/system/accounts' },
   };
@@ -77,6 +77,8 @@ window.aiteam = window.aiteam || {};
 
   // ── Role-aware nav filtering ──
   function _filteredNavItems(section) {
+    // App 前台导航对所有企业角色可见，不参与角色过滤。
+    if (section === 'app') return FULL_SECTION_PAGES.app;
     var role = ns.role ? ns.role.getActiveRole() : '';
     if (!role || !ns.role.visibleNavItems) {
       // No role set — show all items (legacy behavior)
@@ -161,12 +163,17 @@ window.aiteam = window.aiteam || {};
       }
 
       var currentPath = window.location.pathname;
+      // 群聊与工作台深链在导航上归属消息中心高亮。
+      var navPath = currentPath;
+      if (navPath === '/app/group' || navPath.indexOf('/app/group/') === 0 || navPath === '/app/workbench') {
+        navPath = '/app/chat';
+      }
       var nav = document.getElementById('aiteam-nav');
       if (nav) {
         // ── Role-aware navigation (icon rail) ──
         var pages = _filteredNavItems(section);
         nav.innerHTML = pages.map(function (p) {
-          var activeClass = (currentPath === p.href || currentPath.indexOf(p.href + '/') === 0)
+          var activeClass = (navPath === p.href || navPath.indexOf(p.href + '/') === 0)
             ? ' is-active'
             : '';
           return (

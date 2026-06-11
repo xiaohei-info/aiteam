@@ -17,13 +17,12 @@ def test_group_page_reconnect_flow_declares_visible_recovery_states() -> None:
     source = _read(GROUP_PAGE_PATH)
     for snippet in [
         "data-group-recovery",
-        "SSE 恢复状态",
         "setRecoveryStatus('catching-up'",
         "setRecoveryStatus('reconnecting'",
         "setRecoveryStatus('resolved'",
         "setRecoveryStatus('error'",
         "已补齐断流期间事件，准备恢复实时流。",
-        "实时协作流已恢复，不会重复补拉已消费事件。",
+        "实时协作已恢复。",
     ]:
         assert snippet in source, f"Missing reconnect recovery UX snippet: {snippet}"
 
@@ -154,13 +153,12 @@ context.globalThis = context.window;
 vm.createContext(context.window);
 vm.runInContext(timelineSource, context.window);
 context.window.aiteam.timeline.disconnect = function () {{ timelineDisconnects.push('disconnect'); }};
-context.window.aiteam.timeline.setCurrentCursor = function (cursor) {{ this._cursor = cursor; }};
-context.window.aiteam.timeline.connect = function (runId, cursor, handlers) {{
+// 共享契约：connect(runId, cursor, onEvent, {{ onOpen, onReconnect }})
+context.window.aiteam.timeline.connect = function (runId, cursor, onEvent, handlers) {{
   timelineConnects.push({{ runId, cursor }});
-  handlers.onStatus({{ phase: 'reconnecting', cursor }});
-  Promise.resolve(handlers.onReconnect({{ runId, cursor: 7 }})).then(function () {{
-    handlers.onStatus({{ phase: 'live', cursor: 8 }});
-    timelinePayloads.push({{ finalCursor: context.window.aiteam.timeline.getCurrentCursor ? context.window.aiteam.timeline.getCurrentCursor() : cursor }});
+  Promise.resolve(handlers.onReconnect(7)).then(function () {{
+    handlers.onOpen(8);
+    timelinePayloads.push({{ finalCursor: cursor }});
   }});
 }};
 vm.runInContext(pageSource, context.window);
@@ -194,7 +192,7 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     timelineDisconnects: timelineDisconnects.length,
     recoveryLabel: recoveryLabelEl.textContent,
     recoveryText: recoveryEl.textContent,
-    collabText: collabStateEl.textContent,
+    collabText: collabStateEl.innerHTML || '',
     transcriptHtml: transcriptEl.innerHTML,
     timelineHtml: timelineEl.innerHTML,
   }}));
@@ -216,10 +214,9 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     ]
     assert payload["timelineConnects"] == [{"runId": "run_group_1", "cursor": 7}]
     assert payload["timelineDisconnects"] == 1
-    assert payload["recoveryLabel"] == "resolved"
-    assert "实时协作流已恢复" in payload["recoveryText"]
-    assert "cursor：8" in payload["collabText"]
+    assert "实时协作已恢复" in payload["recoveryText"]
+    assert "已完成" in payload["collabText"]
     assert "结果合并" in payload["transcriptHtml"]
     assert "Bob" in payload["transcriptHtml"]
     assert "aiteam-message__avatar" in payload["transcriptHtml"]
-    assert "cursor 8" in payload["timelineHtml"]
+    assert "运行完成" in payload["timelineHtml"]

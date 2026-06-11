@@ -11,7 +11,7 @@ EXPECTED_PAGE_MODULES = {
     "app-marketplace.js": ["getTalentTemplates", "立即招募", "RATE_LIMITED"],
     "app-template-detail.js": ["getTemplate", "default_memory_config", "立即招募"],
     "app-chat.js": ["getConversation", "createRun", "tool_call", "getRunEvents"],
-    "app-group.js": ["getGroupConversation", "routing_decided", "task_created", "result_merged", "成员管理", "群设置", "协作反馈", "多员工协作", "runtime:", "子任务", "runtime_handle", "单员工会话", "协作根任务", "提及选择 / 协作状态", "新建群聊", "新增员工", "踢出员工", "解散群聊", "2×2 宫格"],
+    "app-group.js": ["getGroupConversation", "routing_decided", "task_created", "result_merged", "成员管理", "群设置", "协作反馈", "多员工协作", "data-runtime-task", "子任务", "runtime_handle", "单员工会话", "协作根任务", "提及选择 / 协作状态", "新建群聊", "新增员工", "踢出员工", "解散群聊", "2×2 宫格"],
 }
 
 FORBIDDEN_RUNTIME_ROUTES = [
@@ -111,9 +111,9 @@ def test_group_page_exposes_single_and_multi_agent_routing_feedback() -> None:
         "提及选择 / 协作状态",
         "collaborationModeLabel",
         "renderRuntimeHandle",
-        "SSE 恢复状态",
-        "SSE 已断流，正在 catch-up 缺失事件",
-        "实时协作流已恢复，不会重复补拉已消费事件",
+        "data-group-recovery",
+        "连接中断，正在补齐缺失的协作进度",
+        "实时协作已恢复",
     ]:
         assert snippet in source, f"Group page missing routing feedback snippet: {snippet}"
 
@@ -123,9 +123,9 @@ def test_chat_page_declares_upload_quote_retry_and_tool_call_ux() -> None:
     source = _read(PAGES_DIR / "app-chat.js")
     for snippet in [
         "ns.api.upload",
-        "引用历史",
-        "重试发送",
+        "引用最近一条消息",
+        "重试上一轮",
         "tool_call",
-        "停止补拉",
+        "停止本轮回复",
     ]:
         assert snippet in source, f"Chat page missing expected UX snippet: {snippet}"

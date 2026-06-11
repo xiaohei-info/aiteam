@@ -291,7 +291,7 @@ class TestExistingLayer4Compatibility:
         shell_path = os.path.join(AITEAM_STATIC, "page-shell.js")
         with open(shell_path, "r", encoding="utf-8") as fh:
             content = fh.read()
-        for label in ["工作台", "对话", "群聊", "员工", "连接器", "费用", "企业", "健康"]:
+        for label in ["消息中心", "人才市场", "组织架构", "知识库", "办公室动态", "员工", "连接器", "费用", "企业", "健康"]:
             assert label in content, f"Nav entry '{label}' must survive in page-shell"
         assert "企业前台" in content
         assert "企业后台" in content
@@ -330,7 +330,7 @@ class TestKnowledgeOfficePageModules:
 
     def test_knowledge_module_uses_team_api(self):
         content = _read_js("knowledge.js")
-        assert "/api/team/knowledge-bases" in content or "/knowledge-bases" in content, \
+        assert "getKnowledgeBases" in content or "/knowledge-bases" in content, \
             "knowledge.js must call knowledge-bases endpoint"
         assert "/knowledge-bases/" not in content or "documents" in content, \
             "knowledge.js must reference document POST endpoint"
@@ -349,7 +349,7 @@ class TestKnowledgeOfficePageModules:
     def test_office_module_uses_state_helpers(self):
         content = _read_js("office.js")
         assert "renderLoading" in content, "office.js must use loading state"
-        assert "renderError" in content, "office.js must handle error state"
+        assert "renderOfficeError" in content, "office.js must handle error state"
 
     def test_knowledge_module_does_not_use_runtime_routes(self):
         content = _read_js("knowledge.js")

@@ -260,8 +260,8 @@ def test_chat_page_source_mentions_retry_abort_and_attachment_contract_helpers()
         "run_cancelled",
         "run_waiting_human",
         "routing_decided",
-        "查看入参",
-        "SSE 连接中断",
+        "aiteam-chat__tool-card",
+        "连接中断，正在自动恢复",
     ]:
         assert snippet in source, f"Missing expected chat rendering snippet: {snippet}"
 
@@ -308,9 +308,9 @@ def test_chat_page_tool_call_card_is_interpretable() -> None:
         ],
     }
     result = _run_chat_module(payload)
-    assert "工具调用 · document_reader" in result["transcriptHtml"]
+    assert "调用工具" in result["transcriptHtml"]
+    assert "document_reader" in result["transcriptHtml"]
     assert "执行中" in result["transcriptHtml"]
-    assert "查看入参" in result["transcriptHtml"]
     assert "pages" in result["transcriptHtml"]
 
 
@@ -431,5 +431,5 @@ def test_chat_page_reconnect_callbacks_surface_cursor_recovery_notice() -> None:
         "action": "invoke_reconnect",
     }
     result = _run_chat_module(payload)
-    assert "SSE 连接中断，正在从 cursor 8 补拉" in result["statusText"]
-    assert "自动补拉" in result["transcriptHtml"]
+    assert "连接中断，正在自动恢复" in result["statusText"]
+    assert "自动恢复" in result["transcriptHtml"]
