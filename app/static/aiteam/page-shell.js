@@ -238,6 +238,7 @@ window.aiteam = window.aiteam || {};
             { re: /^\/app\/workbench\/?$/, script: 'app-workbench.js', handler: 'appWorkbench' },
             { re: /^\/app\/marketplace\/?$/, script: 'app-marketplace.js', handler: 'appMarketplace' },
             { re: /^\/app\/marketplace\/[^/]+\/?$/, script: 'app-template-detail.js', handler: 'appTemplateDetail' },
+            { re: /^\/app\/chat\/?$/, script: 'app-chat.js', handler: 'appChat' },
             { re: /^\/app\/chat\/[^/]+\/?$/, script: 'app-chat.js', handler: 'appChat' },
             { re: /^\/app\/group\/?$/, script: 'app-group.js', handler: 'appGroup' },
             { re: /^\/app\/group\/[^/]+\/?$/, script: 'app-group.js', handler: 'appGroup' },

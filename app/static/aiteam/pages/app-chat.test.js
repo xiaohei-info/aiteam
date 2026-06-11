@@ -64,3 +64,54 @@ test('chat summary panel keeps real bindings (skills + model)', function () {
   assert.ok(html.includes('检索'), 'skill chip preserved (real binding)');
   assert.ok(html.includes('gpt'), 'model preserved (real binding)');
 });
+
+test('agent list renders demo three sections (pinned / groups / others)', function () {
+  assert.strictEqual(typeof page._renderAgentList, 'function', 'expected _renderAgentList test export');
+  const html = page._renderAgentList({
+    pinned: [
+      { employee_id: 'p1', display_name: 'Luna', role_name: '策略分析师', status: 'online', conversation_id: 'c-luna', unread_count: 2, time_label: '刚刚' },
+    ],
+    groups: [
+      { conversation_id: 'g1', title: '产品研发组', member_count: 5, running_count: 2, status: 'online', time_label: '5分钟' },
+    ],
+    others: [
+      { employee_id: 'o1', display_name: 'Nova', role_name: '数据科学家', status: 'offline', conversation_id: 'c-nova' },
+    ],
+  }, 'c-luna');
+  assert.ok(html.includes('📌 置顶'), 'expected pinned section label');
+  assert.ok(html.includes('💼 工作群组'), 'expected groups section label');
+  assert.ok(html.includes('🤖 其他智能体'), 'expected others section label');
+  assert.ok(html.includes('Luna'), 'pinned agent rendered');
+  assert.ok(html.includes('产品研发组'), 'group rendered');
+  assert.ok(html.includes('/app/group/g1'), 'group href points to group route');
+  assert.ok(html.includes('Nova'), 'other agent rendered');
+  assert.ok(html.includes('is-active'), 'active conversation highlighted');
+});
+
+test('agent list skips empty sections', function () {
+  const html = page._renderAgentList({
+    pinned: [],
+    groups: [],
+    others: [{ employee_id: 'o1', display_name: 'Nova', role_name: '数据科学家', status: 'online', conversation_id: 'c-nova' }],
+  }, '');
+  assert.ok(!html.includes('📌 置顶'), 'no pinned label when empty');
+  assert.ok(!html.includes('💼 工作群组'), 'no groups label when empty');
+  assert.ok(html.includes('🤖 其他智能体'), 'others label present');
+});
+
+test('landing renders agent list and empty-state prompt without conversation', function () {
+  assert.strictEqual(typeof page._renderLanding, 'function', 'expected _renderLanding test export');
+  const container = makeContainer();
+  page._renderLanding(container, {
+    employees: [
+      { employee_id: 'e1', display_name: 'Luna', role_name: '策略分析师', presence: 'online', conversation_id: 'c-luna', pinned: true },
+      { employee_id: 'e2', display_name: 'Nova', role_name: '数据科学家', presence: 'idle', conversation_id: 'c-nova' },
+    ],
+    groups: [{ conversation_id: 'g1', title: '产品研发组', member_count: 5, running_count: 2 }],
+  });
+  assert.ok(container.innerHTML.includes('aiteam-chat__agent-list'), 'expected agent list container');
+  assert.ok(container.innerHTML.includes('📌 置顶'), 'pinned classified from workbench data');
+  assert.ok(container.innerHTML.includes('💼 工作群组'), 'groups rendered on landing');
+  assert.ok(container.innerHTML.includes('Nova'), 'unpinned employee in others');
+  assert.ok(container.innerHTML.includes('选择'), 'expected empty-state prompt to pick a conversation');
+});
