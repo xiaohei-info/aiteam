@@ -2963,6 +2963,13 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-office__canvas-wrap canvas:active { cursor:grabbing; }
 .aiteam-office__tooltip { position:absolute; pointer-events:none; opacity:0; background:var(--ait-bg2); border:1px solid var(--ait-border); border-radius:10px; padding:10px 14px; z-index:100; box-shadow:0 8px 24px rgba(0,0,0,.4); transition:opacity .15s; min-width:180px; }
 .aiteam-office__tooltip.is-show { opacity:1; }
+.aiteam-office__tooltip-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.aiteam-office__tooltip-avatar { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; background:linear-gradient(135deg,#2563EB,#0EA5E9); flex-shrink:0; }
+.aiteam-office__tooltip-name { font-weight:700; color:var(--ait-text); font-size:13px; }
+.aiteam-office__tooltip-role { color:var(--ait-text2); font-size:11px; }
+.aiteam-office__tooltip-row { display:flex; justify-content:space-between; gap:16px; font-size:12px; padding:2px 0; }
+.aiteam-office__tooltip-row span { color:var(--ait-text2); }
+.aiteam-office__tooltip-row strong { color:var(--ait-text); font-weight:600; }
 .aiteam-office__bottom { display:flex; border-top:1px solid var(--ait-border); background:var(--ait-bg2); }
 .aiteam-office__bottom-col { flex:1; padding:12px 14px; border-right:1px solid var(--ait-border); overflow-y:auto; }
 .aiteam-office__bottom-col:last-child { border-right:none; }

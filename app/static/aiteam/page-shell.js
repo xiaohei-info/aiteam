@@ -254,6 +254,8 @@ window.aiteam = window.aiteam || {};
         if (moduleScript) {
           main.innerHTML = '<p>加载页面...</p>';
           (function () {
+            var isOfficeRoute = currentPath === '/app/office' || currentPath.indexOf('/app/office/') === 0;
+            function loadModuleScript() {
             var scriptEl = document.createElement('script');
             scriptEl.src = 'static/aiteam/pages/' + moduleScript;
             scriptEl.onload = function () {
@@ -315,6 +317,17 @@ window.aiteam = window.aiteam || {};
               main.innerHTML = '<p>页面脚本加载失败</p>';
             };
             document.head.appendChild(scriptEl);
+            }
+
+            if (isOfficeRoute && !(aiteam.officeCanvas && aiteam.officeCanvas.mount)) {
+              var dep = document.createElement('script');
+              dep.src = 'static/aiteam/pages/office-canvas.js';
+              dep.onload = loadModuleScript;
+              dep.onerror = loadModuleScript; // canvas optional; page-module degrades to CSS grid
+              document.head.appendChild(dep);
+            } else {
+              loadModuleScript();
+            }
           })();
           return;
         }
