@@ -746,6 +746,34 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  function presenceDotClass(status) {
+    var s = String(status || '').toLowerCase();
+    if (s === 'busy' || s === 'running' || s === 'streaming') return 'is-busy';
+    if (s === 'offline' || s === 'paused') return 'is-offline';
+    return 'is-online';
+  }
+
+  function renderAgentList(agents, activeConversationId) {
+    if (!agents || !agents.length) {
+      return '<div class="aiteam-chat__agent-list"><div class="aiteam-inline-empty">暂无可用智能体</div></div>';
+    }
+    var items = agents.map(function (a) {
+      var convId = a.conversation_id || '';
+      var active = convId && String(convId) === String(activeConversationId) ? ' is-active' : '';
+      var href = convId ? '/app/chat/' + encodeURIComponent(convId) : '/app/chat/' + encodeURIComponent(a.employee_id || '');
+      var unread = a.unread_count ? '<div class="aiteam-chat__agent-unread">' + escapeHtml(String(a.unread_count)) + '</div>' : '';
+      return '<a class="aiteam-chat__agent' + active + '" href="' + escapeHtml(href) + '" data-chat-agent="' + escapeHtml(a.employee_id || '') + '">' +
+        '<div class="aiteam-chat__agent-avatar" style="background:' + escapeHtml(a.avatar_bg || 'linear-gradient(135deg,#2563EB,#0EA5E9)') + '">' + escapeHtml(a.avatar || '🤖') +
+        '<span class="aiteam-chat__agent-dot ' + presenceDotClass(a.status) + '"></span></div>' +
+        '<div class="aiteam-chat__agent-info"><div class="aiteam-chat__agent-name">' + escapeHtml(a.display_name || a.employee_id || '智能体') + '</div>' +
+        '<div class="aiteam-chat__agent-role">' + escapeHtml(a.role_name || a.status_text || '数字员工') + '</div></div>' +
+        '<div class="aiteam-chat__agent-meta"><div class="aiteam-chat__agent-time">' + escapeHtml(a.time_label || '') + '</div>' + unread + '</div>' +
+        '</a>';
+    }).join('');
+    return '<div class="aiteam-chat__agent-list">' +
+      '<div class="aiteam-chat__group-label">🤖 数字员工</div>' + items + '</div>';
+  }
+
   function renderChat(container, conversation) {
     var summary = conversation.employee_summary || {};
     var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
@@ -755,10 +783,10 @@ window.aiteam = window.aiteam || {};
       '<p class="aiteam-page__desc">按 PRD 原型落三栏结构：左侧历史区、中间消息与输入区、右侧员工摘要。数据仅消费 Team Panel 会话详情 / runs / timeline 契约。</p></div>' +
       '<div class="aiteam-hero-actions"><a class="aiteam-button aiteam-button--ghost" href="/app/workbench">返回工作台</a></div></div>' +
       '<div class="aiteam-grid aiteam-grid--chat-3col">' +
-      '<aside class="aiteam-panel aiteam-panel--history">' +
-      '<div class="aiteam-panel__header"><div><h3>历史区</h3><p class="aiteam-inline-note">完整历史回溯与引用入口</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
-      '<div class="aiteam-chat-history-meta">' + chip('状态 ' + (conversation.status || 'active'), 'neutral') + chip('共 ' + (conversation.message_count != null ? conversation.message_count : 0) + ' 条', 'brand') + '</div>' +
-      '<div class="aiteam-chat-history" data-chat-history></div>' +
+      '<aside class="aiteam-panel aiteam-panel--agents">' +
+      '<div class="aiteam-panel__header"><div><h3>智能体</h3><p class="aiteam-inline-note">点击切换对应会话</p></div><button class="aiteam-button aiteam-button--ghost" type="button" data-chat-load-more>更多</button></div>' +
+      '<input class="aiteam-chat__agent-search" type="search" placeholder="搜索智能体" data-chat-agent-search>' +
+      renderAgentList(conversation.__agentList || [], conversation.conversation_id) +
       '</aside>' +
       '<section class="aiteam-panel aiteam-panel--conversation">' +
       '<div class="aiteam-chat-topbar" data-chat-hero></div>' +
@@ -817,8 +845,34 @@ window.aiteam = window.aiteam || {};
           ns.states.handleApiResult(result, container, function () {});
           return;
         }
-        renderChat(container, result.data || {});
+        var conv = result.data || {};
+        function finish(agentList) {
+          conv.__agentList = agentList || [];
+          renderChat(container, conv);
+        }
+        if (ns.api && typeof ns.api.getWorkbench === 'function') {
+          ns.api.getWorkbench().then(function (wb) {
+            var employees = (wb && wb.ok && wb.data && Array.isArray(wb.data.employees)) ? wb.data.employees : [];
+            finish(employees.map(function (e) {
+              return {
+                employee_id: e.employee_id,
+                display_name: e.display_name,
+                role_name: e.role_name,
+                status: e.presence || e.status,
+                conversation_id: e.conversation_id,
+                avatar: e.avatar || '🤖',
+                avatar_bg: e.avatar_bg,
+                unread_count: e.unread_count,
+                time_label: e.time_label,
+              };
+            }));
+          }).catch(function () { finish([]); });
+        } else {
+          finish([]);
+        }
       });
     },
   };
+
+  ns.pages.appChat._renderChat = renderChat;
 }(window.aiteam));
