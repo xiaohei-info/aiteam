@@ -2938,6 +2938,8 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-org__node-name { font-size:12px; font-weight:700; color:var(--ait-text); }
 .aiteam-org__node-role { font-size:10px; color:var(--ait-text2); }
 .aiteam-org__line-v { width:2px; height:24px; background:var(--ait-border); margin:0 auto; }
+.aiteam-org__assign-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--ait-border); }
+.aiteam-org__assign-name { font-size:12px; font-weight:600; color:var(--ait-text); min-width:64px; }
 /* ===== PROTOTYPE: OFFICE CANVAS ===== */
 .aiteam-office__canvas-wrap { position:relative; flex:1; min-height:420px; overflow:hidden; background:radial-gradient(ellipse at 50% 30%,#1a2540 0%,var(--ait-bg) 70%); }
 .aiteam-office__canvas-wrap canvas { display:block; cursor:grab; }
