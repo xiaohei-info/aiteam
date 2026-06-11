@@ -48,3 +48,19 @@ test('chat renders agent list in left column', function () {
   assert.ok(container.innerHTML.includes('小析'), 'expected agent name rendered');
   assert.ok(container.innerHTML.includes('/app/chat/c-2'), 'expected nav href to other conversation');
 });
+
+test('chat renders tool card for tool_call timeline item', function () {
+  const html = page._renderTimelineItem({ type: 'tool_call', tool_name: 'web_search', tool_args: '"AI"' });
+  assert.ok(html.includes('aiteam-chat__tool-card'), 'expected tool card');
+  assert.ok(html.includes('web_search'), 'expected tool name');
+});
+test('chat renders thinking bubble', function () {
+  const html = page._renderThinking();
+  assert.ok(html.includes('aiteam-chat__thinking'), 'expected thinking bubble');
+});
+test('chat summary panel keeps real bindings (skills + model)', function () {
+  const html = page._renderSummaryPanel({ display_name: '小析', role_name: '分析师', model_provider: 'openrouter', model_name: 'gpt', skills: ['检索','写作'], knowledge_bases: ['KB1'], usage_summary: { total_runs: 4, status_counts: { succeeded: 3 } } }, { message_count: 9 });
+  assert.ok(html.includes('小析'), 'name');
+  assert.ok(html.includes('检索'), 'skill chip preserved (real binding)');
+  assert.ok(html.includes('gpt'), 'model preserved (real binding)');
+});
