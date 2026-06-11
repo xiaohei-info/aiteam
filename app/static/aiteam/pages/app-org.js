@@ -309,6 +309,30 @@ window.aiteam = window.aiteam || {};
     ].join('');
   }
 
+  function renderOrgNode(name, role, glyph, rootClass) {
+    return '<div class="aiteam-org__node' + (rootClass ? ' is-root' : '') + '">' +
+      '<div class="aiteam-org__node-avatar">' + escapeHtml(glyph || '🤖') + '</div>' +
+      '<div><div class="aiteam-org__node-name">' + escapeHtml(name) + '</div>' +
+      '<div class="aiteam-org__node-role">' + escapeHtml(role || '') + '</div></div></div>';
+  }
+
+  function renderOrgChart(departments) {
+    var rootHtml = '<div class="aiteam-org__level">' + renderOrgNode('企业团队', '组织根节点', '🏢', true) + '</div>' +
+      '<div class="aiteam-org__line-v"></div>';
+    var deptNodes = departments.map(function (dept) {
+      var name = getDepartmentName(dept);
+      var members = getDepartmentMembers(dept);
+      var memberHtml = members.map(function (m) {
+        return renderOrgNode(getMemberName(m), getMemberRole(m) || presenceLabel(getPresence(m)), '🧑‍💼', false);
+      }).join('');
+      return '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">' +
+        renderOrgNode(name, members.length + ' 位成员', '🗂️', false) +
+        (memberHtml ? '<div class="aiteam-org__line-v"></div><div class="aiteam-org__level">' + memberHtml + '</div>' : '') +
+        '</div>';
+    }).join('');
+    return '<div class="aiteam-org__chart">' + rootHtml + '<div class="aiteam-org__level">' + deptNodes + '</div></div>';
+  }
+
   function renderOrg(main, payload) {
     var departments = getPayloadDepartments(payload);
     var unassignedMembers = getUnassignedMembers(payload);
@@ -345,7 +369,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽调整层级</span><span class="aiteam-shell__meta-value">当前以 PATCH 等价交互承接</span></div>',
       '</div>',
       '<div class="aiteam-grid aiteam-grid--chat">',
-      '<section class="aiteam-panel">' + renderLegend() + '<div class="aiteam-org__tree">' + panels + '</div></section>',
+      '<section class="aiteam-panel">' + renderLegend() + renderOrgChart(departments) + '</section>',
       '<section class="aiteam-panel">' + renderDeptSummary(departments, unassignedMembers) + '</section>',
       '</div>',
       '</section>'
@@ -383,4 +407,6 @@ window.aiteam = window.aiteam || {};
       return loadOrg(main);
     }
   };
+
+  ns.pages.appOrg._renderOrg = renderOrg;
 }(window.aiteam));
