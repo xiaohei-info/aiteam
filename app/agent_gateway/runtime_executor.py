@@ -93,6 +93,15 @@ def _execute_run(run_id: str) -> None:
 
     conn = _connect()
     try:
+        # Phase 0 — 群聊多智能体编排走专用执行器 (真实多员工拆解/并行/汇总链).
+        # 差异备案: 2026-06-11-AI Team-Gateway执行链路实现口径与设计差异备案 §3.
+        with UnitOfWork(conn) as uow:
+            probe = uow.team_runs().get_by_id(run_id)
+        if probe is not None and probe.execution_mode == "kanban_orchestration":
+            from agent_gateway.orchestration_executor import execute_orchestration
+            execute_orchestration(conn, run_id)
+            return
+
         # Phase 1 — load context, mark running, emit run_started.
         with UnitOfWork(conn) as uow:
             run = uow.team_runs().get_by_id(run_id)

@@ -2706,8 +2706,9 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
                 idempotency_key,
                 sender_id,
             )
-        # 群聊 single_agent 路由同样进入真实执行; orchestration 由执行器按
-        # 单 planner 路径处理 (Phase 1 收敛, 详见 runtime_executor)。
+        # 群聊 single_agent 与 orchestration 均进入真实执行; execute_run_async
+        # 内部按 execution_mode 分流: kanban_orchestration → orchestration_executor
+        # (多员工拆解/并行/汇总), 其余 → 单 agent 路径。
         from agent_gateway.runtime_executor import execute_run_async
         if result.get("run_id"):
             execute_run_async(result["run_id"])
