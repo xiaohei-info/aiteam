@@ -5,3 +5,4 @@
 /.worktrees/
 /docs/复盘/*.html
 /docs/复盘/*.json
+.DS_Store
