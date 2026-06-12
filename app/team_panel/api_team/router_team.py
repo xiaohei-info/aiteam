@@ -56,6 +56,10 @@ from ..repositories.connector_definition_repo import ConnectorDefinitionRepo
 from ..repositories.conversation_message_repo import ConversationMessageRepo
 from ..repositories.conversation_repo import ConversationRepo
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
+from ..repositories.enterprise_llm_provider_repo import (
+    EnterpriseLlmModelRepo,
+    EnterpriseLlmProviderRepo,
+)
 from ..repositories.employee_org_assignment_repo import EmployeeOrgAssignmentRepo
 from ..repositories.employee_repo import EmployeeRepo
 from ..repositories.employee_prompt_repo import EmployeePromptRepo
@@ -1445,6 +1449,31 @@ def _read_asset_text(doc) -> str:
     )
 
 
+def _resolve_enterprise_llm_provider(cur, enterprise_id: str) -> dict | None:
+    """Build the default LLM provider dict for LightRAG from the config 中心 (D6).
+
+    Returns ``{provider_key, base_url, api_key, default_model}`` for the
+    enterprise's default/first enabled provider, or None (vector-only).
+    """
+    if not enterprise_id:
+        return None
+    providers = [p for p in EnterpriseLlmProviderRepo(cur).list_by_enterprise(enterprise_id)
+                 if getattr(p, "enabled", True)]
+    if not providers:
+        return None
+    provider = providers[0]
+    models = [m for m in EnterpriseLlmModelRepo(cur).list_by_enterprise(enterprise_id)
+              if getattr(m, "enabled", True) and m.provider_id == provider.id]
+    default_model = next((m.model_id for m in models if m.is_default),
+                         models[0].model_id if models else "")
+    return {
+        "provider_key": provider.provider_key,
+        "base_url": provider.base_url,
+        "api_key": provider.api_key,
+        "default_model": default_model,
+    }
+
+
 def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
     """Run real LightRAG ingestion (chunk + embed) for pending jobs."""
     from team_panel.integration import lightrag_service
@@ -1463,9 +1492,11 @@ def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
             rag_document_id = doc.rag_document_id or f"rag_{doc.id}"
             try:
                 text = _read_asset_text(doc)
+                llm_provider = _resolve_enterprise_llm_provider(cur, job.enterprise_id)
                 chunk_count = lightrag_service.ingest_document(
                     job.knowledge_base_id, rag_document_id, text,
                     file_name=doc.file_name or doc.display_name or doc.id,
+                    llm_provider=llm_provider,
                 )
             except Exception as exc:  # noqa: BLE001 — ingest failure is a doc state
                 logger.warning("[kb] ingestion failed for %s: %s", doc.id, exc)
