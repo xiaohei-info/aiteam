@@ -1438,7 +1438,8 @@ def _read_asset_text(doc) -> str:
         candidates.append(_UPLOADS_ROOT / rel)
     for p in candidates:
         if p and p.is_file():
-            return p.read_text(encoding="utf-8", errors="replace")
+            from team_panel.integration.document_parser import extract_text
+            return extract_text(p)
     raise FileNotFoundError(
         f"asset file not found for document {doc.id} (asset_id={doc.asset_id})"
     )
