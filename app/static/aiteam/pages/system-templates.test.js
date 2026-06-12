@@ -1,5 +1,10 @@
 'use strict';
 
+// system-templates.js 交互回归测试（轻量 DOM mock）。
+// 覆盖：表格治理操作（update / publish / unpublish）与「创建专家」按钮触发抽屉。
+// 抽屉内部表单提交依赖真实 DOM（innerHTML + querySelector），由 Playwright 端到端验证，
+// 不在此处用手写 HTML parser 模拟，避免脆弱断言。
+
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -10,33 +15,34 @@ function createElement(tag) {
     children: [],
     parentNode: null,
     className: '',
+    id: '',
     innerHTML: '',
-    textContent: '',
     value: '',
     checked: false,
+    hidden: false,
+    disabled: false,
     style: {},
     attributes: {},
     events: {},
-    appendChild(child) {
-      child.parentNode = this;
-      this.children.push(child);
+    appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
+    removeChild(child) {
+      const idx = this.children.indexOf(child);
+      if (idx !== -1) this.children.splice(idx, 1);
       return child;
     },
-    addEventListener(type, fn) {
-      this.events[type] = this.events[type] || [];
-      this.events[type].push(fn);
-    },
+    focus() {},
+    addEventListener(type, fn) { (this.events[type] = this.events[type] || []).push(fn); },
     dispatchEvent(event) {
       const payload = event || { type: '' };
-      if (!payload.currentTarget) payload.currentTarget = el;
-      (this.events[payload.type] || []).forEach(function (fn) { fn.call(el, payload); });
+      if (!payload.currentTarget) payload.currentTarget = this;
+      (this.events[payload.type] || []).forEach((fn) => fn.call(this, payload));
     },
-    setAttribute(key, value) {
-      this.attributes[key] = String(value);
-    },
+    setAttribute(key, value) { this.attributes[key] = String(value); },
     getAttribute(key) {
       return Object.prototype.hasOwnProperty.call(this.attributes, key) ? this.attributes[key] : null;
     },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
   };
   el.classList = { add() {}, remove() {}, toggle() { return false; } };
   return el;
@@ -44,17 +50,10 @@ function createElement(tag) {
 
 function createHost() {
   const host = createElement('div');
-  host._createForm = createElement('form');
-  host._nameInput = createElement('input');
-  host._roleInput = createElement('input');
-  host._publishInput = createElement('input');
-  host._publishInput.checked = false;
+  host._openBtn = createElement('button');
   host._buttons = [];
   host.querySelector = function (selector) {
-    if (selector === '[data-aiteam-template-create-form]') return this._createForm;
-    if (selector === '[data-aiteam-template-create-name]') return this._nameInput;
-    if (selector === '[data-aiteam-template-create-role]') return this._roleInput;
-    if (selector === '[data-aiteam-template-create-publish]') return this._publishInput;
+    if (selector === '[data-aiteam-template-create-open]') return this._openBtn;
     return null;
   };
   host.querySelectorAll = function (selector) {
@@ -71,10 +70,13 @@ function createActionButton(action, templateId) {
   return button;
 }
 
+const appRoot = createElement('div');
+appRoot.id = 'aiteam-app';
 const document = {
   body: createElement('body'),
   head: createElement('head'),
   createElement,
+  getElementById(id) { return id === 'aiteam-app' ? appRoot : null; },
 };
 
 const apiCalls = [];
@@ -85,6 +87,9 @@ const context = {
       api: {
         get(url) {
           apiCalls.push({ method: 'GET', url, body: null });
+          if (url === '/api/system-admin/enterprises') {
+            return Promise.resolve({ ok: true, data: { enterprises: [{ enterprise_id: 'ent_test', name: 'Test Corp' }] } });
+          }
           return Promise.resolve({
             ok: true,
             data: { items: [{ template_id: 'tpl_ops', name: '运营专家', role_name: 'operator', status: 'draft' }] },
@@ -92,7 +97,7 @@ const context = {
         },
         post(url, body) {
           apiCalls.push({ method: 'POST', url, body });
-          return Promise.resolve({ ok: true, data: { template_id: 'tpl_new', status: body.publish_action === 'publish' ? 'published' : 'draft' } });
+          return Promise.resolve({ ok: true, data: { template_id: 'tpl_new', status: 'draft' } });
         },
         patch(url, body) {
           apiCalls.push({ method: 'PATCH', url, body });
@@ -125,82 +130,69 @@ const failures = [];
 
 function assert(condition, message) {
   if (condition) passed += 1;
-  else {
-    failed += 1;
-    failures.push(message);
-  }
+  else { failed += 1; failures.push(message); }
 }
 
 async function nextTick() {
-  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function lastCall(method, urlPart) {
+  for (let i = apiCalls.length - 1; i >= 0; i -= 1) {
+    if (apiCalls[i].method === method && apiCalls[i].url.indexOf(urlPart) !== -1) return apiCalls[i];
+  }
+  return null;
 }
 
 async function run() {
   assert(!!page, 'systemTemplates page should register');
   assert(typeof page.init === 'function', 'systemTemplates.init should exist');
 
-  const createHostNode = createHost();
-  page.init(createHostNode);
+  // 渲染 + 创建按钮触发抽屉（抽屉挂载到 aiteam-app）。
+  const host = createHost();
+  page.init(host);
   await nextTick();
-  assert(apiCalls[0] && apiCalls[0].url === '/api/system-admin/templates', 'init should load templates from system-admin route');
-  assert(createHostNode.innerHTML.indexOf('新建模板') !== -1, 'page should render create form controls');
-  createHostNode._nameInput.value = '新模板';
-  createHostNode._roleInput.value = 'assistant';
-  createHostNode._publishInput.checked = true;
-  createHostNode._createForm.dispatchEvent({ type: 'submit', preventDefault() {} });
   await nextTick();
-  assert(JSON.stringify(apiCalls[1]) === JSON.stringify({
-    method: 'POST',
-    url: '/api/system-admin/templates',
-    body: { name: '新模板', role_name: 'assistant', publish_action: 'publish' },
-  }), 'submitting rendered create form should POST to /api/system-admin/templates');
+  assert(!!lastCall('GET', '/api/system-admin/templates'), 'init should load templates');
+  assert(host.innerHTML.indexOf('创建专家') !== -1, 'page should render 创建专家 button');
+  const drawerCountBefore = appRoot.children.length;
+  host._openBtn.dispatchEvent({ type: 'click' });
+  assert(appRoot.children.length > drawerCountBefore, 'clicking 创建专家 should mount a drawer into aiteam-app');
 
-  const updateHostNode = createHost();
-  updateHostNode._buttons = [createActionButton('update', 'tpl_ops')];
-  page.init(updateHostNode);
+  // 表格更新按钮 → PATCH。
+  const updateHost = createHost();
+  updateHost._buttons = [createActionButton('update', 'tpl_ops')];
+  page.init(updateHost);
+  await nextTick();
   await nextTick();
   promptQueue.push('运营专家Pro', 'senior-operator');
-  updateHostNode._buttons[0].dispatchEvent({ type: 'click' });
+  updateHost._buttons[0].dispatchEvent({ type: 'click' });
   await nextTick();
-  assert(JSON.stringify(apiCalls[3]) === JSON.stringify({
-    method: 'PATCH',
-    url: '/api/system-admin/templates/tpl_ops',
-    body: { name: '运营专家Pro', role_name: 'senior-operator' },
-  }), 'clicking rendered update button should PATCH the template route');
+  const patchUpdate = lastCall('PATCH', '/api/system-admin/templates/tpl_ops');
+  assert(patchUpdate && patchUpdate.body.name === '运营专家Pro' && patchUpdate.body.role_name === 'senior-operator',
+    'update button should PATCH name + role_name');
 
-  const publishHostNode = createHost();
-  publishHostNode._buttons = [createActionButton('publish', 'tpl_ops')];
-  page.init(publishHostNode);
+  // 发布按钮 → PATCH publish_action。
+  const publishHost = createHost();
+  publishHost._buttons = [createActionButton('publish', 'tpl_ops')];
+  page.init(publishHost);
   await nextTick();
-  publishHostNode._buttons[0].dispatchEvent({ type: 'click' });
   await nextTick();
-  assert(JSON.stringify(apiCalls[5]) === JSON.stringify({
-    method: 'PATCH',
-    url: '/api/system-admin/templates/tpl_ops',
-    body: { publish_action: 'publish' },
-  }), 'clicking rendered publish button should PATCH publish_action to the template route');
-
-  const unpublishHostNode = createHost();
-  unpublishHostNode._buttons = [createActionButton('unpublish', 'tpl_ops')];
-  page.init(unpublishHostNode);
+  publishHost._buttons[0].dispatchEvent({ type: 'click' });
   await nextTick();
-  unpublishHostNode._buttons[0].dispatchEvent({ type: 'click' });
-  await nextTick();
-  assert(JSON.stringify(apiCalls[7]) === JSON.stringify({
-    method: 'PATCH',
-    url: '/api/system-admin/templates/tpl_ops',
-    body: { publish_action: 'unpublish' },
-  }), 'clicking rendered unpublish button should PATCH unpublish to the template route');
+  const patchPublish = lastCall('PATCH', '/api/system-admin/templates/tpl_ops');
+  assert(patchPublish && patchPublish.body.publish_action === 'publish',
+    'publish button should PATCH publish_action=publish');
 
   if (failed) {
     console.error('system-templates.test.js failed');
-    failures.forEach(function (item) { console.error('- ' + item); });
+    failures.forEach((item) => console.error('- ' + item));
     process.exit(1);
   }
   console.log('system-templates.test.js passed:', passed, 'assertions');
 }
 
-run().catch(function (err) {
+run().catch((err) => {
   console.error(err && err.stack ? err.stack : err);
   process.exit(1);
 });

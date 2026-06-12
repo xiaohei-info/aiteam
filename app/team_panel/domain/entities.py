@@ -22,6 +22,7 @@ class AgentTemplate:
     version_no: int = 1
     source_type: str = "system"  # system | enterprise_custom
     owner_enterprise_id: Optional[str] = None
+    publish_scope_json: str = '{"mode":"all"}'  # all | selected(enterprise_ids)
     created_at: str = ""
     updated_at: str = ""
     created_by: str = ""
@@ -46,6 +47,7 @@ class IndustrySolution:
     default_kb_blueprint_json: str = "{}"
     default_skill_bundle_json: str = "{}"
     default_collaboration_template_ref: Optional[str] = None
+    publish_scope_json: str = '{"mode":"all"}'  # all | selected(enterprise_ids)
     created_at: str = ""
     updated_at: str = ""
     created_by: str = ""

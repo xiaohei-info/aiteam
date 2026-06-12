@@ -18,6 +18,43 @@ def _json_dumps(value: Any, *, default: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _normalize_publish_scope(value: Any) -> str:
+    """Normalize a publish-scope payload into canonical JSON text.
+
+    Accepted shapes:
+      None / missing / {"mode":"all"}            → {"mode":"all"}
+      {"mode":"selected","enterprise_ids":[...]} → selected with deduped ids
+    Anything malformed falls back to all (fail-open: visible to everyone).
+    """
+    default = {"mode": "all"}
+    if value in (None, ""):
+        return json.dumps(default, ensure_ascii=False)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return json.dumps(default, ensure_ascii=False)
+    if not isinstance(value, dict):
+        return json.dumps(default, ensure_ascii=False)
+    mode = str(value.get("mode") or "all").strip()
+    if mode != "selected":
+        return json.dumps(default, ensure_ascii=False)
+    raw_ids = value.get("enterprise_ids") or []
+    if not isinstance(raw_ids, (list, tuple)):
+        raw_ids = []
+    enterprise_ids: list[str] = []
+    seen: set[str] = set()
+    for item in raw_ids:
+        eid = str(item).strip()
+        if eid and eid not in seen:
+            seen.add(eid)
+            enterprise_ids.append(eid)
+    # selected with empty list is meaningless → treat as all to avoid hiding from everyone.
+    if not enterprise_ids:
+        return json.dumps(default, ensure_ascii=False)
+    return json.dumps({"mode": "selected", "enterprise_ids": enterprise_ids}, ensure_ascii=False)
+
+
 def _create_audit(
     uow,
     *,
@@ -63,6 +100,7 @@ def create_template(uow, body: dict | None) -> AgentTemplate:
         default_binding_json=_json_dumps(payload.get("default_binding") or payload.get("default_binding_json"), default={}),
         version_no=int(payload.get("version_no") or 1),
         source_type="system",
+        publish_scope_json=_normalize_publish_scope(payload.get("publish_scope")),
         created_by=_SYSTEM_ACTOR_ID,
         updated_by=_SYSTEM_ACTOR_ID,
     )
@@ -120,6 +158,11 @@ def update_template(uow, template_id: str, body: dict | None) -> AgentTemplate:
         if template.default_binding_json != new_json:
             template.default_binding_json = new_json
             changed_fields.append("default_binding")
+    if "publish_scope" in payload:
+        new_scope = _normalize_publish_scope(payload.get("publish_scope"))
+        if template.publish_scope_json != new_scope:
+            template.publish_scope_json = new_scope
+            changed_fields.append("publish_scope")
 
     from_status = template.status
     publish_action = (payload.get("publish_state") or payload.get("publish_action") or "").strip()
@@ -166,6 +209,7 @@ def create_solution(uow, body: dict | None) -> IndustrySolution:
         default_kb_blueprint_json=_json_dumps(payload.get("default_kb_blueprint") or payload.get("default_kb_blueprint_json"), default={}),
         default_skill_bundle_json=_json_dumps(payload.get("default_skill_bundle") or payload.get("default_skill_bundle_json"), default={}),
         default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
+        publish_scope_json=_normalize_publish_scope(payload.get("publish_scope")),
         created_by=_SYSTEM_ACTOR_ID,
         updated_by=_SYSTEM_ACTOR_ID,
     )
@@ -227,6 +271,11 @@ def update_solution(uow, solution_id: str, body: dict | None) -> IndustrySolutio
         if solution.default_collaboration_template_ref != value:
             solution.default_collaboration_template_ref = value
             changed_fields.append("default_collaboration_template_ref")
+    if "publish_scope" in payload:
+        new_scope = _normalize_publish_scope(payload.get("publish_scope"))
+        if solution.publish_scope_json != new_scope:
+            solution.publish_scope_json = new_scope
+            changed_fields.append("publish_scope")
 
     if "template_ids" in payload:
         template_ids = payload.get("template_ids") or []

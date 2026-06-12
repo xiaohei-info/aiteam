@@ -1718,6 +1718,30 @@ def _load_json_object(value) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _publish_scope_allows(scope_json: str | dict | None, enterprise_id: str | None) -> bool:
+    """Whether a publish scope makes the item visible to *enterprise_id*.
+
+    Fail-open: any malformed / unknown scope defaults to visible (mode=all),
+    so existing published content stays visible after the scope field was added.
+    """
+    scope = scope_json
+    if isinstance(scope, str):
+        try:
+            scope = json.loads(scope) if scope else {}
+        except (TypeError, ValueError):
+            return True
+    if not isinstance(scope, dict):
+        return True
+    if scope.get("mode") != "selected":
+        return True
+    if not enterprise_id:
+        return False
+    enterprise_ids = scope.get("enterprise_ids")
+    if not isinstance(enterprise_ids, (list, tuple)):
+        return False
+    return str(enterprise_id) in {str(eid) for eid in enterprise_ids}
+
+
 def _template_default_bindings(template: AgentTemplate) -> dict:
     return _load_json_object(template.default_binding_json)
 
@@ -1810,6 +1834,8 @@ def _handle_talent_templates(conn, path: str, query: str) -> tuple[int, dict]:
         except (TypeError, ValueError):
             page_size = 20
         offset = (page - 1) * page_size
+        enterprises = EnterpriseRepo(cur).list_all()
+        enterprise = enterprises[0] if enterprises else None
         templates, total = repo.list_filtered(
             status="published",
             category_code=category,
@@ -1819,9 +1845,8 @@ def _handle_talent_templates(conn, path: str, query: str) -> tuple[int, dict]:
             sort_order=sort_order,
             limit=page_size,
             offset=offset,
+            visible_to_enterprise_id=enterprise.id if enterprise is not None else None,
         )
-        enterprises = EnterpriseRepo(cur).list_all()
-        enterprise = enterprises[0] if enterprises else None
         employee_counts: dict[str, int] = {}
         recruit_counts: dict[str, int] = {}
         if enterprise is not None:
@@ -3956,7 +3981,7 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
         cur.execute(
             "SELECT id, name, status, tags_json, default_kb_blueprint_json, "
             "default_skill_bundle_json, default_collaboration_template_ref, "
-            "created_at, updated_at "
+            "created_at, updated_at, publish_scope_json "
             "FROM industry_solution WHERE deleted_at IS NULL ORDER BY created_at DESC"
         )
         rows = cur.fetchall()
@@ -3976,6 +4001,8 @@ def _handle_solutions_list(conn, path: str) -> tuple[int, dict]:
         items = []
         for row in rows:
             if row[2] != "published":
+                continue
+            if not _publish_scope_allows(row[9], enterprise.id if enterprise is not None else None):
                 continue
             tags = row[3] if isinstance(row[3], list) else []
             solution_id = row[0]

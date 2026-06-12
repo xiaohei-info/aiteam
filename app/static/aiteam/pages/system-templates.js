@@ -8,6 +8,12 @@ window.aiteam = window.aiteam || {};
     return String(value).replace(/^\s+|\s+$/g, '');
   }
 
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   function normalizeItems(payload) {
     if (Array.isArray(payload)) return payload.slice();
     if (payload && Array.isArray(payload.items)) return payload.items.slice();
@@ -46,6 +52,13 @@ window.aiteam = window.aiteam || {};
     return list;
   }
 
+  function scopeLabel(item) {
+    var scope = item && item.publish_scope;
+    if (!scope || scope.mode !== 'selected') return '全部可见';
+    var ids = Array.isArray(scope.enterprise_ids) ? scope.enterprise_ids : [];
+    return '指定企业 (' + ids.length + ')';
+  }
+
   function renderPreviewPanel(item) {
     if (!item) {
       return '<div class="aiteam-inline-empty">选择一个模板后查看用户端预览。</div>';
@@ -57,14 +70,15 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-detail-section">' +
       '<h3>用户端预览</h3>' +
       '<div class="aiteam-chat-summary__hero">' +
-      '<h3>' + (item.name || '') + '</h3>' +
-      '<p>' + previewDescription + '</p>' +
+      '<h3>' + escapeHtml(item.name || '') + '</h3>' +
+      '<p>' + escapeHtml(previewDescription) + '</p>' +
       '</div>' +
       '<div class="aiteam-detail-kv">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">角色标识</span><span class="aiteam-shell__meta-value">' + (item.role_name || item.role || '—') + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">默认模型</span><span class="aiteam-shell__meta-value">' + previewModel + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + (tags.length ? tags.join(' / ') : '—') + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布状态</span><span class="aiteam-shell__meta-value">' + (item.status || item.publish_state || 'draft') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">角色标识</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.role_name || item.role || '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">默认模型</span><span class="aiteam-shell__meta-value">' + escapeHtml(previewModel) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + escapeHtml(tags.length ? tags.join(' / ') : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.status || item.publish_state || 'draft') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布范围</span><span class="aiteam-shell__meta-value">' + escapeHtml(scopeLabel(item)) + '</span></div>' +
       '</div>' +
       '</div>';
   }
@@ -92,17 +106,18 @@ window.aiteam = window.aiteam || {};
         recruitCount = item.publish_record.recruit_count;
       }
       return '<tr>' +
-        '<td>' + templateId + '</td>' +
-        '<td>' + (item.name || '') + '</td>' +
-        '<td>' + (item.role_name || item.role || '') + '</td>' +
-        '<td>' + status + '</td>' +
-        '<td>' + (item.version_no || item.version || '-') + '</td>' +
-        '<td>' + (typeof recruitCount === 'undefined' ? '-' : recruitCount) + '</td>' +
+        '<td>' + escapeHtml(templateId) + '</td>' +
+        '<td>' + escapeHtml(item.name || '') + '</td>' +
+        '<td>' + escapeHtml(item.role_name || item.role || '') + '</td>' +
+        '<td>' + escapeHtml(status) + '</td>' +
+        '<td>' + escapeHtml(scopeLabel(item)) + '</td>' +
+        '<td>' + escapeHtml(item.version_no || item.version || '-') + '</td>' +
+        '<td>' + (typeof recruitCount === 'undefined' ? '-' : escapeHtml(recruitCount)) + '</td>' +
         '<td>' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-template-id="' + templateId + '">更新</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="preview" data-aiteam-template-id="' + templateId + '">预览效果</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="clone" data-aiteam-template-id="' + templateId + '">克隆</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-template-id="' + templateId + '">' + publishLabel + '</button>' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-template-id="' + escapeHtml(templateId) + '">更新</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="preview" data-aiteam-template-id="' + escapeHtml(templateId) + '">预览效果</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="clone" data-aiteam-template-id="' + escapeHtml(templateId) + '">克隆</button> ' +
+          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-template-id="' + escapeHtml(templateId) + '">' + publishLabel + '</button>' +
         '</td>' +
         '</tr>';
     }).join('');
@@ -111,41 +126,147 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">专家管理</h2>' +
-      '<p class="aiteam-shell__panel-body">管理人才市场中的专家模板：创建、更新、预览、克隆，以及发布与下架。</p>' +
-      (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + notice + '</p></div>' : '') +
-      '<form class="aiteam-shell__meta" data-aiteam-template-create-form="1">' +
-      '<div class="aiteam-shell__meta-card"><label>模板名称<br><input class="aiteam-input" type="text" data-aiteam-template-create-name="1" placeholder="例如：销售专家"></label></div>' +
-      '<div class="aiteam-shell__meta-card"><label>角色标识<br><input class="aiteam-input" type="text" data-aiteam-template-create-role="1" placeholder="例如：sales_advisor"></label></div>' +
-      '<div class="aiteam-shell__meta-card"><label><input type="checkbox" data-aiteam-template-create-publish="1"> 创建后立即发布</label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建模板</button></div>' +
-      '</form>' +
+      '<p class="aiteam-shell__panel-body">管理人才市场中的专家模板：创建、更新、预览、克隆，以及发布与下架。可控制每个专家发布给哪些企业。</p>' +
+      (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + escapeHtml(notice) + '</p></div>' : '') +
+      '<div class="aiteam-shell__toolbar"><button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-template-create-open="1">➕ 创建专家</button></div>' +
       '<div class="aiteam-panel aiteam-panel--nested">' + renderPreviewPanel(previewTemplate) + '</div>' +
-      '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th><th>版本</th><th>招募数</th><th>治理操作</th></tr></thead><tbody>' +
-      (rows || '<tr><td colspan="7">暂无可治理的系统模板</td></tr>') +
+      '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th><th>发布范围</th><th>版本</th><th>招募数</th><th>治理操作</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="8">暂无可治理的系统模板</td></tr>') +
       '</tbody></table>' +
       '</div>';
   }
 
-  function bindPanelInteractions(container, state) {
-    var createForm = container.querySelector ? container.querySelector('[data-aiteam-template-create-form]') : null;
-    if (createForm && createForm.addEventListener) {
-      createForm.addEventListener('submit', function (event) {
-        if (event && event.preventDefault) event.preventDefault();
-        var nameInput = container.querySelector ? container.querySelector('[data-aiteam-template-create-name]') : null;
-        var roleInput = container.querySelector ? container.querySelector('[data-aiteam-template-create-role]') : null;
-        var publishInput = container.querySelector ? container.querySelector('[data-aiteam-template-create-publish]') : null;
-        var payload = {
-          name: trimText(nameInput && nameInput.value),
-          role_name: trimText(roleInput && roleInput.value)
-        };
-        if (publishInput && publishInput.checked) payload.publish_action = 'publish';
-        if (!payload.name || !payload.role_name) return;
-        container.lastCreateHandler(payload).then(function (result) {
+  function renderEnterpriseCheckboxes(enterprises) {
+    var list = Array.isArray(enterprises) ? enterprises : [];
+    if (!list.length) {
+      return '<p class="aiteam-drawer__desc">暂无企业可选（创建后可在更新中调整）。</p>';
+    }
+    return list.map(function (ent) {
+      var id = ent.enterprise_id || ent.id || '';
+      var name = ent.name || id;
+      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-scope-ent="' + escapeHtml(id) + '"> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(id) + '</span></label>';
+    }).join('');
+  }
+
+  function closeDrawer() {
+    var overlay = document.getElementById('aiteam-template-create-overlay');
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    var drawer = document.getElementById('aiteam-template-create-drawer');
+    if (drawer && drawer.parentNode) drawer.parentNode.removeChild(drawer);
+  }
+
+  function openCreateDrawer(state, onSubmit) {
+    closeDrawer();
+    var overlay = document.createElement('div');
+    overlay.className = 'aiteam-drawer__overlay';
+    overlay.id = 'aiteam-template-create-overlay';
+    overlay.addEventListener('click', closeDrawer);
+
+    var drawer = document.createElement('div');
+    drawer.className = 'aiteam-drawer';
+    drawer.id = 'aiteam-template-create-drawer';
+    drawer.innerHTML =
+      '<div class="aiteam-drawer__header">' +
+      '<h2 class="aiteam-drawer__title">创建专家</h2>' +
+      '<button type="button" class="aiteam-drawer__close" data-aiteam-template-create-close="1">×</button>' +
+      '</div>' +
+      '<div class="aiteam-drawer__section">' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">模板名称 *</span>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-name placeholder="例如：销售专家"></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">角色标识 *</span>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-role placeholder="例如：sales_advisor"></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">分类</span>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-category placeholder="例如：sales"></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">岗位描述</span>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-tpl-desc placeholder="一句话描述这个专家擅长什么"></textarea></label>' +
+      '</div>' +
+      '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">发布范围</h3>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="all" checked data-aiteam-scope-mode="all"> 全部企业可见</label>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="selected" data-aiteam-scope-mode="selected"> 仅指定企业可见</label>' +
+      '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises hidden>' + renderEnterpriseCheckboxes(state.enterprises) + '</div>' +
+      '</div>' +
+      '<div class="aiteam-drawer__section">' +
+      '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-publish> 创建后立即发布</label>' +
+      '</div>' +
+      '<div class="aiteam-drawer__section" data-aiteam-tpl-error hidden></div>' +
+      '<div class="aiteam-drawer__footer">' +
+      '<button type="button" class="aiteam-btn" data-aiteam-template-create-close="1">取消</button> ' +
+      '<button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-tpl-submit>创建</button>' +
+      '</div>';
+
+    var host = document.getElementById('aiteam-app') || document.body;
+    host.appendChild(overlay);
+    host.appendChild(drawer);
+
+    var scopeRadios = drawer.querySelectorAll('[data-aiteam-scope-mode]');
+    var scopeBox = drawer.querySelector('[data-aiteam-scope-enterprises]');
+    for (var i = 0; i < scopeRadios.length; i++) {
+      scopeRadios[i].addEventListener('change', function () {
+        var selected = drawer.querySelector('[data-aiteam-scope-mode="selected"]');
+        if (scopeBox) scopeBox.hidden = !(selected && selected.checked);
+      });
+    }
+
+    var closeButtons = drawer.querySelectorAll('[data-aiteam-template-create-close]');
+    for (var c = 0; c < closeButtons.length; c++) {
+      closeButtons[c].addEventListener('click', closeDrawer);
+    }
+
+    function showError(msg) {
+      var box = drawer.querySelector('[data-aiteam-tpl-error]');
+      if (!box) return;
+      box.hidden = false;
+      box.innerHTML = '<div class="aiteam-state aiteam-state-error"><p>' + escapeHtml(msg) + '</p></div>';
+    }
+
+    var submitBtn = drawer.querySelector('[data-aiteam-tpl-submit]');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', function () {
+        var name = trimText((drawer.querySelector('[data-aiteam-tpl-name]') || {}).value);
+        var role = trimText((drawer.querySelector('[data-aiteam-tpl-role]') || {}).value);
+        var category = trimText((drawer.querySelector('[data-aiteam-tpl-category]') || {}).value);
+        var desc = trimText((drawer.querySelector('[data-aiteam-tpl-desc]') || {}).value);
+        if (!name) { showError('请填写模板名称'); return; }
+        if (!role) { showError('请填写角色标识'); return; }
+        var payload = { name: name, role_name: role };
+        if (category) payload.category_code = category;
+        if (desc) payload.prompt_pack = { description: desc };
+        var selectedMode = drawer.querySelector('[data-aiteam-scope-mode="selected"]');
+        if (selectedMode && selectedMode.checked) {
+          var checks = drawer.querySelectorAll('[data-aiteam-scope-ent]:checked');
+          var ids = [];
+          for (var k = 0; k < checks.length; k++) {
+            ids.push(checks[k].getAttribute('data-aiteam-scope-ent'));
+          }
+          if (!ids.length) { showError('请至少勾选一家企业，或选择「全部企业可见」'); return; }
+          payload.publish_scope = { mode: 'selected', enterprise_ids: ids };
+        } else {
+          payload.publish_scope = { mode: 'all' };
+        }
+        var publishCheck = drawer.querySelector('[data-aiteam-tpl-publish]');
+        if (publishCheck && publishCheck.checked) payload.publish_action = 'publish';
+        submitBtn.disabled = true;
+        onSubmit(payload).then(function (result) {
           if (result && result.ok) {
-            if (nameInput) nameInput.value = '';
-            if (roleInput) roleInput.value = '';
-            if (publishInput) publishInput.checked = false;
+            closeDrawer();
+          } else {
+            submitBtn.disabled = false;
+            showError((result && result.error) || '创建失败，请重试');
           }
         });
+      });
+    }
+
+    var nameInput = drawer.querySelector('[data-aiteam-tpl-name]');
+    if (nameInput && nameInput.focus) nameInput.focus();
+  }
+
+  function bindPanelInteractions(container, state) {
+    var openBtn = container.querySelector ? container.querySelector('[data-aiteam-template-create-open]') : null;
+    if (openBtn && openBtn.addEventListener) {
+      openBtn.addEventListener('click', function () {
+        openCreateDrawer(state, container.lastCreateHandler);
       });
     }
 
@@ -175,10 +296,10 @@ window.aiteam = window.aiteam || {};
           return;
         }
         if (action === 'clone') {
-          var current = findTemplate(state.items, templateId) || {};
+          var src = findTemplate(state.items, templateId) || {};
           container.lastCreateHandler({
-            name: trimText((current.name || '模板') + '（克隆）'),
-            role_name: trimText(current.role_name || current.role || 'assistant'),
+            name: trimText((src.name || '模板') + '（克隆）'),
+            role_name: trimText(src.role_name || src.role || 'assistant')
           });
           return;
         }
@@ -193,7 +314,7 @@ window.aiteam = window.aiteam || {};
 
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载模板治理数据...</p></div>';
 
-      var state = { items: [], notice: '' };
+      var state = { items: [], notice: '', enterprises: [] };
 
       function rerender(notice) {
         state.notice = notice || '';
@@ -251,6 +372,13 @@ window.aiteam = window.aiteam || {};
         return Promise.resolve({ ok: true, template_id: templateId });
       };
 
+      // 拉取企业列表供「发布范围-指定企业」勾选（失败不阻断主流程）。
+      ns.api.get('/api/system-admin/enterprises').then(function (result) {
+        if (result && result.ok) {
+          state.enterprises = normalizeItems(result.data && result.data.enterprises ? result.data.enterprises : result.data);
+        }
+      });
+
       ns.api.get('/api/system-admin/templates').then(function (result) {
         if (!result.ok) {
           if (result.status === 501) {
@@ -273,3 +401,4 @@ window.aiteam = window.aiteam || {};
     }
   };
 }(window.aiteam));
+

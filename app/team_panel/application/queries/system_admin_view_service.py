@@ -44,6 +44,7 @@ def list_templates(uow) -> dict[str, Any]:
                 "prompt_pack": prompt_pack,
                 "default_model_ref": default_model_ref,
                 "default_binding": _parse_json(template.default_binding_json, {}),
+                "publish_scope": _parse_json(template.publish_scope_json, {"mode": "all"}),
                 "publish_record": publish_record,
                 "recruit_count": recruit_counts.get(template.id, 0),
                 "created_at": template.created_at,
@@ -72,6 +73,7 @@ def list_solutions(uow) -> dict[str, Any]:
                 "default_kb_blueprint": _parse_json(solution.default_kb_blueprint_json, {}),
                 "default_skill_bundle": _parse_json(solution.default_skill_bundle_json, {}),
                 "default_collaboration_template_ref": solution.default_collaboration_template_ref,
+                "publish_scope": _parse_json(solution.publish_scope_json, {"mode": "all"}),
                 "solution_stats": {
                     "apply_count": apply_count,
                     "active_employee_count": active_employee_count,

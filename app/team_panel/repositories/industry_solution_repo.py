@@ -12,8 +12,8 @@ class IndustrySolutionRepo:
     def create(self, solution: IndustrySolution) -> IndustrySolution:
         self._cur.execute(
             "INSERT INTO industry_solution (id, name, status, tags_json, default_kb_blueprint_json, "
-            "default_skill_bundle_json, default_collaboration_template_ref) "
-            "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)",
+            "default_skill_bundle_json, default_collaboration_template_ref, publish_scope_json) "
+            "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s::jsonb)",
             (
                 solution.id,
                 solution.name,
@@ -22,6 +22,7 @@ class IndustrySolutionRepo:
                 solution.default_kb_blueprint_json,
                 solution.default_skill_bundle_json,
                 solution.default_collaboration_template_ref,
+                solution.publish_scope_json,
             ),
         )
         return solution
@@ -29,7 +30,8 @@ class IndustrySolutionRepo:
     def get_by_id(self, solution_id: str) -> Optional[IndustrySolution]:
         self._cur.execute(
             "SELECT id, name, status, tags_json, default_kb_blueprint_json, default_skill_bundle_json, "
-            "default_collaboration_template_ref, created_at, updated_at, created_by, updated_by, deleted_at "
+            "default_collaboration_template_ref, created_at, updated_at, created_by, updated_by, deleted_at, "
+            "publish_scope_json "
             "FROM industry_solution WHERE id = %s",
             (solution_id,),
         )
@@ -41,7 +43,8 @@ class IndustrySolutionRepo:
     def list_all(self) -> list[IndustrySolution]:
         self._cur.execute(
             "SELECT id, name, status, tags_json, default_kb_blueprint_json, default_skill_bundle_json, "
-            "default_collaboration_template_ref, created_at, updated_at, created_by, updated_by, deleted_at "
+            "default_collaboration_template_ref, created_at, updated_at, created_by, updated_by, deleted_at, "
+            "publish_scope_json "
             "FROM industry_solution ORDER BY created_at"
         )
         rows = self._cur.fetchall()
@@ -50,7 +53,8 @@ class IndustrySolutionRepo:
     def update(self, solution: IndustrySolution) -> IndustrySolution:
         self._cur.execute(
             "UPDATE industry_solution SET name=%s, status=%s, tags_json=%s::jsonb, default_kb_blueprint_json=%s::jsonb, "
-            "default_skill_bundle_json=%s::jsonb, default_collaboration_template_ref=%s, updated_at=now(), updated_by=%s "
+            "default_skill_bundle_json=%s::jsonb, default_collaboration_template_ref=%s, publish_scope_json=%s::jsonb, "
+            "updated_at=now(), updated_by=%s "
             "WHERE id=%s",
             (
                 solution.name,
@@ -59,6 +63,7 @@ class IndustrySolutionRepo:
                 solution.default_kb_blueprint_json,
                 solution.default_skill_bundle_json,
                 solution.default_collaboration_template_ref,
+                solution.publish_scope_json,
                 solution.updated_by or None,
                 solution.id,
             ),
@@ -80,4 +85,5 @@ class IndustrySolutionRepo:
             created_by=row[9] or "",
             updated_by=row[10] or "",
             deleted_at=str(row[11]) if row[11] else None,
+            publish_scope_json=json.dumps(row[12]) if len(row) > 12 and row[12] else '{"mode":"all"}',
         )

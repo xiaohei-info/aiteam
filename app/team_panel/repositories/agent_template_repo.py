@@ -23,11 +23,11 @@ class AgentTemplateRepo:
         self._cur.execute(
             "INSERT INTO agent_template (id, name, category_code, role_name, status, "
             "prompt_pack_json, default_model_json, default_binding_json, "
-            "version_no, source_type, owner_enterprise_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "version_no, source_type, owner_enterprise_id, publish_scope_json) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
             (t.id, t.name, t.category_code, t.role_name, t.status,
              t.prompt_pack_json, t.default_model_json, t.default_binding_json,
-             t.version_no, t.source_type, t.owner_enterprise_id),
+             t.version_no, t.source_type, t.owner_enterprise_id, t.publish_scope_json),
         )
         return t
 
@@ -36,7 +36,7 @@ class AgentTemplateRepo:
             "SELECT id, name, category_code, role_name, status, "
             "prompt_pack_json, default_model_json, default_binding_json, "
             "version_no, source_type, owner_enterprise_id, "
-            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "created_at, updated_at, created_by, updated_by, deleted_at, publish_scope_json "
             "FROM agent_template WHERE id = %s",
             (template_id,),
         )
@@ -50,7 +50,7 @@ class AgentTemplateRepo:
             "SELECT id, name, category_code, role_name, status, "
             "prompt_pack_json, default_model_json, default_binding_json, "
             "version_no, source_type, owner_enterprise_id, "
-            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "created_at, updated_at, created_by, updated_by, deleted_at, publish_scope_json "
             "FROM agent_template ORDER BY created_at"
         )
         rows = self._cur.fetchall()
@@ -61,7 +61,7 @@ class AgentTemplateRepo:
             "SELECT id, name, category_code, role_name, status, "
             "prompt_pack_json, default_model_json, default_binding_json, "
             "version_no, source_type, owner_enterprise_id, "
-            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "created_at, updated_at, created_by, updated_by, deleted_at, publish_scope_json "
             "FROM agent_template WHERE status = %s AND deleted_at IS NULL "
             "ORDER BY created_at",
             (status,),
@@ -80,10 +80,15 @@ class AgentTemplateRepo:
         sort_order: str = _DEFAULT_SORT_ORDER,
         limit: int = 20,
         offset: int = 0,
+        visible_to_enterprise_id: str | None = None,
     ) -> tuple[list[AgentTemplate], int]:
         """Return filtered + paginated templates.
 
         Returns (items, total_count).
+
+        When *visible_to_enterprise_id* is given, only templates whose
+        publish_scope_json is mode=all, or mode=selected including that
+        enterprise id, are returned. None disables the visibility filter.
         """
         db_sort = _SORT_COLUMN_MAP.get(sort_by, _DEFAULT_SORT)
         db_order = "DESC" if sort_order.lower() == "desc" else "ASC"
@@ -114,6 +119,13 @@ class AgentTemplateRepo:
         if tag:
             conditions.append("(t.category_code = %s OR COALESCE(t.prompt_pack_json->'tags', '[]'::jsonb) ? %s)")
             params.extend([tag, tag])
+        if visible_to_enterprise_id is not None:
+            # Visible when scope is not "selected", or selected list contains this enterprise.
+            conditions.append(
+                "(COALESCE(t.publish_scope_json->>'mode', 'all') <> 'selected' "
+                "OR COALESCE(t.publish_scope_json->'enterprise_ids', '[]'::jsonb) ? %s)"
+            )
+            params.append(str(visible_to_enterprise_id))
 
         where_clause = " AND ".join(conditions)
 
@@ -129,7 +141,7 @@ class AgentTemplateRepo:
             f"SELECT t.id, t.name, t.category_code, t.role_name, t.status, "
             f"t.prompt_pack_json, t.default_model_json, t.default_binding_json, "
             f"t.version_no, t.source_type, t.owner_enterprise_id, "
-            f"t.created_at, t.updated_at, t.created_by, t.updated_by, t.deleted_at "
+            f"t.created_at, t.updated_at, t.created_by, t.updated_by, t.deleted_at, t.publish_scope_json "
             f"FROM agent_template t "
             f"LEFT JOIN ("
             f"  SELECT template_id, COUNT(*)::int AS recruit_count "
@@ -151,7 +163,7 @@ class AgentTemplateRepo:
         self._cur.execute(
             "UPDATE agent_template SET name=%s, category_code=%s, role_name=%s, status=%s, "
             "prompt_pack_json=%s::jsonb, default_model_json=%s::jsonb, default_binding_json=%s::jsonb, "
-            "version_no=%s, updated_at=now(), updated_by=%s WHERE id=%s",
+            "version_no=%s, publish_scope_json=%s::jsonb, updated_at=now(), updated_by=%s WHERE id=%s",
             (
                 t.name,
                 t.category_code,
@@ -161,6 +173,7 @@ class AgentTemplateRepo:
                 t.default_model_json,
                 t.default_binding_json,
                 t.version_no,
+                t.publish_scope_json,
                 t.updated_by or None,
                 t.id,
             ),
@@ -186,4 +199,5 @@ class AgentTemplateRepo:
             created_at=str(row[11]), updated_at=str(row[12]),
             created_by=row[13] or "", updated_by=row[14] or "",
             deleted_at=str(row[15]) if row[15] else None,
+            publish_scope_json=json.dumps(row[16]) if row[16] else '{"mode":"all"}',
         )
