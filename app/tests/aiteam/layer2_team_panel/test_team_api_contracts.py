@@ -635,6 +635,57 @@ class TestEmployeeList:
         assert body.get("error") == "FORBIDDEN"
 
 
+class TestEmployeeProfileReconcile:
+    """Both creation and update must push config to the Hermes profile via the
+    single shared _reconcile_employee_profile entry (no model/persona drift)."""
+
+    def test_create_routes_through_shared_reconcile_with_model(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        monkeypatch.setattr(
+            router_team, "_reconcile_employee_profile",
+            lambda cur, employee, **kw: calls.append((employee.id, employee.model_provider, employee.model_name)),
+        )
+        status, body = _post(
+            "/api/team/employees?role=owner",
+            {"display_name": "建档测试", "model_provider": "openrouter", "model_name": "claude-opus-4-8"},
+        )
+        assert status == 201, body
+        assert calls, "create must reconcile the profile via the shared entry"
+        assert calls[-1][1] == "openrouter" and calls[-1][2] == "claude-opus-4-8", calls
+
+    def test_patch_model_change_reconciles_profile(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        def spy(cur, employee, *, system_prompt=None):
+            calls.append((employee.id, employee.model_provider, employee.model_name))
+        monkeypatch.setattr(router_team, "_reconcile_employee_profile", spy)
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _patch(
+            f"/api/team/employees/{emp_id}?role=owner",
+            {"model_provider": "openrouter", "model_name": "claude-opus-4-8"},
+        )
+        assert status == 200, body
+        assert body["reprovision_status"] == "reconciled"
+        assert calls, "PATCH must reconcile the profile so the new model reaches the runtime"
+        assert calls[-1] == (emp_id, "openrouter", "claude-opus-4-8"), calls
+
+    def test_patch_persona_change_reconciles_profile(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        monkeypatch.setattr(
+            router_team, "_reconcile_employee_profile",
+            lambda cur, employee, **kw: calls.append(employee.id),
+        )
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _patch(
+            f"/api/team/employees/{emp_id}?role=owner",
+            {"prompt_system": "你是一名严谨的市场分析师。"},
+        )
+        assert status == 200, body
+        assert calls, "PATCH persona change must reconcile the profile (SOUL drift fix)"
+
+
 class TestEmployeeCreateDelete:
     """POST /api/team/employees (direct create) and DELETE /api/team/employees/{id}."""
 

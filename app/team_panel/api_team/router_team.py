@@ -2017,6 +2017,37 @@ def _provision_employee_profile(profile_name: str, system_prompt: str,
             pass
 
 
+def _reconcile_employee_profile(cur, employee, *, system_prompt: str | None = None) -> None:
+    """Push an employee's current DB config down into its Hermes profile:
+    persona (SOUL), model (config.yaml), skills, and memory.
+
+    Single shared assembly entry used by BOTH employee creation and update, so
+    the two paths cannot drift. Previously model + prompt only reached the
+    profile at creation and were never re-applied on update — editing an
+    employee's model/persona changed the DB but not the runtime profile.
+
+    Reads bindings via the passed cursor synchronously (skill/memory sync then
+    hand off to filesystem threads), so callers must invoke this while their
+    cursor/UoW is still open. Best-effort: never raises.
+    """
+    if employee is None or not getattr(employee, "profile_name", ""):
+        return
+    # Persona/prompt: prefer the freshly-built prompt from the create path;
+    # otherwise reload the persisted EmployeePrompt (the update path).
+    if system_prompt is None:
+        try:
+            prompt = EmployeePromptRepo(cur).get_by_employee(employee.id)
+            system_prompt = (prompt.system_prompt if prompt is not None else "") or ""
+        except Exception:  # noqa: BLE001
+            system_prompt = ""
+    _provision_employee_profile(
+        employee.profile_name, system_prompt,
+        employee.model_provider or "", employee.model_name or "",
+    )
+    _fire_skill_sync(cur, employee.id)
+    _fire_memory_sync(cur, employee.id)
+
+
 def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
                                   template_id: str, body: dict,
                                   created_from: str, employee_id: str | None = None,
@@ -2068,10 +2099,10 @@ def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
     )
     ConversationRepo(cur).create(conv)
     conn.commit()
-    # Filesystem side-effects after the DB commit: create the Hermes profile,
-    # write SOUL from the persona, and pin the chosen model into its config.
-    _provision_employee_profile(profile_name, system_prompt, model_provider, model_name)
-    _fire_skill_sync(cur, employee_id)
+    # Filesystem side-effects after the DB commit: push the full persona + model
+    # + skills + memory into the new Hermes profile via the shared reconcile
+    # entry (the same one the update path uses, so the two can't drift).
+    _reconcile_employee_profile(cur, emp, system_prompt=system_prompt)
     return {
         "employee_id": employee_id,
         "profile_name": profile_name,
@@ -4943,23 +4974,19 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 )
             )
 
-            # Down-provision skill changes into the employee's Hermes profile.
-            # Must run INSIDE the UoW block: it reads the current bindings via the
-            # still-open cursor (sees the add/remove within this transaction) and
-            # spawns a thread that only touches the filesystem. Calling it after
-            # the block would hit a closed cursor (uow.cur raises).
-            if skills_add or skills_remove:
-                _fire_skill_sync(uow.cur, emp.id)
-            # A memory-mode change must re-project MEMORY.md: builtin re-writes
-            # the items, external/disabled clear it. Same in-block cursor rule.
-            if memory_binding_changed:
-                _fire_memory_sync(uow.cur, emp.id)
+            # Reconcile the FULL profile (persona + model + skills + memory) from
+            # the just-updated DB state via the shared entry, so model/persona
+            # edits actually reach the runtime profile — not just skills/memory.
+            # Must run INSIDE the UoW block: it reads bindings via the still-open
+            # cursor (sees this transaction's writes) and hands off to filesystem
+            # threads. After the block the cursor is closed (uow.cur raises).
+            _reconcile_employee_profile(uow.cur, emp)
 
         response = {
             "employee_id": emp.id,
             "display_name": emp.display_name,
             "status": emp.status,
-            "reprovision_status": None,
+            "reprovision_status": "reconciled",
             "updated_at": _today_iso(),
             "effective_role": role,
             "audit_event_id": audit_event_ids[-1] if audit_event_ids else "",
