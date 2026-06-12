@@ -17,6 +17,7 @@ window.aiteam = window.aiteam || {};
 
   var _activeTab = 'profile';
   var _employeeData = null;
+  var _llmModels = [];
   var _overlay = null;
   var _drawer = null;
   var _container = null;
@@ -51,6 +52,17 @@ window.aiteam = window.aiteam || {};
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function _modelPickerOptions() {
+    var opts = ['<option value="">— 选择已配置模型 —</option>'];
+    for (var i = 0; i < _llmModels.length; i++) {
+      var m = _llmModels[i];
+      var label = (m.provider_name || m.provider_key) + ' · ' + (m.label || m.model_id);
+      opts.push('<option value="' + _escapeHtml(m.provider_key) + '|' + _escapeHtml(m.model_id) + '">'
+        + _escapeHtml(label) + '</option>');
+    }
+    return opts.join('');
   }
 
   function _stringValue(value, fallback) {
@@ -636,6 +648,10 @@ window.aiteam = window.aiteam || {};
           _fieldRow('Provider', d.modelProvider) +
           _fieldRow('模型名称', d.modelName) +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">从已配置模型选择</span>' +
+          '<select id="aiteam-model-picker" class="aiteam-input">' + _modelPickerOptions() + '</select>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">编辑 Provider</span>' +
           '<input id="aiteam-model-provider-input" class="aiteam-input" value="' + _escapeHtml(d.modelProvider === '未设置' ? '' : d.modelProvider) + '">' +
           '</div>' +
@@ -787,7 +803,24 @@ window.aiteam = window.aiteam || {};
     if (_activeTab === 'profile') {
       _wireStatusButtons();
     }
+    if (_activeTab === 'model') {
+      _wireModelPicker();
+    }
     _wireConfigButtons();
+  }
+
+  function _wireModelPicker() {
+    var picker = document.getElementById('aiteam-model-picker');
+    if (!picker) return;
+    picker.addEventListener('change', function () {
+      var val = picker.value || '';
+      if (!val) return;
+      var parts = val.split('|');
+      var provInput = document.getElementById('aiteam-model-provider-input');
+      var nameInput = document.getElementById('aiteam-model-name-input');
+      if (provInput) provInput.value = parts[0] || '';
+      if (nameInput) nameInput.value = parts[1] || '';
+    });
   }
 
   function _switchTab(tabId) {
@@ -935,7 +968,18 @@ window.aiteam = window.aiteam || {};
       _suppressHistorySync = false;
       _renderTabContent();
       _loadEnterpriseSkillInstalls();
+      _loadLlmModels();
     });
+  }
+
+  function _loadLlmModels() {
+    if (!ns.api || !ns.api.getLlmModels) return;
+    ns.api.getLlmModels().then(function (result) {
+      if (result && result.ok && result.data) {
+        _llmModels = result.data.models || [];
+        if (_activeTab === 'model') _renderTabContent();
+      }
+    }, function () {});
   }
 
   function close() {

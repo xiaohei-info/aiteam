@@ -43,11 +43,34 @@ def create_scheduled_job(uow, enterprise_id: str, employee_id: str,
     uow.scheduled_jobs().create(job)
 
     if auto_enable:
+        # The Hermes cron runs under the employee's provisioned profile (so it
+        # inherits persona/providers). Resolve the real profile_name (not the
+        # raw employee_id) and ensure the profile exists first, otherwise
+        # ``hermes cron create --profile`` fails with "Profile ... does not
+        # exist" and we silently fall back to a stub job that never fires.
+        employee = uow.employees().get_by_id(employee_id)
+        profile_name = (employee.profile_name if employee and employee.profile_name else employee_id)
+        try:
+            import os
+            from agent_gateway.profile_provisioner import ensure_profile
+            home = os.getenv("HERMES_HOME") or ""
+            if home:
+                ensure_profile(profile_name, home)
+        except Exception as exc:  # noqa: BLE001 — degraded: cron falls back to stub
+            _logger.warning("profile provision for cron %s failed: %s", job_id, exc)
         runtime_handle = gateway_create_scheduled_job(
             {
                 "enterprise_id": enterprise_id,
                 "employee_id": employee_id,
                 "job_id": job_id,
+                "profile_name": profile_name,
+                # Pass the real schedule/goal/name through to the Hermes cron;
+                # without these the gateway fell back to its default
+                # "0 9 * * 1-5" + empty goal, silently dropping the user's
+                # actual Loop config (e.g. "every 10 minutes") at runtime.
+                "schedule_expr": schedule_expr,
+                "goal": goal,
+                "name": name,
             }
         )
         binding = RuntimeBinding(

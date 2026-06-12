@@ -83,6 +83,12 @@ def execute_orchestration(conn, run_id: str) -> None:
         if ctx is None:
             return
 
+        # Resolve enterprise-configured orchestration prompt templates (falls
+        # back to built-in defaults). Done after _start_run's UoW closes to
+        # avoid nesting transactions on the shared connection.
+        from agent_gateway.orchestration_templates import resolve_templates
+        ctx["templates"] = resolve_templates(conn, ctx["enterprise_id"])
+
         # Phase 1 — planner 拆解 (失败降级为按目标员工均分).
         if _is_cancelled(run_id):
             _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
@@ -217,15 +223,10 @@ def _plan_subtasks(ctx: dict) -> list[dict]:
         f"（{ctx['employees'][emp_id].role_name or '协作成员'}）"
         for emp_id in ctx["targets"]
     )
-    plan_prompt = (
-        "你是本次群聊协作的主持人, 请把任务拆解为子任务并分配给可用成员。\n\n"
-        f"可用成员（assignee 必须使用 employee_id）:\n{roster}\n\n"
-        f"任务: {ctx['message_text']}\n\n"
-        f"要求: 2 到 {MAX_SUBTASKS} 个子任务; depends_on 填依赖的子任务序号(从0开始), 无依赖填 []。\n"
-        "只输出 JSON, 不要任何其他文字, 格式:\n"
-        '{"subtasks": [{"title": "...", "description": "...", '
-        '"assignee": "<employee_id>", "depends_on": []}]}'
-    )
+    plan_prompt = _render_tmpl(ctx, "planner",
+                               roster=roster,
+                               message_text=ctx["message_text"],
+                               max_subtasks=MAX_SUBTASKS)
     text = _run_employee_turn(ctx, ctx["planner_id"], plan_prompt, inject_knowledge=False)[1]
     plan = parse_plan(text, ctx["targets"])
     if plan:
@@ -385,16 +386,17 @@ def _run_subtask(run_id: str, ctx: dict, subtasks: list[dict],
         else:
             dep_lines.append(f"- {dep_task['title']}: 执行失败（{dep['error'] or '无产出'}）, 请基于现有信息继续推进")
 
-    parts = [
-        "[群聊协作任务]",
-        f"原始任务: {ctx['message_text']}",
-        f"你负责的子任务: {task['title']}" + (f" — {task['description']}" if task["description"] else ""),
-    ]
+    dep_block = ""
     if dep_lines:
-        parts.append("[前序子任务产出]\n" + "\n".join(dep_lines))
-    parts.append("请直接给出你这个子任务的成果, 不要复述任务本身。")
+        dep_block = "[前序子任务产出]\n" + "\n".join(dep_lines) + "\n\n"
+    task_desc = f" — {task['description']}" if task["description"] else ""
+    prompt = _render_tmpl(ctx, "subtask",
+                          message_text=ctx["message_text"],
+                          task_title=task["title"],
+                          task_desc=task_desc,
+                          dep_block=dep_block)
 
-    success, output = _run_employee_turn(ctx, assignee, "\n\n".join(parts))
+    success, output = _run_employee_turn(ctx, assignee, prompt)
 
     if success and output:
         _persist_subtask_message(run_id, ctx, assignee, task_id, output)
@@ -473,12 +475,9 @@ def _aggregate(conn, run_id: str, ctx: dict, subtasks: list[dict],
         else:
             lines.append(f"- [失败] {task['title']}（{emp}）: {r['error'] or '无产出'}")
 
-    prompt = (
-        "你是本次群聊协作的主持人。以下是各成员子任务的执行结果, "
-        "请汇总为面向用户的最终交付, 直接输出结果本身。\n\n"
-        f"原始任务: {ctx['message_text']}\n\n"
-        "子任务结果:\n" + "\n".join(lines)
-    )
+    prompt = _render_tmpl(ctx, "aggregate",
+                          message_text=ctx["message_text"],
+                          subtask_results="\n".join(lines))
 
     flusher = _DeltaFlusher(conn, run_id, ctx["planner_id"])
 
@@ -576,6 +575,22 @@ def _emit_standalone(run_id: str, event_type: str, *, source_id: str,
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _render_tmpl(ctx: dict, kind: str, **kwargs) -> str:
+    from agent_gateway.orchestration_templates import (
+        DEFAULT_AGGREGATE_PROMPT,
+        DEFAULT_PLANNER_PROMPT,
+        DEFAULT_SUBTASK_PROMPT,
+        render,
+    )
+    fallback = {
+        "planner": DEFAULT_PLANNER_PROMPT,
+        "subtask": DEFAULT_SUBTASK_PROMPT,
+        "aggregate": DEFAULT_AGGREGATE_PROMPT,
+    }[kind]
+    template = (ctx.get("templates") or {}).get(kind) or fallback
+    return render(template, **kwargs)
+
 
 def _emp_name(ctx: dict, employee_id: str) -> str:
     emp = ctx["employees"].get(employee_id)

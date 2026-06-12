@@ -56,6 +56,7 @@ class TurnResult:
     error: str = ""
     session_id: str = ""
     tool_calls: list = field(default_factory=list)
+    usage: dict = field(default_factory=dict)
 
 
 def _post_json(path: str, body: dict, timeout: int = 30) -> dict:
@@ -139,6 +140,7 @@ def _consume_stream(stream_id: str, session_id: str,
     deadline = time.time() + timeout_seconds
     text_parts: list[str] = []
     tool_calls: list[dict] = []
+    usage: dict = {}
     error = ""
     done = False
 
@@ -155,8 +157,26 @@ def _consume_stream(stream_id: str, session_id: str,
                     _emit(on_event, "tool", payload)
                 elif kind == "tool_complete":
                     _emit(on_event, "tool_complete", payload)
+                elif kind == "metering":
+                    # Carries running token usage; keep the latest snapshot so a
+                    # turn that ends without a usage-bearing 'done' still records.
+                    u = payload.get("usage")
+                    if isinstance(u, dict) and u:
+                        usage = u
                 elif kind == "done":
                     done = True
+                    # Final usage lives on the done frame (top-level 'usage' or
+                    # nested under the closed 'session').
+                    u = payload.get("usage")
+                    if isinstance(u, dict) and u:
+                        usage = u
+                    elif isinstance(payload.get("session"), dict):
+                        sess = payload["session"]
+                        usage = {
+                            "input_tokens": sess.get("input_tokens") or 0,
+                            "output_tokens": sess.get("output_tokens") or 0,
+                            "estimated_cost": sess.get("estimated_cost") or 0,
+                        }
                     break
                 elif kind == "message":  # default/unnamed frames carry errors
                     ptype = str(payload.get("type") or "")
@@ -172,9 +192,10 @@ def _consume_stream(stream_id: str, session_id: str,
 
     text = "".join(text_parts)
     if done or (text and not error):
-        return TurnResult(True, text=text, session_id=session_id, tool_calls=tool_calls)
+        return TurnResult(True, text=text, session_id=session_id,
+                          tool_calls=tool_calls, usage=usage)
     return TurnResult(False, text=text, error=error or "stream ended without completion",
-                      session_id=session_id, tool_calls=tool_calls)
+                      session_id=session_id, tool_calls=tool_calls, usage=usage)
 
 
 def _emit(on_event, kind: str, payload: dict) -> None:

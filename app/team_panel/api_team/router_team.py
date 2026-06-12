@@ -25,6 +25,7 @@ from ..transactions.db import create_connection
 from ..domain.entities import (
     AgentTemplate,
     AuditEvent,
+    CollaborationTemplate,
     Conversation,
     EmployeeOrgAssignment,
     Employee,
@@ -57,6 +58,7 @@ from ..repositories.conversation_repo import ConversationRepo
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
 from ..repositories.employee_org_assignment_repo import EmployeeOrgAssignmentRepo
 from ..repositories.employee_repo import EmployeeRepo
+from ..repositories.employee_prompt_repo import EmployeePromptRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..repositories.connector_repo import EnterpriseConnectorRepo
 from ..repositories.department_repo import DepartmentRepo
@@ -331,21 +333,63 @@ def _sync_skill_grants(cur, *, enterprise_id: str, skill_code: str, scope_mode: 
 
 
 def _fire_memory_sync(cur, employee_id: str) -> None:
-    """Fire-and-forget: project memory items to Hermes profile MEMORY.md."""
+    """Fire-and-forget: project memory items to Hermes profile MEMORY.md.
+
+    Only the ``builtin`` memory mode uses Hermes' built-in MEMORY.md. For
+    ``external`` (a separate provider owns recall) or ``disabled`` modes we
+    project an empty set, which rewrites MEMORY.md to its managed-empty form —
+    skipping projection AND clearing any residue a prior builtin run left.
+    """
     import threading
     try:
         employee = EmployeeRepo(cur).get_by_id(employee_id)
         if not employee or not employee.profile_name:
             return
         profile_name = employee.profile_name
-        items = list(MemoryItemRepo(cur).list_by_enterprise(
-            employee.enterprise_id, employee_id=employee_id, limit=500
-        ))
+        binding = EmployeeMemoryBindingRepo(cur).get_by_employee(employee_id)
+        mode = (binding.memory_mode if binding is not None else "builtin") or "builtin"
+        if mode == "builtin":
+            items = list(MemoryItemRepo(cur).list_by_enterprise(
+                employee.enterprise_id, employee_id=employee_id, limit=500
+            ))
+        else:
+            items = []
     except Exception:
         return
     threading.Thread(
         target=profile_capability.sync_employee_memory,
         args=(profile_name, items),
+        daemon=True,
+    ).start()
+
+
+def _fire_skill_sync(cur, employee_id: str) -> None:
+    """Fire-and-forget: down-provision enabled skill bindings into the employee's
+    own Hermes profile (per design §6.7). Mirrors _fire_memory_sync."""
+    import threading
+    try:
+        employee = EmployeeRepo(cur).get_by_id(employee_id)
+        if not employee or not employee.profile_name:
+            return
+        profile_name = employee.profile_name
+        bindings = EmployeeSkillBindingRepo(cur).list_by_employee(employee_id)
+        catalog = {e["skill_code"]: e for e in _MARKET_CATALOG}
+        skills = []
+        for b in bindings:
+            if not getattr(b, "enabled", True):
+                continue
+            meta = catalog.get(b.skill_code, {})
+            skills.append({
+                "skill_code": b.skill_code,
+                "display_name": meta.get("display_name") or b.skill_code,
+                "description": meta.get("description") or "",
+                "enabled": True,
+            })
+    except Exception:
+        return
+    threading.Thread(
+        target=profile_capability.sync_employee_skills,
+        args=(profile_name, skills),
         daemon=True,
     ).start()
 
@@ -1852,6 +1896,127 @@ def _handle_talent_template_detail(conn, path: str, query: str, template_id: str
         cur.close()
 
 
+def _resolve_employee_model(cur, enterprise_id: str, template,
+                            body: dict | None) -> tuple[str, str]:
+    """Resolve (model_provider, model_id) for a new employee.
+
+    Priority: explicit body selection (validated against the enterprise's
+    enabled models) -> template default_model -> empty (runtime falls back to
+    the root config default). Returns ("","") when nothing is configured.
+    """
+    body = body or {}
+    sel_provider = (body.get("model_provider") or "").strip()
+    sel_model = (body.get("model_name") or body.get("model_id") or "").strip()
+    if sel_provider and sel_model:
+        return sel_provider, sel_model
+    # A model_uid from the /llm-models picker resolves to provider_key + model_id.
+    model_uid = (body.get("model_uid") or "").strip()
+    if model_uid:
+        from ..transactions.uow import UnitOfWork
+        with UnitOfWork(cur.connection) as uow:
+            m = uow.llm_models().get_by_id(model_uid)
+            if m is not None and m.enterprise_id == enterprise_id and m.enabled:
+                p = uow.llm_providers().get_by_id(m.provider_id)
+                if p is not None and p.enabled:
+                    return p.provider_key, m.model_id
+    if template is not None:
+        ref = _template_model_ref(template)
+        prov = (ref.get("provider") or "").strip()
+        mod = (ref.get("model") or ref.get("model_name") or ref.get("name") or "").strip()
+        if prov or mod:
+            return prov, mod
+    return "", ""
+
+
+def _seed_employee_capabilities(cur, enterprise_id: str, employee_id: str,
+                                profile_name: str, template,
+                                *, source_template_version=None) -> str:
+    """Seed prompt/skill/KB/memory bindings from a template and provision the
+    employee's Hermes profile (SOUL + config). Returns the seeded system_prompt.
+
+    Idempotent-ish: callers create the Employee first, then call this to fill in
+    the capability layer the design requires at creation time. Profile writes are
+    best-effort — failures are logged but never abort recruitment (the run path
+    re-provisions on demand).
+    """
+    system_prompt = ""
+    behavior_rules: dict = {}
+    opening = None
+    if template is not None:
+        pack = _template_prompt_pack(template)
+        system_prompt = pack.get("system_prompt", "") or ""
+        behavior_rules = pack.get("behavior_rules", {}) or {}
+        opening = pack.get("opening_message")
+
+    # EmployeePrompt — SOUL source.
+    EmployeePromptRepo(cur).upsert(EmployeePrompt(
+        employee_id=employee_id,
+        system_prompt=system_prompt,
+        behavior_rules_json=json.dumps(behavior_rules, ensure_ascii=False),
+        opening_message=opening,
+        version_no=1,
+        source_template_version=source_template_version,
+    ))
+
+    if template is not None:
+        skill_repo = EmployeeSkillBindingRepo(cur)
+        for skill_code in (_template_default_bindings(template).get("skills") or []):
+            if not skill_code:
+                continue
+            skill_repo.create(EmployeeSkillBinding(
+                id=f"sb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=enterprise_id,
+                employee_id=employee_id,
+                skill_code=str(skill_code),
+                enabled=True,
+                source_type="template_default",
+            ))
+
+        kb_repo = EmployeeKnowledgeBindingRepo(cur)
+        for kb in _template_knowledge_bindings(template):
+            kb_repo.create(EmployeeKnowledgeBinding(
+                id=f"kb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=enterprise_id,
+                employee_id=employee_id,
+                knowledge_base_id=kb["knowledge_id"],
+                scope_mode="read",
+                enabled=True,
+            ))
+
+        mem = _template_memory_config(template)
+        EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
+            id=f"mb_{uuid.uuid4().hex[:12]}",
+            enterprise_id=enterprise_id,
+            employee_id=employee_id,
+            memory_mode=str(mem.get("mode") or "builtin"),
+            provider_code=mem.get("provider_code"),
+            retention_days=mem.get("retention_days"),
+            writeback_enabled=bool(mem.get("writeback_enabled", True)),
+        ))
+
+    return system_prompt
+
+
+def _provision_employee_profile(profile_name: str, system_prompt: str,
+                                model_provider: str, model_name: str) -> None:
+    """Create the employee's Hermes profile, write SOUL, and pin the chosen
+    model into the profile config.yaml. Best-effort; never raises."""
+    try:
+        from agent_gateway.runtime_executor import _provision_profile, _profile_home
+        from agent_gateway.profile_provisioner import set_profile_model
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        _provision_profile(profile_name, system_prompt or "")
+    except Exception:  # noqa: BLE001
+        return
+    if model_provider and model_name:
+        try:
+            set_profile_model(_profile_home(profile_name), model_provider, model_name)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -1896,7 +2061,14 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
                 },
             }
         employee_id = f"emp_{uuid.uuid4().hex[:12]}"
-        profile_name = f"{ent.slug or ent.id}-{display_name.lower().replace(' ', '-')}"[:60]
+        # profile_name must be a valid runtime profile id (ASCII slug). A raw
+        # lowercased display_name like "产品顾问" produces a non-ASCII name the
+        # WebUI chat chain rejects ("invalid profile"), failing every run for
+        # Chinese-named employees. Sanitize, and fall back to the (always-ASCII)
+        # employee id fragment when the name slugs to nothing.
+        _ent_frag = _slug_fragment(ent.slug or ent.id, "enterprise")
+        _name_frag = _slug_fragment(display_name, employee_id.replace("_", "-"))
+        profile_name = f"{_ent_frag}-{_name_frag}"[:60]
         order_id = f"recruit_{uuid.uuid4().hex[:8]}"
         order = RecruitmentOrder(
             id=order_id,
@@ -1909,18 +2081,31 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
         )
         repo = RecruitmentOrderRepo(cur)
         repo.create(order)
+        # Load template (if any) and resolve the employee's model: explicit body
+        # selection -> template default -> empty (runtime falls back to root).
+        template = AgentTemplateRepo(cur).get_by_id(template_id) if template_id else None
+        model_provider, model_name = _resolve_employee_model(cur, ent.id, template, body)
+        role_name = template.role_name if template is not None else ""
         emp = Employee(
             id=employee_id,
             enterprise_id=ent.id,
             template_id=template_id or None,
             profile_name=profile_name,
             display_name=display_name,
-            role_name="",
+            role_name=role_name,
             status=EmployeeStatus.ACTIVE,
             created_from="talent_market",
+            model_provider=model_provider,
+            model_name=model_name,
         )
         emp_repo = EmployeeRepo(cur)
         emp_repo.create(emp)
+        # Seed the capability layer (prompt/skill/KB/memory) the design requires
+        # at creation time, so the employee is functional without a later PATCH.
+        system_prompt = _seed_employee_capabilities(
+            cur, ent.id, employee_id, profile_name, template,
+            source_template_version=(template.version_no if template is not None else None),
+        )
         conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
         conv = Conversation(
             id=conversation_id,
@@ -1933,6 +2118,10 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
         )
         ConversationRepo(cur).create(conv)
         conn.commit()
+        # Filesystem side-effects after the DB commit: create the Hermes profile,
+        # write SOUL from the persona, and pin the chosen model into its config.
+        _provision_employee_profile(profile_name, system_prompt, model_provider, model_name)
+        _fire_skill_sync(cur, employee_id)
         return 201, {
             "order_id": order.id,
             "status": "succeeded",
@@ -1953,7 +2142,17 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
 
 
 def _slug_fragment(value: str, fallback: str) -> str:
-    slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in (value or "")).strip("-")
+    # ASCII-only: profile names must satisfy the runtime's profile-id regex
+    # ^[a-z0-9][a-z0-9_-]{0,63}$. Note str.isalnum() is True for CJK and other
+    # Unicode letters, so a naive isalnum() check would keep "产品顾问" verbatim
+    # and the WebUI chat chain would reject the profile with "invalid profile".
+    slug = "".join(
+        ch.lower() if (ch.isascii() and ch.isalnum()) else "-"
+        for ch in (value or "")
+    ).strip("-")
+    # Collapse runs of "-" left by stripped non-ASCII spans for readability.
+    while "--" in slug:
+        slug = slug.replace("--", "-")
     return slug or fallback
 
 
@@ -2090,6 +2289,26 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
 
         employee_repo = EmployeeRepo(cur)
         kb_repo = EmployeeKnowledgeBindingRepo(cur)
+        # 场景④ "一键应用自动创建知识库结构": a template's knowledge_bindings may
+        # reference KBs that don't exist yet in this enterprise (the solution
+        # blueprint ships the structure, not the tenant's data). Auto-provision
+        # any missing referenced KB so the employee binding is never dangling.
+        knowledge_base_repo = KnowledgeBaseRepo(cur)
+        for knowledge_base_id in knowledge_base_ids:
+            if knowledge_base_repo.get_by_id(knowledge_base_id) is not None:
+                continue
+            knowledge_base_repo.create(
+                KnowledgeBase(
+                    id=knowledge_base_id,
+                    enterprise_id=enterprise.id,
+                    name=f"{template.role_name or template.name or '方案'}知识库",
+                    description=f"由行业方案 {solution_id} 一键应用自动创建",
+                    status="active",
+                    storage_prefix=f"aiteam/{enterprise.id}/knowledge/{knowledge_base_id}",
+                    created_by="solution_apply",
+                    updated_by="solution_apply",
+                )
+            )
         if mode == "replace":
             for previous_employee_id in previous_employee_ids:
                 previous_employee = employee_repo.get_by_id(previous_employee_id)
@@ -2119,6 +2338,8 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 updated_by="solution_apply",
             )
         )
+        sol_model_provider, sol_model_name = _resolve_employee_model(
+            cur, enterprise.id, template, body)
         employee_repo.create(
             Employee(
                 id=employee_id,
@@ -2131,8 +2352,44 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 created_from="solution_apply",
                 created_by="solution_apply",
                 updated_by="solution_apply",
+                model_provider=sol_model_provider,
+                model_name=sol_model_name,
             )
         )
+        # Seed persona + skill + memory from the template (KB bindings are created
+        # explicitly below from the solution blueprint). Mirrors recruitment.
+        sol_system_prompt = ""
+        sol_pack = _template_prompt_pack(template)
+        sol_system_prompt = sol_pack.get("system_prompt", "") or ""
+        EmployeePromptRepo(cur).upsert(EmployeePrompt(
+            employee_id=employee_id,
+            system_prompt=sol_system_prompt,
+            behavior_rules_json=json.dumps(sol_pack.get("behavior_rules", {}) or {}, ensure_ascii=False),
+            opening_message=sol_pack.get("opening_message"),
+            version_no=1,
+            source_template_version=template.version_no,
+        ))
+        _sol_skill_repo = EmployeeSkillBindingRepo(cur)
+        for _sc in (_template_default_bindings(template).get("skills") or []):
+            if _sc:
+                _sol_skill_repo.create(EmployeeSkillBinding(
+                    id=f"sb_{uuid.uuid4().hex[:12]}",
+                    enterprise_id=enterprise.id,
+                    employee_id=employee_id,
+                    skill_code=str(_sc),
+                    enabled=True,
+                    source_type="template_default",
+                ))
+        _sol_mem = _template_memory_config(template)
+        EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
+            id=f"mb_{uuid.uuid4().hex[:12]}",
+            enterprise_id=enterprise.id,
+            employee_id=employee_id,
+            memory_mode=str(_sol_mem.get("mode") or "builtin"),
+            provider_code=_sol_mem.get("provider_code"),
+            retention_days=_sol_mem.get("retention_days"),
+            writeback_enabled=bool(_sol_mem.get("writeback_enabled", True)),
+        ))
         for knowledge_base_id in knowledge_base_ids:
             kb_repo.create(
                 EmployeeKnowledgeBinding(
@@ -2174,6 +2431,10 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
             )
         )
         conn.commit()
+        # Provision the Hermes profile (SOUL + pinned model) after the DB commit.
+        _provision_employee_profile(profile_name, sol_system_prompt,
+                                    sol_model_provider, sol_model_name)
+        _fire_skill_sync(cur, employee_id)
         return 201, {
             "apply_record_id": apply_record_id,
             "mode": mode,
@@ -3560,6 +3821,40 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         template_id = emp.template_id if emp else None
         profile_name = emp.profile_name if emp else ""
         created_at = emp.created_at if emp else _today_iso()
+        # Presence is derived from the live employee status, not a hardcoded
+        # placeholder: active→online, paused/archived→offline, else busy.
+        presence = _presence_for_employee(emp.status) if emp else "offline"
+        template_name = ""
+        if template_id:
+            tmpl = AgentTemplateRepo(cur).get_by_id(template_id)
+            template_name = tmpl.name if tmpl is not None else ""
+        # Join enterprise_connector so each binding carries the connector's real
+        # type/status/name, not just the binding row's own fields.
+        connector_meta: dict = {}
+        if emp is not None:
+            conn_repo = EnterpriseConnectorRepo(cur)
+            for binding in view.connector_bindings:
+                cid = binding.get("connector_id")
+                if not cid or cid in connector_meta:
+                    continue
+                c = conn_repo.get_by_id(cid)
+                if c is not None:
+                    connector_meta[cid] = {
+                        "name": c.name,
+                        "provider_code": c.provider_code,
+                        "connector_type": c.connector_type,
+                        "status": c.status,
+                    }
+        conversation_bindings = []
+        if emp is not None:
+            for conv in ConversationRepo(cur).list_by_enterprise(emp.enterprise_id):
+                if conv.entry_employee_id == emp_id and not conv.deleted_at:
+                    conversation_bindings.append({
+                        "conversation_id": conv.id,
+                        "type": conv.type,
+                        "title": conv.title,
+                        "status": conv.status,
+                    })
         audit_repo = AuditEventRepo(cur)
         audit_events = list(audit_repo.list_by_target("employee", emp_id, limit=20))
         for job in ScheduledJobRepo(cur).list_by_employee(emp_id):
@@ -3595,11 +3890,11 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         "display_name": view.display_name,
         "role_name": view.role_name,
         "status": view.status,
-        "presence": "idle",
+        "presence": presence,
         "avatar_url": avatar_url,
         "template_ref": {
             "template_id": template_id,
-            "name": "",
+            "name": template_name,
         } if template_id else None,
         "profile_config": {
             "profile_name": profile_name,
@@ -3614,10 +3909,14 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
                 "connector_id": binding["connector_id"],
                 "access_mode": binding.get("access_mode", "invoke"),
                 "enabled": binding.get("enabled", True),
+                "connector_name": connector_meta.get(binding["connector_id"], {}).get("name", ""),
+                "provider_code": connector_meta.get(binding["connector_id"], {}).get("provider_code", ""),
+                "connector_type": connector_meta.get(binding["connector_id"], {}).get("connector_type", ""),
+                "connector_status": connector_meta.get(binding["connector_id"], {}).get("status", ""),
             }
             for binding in view.connector_bindings
         ],
-        "conversation_bindings": [],
+        "conversation_bindings": conversation_bindings,
         "usage_summary": usage_summary,
         "model_provider": view.model_provider,
         "model_name": view.model_name,
@@ -3866,6 +4165,226 @@ def _handle_connector_patch(conn, path: str, connector_id: str, body: dict | Non
         cur.close()
 
 
+# ── LLM provider/model catalog (enterprise-configured, DB source of truth) ──
+
+def _llm_enterprise_id(conn) -> str | None:
+    """Resolve the active enterprise id within a self-contained transaction.
+
+    Handlers must NOT open a bare cursor before entering a UnitOfWork: a stray
+    SELECT leaves the connection mid-transaction and UoW's autocommit toggle
+    then raises 'set_session cannot be used inside a transaction'.
+    """
+    from ..transactions.uow import UnitOfWork
+    with UnitOfWork(conn) as uow:
+        enterprises = EnterpriseRepo(uow.cur).list_all()
+        return enterprises[0].id if enterprises else None
+
+
+def _serialize_llm_provider(p, models):
+    return {
+        "provider_id": p.id,
+        "provider_key": p.provider_key,
+        "display_name": p.display_name,
+        "base_url": p.base_url,
+        "api_key_mask": "已配置" if p.api_key else "未配置",
+        "transport": p.transport,
+        "enabled": p.enabled,
+        "models": [
+            {
+                "model_uid": m.id,
+                "model_id": m.model_id,
+                "label": m.label,
+                "context_length": m.context_length,
+                "enabled": m.enabled,
+                "is_default": m.is_default,
+            }
+            for m in models
+        ],
+    }
+
+
+def _handle_llm_providers_list(conn, path: str) -> tuple[int, dict]:
+    from ..transactions.uow import UnitOfWork
+    with UnitOfWork(conn) as uow:
+        enterprises = EnterpriseRepo(uow.cur).list_all()
+        if not enterprises:
+            return 200, {"providers": []}
+        enterprise_id = enterprises[0].id
+        providers = uow.llm_providers().list_by_enterprise(enterprise_id)
+        models_by_provider: dict[str, list] = {}
+        for m in uow.llm_models().list_by_enterprise(enterprise_id):
+            models_by_provider.setdefault(m.provider_id, []).append(m)
+    return 200, {
+        "providers": [
+            _serialize_llm_provider(p, models_by_provider.get(p.id, []))
+            for p in providers
+        ]
+    }
+
+
+def _handle_llm_providers_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
+    if not (body.get("provider_key") or "").strip():
+        return 400, {"error": "MISSING_PROVIDER_KEY", "message": "provider_key is required"}
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..application.commands import llm_provider_service
+    provider_id = llm_provider_service.create_provider(conn, enterprise_id, body, created_by=role or "")
+    return 201, {"provider_id": provider_id, "status": "created"}
+
+
+def _handle_llm_provider_patch(conn, path: str, query: str, provider_id: str, body: dict | None) -> tuple[int, dict]:
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..application.commands import llm_provider_service
+    ok = llm_provider_service.update_provider(conn, enterprise_id, provider_id, body or {})
+    if not ok:
+        return 404, {"error": "PROVIDER_NOT_FOUND", "message": f"Provider {provider_id} not found"}
+    return 200, {"provider_id": provider_id, "status": "updated"}
+
+
+def _handle_llm_provider_delete(conn, path: str, query: str, provider_id: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..application.commands import llm_provider_service
+    ok = llm_provider_service.delete_provider(conn, enterprise_id, provider_id)
+    if not ok:
+        return 404, {"error": "PROVIDER_NOT_FOUND", "message": f"Provider {provider_id} not found"}
+    return 200, {"provider_id": provider_id, "status": "deleted"}
+
+
+def _handle_llm_models_post(conn, path: str, query: str, provider_id: str, body: dict | None) -> tuple[int, dict]:
+    if not body or not (body.get("model_id") or "").strip():
+        return 400, {"error": "MISSING_MODEL_ID", "message": "model_id is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..application.commands import llm_provider_service
+    model_uid = llm_provider_service.add_model(conn, enterprise_id, provider_id, body)
+    if model_uid is None:
+        return 404, {"error": "PROVIDER_NOT_FOUND", "message": f"Provider {provider_id} not found"}
+    return 201, {"model_uid": model_uid, "status": "created"}
+
+
+def _handle_llm_model_delete(conn, path: str, query: str, model_uid: str) -> tuple[int, dict]:
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..application.commands import llm_provider_service
+    ok = llm_provider_service.delete_model(conn, enterprise_id, model_uid)
+    if not ok:
+        return 404, {"error": "MODEL_NOT_FOUND", "message": f"Model {model_uid} not found"}
+    return 200, {"model_uid": model_uid, "status": "deleted"}
+
+
+def _handle_llm_models_flat(conn, path: str) -> tuple[int, dict]:
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 200, {"models": []}
+    from ..application.commands import llm_provider_service
+    return 200, {"models": llm_provider_service.list_models_flat(conn, enterprise_id)}
+
+
+# ── Collaboration (orchestration prompt) template ──
+
+def _handle_collab_template_get(conn, path: str) -> tuple[int, dict]:
+    from agent_gateway.orchestration_templates import (
+        DEFAULT_AGGREGATE_PROMPT, DEFAULT_PLANNER_PROMPT, DEFAULT_SUBTASK_PROMPT,
+    )
+    enterprise_id = _llm_enterprise_id(conn)
+    defaults = {
+        "planner_prompt": DEFAULT_PLANNER_PROMPT,
+        "subtask_prompt": DEFAULT_SUBTASK_PROMPT,
+        "aggregate_prompt": DEFAULT_AGGREGATE_PROMPT,
+    }
+    current = None
+    if enterprise_id is not None:
+        from ..transactions.uow import UnitOfWork
+        with UnitOfWork(conn) as uow:
+            current = uow.collaboration_templates().get_default(enterprise_id)
+    payload = {
+        "defaults": defaults,
+        "placeholders": {
+            "planner_prompt": ["{roster}", "{message_text}", "{max_subtasks}"],
+            "subtask_prompt": ["{message_text}", "{task_title}", "{task_desc}", "{dep_block}"],
+            "aggregate_prompt": ["{message_text}", "{subtask_results}"],
+        },
+    }
+    if current is not None:
+        payload["template"] = {
+            "template_id": current.id,
+            "name": current.name,
+            "planner_prompt": current.planner_prompt,
+            "subtask_prompt": current.subtask_prompt,
+            "aggregate_prompt": current.aggregate_prompt,
+            "enabled": current.enabled,
+        }
+    else:
+        payload["template"] = None
+    return 200, payload
+
+
+def _handle_collab_template_put(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
+    enterprise_id = _llm_enterprise_id(conn)
+    if enterprise_id is None:
+        return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+    from ..transactions.uow import UnitOfWork
+    with UnitOfWork(conn) as uow:
+        repo = uow.collaboration_templates()
+        current = repo.get_default(enterprise_id)
+        if current is None:
+            current = CollaborationTemplate(
+                id=f"collab_{uuid.uuid4().hex[:12]}",
+                enterprise_id=enterprise_id,
+                name=body.get("name") or "默认协作模板",
+                planner_prompt=body.get("planner_prompt") or "",
+                subtask_prompt=body.get("subtask_prompt") or "",
+                aggregate_prompt=body.get("aggregate_prompt") or "",
+                is_default=True,
+                enabled=True,
+                created_by=role or "",
+            )
+            repo.create(current)
+        else:
+            if "name" in body:
+                current.name = body.get("name") or current.name
+            if "planner_prompt" in body:
+                current.planner_prompt = body.get("planner_prompt") or ""
+            if "subtask_prompt" in body:
+                current.subtask_prompt = body.get("subtask_prompt") or ""
+            if "aggregate_prompt" in body:
+                current.aggregate_prompt = body.get("aggregate_prompt") or ""
+            if "enabled" in body:
+                current.enabled = bool(body.get("enabled"))
+            repo.update(current)
+        template_id = current.id
+    return 200, {"template_id": template_id, "status": "saved"}
+
+
 def _handle_connector_delete(conn, path: str, connector_id: str) -> tuple[int, dict]:
     cur = conn.cursor()
     try:
@@ -3990,8 +4509,13 @@ def _handle_connector_test(conn, path: str, connector_id: str) -> tuple[int, dic
         if connector.connector_type == "mcp_server":
             ok, detail = profile_capability.mcp_test(connector.name)
         else:
-            ok = connector.status == "online"
-            detail = "连接测试已完成"
+            # API-key / OAuth connectors: the test validates that credentials
+            # are configured, not that the connector is already online — the
+            # previous `ok = status == "online"` was circular (status only
+            # becomes online via a passing test), so a freshly-created
+            # connector could never pass and could never be granted.
+            ok = connector.credential_state in ("configured", "rotated") and bool(connector.credential_ref)
+            detail = "凭证已配置，连接测试通过" if ok else "凭证未配置，无法连接"
         result_str = "passed" if ok else "failed"
         new_status = "online" if ok else "offline"
         cur.execute(
@@ -4180,19 +4704,20 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                     )
                 )
 
-            if any(field in body for field in (
+            memory_binding_changed = any(field in body for field in (
                 "memory_mode",
                 "memory_provider_code",
                 "memory_retention_days",
                 "memory_writeback_enabled",
-            )):
+            ))
+            if memory_binding_changed:
                 existing_memory = uow.employee_memory_bindings().get_by_employee(emp_id)
                 uow.employee_memory_bindings().upsert(
                     EmployeeMemoryBinding(
                         id=existing_memory.id if existing_memory is not None else f"emb_{uuid.uuid4().hex[:12]}",
                         enterprise_id=emp.enterprise_id,
                         employee_id=emp_id,
-                        memory_mode=body.get("memory_mode", existing_memory.memory_mode if existing_memory else "conversation_scoped"),
+                        memory_mode=body.get("memory_mode", existing_memory.memory_mode if existing_memory else "builtin"),
                         provider_code=body.get("memory_provider_code", existing_memory.provider_code if existing_memory else None),
                         retention_days=body.get("memory_retention_days", existing_memory.retention_days if existing_memory else None),
                         writeback_enabled=body.get("memory_writeback_enabled", existing_memory.writeback_enabled if existing_memory else True),
@@ -4311,6 +4836,18 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                     payload={"fields": sorted(body.keys()), "status": emp.status, "display_name": emp.display_name},
                 )
             )
+
+            # Down-provision skill changes into the employee's Hermes profile.
+            # Must run INSIDE the UoW block: it reads the current bindings via the
+            # still-open cursor (sees the add/remove within this transaction) and
+            # spawns a thread that only touches the filesystem. Calling it after
+            # the block would hit a closed cursor (uow.cur raises).
+            if skills_add or skills_remove:
+                _fire_skill_sync(uow.cur, emp.id)
+            # A memory-mode change must re-project MEMORY.md: builtin re-writes
+            # the items, external/disabled clear it. Same in-block cursor rule.
+            if memory_binding_changed:
+                _fire_memory_sync(uow.cur, emp.id)
 
         response = {
             "employee_id": emp.id,
@@ -4521,6 +5058,43 @@ def handle_team_route(
     # ── B06 solutions list ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/solutions"):
         route_handler = lambda conn: _handle_solutions_list(conn, sub)
+
+    # ── LLM provider/model catalog ──
+    if route_handler is None and method == "GET" and _match_exact(sub, "/llm-providers"):
+        route_handler = lambda conn: _handle_llm_providers_list(conn, sub)
+
+    if route_handler is None and method == "POST" and _match_exact(sub, "/llm-providers"):
+        route_handler = lambda conn: _handle_llm_providers_post(conn, sub, query, body)
+
+    if route_handler is None and method == "GET" and _match_exact(sub, "/llm-models"):
+        route_handler = lambda conn: _handle_llm_models_flat(conn, sub)
+
+    # ── Collaboration (orchestration prompt) template ──
+    if route_handler is None and method == "GET" and _match_exact(sub, "/collaboration-template"):
+        route_handler = lambda conn: _handle_collab_template_get(conn, sub)
+
+    if route_handler is None and method in ("PUT", "POST", "PATCH") and _match_exact(sub, "/collaboration-template"):
+        route_handler = lambda conn: _handle_collab_template_put(conn, sub, query, body)
+
+    if route_handler is None:
+        llm_model_del = _match_prefix(sub, "/llm-models/")
+        if method == "DELETE" and llm_model_del is not None and "/" not in llm_model_del:
+            route_handler = lambda conn, mid=llm_model_del: _handle_llm_model_delete(conn, sub, query, mid)
+
+    if route_handler is None:
+        llm_models_add = _match_prefix(sub, "/llm-providers/")
+        if method == "POST" and llm_models_add is not None and llm_models_add.endswith("/models"):
+            pid = llm_models_add[:-len("/models")]
+            if "/" not in pid:
+                route_handler = lambda conn, matched_pid=pid: _handle_llm_models_post(conn, sub, query, matched_pid, body)
+
+    if route_handler is None:
+        llm_provider_detail = _match_prefix(sub, "/llm-providers/")
+        if llm_provider_detail is not None and "/" not in llm_provider_detail:
+            if method == "PATCH":
+                route_handler = lambda conn, matched_pid=llm_provider_detail: _handle_llm_provider_patch(conn, sub, query, matched_pid, body)
+            elif method == "DELETE":
+                route_handler = lambda conn, matched_pid=llm_provider_detail: _handle_llm_provider_delete(conn, sub, query, matched_pid)
 
     # ── B05 connectors list/create/test/grants ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/connectors"):

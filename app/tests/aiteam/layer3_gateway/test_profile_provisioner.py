@@ -37,11 +37,16 @@ def test_provision_creates_new_profile(tmp_path, monkeypatch):
     result = ensure_profile("new-profile", tmp_path)
 
     assert result is True
-    mock_run.assert_called_once_with(
-        ["hermes", "profile", "create", "new-profile", "--home", str(tmp_path)],
-        capture_output=True,
-        text=True,
-    )
+    # `hermes profile create` does NOT accept a --home flag (argparse rejects it);
+    # HERMES_HOME is passed via the subprocess environment instead.
+    mock_run.assert_called_once()
+    call_args, call_kwargs = mock_run.call_args
+    cmd = call_args[0]
+    assert cmd[-3:] == ["profile", "create", "new-profile"]
+    assert "--home" not in cmd
+    assert call_kwargs["capture_output"] is True
+    assert call_kwargs["text"] is True
+    assert call_kwargs["env"]["HERMES_HOME"] == str(tmp_path)
 
 
 # ── T03: CLI failure raises RuntimeError ───────────────────────────────

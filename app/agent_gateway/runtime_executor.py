@@ -46,6 +46,12 @@ def _hermes_bin() -> str:
     candidates = []
     if agent_dir:
         candidates.append(Path(agent_dir) / "venv" / "bin" / "hermes")
+    # Working CLI lives in the WebUI venv (sibling of HERMES_WEBUI_PYTHON);
+    # the agent dir has no venv. Check it before a bare ``hermes`` that the
+    # server process PATH won't resolve.
+    webui_python = os.getenv("HERMES_WEBUI_PYTHON", "").strip()
+    if webui_python:
+        candidates.append(Path(webui_python).parent / "hermes")
     candidates.append(Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "hermes")
     for c in candidates:
         if c.is_file():
@@ -146,7 +152,7 @@ def _execute_run(run_id: str) -> None:
                         payload={"tool": "knowledge_retrieval", "citations": citations},
                         employee_id=employee_id)
 
-        success, output, error, session_id = _run_turn_streaming(
+        success, output, error, session_id, usage = _run_turn_streaming(
             conn, run_id, employee_id,
             profile=profile_name, prompt_text=full_prompt,
             model=model_name, model_provider=model_provider,
@@ -157,9 +163,9 @@ def _execute_run(run_id: str) -> None:
         if session_id:
             _persist_conversation_session(conn, run_id, profile_name, session_id)
 
-        # Phase 3 — result write-back (message + terminal event + status).
+        # Phase 3 — result write-back (message + terminal event + status + usage).
         _finalize(run_id, success=success, output=output, error=error,
-                  employee_id=employee_id, citations=citations, conn=conn)
+                  employee_id=employee_id, citations=citations, usage=usage, conn=conn)
     finally:
         conn.close()
 
@@ -189,8 +195,8 @@ def _compose_prompt(system_prompt: str, knowledge_block: str, message_text: str)
 def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
                         profile: str, prompt_text: str,
                         model: str, model_provider: str,
-                        webui_session_id: str) -> tuple[bool, str, str, str]:
-    """Returns (success, final_text, error, webui_session_id)."""
+                        webui_session_id: str) -> tuple[bool, str, str, str, dict]:
+    """Returns (success, final_text, error, webui_session_id, usage)."""
     from agent_gateway import webui_runtime_adapter as webui
 
     flusher = _DeltaFlusher(conn, run_id, employee_id)
@@ -215,7 +221,7 @@ def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
             on_event=on_event, timeout_seconds=RUN_TIMEOUT_SECONDS,
         )
         flusher.flush()
-        return result.success, result.text, result.error, result.session_id
+        return result.success, result.text, result.error, result.session_id, (result.usage or {})
     except OSError as exc:
         # WebUI loopback unreachable — degrade to one-shot CLI execution.
         logger.warning("[executor] webui loopback unavailable (%s); CLI fallback", exc)
@@ -227,7 +233,7 @@ def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
             _ingest_standalone(conn, run_id, "message_delta",
                                preview=out[:200], payload={"delta": out},
                                employee_id=employee_id)
-        return ok, out, ("" if ok else out), ""
+        return ok, out, ("" if ok else out), "", {}
 
 
 class _DeltaFlusher:
@@ -383,7 +389,7 @@ def _invoke_hermes_cli(profile_name: str, prompt: str) -> tuple[bool, str]:
 
 def _finalize(run_id: str, *, success: bool, output: str,
               employee_id: str = "", citations: list[dict] | None = None,
-              error: str = "", conn=None) -> None:
+              error: str = "", usage: dict | None = None, conn=None) -> None:
     from team_panel.domain.entities import ConversationMessage
     from team_panel.transactions.uow import UnitOfWork
 
@@ -396,6 +402,24 @@ def _finalize(run_id: str, *, success: bool, output: str,
             if run is None:
                 return
             employee_id = employee_id or run.entry_employee_id or ""
+
+            # Persist token usage into the run summary so billing_view_service
+            # materializes a non-zero usage_ledger (场景⑤ Token 消耗实时统计).
+            if usage:
+                try:
+                    summary = json.loads(run.result_summary_json or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    summary = {}
+                in_tok = int(usage.get("input_tokens") or 0)
+                out_tok = int(usage.get("output_tokens") or 0)
+                summary["usage"] = {
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "total_tokens": int(usage.get("total_tokens") or (in_tok + out_tok)),
+                    "cost_cents": int(round(float(usage.get("estimated_cost") or 0) * 100)),
+                }
+                run.result_summary_json = json.dumps(summary, ensure_ascii=False)
+                uow.team_runs().update_status(run)
 
             if success and output:
                 message_id = f"msg_{uuid.uuid4().hex[:12]}"

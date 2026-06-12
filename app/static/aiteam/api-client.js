@@ -325,6 +325,44 @@ window.aiteam = window.aiteam || {};
       return this.delete(`/connectors/${encodeURIComponent(connectorId)}`, options);
     },
 
+    // ── LLM provider/model catalog ──
+    getLlmProviders(options) {
+      return this.get('/llm-providers', options);
+    },
+
+    createLlmProvider(body, options) {
+      return this.post('/llm-providers', body, options);
+    },
+
+    updateLlmProvider(providerId, body, options) {
+      return this.patch(`/llm-providers/${encodeURIComponent(providerId)}`, body, options);
+    },
+
+    deleteLlmProvider(providerId, options) {
+      return this.delete(`/llm-providers/${encodeURIComponent(providerId)}`, options);
+    },
+
+    addLlmModel(providerId, body, options) {
+      return this.post(`/llm-providers/${encodeURIComponent(providerId)}/models`, body, options);
+    },
+
+    deleteLlmModel(modelUid, options) {
+      return this.delete(`/llm-models/${encodeURIComponent(modelUid)}`, options);
+    },
+
+    getLlmModels(options) {
+      return this.get('/llm-models', options);
+    },
+
+    getCollaborationTemplate(options) {
+      return this.get('/collaboration-template', options);
+    },
+
+    saveCollaborationTemplate(body, options) {
+      // POST (not PUT): the northbound dispatch only routes POST/PATCH/GET/DELETE.
+      return this.post('/collaboration-template', body, options);
+    },
+
     testConnector(connectorId, body, options) {
       return this.post(`/connectors/${encodeURIComponent(connectorId)}/test`, body || {}, options);
     },

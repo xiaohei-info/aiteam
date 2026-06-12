@@ -64,6 +64,23 @@ window.aiteam = window.aiteam || {};
     return ref.model || ref.model_name || ref.name || ref.provider || '标准模型';
   }
 
+  function modelPickerHtml(state) {
+    var models = (state && state.models) || [];
+    if (!models.length) {
+      return '<p class="aiteam-template-detail__model-hint">将使用模板默认模型（可在“企业后台 · 模型”中配置更多）。</p>';
+    }
+    var opts = ['<option value="">使用模板默认模型</option>'];
+    for (var i = 0; i < models.length; i++) {
+      var m = models[i];
+      var label = (m.provider_name || m.provider_key) + ' · ' + (m.label || m.model_id);
+      opts.push('<option value="' + escapeHtml(m.model_uid) + '"'
+        + (state.selectedModelUid === m.model_uid ? ' selected' : '')
+        + '>' + escapeHtml(label) + '</option>');
+    }
+    return '<label class="aiteam-template-detail__model"><span>选择模型</span>'
+      + '<select data-template-detail-model>' + opts.join('') + '</select></label>';
+  }
+
   function formatNumber(value) {
     var number = Number(value || 0);
     if (typeof number.toLocaleString === 'function') {
@@ -273,6 +290,7 @@ window.aiteam = window.aiteam || {};
       template_id: state.detail.template_id,
       display_name: state.detail.name || '新招募成员',
       idempotency_key: 'recruit-' + state.detail.template_id,
+      model_uid: state.selectedModelUid || '',
     }).then(function (result) {
       state.recruiting = false;
       if (!result.ok) {
@@ -302,6 +320,12 @@ window.aiteam = window.aiteam || {};
     }
     if (secondary) {
       secondary.addEventListener('click', navigateBack);
+    }
+    var modelSelect = container.querySelector('[data-template-detail-model]');
+    if (modelSelect) {
+      modelSelect.addEventListener('change', function () {
+        state.selectedModelUid = modelSelect.value || '';
+      });
     }
   }
 
@@ -344,7 +368,9 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-template-detail__tabs">' + tabsHtml + '</div>' +
       '<div class="aiteam-template-detail__body">' + bodyHtml + '</div>' +
       '<footer class="aiteam-template-detail__footer">' +
-      '<div class="aiteam-template-detail__footer-copy"><strong>招募前确认</strong><p>招募后可在企业后台继续调整该员工的技能、知识和记忆策略。</p></div>' +
+      '<div class="aiteam-template-detail__footer-copy"><strong>招募前确认</strong><p>招募后可在企业后台继续调整该员工的技能、知识和记忆策略。</p>' +
+      modelPickerHtml(state) +
+      '</div>' +
       '<div class="aiteam-template-detail__footer-actions"><button class="aiteam-button" type="button" data-template-detail-recruit' + ((state.recruited || state.recruiting) ? ' disabled' : '') + '>' + escapeHtml(buttonLabel) + '</button><button class="aiteam-button aiteam-button--ghost" type="button" data-template-detail-dismiss-action>稍后再说</button></div>' +
       '<div class="aiteam-inline-note" data-template-detail-feedback>' + escapeHtml(state.feedback || '') + '</div>' +
       recruitedActions +
@@ -381,12 +407,21 @@ window.aiteam = window.aiteam || {};
           ns.states.handleApiResult(result, container, function () {});
           return;
         }
-        renderState(container, {
+        var baseState = {
           detail: result.data || {},
           activeTab: 'overview',
           feedback: '',
           recruiting: false,
           recruited: false,
+          models: [],
+          selectedModelUid: '',
+        };
+        var modelsP = (ns.api && ns.api.getLlmModels)
+          ? ns.api.getLlmModels().then(function (r) { return (r && r.data && r.data.models) || []; }, function () { return []; })
+          : Promise.resolve([]);
+        modelsP.then(function (models) {
+          baseState.models = models || [];
+          renderState(container, baseState);
         });
       });
     },

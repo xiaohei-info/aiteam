@@ -14,6 +14,11 @@ from ..repositories.employee_connector_binding_repo import EmployeeConnectorBind
 from ..repositories.employee_knowledge_binding_repo import EmployeeKnowledgeBindingRepo
 from ..repositories.employee_memory_binding_repo import EmployeeMemoryBindingRepo
 from ..repositories.enterprise_skill_install_repo import EnterpriseSkillInstallRepo
+from ..repositories.enterprise_llm_provider_repo import (
+    EnterpriseLlmModelRepo,
+    EnterpriseLlmProviderRepo,
+)
+from ..repositories.collaboration_template_repo import CollaborationTemplateRepo
 from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
 from ..repositories.employee_prompt_repo import EmployeePromptRepo
 from ..repositories.employee_repo import EmployeeRepo
@@ -104,6 +109,15 @@ class UnitOfWork:
 
     def employee_prompts(self) -> EmployeePromptRepo:
         return EmployeePromptRepo(self.cur)
+
+    def llm_providers(self) -> EnterpriseLlmProviderRepo:
+        return EnterpriseLlmProviderRepo(self.cur)
+
+    def llm_models(self) -> EnterpriseLlmModelRepo:
+        return EnterpriseLlmModelRepo(self.cur)
+
+    def collaboration_templates(self) -> CollaborationTemplateRepo:
+        return CollaborationTemplateRepo(self.cur)
 
     def employee_skill_bindings(self) -> EmployeeSkillBindingRepo:
         return EmployeeSkillBindingRepo(self.cur)

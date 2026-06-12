@@ -1093,3 +1093,51 @@ class KnowledgeIngestionJob:
         self.status = "failed"
         self.error_message = error_message
         self.completed_at = _now_str()
+
+
+@dataclass
+class EnterpriseLlmProvider:
+    """Enterprise-configured LLM provider — DB is the source of truth; the
+    Gateway materializes these into the Hermes root config.yaml providers block."""
+    id: str
+    enterprise_id: str
+    provider_key: str = ""        # config.yaml providers.<key> (ASCII slug)
+    display_name: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    transport: str = "openai_chat"
+    enabled: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""
+
+
+@dataclass
+class EnterpriseLlmModel:
+    """A model exposed by an EnterpriseLlmProvider; employees pick from these."""
+    id: str
+    enterprise_id: str
+    provider_id: str
+    model_id: str = ""
+    label: str = ""
+    context_length: int = 0
+    enabled: bool = True
+    is_default: bool = False
+    created_at: str = ""
+
+
+@dataclass
+class CollaborationTemplate:
+    """Enterprise-configurable orchestration prompt templates (planner/subtask/
+    aggregate). Empty fields fall back to the executor's built-in defaults."""
+    id: str
+    enterprise_id: str
+    name: str = "默认协作模板"
+    planner_prompt: str = ""
+    subtask_prompt: str = ""
+    aggregate_prompt: str = ""
+    is_default: bool = True
+    enabled: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+    created_by: str = ""

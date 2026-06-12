@@ -39,6 +39,13 @@ def _hermes_bin() -> str:
     candidates = []
     if agent_dir:
         candidates.append(Path(agent_dir) / "venv" / "bin" / "hermes")
+    # The hermes CLI is installed (editable) into the WebUI's own venv, so the
+    # working binary is the sibling of HERMES_WEBUI_PYTHON — not a venv under
+    # the agent dir (which may not exist). Check it before falling back to a
+    # bare ``hermes`` that won't be on the server process PATH.
+    webui_python = os.getenv("HERMES_WEBUI_PYTHON", "").strip()
+    if webui_python:
+        candidates.append(Path(webui_python).parent / "hermes")
     candidates.append(Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "hermes")
     for c in candidates:
         if c.is_file():
@@ -66,7 +73,12 @@ def _run_cli(args: list[str], timeout: int = _CLI_TIMEOUT) -> tuple[bool, str]:
 
 # ── Loop / cron (§5.2-F) ──────────────────────────────────────────────────
 
-_JOB_ID_RE = re.compile(r"\b(?:job[_\s-]?id[:=\s]+|#)([A-Za-z0-9_-]{4,})", re.I)
+# Match the CLI's job-id output, e.g. "Created job: 06eccc49e1a7", "job_id: x",
+# or "#x". The earlier pattern missed the "Created job:" form, so the whole
+# first output line ("Created job: <id>") leaked into runtime_job_id.
+_JOB_ID_RE = re.compile(
+    r"(?:created\s+job|job[_\s-]?id|#)[:=\s]+([A-Za-z0-9_-]{4,})", re.I
+)
 
 
 def cron_create(*, schedule_expr: str, goal: str, name: str,
@@ -148,6 +160,81 @@ def skills_uninstall(skill_code: str) -> tuple[bool, str]:
 
 def skills_list_installed() -> tuple[bool, str]:
     return _run_cli(["skills", "list"])
+
+
+# AI-Team-managed skill dirs carry this marker so sync never deletes Hermes'
+# bundled skills — only dirs it created itself.
+_SKILL_MARKER = ".aiteam_managed"
+
+
+def sync_employee_skills(profile_name: str, skills: list) -> tuple[bool, str]:
+    """Down-provision an employee's granted skills into its own profile.
+
+    Per design §6.7 "绑定/授权归 Team Panel；实际下发至 profile, 按 enabled 过滤".
+    Writes each enabled skill as ``{profile}/skills/{code}/SKILL.md`` (isolated
+    per profile), and removes previously-managed skills no longer granted. Only
+    touches dirs bearing ``_SKILL_MARKER`` so Hermes' bundled skills are safe.
+    One-way idempotent projection, mirroring ``sync_employee_memory``.
+
+    ``skills``: list of objects/dicts with skill_code, display_name, description,
+    enabled.
+    """
+    profile_dir = _hermes_home() / "profiles" / (profile_name or "default")
+    if not profile_dir.is_dir():
+        return False, f"profile dir missing: {profile_dir}"
+    skills_dir = profile_dir / "skills"
+    try:
+        skills_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return False, f"skills dir create failed: {exc}"
+
+    def _attr(item, key, default=""):
+        if isinstance(item, dict):
+            return item.get(key, default)
+        return getattr(item, key, default)
+
+    wanted = {}
+    for item in skills or []:
+        if not _attr(item, "enabled", True):
+            continue
+        code = str(_attr(item, "skill_code", "") or "").strip()
+        if not code or "/" in code or code.startswith("."):
+            continue
+        wanted[code] = item
+
+    # Remove managed skills no longer granted.
+    removed = 0
+    for child in skills_dir.iterdir() if skills_dir.is_dir() else []:
+        if not child.is_dir() or not (child / _SKILL_MARKER).is_file():
+            continue
+        if child.name not in wanted:
+            try:
+                for f in child.iterdir():
+                    f.unlink()
+                child.rmdir()
+                removed += 1
+            except OSError:
+                pass
+
+    written = 0
+    for code, item in wanted.items():
+        name = str(_attr(item, "display_name", "") or code)
+        desc = str(_attr(item, "description", "") or f"{name} skill").replace('"', "'")
+        skill_dir = skills_dir / code
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / _SKILL_MARKER).write_text("", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {code}\ndescription: \"{desc}\"\nversion: 1.0.0\n"
+                f"metadata:\n  hermes:\n    tags: []\n---\n\n"
+                f"# {name}\n\n{desc}\n\n"
+                "<!-- managed by AI Team — projected from employee skill bindings -->\n",
+                encoding="utf-8")
+            written += 1
+        except OSError:
+            continue
+    return True, f"skills synced: {written} written, {removed} removed"
+
 
 
 # ── Connectors / MCP (§5.2 工具中心) ──────────────────────────────────────

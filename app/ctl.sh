@@ -2,7 +2,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HERMES_HOME="${HERMES_HOME:-${HOME}/.hermes}"
+# NOTE: do NOT pre-seed HERMES_HOME here. _load_repo_dotenv_preserving_env
+# treats any already-set shell var as a shell override and re-exports it over
+# the repo .env value — so seeding HERMES_HOME=${HOME}/.hermes silently
+# shadowed the project's app/.env HERMES_HOME (pointing the runtime at the
+# wrong ~/.hermes config without the providers: block). bootstrap.py already
+# defaults HERMES_HOME to ~/.hermes when unset, so this line was redundant.
 PID_FILE="${HERMES_WEBUI_PID_FILE:-${REPO_ROOT}/.state/aiteam.pid}"
 LOG_FILE="${HERMES_WEBUI_LOG_FILE:-${REPO_ROOT}/logs/aiteam.log}"
 STATE_FILE="${HERMES_WEBUI_CTL_STATE_FILE:-${REPO_ROOT}/.state/aiteam.ctl.env}"

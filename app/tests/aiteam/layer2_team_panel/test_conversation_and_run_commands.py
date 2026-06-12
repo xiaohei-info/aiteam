@@ -402,7 +402,10 @@ def test_scheduled_job_lifecycle(uow, clean_tables_with_enterprise):
         assert binding is not None
         assert binding.runtime_kind == "cron_job"
         assert binding.runtime_job_id == job_id
-        assert binding.profile_name == "emp_test"
+        # The cron runs under the employee's provisioned profile_name (emp-test),
+        # not the raw employee_id — create_scheduled_job now resolves it so
+        # `hermes cron create --profile` targets a real profile.
+        assert binding.profile_name == "emp-test"
         assert binding.sync_status == "pending"
 
         # Pause the job

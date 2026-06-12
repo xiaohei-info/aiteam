@@ -19,6 +19,8 @@ window.aiteam = window.aiteam || {};
       { label: '人才市场',  href: '/admin/templates',        note: 'Templates' },
       { label: '记忆',      href: '/admin/memories',         note: 'Memories' },
       { label: '连接器',    href: '/admin/connectors',       note: 'Connectors' },
+      { label: '模型',      href: '/admin/llm-providers',     note: 'Models' },
+      { label: '编排',      href: '/admin/collaboration',    note: 'Orchestration' },
       { label: '费用',      href: '/admin/billing/usage',    note: 'Billing' },
       { label: '充值',      href: '/admin/billing/recharge', note: 'Recharge' },
       { label: '设置',      href: '/admin/settings',         note: 'Settings' },
@@ -54,6 +56,8 @@ window.aiteam = window.aiteam || {};
     '/admin/templates': '🛒',
     '/admin/memories': '🧠',
     '/admin/connectors': '🔌',
+    '/admin/llm-providers': '🤖',
+    '/admin/collaboration': '🧩',
     '/admin/billing/usage': '💰',
     '/admin/billing/recharge': '💳',
     '/admin/settings': '⚙️',
@@ -227,6 +231,8 @@ window.aiteam = window.aiteam || {};
         pathToModule['/admin/templates'] = 'admin-templates.js';
         pathToModule['/admin/memories'] = 'admin-memories.js';
         pathToModule['/admin/connectors'] = 'admin-connectors.js';
+        pathToModule['/admin/llm-providers'] = 'admin-llm-providers.js';
+        pathToModule['/admin/collaboration'] = 'admin-collaboration.js';
         pathToModule['/admin/billing/usage'] = 'admin-billing.js';
         pathToModule['/admin/billing/recharge'] = 'admin-recharge.js';
         pathToModule['/admin/settings'] = 'admin-settings.js';
@@ -298,6 +304,10 @@ window.aiteam = window.aiteam || {};
                 handler = aiteam.pages && aiteam.pages.adminMemories;
               } else if (currentPath === '/admin/connectors' || currentPath.indexOf('/admin/connectors') === 0) {
                 handler = aiteam.pages && aiteam.pages.adminConnectors;
+              } else if (currentPath.indexOf('/admin/llm-providers') === 0) {
+                handler = aiteam.pages && aiteam.pages.adminLlmProviders;
+              } else if (currentPath.indexOf('/admin/collaboration') === 0) {
+                handler = aiteam.pages && aiteam.pages.adminCollaboration;
               } else if (currentPath.indexOf('/admin/billing/recharge') === 0) {
                 handler = aiteam.pages && aiteam.pages.adminRecharge;
               } else if (currentPath.indexOf('/admin/billing/usage') === 0) {

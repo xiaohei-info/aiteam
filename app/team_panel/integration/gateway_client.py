@@ -83,7 +83,9 @@ def create_scheduled_job(request: dict) -> RuntimeHandle:
     schedule_expr = request.get("schedule_expr", "0 9 * * 1-5")
     goal = request.get("goal", "")
     name = request.get("name", job_id)
-    profile = employee_id or ""
+    # Prefer the provisioned profile_name; fall back to employee_id only if the
+    # caller didn't resolve one. The cron runs under this profile.
+    profile = request.get("profile_name") or employee_id or ""
     ok, runtime_job_id = profile_capability.cron_create(
         schedule_expr=schedule_expr,
         goal=goal,
