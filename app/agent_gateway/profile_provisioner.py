@@ -164,6 +164,38 @@ def set_profile_model(profile_dir: str | Path, provider_key: str,
         return False
 
 
+def set_profile_mcp(profile_dir: str | Path, url: str, token: str,
+                    server_name: str = "aiteam-knowledge") -> bool:
+    """Inject the knowledge MCP server into a profile's config.yaml.
+
+    Per 调研方案 D2/D4：employee 身份走连接级 Bearer token（不可被模型篡改）。
+    Must run AFTER ``_seed_profile_config`` (which copies root over the profile),
+    so ``_provision_profile`` re-injects on every run. Empty url/token -> no-op.
+    Preserves all other config fields.
+    """
+    if yaml is None or not (url and token):
+        return False
+    cfg_path = Path(profile_dir) / "config.yaml"
+    try:
+        cfg = {}
+        if cfg_path.is_file():
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        servers = cfg.setdefault("mcp_servers", {})
+        if not isinstance(servers, dict):
+            servers = {}
+            cfg["mcp_servers"] = servers
+        servers[server_name] = {
+            "url": url,
+            "headers": {"Authorization": f"Bearer {token}"},
+        }
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+                           encoding="utf-8")
+        return True
+    except (OSError, yaml.YAMLError):
+        return False
+
+
 def _default_home() -> Path:
     return Path(os.getenv("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
 

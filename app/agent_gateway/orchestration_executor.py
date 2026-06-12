@@ -508,21 +508,17 @@ def _run_employee_turn(ctx: dict, employee_id: str, message: str, *,
         RUN_TIMEOUT_SECONDS,
         _invoke_hermes_cli,
         _provision_profile,
-        _retrieve_knowledge,
     )
 
     employee = ctx["employees"][employee_id]
     profile = employee.profile_name or employee.id
     system_prompt = ctx["prompts"].get(employee_id, "") or ""
-    _provision_profile(profile, system_prompt)
+    # 知识检索改为 agentic：经员工 profile 注入的 knowledge MCP 工具按需调用。
+    _provision_profile(profile, system_prompt, employee_id)
 
     parts = []
     if system_prompt.strip():
         parts.append(f"[你的角色设定]\n{system_prompt.strip()}")
-    if inject_knowledge:
-        knowledge_block, _ = _retrieve_knowledge(ctx["kb_ids"].get(employee_id, []), message)
-        if knowledge_block:
-            parts.append("[企业知识库检索结果 — 回答时优先引用以下内容]\n" + knowledge_block)
     parts.append(message)
     full_prompt = "\n\n".join(parts)
 
