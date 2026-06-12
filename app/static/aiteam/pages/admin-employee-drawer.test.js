@@ -308,14 +308,14 @@ async function run() {
   }
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('Excel分析') !== -1, 'skills tab should render installed enterprise skills');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('授权给员工') !== -1, 'skills tab should render assignment actions');
-  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('提交并持久化技能绑定；刷新页面后，已授权技能仍会保留。') !== -1, 'skills tab should state that skills_add/skills_remove persists after refresh');
+  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('变更立即生效并长期保留') !== -1, 'skills tab should state that skill grants persist');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('尚未持久化技能绑定') === -1, 'skills tab should not claim skills bindings are non-persistent');
   const profileTab = tabs.filter(function (item) { return item.getAttribute('data-tab') === 'profile'; })[0];
   if (profileTab) {
     profileTab.dispatchEvent({ type: 'click' });
   }
-  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('knowledge_base_ids') !== -1, 'profile tab copy should mention knowledge_base_ids patch support');
-  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('scheduled_job/scheduled_job_action') !== -1, 'profile tab copy should mention scheduled_job patch support');
+  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('运行安全操作') !== -1, 'profile tab should render runtime safety actions');
+  assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('解雇') !== -1, 'profile tab should explain irreversible dismissal');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('治理审计') !== -1, 'profile tab should render governance audit section');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('employee.updated') !== -1, 'profile tab should render recent employee audit event types');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('scheduled_job.pause') !== -1, 'profile tab should render scheduled job governance audit event types');

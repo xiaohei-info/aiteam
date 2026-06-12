@@ -244,14 +244,37 @@ window.aiteam = window.aiteam || {};
     return '' +
       '<div class="aiteam-card__meta"><span>累计消耗</span><span>' + formatTokens(selected.total_tokens_used || 0) + '</span></div>' +
       '<div class="aiteam-card__meta"><span>最近活跃时间</span><span>' + (selected.last_active_at || '—') + '</span></div>' +
-      '<div class="aiteam-inline-note">Token 消耗历史明细后续通过平台财务与企业账本联动追溯。</div>';
+      '<div class="aiteam-inline-note">明细可在「财务管理」页查看。</div>';
   }
 
   function renderExportSummary(items) {
     var count = (items || []).length;
     return '' +
-      '<div class="aiteam-card__meta"><span>导出视图</span><span>当前导出样本 ' + count + ' 条</span></div>' +
-      '<div class="aiteam-action-row"><button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="enterprise-export">导出 Excel</button></div>';
+      '<div class="aiteam-card__meta"><span>数据导出</span><span>共 ' + count + ' 家企业</span></div>' +
+      '<div class="aiteam-action-row"><button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="enterprise-export">导出 CSV</button></div>';
+  }
+
+  function downloadEnterprisesCsv(items) {
+    var rows = items || [];
+    var header = ['企业ID', '企业名称', '状态', '注册时间', '累计充值(分)', 'Token消耗'];
+    var lines = [header.join(',')].concat(rows.map(function (item) {
+      return [
+        item.id || item.enterprise_id || '',
+        '"' + String(item.name || '').replace(/"/g, '""') + '"',
+        item.status || '',
+        item.created_at || '',
+        item.total_recharged_cents != null ? item.total_recharged_cents : (item.total_recharged || ''),
+        item.total_tokens_used || 0,
+      ].join(',');
+    }));
+    var blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'enterprises.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
   }
 
   function renderQuota(detailQuota) {
@@ -288,7 +311,7 @@ window.aiteam = window.aiteam || {};
               '<div class="aiteam-shell__panel">' +
               '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
               '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
-              '<p class="aiteam-shell__panel-body">企业账号 API 尚未实现（当前返回 501）。此区域将在后端就绪后展示企业列表与系统管理操作。</p>' +
+              '<p class="aiteam-shell__panel-body">企业账号数据暂时不可用，请稍后刷新重试。</p>' +
               '</div>';
             return;
           }
@@ -369,7 +392,7 @@ window.aiteam = window.aiteam || {};
             '<div class="aiteam-shell__panel">' +
             '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
             '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
-            '<p class="aiteam-shell__panel-body">通过 /api/system-admin/enterprises 消费企业账号数据；所有写操作统一走 /actions 正式入口。</p>' +
+            '<p class="aiteam-shell__panel-body">管理平台上的企业账号：查看企业概况与配额，执行充值、封禁、解封与通知等运营操作。</p>' +
             '<div class="aiteam-billing__stats">' +
             '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总企业数</span><span class="aiteam-shell__meta-value">' + stats.total + '</span></div>' +
             '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">本月新增</span><span class="aiteam-shell__meta-value">' + stats.monthNew + '</span></div>' +
@@ -420,6 +443,12 @@ window.aiteam = window.aiteam || {};
               createdRangeInput.addEventListener('input', function () {
                 state.createdRange = this.value || '';
                 render();
+              });
+            }
+            var exportButton = container.querySelector('[data-role="enterprise-export"]');
+            if (exportButton && exportButton.addEventListener) {
+              exportButton.addEventListener('click', function () {
+                downloadEnterprisesCsv(state.exportItems);
               });
             }
           }

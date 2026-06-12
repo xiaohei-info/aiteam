@@ -64,8 +64,8 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限应用行业方案';
-    if (result && result.status === 404) return '行业方案接口尚未开放';
-    if (result && result.status === 501) return '行业方案接口尚未实现';
+    if (result && result.status === 404) return '行业方案服务暂时不可用';
+    if (result && result.status === 501) return '行业方案服务暂时不可用';
     if (result && result.error) return result.error;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
     return '网络请求失败';
@@ -176,9 +176,8 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">行业 AI 解决方案</h2>' +
-        '<p class="aiteam-shell__panel-body">B06 页面已按企业口径对接 `/api/team/solutions` 与 `POST /api/team/solutions/{id}/apply`。当前后端尚未开放列表接口时，页面保留 Apply 契约说明与原子回滚提示，不伪造已应用状态。</p>' +
+        '<p class="aiteam-shell__panel-body">行业方案数据暂时无法加载，请稍后刷新重试。</p>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">Apply 语义</span><span class="aiteam-shell__meta-value">append 模式，失败时整体回滚</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前状态</span><span class="aiteam-shell__meta-value">' + esc(apiErrorMessage(result)) + '</span></div>' +
         '</div>' +
         '</div>';
@@ -270,12 +269,12 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">行业 AI 解决方案</h2>' +
-        '<p class="aiteam-shell__panel-body">B06 页面通过 `/api/team/solutions` 读取企业可应用方案，并通过 `POST /api/team/solutions/{id}/apply` 提交。当前支持追加应用、覆盖重建、重新应用三种策略；方案创建新员工和知识库，页面展示的统计、最近应用状态、员工与知识库结果均以后端列表返回为准。</p>' +
+        '<p class="aiteam-shell__panel-body">按行业一键应用预设的数字员工方案。应用后自动创建对应的员工与知识库，支持追加应用、覆盖重建与重新应用三种模式。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
         renderApplyPreview(findSolution(state.previewSolutionId), state.previewPayload) +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用模式</span><span class="aiteam-shell__meta-value">追加应用 / 覆盖重建 / 重新应用</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">原子性</span><span class="aiteam-shell__meta-value">若后端返回失败，则视为全量回滚，不展示局部成功</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">失败保护</span><span class="aiteam-shell__meta-value">应用失败时自动整体回滚，不会产生不完整的配置</span></div>' +
         (state.lastSubmittedMode ? '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近一次提交</span><span class="aiteam-shell__meta-value">' + esc(applyModeLabel(state.lastSubmittedMode)) + '</span></div>' : '') +
         '</div>' +
         (state.lastSubmittedMode ? '<p class="aiteam-shell__panel-body">最近一次提交：' + esc(applyModeLabel(state.lastSubmittedMode)) + '</p>' : '') +

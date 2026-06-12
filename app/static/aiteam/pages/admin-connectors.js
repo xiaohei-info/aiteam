@@ -205,10 +205,10 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限访问连接器配置';
-    if (result && result.status === 404) return '连接器接口尚未开放';
+    if (result && result.status === 404) return '连接器服务暂时不可用';
     if (result && result.status === 409) return '当前连接器状态不允许执行此操作';
-    if (result && result.status === 422) return '请求参数不符合连接器契约';
-    if (result && result.status === 501) return '连接器接口尚未实现';
+    if (result && result.status === 422) return '请求参数有误，请检查后重试';
+    if (result && result.status === 501) return '连接器服务暂时不可用';
     if (result && result.error) return result.error;
     if (result && result.data && result.data.message) return result.data.message;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
@@ -363,9 +363,8 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">连接器中心</h2>' +
-        '<p class="aiteam-shell__panel-body">B05 连接器管理页按冻结契约消费 `/api/team/connectors`、`/api/team/connectors/{id}`、`PATCH /api/team/connectors/{id}`、`/api/team/connectors/{id}/test`、`/api/team/connectors/{id}/grants`。若后端不可用，页面仅展示真实失败态，不伪造 detail/update 成功结果或 raw secret。</p>' +
+        '<p class="aiteam-shell__panel-body">连接器数据暂时无法加载，请稍后刷新重试。</p>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全约束</span><span class="aiteam-shell__meta-value">凭据输入只接受 opaque ref，页面不展示 raw secret</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前状态</span><span class="aiteam-shell__meta-value">' + esc(apiErrorMessage(result)) + '</span></div>' +
         '</div>' +
         '</div>';
@@ -430,7 +429,7 @@ window.aiteam = window.aiteam || {};
       return '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">连接器详情</p>' +
         '<h3 class="aiteam-shell__panel-title">' + esc(item.name) + '</h3>' +
-        '<p class="aiteam-shell__panel-body">按冻结契约显示 provider、类型、状态、作用域、配置摘要、opaque credential ref 与凭据脱敏状态；详情编辑只提交 name/config/credential_input 等允许字段，浏览器不展示 raw secret，只消费 Team Panel 返回的安全字段。</p>' +
+        '<p class="aiteam-shell__panel-body">查看连接器的提供方、类型、状态与配置摘要。凭据始终以脱敏形式展示，不会泄露原始密钥。</p>' +
         (state.detailNotice ? '<div class="aiteam-state aiteam-state-info"><p>' + esc(state.detailNotice) + '</p></div>' : '') +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">Provider</span><span class="aiteam-shell__meta-value">' + esc(item.provider) + '</span></div>' +
@@ -445,12 +444,11 @@ window.aiteam = window.aiteam || {};
         '</div>' +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><label>连接器名称<br><input class="aiteam-input" type="text" data-role="detail-name-' + esc(item.connector_id) + '" placeholder="例如：公司 Slack" value="' + esc(state.detailDraft.name) + '"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><label>Tenant Hint<br><input class="aiteam-input" type="text" data-role="detail-tenant-hint-' + esc(item.connector_id) + '" placeholder="例如：acme" value="' + esc(state.detailDraft.config_tenant_hint) + '"></label></div>' +
+        '<div class="aiteam-shell__meta-card"><label>租户标识<br><input class="aiteam-input" type="text" data-role="detail-tenant-hint-' + esc(item.connector_id) + '" placeholder="例如：acme" value="' + esc(state.detailDraft.config_tenant_hint) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Channel<br><input class="aiteam-input" type="text" data-role="detail-channel-' + esc(item.connector_id) + '" placeholder="例如：#sales" value="' + esc(state.detailDraft.config_channel) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>MCP Server URL<br><input class="aiteam-input" type="text" data-role="detail-endpoint-url-' + esc(item.connector_id) + '" placeholder="https://mcp.example.com/service" value="' + esc(state.detailDraft.config_endpoint_url) + '"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><label>更新凭据标识（受控输入）<br><input class="aiteam-input" type="text" data-role="credential-input-' + esc(item.connector_id) + '" placeholder="cred://enterprise/..." value="' + esc(state.detailDraft.credential_ref) + '"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">保存后展示</span><span class="aiteam-shell__meta-value">显示 opaque credential ref、脱敏状态、更新时间等安全字段；不展示 raw secret</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">更新口径</span><span class="aiteam-shell__meta-value">提交 PATCH /connectors/{id} 后重新拉取 detail 与列表，避免本地伪造更新结果</span></div>' +
+        '<div class="aiteam-shell__meta-card"><label>更新凭据标识<br><input class="aiteam-input" type="text" data-role="credential-input-' + esc(item.connector_id) + '" placeholder="cred://enterprise/..." value="' + esc(state.detailDraft.credential_ref) + '"></label></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全说明</span><span class="aiteam-shell__meta-value">凭据保存后仅显示脱敏标识与更新时间，原始密钥不会在页面展示</span></div>' +
         '</div>' +
         '<div class="aiteam-skill-card__actions">' +
         '<button type="button" class="aiteam-btn" data-role="connector-save" data-connector-id="' + esc(item.connector_id) + '"' + actionDisabled + '>保存详情</button>' +
@@ -478,7 +476,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">连接器中心</h2>' +
-        '<p class="aiteam-shell__panel-body">B05 页面按冻结契约展示凭据脱敏、详情编辑、最近测试、状态刷新与员工授权；列表真相以 `/api/team/connectors` 为准，detail/update/test/grants 成功后重新拉取，避免前端残留临时状态。</p>' +
+        '<p class="aiteam-shell__panel-body">将企业的外部服务（IM、邮件、自定义 MCP 服务等）接入数字员工。支持连接测试、状态刷新、凭据更新与员工授权管理。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-info"><p>' + esc(state.notice) + '</p></div>' : '') +
         '<div class="aiteam-grid aiteam-grid--split">' +
         '<div class="aiteam-panel">' +
@@ -498,15 +496,13 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><label>连接器名称<br><input class="aiteam-input" type="text" data-role="connector-name" placeholder="例如：公司飞书" value="' + esc(state.createDraft.name) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Provider<br><input class="aiteam-input" type="text" data-role="connector-provider" value="' + esc(state.createDraft.provider_code) + '" placeholder="例如：feishu"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>类型<br><input class="aiteam-input" type="text" data-role="connector-type" value="' + esc(state.createDraft.connector_type) + '" placeholder="例如：webhook_target"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><label>Tenant Hint<br><input class="aiteam-input" type="text" data-role="connector-tenant-hint" placeholder="例如：acme" value="' + esc(state.createDraft.config_tenant_hint) + '"></label></div>' +
+        '<div class="aiteam-shell__meta-card"><label>租户标识<br><input class="aiteam-input" type="text" data-role="connector-tenant-hint" placeholder="例如：acme" value="' + esc(state.createDraft.config_tenant_hint) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>Channel<br><input class="aiteam-input" type="text" data-role="connector-channel" placeholder="例如：#sales" value="' + esc(state.createDraft.config_channel) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>MCP Server URL<br><input class="aiteam-input" type="text" data-role="connector-endpoint-url" placeholder="https://mcp.example.com/service" value="' + esc(state.createDraft.config_endpoint_url) + '"></label></div>' +
-        '<div class="aiteam-shell__meta-card"><label>Credential Ref（受控输入）<br><input class="aiteam-input" type="text" data-role="connector-credential-ref" placeholder="cred://enterprise/opaque-id" value="' + esc(state.createDraft.credential_ref) + '"></label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建连接器</button></div>' +
+        '<div class="aiteam-shell__meta-card"><label>凭据标识<br><input class="aiteam-input" type="text" data-role="connector-credential-ref" placeholder="cred://enterprise/..." value="' + esc(state.createDraft.credential_ref) + '"></label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建连接器</button></div>' +
         '</form>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全策略</span><span class="aiteam-shell__meta-value">raw secret 不进入页面；只显示 opaque credential ref 与脱敏状态</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">测试口径</span><span class="aiteam-shell__meta-value">running / success / failure 与 last_test_result 以后端返回为准</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">授权口径</span><span class="aiteam-shell__meta-value">已授权员工 / 未授权空态 / 错误态均不绕过后端语义</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">安全说明</span><span class="aiteam-shell__meta-value">凭据全程脱敏存储与展示，页面不会出现原始密钥</span></div>' +
         '</div>' +
         '<div class="aiteam-shell__two-column">' +
         '<div class="aiteam-shell__panel"><h3 class="aiteam-shell__panel-title">连接器列表</h3>' + listMarkup + '</div>' +
@@ -824,7 +820,7 @@ window.aiteam = window.aiteam || {};
         state.pendingAction = '';
         if (result && result.ok) {
           return refreshList({
-            notice: '连接器检测完成，已按后端返回刷新状态',
+            notice: '连接器检测完成，状态已更新',
             errorNotice: '连接器检测成功，但列表刷新失败：',
           }).then(function () {
             return result;

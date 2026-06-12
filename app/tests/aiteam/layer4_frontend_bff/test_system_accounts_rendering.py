@@ -33,7 +33,7 @@ global.Headers = class Headers {{
 }};
 global.fetch = async (url, options) => {{
   fetchCalls.push({{ url, method: (options && options.method) || 'GET' }});
-  if (url === '/api/system-admin/enterprises') {{
+  if (url === '/api/system-admin/enterprises?role=system_admin') {{
     return {{
       ok: true,
       status: 200,
@@ -51,7 +51,7 @@ global.fetch = async (url, options) => {{
       }}); }},
     }};
   }}
-  if (url === '/api/system-admin/enterprises/ent_1') {{
+  if (url === '/api/system-admin/enterprises/ent_1?role=system_admin') {{
     return {{
       ok: true,
       status: 200,
@@ -66,7 +66,7 @@ global.fetch = async (url, options) => {{
       }}); }},
     }};
   }}
-  if (url === '/api/system-admin/enterprises/ent_1/quota') {{
+  if (url === '/api/system-admin/enterprises/ent_1/quota?role=system_admin') {{
     return {{
       ok: true,
       status: 200,
@@ -79,7 +79,7 @@ global.fetch = async (url, options) => {{
       }}); }},
     }};
   }}
-  if (url === '/api/system-admin/enterprises/export') {{
+  if (url === '/api/system-admin/enterprises/export?role=system_admin') {{
     return {{
       ok: true,
       status: 200,
@@ -148,10 +148,10 @@ function createEventTarget(initialValue) {{
 
 def test_system_accounts_renders_stat_cards_search_and_detail_region() -> None:
     payload = _run_system_accounts()
-    assert {"url": "/api/system-admin/enterprises", "method": "GET"} in payload["fetchCalls"]
-    assert {"url": "/api/system-admin/enterprises/ent_1", "method": "GET"} in payload["fetchCalls"]
-    assert {"url": "/api/system-admin/enterprises/ent_1/quota", "method": "GET"} in payload["fetchCalls"]
-    assert {"url": "/api/system-admin/enterprises/export", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises?role=system_admin", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/ent_1?role=system_admin", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/ent_1/quota?role=system_admin", "method": "GET"} in payload["fetchCalls"]
+    assert {"url": "/api/system-admin/enterprises/export?role=system_admin", "method": "GET"} in payload["fetchCalls"]
     assert "总企业数" in payload["html"]
     assert "本月新增" in payload["html"]
     assert "月活企业" in payload["html"]
@@ -168,8 +168,8 @@ def test_system_accounts_renders_stat_cards_search_and_detail_region() -> None:
     assert "太乙知行AI科技" in payload["html"]
     assert "企业配额" in payload["html"]
     assert "员工上限" in payload["html"]
-    assert "导出视图" in payload["html"]
-    assert "导出 Excel" in payload["html"]
+    assert "数据导出" in payload["html"]
+    assert "导出 CSV" in payload["html"]
 
 
 def test_system_accounts_filters_by_created_range_in_browser_state() -> None:

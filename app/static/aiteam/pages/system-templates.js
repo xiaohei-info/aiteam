@@ -74,11 +74,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">专家管理</h2>' +
-      '<p class="aiteam-shell__panel-body">模板治理 API 尚未实现（当前返回 501）。此区域已对接 `/api/system-admin/templates`，后端就绪后将承接模板列表、发布记录与上下架控制。</p>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">主读取接口</span><span class="aiteam-shell__meta-value">GET /api/system-admin/templates</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">后续写接口</span><span class="aiteam-shell__meta-value">POST /api/system-admin/templates · PATCH /api/system-admin/templates/{id}</span></div>' +
-      '</div>' +
+      '<p class="aiteam-shell__panel-body">专家模板数据暂时不可用，请稍后刷新重试。</p>' +
       '</div>';
   }
 
@@ -115,18 +111,13 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">专家管理</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 `/api/system-admin/templates` 消费平台模板治理视图，并提供最小创建、更新和发布治理入口。</p>' +
+      '<p class="aiteam-shell__panel-body">管理人才市场中的专家模板：创建、更新、预览、克隆，以及发布与下架。</p>' +
       (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + notice + '</p></div>' : '') +
       '<form class="aiteam-shell__meta" data-aiteam-template-create-form="1">' +
       '<div class="aiteam-shell__meta-card"><label>模板名称<br><input class="aiteam-input" type="text" data-aiteam-template-create-name="1" placeholder="例如：销售专家"></label></div>' +
       '<div class="aiteam-shell__meta-card"><label>角色标识<br><input class="aiteam-input" type="text" data-aiteam-template-create-role="1" placeholder="例如：sales_advisor"></label></div>' +
       '<div class="aiteam-shell__meta-card"><label><input type="checkbox" data-aiteam-template-create-publish="1"> 创建后立即发布</label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建模板</button></div>' +
       '</form>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">新建模板</span><span class="aiteam-shell__meta-value">输入名称 / 角色后提交</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">行级治理</span><span class="aiteam-shell__meta-value">更新、预览效果、克隆、发布记录都在这一页收口；发布 / 下架直接提交</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布记录</span><span class="aiteam-shell__meta-value">当前以前台招募数与版本号做最小展示；后续可继续扩成独立记录面板</span></div>' +
-      '</div>' +
       '<div class="aiteam-panel aiteam-panel--nested">' + renderPreviewPanel(previewTemplate) + '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th><th>版本</th><th>招募数</th><th>治理操作</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="7">暂无可治理的系统模板</td></tr>') +

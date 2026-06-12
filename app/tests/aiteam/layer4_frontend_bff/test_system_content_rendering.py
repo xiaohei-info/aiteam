@@ -278,7 +278,8 @@ def test_system_templates_renders_preview_clone_and_publish_record_controls() ->
     )
     assert "预览效果" in payload["html"]
     assert "克隆" in payload["html"]
-    assert "发布记录" in payload["html"]
+    assert "版本" in payload["html"]
+    assert "招募数" in payload["html"]
 
 
 def test_system_solutions_renders_industry_cards_sorting_slot_and_apply_stats() -> None:
@@ -298,9 +299,9 @@ def test_system_solutions_renders_industry_cards_sorting_slot_and_apply_stats() 
             ]
         },
     )
-    assert "9个行业卡片" in payload["html"]
-    assert "拖拽排序" in payload["html"]
-    assert "应用统计" in payload["html"]
+    assert "绑定模板" in payload["html"]
+    assert "应用数" in payload["html"]
+    assert "拖拽排序" not in payload["html"]  # 假交互已移除
 
 
 def test_system_templates_preview_switches_between_template_profiles() -> None:

@@ -82,7 +82,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
       '<h2 class="aiteam-shell__panel-title">企业设置</h2>' +
-      '<p class="aiteam-shell__panel-body">设置 API 尚未实现（当前返回 501）。此区域将在后端就绪后展示企业资料、子管理员与邀请码配置。</p>' +
+      '<p class="aiteam-shell__panel-body">企业设置暂时不可用，请稍后刷新重试。</p>' +
       '</div>';
   }
 
@@ -221,7 +221,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
       '<h2 class="aiteam-shell__panel-title">企业设置</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 /api/team/settings 与 /api/enterprise-admin/invites 管理企业资料、邀请、帮助反馈与通知策略。</p>' +
+      '<p class="aiteam-shell__panel-body">管理企业资料、管理员邀请、帮助反馈与通知策略。</p>' +
       (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(notice) + '</p></div>' : '') +
       '<div class="aiteam-grid aiteam-grid--settings">' +
       renderAccountSection(data) +

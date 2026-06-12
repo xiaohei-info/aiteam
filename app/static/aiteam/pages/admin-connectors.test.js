@@ -359,7 +359,7 @@ async function run() {
   assert(host.innerHTML.indexOf('最近一次连接测试通过') !== -1, 'page should render backend last_test_result summary');
   assert(host.innerHTML.indexOf('种子员工') !== -1, 'page should render employee display names in grant summary');
   assert(host.innerHTML.indexOf('Slack Webhook') !== -1, 'page should render connector definition options');
-  assert(host.innerHTML.indexOf('受控输入') !== -1, 'page should present controlled credential input copy');
+  assert(host.innerHTML.indexOf('更新凭据标识') !== -1, 'page should present credential update input');
   assert(host.innerHTML.indexOf('保存详情') !== -1, 'page should render detail update action');
   assert(host.innerHTML.indexOf('prompt') === -1, 'page html should not mention legacy prompt flow');
 

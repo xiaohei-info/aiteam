@@ -117,6 +117,7 @@ global.window = {{
           }},
         }});
       }},
+      downloadCsv(url) {{ assignedUrls.push(url); return Promise.resolve(); }},
       getBillingUsageRecords(query) {{
         recordsQueries.push(query || '');
         return Promise.resolve({{
@@ -508,7 +509,7 @@ def test_admin_billing_renders_prd_period_switch_trend_and_ranking_sections() ->
     assert "本月" in payload["html"]
     assert "上月" in payload["html"]
     assert "全部" in payload["html"]
-    assert "较上月" in payload["html"]
+    assert "较上月" not in payload["html"]  # 禁止伪造环比数据
     assert "按市场价计算" in payload["html"]
     assert "每日 Token 消耗趋势" in payload["html"]
     assert "工资最高员工" in payload["html"]
@@ -554,7 +555,7 @@ def test_admin_recharge_submit_success_renders_result_and_refreshes_balance_reco
     }
     assert "充值结果" in payload["afterHtml"]
     assert "已到账" in payload["afterHtml"]
-    assert "充值已提交并已按后端返回刷新余额与记录" in payload["afterHtml"]
+    assert "充值成功，余额与充值记录已更新" in payload["afterHtml"]
     assert "¥148.60" in payload["afterHtml"]
     assert "rch_new" in payload["afterHtml"]
 
@@ -568,15 +569,16 @@ def test_admin_recharge_submit_failure_renders_result_feedback() -> None:
 
 def test_admin_billing_export_uses_current_filters_and_download_path() -> None:
     payload = _run_admin_billing_export_flow()
-    assert "/api/team/billing/usage/records/export" in payload["beforeHtml"]
+    assert "导出报表" in payload["beforeHtml"]
+    assert "/api/team/billing/usage/records/export" not in payload["beforeHtml"]
     assert payload["recordsQueries"] == [
         "",
         "period_start=2026-06-05&period_end=2026-06-20&employee_id=emp_finance",
     ]
     assert payload["exportUrl"] == "/api/team/billing/usage/records/export?period_start=2026-06-05&period_end=2026-06-20&employee_id=emp_finance"
     assert payload["assignedUrls"] == [payload["exportUrl"]]
-    assert "period_start=2026-06-05" in payload["afterHtml"]
-    assert "employee_id=emp_finance" in payload["afterHtml"]
+    assert 'value="2026-06-05"' in payload["afterHtml"]
+    assert "emp_finance" in payload["afterHtml"]
 
 
 def test_admin_billing_rank_row_expands_employee_specific_run_details() -> None:

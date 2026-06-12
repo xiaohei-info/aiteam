@@ -39,15 +39,16 @@ def get_billing_view(
     for r in windowed_runs:
         events_by_run[r.id] = [e for e in usage_events if e.run_id == r.id]
 
-    _materialize_usage_ledger(uow, enterprise_id, windowed_runs, events_by_run)
+    employees = uow.employees().list_by_enterprise(enterprise_id)
+    emp_map = {e.id: e for e in employees}
+
+    _materialize_usage_ledger(uow, enterprise_id, windowed_runs, events_by_run, set(emp_map))
 
     ledgers = uow.usage_ledgers().list_by_enterprise(
         enterprise_id,
         period_start=f"{period_start}T00:00:00Z",
         period_end=f"{period_end}T00:00:00Z",
     )
-    employees = uow.employees().list_by_enterprise(enterprise_id)
-    emp_map = {e.id: e for e in employees}
 
     by_employee: dict[str, BillingEmployeeItem] = {}
     total_tokens = 0
@@ -76,8 +77,18 @@ def get_billing_view(
     )
 
 
-def _materialize_usage_ledger(uow: UnitOfWork, enterprise_id: str, runs: list, events_by_run: dict[str, list]) -> None:
+def _materialize_usage_ledger(
+    uow: UnitOfWork,
+    enterprise_id: str,
+    runs: list,
+    events_by_run: dict[str, list],
+    valid_employee_ids: set[str],
+) -> None:
     for run in runs:
+        # usage_ledger.employee_id is a NOT NULL FK; runs without a resolvable
+        # entry employee (e.g. group orchestration) cannot be attributed yet.
+        if run.entry_employee_id not in valid_employee_ids:
+            continue
         run_events = events_by_run.get(run.id, [])
         usage_summary = _jsonb_to_dict(run.result_summary_json) or {}
         usage = usage_summary.get("usage") if isinstance(usage_summary.get("usage"), dict) else usage_summary
@@ -90,7 +101,7 @@ def _materialize_usage_ledger(uow: UnitOfWork, enterprise_id: str, runs: list, e
             UsageLedger(
                 id=f"ulg_{run.id}_run_summary",
                 enterprise_id=enterprise_id,
-                employee_id=run.entry_employee_id or "unknown",
+                employee_id=run.entry_employee_id,
                 conversation_id=run.conversation_id,
                 run_id=run.id,
                 input_tokens=input_tokens,

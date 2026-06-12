@@ -99,11 +99,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">行业方案管理</h2>' +
-      '<p class="aiteam-shell__panel-body">行业方案治理 API 尚未实现（当前返回 501）。此区域已对接 `/api/system-admin/solutions`，后端就绪后将承接方案发布、模板绑定与应用统计。</p>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">主读取接口</span><span class="aiteam-shell__meta-value">GET /api/system-admin/solutions</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">后续写接口</span><span class="aiteam-shell__meta-value">POST /api/system-admin/solutions · PATCH /api/system-admin/solutions/{id}</span></div>' +
-      '</div>' +
+      '<p class="aiteam-shell__panel-body">行业方案数据暂时不可用，请稍后刷新重试。</p>' +
       '</div>';
   }
 
@@ -136,7 +132,6 @@ window.aiteam = window.aiteam || {};
         '<td>' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-solution-id="' + solutionId + '">更新</button> ' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="bind" data-aiteam-solution-id="' + solutionId + '">绑定模板</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="sort" data-aiteam-solution-id="' + solutionId + '">拖拽排序</button> ' +
           '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-solution-id="' + solutionId + '">' + publishLabel + '</button>' +
         '</td>' +
         '</tr>';
@@ -146,18 +141,13 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">行业方案管理</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 `/api/system-admin/solutions` 消费平台行业方案治理视图，并提供最小创建、更新、发布和模板绑定入口。</p>' +
+      '<p class="aiteam-shell__panel-body">管理面向企业的行业方案：创建方案、绑定专家模板、发布与下架，并跟踪各方案的应用情况。</p>' +
       (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + notice + '</p></div>' : '') +
       '<form class="aiteam-shell__meta" data-aiteam-solution-create-form="1">' +
       '<div class="aiteam-shell__meta-card"><label>方案名称<br><input class="aiteam-input" type="text" data-aiteam-solution-create-name="1" placeholder="例如：零售标准方案"></label></div>' +
       '<div class="aiteam-shell__meta-card"><label>模板 ID（逗号分隔）<br><input class="aiteam-input" type="text" data-aiteam-solution-create-templates="1" placeholder="例如：tpl_ops, tpl_sales"></label></div>' +
       '<div class="aiteam-shell__meta-card"><label><input type="checkbox" data-aiteam-solution-create-publish="1"> 创建后立即发布</label><br><button type="submit" class="aiteam-btn aiteam-btn--sm">新建方案</button></div>' +
       '</form>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">9个行业卡片</span><span class="aiteam-shell__meta-value">当前以可治理列表 + 方案卡产品位承接，后续可继续扩成完整行业卡片画廊</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">拖拽排序</span><span class="aiteam-shell__meta-value">当前保留排序操作位，避免前端误宣称未实现的真实拖拽语义</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用统计</span><span class="aiteam-shell__meta-value">以 apply_count 为最小展示，持续与企业侧 Apply 链路保持一致</span></div>' +
-      '</div>' +
       '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionCards(items) + '</div>' +
       '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution) + '</div>' +
       '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>模板数</th><th>应用数</th><th>绑定模板</th><th>治理操作</th></tr></thead><tbody>' +
@@ -214,10 +204,6 @@ window.aiteam = window.aiteam || {};
           var nextTemplates = typeof window.prompt === 'function' ? window.prompt('请输入模板 ID，使用逗号分隔', currentTemplates) : currentTemplates;
           if (nextTemplates === null) return;
           container.lastBindHandler(solutionId, nextTemplates.split(','));
-          return;
-        }
-        if (action === 'sort') {
-          rerender('拖拽排序：当前已保留产品位，待后续接入真实排序持久化语义。');
           return;
         }
         container.lastPublishHandler(solutionId, action);

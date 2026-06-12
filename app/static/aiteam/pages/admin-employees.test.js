@@ -128,7 +128,8 @@ async function run() {
   await new Promise(function (resolve) { setTimeout(resolve, 0); });
 
   assert(getEmployeesCalls === 1, 'page should use ns.api.getEmployees');
-  assert(host.innerHTML.indexOf('/api/team/employees/{id}') !== -1, 'page should reference team employee detail contract');
+  assert(host.innerHTML.indexOf('管理企业的全部数字员工') !== -1, 'page should render production employee copy');
+  assert(host.innerHTML.indexOf('/api/team/employees') === -1, 'page should not expose API paths in user copy');
   host._rows[0].dispatchEvent({ type: 'click' });
   assert(pushedPath === '/admin/employees/emp_1', 'clicking an employee row should push nested employee detail route');
   assert(drawerOpened && drawerOpened.employeeId === 'emp_1', 'clicking an employee row should open drawer');

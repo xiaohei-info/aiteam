@@ -49,8 +49,8 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限查看企业后台人才市场';
-    if (result && result.status === 404) return '企业后台人才市场接口尚未开放';
-    if (result && result.status === 501) return '企业后台人才市场接口尚未实现';
+    if (result && result.status === 404) return '人才市场暂时不可用';
+    if (result && result.status === 501) return '人才市场暂时不可用';
     if (result && result.error) return result.error;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
     return '网络请求失败';
@@ -107,13 +107,9 @@ window.aiteam = window.aiteam || {};
       container.innerHTML =
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
-        '<h2 class="aiteam-shell__panel-title">人才市场（后台）</h2>' +
-        '<p class="aiteam-shell__panel-body">B03 页面只承接企业侧模板消费与招募，不承担平台模板发布治理。列表读取 `/api/team/templates`，详情跳转前台 `/app/marketplace/:templateId`，招募写入 `POST /api/team/recruitments`。</p>' +
+        '<h2 class="aiteam-shell__panel-title">人才市场</h2>' +
+        '<p class="aiteam-shell__panel-body">浏览数字员工模板，查看专家详情，并一键招募到企业团队。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
-        '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">企业视角</span><span class="aiteam-shell__meta-value">浏览模板、查看详情、直接招募</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">平台边界</span><span class="aiteam-shell__meta-value">模板发布、上下架、克隆仍由系统后台负责</span></div>' +
-        '</div>' +
         '<ul class="aiteam-skills-list">' + cards + '</ul>' +
         '</div>';
       bindEvents();

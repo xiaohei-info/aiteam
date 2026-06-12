@@ -627,6 +627,8 @@ window.aiteam = window.aiteam || {};
         recoveryStatus: 'idle',
         recoveryMessage: '',
         recoveryError: '',
+        lastSentText: '',
+        lastRouteHint: 'auto',
       };
 
       initialTaskItems.forEach(function (task) {
@@ -695,6 +697,8 @@ window.aiteam = window.aiteam || {};
       '<select class="aiteam-chatwin__route" data-group-route title="协作策略"><option value="auto">自动路由</option><option value="single_agent">单员工</option><option value="orchestration">多员工协作</option></select>' +
       '<span class="aiteam-chatwin__model" data-group-mention-state hidden></span>' +
       '<span class="aiteam-chatwin__spacer"></span>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-group-retry title="重试上一轮">↻</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-group-abort title="停止本轮">⏹</button>' +
       '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
       '</div>' +
       '<input type="hidden" data-group-sender value="">' +
@@ -1187,6 +1191,8 @@ window.aiteam = window.aiteam || {};
         var text = stringValue(input.value, '');
         var senderId = resolveSenderId();
         if (!text) return;
+        state.lastSentText = text;
+        state.lastRouteHint = routeSelect.value;
         var selectedHandles = selectedMentionHandles();
         rememberSenderId(senderId);
         state.pendingRouteHint = routeSelect.value;
@@ -1249,6 +1255,95 @@ window.aiteam = window.aiteam || {};
           return;
         }
         syncTimeline(state.runId, state.cursor, '正在重新同步协作进度...');
+      });
+    }
+
+    function retryLatestGroupRun() {
+      if (!state.lastSentText) {
+        setStatus('暂无可重试的上一条消息。');
+        return;
+      }
+      setStatus('正在重试上一轮协作...');
+      var idempotencyKey = 'group-retry-' + state.conversationId + '-' + Date.now();
+      var senderId = resolveSenderId();
+      ns.api.submitGroupMessage(state.conversationId, {
+        sender_id: senderId,
+        route_hint: state.lastRouteHint || 'auto',
+        idempotency_key: idempotencyKey,
+        message: { text: state.lastSentText },
+      }).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '重试失败。');
+          return;
+        }
+        ns.timeline.disconnect();
+        state.liveItems = [];
+        state.timelineNodes = [];
+        state.taskMap = {};
+        state.taskOrder = [];
+        state.seenCursors = {};
+        state.cursor = 0;
+        state.reconnectCount = 0;
+        state.transcriptNodes.push(messageBubble('user', '你', '<p>' + escapeHtml(state.lastSentText) + '</p><div class="aiteam-chip-row">' + badge(routeModeLabel(state.lastRouteHint || 'auto')) + '</div>'));
+        renderTranscript();
+        if (result.data) {
+          state.runtimeHandle = result.data.runtime_handle || state.runtimeHandle;
+          state.runId = result.data.run_id || state.runId;
+          state.recoveryError = '';
+          if (state.conversation.latest_run) {
+            state.conversation.latest_run.run_id = state.runId;
+            state.conversation.latest_run.status = 'running';
+            state.conversation.latest_run.runtime_handle = state.runtimeHandle;
+          } else {
+            state.conversation.latest_run = {
+              run_id: state.runId,
+              status: 'running',
+              runtime_handle: state.runtimeHandle,
+              latest_event_cursor: 0,
+            };
+          }
+        }
+        var newRunId = result.data && result.data.run_id;
+        setStatus('已重试，正在同步协作进度...');
+        renderRuntimeHandle(state.runtimeHandle);
+        syncTimeline(newRunId, 0, '已重试，正在同步协作进度...');
+      });
+    }
+
+    function abortActiveGroupRun() {
+      if (!state.runId) {
+        setStatus('当前没有可中止的运行。');
+        return;
+      }
+      setStatus('正在提交中止请求...');
+      ns.api.abortRun(state.runId, {
+        reason: '用户从群聊页主动停止本轮',
+      }).then(function (result) {
+        if (!result.ok) {
+          setStatus(result.error || '中止失败。');
+          return;
+        }
+        ns.timeline.disconnect();
+        var alreadyTerminal = result.data && result.data.already_terminal;
+        setStatus(alreadyTerminal ? '当前运行已结束，无需重复中止。' : '已提交中止请求。');
+        if (state.conversation.latest_run) {
+          state.conversation.latest_run.status = 'cancelled';
+        }
+        renderRuntimeHandle(state.runtimeHandle);
+        updateCollaborationState();
+      });
+    }
+
+    var retryBtn = container.querySelector('[data-group-retry]');
+    var abortBtn = container.querySelector('[data-group-abort]');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', function () {
+        retryLatestGroupRun();
+      });
+    }
+    if (abortBtn) {
+      abortBtn.addEventListener('click', function () {
+        abortActiveGroupRun();
       });
     }
 

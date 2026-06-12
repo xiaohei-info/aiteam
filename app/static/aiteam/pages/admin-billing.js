@@ -36,8 +36,8 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限查看费用数据';
-    if (result && result.status === 404) return '费用接口尚未开放';
-    if (result && result.status === 501) return '费用接口尚未实现';
+    if (result && result.status === 404) return '费用服务暂时不可用';
+    if (result && result.status === 501) return '费用服务暂时不可用';
     if (result && result.error) return result.error;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
     return '网络请求失败';
@@ -161,9 +161,8 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">工资管理 / Token 消耗</h2>' +
-        '<p class="aiteam-shell__panel-body">B04 页面已收口到 Team billing 命名空间，规范读取 `' + BILLING_OVERVIEW_PATH + '` 与 `' + BILLING_RECORDS_PATH + '`。当前后端未开放时，页面保留趋势/排行/明细的契约提示，不再消费过时 enterprise-admin alias。</p>' +
+        '<p class="aiteam-shell__panel-body">费用数据暂时无法加载，请稍后刷新重试。</p>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">明细导出</span><span class="aiteam-shell__meta-value">GET ' + BILLING_EXPORT_PATH + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">当前状态</span><span class="aiteam-shell__meta-value">' + esc(apiErrorMessage(result)) + '</span></div>' +
         '</div>' +
         '</div>';
@@ -237,17 +236,17 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">工资管理 / Token 消耗</h2>' +
-        '<p class="aiteam-shell__panel-body">B04 页面同时展示用量总览、员工排行与按 run 聚合的消耗明细，数据全部来自 Team Panel 的 `usage_ledger` 视图。</p>' +
+        '<p class="aiteam-shell__panel-body">查看企业员工的 Token 消耗总览、员工排行与对话明细，支持按时间窗口和员工筛选，并可导出报表。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
         '<div class="aiteam-billing__actions">' + periodButtons + '</div>' +
         '<form class="aiteam-shell__meta" data-role="billing-filter-form">' +
         '<div class="aiteam-shell__meta-card"><label>开始日期<br><input class="aiteam-input" type="date" data-role="billing-period-start" value="' + esc(state.periodStart) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>结束日期<br><input class="aiteam-input" type="date" data-role="billing-period-end" value="' + esc(state.periodEnd) + '"></label></div>' +
         '<div class="aiteam-shell__meta-card"><label>员工筛选<br><select class="aiteam-input" data-role="billing-employee-filter">' + employeeOptions + '</select></label></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">数据导出</span><span class="aiteam-shell__meta-value">' + esc(exportUrl()) + '</span><br><button type="submit" class="aiteam-btn aiteam-btn--sm">刷新看板</button>' + exportButton + '</div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">操作</span><br><button type="submit" class="aiteam-btn aiteam-btn--sm">刷新看板</button>' + exportButton + '</div>' +
         '</form>' +
         '<div class="aiteam-billing__stats">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总 Tokens</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(overview.total_tokens)) + '</span><span class="aiteam-inline-note">较上月 ↑ 12.4%</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总 Tokens</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(overview.total_tokens)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总成本</span><span class="aiteam-shell__meta-value">' + esc(formatCents(overview.total_cost_cents)) + '</span><span class="aiteam-inline-note">按市场价计算</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">员工数</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(employees.length)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">明细行数</span><span class="aiteam-shell__meta-value">' + esc(formatNumber(records.total || 0)) + '</span></div>' +
@@ -368,8 +367,11 @@ window.aiteam = window.aiteam || {};
 
     container.lastExportHandler = function () {
       var url = exportUrl();
-      if (window.location && typeof window.location.assign === 'function') {
-        window.location.assign(url);
+      if (ns.api && typeof ns.api.downloadCsv === 'function') {
+        ns.api.downloadCsv(url, 'billing-records.csv').catch(function () {
+          setNotice('导出失败，请稍后重试');
+          render();
+        });
       }
       return url;
     };

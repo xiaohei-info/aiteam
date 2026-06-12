@@ -236,7 +236,7 @@ global.fetch = async (url, options) => {{
     method: options.method,
     body: options.body ? JSON.parse(options.body) : null,
   }});
-  const isList = url === '/api/system-admin/enterprises' && options.method === 'GET';
+  const isList = url.indexOf('/api/system-admin/enterprises?') === 0 && options.method === 'GET';
   return {{
     ok: true,
     status: 200,
@@ -590,10 +590,10 @@ class TestPermissionDeniedState:
         )
         assert "只读" in result["html"]
         assert result["fetchCalls"] == [
-            {"url": "/api/system-admin/enterprises", "method": "GET"},
-            {"url": "/api/system-admin/enterprises/ent_acme", "method": "GET"},
-            {"url": "/api/system-admin/enterprises/ent_acme/quota", "method": "GET"},
-            {"url": "/api/system-admin/enterprises/export", "method": "GET"},
+            {"url": "/api/system-admin/enterprises?role=system_operator", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/ent_acme?role=system_operator", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/ent_acme/quota?role=system_operator", "method": "GET"},
+            {"url": "/api/system-admin/enterprises/export?role=system_operator", "method": "GET"},
         ]
         module_source = (ROOT / "static" / "aiteam" / "pages" / "system-accounts.js").read_text(encoding="utf-8")
         assert "system_write" in module_source
@@ -636,12 +636,12 @@ class TestPermissionDeniedState:
         assert result["ok"] is True
         assert result["status"] == 200
         assert result["fetchCalls"] == [
-            {"url": "/api/system-admin/enterprises", "method": "GET", "body": None},
-            {"url": "/api/system-admin/enterprises/ent_demo", "method": "GET", "body": None},
-            {"url": "/api/system-admin/enterprises/ent_demo/quota", "method": "GET", "body": None},
-            {"url": "/api/system-admin/enterprises/export", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises?role=system_admin", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/ent_demo?role=system_admin", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/ent_demo/quota?role=system_admin", "method": "GET", "body": None},
+            {"url": "/api/system-admin/enterprises/export?role=system_admin", "method": "GET", "body": None},
             {
-                "url": "/api/system-admin/enterprises/ent_demo/actions",
+                "url": "/api/system-admin/enterprises/ent_demo/actions?role=system_admin",
                 "method": "POST",
                 "body": {"action": "ban", "reason": "policy"},
             },

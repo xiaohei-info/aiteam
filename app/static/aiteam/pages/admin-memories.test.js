@@ -139,9 +139,9 @@ assert(store.filter({ query: 'run_1' })[0].memory_id === 'mem_1', 'store.filter 
   assert(container.innerHTML.indexOf('记忆管理') !== -1, 'page should render heading');
   assert(container.innerHTML.indexOf('自动提取/写回失败') !== -1, 'page should render extraction failure visibility');
   assert(container.innerHTML.indexOf('Prompt Plan 引用') !== -1, 'page should render prompt plan section');
-  assert(container.innerHTML.indexOf('注入痕迹') !== -1, 'page should render prompt injection trace section');
+  assert(container.innerHTML.indexOf('使用记录') !== -1, 'page should render memory usage trace section');
   assert(container.innerHTML.indexOf('prompt_injected') !== -1, 'page should render prompt injection stage');
-  assert(container.innerHTML.indexOf('审计追踪') !== -1, 'page should render audit trace section');
+  assert(container.innerHTML.indexOf('操作记录') !== -1, 'page should render audit trace section');
   assert(container.innerHTML.indexOf('当前显示 2 / 2 条记忆') !== -1, 'page should render summary');
   assert(container.innerHTML.indexOf('重要程度') !== -1, 'page should render inline importance field');
   assert(container.innerHTML.indexOf('记忆分类') !== -1, 'page should render inline category field');

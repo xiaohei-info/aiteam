@@ -52,15 +52,26 @@ window.aiteam = window.aiteam || {};
     return text ? `?${text}` : '';
   }
 
+  // System-admin endpoints require a system role for the backend permission
+  // check; team endpoints already default to the enterprise owner role.
+  function appendRoleParam(url) {
+    if (url.indexOf('/api/system-admin/') !== 0 || url.indexOf('role=') !== -1) {
+      return url;
+    }
+    const activeRole = ns.role && typeof ns.role.getActiveRole === 'function' ? ns.role.getActiveRole() : '';
+    const role = activeRole || 'system_admin';
+    return url + (url.indexOf('?') === -1 ? '?' : '&') + 'role=' + encodeURIComponent(role);
+  }
+
   ns.api = {
     BASE: '/api/team',
 
     _buildUrl(path) {
       const requestPath = String(path || '');
       if (requestPath.indexOf('/api/') === 0) {
-        return requestPath;
+        return appendRoleParam(requestPath);
       }
-      return this.BASE + requestPath;
+      return appendRoleParam(this.BASE + requestPath);
     },
 
     async _request(method, path, body, options) {
@@ -89,6 +100,23 @@ window.aiteam = window.aiteam || {};
 
     get(path, options) {
       return this._request('GET', path, undefined, options);
+    },
+
+    // Fetch a CSV endpoint and trigger a browser file download.
+    async downloadCsv(path, filename) {
+      const res = await fetch(this._buildUrl(path));
+      if (!res.ok) {
+        throw new Error(`download failed (${res.status})`);
+      }
+      const text = await res.text();
+      const blob = new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename || 'export.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     },
 
     post(path, body, options) {

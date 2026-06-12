@@ -114,7 +114,7 @@ async function run() {
   await new Promise(function (resolve) { setTimeout(resolve, 0); });
 
   assert(apiCalls[0] === 'templates', 'page should request admin templates on init');
-  assert(host.innerHTML.indexOf('人才市场（后台）') !== -1, 'page should render title');
+  assert(host.innerHTML.indexOf('人才市场') !== -1, 'page should render title');
   assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render template item');
   assert(host.innerHTML.indexOf('立即招募') !== -1, 'page should render recruit action');
   assert(host.innerHTML.indexOf('/app/marketplace/tpl_marketing') !== -1, 'page should link to frontend template detail');

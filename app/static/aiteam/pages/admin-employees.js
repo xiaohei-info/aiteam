@@ -70,7 +70,7 @@ window.aiteam = window.aiteam || {};
   }
 
   function _renderExportButton(role) {
-    if (!role || !ns.role || !ns.role.canExportEmployees(role)) return '';
+    if (role && ns.role && !ns.role.canExportEmployees(role)) return '';
     return (
       '<button class="aiteam-btn aiteam-btn--export" onclick="aiteam.pages.adminEmployees._exportEmployees()">' +
       '导出员工列表</button>'
@@ -78,11 +78,55 @@ window.aiteam = window.aiteam || {};
   }
 
   function _renderAuditLink(role) {
-    if (!role || !ns.role || !ns.role.canViewAudit(role)) return '';
+    if (role && ns.role && !ns.role.canViewAudit(role)) return '';
     return (
-      '<p class="aiteam-shell__meta"><a href="/api/team/audit-events" class="aiteam-shell__link">' +
-      '查看审计日志 →</a></p>'
+      '<div class="aiteam-shell__meta">' +
+      '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="toggle-audit">查看审计日志</button>' +
+      '</div>' +
+      '<div data-role="audit-panel" hidden></div>'
     );
+  }
+
+  function _formatAuditTime(value) {
+    var text = String(value || '');
+    return text ? text.slice(0, 19).replace('T', ' ') : '';
+  }
+
+  function _renderAuditTable(items) {
+    if (!items || !items.length) {
+      return '<p class="aiteam-shell__panel-body">暂无审计记录。</p>';
+    }
+    var rows = items.map(function (item) {
+      return '<tr>' +
+        '<td>' + _formatAuditTime(item.created_at) + '</td>' +
+        '<td>' + (item.event_type || '') + '</td>' +
+        '<td>' + (item.actor_id || '') + '</td>' +
+        '<td>' + (item.target_type || '') + (item.target_id ? ' · ' + item.target_id : '') + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<table class="aiteam-table"><thead><tr><th>时间</th><th>事件</th><th>操作者</th><th>对象</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function _bindAuditPanel(container) {
+    if (!container || typeof container.querySelector !== 'function') return;
+    var toggle = container.querySelector('[data-role="toggle-audit"]');
+    var panel = container.querySelector('[data-role="audit-panel"]');
+    if (!toggle || !panel) return;
+    toggle.addEventListener('click', function () {
+      if (!panel.hidden) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      panel.innerHTML = '<p class="aiteam-shell__panel-body">加载审计日志...</p>';
+      ns.api.get('/api/team/audit-events?limit=20').then(function (result) {
+        if (!result.ok) {
+          panel.innerHTML = '<p class="aiteam-shell__panel-body">审计日志加载失败，请稍后重试。</p>';
+          return;
+        }
+        panel.innerHTML = _renderAuditTable(result.data && result.data.items);
+      });
+    });
   }
 
   function _buildEmployeeRows(employees) {
@@ -119,7 +163,7 @@ window.aiteam = window.aiteam || {};
               '<div class="aiteam-shell__panel">' +
               '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
               '<h2 class="aiteam-shell__panel-title">员工管理</h2>' +
-              '<p class="aiteam-shell__panel-body">员工 API 尚未实现（当前返回 501）。后端就绪后，此区域将通过 /api/team/employees 与 /api/team/employees/{id} 展示员工列表、技能授权入口与导出能力。</p>' +
+              '<p class="aiteam-shell__panel-body">员工服务暂时不可用，请稍后刷新重试。</p>' +
               '</div>';
             return;
           }
@@ -147,32 +191,27 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-shell__panel">' +
           '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
           '<h2 class="aiteam-shell__panel-title">员工管理</h2>' +
-          '<p class="aiteam-shell__panel-body">通过 /api/team/employees 消费员工列表；点击员工行或直接访问 /admin/employees/:employeeId/:tab? 可查看 /api/team/employees/{id} 返回的员工详情页签，并通过 skills_add / skills_remove、knowledge_base_ids、connector_ids、memory_*、scheduled_job 等入口完成配置。</p>' +
+          '<p class="aiteam-shell__panel-body">管理企业的全部数字员工。点击员工行可进入详情，配置模型与提示词、授权技能、绑定知识库与连接器、管理记忆和周期任务。</p>' +
           exportBtn +
           '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>角色</th><th>状态</th></tr></thead><tbody>' + rows + '</tbody></table>' +
           auditLink +
           '</div>';
 
+        _bindAuditPanel(container);
         ensureDrawerModule(function () {
           bindDrawer(container);
         });
       });
     },
 
-    // Export handler — calls canonical backend export path
-    // NOTE: Backend /api/team/employees/export may still return 501 until rollout completes.
     _exportEmployees: function () {
       var role = ns.role ? ns.role.getActiveRole() : '';
-      if (!ns.role || !ns.role.canExportEmployees(role)) {
+      if (role && ns.role && !ns.role.canExportEmployees(role)) {
         alert('您没有导出员工数据的权限');
         return;
       }
-      ns.api.get('/api/team/employees/export').then(function (result) {
-        if (result.ok) {
-          alert('导出完成: ' + JSON.stringify(result.data));
-        } else {
-          alert('导出失败: ' + (result.error || '未知错误'));
-        }
+      ns.api.downloadCsv('/api/team/employees/export', 'employees.csv').catch(function () {
+        alert('导出失败，请稍后重试');
       });
     },
   };

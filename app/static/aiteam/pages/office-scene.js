@@ -7,7 +7,7 @@ window.aiteam = window.aiteam || {};
     summary: {
       online_employee_count: 4,
       running_task_count: 2,
-      mode_label: '预览模式 · 等待 /api/team/office/* 聚合接口',
+      mode_label: '预览模式 · 示例数据',
     },
     seats: [
       {
@@ -49,7 +49,7 @@ window.aiteam = window.aiteam || {};
         employee_id: 'preview_rex',
         employee_name: 'Rex',
         title: '执行自动化回归',
-        detail: 'Layer4 前端 + API 契约 smoke',
+        detail: '回归测试与质量检查',
         status: 'running',
         progress: 62,
       },
@@ -188,8 +188,8 @@ window.aiteam = window.aiteam || {};
     var seats = payload.scene.seats || [];
     var tasks = payload.feed.items || [];
     var toolbarLabel = payload.preview
-      ? (summary.mode_label || '预览模式 · 等待 /api/team/office/* 聚合接口')
-      : (summary.mode_label || '实时视图 · Team Panel 聚合');
+      ? (summary.mode_label || '预览模式 · 示例数据')
+      : (summary.mode_label || '实时视图');
     return '' +
       '<section class="aiteam-office' + (payload.preview ? ' is-preview' : '') + '">' +
       '<div class="aiteam-shell__panel aiteam-office__panel">' +

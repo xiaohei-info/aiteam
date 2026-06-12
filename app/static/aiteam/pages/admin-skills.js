@@ -103,8 +103,8 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限访问技能市场';
-    if (result && result.status === 404) return '技能市场接口尚未开放';
-    if (result && result.status === 501) return '技能市场接口尚未实现';
+    if (result && result.status === 404) return '技能市场暂时不可用';
+    if (result && result.status === 501) return '技能市场暂时不可用';
     if (result && result.error) return result.error;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
     return '网络请求失败';
@@ -192,12 +192,11 @@ window.aiteam = window.aiteam || {};
     function buildDegradationNotes() {
       var notices = state.notices.slice();
       if (state.loadState.installs !== 'ready') {
-        notices.push('已安装技能接口未完全就绪：页面仍展示技能市场与授权入口说明。');
+        notices.push('已安装技能列表暂时无法加载，请稍后刷新重试。');
       }
       if (state.loadState.catalog !== 'ready') {
-        notices.push('技能市场目录接口未完全就绪：页面保留搜索和降级占位，不伪造缺失数据。');
+        notices.push('技能市场目录暂时无法加载，请稍后刷新重试。');
       }
-      notices.push('已安装技能支持升级、卸载和按 employee_ids 调整授权范围；员工详情抽屉继续负责单员工即时增减。');
       return notices;
     }
 
@@ -314,7 +313,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">技能市场</h2>' +
-        '<p class="aiteam-shell__panel-body">企业技能库与市场浏览共用 Team Panel 北向契约，读取 /api/team/skills/catalog 与 /api/team/skills/installs，安装写入 /api/team/skills/installs。安装后可在员工配置中通过 skills_add / skills_remove 完成授权。</p>' +
+        '<p class="aiteam-shell__panel-body">浏览技能市场并为企业安装技能。已安装技能支持升级、卸载与授权范围调整；安装后可在员工详情中为具体员工授权。</p>' +
         '<div class="aiteam-skill-summary">' +
         '<span class="aiteam-skill-summary__item">已安装 ' + esc(state.installs.length) + ' 项</span>' +
         '<span class="aiteam-skill-summary__item">市场可见 ' + esc(visibleCatalog.length) + ' 项</span>' +

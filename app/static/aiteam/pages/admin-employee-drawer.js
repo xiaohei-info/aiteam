@@ -504,7 +504,7 @@ window.aiteam = window.aiteam || {};
       return '<p class="aiteam-drawer__desc">正在加载企业技能库...</p>';
     }
     if (_skillInstallState === 'unavailable') {
-      return '<p class="aiteam-drawer__desc">当前分支未接入 /api/team/skills/installs，技能市场接口就绪后可直接在此授权。</p>';
+      return '<p class="aiteam-drawer__desc">企业技能库暂时不可用，请稍后重试。</p>';
     }
     if (!_enterpriseSkillInstalls.length) {
       return '<p class="aiteam-drawer__desc">企业技能库暂无已安装技能；请先前往 /admin/skills 安装。</p>';
@@ -553,7 +553,7 @@ window.aiteam = window.aiteam || {};
       actions.push({ status: 'archived', label: '解雇员工' });
     }
     if (!actions.length) {
-      return '<p class="aiteam-drawer__desc">当前员工已归档；如需重新启用，请等待后端补充 rehire / reprovision 契约。</p>';
+      return '<p class="aiteam-drawer__desc">当前员工已解雇。如需重新启用，请通过人才市场重新招募。</p>';
     }
     return '<div class="aiteam-drawer__binding-actions">' + actions.map(function (item) {
       var disabled = _statusActionLoading === item.status ? ' disabled' : '';
@@ -619,13 +619,13 @@ window.aiteam = window.aiteam || {};
           _configActionsMarkup('profile', '保存基础资料') +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">运行安全操作</span>' +
-          '<div class="aiteam-drawer__prompt-text">通过 PATCH /api/team/employees/{id} 提交变更。当前支持字段：display_name、status、skills_add/skills_remove、model_provider、model_name、prompt_version、prompt_system/prompt_behavior_rules_json/prompt_opening_message、memory_mode/memory_provider_code/memory_retention_days/memory_writeback_enabled、knowledge_base_ids、connector_ids、scheduled_job/scheduled_job_action。</div>' +
+          '<div class="aiteam-drawer__prompt-text">可在此停用、恢复或解雇员工。停用后员工不再响应新会话；解雇为不可逆操作，请谨慎执行。</div>' +
           (_statusNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_statusNotice) + '</p>' : '') +
           _statusActionsMarkup() +
           '</div>' +
           '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">治理审计</h3>' +
-          '<p class="aiteam-drawer__desc">最近治理动作直接来自 /api/team/employees/{id} 返回的 recent_audit_events，可核对停用/恢复/Loop 调整是否已落库。</p>' +
+          '<p class="aiteam-drawer__desc">展示该员工最近的治理操作记录，包括停用、恢复与周期任务调整。</p>' +
           _recentAuditMarkup(d.recentAuditEvents) +
           '</div>' +
           '</div>';
@@ -686,7 +686,7 @@ window.aiteam = window.aiteam || {};
       skills: function () {
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">技能授权</h3>' +
-          '<p class="aiteam-drawer__desc">从企业技能库授权技能给当前员工，通过 PATCH /api/team/employees/{id} 的 skills_add / skills_remove 提交并持久化技能绑定；刷新页面后，已授权技能仍会保留。</p>' +
+          '<p class="aiteam-drawer__desc">从企业技能库为当前员工授权或移除技能，变更立即生效并长期保留。</p>' +
           (_skillNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_skillNotice) + '</p>' : '') +
           _renderEnterpriseSkillAssignments() +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
@@ -748,7 +748,7 @@ window.aiteam = window.aiteam || {};
         var job = d.scheduledJobs && d.scheduledJobs[0] ? d.scheduledJobs[0] : {};
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">Loop 配置</h3>' +
-          '<p class="aiteam-drawer__desc">Scheduled Job 由 /api/team/employees/{id} 聚合返回，修改时通过 scheduled_job / scheduled_job_action PATCH 字段提交。</p>' +
+          '<p class="aiteam-drawer__desc">为员工配置周期性自主任务（Loop）。员工将按设定的周期自动执行任务并产出结果。</p>' +
           _scheduledJobsMarkup(d.scheduledJobs) +
           '<input id="aiteam-loop-job-id-input" type="hidden" value="' + _escapeHtml(job.scheduled_job_id || '') + '">' +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +

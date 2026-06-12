@@ -34,13 +34,51 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">财务管理</h2>' +
-      '<p class="aiteam-shell__panel-body">平台财务聚合 API 尚未实现（当前返回 501）。此区域已对接 `/api/system-admin/finance/overview`，并预留 `/api/system-admin/finance/reports` 作为导出报表入口。</p>' +
-      '<div class="aiteam-shell__meta">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">主读取接口</span><span class="aiteam-shell__meta-value">GET /api/system-admin/finance/overview</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">导出接口</span><span class="aiteam-shell__meta-value">GET /api/system-admin/finance/reports</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">页面职责</span><span class="aiteam-shell__meta-value">平台收入、成本、利润趋势与高消耗企业排行</span></div>' +
-      '</div>' +
+      '<p class="aiteam-shell__panel-body">平台财务数据暂时不可用，请稍后刷新重试。</p>' +
       '</div>';
+  }
+
+  function periodWindow(key) {
+    var now = new Date();
+    var year = now.getUTCFullYear();
+    var month = now.getUTCMonth();
+    if (key === 'this_month') {
+      return {
+        start: new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(year, month + 1, 1)).toISOString().slice(0, 10),
+      };
+    }
+    if (key === 'this_year') {
+      return {
+        start: new Date(Date.UTC(year, 0, 1)).toISOString().slice(0, 10),
+        end: new Date(Date.UTC(year + 1, 0, 1)).toISOString().slice(0, 10),
+      };
+    }
+    return { start: '', end: '' };
+  }
+
+  function exportReportCsv(payload) {
+    var rows = Array.isArray(payload && payload.enterprises) ? payload.enterprises : [];
+    var header = ['企业ID', '企业名称', 'Tokens', '收入(分)', '成本(分)', '利润(分)', 'Run 数'];
+    var lines = [header.join(',')].concat(rows.map(function (item) {
+      return [
+        item.enterprise_id || '',
+        '"' + String(item.enterprise_name || '').replace(/"/g, '""') + '"',
+        item.tokens || 0,
+        item.revenue_cents || 0,
+        item.cost_cents || 0,
+        item.profit_cents || 0,
+        item.run_count || 0,
+      ].join(',');
+    }));
+    var blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'finance-report.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
   }
 
   function renderTrend(trendItems) {
@@ -65,7 +103,7 @@ window.aiteam = window.aiteam || {};
     '</div>';
   }
 
-  function renderOverview(container, payload) {
+  function renderOverview(container, payload, activePeriodKey) {
     if (!payload || (typeof payload !== 'object')) {
       if (ns.states && ns.states.renderEmpty) {
         ns.states.renderEmpty(container, '暂无平台财务汇总');
@@ -92,11 +130,16 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__panel">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">财务管理</h2>' +
-      '<p class="aiteam-shell__panel-body">通过 `/api/system-admin/finance/overview` 消费平台级财务聚合结果；导出能力后续经 `/api/system-admin/finance/reports` 接入。</p>' +
+      '<p class="aiteam-shell__panel-body">查看平台级收入、成本与利润汇总，以及月度趋势与高消耗企业排行。</p>' +
       '<div class="aiteam-billing__actions">' +
-      '<button type="button" class="aiteam-pill is-active">本月</button>' +
-      '<button type="button" class="aiteam-pill">本年</button>' +
-      '<button type="button" class="aiteam-pill">全部</button>' +
+      [
+        { key: 'this_month', label: '本月' },
+        { key: 'this_year', label: '本年' },
+        { key: 'all', label: '全部' },
+      ].map(function (item) {
+        var active = item.key === (activePeriodKey || 'all') ? ' is-active' : '';
+        return '<button type="button" class="aiteam-pill' + active + '" data-system-finance-period="' + item.key + '">' + item.label + '</button>';
+      }).join('') +
       '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-system-finance-export>导出报表</button>' +
       '</div>' +
       '<div class="aiteam-billing__stats">' +
@@ -129,36 +172,64 @@ window.aiteam = window.aiteam || {};
         }
       });
     }
+    var periodButtons = container.querySelectorAll ? container.querySelectorAll('[data-system-finance-period]') : [];
+    for (var i = 0; i < periodButtons.length; i += 1) {
+      periodButtons[i].addEventListener('click', function () {
+        var key = this.getAttribute('data-system-finance-period') || 'this_month';
+        if (typeof container.lastPeriodHandler === 'function') {
+          container.lastPeriodHandler(key);
+        }
+      });
+    }
   }
 
   ns.pages.systemFinance = {
     init: function (container) {
       if (!container) return;
 
-      container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载平台财务数据...</p></div>';
+      function buildPeriodQuery(key) {
+        var range = periodWindow(key);
+        var parts = [];
+        if (range.start) parts.push('period_start=' + range.start);
+        if (range.end) parts.push('period_end=' + range.end);
+        return parts.length ? ('?' + parts.join('&')) : '';
+      }
+
+      function loadOverview(periodKey) {
+        container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载平台财务数据...</p></div>';
+        ns.api.get('/api/system-admin/finance/overview' + buildPeriodQuery(periodKey)).then(function (result) {
+          if (!result.ok) {
+            if (result.status === 501) {
+              renderNotImplemented(container);
+              return;
+            }
+            if (ns.states && ns.states.handleApiResult) {
+              ns.states.handleApiResult(result, container, function () {});
+            } else {
+              container.innerHTML = '<div class="aiteam-state aiteam-state-error"><p>⚠ 平台财务数据加载失败</p></div>';
+            }
+            return;
+          }
+          renderOverview(container, result.data, periodKey);
+          bindFinanceActions(container);
+        });
+      }
+
+      container.lastPeriodHandler = function (key) {
+        loadOverview(key);
+        return key;
+      };
+
       container.lastExportHandler = function () {
-        if (window.location && typeof window.location.assign === 'function') {
-          window.location.assign(FINANCE_REPORTS_PATH);
-        }
+        ns.api.get(FINANCE_REPORTS_PATH).then(function (result) {
+          if (result.ok) {
+            exportReportCsv(result.data);
+          }
+        });
         return FINANCE_REPORTS_PATH;
       };
 
-      ns.api.get('/api/system-admin/finance/overview').then(function (result) {
-        if (!result.ok) {
-          if (result.status === 501) {
-            renderNotImplemented(container);
-            return;
-          }
-          if (ns.states && ns.states.handleApiResult) {
-            ns.states.handleApiResult(result, container, function () {});
-          } else {
-            container.innerHTML = '<div class="aiteam-state aiteam-state-error"><p>⚠ 平台财务数据加载失败</p></div>';
-          }
-          return;
-        }
-        renderOverview(container, result.data);
-        bindFinanceActions(container);
-      });
+      loadOverview('all');
     }
   };
 }(window.aiteam));

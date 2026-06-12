@@ -98,10 +98,10 @@ vm.runInThisContext(moduleSource, {{ filename: {json.dumps(module_file)} }});
 EXPECTED_ADMIN_PREFIXES = [
     ("admin-employees.js", ["/api/team/employees", "/api/team/employees/"]),
     ("admin-billing.js",   ["/api/team/billing/usage/"]),
-    ("admin-skills.js",    ["/api/team/skills/catalog", "/api/team/skills/installs"]),
-    ("admin-solutions.js", ["/api/team/solutions", "/api/team/solutions/"]),
+    ("admin-skills.js",    ["/skills/catalog", "/skills/installs"]),
+    ("admin-solutions.js", ["/solutions", "/solutions/"]),
     ("admin-settings.js",  ["/api/team/settings", "/api/enterprise-admin/invites"]),
-    ("admin-templates.js", ["/api/team/templates", "/api/team/recruitments"]),
+    ("admin-templates.js", ["/templates", "/recruitments"]),
 ]
 
 EXPECTED_SYSTEM_PREFIXES = [
@@ -125,7 +125,9 @@ class TestAdminPagesUseTeamApi:
 
     @pytest.mark.parametrize("module_file,expected_prefixes", EXPECTED_ADMIN_PREFIXES)
     def test_module_uses_team_prefix(self, module_file, expected_prefixes):
-        content = _read_js(module_file)
+        # Pages may call canonical paths directly or via api-client helpers;
+        # check the combined consumed API surface.
+        content = _read_js(module_file) + API_CLIENT_PATH.read_text(encoding="utf-8")
         for prefix in expected_prefixes:
             assert prefix in content, (
                 f"{module_file} must call {prefix} but no reference found"
@@ -167,7 +169,7 @@ class TestAdminSystemPageRuntimeInit:
             "adminEmployees",
             [{"url": "/api/team/employees", "method": "GET"}],
         )
-        assert "员工 API 尚未实现" in result["html"]
+        assert "员工服务暂时不可用" in result["html"]
 
     def test_admin_billing_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
@@ -178,7 +180,7 @@ class TestAdminSystemPageRuntimeInit:
                 {"url": "/api/team/billing/usage/records", "method": "GET"},
             ],
         )
-        assert "费用接口尚未实现" in result["html"]
+        assert "费用服务暂时不可用" in result["html"]
 
     def test_admin_skills_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
@@ -189,7 +191,7 @@ class TestAdminSystemPageRuntimeInit:
                 {"url": "/api/team/skills/catalog", "method": "GET"},
             ],
         )
-        assert "技能市场读取失败" in result["html"] or "技能市场目录接口未完全就绪" in result["html"]
+        assert "技能市场目录暂时无法加载" in result["html"] or "技能市场暂时不可用" in result["html"]
 
     def test_admin_solutions_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
@@ -197,7 +199,7 @@ class TestAdminSystemPageRuntimeInit:
             "adminSolutions",
             [{"url": "/api/team/solutions", "method": "GET"}],
         )
-        assert "行业方案接口尚未实现" in result["html"] or "行业方案接口尚未开放" in result["html"]
+        assert "行业方案数据暂时无法加载" in result["html"] or "行业方案服务暂时不可用" in result["html"]
 
     def test_admin_settings_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
@@ -205,7 +207,7 @@ class TestAdminSystemPageRuntimeInit:
             "adminSettings",
             [{"url": "/api/team/settings", "method": "GET"}],
         )
-        assert "企业设置加载失败" in result["html"] or "设置 API 尚未实现" in result["html"] or "404" in result["html"]
+        assert "企业设置暂时不可用" in result["html"] or "404" in result["html"]
 
     def test_admin_templates_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
@@ -213,31 +215,31 @@ class TestAdminSystemPageRuntimeInit:
             "adminTemplates",
             [{"url": "/api/team/templates", "method": "GET"}],
         )
-        assert "企业后台人才市场接口尚未实现" in result["html"]
+        assert "人才市场暂时不可用" in result["html"]
 
     def test_system_health_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
             "system-health.js",
             "systemHealth",
-            [{"url": "/api/system-admin/health", "method": "GET"}],
+            [{"url": "/api/system-admin/health?role=system_admin", "method": "GET"}],
         )
-        assert "系统管理员 API 尚未实现" in result["html"]
+        assert "系统健康数据暂时不可用" in result["html"]
 
     def test_system_accounts_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
             "system-accounts.js",
             "systemAccounts",
-            [{"url": "/api/system-admin/enterprises", "method": "GET"}],
+            [{"url": "/api/system-admin/enterprises?role=system_admin", "method": "GET"}],
         )
-        assert "企业账号 API 尚未实现" in result["html"]
+        assert "企业账号数据暂时不可用" in result["html"]
 
     def test_system_finance_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
             "system-finance.js",
             "systemFinance",
-            [{"url": "/api/system-admin/finance/overview", "method": "GET"}],
+            [{"url": "/api/system-admin/finance/overview?role=system_admin", "method": "GET"}],
         )
-        assert "平台财务聚合 API 尚未实现" in result["html"] or "平台财务数据加载失败" in result["html"]
+        assert "平台财务数据暂时不可用" in result["html"] or "平台财务数据加载失败" in result["html"]
 
 
 class TestDynamicPageLoading:

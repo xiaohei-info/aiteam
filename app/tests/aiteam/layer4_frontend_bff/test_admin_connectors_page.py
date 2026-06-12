@@ -435,7 +435,7 @@ def test_admin_connectors_runtime_flow_masks_and_refreshes_truthfully() -> None:
     assert "bot_secret: ****" in initial_html
     assert "最近一次连接测试通过" in initial_html
     assert "Slack Webhook" in initial_html
-    assert "受控输入" in initial_html
+    assert "更新凭据标识" in initial_html
     assert "MCP Server URL" in initial_html
     assert "种子员工" in initial_html
     assert "保存详情" in initial_html

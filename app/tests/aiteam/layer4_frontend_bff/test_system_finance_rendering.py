@@ -169,4 +169,5 @@ def test_system_finance_exposes_export_report_entry() -> None:
     payload = _run_system_finance_export_flow()
     assert "导出报表" in payload["beforeHtml"]
     assert payload["lastExportUrl"] == "/api/system-admin/finance/reports"
-    assert payload["assignedUrls"] == ["/api/system-admin/finance/reports"]
+    # export now fetches the report data and downloads CSV client-side
+    assert "/api/system-admin/finance/reports" in payload["overviewCalls"]

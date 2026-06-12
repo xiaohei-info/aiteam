@@ -177,8 +177,8 @@ window.aiteam = window.aiteam || {};
 
   function apiErrorMessage(result) {
     if (result && result.status === 403) return '您没有权限访问记忆管理';
-    if (result && result.status === 404) return '记忆 API 尚未实现（当前返回 404）。';
-    if (result && result.status === 501) return '记忆 API 尚未实现（当前返回 501）。';
+    if (result && result.status === 404) return '记忆服务暂时不可用，请稍后重试。';
+    if (result && result.status === 501) return '记忆服务暂时不可用，请稍后重试。';
     if (result && result.error) return result.error;
     if (result && typeof result.status !== 'undefined') return '请求失败 (' + result.status + ')';
     return '网络请求失败';
@@ -224,10 +224,10 @@ window.aiteam = window.aiteam || {};
         return !(entry.audit_events && entry.audit_events.length);
       }).length;
       if (failedExtractions) {
-        messages.push('检测到 ' + failedExtractions + ' 条自动提取失败/写回异常记忆，前端继续允许人工 CRUD，不阻断治理流程。');
+        messages.push('有 ' + failedExtractions + ' 条记忆自动提取失败，可手动编辑修正或删除。');
       }
       if (missingAudit && allItems.length) {
-        messages.push('有 ' + missingAudit + ' 条记忆未返回审计追踪字段；页面已显式展示降级而不伪造日志。');
+        messages.push('有 ' + missingAudit + ' 条记忆暂无操作记录。');
       }
       if (!allItems.length) {
         messages.push('该员工尚未形成记忆，可手动添加或通过对话沉淀。');
@@ -273,7 +273,7 @@ window.aiteam = window.aiteam || {};
     function renderEmployeeSidebar() {
       var employees = collectEmployees(store.all());
       if (!employees.length) {
-        return '<div class="aiteam-inline-empty">左侧员工选择器暂无可用员工</div>';
+        return '<div class="aiteam-inline-empty">暂无可选择的员工</div>';
       }
       return '<div class="aiteam-stack">' + employees.map(function (item) {
         var active = item.employee_id === state.employeeId ? ' is-active' : '';
@@ -297,7 +297,7 @@ window.aiteam = window.aiteam || {};
 
     function renderAuditTrace(item) {
       if (!item.audit_events.length) {
-        return '<p class="aiteam-memory__audit-note">审计追踪未返回，页面展示降级提示并保留人工核查入口。</p>';
+        return '<p class="aiteam-memory__audit-note">暂无该条记忆的操作记录。</p>';
       }
       return '<ul class="aiteam-memory__audit-list">' + item.audit_events.map(function (entry) {
         return '<li><span>' + escapeHtml(entry.action) + '</span><span>' + escapeHtml(entry.actor) + '</span><span>' + escapeHtml(entry.timestamp || '未知时间') + '</span></li>';
@@ -306,7 +306,7 @@ window.aiteam = window.aiteam || {};
 
     function renderPromptRefs(item) {
       if (!item.prompt_plan_refs.length) {
-        return '<p class="aiteam-memory__audit-note">当前后端未返回 Prompt Plan 引用。</p>';
+        return '<p class="aiteam-memory__audit-note">该记忆暂未被提示词引用。</p>';
       }
       return '<div class="aiteam-memory__tags">' + item.prompt_plan_refs.map(function (ref) {
         return '<span class="aiteam-memory__tag">' + escapeHtml(ref) + '</span>';
@@ -315,7 +315,7 @@ window.aiteam = window.aiteam || {};
 
     function renderPromptUseTrace(item) {
       if (!item.prompt_use_trace.length) {
-        return '<p class="aiteam-memory__audit-note">当前后端未返回注入痕迹。</p>';
+        return '<p class="aiteam-memory__audit-note">该记忆暂无使用记录。</p>';
       }
       return '<ul class="aiteam-memory__audit-list">' + item.prompt_use_trace.map(function (entry) {
         return '<li><span>' + escapeHtml(entry.stage || 'unknown_stage') + '</span><span>' + escapeHtml(entry.run_id || 'unknown_run') + '</span><span>' + escapeHtml(entry.used_at || entry.event_id || '未知时间') + '</span></li>';
@@ -354,9 +354,9 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-memory__tags">' + (item.tags || []).map(function (tag) {
             return '<span class="aiteam-memory__tag">' + escapeHtml(tag) + '</span>';
           }).join('') + '</div>' +
-          '<div class="aiteam-memory__subsection"><strong>Prompt Plan 引用</strong>' + renderPromptRefs(item) + '</div>' +
-          '<div class="aiteam-memory__subsection"><strong>注入痕迹</strong>' + renderPromptUseTrace(item) + '</div>' +
-          '<div class="aiteam-memory__subsection"><strong>审计追踪</strong>' + renderAuditTrace(item) + '</div>' +
+          '<div class="aiteam-memory__subsection"><strong>提示词引用</strong>' + renderPromptRefs(item) + '</div>' +
+          '<div class="aiteam-memory__subsection"><strong>使用记录</strong>' + renderPromptUseTrace(item) + '</div>' +
+          '<div class="aiteam-memory__subsection"><strong>操作记录</strong>' + renderAuditTrace(item) + '</div>' +
           '<div class="aiteam-memory__actions">' +
           '<button type="button" data-role="edit-memory" data-memory-id="' + escapeHtml(item.memory_id) + '">编辑</button>' +
           '<button type="button" data-role="delete-memory" data-memory-id="' + escapeHtml(item.memory_id) + '">删除</button>' +
@@ -481,12 +481,12 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__panel aiteam-memory">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">记忆管理</h2>' +
-        '<p class="aiteam-shell__panel-body">通过 /api/team/memories 管理员工记忆条目，支持搜索、分类筛选、基础 CRUD，以及自动提取失败、审计追踪、Prompt 注入痕迹的可见降级。</p>' +
+        '<p class="aiteam-shell__panel-body">查看与管理员工的长期记忆。支持按员工查看、搜索与分类筛选，可手动添加、编辑或删除记忆条目。</p>' +
         '<div class="aiteam-memory__banners">' + bannerMessages.map(function (message) {
           return '<p class="aiteam-memory__banner">' + escapeHtml(message) + '</p>';
         }).join('') + '</div>' +
         '<div class="aiteam-grid aiteam-grid--chat">' +
-        '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>左侧员工选择器</h3><span class="aiteam-inline-note">员工 / 记忆归属</span></div>' + renderEmployeeSidebar() + '</section>' +
+        '<section class="aiteam-panel"><div class="aiteam-panel__header"><h3>员工</h3><span class="aiteam-inline-note">按员工查看记忆</span></div>' + renderEmployeeSidebar() + '</section>' +
         '<section class="aiteam-panel">' + renderToolbar(items) + renderBatchToolbar(items) + renderCards(items) + '</section>' +
         '</div>' +
         '</div>';

@@ -95,7 +95,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-templates.js' }});
 """
     completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
     payload = json.loads(completed.stdout)
-    assert "人才市场（后台）" in payload["html"]
+    assert "人才市场" in payload["html"]
     assert "营销分析师" in payload["html"]
     assert "财务顾问" in payload["html"]
     assert "查看专家详情" in payload["html"]

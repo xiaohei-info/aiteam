@@ -35,6 +35,37 @@ MAX_PARALLEL = int(os.getenv("AITEAM_ORCH_MAX_PARALLEL", "3"))
 
 _EVENT_LOCK = threading.Lock()
 
+# ── Cancellation support (线程中断) ────────────────────────────────────────
+
+_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_CANCEL_LOCK = threading.Lock()
+
+
+def request_cancel(run_id: str) -> bool:
+    """Signal the orchestration thread for *run_id* to stop.  Idempotent.
+    Returns True if a matching event was found and set, False otherwise
+    (the run may have already completed or was never started as orchestration).
+    """
+    with _CANCEL_LOCK:
+        event = _CANCEL_EVENTS.get(run_id)
+    if event is not None:
+        event.set()
+        logger.info("[orch] cancel requested for run %s", run_id)
+        return True
+    logger.debug("[orch] cancel request for run %s — no live event found", run_id)
+    return False
+
+
+def _is_cancelled(run_id: str) -> bool:
+    with _CANCEL_LOCK:
+        event = _CANCEL_EVENTS.get(run_id)
+    return event is not None and event.is_set()
+
+
+def _cleanup_cancel(run_id: str) -> None:
+    with _CANCEL_LOCK:
+        _CANCEL_EVENTS.pop(run_id, None)
+
 
 # ── Public entrypoint ─────────────────────────────────────────────────────
 
@@ -42,41 +73,67 @@ def execute_orchestration(conn, run_id: str) -> None:
     """Execute a kanban_orchestration run. Caller owns ``conn``."""
     from agent_gateway.runtime_executor import _finalize
 
-    ctx = _start_run(conn, run_id)
-    if ctx is None:
-        return
+    # Register cancellation event.
+    event = threading.Event()
+    with _CANCEL_LOCK:
+        _CANCEL_EVENTS[run_id] = event
 
-    # Phase 1 — planner 拆解 (失败降级为按目标员工均分).
-    subtasks = _plan_subtasks(ctx)
+    try:
+        ctx = _start_run(conn, run_id)
+        if ctx is None:
+            return
 
-    # Phase 2 — 任务树事件 (root + children), 镜像由 event_ingest 完成.
-    _emit_task_tree(run_id, ctx, subtasks)
+        # Phase 1 — planner 拆解 (失败降级为按目标员工均分).
+        if _is_cancelled(run_id):
+            _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
+            return
+        subtasks = _plan_subtasks(ctx)
 
-    # Phase 3 — 按依赖分波执行, 同波并行.
-    results = _execute_waves(run_id, ctx, subtasks)
+        # Phase 2 — 任务树事件 (root + children), 镜像由 event_ingest 完成.
+        if _is_cancelled(run_id):
+            _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
+            return
+        _emit_task_tree(run_id, ctx, subtasks)
 
-    # Phase 4 — planner 汇总 + result_merged + 终态.
-    succeeded = [i for i, r in results.items() if r["success"]]
-    if not succeeded:
-        first_error = next((r["error"] for r in results.values() if r["error"]), "全部子任务执行失败")
-        _finalize(run_id, success=False, output="多智能体协作执行失败",
-                  error=first_error, employee_id=ctx["planner_id"], conn=conn)
-        return
+        # Phase 3 — 按依赖分波执行, 同波并行; 中止信号在 wave 间和子任务前检查.
+        results = _execute_waves(run_id, ctx, subtasks)
 
-    final_text = _aggregate(conn, run_id, ctx, subtasks, results)
-    _emit_standalone(run_id, "result_merged",
-                     source_id=ctx["root_task_id"],
-                     preview=f"已汇总 {len(succeeded)}/{len(subtasks)} 个子任务成果",
-                     payload={"subtasks": [
-                         {"task_id": _subtask_id(run_id, i),
-                          "title": t["title"],
-                          "assignee_employee_id": t["assignee"],
-                          "status": "succeeded" if results[i]["success"] else "failed",
-                          "preview": (results[i]["output"] or results[i]["error"])[:200]}
-                         for i, t in enumerate(subtasks)]},
-                     employee_id=ctx["planner_id"])
-    _finalize(run_id, success=True, output=final_text,
-              employee_id=ctx["planner_id"], conn=conn)
+        if _is_cancelled(run_id):
+            # Still aggregate whatever partial results we have before finalizing.
+            succeeded = [i for i, r in results.items() if r["success"]]
+            if succeeded:
+                partial = _partial_aggregate(ctx, subtasks, results)
+                _finalize(run_id, success=False, output=partial,
+                          error="CANCELLED — 已生成部分成果", conn=conn)
+            else:
+                _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
+            return
+
+        # Phase 4 — planner 汇总 + result_merged + 终态.
+        succeeded = [i for i, r in results.items() if r["success"]]
+        if not succeeded:
+            first_error = next((r["error"] for r in results.values() if r["error"]), "全部子任务执行失败")
+            _finalize(run_id, success=False, output="多智能体协作执行失败",
+                      error=first_error, employee_id=ctx["planner_id"], conn=conn)
+            return
+
+        final_text = _aggregate(conn, run_id, ctx, subtasks, results)
+        _emit_standalone(run_id, "result_merged",
+                         source_id=ctx["root_task_id"],
+                         preview=f"已汇总 {len(succeeded)}/{len(subtasks)} 个子任务成果",
+                         payload={"subtasks": [
+                             {"task_id": _subtask_id(run_id, i),
+                              "title": t["title"],
+                              "assignee_employee_id": t["assignee"],
+                              "status": "succeeded" if results[i]["success"] else "failed",
+                              "preview": (results[i]["output"] or results[i]["error"])[:200]}
+                             for i, t in enumerate(subtasks)]},
+                         employee_id=ctx["planner_id"])
+
+        _finalize(run_id, success=True, output=final_text,
+                  employee_id=ctx["planner_id"], conn=conn)
+    finally:
+        _cleanup_cancel(run_id)
 
 
 # ── Phase 0: load context + mark running ─────────────────────────────────
@@ -385,6 +442,23 @@ def _persist_subtask_message(run_id: str, ctx: dict, assignee: str,
 
 
 # ── Phase 4: planner 汇总 ─────────────────────────────────────────────────
+
+def _partial_aggregate(ctx: dict, subtasks: list[dict],
+                       results: dict[int, dict]) -> str:
+    """Lightweight aggregation of partial results without calling the planner.
+
+    Used when the orchestration is cancelled mid-execution — we surface
+    whatever completed subtasks produced rather than throwing them away.
+    """
+    merged = [
+        f"【{subtasks[i]['title']} — {_emp_name(ctx, subtasks[i]['assignee'])}】\n{results[i]['output']}"
+        for i in sorted(results) if results[i]["success"]
+    ]
+    if not merged:
+        return "协作已被用户中止，无子任务产出。"
+    header = "协作已被用户中止。以下是已完成子任务的部分成果：\n\n"
+    return header + "\n\n".join(merged)
+
 
 def _aggregate(conn, run_id: str, ctx: dict, subtasks: list[dict],
                results: dict[int, dict]) -> str:

@@ -69,7 +69,7 @@ def test_api_client_uses_team_api_prefix() -> None:
     source = _client_source()
     assert "BASE: '/api/team'" in source
     assert "_buildUrl(path)" in source
-    assert "return this.BASE + requestPath;" in source
+    assert "return appendRoleParam(this.BASE + requestPath);" in source
 
 
 def test_api_client_does_not_call_runtime_routes() -> None:
@@ -133,6 +133,8 @@ def test_api_client_preserves_enterprise_admin_routes_at_runtime() -> None:
 
 
 def test_api_client_preserves_system_admin_routes_at_runtime() -> None:
+    # system-admin routes keep their prefix; api-client appends the effective
+    # role so the backend permission check passes for system pages.
     result = _run_node('/api/system-admin/health')
     assert result['result']['ok'] is True
-    assert result['call']['url'] == '/api/system-admin/health'
+    assert result['call']['url'] == '/api/system-admin/health?role=system_admin'

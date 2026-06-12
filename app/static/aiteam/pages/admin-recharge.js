@@ -33,7 +33,7 @@ window.aiteam = window.aiteam || {};
   }
 
   function formatPaymentMethod(method) {
-    if (method === 'mock_pay') return 'mock_pay（即时测试通道）';
+    if (method === 'mock_pay') return '演示支付（即时到账）';
     if (method === 'wechat_pay') return '微信支付';
     if (method === 'alipay') return '支付宝';
     if (method === 'bank_transfer') return '银行转账';
@@ -105,7 +105,7 @@ window.aiteam = window.aiteam || {};
 
   function renderRecords(records) {
     if (!records.length) {
-      return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">充值记录</span><span class="aiteam-shell__meta-value">暂无充值记录；提交后会展示 /api/team/billing/recharges 返回的真实状态。</span></div>';
+      return '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">充值记录</span><span class="aiteam-shell__meta-value">暂无充值记录。</span></div>';
     }
 
     return (
@@ -143,9 +143,9 @@ window.aiteam = window.aiteam || {};
 
     container.innerHTML =
       '<div class="aiteam-shell__panel">' +
-      '<p class="aiteam-shell__panel-kicker">企业后台 · B09 充值与余额</p>' +
+      '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
       '<h2 class="aiteam-shell__panel-title">充值与余额</h2>' +
-      '<p class="aiteam-shell__panel-body">当前页面直接消费 /api/team/billing/balance 与 /api/team/billing/recharges，并将充值动作写入 Team billing 合同。</p>' +
+      '<p class="aiteam-shell__panel-body">查看企业账户余额与消耗概况，设置低余额预警，并为企业账户充值。</p>' +
       banner +
       notice +
       '<div class="aiteam-billing__stats">' +
@@ -165,7 +165,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-billing__section">' +
       '<div class="aiteam-billing__section-head">发起充值</div>' +
-      '<p class="aiteam-shell__panel-body aiteam-billing__subtle">充值请求会 POST 到 /api/team/billing/recharges；mock_pay 会立即到账，其余通道按后端状态展示处理中/到账结果。</p>' +
+      '<p class="aiteam-shell__panel-body aiteam-billing__subtle">选择充值金额与支付方式后提交。演示支付即时到账，其余通道完成支付后自动更新到账状态。</p>' +
       '<div class="aiteam-billing__actions">' + packageButtons + '</div>' +
       '<div class="aiteam-billing__section-head">支付方式</div>' +
       '<div class="aiteam-billing__actions">' + paymentTags + '</div>' +
@@ -341,7 +341,7 @@ window.aiteam = window.aiteam || {};
             status: (result.data && result.data.status) || (paymentMethod === 'mock_pay' ? 'succeeded' : 'pending'),
             token_credited: (result.data && result.data.token_credited) || 0,
           },
-          notice: paymentMethod === 'mock_pay' ? '充值已提交并已按后端返回刷新余额与记录' : '充值已提交，等待后端通道完成到账',
+          notice: paymentMethod === 'mock_pay' ? '充值成功，余额与充值记录已更新' : '充值已提交，等待支付通道确认到账',
         }).then(function (nextState) {
           if (!nextState) return result;
           Object.assign(state, nextState);

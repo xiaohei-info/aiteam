@@ -87,7 +87,7 @@ def test_admin_memories_renders_employee_sidebar_and_batch_delete_toolbar() -> N
     payload = _run_admin_memories()
     assert payload["apiCalls"][0]["query"]["include"] == "prompt_use_trace"
     assert payload["apiCalls"][0]["query"]["trace_limit"] == 5
-    assert "左侧员工选择器" in payload["html"]
+    assert "按员工查看记忆" in payload["html"]
     assert "批量删除" in payload["html"]
     assert "重要程度" in payload["html"]
     assert "记忆分类" in payload["html"]
@@ -95,5 +95,5 @@ def test_admin_memories_renders_employee_sidebar_and_batch_delete_toolbar() -> N
     assert "Alice" in payload["html"]
     assert "Bob" in payload["html"]
     assert "工作偏好" in payload["html"] or "preference" in payload["html"]
-    assert "注入痕迹" in payload["html"]
+    assert "使用记录" in payload["html"]
     assert "prompt_injected" in payload["html"]
