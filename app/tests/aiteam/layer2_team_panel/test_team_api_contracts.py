@@ -635,6 +635,56 @@ class TestEmployeeList:
         assert body.get("error") == "FORBIDDEN"
 
 
+class TestEmployeeCreateDelete:
+    """POST /api/team/employees (direct create) and DELETE /api/team/employees/{id}."""
+
+    def test_create_employee_returns_201_and_appears_in_list(self, seeded_enterprise):
+        status, body = _post(
+            "/api/team/employees?role=owner",
+            {"display_name": "市场新人", "role_name": "市场专员"},
+        )
+        assert status == 201, f"Expected 201, got {status}: {body}"
+        assert body["employee_id"].startswith("emp_")
+        assert body["conversation_id"].startswith("conv_")
+        assert body["status"] == "active"
+        _, listing = _get("/api/team/employees?role=owner")
+        ids = {e["employee_id"] for e in listing["employees"]}
+        assert body["employee_id"] in ids
+
+    def test_create_employee_requires_display_name(self, seeded_enterprise):
+        status, body = _post("/api/team/employees?role=owner", {"role_name": "市场专员"})
+        assert status == 400
+        assert body.get("error") == "MISSING_DISPLAY_NAME"
+
+    def test_create_employee_forbidden_for_finance_admin(self, seeded_enterprise):
+        status, body = _post("/api/team/employees?role=finance_admin", {"display_name": "X"})
+        assert status == 403
+        assert body.get("error") == "FORBIDDEN"
+
+    def test_delete_employee_soft_deletes_and_disappears(self, seeded_enterprise):
+        _, created = _post("/api/team/employees?role=owner", {"display_name": "待删除"})
+        emp_id = created["employee_id"]
+        status, body = _delete(f"/api/team/employees/{emp_id}?role=owner")
+        assert status == 200, body
+        assert body["status"] == "deleted"
+        _, listing = _get("/api/team/employees?role=owner")
+        ids = {e["employee_id"] for e in listing["employees"]}
+        assert emp_id not in ids
+        detail_status, _ = _get(f"/api/team/employees/{emp_id}?role=owner")
+        assert detail_status == 404
+
+    def test_delete_missing_employee_returns_404(self, seeded_enterprise):
+        status, body = _delete("/api/team/employees/nonexistent?role=owner")
+        assert status == 404
+        assert body.get("error") == "EMPLOYEE_NOT_FOUND"
+
+    def test_delete_employee_forbidden_for_member(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _delete(f"/api/team/employees/{emp_id}?role=member")
+        assert status == 403
+        assert body.get("error") == "FORBIDDEN"
+
+
 class TestEmployeeDetail:
     """S06-T11: GET /api/team/employees/{id}."""
 

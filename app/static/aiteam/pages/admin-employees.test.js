@@ -130,6 +130,10 @@ async function run() {
   assert(getEmployeesCalls === 1, 'page should use ns.api.getEmployees');
   assert(host.innerHTML.indexOf('管理企业的全部数字员工') !== -1, 'page should render production employee copy');
   assert(host.innerHTML.indexOf('/api/team/employees') === -1, 'page should not expose API paths in user copy');
+  assert(host.innerHTML.indexOf('新建员工') !== -1, 'page should render the create-employee button');
+  assert(host.innerHTML.indexOf('data-role="create-employee-form"') !== -1, 'page should render the create-employee form');
+  assert(host.innerHTML.indexOf('data-role="delete-employee"') !== -1, 'each row should render a delete button');
+  assert(host.innerHTML.indexOf('<th>操作</th>') !== -1, 'table should include an actions column');
   host._rows[0].dispatchEvent({ type: 'click' });
   assert(pushedPath === '/admin/employees/emp_1', 'clicking an employee row should push nested employee detail route');
   assert(drawerOpened && drawerOpened.employeeId === 'emp_1', 'clicking an employee row should open drawer');

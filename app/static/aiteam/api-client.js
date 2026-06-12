@@ -272,6 +272,14 @@ window.aiteam = window.aiteam || {};
       return this.get(`/employees/${encodeURIComponent(employeeId)}`, options);
     },
 
+    createEmployee(body, options) {
+      return this.post('/employees', body, options);
+    },
+
+    deleteEmployee(employeeId, options) {
+      return this.delete(`/employees/${encodeURIComponent(employeeId)}`, options);
+    },
+
     updateEmployee(employeeId, body, options) {
       return this.patch(`/employees/${encodeURIComponent(employeeId)}`, body, options);
     },

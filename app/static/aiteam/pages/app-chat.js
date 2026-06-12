@@ -9,6 +9,16 @@ window.aiteam = window.aiteam || {};
     return parts.length >= 4 ? decodeURIComponent(parts[3]) : '';
   }
 
+  // Replace the last path segment (e.g. emp_xxx) with the real conversation id
+  // without reloading, so a draft chat's URL becomes /app/chat/conv_xxx.
+  function adoptConversationUrl(convId) {
+    try {
+      if (typeof window === 'undefined' || !window.history || !window.history.replaceState) return;
+      var path = String(window.location.pathname || '').replace(/[^/]*$/, encodeURIComponent(convId));
+      window.history.replaceState(null, '', path + (window.location.search || ''));
+    } catch (_error) { /* non-fatal: URL stays on emp_xxx */ }
+  }
+
   function formatTime(value) {
     if (!value) {
       return '刚刚';
@@ -166,11 +176,25 @@ window.aiteam = window.aiteam || {};
       '<span class="aiteam-message__kind">' + escapeHtml(title || '消息') + '</span>';
   }
 
+  // Render assistant/user message text. Reuses the Hermes webui markdown renderer
+  // (window.renderMd from ui.js) so tables, code, lists, bold, links render like
+  // the runtime does; falls back to escaped plain text when unavailable (tests).
+  function renderRichText(text) {
+    var raw = String(text == null ? '' : text);
+    if (typeof window !== 'undefined' && typeof window.renderMd === 'function') {
+      try {
+        var html = window.renderMd(raw);
+        if (html) return html;
+      } catch (_error) { /* fall through to plain text */ }
+    }
+    return '<p>' + escapeHtml(raw).replace(/\n/g, '<br>') + '</p>';
+  }
+
   function renderMessageBubble(message, extraClass, employeeSummary, conversation) {
     var roleClass = message && message.role ? message.role : 'system';
     var body = '';
     body += renderQuote(message && message.quote);
-    body += message && message.text ? '<p>' + escapeHtml(message.text).replace(/\n/g, '<br>') + '</p>' : '<p>暂无正文</p>';
+    body += message && message.text ? renderRichText(message.text) : '<p>暂无正文</p>';
     body += renderAttachmentList(message && message.attachments);
     body += renderCitationList(message && message.citations);
     body += renderMetadataBlock(message && message.metadata);
@@ -201,18 +225,23 @@ window.aiteam = window.aiteam || {};
       var statusLabel = item.status_label || '';
       return '<div class="aiteam-chat__tool-card"><div class="aiteam-chat__tool-head">⚡ 调用工具' +
         (statusLabel ? ' · ' + escapeHtml(String(statusLabel)) : '') + '</div>' +
-        '<div class="aiteam-chat__tool-call">' + escapeHtml(String(name)) + '(' + escapeHtml(String(args)) + ')</div>' +
+        '<div class="aiteam-chat__tool-call"><span class="aiteam-chat__tool-key">' + escapeHtml(String(name)) + '</span>(' +
+        '<span class="aiteam-chat__tool-val">' + escapeHtml(String(args)) + '</span>)</div>' +
         (result ? '<pre class="aiteam-chat__tool-result">' + escapeHtml(String(result)) + '</pre>' : '') +
         '</div>';
     }
     if (t === 'loop' || t === 'orchestration') {
       var steps = (item.steps || []).map(function (s) {
-        var cls = s.status === 'done' ? ' is-done' : (s.status === 'running' ? ' is-running' : '');
-        var label = s.status === 'done' ? '✓ 完成' : (s.status === 'running' ? '● 进行中' : '○ 等待');
-        return '<div class="aiteam-chat__loop-step' + cls + '">' + escapeHtml(s.title || '') +
-          '<span class="aiteam-chat__loop-step-status">' + label + '</span></div>';
+        var status = s.status === 'done' ? 'done' : (s.status === 'running' ? 'running' : 'pending');
+        var icon = s.icon || (status === 'done' ? '✅' : (status === 'running' ? '⏳' : '⏸'));
+        var label = status === 'done' ? '✓ 完成' : (status === 'running' ? '● 进行中' : '○ 等待');
+        return '<div class="aiteam-chat__loop-step is-' + status + '">' +
+          '<span class="aiteam-chat__loop-step-icon">' + escapeHtml(icon) + '</span>' +
+          '<span class="aiteam-chat__loop-step-title">' + escapeHtml(s.title || '') + '</span>' +
+          '<span class="aiteam-chat__loop-step-status is-' + status + '">' + label + '</span></div>';
       }).join('');
-      return '<div class="aiteam-chat__loop-card"><div class="aiteam-chat__loop-title">🦞 龙虾编排</div>' + steps + '</div>';
+      return '<div class="aiteam-chat__loop-card"><div class="aiteam-chat__loop-title">🦞 龙虾编排</div>' +
+        '<div class="aiteam-chat__loop-steps">' + steps + '</div></div>';
     }
     return '';
   }
@@ -408,7 +437,10 @@ window.aiteam = window.aiteam || {};
           }
           return renderTimelineNotice(item.payload || item);
         }).join('');
-        if (!state.streamingAssistantText && state.runId && !/run_succeeded|run_failed|run_cancelled/.test(state.latestEventType || '')) {
+        // Only show the thinking indicator while we are actively streaming a live
+        // run. A stale runId loaded from history (terminal run, no live SSE) must
+        // NOT show a permanent "正在思考中" bubble.
+        if (!state.streamingAssistantText && state.isSyncing) {
           html += renderThinking();
         }
         if (state.streamingAssistantText) {
@@ -504,6 +536,7 @@ window.aiteam = window.aiteam || {};
         state.liveItems.push({ kind: 'notice', payload: event });
         state.statusText = state.hasLiveDelta ? '仍在持续生成回复...' : '运行仍在进行中。';
       } else if (event.event_type === 'run_succeeded' || event.event_type === 'run_failed' || event.event_type === 'run_cancelled') {
+        state.isSyncing = false;
         state.liveItems.push({ kind: 'notice', payload: event });
         state.statusText = event.event_type === 'run_failed' ? '本次运行失败，可重试发送。' : (event.event_type === 'run_cancelled' ? '本次运行已取消，正在同步历史记录。' : '回复完成，正在同步历史记录。');
         renderAll();
@@ -523,6 +556,7 @@ window.aiteam = window.aiteam || {};
         return;
       }
       state.runId = runId;
+      state.isSyncing = true;
       state.cursor = Number(initialCursor) || state.cursor || 0;
       state.liveItems = [];
       state.streamingAssistantText = '';
@@ -569,7 +603,7 @@ window.aiteam = window.aiteam || {};
         message: {
           text: messageText,
         },
-        idempotency_key: 'chat-' + state.conversationId + '-' + Date.now(),
+        idempotency_key: 'chat-' + (state.conversationId || state.employeeId) + '-' + Date.now(),
       };
       if (state.selectedQuoteId) {
         body.message.quote_message_id = state.selectedQuoteId;
@@ -591,6 +625,13 @@ window.aiteam = window.aiteam || {};
           state.statusText = '发送失败，可重试发送。';
           renderAll();
           return;
+        }
+        // Draft → real: the server lazy-created a conversation; adopt its id and
+        // reflect it in the URL so refresh/deep-link lands on the real conversation.
+        var newConvId = result.data && result.data.conversation_id;
+        if (newConvId && newConvId !== state.conversationId) {
+          state.conversationId = newConvId;
+          adoptConversationUrl(newConvId);
         }
         reloadConversation(0, 100);
         syncRun(result.data && result.data.run_id, state.cursor);
@@ -647,6 +688,7 @@ window.aiteam = window.aiteam || {};
           return;
         }
         ns.timeline.disconnect();
+        state.isSyncing = false;
         state.statusText = result.data && result.data.already_terminal ? '当前运行已结束，无需重复中止。' : '已提交中止请求，正在刷新会话。';
         state.liveItems.push({
           kind: 'notice',
@@ -773,9 +815,12 @@ window.aiteam = window.aiteam || {};
     return 'is-online';
   }
 
-  function renderAgentItem(a, activeConversationId) {
+  function renderAgentItem(a, activeKey) {
     var convId = a.conversation_id || '';
-    var active = convId && String(convId) === String(activeConversationId) ? ' is-active' : '';
+    // Match by conversation_id normally; for a draft (no conversation yet) the
+    // active key is the employee_id, so highlight the clicked employee too.
+    var active = (convId && String(convId) === String(activeKey)) ||
+      (!convId && a.employee_id && String(a.employee_id) === String(activeKey)) ? ' is-active' : '';
     var href = convId ? '/app/chat/' + encodeURIComponent(convId) : '/app/chat/' + encodeURIComponent(a.employee_id || '');
     var unread = a.unread_count ? '<div class="aiteam-chat__agent-unread">' + escapeHtml(String(a.unread_count)) + '</div>' : '';
     return '<a class="aiteam-chat__agent' + active + '" href="' + escapeHtml(href) + '" data-chat-agent="' + escapeHtml(a.employee_id || '') + '">' +
@@ -940,6 +985,39 @@ window.aiteam = window.aiteam || {};
     bindAgentSearch(container);
   }
 
+  // Draft chat for /app/chat/emp_xxx — an employee with no conversation yet.
+  // Synthesizes an empty conversation shell from workbench employee data; the
+  // first sent message lazy-creates the real conversation on the server.
+  function renderEmployeeDraft(container, employeeId) {
+    ns.states.renderLoading(container, '加载会话...');
+    function build(wbData) {
+      var data = wbData || {};
+      var employees = Array.isArray(data.employees) ? data.employees : [];
+      var emp = employees.find(function (e) { return e && e.employee_id === employeeId; }) || { employee_id: employeeId };
+      renderChat(container, {
+        conversation_id: '',
+        employee_summary: {
+          employee_id: emp.employee_id,
+          display_name: emp.display_name || '',
+          role_name: emp.role_name || '',
+          model_provider: emp.model_provider || '',
+          model_name: emp.model_name || '',
+        },
+        messages: { items: [], next_cursor: 0, has_more: false },
+        latest_run: null,
+        __sections: mapWorkbenchToSections(data),
+        __draft_employee_id: employeeId,
+      });
+    }
+    if (ns.api && typeof ns.api.getWorkbench === 'function') {
+      ns.api.getWorkbench().then(function (wb) {
+        build((wb && wb.ok && wb.data) ? wb.data : {});
+      }).catch(function () { build({}); });
+    } else {
+      build({});
+    }
+  }
+
   function renderChat(container, conversation) {
     var summary = conversation.employee_summary || {};
     var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
@@ -973,7 +1051,7 @@ window.aiteam = window.aiteam || {};
       '</div></form></div>';
 
     container.innerHTML = chatShell({
-      agentListHtml: renderAgentList(conversation.__sections || conversation.__agentList || [], conversation.conversation_id),
+      agentListHtml: renderAgentList(conversation.__sections || conversation.__agentList || [], conversation.conversation_id || conversation.__draft_employee_id || ''),
       mainHtml: mainHtml,
       summaryHtml: '',
     });
@@ -992,6 +1070,7 @@ window.aiteam = window.aiteam || {};
       messages: [],
       liveItems: [],
       streamingAssistantText: '',
+      isSyncing: false,
       selectedQuoteId: '',
       selectedQuotePreview: '',
       lastSentText: '',
@@ -1021,6 +1100,12 @@ window.aiteam = window.aiteam || {};
         } else {
           renderLanding(container, {});
         }
+        return;
+      }
+      if (conversationId.indexOf('emp_') === 0) {
+        // Draft state: a digital employee with no conversation yet. Render an empty
+        // chat window; the first message lazy-creates the conversation server-side.
+        renderEmployeeDraft(container, conversationId);
         return;
       }
       ns.states.renderLoading(container, '加载单聊会话...');

@@ -41,10 +41,10 @@ window.aiteam = window.aiteam || {};
       return '<code class="aiteam-tag">' + esc(p) + '</code>';
     }).join(' ');
     return '<section class="aiteam-card aiteam-collab-field">'
-      + '<h3>' + esc(f.title) + '</h3>'
-      + '<p class="aiteam-page-sub">' + esc(f.hint)
+      + '<h3 class="aiteam-card__title">' + esc(f.title) + '</h3>'
+      + '<p class="aiteam-card__sub">' + esc(f.hint)
       + (chips ? ' 可用占位符: ' + chips : '') + '</p>'
-      + '<textarea name="' + f.key + '" rows="6" class="aiteam-collab-textarea" '
+      + '<textarea name="' + f.key + '" rows="6" class="aiteam-input aiteam-collab-textarea" '
       + 'placeholder="留空则使用默认模板">' + esc(current) + '</textarea>'
       + '<details class="aiteam-collab-default"><summary>查看默认模板</summary>'
       + '<pre>' + esc(def) + '</pre></details>'
@@ -55,19 +55,21 @@ window.aiteam = window.aiteam || {};
     var fields = FIELDS.map(function (f) { return renderField(f, state); }).join('');
     var hasCustom = !!state.template;
     return '<div class="aiteam-page aiteam-collab-page">'
-      + '<header class="aiteam-page-head"><h2>群聊协作编排</h2>'
-      + '<p class="aiteam-page-sub">配置群聊多智能体协作的规划/子任务/汇总提示词。'
-      + '留空的字段在运行时自动回退到内置默认模板。</p></header>'
-      + (state.notice ? '<div class="aiteam-notice">' + esc(state.notice) + '</div>' : '')
-      + '<div class="aiteam-collab-status">'
+      + '<div class="aiteam-shell__panel">'
+      + '<p class="aiteam-shell__panel-kicker">企业后台</p>'
+      + '<h2 class="aiteam-shell__panel-title">群聊协作编排</h2>'
+      + '<p class="aiteam-shell__panel-body">配置群聊多智能体协作的规划/子任务/汇总提示词。'
+      + '留空的字段在运行时自动回退到内置默认模板。</p></div>'
+      + (state.notice ? '<div class="aiteam-alert aiteam-alert-success">' + esc(state.notice) + '</div>' : '')
+      + '<div class="aiteam-collab-status aiteam-tag">'
       + (hasCustom ? '当前已有自定义编排模板' : '当前使用全部默认模板')
       + '</div>'
-      + '<form data-role="collab-form">'
+      + '<form data-role="collab-form" class="aiteam-collab-form">'
       + '<input type="hidden" name="name" value="'
       + esc((state.template && state.template.name) || '默认编排') + '" />'
       + fields
-      + '<div class="aiteam-collab-actions">'
-      + '<button class="aiteam-btn aiteam-btn-primary" type="submit">保存</button>'
+      + '<div class="aiteam-action-row">'
+      + '<button class="aiteam-btn" type="submit">保存</button>'
       + '</div></form>'
       + '</div>';
   }
