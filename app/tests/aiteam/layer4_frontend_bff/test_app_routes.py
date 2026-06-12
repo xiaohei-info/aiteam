@@ -68,18 +68,22 @@ def test_app_subpath_also_returns_html(test_server, base_url):
         assert '<div id="aiteam-app"' in body
 
 
-def test_root_still_works(test_server, base_url):
-    """GET / must still return Hermes layout (not hijacked by aiteam shell)."""
+def test_root_redirects_to_aiteam(test_server, base_url):
+    """GET / must redirect (302) to /app/chat — root is AI Team, not Hermes."""
     url = f"{base_url}/"
-    with urllib.request.urlopen(url, timeout=10) as r:
-        assert r.status == 200
-        body = r.read().decode("utf-8")
-        # The Hermes layout is present; the aiteam shell HTML is shared but
-        # hidden by default — it only unhides when boot.js activates it.
-        assert 'class="layout"' in body
-        # AI Team shell container exists in the shared template but the root
-        # path must still serve as Hermes UI.
-        assert 'class="layout"' in body
+    # urllib follows redirects by default; use opener that does NOT follow.
+    import urllib.response
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(url, timeout=10)
+        raise AssertionError("Expected 302 redirect but got 200")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 302, f"Expected 302, got {exc.code}"
+        location = exc.headers.get("Location", "")
+        assert location == "/app/chat", f"Expected Location: /app/chat, got {location!r}"
 
 
 # ── Layer C: static resource validation ──────────────────────────────────

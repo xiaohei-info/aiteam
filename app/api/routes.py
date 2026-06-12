@@ -4062,7 +4062,25 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path in ("/session/manifest.json", "/session/manifest.webmanifest"):
         return _serve_manifest(handler)
 
-    if parsed.path in ("/", "/index.html") or parsed.path.startswith("/session/") or _is_aiteam_page_path(parsed.path):
+    # Redirect Hermes-native root to the AI Team default view.
+    if parsed.path in ("/", "/index.html"):
+        handler.send_response(302)
+        handler.send_header("Location", "/app/chat")
+        handler.send_header("Content-Length", "0")
+        handler.end_headers()
+        return True
+
+    # Redirect any remaining /session/* paths (Hermes session pages) to AI
+    # Team.  /session/static/* and /session/manifest.* are already handled
+    # above so what arrives here can only be actual session-page requests.
+    if parsed.path.startswith("/session/"):
+        handler.send_response(302)
+        handler.send_header("Location", "/app/chat")
+        handler.send_header("Content-Length", "0")
+        handler.end_headers()
+        return True
+
+    if _is_aiteam_page_path(parsed.path):
         try:
             from urllib.parse import quote
             from api.updates import WEBUI_VERSION
