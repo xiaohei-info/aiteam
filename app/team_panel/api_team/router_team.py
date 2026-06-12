@@ -2042,6 +2042,168 @@ def _provision_employee_profile(profile_name: str, system_prompt: str,
             pass
 
 
+def _reconcile_employee_profile(cur, employee, *, system_prompt: str | None = None) -> None:
+    """Push an employee's current DB config down into its Hermes profile:
+    persona (SOUL), model (config.yaml), skills, and memory.
+
+    Single shared assembly entry used by BOTH employee creation and update, so
+    the two paths cannot drift. Previously model + prompt only reached the
+    profile at creation and were never re-applied on update — editing an
+    employee's model/persona changed the DB but not the runtime profile.
+
+    Reads bindings via the passed cursor synchronously (skill/memory sync then
+    hand off to filesystem threads), so callers must invoke this while their
+    cursor/UoW is still open. Best-effort: never raises.
+    """
+    if employee is None or not getattr(employee, "profile_name", ""):
+        return
+    # Persona/prompt: prefer the freshly-built prompt from the create path;
+    # otherwise reload the persisted EmployeePrompt (the update path).
+    if system_prompt is None:
+        try:
+            prompt = EmployeePromptRepo(cur).get_by_employee(employee.id)
+            system_prompt = (prompt.system_prompt if prompt is not None else "") or ""
+        except Exception:  # noqa: BLE001
+            system_prompt = ""
+    _provision_employee_profile(
+        employee.profile_name, system_prompt,
+        employee.model_provider or "", employee.model_name or "",
+    )
+    _fire_skill_sync(cur, employee.id)
+    _fire_memory_sync(cur, employee.id)
+
+
+def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
+                                  template_id: str, body: dict,
+                                  created_from: str, employee_id: str | None = None,
+                                  status=EmployeeStatus.ACTIVE) -> dict:
+    """Create an employee, seed its capability layer, open its private conversation,
+    and provision the Hermes profile. Commits on success and returns the new ids.
+
+    Shared by the recruitment path and direct employee creation so the two can
+    never drift (one place owns profile-name slugging, capability seeding and
+    profile provisioning).
+    """
+    employee_id = employee_id or f"emp_{uuid.uuid4().hex[:12]}"
+    # profile_name must be a valid runtime profile id (ASCII slug); see
+    # _slug_fragment for why a raw CJK display_name cannot be used verbatim.
+    _ent_frag = _slug_fragment(ent.slug or ent.id, "enterprise")
+    _name_frag = _slug_fragment(display_name, employee_id.replace("_", "-"))
+    profile_name = f"{_ent_frag}-{_name_frag}"[:60]
+    template = AgentTemplateRepo(cur).get_by_id(template_id) if template_id else None
+    model_provider, model_name = _resolve_employee_model(cur, ent.id, template, body)
+    role_name = str(body.get("role_name") or (template.role_name if template is not None else "") or "")
+    emp = Employee(
+        id=employee_id,
+        enterprise_id=ent.id,
+        template_id=template_id or None,
+        profile_name=profile_name,
+        display_name=display_name,
+        role_name=role_name,
+        status=status,
+        created_from=created_from,
+        model_provider=model_provider,
+        model_name=model_name,
+    )
+    EmployeeRepo(cur).create(emp)
+    # Seed prompt/skill/KB/memory at creation time so the employee is functional
+    # without a later PATCH.
+    system_prompt = _seed_employee_capabilities(
+        cur, ent.id, employee_id, profile_name, template,
+        source_template_version=(template.version_no if template is not None else None),
+    )
+    conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
+    conv = Conversation(
+        id=conversation_id,
+        enterprise_id=ent.id,
+        type="private",
+        status="active",
+        title=display_name,
+        entry_employee_id=employee_id,
+        created_by="system",
+    )
+    ConversationRepo(cur).create(conv)
+    conn.commit()
+    # Filesystem side-effects after the DB commit: push the full persona + model
+    # + skills + memory into the new Hermes profile via the shared reconcile
+    # entry (the same one the update path uses, so the two can't drift).
+    _reconcile_employee_profile(cur, emp, system_prompt=system_prompt)
+    return {
+        "employee_id": employee_id,
+        "profile_name": profile_name,
+        "conversation_id": conversation_id,
+        "model_provider": model_provider,
+        "model_name": model_name,
+        "role_name": role_name,
+    }
+
+
+def _handle_employees_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
+    """Directly create a digital employee (admin '新建员工'), parallel to recruiting
+    from a template. Reuses the same creation+provisioning path as recruitment."""
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    role, denial = _require_permission(query, body, "manage_employees")
+    if denial is not None:
+        return denial
+    display_name = str(body.get("display_name") or "").strip()
+    if not display_name:
+        return 400, {"error": "MISSING_DISPLAY_NAME", "message": "display_name is required"}
+    template_id = body.get("template_id", "")
+    cur = conn.cursor()
+    try:
+        enterprises = EnterpriseRepo(cur).list_all()
+        if not enterprises:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+        ent = enterprises[0]
+        created = _create_employee_with_profile(
+            conn, cur, ent,
+            display_name=display_name,
+            template_id=template_id,
+            body=body,
+            created_from="manual",
+        )
+        return 201, {
+            "employee_id": created["employee_id"],
+            "profile_name": created["profile_name"],
+            "conversation_id": created["conversation_id"],
+            "display_name": display_name,
+            "role_name": created["role_name"],
+            "status": "active",
+            "navigation": {
+                "employee_admin": f"/app/admin/employees/{created['employee_id']}",
+                "chat": f"/app/chat/{created['conversation_id']}",
+            },
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def _handle_employee_delete(conn, path: str, employee_id: str, query: str) -> tuple[int, dict]:
+    """Soft-delete an employee (sets deleted_at). The employee then disappears
+    from list/detail (both filter deleted_at IS NULL)."""
+    role, denial = _require_permission(query, None, "manage_employees")
+    if denial is not None:
+        return denial
+    cur = conn.cursor()
+    try:
+        repo = EmployeeRepo(cur)
+        emp = repo.get_by_id(employee_id)
+        if emp is None:
+            return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {employee_id} not found"}
+        repo.delete(employee_id)
+        conn.commit()
+        return 200, {"employee_id": employee_id, "status": "deleted"}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -2086,14 +2248,6 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
                 },
             }
         employee_id = f"emp_{uuid.uuid4().hex[:12]}"
-        # profile_name must be a valid runtime profile id (ASCII slug). A raw
-        # lowercased display_name like "产品顾问" produces a non-ASCII name the
-        # WebUI chat chain rejects ("invalid profile"), failing every run for
-        # Chinese-named employees. Sanitize, and fall back to the (always-ASCII)
-        # employee id fragment when the name slugs to nothing.
-        _ent_frag = _slug_fragment(ent.slug or ent.id, "enterprise")
-        _name_frag = _slug_fragment(display_name, employee_id.replace("_", "-"))
-        profile_name = f"{_ent_frag}-{_name_frag}"[:60]
         order_id = f"recruit_{uuid.uuid4().hex[:8]}"
         order = RecruitmentOrder(
             id=order_id,
@@ -2104,59 +2258,25 @@ def _handle_recruitments_post(conn, path: str, query: str, body: dict | None) ->
             created_employee_id=employee_id,
             idempotency_key=idempotency_key,
         )
-        repo = RecruitmentOrderRepo(cur)
-        repo.create(order)
-        # Load template (if any) and resolve the employee's model: explicit body
-        # selection -> template default -> empty (runtime falls back to root).
-        template = AgentTemplateRepo(cur).get_by_id(template_id) if template_id else None
-        model_provider, model_name = _resolve_employee_model(cur, ent.id, template, body)
-        role_name = template.role_name if template is not None else ""
-        emp = Employee(
-            id=employee_id,
-            enterprise_id=ent.id,
-            template_id=template_id or None,
-            profile_name=profile_name,
+        RecruitmentOrderRepo(cur).create(order)
+        created = _create_employee_with_profile(
+            conn, cur, ent,
             display_name=display_name,
-            role_name=role_name,
-            status=EmployeeStatus.ACTIVE,
+            template_id=template_id,
+            body=body,
             created_from="talent_market",
-            model_provider=model_provider,
-            model_name=model_name,
+            employee_id=employee_id,
         )
-        emp_repo = EmployeeRepo(cur)
-        emp_repo.create(emp)
-        # Seed the capability layer (prompt/skill/KB/memory) the design requires
-        # at creation time, so the employee is functional without a later PATCH.
-        system_prompt = _seed_employee_capabilities(
-            cur, ent.id, employee_id, profile_name, template,
-            source_template_version=(template.version_no if template is not None else None),
-        )
-        conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
-        conv = Conversation(
-            id=conversation_id,
-            enterprise_id=ent.id,
-            type="private",
-            status="active",
-            title=display_name,
-            entry_employee_id=employee_id,
-            created_by="system",
-        )
-        ConversationRepo(cur).create(conv)
-        conn.commit()
-        # Filesystem side-effects after the DB commit: create the Hermes profile,
-        # write SOUL from the persona, and pin the chosen model into its config.
-        _provision_employee_profile(profile_name, system_prompt, model_provider, model_name)
-        _fire_skill_sync(cur, employee_id)
         return 201, {
             "order_id": order.id,
             "status": "succeeded",
-            "employee_id": employee_id,
-            "profile_name": profile_name,
-            "conversation_id": conversation_id,
+            "employee_id": created["employee_id"],
+            "profile_name": created["profile_name"],
+            "conversation_id": created["conversation_id"],
             "navigation": {
                 "workbench": "/app/workbench",
-                "employee_admin": f"/app/admin/employees/{employee_id}",
-                "chat": f"/app/chat/{conversation_id}",
+                "employee_admin": f"/app/admin/employees/{created['employee_id']}",
+                "chat": f"/app/chat/{created['conversation_id']}",
             },
         }
     except Exception:
@@ -3051,6 +3171,7 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
             if employee is None:
                 return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {employee_id} not found"}
             ent_id = employee.enterprise_id
+        create_private_for_employee = False
         if conversation_id:
             conversation = ConversationRepo(cur).get_by_id(conversation_id)
             if conversation is None:
@@ -3067,13 +3188,17 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
             )
             if private_conv is not None:
                 conversation_id = private_conv.id
+            else:
+                # First message to an employee that has no private conversation yet:
+                # lazy-create one so chatting from a draft (/app/chat/emp_xxx) just works.
+                create_private_for_employee = True
         if not ent_id:
             enterprise_repo = EnterpriseRepo(cur)
             enterprises = enterprise_repo.list_all()
             ent_id = enterprises[0].id if enterprises else ""
         if not ent_id:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
-        if not conversation_id:
+        if not conversation_id and not create_private_for_employee:
             return 400, {"error": "MISSING_CONVERSATION_ID", "message": "conversation_id is required"}
         if not message_text:
             return 400, {"error": "MISSING_MESSAGE_TEXT", "message": "message.text is required"}
@@ -3087,6 +3212,13 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     try:
         conn.rollback()
         with uow:
+            if create_private_for_employee:
+                from team_panel.application.commands.conversation_service import (
+                    create_private_conversation,
+                )
+                conversation_id = create_private_conversation(
+                    uow, ent_id, employee_id, created_by="system"
+                )
             result = create_run(
                 uow,
                 conversation_id,
@@ -3842,6 +3974,11 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
     cur = conn.cursor()
     try:
         emp = EmployeeRepo(cur).get_by_id(emp_id)
+        if emp is None or emp.deleted_at:
+            # Soft-deleted (or vanished) employee. get_by_id does not filter
+            # deleted_at, so check it explicitly here to stay consistent with the
+            # (deleted-filtered) employee list.
+            return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {emp_id} not found"}
         avatar_url = emp.avatar_url if emp else None
         template_id = emp.template_id if emp else None
         profile_name = emp.profile_name if emp else ""
@@ -4864,23 +5001,19 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
                 )
             )
 
-            # Down-provision skill changes into the employee's Hermes profile.
-            # Must run INSIDE the UoW block: it reads the current bindings via the
-            # still-open cursor (sees the add/remove within this transaction) and
-            # spawns a thread that only touches the filesystem. Calling it after
-            # the block would hit a closed cursor (uow.cur raises).
-            if skills_add or skills_remove:
-                _fire_skill_sync(uow.cur, emp.id)
-            # A memory-mode change must re-project MEMORY.md: builtin re-writes
-            # the items, external/disabled clear it. Same in-block cursor rule.
-            if memory_binding_changed:
-                _fire_memory_sync(uow.cur, emp.id)
+            # Reconcile the FULL profile (persona + model + skills + memory) from
+            # the just-updated DB state via the shared entry, so model/persona
+            # edits actually reach the runtime profile — not just skills/memory.
+            # Must run INSIDE the UoW block: it reads bindings via the still-open
+            # cursor (sees this transaction's writes) and hands off to filesystem
+            # threads. After the block the cursor is closed (uow.cur raises).
+            _reconcile_employee_profile(uow.cur, emp)
 
         response = {
             "employee_id": emp.id,
             "display_name": emp.display_name,
             "status": emp.status,
-            "reprovision_status": None,
+            "reprovision_status": "reconciled",
             "updated_at": _today_iso(),
             "effective_role": role,
             "audit_event_id": audit_event_ids[-1] if audit_event_ids else "",
@@ -5224,6 +5357,16 @@ def handle_team_route(
         emp_id_patch = _match_prefix(sub, "/employees/")
         if method == "PATCH" and emp_id_patch is not None and "/" not in emp_id_patch:
             route_handler = lambda conn, employee_id=emp_id_patch: _handle_employee_patch(conn, sub, employee_id, query, body)
+
+    # ── employees/{id} delete (soft) ──
+    if route_handler is None:
+        emp_id_delete = _match_prefix(sub, "/employees/")
+        if method == "DELETE" and emp_id_delete is not None and "/" not in emp_id_delete:
+            route_handler = lambda conn, employee_id=emp_id_delete: _handle_employee_delete(conn, sub, employee_id, query)
+
+    # ── employees create (direct) ──
+    if route_handler is None and method == "POST" and _match_exact(sub, "/employees"):
+        route_handler = lambda conn: _handle_employees_post(conn, sub, query, body)
 
     # ── employees list ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/employees"):

@@ -7046,7 +7046,10 @@ def handle_delete(handler, parsed) -> bool:
         return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
 
     if _is_aiteam_api_path(parsed.path):
-        dispatched, status, body, ct = _try_aiteam_dispatch(handler, parsed.path, "DELETE")
+        # Forward the query string (consistent with handle_get/handle_post) so
+        # DELETE handlers can read role/actor params for permission checks.
+        team_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
+        dispatched, status, body, ct = _try_aiteam_dispatch(handler, team_path, "DELETE")
         if dispatched:
             if ct is not None:
                 return t(handler, body, status=status, content_type=ct)

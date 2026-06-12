@@ -88,6 +88,63 @@ test('agent list renders demo three sections (pinned / groups / others)', functi
   assert.ok(html.includes('is-active'), 'active conversation highlighted');
 });
 
+function makeCapturingContainer() {
+  // querySelector returns a per-selector capturing stub so bindChat's refs work
+  // and we can inspect what renderTranscript wrote.
+  const els = {};
+  function stub() {
+    return { innerHTML: '', textContent: '', scrollTop: 0, scrollHeight: 0,
+      addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
+  }
+  const c = {
+    innerHTML: '', addEventListener() {}, querySelectorAll() { return []; },
+    querySelector(sel) { if (!els[sel]) els[sel] = stub(); return els[sel]; },
+    _els: els,
+  };
+  return c;
+}
+
+test('stale terminal run loaded from history shows no thinking bubble', function () {
+  const c = makeCapturingContainer();
+  page._renderChat(c, {
+    conversation_id: 'c_stale',
+    display_state: 'resolved', // not an active state → no live sync
+    employee_summary: { employee_id: 'e1', display_name: '小析' },
+    messages: { items: [{ role: 'user', text: '你好', created_at: '2026-01-01T00:00:00Z' }], next_cursor: 0, has_more: false },
+    latest_run: { run_id: 'run_stale', status: 'succeeded' }, // stale runId in history
+    __agentList: [{ employee_id: 'e1', display_name: '小析', conversation_id: 'c_stale' }],
+  });
+  const transcript = c._els['[data-chat-transcript]'].innerHTML;
+  assert.ok(transcript.indexOf('你好') !== -1, 'history message should render');
+  assert.ok(transcript.indexOf('正在思考中') === -1, 'stale run must not show a permanent thinking bubble');
+});
+
+test('draft chat highlights employee with no conversation by employee_id', function () {
+  const html = page._renderAgentList({
+    pinned: [], groups: [],
+    others: [
+      { employee_id: 'emp_new', display_name: '产品顾问', role_name: '顾问', status: 'online' }, // no conversation_id yet
+    ],
+  }, 'emp_new');
+  assert.ok(html.includes('is-active'), 'draft employee highlighted by employee_id');
+  assert.ok(html.includes('/app/chat/emp_new'), 'draft href uses employee id');
+});
+
+test('draft conversation renders empty chat window with composer', function () {
+  const container = makeContainer();
+  page._renderChat(container, {
+    conversation_id: '',
+    employee_summary: { employee_id: 'emp_new', display_name: '产品顾问', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    latest_run: null,
+    __draft_employee_id: 'emp_new',
+    __agentList: [{ employee_id: 'emp_new', display_name: '产品顾问', role_name: '顾问', status: 'online' }],
+  });
+  assert.ok(container.innerHTML.includes('产品顾问'), 'employee name rendered in draft');
+  assert.ok(container.innerHTML.includes('data-chat-form'), 'composer rendered for draft');
+  assert.ok(container.innerHTML.includes('is-active'), 'draft employee highlighted in list');
+});
+
 test('agent list skips empty sections', function () {
   const html = page._renderAgentList({
     pinned: [],

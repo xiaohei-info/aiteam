@@ -635,6 +635,107 @@ class TestEmployeeList:
         assert body.get("error") == "FORBIDDEN"
 
 
+class TestEmployeeProfileReconcile:
+    """Both creation and update must push config to the Hermes profile via the
+    single shared _reconcile_employee_profile entry (no model/persona drift)."""
+
+    def test_create_routes_through_shared_reconcile_with_model(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        monkeypatch.setattr(
+            router_team, "_reconcile_employee_profile",
+            lambda cur, employee, **kw: calls.append((employee.id, employee.model_provider, employee.model_name)),
+        )
+        status, body = _post(
+            "/api/team/employees?role=owner",
+            {"display_name": "建档测试", "model_provider": "openrouter", "model_name": "claude-opus-4-8"},
+        )
+        assert status == 201, body
+        assert calls, "create must reconcile the profile via the shared entry"
+        assert calls[-1][1] == "openrouter" and calls[-1][2] == "claude-opus-4-8", calls
+
+    def test_patch_model_change_reconciles_profile(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        def spy(cur, employee, *, system_prompt=None):
+            calls.append((employee.id, employee.model_provider, employee.model_name))
+        monkeypatch.setattr(router_team, "_reconcile_employee_profile", spy)
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _patch(
+            f"/api/team/employees/{emp_id}?role=owner",
+            {"model_provider": "openrouter", "model_name": "claude-opus-4-8"},
+        )
+        assert status == 200, body
+        assert body["reprovision_status"] == "reconciled"
+        assert calls, "PATCH must reconcile the profile so the new model reaches the runtime"
+        assert calls[-1] == (emp_id, "openrouter", "claude-opus-4-8"), calls
+
+    def test_patch_persona_change_reconciles_profile(self, seeded_enterprise, monkeypatch):
+        from team_panel.api_team import router_team
+        calls = []
+        monkeypatch.setattr(
+            router_team, "_reconcile_employee_profile",
+            lambda cur, employee, **kw: calls.append(employee.id),
+        )
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _patch(
+            f"/api/team/employees/{emp_id}?role=owner",
+            {"prompt_system": "你是一名严谨的市场分析师。"},
+        )
+        assert status == 200, body
+        assert calls, "PATCH persona change must reconcile the profile (SOUL drift fix)"
+
+
+class TestEmployeeCreateDelete:
+    """POST /api/team/employees (direct create) and DELETE /api/team/employees/{id}."""
+
+    def test_create_employee_returns_201_and_appears_in_list(self, seeded_enterprise):
+        status, body = _post(
+            "/api/team/employees?role=owner",
+            {"display_name": "市场新人", "role_name": "市场专员"},
+        )
+        assert status == 201, f"Expected 201, got {status}: {body}"
+        assert body["employee_id"].startswith("emp_")
+        assert body["conversation_id"].startswith("conv_")
+        assert body["status"] == "active"
+        _, listing = _get("/api/team/employees?role=owner")
+        ids = {e["employee_id"] for e in listing["employees"]}
+        assert body["employee_id"] in ids
+
+    def test_create_employee_requires_display_name(self, seeded_enterprise):
+        status, body = _post("/api/team/employees?role=owner", {"role_name": "市场专员"})
+        assert status == 400
+        assert body.get("error") == "MISSING_DISPLAY_NAME"
+
+    def test_create_employee_forbidden_for_finance_admin(self, seeded_enterprise):
+        status, body = _post("/api/team/employees?role=finance_admin", {"display_name": "X"})
+        assert status == 403
+        assert body.get("error") == "FORBIDDEN"
+
+    def test_delete_employee_soft_deletes_and_disappears(self, seeded_enterprise):
+        _, created = _post("/api/team/employees?role=owner", {"display_name": "待删除"})
+        emp_id = created["employee_id"]
+        status, body = _delete(f"/api/team/employees/{emp_id}?role=owner")
+        assert status == 200, body
+        assert body["status"] == "deleted"
+        _, listing = _get("/api/team/employees?role=owner")
+        ids = {e["employee_id"] for e in listing["employees"]}
+        assert emp_id not in ids
+        detail_status, _ = _get(f"/api/team/employees/{emp_id}?role=owner")
+        assert detail_status == 404
+
+    def test_delete_missing_employee_returns_404(self, seeded_enterprise):
+        status, body = _delete("/api/team/employees/nonexistent?role=owner")
+        assert status == 404
+        assert body.get("error") == "EMPLOYEE_NOT_FOUND"
+
+    def test_delete_employee_forbidden_for_member(self, seeded_enterprise):
+        emp_id = seeded_enterprise["employee_id"]
+        status, body = _delete(f"/api/team/employees/{emp_id}?role=member")
+        assert status == 403
+        assert body.get("error") == "FORBIDDEN"
+
+
 class TestEmployeeDetail:
     """S06-T11: GET /api/team/employees/{id}."""
 

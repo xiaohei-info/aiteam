@@ -29,31 +29,31 @@ window.aiteam = window.aiteam || {};
         + '<span class="aiteam-llm-model-label">' + esc(m.label || '') + '</span>'
         + '<span class="aiteam-llm-model-ctx">' + (m.context_length ? esc(m.context_length) + ' ctx' : '') + '</span>'
         + def
-        + '<button class="aiteam-btn aiteam-btn-text" data-role="llm-del-model" data-model="' + esc(m.model_uid) + '">删除</button>'
+        + '<button class="aiteam-btn aiteam-btn--secondary" data-role="llm-del-model" data-model="' + esc(m.model_uid) + '">删除</button>'
         + '</li>';
     }).join('');
     if (!models) {
       models = '<li class="aiteam-llm-model-empty">尚未配置模型</li>';
     }
-    return '<div class="aiteam-llm-provider" data-provider="' + esc(p.provider_id) + '">'
+    return '<div class="aiteam-card aiteam-llm-provider" data-provider="' + esc(p.provider_id) + '">'
       + '<div class="aiteam-llm-provider-head">'
-      + '<div><strong>' + esc(p.display_name || p.provider_key) + '</strong>'
+      + '<div class="aiteam-card__title">' + esc(p.display_name || p.provider_key)
       + ' <code>' + esc(p.provider_key) + '</code></div>'
       + '<div class="aiteam-llm-provider-meta">'
       + '<span class="aiteam-tag ' + (p.enabled ? 'aiteam-tag-ok' : 'aiteam-tag-off') + '">'
       + (p.enabled ? '启用' : '停用') + '</span>'
       + '<span class="aiteam-llm-key">' + esc(p.api_key_mask || '') + '</span>'
-      + '<button class="aiteam-btn aiteam-btn-text" data-role="llm-del-provider" data-provider="' + esc(p.provider_id) + '">删除</button>'
+      + '<button class="aiteam-btn aiteam-btn--secondary" data-role="llm-del-provider" data-provider="' + esc(p.provider_id) + '">删除</button>'
       + '</div></div>'
       + '<div class="aiteam-llm-provider-body">'
       + '<div class="aiteam-llm-baseurl">' + esc(p.base_url || '') + ' · ' + esc(p.transport || '') + '</div>'
       + '<ul class="aiteam-llm-models">' + models + '</ul>'
       + '<form class="aiteam-llm-model-form" data-role="llm-add-model-form" data-provider="' + esc(p.provider_id) + '">'
-      + '<input type="text" name="model_id" placeholder="模型ID 如 gpt-5.4" required />'
-      + '<input type="text" name="label" placeholder="显示名(可选)" />'
-      + '<input type="number" name="context_length" placeholder="上下文长度" />'
+      + '<input type="text" class="aiteam-input" name="model_id" placeholder="模型ID 如 gpt-5.4" required />'
+      + '<input type="text" class="aiteam-input" name="label" placeholder="显示名(可选)" />'
+      + '<input type="number" class="aiteam-input" name="context_length" placeholder="上下文长度" />'
       + '<label class="aiteam-llm-default"><input type="checkbox" name="is_default" /> 默认</label>'
-      + '<button class="aiteam-btn aiteam-btn-sm" type="submit">添加模型</button>'
+      + '<button class="aiteam-btn aiteam-btn--secondary" type="submit">添加模型</button>'
       + '</form>'
       + '</div></div>';
   }
@@ -64,22 +64,24 @@ window.aiteam = window.aiteam || {};
       list = '<div class="aiteam-state aiteam-state-empty"><p>尚未配置任何 LLM Provider</p></div>';
     }
     return '<div class="aiteam-page aiteam-llm-page">'
-      + '<header class="aiteam-page-head"><h2>模型配置</h2>'
-      + '<p class="aiteam-page-sub">配置企业可用的 LLM Provider 与模型；创建员工时从中选择模型。</p></header>'
-      + (state.notice ? '<div class="aiteam-notice">' + esc(state.notice) + '</div>' : '')
+      + '<div class="aiteam-shell__panel">'
+      + '<p class="aiteam-shell__panel-kicker">企业后台</p>'
+      + '<h2 class="aiteam-shell__panel-title">模型配置</h2>'
+      + '<p class="aiteam-shell__panel-body">配置企业可用的 LLM Provider 与模型；创建员工时从中选择模型。</p></div>'
+      + (state.notice ? '<div class="aiteam-alert aiteam-alert-success">' + esc(state.notice) + '</div>' : '')
       + '<section class="aiteam-card aiteam-llm-create">'
-      + '<h3>新增 Provider</h3>'
-      + '<form data-role="llm-create-provider-form" class="aiteam-form-grid">'
-      + '<input type="text" name="provider_key" placeholder="provider key 如 newapi-openai" required />'
-      + '<input type="text" name="display_name" placeholder="显示名" />'
-      + '<input type="text" name="base_url" placeholder="base_url 如 https://x/v1" />'
-      + '<input type="password" name="api_key" placeholder="api_key" />'
-      + '<select name="transport">'
+      + '<h3 class="aiteam-card__title">新增 Provider</h3>'
+      + '<form data-role="llm-create-provider-form" class="aiteam-llm-form-grid">'
+      + '<input type="text" class="aiteam-input" name="provider_key" placeholder="provider key 如 newapi-openai" required />'
+      + '<input type="text" class="aiteam-input" name="display_name" placeholder="显示名" />'
+      + '<input type="text" class="aiteam-input" name="base_url" placeholder="base_url 如 https://x/v1" />'
+      + '<input type="password" class="aiteam-input" name="api_key" placeholder="api_key" />'
+      + '<select class="aiteam-input" name="transport">'
       + '<option value="openai_chat">openai_chat</option>'
       + '<option value="codex_responses">codex_responses</option>'
       + '<option value="anthropic_messages">anthropic_messages</option>'
       + '</select>'
-      + '<button class="aiteam-btn aiteam-btn-primary" type="submit">创建</button>'
+      + '<button class="aiteam-btn" type="submit">创建</button>'
       + '</form></section>'
       + '<section class="aiteam-llm-list">' + list + '</section>'
       + '</div>';

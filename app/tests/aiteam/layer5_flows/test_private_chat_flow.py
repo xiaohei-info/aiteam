@@ -50,6 +50,34 @@ def test_recruit_then_private_chat_run(seeded_enterprise, db_conn):
         assert binding.runtime_session_id == body["runtime_handle"]["session_id"]
 
 
+def test_first_message_to_employee_without_conversation_lazy_creates(seeded_enterprise, db_conn):
+    # emp_member is seeded without any private conversation. Sending a run with
+    # only employee_id (the draft-state /app/chat/emp_xxx path) must lazy-create
+    # a private conversation instead of returning MISSING_CONVERSATION_ID.
+    status, body = _post(
+        "/api/team/runs",
+        {
+            "employee_id": "emp_member",
+            "message": {"text": "你好，第一次找你。"},
+            "idempotency_key": "idem_l5_lazy_create_conv",
+        },
+    )
+    assert status == 201, body
+    assert body["run_id"].startswith("run_")
+    assert body["status"] == "queued"
+    assert body["conversation_id"].startswith("conv_")
+
+    # The lazy-created conversation must be a real, fetchable private conversation
+    # bound to emp_member.
+    status, conv = _get(f"/api/team/conversations/{body['conversation_id']}")
+    assert status == 200, conv
+    with UnitOfWork(db_conn) as uow:
+        created = uow.conversations().get_by_id(body["conversation_id"])
+        assert created is not None
+        assert created.type == "private"
+        assert created.entry_employee_id == "emp_member"
+
+
 def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):
     run_id = seeded_private_chat["run_id"]
     conv_id = seeded_private_chat["conversation_id"]

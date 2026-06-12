@@ -2075,14 +2075,14 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-chat-transcript .aiteam-message {
   max-width: 76%;
   align-self: flex-start;
-  border-radius: 4px 14px 14px 14px;
+  border-radius: 12px;
   background: var(--ait-bg3);
   border-color: var(--ait-border);
 }
 
 .aiteam-chat-transcript .aiteam-message--user {
   align-self: flex-end;
-  border-radius: 14px 4px 14px 14px;
+  border-radius: 12px 2px 12px 12px;
   background: var(--ait-brand-dim);
   border-color: rgba(47, 129, 247, 0.4);
 }
@@ -2092,6 +2092,23 @@ body.aiteam-shell-active .aiteam-shell {
   max-width: 90%;
   background: rgba(139, 148, 158, 0.12);
 }
+
+/* Markdown body (rendered via Hermes renderMd) inside chat bubbles. Normal
+   whitespace so block elements don't get extra blank lines from pre-wrap. */
+.aiteam-chat-transcript .aiteam-message__body { white-space: normal; font-size: 13px; }
+.aiteam-chat-transcript .aiteam-message__body > :first-child { margin-top: 0; }
+.aiteam-chat-transcript .aiteam-message__body > :last-child { margin-bottom: 0; }
+.aiteam-chat-transcript .aiteam-message__body p { margin: 8px 0; }
+.aiteam-chat-transcript .aiteam-message__body ul,
+.aiteam-chat-transcript .aiteam-message__body ol { margin: 8px 0; padding-left: 20px; }
+.aiteam-chat-transcript .aiteam-message__body code { background: rgba(110, 118, 129, 0.22); padding: 1px 5px; border-radius: 5px; font-size: 12px; font-family: 'SF Mono', Consolas, monospace; }
+.aiteam-chat-transcript .aiteam-message__body pre { background: rgba(0, 0, 0, 0.28); border: 1px solid var(--ait-border); border-radius: 8px; padding: 12px; overflow: auto; margin: 8px 0; }
+.aiteam-chat-transcript .aiteam-message__body pre code { background: none; padding: 0; }
+.aiteam-chat-transcript .aiteam-message__body table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.aiteam-chat-transcript .aiteam-message__body th,
+.aiteam-chat-transcript .aiteam-message__body td { border: 1px solid var(--ait-border); padding: 5px 9px; }
+.aiteam-chat-transcript .aiteam-message__body a { color: var(--ait-accent); }
+.aiteam-chat-transcript .aiteam-message__body blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--ait-border2); color: var(--ait-text2); }
 
 .aiteam-quote {
   margin: 0 0 12px;
@@ -2933,13 +2950,21 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-chat__tool-card { background:var(--ait-bg4); border:1px solid var(--ait-border); border-left:3px solid #bc8cff; border-radius:8px; padding:10px 12px; font-size:11px; font-family:'SF Mono',Consolas,monospace; color:var(--ait-text2); max-width:480px; }
 .aiteam-chat__tool-head { color:#bc8cff; font-weight:700; margin-bottom:6px; }
 .aiteam-chat__tool-call { color:var(--ait-text); word-break:break-all; }
+.aiteam-chat__tool-key { color:#39c5cf; }
+.aiteam-chat__tool-val { color:#3fb950; }
 .aiteam-chat__tool-result { margin:6px 0 0; padding:8px; background:rgba(0,0,0,.25); border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:160px; overflow:auto; color:var(--ait-text2); }
 .aiteam-chat__loop-card { background:var(--ait-bg4); border:1px solid var(--ait-border); border-left:3px solid var(--ait-busy); border-radius:10px; padding:14px 16px; max-width:500px; }
-.aiteam-chat__loop-title { font-size:12px; font-weight:700; color:var(--ait-busy); margin-bottom:10px; }
-.aiteam-chat__loop-step { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ait-text2); padding:6px 10px; background:var(--ait-bg3); border:1px solid var(--ait-border); border-radius:6px; margin-bottom:6px; }
-.aiteam-chat__loop-step.is-running { color:var(--ait-brand); border-color:var(--ait-brand); }
+.aiteam-chat__loop-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; color:var(--ait-busy); margin-bottom:10px; }
+.aiteam-chat__loop-steps { display:flex; flex-direction:column; gap:6px; }
+.aiteam-chat__loop-step { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ait-text2); padding:6px 10px; background:var(--ait-bg3); border:1px solid var(--ait-border); border-radius:6px; }
+.aiteam-chat__loop-step-icon { font-size:13px; flex-shrink:0; }
+.aiteam-chat__loop-step.is-running { color:var(--ait-brand); border-color:var(--ait-brand); background:rgba(47,129,247,.08); }
 .aiteam-chat__loop-step.is-done { color:var(--ait-green); }
+.aiteam-chat__loop-step.is-pending { color:var(--ait-text3); }
 .aiteam-chat__loop-step-status { margin-left:auto; font-size:10px; font-weight:700; padding:2px 8px; border-radius:4px; }
+.aiteam-chat__loop-step-status.is-done { background:rgba(63,185,80,.15); color:var(--ait-green); }
+.aiteam-chat__loop-step-status.is-running { background:var(--ait-brand-dim); color:var(--ait-brand); }
+.aiteam-chat__loop-step-status.is-pending { background:var(--ait-bg4); color:var(--ait-text3); }
 
 /* ===== PROTOTYPE: MARKETPLACE CARD POLISH ===== */
 .aiteam-marketplace-card { position:relative; overflow:hidden; }
@@ -3075,3 +3100,46 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-org__node-dot.is-busy { background: var(--ait-busy); }
 .aiteam-org__node-dot.is-offline { background: var(--ait-text3); }
 .aiteam-office__seat-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+
+/* ── admin collaboration / llm-provider config (aligned to unified shell look) ── */
+.aiteam-collab-page,
+.aiteam-llm-page { display: flex; flex-direction: column; gap: 20px; }
+.aiteam-collab-form { display: flex; flex-direction: column; gap: 20px; }
+.aiteam-collab-field { display: flex; flex-direction: column; gap: 10px; }
+.aiteam-collab-field .aiteam-card__title { margin: 0; font-size: 16px; }
+.aiteam-collab-field .aiteam-card__sub { margin: 0; }
+.aiteam-collab-textarea { width: 100%; min-height: 132px; font-family: inherit; line-height: 1.6; resize: vertical; }
+.aiteam-collab-default { font-size: 12px; color: var(--ait-text2); }
+.aiteam-collab-default summary { cursor: pointer; }
+.aiteam-collab-default pre { white-space: pre-wrap; background: rgba(13, 17, 23, 0.55); border: 1px solid var(--ait-border); border-radius: 12px; padding: 12px; margin: 8px 0 0; max-height: 220px; overflow: auto; }
+.aiteam-collab-status { align-self: flex-start; }
+
+.aiteam-llm-create { display: flex; flex-direction: column; gap: 14px; }
+.aiteam-llm-create .aiteam-card__title { margin: 0; font-size: 16px; }
+.aiteam-llm-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: center; }
+.aiteam-llm-form-grid .aiteam-btn { grid-column: 1 / -1; justify-self: start; }
+.aiteam-llm-list { display: flex; flex-direction: column; gap: 16px; }
+.aiteam-llm-provider-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.aiteam-llm-provider-head .aiteam-card__title { margin: 0; font-size: 16px; }
+.aiteam-llm-provider-head code { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; color: var(--ait-text2); }
+.aiteam-llm-provider-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aiteam-llm-key { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; color: var(--ait-text2); }
+.aiteam-llm-baseurl { margin: 12px 0; font-size: 12px; color: var(--ait-text2); font-family: 'SF Mono', Consolas, monospace; }
+.aiteam-llm-models { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.aiteam-llm-model-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(13, 17, 23, 0.45); border: 1px solid var(--ait-border); border-radius: 10px; font-size: 13px; }
+.aiteam-llm-model-id { font-weight: 600; }
+.aiteam-llm-model-label,
+.aiteam-llm-model-ctx { color: var(--ait-text2); font-size: 12px; }
+.aiteam-llm-model-row .aiteam-btn { margin-left: auto; padding: 6px 12px; }
+.aiteam-llm-model-empty { color: var(--ait-text2); font-size: 13px; padding: 6px 0; }
+.aiteam-llm-model-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.aiteam-llm-model-form .aiteam-input { min-width: 120px; }
+.aiteam-llm-default { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ait-text2); }
+.aiteam-tag-ok { background: rgba(46, 160, 67, 0.16); border-color: rgba(46, 160, 67, 0.4); color: #7ee787; }
+.aiteam-tag-off { background: rgba(139, 148, 158, 0.12); border-color: rgba(139, 148, 158, 0.3); color: var(--ait-text2); }
+
+/* ── employee create / delete controls ── */
+.aiteam-employee-create { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+.aiteam-employee-create .aiteam-card__title { margin: 0; font-size: 16px; }
+.aiteam-employee-create__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.aiteam-employee-del { padding: 5px 12px; font-size: 12px; }
