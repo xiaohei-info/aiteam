@@ -19,6 +19,15 @@
   --ait-radius-lg: 12px;
 }
 
+/* Flash-prevention: hide Hermes native layout immediately on first paint for aiteam paths.
+   data-aiteam-path is set by an inline script in <head> before any paint, so this rule
+   takes effect before deferred scripts run and add body.aiteam-shell-active. */
+html[data-aiteam-path] .app-titlebar,
+html[data-aiteam-path] .layout,
+html[data-aiteam-path] #toast {
+  display: none !important;
+}
+
 body.aiteam-shell-active {
   background: var(--ait-bg);
   color: var(--ait-text);
