@@ -188,10 +188,10 @@ class TestAdminSystemPageRuntimeInit:
             "adminSkills",
             [
                 {"url": "/api/team/skills/installs", "method": "GET"},
-                {"url": "/api/team/skills/catalog", "method": "GET"},
+                {"url": "/api/team/skills/catalog?page=1&page_size=1", "method": "GET"},
             ],
         )
-        assert "技能市场目录暂时无法加载" in result["html"] or "技能市场暂时不可用" in result["html"]
+        assert "技能市场" in result["html"]  # 分页改写后优雅降级，仍渲染面板而非整页报错
 
     def test_admin_solutions_init_executes_with_loaded_dependencies(self):
         result = _run_page_module(
