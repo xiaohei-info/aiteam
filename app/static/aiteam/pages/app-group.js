@@ -405,6 +405,52 @@ window.aiteam = window.aiteam || {};
     return { pinned: pinned, groups: groups, others: others };
   }
 
+  // 打开会话后，把左栏列表里该会话的未读数本地清零（与服务端 mark_read 对应）。
+  function markConversationReadInSections(sections, conversationId) {
+    sections = sections || {};
+    var targetId = String(conversationId || '');
+    function clearUnread(list) {
+      var items = Array.isArray(list) ? list : [];
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i] || {};
+        if (String(item.conversation_id || '') === targetId) {
+          item.unread_count = 0;
+        }
+      }
+    }
+    clearUnread(sections.pinned);
+    clearUnread(sections.groups);
+    clearUnread(sections.others);
+    return sections;
+  }
+
+  // 进入群聊会话时，如该会话仍有未读则持久化已读并清零本地徽标，避免切换后残留。
+  function syncOpenedConversationRead(conversationId, sections, onDone) {
+    var targetId = String(conversationId || '');
+    if (!targetId || !ns.api || typeof ns.api.updateWorkbenchState !== 'function') {
+      if (typeof onDone === 'function') onDone(sections || null);
+      return;
+    }
+    var currentSections = sections || { pinned: [], groups: [], others: [] };
+    var lists = []
+      .concat(Array.isArray(currentSections.pinned) ? currentSections.pinned : [])
+      .concat(Array.isArray(currentSections.groups) ? currentSections.groups : [])
+      .concat(Array.isArray(currentSections.others) ? currentSections.others : []);
+    var hasUnread = lists.some(function (item) {
+      return String(item && item.conversation_id || '') === targetId && Number(item && item.unread_count) > 0;
+    });
+    if (!hasUnread) {
+      if (typeof onDone === 'function') onDone(currentSections);
+      return;
+    }
+    ns.api.updateWorkbenchState({ conversation_id: targetId, mark_read: true }).then(function (result) {
+      if (result && result.ok) markConversationReadInSections(currentSections, targetId);
+      if (typeof onDone === 'function') onDone(currentSections);
+    }).catch(function () {
+      if (typeof onDone === 'function') onDone(currentSections);
+    });
+  }
+
   function bindListSearch(container) {
     var search = container.querySelector && container.querySelector('[data-chat-agent-search]');
     if (!search || typeof search.addEventListener !== 'function') return;
@@ -1478,8 +1524,11 @@ window.aiteam = window.aiteam || {};
         var conv = result.data || {};
         if (ns.api && typeof ns.api.getWorkbench === 'function') {
           ns.api.getWorkbench().then(function (wb) {
-            lastListSections = mapWorkbenchToListSections((wb && wb.ok && wb.data) ? wb.data : {});
-            renderGroup(container, conv);
+            var sections = mapWorkbenchToListSections((wb && wb.ok && wb.data) ? wb.data : {});
+            syncOpenedConversationRead(conv.conversation_id, sections, function (synced) {
+              lastListSections = synced || sections;
+              renderGroup(container, conv);
+            });
           }).catch(function () { renderGroup(container, conv); });
         } else {
           renderGroup(container, conv);
