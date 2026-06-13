@@ -159,18 +159,18 @@ async function run() {
   host._openBtn.dispatchEvent({ type: 'click' });
   assert(appRoot.children.length > drawerCountBefore, 'clicking 创建专家 should mount a drawer into aiteam-app');
 
-  // 表格更新按钮 → PATCH。
+  // 表格更新按钮 → 打开「编辑专家」抽屉（复用创建抽屉、全量回填编辑）。
+  // 抽屉内表单提交依赖真实 DOM，由 E2E 验证；此处验证点击会挂载编辑抽屉。
   const updateHost = createHost();
   updateHost._buttons = [createActionButton('update', 'tpl_ops')];
   page.init(updateHost);
   await nextTick();
   await nextTick();
-  promptQueue.push('运营专家Pro', 'senior-operator');
+  const editCountBefore = appRoot.children.length;
   updateHost._buttons[0].dispatchEvent({ type: 'click' });
-  await nextTick();
-  const patchUpdate = lastCall('PATCH', '/api/system-admin/templates/tpl_ops');
-  assert(patchUpdate && patchUpdate.body.name === '运营专家Pro' && patchUpdate.body.role_name === 'senior-operator',
-    'update button should PATCH name + role_name');
+  const mountedEdit = appRoot.children.slice(editCountBefore).some((el) => (el.innerHTML || '').indexOf('编辑专家') !== -1);
+  assert(appRoot.children.length > editCountBefore, 'clicking 更新 should mount an edit drawer');
+  assert(mountedEdit, 'edit drawer should be titled 编辑专家 (reuses the create form for full edit)');
 
   // 发布按钮 → PATCH publish_action。
   const publishHost = createHost();

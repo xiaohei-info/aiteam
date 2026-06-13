@@ -1149,6 +1149,48 @@ body.aiteam-shell-active .aiteam-shell {
   gap: 8px;
 }
 
+/* Checkbox/radio rows inside drawers (publish scope, expert/enterprise pick). */
+.aiteam-drawer__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #c9d1d9;
+  cursor: pointer;
+}
+
+.aiteam-drawer__check:hover {
+  background: rgba(33, 38, 45, 0.6);
+}
+
+.aiteam-drawer__check input {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.aiteam-drawer__scope-list {
+  margin-top: 10px;
+}
+
+/* Searchable picker: a sticky search box over a scrollable checkbox list. */
+.aiteam-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.aiteam-picker__list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgba(139, 148, 158, 0.16);
+  border-radius: 12px;
+  background: rgba(13, 17, 23, 0.4);
+}
+
 .aiteam-drawer__field-row {
   display: grid;
   grid-template-columns: 110px 1fr;

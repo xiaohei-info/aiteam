@@ -3,6 +3,54 @@ window.aiteam = window.aiteam || {};
 (function registerSystemTemplatesPage(ns) {
   ns.pages = ns.pages || {};
 
+  // Enterprise LLM model catalog — loaded once per page init, shared by the
+  // create/edit drawer's 默认模型 dropdown. Mirrors admin-employees.
+  function modelOptions(models, selectedValue) {
+    var opts = ['<option value="">默认（继承企业默认模型）</option>'];
+    var list = Array.isArray(models) ? models : [];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i] || {};
+      var value = (m.provider_key || '') + '|' + (m.model_id || '');
+      var label = (m.provider_name || m.provider_key || '') + ' · ' + (m.label || m.model_id || '');
+      var sel = value === selectedValue ? ' selected' : '';
+      opts.push('<option value="' + escapeHtml(value) + '"' + sel + '>' + escapeHtml(label) + '</option>');
+    }
+    return opts.join('');
+  }
+
+  // A search box + scrollable checkbox list, scoped by a unique `key` so several
+  // pickers can coexist in one drawer. `rowsHtml` is the joined <label> rows the
+  // caller already built (each carries its own id data-attr). Filtering is pure
+  // DOM (toggle label.hidden by text) — no re-render, no state.
+  function renderPicker(key, rowsHtml, opts) {
+    var o = opts || {};
+    if (!rowsHtml) {
+      return '<p class="aiteam-drawer__desc">' + escapeHtml(o.empty || '暂无可选项') + '</p>';
+    }
+    return '<div class="aiteam-picker" data-picker="' + escapeHtml(key) + '">' +
+      '<input class="aiteam-input aiteam-picker__search" type="text" data-picker-search' +
+      ' placeholder="' + escapeHtml(o.placeholder || '输入关键词筛选…') + '">' +
+      '<div class="aiteam-picker__list">' + rowsHtml + '</div>' +
+      '</div>';
+  }
+
+  // Wire a picker's search box to filter its <label> rows by text.
+  function bindPicker(scope, key) {
+    if (!scope || !scope.querySelector) return;
+    var box = scope.querySelector('[data-picker="' + key + '"]');
+    if (!box || !box.querySelector) return;
+    var search = box.querySelector('[data-picker-search]');
+    if (!search || !search.addEventListener) return;
+    search.addEventListener('input', function () {
+      var q = trimText(search.value).toLowerCase();
+      var labels = box.querySelectorAll('.aiteam-drawer__check');
+      for (var i = 0; i < labels.length; i++) {
+        var text = (labels[i].textContent || '').toLowerCase();
+        labels[i].hidden = !!(q && text.indexOf(q) === -1);
+      }
+    });
+  }
+
   function trimText(value) {
     if (value === undefined || value === null) return '';
     return String(value).replace(/^\s+|\s+$/g, '');
@@ -136,15 +184,15 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
-  function renderEnterpriseCheckboxes(enterprises) {
+  function enterpriseRows(enterprises, selectedIds) {
     var list = Array.isArray(enterprises) ? enterprises : [];
-    if (!list.length) {
-      return '<p class="aiteam-drawer__desc">暂无企业可选（创建后可在更新中调整）。</p>';
-    }
+    var picked = {};
+    (selectedIds || []).forEach(function (id) { picked[id] = true; });
     return list.map(function (ent) {
       var id = ent.enterprise_id || ent.id || '';
       var name = ent.name || id;
-      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-scope-ent="' + escapeHtml(id) + '"> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(id) + '</span></label>';
+      var checked = picked[id] ? ' checked' : '';
+      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-scope-ent="' + escapeHtml(id) + '"' + checked + '> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(id) + '</span></label>';
     }).join('');
   }
 
@@ -155,8 +203,15 @@ window.aiteam = window.aiteam || {};
     if (drawer && drawer.parentNode) drawer.parentNode.removeChild(drawer);
   }
 
-  function openCreateDrawer(state, onSubmit) {
+  function openCreateDrawer(state, onSubmit, editTemplate) {
     closeDrawer();
+    var edit = editTemplate || null;
+    var promptPack = (edit && edit.prompt_pack) || {};
+    var modelRef = (edit && edit.default_model_ref) || {};
+    var scope = (edit && edit.publish_scope) || {};
+    var selectedEntIds = scope.mode === 'selected' && Array.isArray(scope.enterprise_ids) ? scope.enterprise_ids : [];
+    var selectedModel = modelRef.provider || modelRef.model ? (modelRef.provider || '') + '|' + (modelRef.model || '') : '';
+
     var overlay = document.createElement('div');
     overlay.className = 'aiteam-drawer__overlay';
     overlay.id = 'aiteam-template-create-overlay';
@@ -167,37 +222,46 @@ window.aiteam = window.aiteam || {};
     drawer.id = 'aiteam-template-create-drawer';
     drawer.innerHTML =
       '<div class="aiteam-drawer__header">' +
-      '<h2 class="aiteam-drawer__title">创建专家</h2>' +
+      '<h2 class="aiteam-drawer__title">' + (edit ? '编辑专家' : '创建专家') + '</h2>' +
       '<button type="button" class="aiteam-drawer__close" data-aiteam-template-create-close="1">×</button>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">模板名称 *</span>' +
-      '<input class="aiteam-input" type="text" data-aiteam-tpl-name placeholder="例如：销售专家"></label>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-name placeholder="例如：销售专家" value="' + escapeHtml(edit ? (edit.name || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">角色标识 *</span>' +
-      '<input class="aiteam-input" type="text" data-aiteam-tpl-role placeholder="例如：sales_advisor"></label>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-role placeholder="例如：sales_advisor" value="' + escapeHtml(edit ? (edit.role_name || edit.role || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">分类</span>' +
-      '<input class="aiteam-input" type="text" data-aiteam-tpl-category placeholder="例如：sales"></label>' +
+      '<input class="aiteam-input" type="text" data-aiteam-tpl-category placeholder="例如：sales" value="' + escapeHtml(edit ? (edit.category_code || edit.category || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">岗位描述</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-tpl-desc placeholder="一句话描述这个专家擅长什么"></textarea></label>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-tpl-desc placeholder="一句话描述这个专家擅长什么">' + escapeHtml(promptPack.description || '') + '</textarea></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">默认模型</span>' +
+      '<select class="aiteam-select" data-aiteam-tpl-model>' + modelOptions(state.models, selectedModel) + '</select></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">系统提示词</span>' +
+      '<textarea class="aiteam-input" rows="4" data-aiteam-tpl-prompt placeholder="专家的系统人设提示词，留空则使用默认">' + escapeHtml(promptPack.system_prompt || '') + '</textarea></label>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<h3 class="aiteam-drawer__section-title">发布范围</h3>' +
-      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="all" checked data-aiteam-scope-mode="all"> 全部企业可见</label>' +
-      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="selected" data-aiteam-scope-mode="selected"> 仅指定企业可见</label>' +
-      '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises hidden>' + renderEnterpriseCheckboxes(state.enterprises) + '</div>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="all"' + (selectedEntIds.length ? '' : ' checked') + ' data-aiteam-scope-mode="all"> 全部企业可见</label>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="selected"' + (selectedEntIds.length ? ' checked' : '') + ' data-aiteam-scope-mode="selected"> 仅指定企业可见</label>' +
+      '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises' + (selectedEntIds.length ? '' : ' hidden') + '>' +
+      renderPicker('tpl-ent', enterpriseRows(state.enterprises, selectedEntIds), { placeholder: '搜索企业名称…', empty: '暂无企业可选（创建后可在更新中调整）。' }) +
       '</div>' +
-      '<div class="aiteam-drawer__section">' +
-      '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-publish> 创建后立即发布</label>' +
       '</div>' +
+      (edit ? '' :
+        '<div class="aiteam-drawer__section">' +
+        '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-publish> 创建后立即发布</label>' +
+        '</div>') +
       '<div class="aiteam-drawer__section" data-aiteam-tpl-error hidden></div>' +
       '<div class="aiteam-drawer__footer">' +
       '<button type="button" class="aiteam-btn" data-aiteam-template-create-close="1">取消</button> ' +
-      '<button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-tpl-submit>创建</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-tpl-submit>' + (edit ? '保存' : '创建') + '</button>' +
       '</div>';
 
     var host = document.getElementById('aiteam-app') || document.body;
     host.appendChild(overlay);
     host.appendChild(drawer);
+
+    bindPicker(drawer, 'tpl-ent');
 
     var scopeRadios = drawer.querySelectorAll('[data-aiteam-scope-mode]');
     var scopeBox = drawer.querySelector('[data-aiteam-scope-enterprises]');
@@ -227,11 +291,18 @@ window.aiteam = window.aiteam || {};
         var role = trimText((drawer.querySelector('[data-aiteam-tpl-role]') || {}).value);
         var category = trimText((drawer.querySelector('[data-aiteam-tpl-category]') || {}).value);
         var desc = trimText((drawer.querySelector('[data-aiteam-tpl-desc]') || {}).value);
+        var systemPrompt = trimText((drawer.querySelector('[data-aiteam-tpl-prompt]') || {}).value);
+        var modelValue = trimText((drawer.querySelector('[data-aiteam-tpl-model]') || {}).value);
         if (!name) { showError('请填写模板名称'); return; }
         if (!role) { showError('请填写角色标识'); return; }
-        var payload = { name: name, role_name: role };
-        if (category) payload.category_code = category;
-        if (desc) payload.prompt_pack = { description: desc };
+        var payload = { name: name, role_name: role, category_code: category };
+        payload.prompt_pack = { description: desc, system_prompt: systemPrompt };
+        if (modelValue) {
+          var parts = modelValue.split('|');
+          payload.default_model_ref = { provider: parts[0] || '', model: parts[1] || '' };
+        } else {
+          payload.default_model_ref = {};
+        }
         var selectedMode = drawer.querySelector('[data-aiteam-scope-mode="selected"]');
         if (selectedMode && selectedMode.checked) {
           var checks = drawer.querySelectorAll('[data-aiteam-scope-ent]:checked');
@@ -252,7 +323,7 @@ window.aiteam = window.aiteam || {};
             closeDrawer();
           } else {
             submitBtn.disabled = false;
-            showError((result && result.error) || '创建失败，请重试');
+            showError((result && result.error) || (edit ? '保存失败，请重试' : '创建失败，请重试'));
           }
         });
       });
@@ -279,14 +350,9 @@ window.aiteam = window.aiteam || {};
         if (!templateId || !action) return;
         if (action === 'update') {
           var current = findTemplate(state.items, templateId) || {};
-          var nextName = typeof window.prompt === 'function' ? window.prompt('请输入模板名称', current.name || '') : current.name;
-          if (nextName === null) return;
-          var nextRole = typeof window.prompt === 'function' ? window.prompt('请输入角色标识', current.role_name || current.role || '') : (current.role_name || current.role || '');
-          if (nextRole === null) return;
-          container.lastUpdateHandler(templateId, {
-            name: trimText(nextName),
-            role_name: trimText(nextRole)
-          });
+          openCreateDrawer(state, function (payload) {
+            return container.lastUpdateHandler(templateId, payload);
+          }, current);
           return;
         }
         if (action === 'preview') {
@@ -314,7 +380,7 @@ window.aiteam = window.aiteam || {};
 
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载模板治理数据...</p></div>';
 
-      var state = { items: [], notice: '', enterprises: [] };
+      var state = { items: [], notice: '', enterprises: [], models: [] };
 
       function rerender(notice) {
         state.notice = notice || '';
@@ -378,6 +444,15 @@ window.aiteam = window.aiteam || {};
           state.enterprises = normalizeItems(result.data && result.data.enterprises ? result.data.enterprises : result.data);
         }
       });
+
+      // 拉取企业模型目录供创建/编辑专家时选择默认模型（失败不阻断主流程）。
+      if (ns.api && ns.api.getLlmModels) {
+        ns.api.getLlmModels().then(function (result) {
+          if (result && result.ok && result.data) {
+            state.models = result.data.models || [];
+          }
+        });
+      }
 
       ns.api.get('/api/system-admin/templates').then(function (result) {
         if (!result.ok) {
