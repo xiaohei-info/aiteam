@@ -53,6 +53,8 @@ function createHost() {
   host._recruitButtons = [createElement('button')];
   host._recruitButtons[0].setAttribute('data-recruit-template', 'tpl_marketing_v1');
   host._recruitButtons[0].setAttribute('data-recruit-name', '营销分析师');
+  host._openButtons = [createElement('button')];
+  host._openButtons[0].setAttribute('data-template-open', 'tpl_marketing_v1');
   host.querySelector = function (selector) {
     if (selector === '[data-marketplace-search-form]') return this._searchForm;
     if (selector === '[data-marketplace-search-input]') return this._searchInput;
@@ -63,6 +65,7 @@ function createHost() {
   host.querySelectorAll = function (selector) {
     if (selector === '[data-marketplace-category]') return this._categoryButtons;
     if (selector === '[data-recruit-template]') return this._recruitButtons;
+    if (selector === '[data-template-open]') return this._openButtons;
     return [];
   };
   return host;
@@ -257,9 +260,9 @@ async function run() {
   assert(apiCalls[0] && apiCalls[0].query && apiCalls[0].query.sort_by === 'popularity', 'initial request should default to popularity sort');
   assert(apiCalls[0] && apiCalls[0].query && apiCalls[0].query.page_size === 20, 'initial request should request 20 templates');
   assert(host.innerHTML.indexOf('搜索专家名称、技能') !== -1, 'page should render the marketplace search copy from the prototype');
-  assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render the initial talent card');
-  assert(host.innerHTML.indexOf('查看详情') !== -1, 'page should render the detail CTA');
-  assert(host.innerHTML.includes('aiteam-marketplace-card__rating'), 'expected rating element in marketplace card');
+  assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render the initial talent row');
+  assert(host.innerHTML.indexOf('data-template-open') !== -1, 'page should render slim list rows that open a detail modal');
+  assert(host.innerHTML.indexOf('aiteam-marketplace-card__rating') === -1, 'rating should not be expanded inline on the list (lives in modal)');
 
   host._loadMoreButton.dispatchEvent({ type: 'click' });
   await nextTick();
@@ -276,6 +279,13 @@ async function run() {
   await nextTick();
   assert(apiCalls[3] && apiCalls[3].query && apiCalls[3].query.category === 'marketing', 'clicking a category tab should request category filtering');
   assert(replacedUrl === '/app/marketplace?q=%E8%90%A5%E9%94%80&category=marketing', 'state changes should sync the marketplace URL');
+
+  // 点击列表行 → 打开模态详情（详情与招募按钮都在模态内）。
+  host._openButtons[0].dispatchEvent({ type: 'click' });
+  await nextTick();
+  assert(host.innerHTML.indexOf('aiteam-marketplace-modal') !== -1, 'clicking a row should open the detail modal');
+  assert(host.innerHTML.indexOf('查看完整详情页') !== -1, 'detail modal should link out to the full detail page');
+  assert(host.innerHTML.indexOf('⭐') !== -1, 'detail modal should surface the rating');
 
   host._recruitButtons[0].dispatchEvent({ type: 'click' });
   await nextTick();

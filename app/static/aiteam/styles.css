@@ -3369,6 +3369,7 @@ body.aiteam-shell-active .aiteam-shell {
 }
 .aiteam-modal__overlay[hidden] { display: none; }
 .aiteam-modal {
+  position: relative;
   width: 100%;
   max-width: 520px;
   max-height: calc(100vh - 48px);
@@ -3383,8 +3384,26 @@ body.aiteam-shell-active .aiteam-shell {
   border: 1px solid var(--ait-border);
   box-shadow: 0 28px 64px rgba(2, 6, 23, 0.5);
 }
+.aiteam-modal__close { position: absolute; top: 14px; right: 14px; width: 32px; height: 32px; line-height: 1; }
+.aiteam-marketplace-modal { max-width: 580px; }
 .aiteam-modal__title { margin: 0; font-size: 18px; font-weight: 700; color: var(--ait-text); }
 .aiteam-modal__sub { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ait-text2); }
+
+/* Generic vertical list of clickable rows (name + description → modal detail).
+   Used by 人才市场 / 企业方案 to replace fully-expanded card grids. */
+.aiteam-list { display: grid; gap: 8px; margin-top: 16px; }
+.aiteam-list-row {
+  display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  padding: 14px 16px; border-radius: 14px; cursor: pointer;
+  background: rgba(33, 38, 45, 0.5); border: 1px solid rgba(139, 148, 158, 0.14);
+  color: inherit;
+}
+.aiteam-list-row:hover { border-color: rgba(88, 166, 255, 0.5); background: rgba(33, 38, 45, 0.72); }
+.aiteam-list-row__icon { font-size: 22px; flex: 0 0 auto; }
+.aiteam-list-row__main { display: grid; gap: 3px; flex: 1 1 auto; min-width: 0; }
+.aiteam-list-row__title { font-size: 15px; font-weight: 600; color: #e6edf3; }
+.aiteam-list-row__desc { font-size: 13px; color: #9aa4af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aiteam-list-row__aside { flex: 0 0 auto; }
 .aiteam-field { display: flex; flex-direction: column; gap: 6px; }
 .aiteam-field > span { font-size: 12px; color: var(--ait-text2); }
 .aiteam-textarea { resize: vertical; min-height: 96px; font-family: inherit; line-height: 1.5; }

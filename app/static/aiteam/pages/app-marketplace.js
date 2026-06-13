@@ -152,6 +152,7 @@ window.aiteam = window.aiteam || {};
       successById: {},
       recruitingById: {},
       searchTimer: 0,
+      openTemplateId: '',
     };
   }
 
@@ -188,60 +189,82 @@ window.aiteam = window.aiteam || {};
     }).join('');
   }
 
-  function renderCards(state) {
+  function findItem(state, templateId) {
+    for (var i = 0; i < state.items.length; i++) {
+      if ((state.items[i].template_id || '') === templateId) return state.items[i];
+    }
+    return null;
+  }
+
+  function recruitedActionsHtml(state, templateId) {
+    var successPayload = getSuccessPayload(state, templateId);
+    if (!successPayload || !successPayload.navigation) return '';
+    var workbenchTarget = successPayload.navigation.workbench || '/app/workbench';
+    var employeeAdminTarget = successPayload.navigation.employee_admin || '/admin/employees';
+    var chatTarget = successPayload.navigation.chat || '';
+    return '<div class="aiteam-action-row">' +
+      '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(workbenchTarget) + '">去工作台查看</a>' +
+      '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(employeeAdminTarget) + '">去配置员工</a>' +
+      (chatTarget ? '<a class="aiteam-button" href="' + escapeHtml(chatTarget) + '">开始私聊</a>' : '') +
+      '</div>';
+  }
+
+  // The page lists experts as slim rows (name + description); full detail and
+  // the recruit action live in a modal opened on row click.
+  function renderRows(state) {
     if (!state.items.length) {
       return '<div class="aiteam-inline-empty aiteam-marketplace-empty">没有符合当前条件的人才模板。</div>';
     }
     return state.items.map(function (item) {
       var templateId = item.template_id || '';
       var recruited = !!item.is_recruited;
-      var recruiting = isRecruiting(state, templateId);
-      var successPayload = getSuccessPayload(state, templateId);
-      var buttonLabel = recruited ? '已招募' : (recruiting ? '招募中...' : '立即招募');
-      var noteText = getFeedback(state, templateId);
-      var statusHtml = recruited
+      var badge = recruited
         ? '<span class="aiteam-marketplace-card__check">✓ 已招募</span>'
         : '<span class="aiteam-marketplace-card__pill">热度 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + '</span>';
-      var recruitedActions = '';
-      if (successPayload && successPayload.navigation) {
-        var workbenchTarget = successPayload.navigation.workbench || '/app/workbench';
-        var employeeAdminTarget = successPayload.navigation.employee_admin || '/admin/employees';
-        var chatTarget = successPayload.navigation.chat || '';
-        recruitedActions = '<div class="aiteam-action-row">' +
-          '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(workbenchTarget) + '">去工作台查看</a>' +
-          '<a class="aiteam-button aiteam-button--ghost" href="' + escapeHtml(employeeAdminTarget) + '">去配置员工</a>' +
-          (chatTarget ? '<a class="aiteam-button" href="' + escapeHtml(chatTarget) + '">开始私聊</a>' : '') +
-          '</div>';
-      }
-      return '<article class="aiteam-card aiteam-marketplace-card' + (recruited ? ' is-recruited' : '') + (recruiting ? ' is-recruiting' : '') + '" data-template-card="' + escapeHtml(templateId) + '">' +
-        '<div class="aiteam-marketplace-card__status">' + statusHtml + '</div>' +
-        '<a class="aiteam-marketplace-card__body" href="/app/marketplace/' + encodeURIComponent(templateId) + '">' +
-        '<div class="aiteam-marketplace-card__hero">' +
-        '<div class="aiteam-marketplace-card__avatar">' + escapeHtml(categoryIcon(item.category)) + '</div>' +
-        '<div class="aiteam-marketplace-card__heading">' +
-        '<h3 class="aiteam-card__title">' + escapeHtml(item.name || templateId || '未命名专家') + '</h3>' +
-        '<p class="aiteam-card__sub">' + escapeHtml(item.role || categoryLabel(item.category || '')) + '</p>' +
-        '</div>' +
-        '</div>' +
-        '<div class="aiteam-marketplace-card__meta">' +
-        '<span>' + escapeHtml(modelLabel(item)) + '</span>' +
-        '<span>' + escapeHtml(String(skillsCount(item))) + ' Skills</span>' +
-        '</div>' +
-        '<p class="aiteam-card__body">' + escapeHtml(item.description || '可用于快速招募数字员工。') + '</p>' +
-        '<div class="aiteam-tag-row">' + renderTags(item.tags) + '</div>' +
-        '<p class="aiteam-marketplace-card__recruiters">已有 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + ' 家企业招募</p>' +
-        '</a>' +
-        '<div class="aiteam-marketplace-card__rating">⭐ ' +
-        escapeHtml(String((item.rating != null ? item.rating : '4.8'))) +
-        ' · 热度 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + '</div>' +
-        '<div class="aiteam-marketplace-card__footer">' +
-        '<a class="aiteam-button aiteam-button--ghost" href="/app/marketplace/' + encodeURIComponent(templateId) + '">查看详情</a>' +
-        '<button class="aiteam-button" type="button" data-recruit-template="' + escapeHtml(templateId) + '" data-recruit-name="' + escapeHtml(item.name || '新招募成员') + '"' + (recruited ? ' disabled' : '') + '>' + buttonLabel + '</button>' +
-        '</div>' +
-        '<p class="aiteam-inline-note" data-recruit-feedback="' + escapeHtml(templateId) + '">' + escapeHtml(noteText) + '</p>' +
-        recruitedActions +
-        '</article>';
+      return '<button type="button" class="aiteam-list-row' + (recruited ? ' is-recruited' : '') + '" data-template-open="' + escapeHtml(templateId) + '">' +
+        '<span class="aiteam-list-row__icon">' + escapeHtml(categoryIcon(item.category)) + '</span>' +
+        '<span class="aiteam-list-row__main">' +
+        '<span class="aiteam-list-row__title">' + escapeHtml(item.name || templateId || '未命名专家') + '</span>' +
+        '<span class="aiteam-list-row__desc">' + escapeHtml(item.description || item.role || categoryLabel(item.category || '') || '可用于快速招募数字员工。') + '</span>' +
+        '</span>' +
+        '<span class="aiteam-list-row__aside">' + badge + '</span>' +
+        '</button>';
     }).join('');
+  }
+
+  function renderDetailModal(state, item) {
+    if (!item) return '';
+    var templateId = item.template_id || '';
+    var recruited = !!item.is_recruited;
+    var recruiting = isRecruiting(state, templateId);
+    var buttonLabel = recruited ? '已招募' : (recruiting ? '招募中...' : '立即招募');
+    var noteText = getFeedback(state, templateId);
+    return '<div class="aiteam-modal__overlay" data-marketplace-modal>' +
+      '<div class="aiteam-modal aiteam-marketplace-modal" role="dialog">' +
+      '<button type="button" class="aiteam-drawer__close aiteam-modal__close" data-marketplace-modal-close>×</button>' +
+      '<div class="aiteam-marketplace-card__hero">' +
+      '<div class="aiteam-marketplace-card__avatar">' + escapeHtml(categoryIcon(item.category)) + '</div>' +
+      '<div class="aiteam-marketplace-card__heading">' +
+      '<h3 class="aiteam-modal__title">' + escapeHtml(item.name || templateId || '未命名专家') + '</h3>' +
+      '<p class="aiteam-card__sub">' + escapeHtml(item.role || categoryLabel(item.category || '')) + '</p>' +
+      '</div>' +
+      '</div>' +
+      '<div class="aiteam-marketplace-card__meta">' +
+      '<span>' + escapeHtml(modelLabel(item)) + '</span>' +
+      '<span>' + escapeHtml(String(skillsCount(item))) + ' Skills</span>' +
+      '<span>⭐ ' + escapeHtml(String((item.rating != null ? item.rating : '4.8'))) + '</span>' +
+      '</div>' +
+      '<p class="aiteam-card__body">' + escapeHtml(item.description || '可用于快速招募数字员工。') + '</p>' +
+      '<div class="aiteam-tag-row">' + renderTags(item.tags) + '</div>' +
+      '<p class="aiteam-marketplace-card__recruiters">已有 ' + escapeHtml(formatNumber(item.recruit_count || 0)) + ' 家企业招募</p>' +
+      '<div class="aiteam-marketplace-card__footer">' +
+      '<a class="aiteam-button aiteam-button--ghost" href="/app/marketplace/' + encodeURIComponent(templateId) + '">查看完整详情页</a>' +
+      '<button class="aiteam-button" type="button" data-recruit-template="' + escapeHtml(templateId) + '" data-recruit-name="' + escapeHtml(item.name || '新招募成员') + '"' + (recruited ? ' disabled' : '') + '>' + buttonLabel + '</button>' +
+      '</div>' +
+      '<p class="aiteam-inline-note" data-recruit-feedback="' + escapeHtml(templateId) + '">' + escapeHtml(noteText) + '</p>' +
+      recruitedActionsHtml(state, templateId) +
+      '</div>' +
+      '</div>';
   }
 
   function renderFooter(state) {
@@ -279,10 +302,11 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       loadingHint +
       '</div>' +
-      '<div class="aiteam-card-grid aiteam-marketplace-grid">' + renderCards(state) + '</div>' +
+      '<div class="aiteam-list aiteam-marketplace-list">' + renderRows(state) + '</div>' +
       renderFooter(state) +
       '</section>' +
-      '</section>';
+      '</section>' +
+      (state.openTemplateId ? renderDetailModal(state, findItem(state, state.openTemplateId)) : '');
 
     bindInteractions(container, state);
   }
@@ -372,6 +396,13 @@ window.aiteam = window.aiteam || {};
       });
     });
 
+    Array.prototype.slice.call(container.querySelectorAll('[data-template-open]')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        state.openTemplateId = button.getAttribute('data-template-open') || '';
+        renderMarketplace(container, state);
+      });
+    });
+
     Array.prototype.slice.call(container.querySelectorAll('[data-recruit-template]')).forEach(function (button) {
       button.addEventListener('click', function () {
         recruitTemplate(
@@ -382,6 +413,24 @@ window.aiteam = window.aiteam || {};
         );
       });
     });
+
+    var modalOverlay = container.querySelector('[data-marketplace-modal]');
+    if (modalOverlay) {
+      modalOverlay.addEventListener('click', function (event) {
+        var target = event && event.target ? event.target : null;
+        if (!target || target === modalOverlay) {
+          state.openTemplateId = '';
+          renderMarketplace(container, state);
+        }
+      });
+    }
+    var modalClose = container.querySelector('[data-marketplace-modal-close]');
+    if (modalClose) {
+      modalClose.addEventListener('click', function () {
+        state.openTemplateId = '';
+        renderMarketplace(container, state);
+      });
+    }
 
     if (loadMoreButton) {
       loadMoreButton.addEventListener('click', function () {
