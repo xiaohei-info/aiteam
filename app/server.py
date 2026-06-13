@@ -10,6 +10,7 @@ import socket
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ── Test-mode network isolation ─────────────────────────────────────────────
@@ -406,6 +407,8 @@ def _raise_fd_soft_limit(target: int = 4096) -> dict:
 def main() -> None:
     from api.config import print_startup_config, verify_hermes_imports, _HERMES_FOUND
 
+    startup_cutoff = datetime.now(timezone.utc).isoformat()
+
     print_startup_config()
 
     fd_limit = _raise_fd_soft_limit()
@@ -438,6 +441,26 @@ def main() -> None:
     except Exception as exc:
         # Recovery is best-effort; never block server startup.
         print(f"[recovery] startup recovery failed: {exc}", flush=True)
+
+    try:
+        from agent_gateway.reconcile import reconcile_interrupted_runs
+        from team_panel.transactions.db import create_connection
+        from team_panel.transactions.uow import UnitOfWork
+
+        conn = create_connection()
+        try:
+            with UnitOfWork(conn) as uow:
+                recovered_run_ids = reconcile_interrupted_runs(
+                    uow,
+                    interrupted_before=startup_cutoff,
+                    reason="服务重启前该任务未完成，请重新发送消息。",
+                )
+        finally:
+            conn.close()
+        if recovered_run_ids:
+            print(f"[recovery] Marked {len(recovered_run_ids)} interrupted AI Team runs failed.", flush=True)
+    except Exception as exc:
+        print(f"[recovery] AI Team run recovery failed: {exc}", flush=True)
 
     within_container = False
     # Check for the "/.within_container" file to determine if we're running inside a container; this file is created in the Dockerfile

@@ -76,6 +76,65 @@ def reconcile_stale_run(uow: UnitOfWork, run_id: str) -> Optional[str]:
     return run.status
 
 
+def reconcile_interrupted_run(uow: UnitOfWork, run_id: str, *, reason: str) -> Optional[str]:
+    """Fail a non-terminal run whose in-process executor can no longer finish."""
+    run_repo = uow.team_runs()
+    run = run_repo.get_by_id(run_id)
+    if run is None:
+        raise ValueError(f"No team_run found for run {run_id}")
+    if run.is_terminal():
+        return run.status
+
+    terminal_event_type = check_run_terminal_state(uow, run_id)
+    if terminal_event_type is not None:
+        return reconcile_stale_run(uow, run_id)
+
+    from team_panel.integration.event_ingest_service import ingest_timeline_event
+
+    cursor = uow.run_events().get_max_cursor(run_id) + 1
+    ingest_timeline_event(uow, {
+        "id": f"evt_{run_id}_interrupted",
+        "enterprise_id": run.enterprise_id,
+        "run_id": run_id,
+        "cursor_no": cursor,
+        "event_type": "run_failed",
+        "source_type": "gateway",
+        "source_id": "reconcile",
+        "employee_id": run.entry_employee_id,
+        "preview_text": reason,
+        "error_code": "INTERRUPTED",
+        "error_message": reason,
+        "payload_json": {
+            "error_code": "INTERRUPTED",
+            "error_message": reason,
+        },
+    })
+    return "failed"
+
+
+def reconcile_interrupted_runs(
+    uow: UnitOfWork,
+    *,
+    interrupted_before: str,
+    reason: str,
+) -> list[str]:
+    """Fail non-terminal TeamRuns left behind by a previous server process."""
+    uow.cur.execute(
+        "SELECT id FROM team_run "
+        "WHERE status IN ('queued','routing','submitting','running','waiting_human') "
+        "AND deleted_at IS NULL AND updated_at < %s "
+        "ORDER BY updated_at ASC",
+        (interrupted_before,),
+    )
+    run_ids = [row[0] for row in uow.cur.fetchall()]
+    recovered: list[str] = []
+    for run_id in run_ids:
+        status = reconcile_interrupted_run(uow, run_id, reason=reason)
+        if status == "failed":
+            recovered.append(run_id)
+    return recovered
+
+
 def _runtime_event_to_run_event(
     enterprise_id: str,
     run_id: str,
