@@ -1027,6 +1027,8 @@ window.aiteam = window.aiteam || {};
       summaryHtml: renderSummaryPanel(null, null),
     });
     bindAgentSearch(container);
+    bindAgentSwitch(container);
+    container.__activeChatKey = '';
   }
 
   // Draft chat for /app/chat/emp_xxx — an employee with no conversation yet.
@@ -1035,23 +1037,7 @@ window.aiteam = window.aiteam || {};
   function renderEmployeeDraft(container, employeeId) {
     ns.states.renderLoading(container, '加载会话...');
     function build(wbData) {
-      var data = wbData || {};
-      var employees = Array.isArray(data.employees) ? data.employees : [];
-      var emp = employees.find(function (e) { return e && e.employee_id === employeeId; }) || { employee_id: employeeId };
-      renderChat(container, {
-        conversation_id: '',
-        employee_summary: {
-          employee_id: emp.employee_id,
-          display_name: emp.display_name || '',
-          role_name: emp.role_name || '',
-          model_provider: emp.model_provider || '',
-          model_name: emp.model_name || '',
-        },
-        messages: { items: [], next_cursor: 0, has_more: false },
-        latest_run: null,
-        __sections: mapWorkbenchToSections(data),
-        __draft_employee_id: employeeId,
-      });
+      renderChat(container, buildDraftConversation(employeeId, wbData));
     }
     if (ns.api && typeof ns.api.getWorkbench === 'function') {
       ns.api.getWorkbench().then(function (wb) {
@@ -1062,7 +1048,8 @@ window.aiteam = window.aiteam || {};
     }
   }
 
-  function renderChat(container, conversation) {
+  // Derive the header/model fields a chat view needs from a conversation payload.
+  function buildChatModel(conversation) {
     var summary = conversation.employee_summary || {};
     var displayName = summary.display_name || (conversation.employee_ref && conversation.employee_ref.display_name) || conversation.conversation_id;
     var roleName = summary.role_name || '';
@@ -1070,10 +1057,17 @@ window.aiteam = window.aiteam || {};
     var headerName = roleName ? (displayName + ' · ' + roleName) : (displayName || '会话');
     var defaultStatus = ['在线', modelLine].filter(Boolean).join(' · ');
     var initial = (displayName || 'A').slice(0, 1);
-    var mainHtml = '<div class="aiteam-chatwin__header">' +
-      '<div class="aiteam-chatwin__havatar">' + escapeHtml(initial) + '</div>' +
-      '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(headerName) + '</div>' +
-      '<div class="aiteam-chatwin__hstatus" data-chat-status>' + escapeHtml(defaultStatus) + '</div></div>' +
+    return { summary: summary, modelLine: modelLine, headerName: headerName, defaultStatus: defaultStatus, initial: initial };
+  }
+
+  // The middle conversation pane HTML (everything inside .aiteam-chatwin__main).
+  // Extracted so an in-place conversation switch can swap just this pane without
+  // tearing down the left agent list / right detail panel (no full-page flash).
+  function buildChatMainHtml(model) {
+    return '<div class="aiteam-chatwin__header">' +
+      '<div class="aiteam-chatwin__havatar">' + escapeHtml(model.initial) + '</div>' +
+      '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(model.headerName) + '</div>' +
+      '<div class="aiteam-chatwin__hstatus" data-chat-status>' + escapeHtml(model.defaultStatus) + '</div></div>' +
       '<div class="aiteam-chatwin__hactions">' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-load-more title="加载更早的历史">⇡</button>' +
       '</div>' +
@@ -1090,19 +1084,15 @@ window.aiteam = window.aiteam || {};
       '<button class="aiteam-chatwin__tool" type="button" data-chat-retry title="重试上一轮">↻</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复">⏹</button>' +
       '<span class="aiteam-chatwin__spacer"></span>' +
-      (modelLine ? '<span class="aiteam-chatwin__model"><span class="aiteam-chatwin__model-dot"></span>' + escapeHtml(modelLine) + '</span>' : '') +
+      (model.modelLine ? '<span class="aiteam-chatwin__model"><span class="aiteam-chatwin__model-dot"></span>' + escapeHtml(model.modelLine) + '</span>' : '') +
       '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
       '</div></form></div>';
+  }
 
-    container.innerHTML = chatShell({
-      agentListHtml: renderAgentList(conversation.__sections || conversation.__agentList || [], conversation.conversation_id || conversation.__draft_employee_id || ''),
-      mainHtml: mainHtml,
-      summaryHtml: '',
-    });
-    bindAgentSearch(container);
-
-    bindChat(container, {
-      defaultStatus: defaultStatus,
+  function buildChatState(conversation, model) {
+    var summary = model.summary;
+    return {
+      defaultStatus: model.defaultStatus,
       conversationId: conversation.conversation_id,
       employeeId: summary.employee_id || (conversation.employee_ref && conversation.employee_ref.employee_id) || '',
       employeeSummary: summary,
@@ -1123,7 +1113,163 @@ window.aiteam = window.aiteam || {};
       pendingAttachments: [],
       statusText: '',
       refs: {},
+    };
+  }
+
+  function activeChatKey(conversation) {
+    return conversation.conversation_id || conversation.__draft_employee_id || '';
+  }
+
+  function renderChat(container, conversation) {
+    var model = buildChatModel(conversation);
+    container.innerHTML = chatShell({
+      agentListHtml: renderAgentList(conversation.__sections || conversation.__agentList || [], activeChatKey(conversation)),
+      mainHtml: buildChatMainHtml(model),
+      summaryHtml: '',
     });
+    bindAgentSearch(container);
+    bindAgentSwitch(container);
+    bindChat(container, buildChatState(conversation, model));
+    container.__activeChatKey = activeChatKey(conversation);
+  }
+
+  // Swap only the middle conversation pane in place and re-bind it, leaving the
+  // left agent list + right detail panel untouched. This is what makes switching
+  // employees seamless: no full-page reload, no loading whiteout, no agent-list
+  // rebuild (search text and scroll position are preserved).
+  function swapConversationView(container, conversation) {
+    var main = container.querySelector ? container.querySelector('.aiteam-chatwin__main') : null;
+    if (!main) {
+      // Defensive fallback: no shell yet, do a full render.
+      renderChat(container, conversation);
+      return;
+    }
+    var model = buildChatModel(conversation);
+    main.innerHTML = buildChatMainHtml(model);
+    bindChat(container, buildChatState(conversation, model));
+    container.__activeChatKey = activeChatKey(conversation);
+  }
+
+  function buildDraftConversation(employeeId, wbData) {
+    var data = wbData || {};
+    var employees = Array.isArray(data.employees) ? data.employees : [];
+    var emp = employees.find(function (e) { return e && e.employee_id === employeeId; }) || { employee_id: employeeId };
+    return {
+      conversation_id: '',
+      employee_summary: {
+        employee_id: emp.employee_id,
+        display_name: emp.display_name || '',
+        role_name: emp.role_name || '',
+        model_provider: emp.model_provider || '',
+        model_name: emp.model_name || '',
+      },
+      messages: { items: [], next_cursor: 0, has_more: false },
+      latest_run: null,
+      __sections: mapWorkbenchToSections(data),
+      __draft_employee_id: employeeId,
+    };
+  }
+
+  // Highlight the agent-list anchor whose href matches `path` and clear its unread
+  // badge — used both on optimistic click and on browser back/forward (popstate).
+  function applyActiveByPath(container, path) {
+    if (!container || !container.querySelectorAll) return;
+    var items = container.querySelectorAll('.aiteam-chat__agent');
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var isMatch = item && item.getAttribute && item.getAttribute('href') === path;
+      if (item && item.classList) {
+        if (isMatch) item.classList.add('is-active'); else item.classList.remove('is-active');
+      }
+      if (isMatch && item.querySelector) {
+        var badge = item.querySelector('.aiteam-chat__agent-unread');
+        if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
+      }
+    }
+  }
+
+  // Load the conversation/draft/landing for `path` and swap it into the existing
+  // shell. Does NOT push history — callers (switch + popstate) own the URL.
+  function navigateToChatPath(container, path) {
+    if (ns.timeline && typeof ns.timeline.disconnect === 'function') ns.timeline.disconnect();
+    applyActiveByPath(container, path);
+    var conversationId = getConversationId(path);
+    if (!conversationId) {
+      if (ns.api && typeof ns.api.getWorkbench === 'function') {
+        ns.api.getWorkbench().then(function (wb) {
+          renderLanding(container, (wb && wb.ok && wb.data) ? wb.data : {});
+        }).catch(function () { renderLanding(container, {}); });
+      } else {
+        renderLanding(container, {});
+      }
+      return;
+    }
+    if (conversationId.indexOf('emp_') === 0) {
+      if (ns.api && typeof ns.api.getWorkbench === 'function') {
+        ns.api.getWorkbench().then(function (wb) {
+          swapConversationView(container, buildDraftConversation(conversationId, (wb && wb.ok && wb.data) ? wb.data : {}));
+        }).catch(function () { swapConversationView(container, buildDraftConversation(conversationId, {})); });
+      } else {
+        swapConversationView(container, buildDraftConversation(conversationId, {}));
+      }
+      return;
+    }
+    ns.api.get(buildConversationRequestPath(conversationId, 0, 100)).then(function (result) {
+      if (!result || !result.ok) {
+        // Never leave the user stranded: fall back to a real navigation.
+        if (typeof window !== 'undefined' && window.location && typeof window.location.assign === 'function') window.location.assign(path);
+        return;
+      }
+      var conv = result.data || {};
+      swapConversationView(container, conv);
+      if (ns.api && typeof ns.api.updateWorkbenchState === 'function' && conv.conversation_id) {
+        ns.api.updateWorkbenchState({ conversation_id: conv.conversation_id, mark_read: true });
+      }
+    }).catch(function () {
+      if (typeof window !== 'undefined' && window.location && typeof window.location.assign === 'function') window.location.assign(path);
+    });
+  }
+
+  // Push the new URL then swap in place. No-op when the target is already active.
+  function switchConversation(container, path) {
+    var convId = getConversationId(path);
+    var currentKey = (container && container.__activeChatKey) || getConversationId(window.location.pathname);
+    if (convId && convId === currentKey) return;
+    if (typeof window !== 'undefined' && window.history && typeof window.history.pushState === 'function') {
+      window.history.pushState(null, '', path);
+    }
+    navigateToChatPath(container, path);
+  }
+
+  // Intercept left-click on agent-list items to switch in place instead of doing
+  // a full browser navigation. Modifier-clicks, group items and non-chat links
+  // keep their default behaviour. Bound once per container (and one popstate).
+  function bindAgentSwitch(container) {
+    if (!container || typeof container.addEventListener !== 'function') return;
+    if (!container.__chatSwitchBound) {
+      container.__chatSwitchBound = true;
+      container.addEventListener('click', function (event) {
+        if (event.defaultPrevented) return;
+        if (event.button !== undefined && event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        var anchor = event.target && event.target.closest ? event.target.closest('a.aiteam-chat__agent[data-chat-agent]') : null;
+        if (!anchor) return;
+        var href = anchor.getAttribute ? anchor.getAttribute('href') : '';
+        if (!href || href.indexOf('/app/chat/') !== 0) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        switchConversation(container, href);
+      });
+    }
+    if (!ns.__chatPopstateBound && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      ns.__chatPopstateBound = true;
+      window.addEventListener('popstate', function () {
+        var main = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('aiteam-main') : null;
+        if (!main) return;
+        var path = (window.location && window.location.pathname) || '';
+        if (path.indexOf('/app/chat') !== 0) return;
+        navigateToChatPath(main, path);
+      });
+    }
   }
 
   ns.pages.appChat = {
@@ -1176,6 +1322,11 @@ window.aiteam = window.aiteam || {};
   };
 
   ns.pages.appChat._renderChat = renderChat;
+  ns.pages.appChat._switchConversation = switchConversation;
+  ns.pages.appChat._navigateToChatPath = navigateToChatPath;
+  ns.pages.appChat._swapConversationView = swapConversationView;
+  ns.pages.appChat._buildChatMainHtml = buildChatMainHtml;
+  ns.pages.appChat._buildChatModel = buildChatModel;
   ns.pages.appChat._renderAgentList = renderAgentList;
   ns.pages.appChat._renderLanding = renderLanding;
   ns.pages.appChat._mapWorkbenchToSections = mapWorkbenchToSections;
