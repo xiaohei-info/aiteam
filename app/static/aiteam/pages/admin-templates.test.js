@@ -128,7 +128,11 @@ async function run() {
   assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render template item');
   assert(host.innerHTML.indexOf('立即招募') !== -1, 'page should render recruit action');
   assert(host.innerHTML.indexOf('/app/marketplace/tpl_marketing') !== -1, 'page should link to frontend template detail');
+  assert(host.innerHTML.indexOf('可直接开聊') !== -1, 'page should explain the streamlined list flow');
   assert(host.innerHTML.indexOf('已招募') !== -1, 'recruited templates should render a clear recruited badge');
+  assert(host.innerHTML.indexOf('已招募专家') !== -1, 'page should group recruited templates separately');
+  assert(host.innerHTML.indexOf('可招募专家') !== -1, 'page should group unrecruited templates separately');
+  assert(host.innerHTML.indexOf('aiteam-list-row') !== -1, 'page should render compact list rows instead of bulky cards');
 
   const controllerHost = createElement('div');
   const controller = page.__test.createController(controllerHost);

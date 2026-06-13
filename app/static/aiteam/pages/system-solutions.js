@@ -247,6 +247,12 @@ window.aiteam = window.aiteam || {};
     if (drawer && drawer.parentNode) drawer.parentNode.removeChild(drawer);
   }
 
+  function reopenSolutionDrawer(container, state) {
+    var active = container && container.__activeSolutionDrawer;
+    if (!active || typeof active.onSubmit !== 'function') return;
+    openCreateDrawer(state, active.onSubmit, active.editSolution || null);
+  }
+
   function solutionDescription(item) {
     if (!item) return '';
     return item.description || ((item.default_kb_blueprint || {}).description) || '';
@@ -391,6 +397,7 @@ window.aiteam = window.aiteam || {};
     var openBtn = container.querySelector ? container.querySelector('[data-aiteam-solution-create-open]') : null;
     if (openBtn && openBtn.addEventListener) {
       openBtn.addEventListener('click', function () {
+        container.__activeSolutionDrawer = { onSubmit: container.lastCreateHandler, editSolution: null };
         openCreateDrawer(state, container.lastCreateHandler);
       });
     }
@@ -404,6 +411,12 @@ window.aiteam = window.aiteam || {};
         if (!solutionId || !action) return;
         var current = findSolution(state.items, solutionId) || {};
         if (action === 'update') {
+          container.__activeSolutionDrawer = {
+            onSubmit: function (payload) {
+              return container.lastUpdateHandler(solutionId, payload);
+            },
+            editSolution: current,
+          };
           openCreateDrawer(state, function (payload) {
             return container.lastUpdateHandler(solutionId, payload);
           }, current);
@@ -498,6 +511,7 @@ window.aiteam = window.aiteam || {};
       ns.api.get('/api/system-admin/enterprises').then(function (result) {
         if (result && result.ok) {
           state.enterprises = normalizeItems(result.data && result.data.enterprises ? result.data.enterprises : result.data);
+          reopenSolutionDrawer(container, state);
         }
       });
       ns.api.get('/api/system-admin/templates').then(function (result) {

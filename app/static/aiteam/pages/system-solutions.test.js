@@ -77,7 +77,10 @@ const document = {
 };
 
 const apiCalls = [];
-const promptQueue = [];
+var resolveEnterprises;
+const enterprisesReady = new Promise((resolve) => {
+  resolveEnterprises = resolve;
+});
 const context = {
   window: {
     aiteam: {
@@ -85,7 +88,7 @@ const context = {
         get(url) {
           apiCalls.push({ method: 'GET', url, body: null });
           if (url === '/api/system-admin/enterprises') {
-            return Promise.resolve({ ok: true, data: { enterprises: [{ enterprise_id: 'ent_test', name: 'Test Corp' }] } });
+            return enterprisesReady;
           }
           if (url === '/api/system-admin/templates') {
             return Promise.resolve({ ok: true, data: { items: [{ template_id: 'tpl_ops', name: '运营专家', role_name: 'operator' }] } });
@@ -104,10 +107,6 @@ const context = {
           return Promise.resolve({ ok: true, data: {} });
         },
       },
-    },
-    prompt(message, defaultValue) {
-      if (!promptQueue.length) return defaultValue || '';
-      return promptQueue.shift();
     },
   },
   document,
@@ -158,6 +157,14 @@ async function run() {
   const before = appRoot.children.length;
   host._openBtn.dispatchEvent({ type: 'click' });
   assert(appRoot.children.length > before, 'clicking 创建方案 should mount a drawer into aiteam-app');
+  var createDrawer = appRoot.children[appRoot.children.length - 1];
+  assert((createDrawer.innerHTML || '').indexOf('Test Corp') === -1, 'solution drawer opened before enterprise fetch should not yet have enterprise rows');
+  resolveEnterprises({ ok: true, data: { enterprises: [{ enterprise_id: 'ent_test', name: 'Test Corp' }] } });
+  await nextTick();
+  await nextTick();
+  createDrawer = appRoot.children[appRoot.children.length - 1];
+  assert((createDrawer.innerHTML || '').indexOf('Test Corp') !== -1, 'solution drawer should refresh enterprise rows after async enterprise fetch resolves');
+  assert((createDrawer.innerHTML || '').indexOf('data-picker-search') !== -1, 'solution drawer should expose the searchable enterprise picker after rows arrive');
 
   // Orchestration authoring lives in the system-backend create drawer (方案自带编排).
   const drawerEl = appRoot.children.find(function (c) { return (c.innerHTML || '').indexOf('创建行业方案') !== -1; });

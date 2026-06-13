@@ -203,6 +203,12 @@ window.aiteam = window.aiteam || {};
     if (drawer && drawer.parentNode) drawer.parentNode.removeChild(drawer);
   }
 
+  function reopenTemplateDrawer(container, state) {
+    var active = container && container.__activeTemplateDrawer;
+    if (!active || typeof active.onSubmit !== 'function') return;
+    openCreateDrawer(state, active.onSubmit, active.editTemplate || null);
+  }
+
   function openCreateDrawer(state, onSubmit, editTemplate) {
     closeDrawer();
     var edit = editTemplate || null;
@@ -337,6 +343,7 @@ window.aiteam = window.aiteam || {};
     var openBtn = container.querySelector ? container.querySelector('[data-aiteam-template-create-open]') : null;
     if (openBtn && openBtn.addEventListener) {
       openBtn.addEventListener('click', function () {
+        container.__activeTemplateDrawer = { onSubmit: container.lastCreateHandler, editTemplate: null };
         openCreateDrawer(state, container.lastCreateHandler);
       });
     }
@@ -350,6 +357,12 @@ window.aiteam = window.aiteam || {};
         if (!templateId || !action) return;
         if (action === 'update') {
           var current = findTemplate(state.items, templateId) || {};
+          container.__activeTemplateDrawer = {
+            onSubmit: function (payload) {
+              return container.lastUpdateHandler(templateId, payload);
+            },
+            editTemplate: current,
+          };
           openCreateDrawer(state, function (payload) {
             return container.lastUpdateHandler(templateId, payload);
           }, current);
@@ -442,6 +455,7 @@ window.aiteam = window.aiteam || {};
       ns.api.get('/api/system-admin/enterprises').then(function (result) {
         if (result && result.ok) {
           state.enterprises = normalizeItems(result.data && result.data.enterprises ? result.data.enterprises : result.data);
+          reopenTemplateDrawer(container, state);
         }
       });
 
@@ -476,4 +490,3 @@ window.aiteam = window.aiteam || {};
     }
   };
 }(window.aiteam));
-
