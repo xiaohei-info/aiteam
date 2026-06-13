@@ -2864,6 +2864,35 @@ def _serialize_private_history(
                 }
             )
 
+        # Inject intermediate timeline events (tool_call) so the frontend can
+        # render the execution process alongside user/assistant messages.
+        run_events = event_repo.list_by_run(run.id, after_cursor=0, limit=200)
+        for ev in run_events:
+            if ev.event_type == "tool_call":
+                tool_payload = _load_payload(ev.payload_json)
+                envelopes.append(
+                    {
+                        "message_id": f"msg_{run.id}_evt_{ev.cursor_no}",
+                        "cursor": 0,
+                        "run_id": run.id,
+                        "role": "system",
+                        "sender_type": "system",
+                        "sender_id": "",
+                        "status": "completed",
+                        "created_at": ev.event_ts or assistant_created_at,
+                        "text": "",
+                        "quote": None,
+                        "attachments": [],
+                        "citations": [],
+                        "metadata": {},
+                        "event_type": "tool_call",
+                        "__timeline_item": {
+                            "kind": "tool_call",
+                            "payload": tool_payload,
+                        },
+                    }
+                )
+
     synthetic_by_id = {item["message_id"]: item for item in envelopes}
     for item in envelopes:
         quote_id = _message_quote_id(item.get("metadata") or {})
@@ -3468,6 +3497,7 @@ def _handle_run_events(conn, path: str, run_id: str, query: str) -> tuple[int, d
                 "event_cursor": e.cursor_no,
                 "event_type": e.event_type,
                 "preview": e.preview_text,
+                "payload": _load_payload(e.payload_json) or {},
             }
             for e in events
         ]
