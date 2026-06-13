@@ -327,9 +327,37 @@ def _sync_skill_grants(cur, *, enterprise_id: str, skill_code: str, scope_mode: 
             binding.enabled = True
             binding.binding_version += 1
             skill_binding_repo.update(binding)
-        grants.append({"skill_code": skill_code, "employee_id": employee_id, "enabled": True})
+        grants.append({
+            "skill_code": skill_code,
+            "employee_id": employee_id,
+            "enabled": True,
+            "profile_name": getattr(employee_map.get(employee_id), "profile_name", "") or "",
+        })
     grants.sort(key=lambda item: item["employee_id"])
     return grants
+
+
+def _install_skill_to_profiles(skill_code: str, grants: list[dict]) -> None:
+    """Install a market skill into each granted employee's Hermes profile.
+
+    Best-effort write-through: iterates granted employees, installs the skill
+    into each profile's own skills dir. Skips employees without a profile_name.
+    All failures are logged, never raised — the Team Panel install record is
+    already committed and authoritative.
+    """
+    seen_profiles: set[str] = set()
+    for grant in grants or []:
+        profile_name = str(grant.get("profile_name") or "").strip()
+        if not profile_name or profile_name in seen_profiles:
+            continue
+        seen_profiles.add(profile_name)
+        try:
+            ok, detail = profile_capability.skills_install_to_profile(profile_name, skill_code)
+        except Exception as exc:  # never let a runtime hiccup break the response
+            logger.warning("skill %s install to profile %s errored: %s", skill_code, profile_name, exc)
+            continue
+        if not ok:
+            logger.warning("skill %s install to profile %s failed: %s", skill_code, profile_name, detail)
 
 
 def _fire_memory_sync(cur, employee_id: str) -> None:
@@ -463,12 +491,15 @@ def _build_department_node(department, children_by_parent: dict[str | None, list
 
 # ── B02 skill market catalog helpers ────────────────────────────────────────
 
+from . import skill_market_client
+
+# Builtin skills always shown first (no network needed). External market entries
+# (SkillHub/ClawHub) are layered on top of these via fetch_remote_catalog().
 _MARKET_CATALOG: list[dict] = [
     {"skill_code": "web-search", "display_name": "Web Search", "description": "Search the web for information", "source_marketplace": "builtin", "version": "1.0.0", "latest_version": "1.0.0", "tags": ["search", "information"], "is_free": True},
     {"skill_code": "slides", "display_name": "Slides", "description": "Create presentation slides", "source_marketplace": "builtin", "version": "1.0.0", "latest_version": "1.0.0", "tags": ["presentation", "generation"], "is_free": True},
     {"skill_code": "reporting", "display_name": "Reporting", "description": "Generate structured reports", "source_marketplace": "builtin", "version": "1.0.0", "latest_version": "1.0.0", "tags": ["reporting", "analysis"], "is_free": True},
     {"skill_code": "forecasting", "display_name": "Forecasting", "description": "Time-series forecasting", "source_marketplace": "builtin", "version": "1.0.0", "latest_version": "1.0.0", "tags": ["forecasting", "prediction"], "is_free": True},
-    {"skill_code": "code-analysis", "display_name": "Code Analysis", "description": "Analyze source code", "source_marketplace": "skillhub", "version": "2.0.0", "latest_version": "2.1.0", "tags": ["code", "analysis"], "is_free": False},
 ]
 
 
@@ -524,8 +555,25 @@ def _discover_hermes_skill_entries() -> list[dict]:
     return entries
 
 
-def _get_full_catalog() -> list[dict]:
-    return _MARKET_CATALOG + _discover_hermes_skill_entries()
+def _get_full_catalog(query: str = "") -> list[dict]:
+    """Builtin + remote market (SkillHub/ClawHub) + locally-discovered skills.
+
+    Remote fetch is cached (10min TTL) and degrades to [] on failure, so the
+    catalog always at least returns the builtin entries. Dedupe by skill_code:
+    builtin wins over remote, remote wins over local-discovered.
+    """
+    entries: list[dict] = list(_MARKET_CATALOG)
+    seen = {e["skill_code"] for e in entries}
+    try:
+        remote = skill_market_client.fetch_remote_catalog(query)
+    except Exception as exc:  # never let market issues break the page
+        logger.warning("remote catalog fetch error: %s", exc)
+        remote = []
+    for entry in remote + _discover_hermes_skill_entries():
+        if entry["skill_code"] not in seen:
+            entries.append(entry)
+            seen.add(entry["skill_code"])
+    return entries
 
 
 # ── B02 skill install handlers ───────────────────────────────────────────────
@@ -554,7 +602,7 @@ def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
         tag_filter = str(qs.get("tag", [""])[0] or "").strip().lower()
         source_filter = str(qs.get("source_marketplace", [""])[0] or "").strip().lower()
         installed_only = str(qs.get("installed_only", [""])[0] or "").strip().lower() in {"1", "true", "yes"}
-        catalog = _get_full_catalog()
+        catalog = _get_full_catalog(search_query)
         items = []
         for entry in catalog:
             installed = installed_map.get(entry["skill_code"])
@@ -711,7 +759,11 @@ def _handle_skill_install_post(conn, path: str, query: str, body: dict | None) -
             },
         )
         conn.commit()
-        profile_capability.skills_install(skill_code)
+        # Land the skill into each granted employee's own Hermes profile
+        # (<profile>/skills/<code>/). This is the real install target — skills
+        # live in the profile, not behind an MCP shim. Failures are logged but
+        # don't fail the request; the Team Panel record stays authoritative.
+        _install_skill_to_profiles(skill_code, grants)
         return 201, {
             "install_id": install_id,
             "skill_code": skill_code,

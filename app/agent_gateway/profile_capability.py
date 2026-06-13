@@ -154,6 +154,51 @@ def skills_install(skill_code: str) -> tuple[bool, str]:
     return _run_cli(["skills", "install", skill_code], timeout=180)
 
 
+# Skill-market slugs come from SkillHub (the 国内镜像), whose skills carry
+# ``"source": "clawhub"`` — they share ClawHub's slug namespace. Prefixing the
+# identifier with ``clawhub/`` routes Hermes straight to its ClawHubSource
+# adapter and skips the short-name fuzzy-search path (which resolves bare names
+# against skills.sh/GitHub and would miss these slugs).
+def skills_install_to_profile(profile_name: str, skill_code: str) -> tuple[bool, str]:
+    """Install a market skill into one employee profile's own skills dir.
+
+    Overrides ``HERMES_HOME`` to the profile dir so Hermes' skills runtime
+    lands files at ``<profile>/skills/<skill_code>/`` (SKILL.md + assets),
+    isolated per employee. This is the real landing point per the design:
+    skills live in the Hermes profile, not behind an MCP shim.
+
+    Returns ``(ok, detail)``; never raises — callers keep the Team Panel
+    business record authoritative and log sync failures honestly.
+    """
+    code = str(skill_code or "").strip()
+    if not code or code.startswith(".") or code.startswith("/"):
+        return False, f"invalid skill_code: {skill_code!r}"
+    profile_dir = _hermes_home() / "profiles" / (profile_name or "default")
+    if not profile_dir.is_dir():
+        return False, f"profile dir not found: {profile_dir}"
+
+    identifier = code if "/" in code else f"clawhub/{code}"
+    env = dict(os.environ)
+    env["HERMES_HOME"] = str(profile_dir)
+    cmd = [_hermes_bin(), "skills", "install", identifier, "--yes"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
+    except subprocess.TimeoutExpired:
+        return False, f"skills install timed out for {code} in {profile_name}"
+    except OSError as exc:
+        return False, f"hermes CLI unavailable: {exc}"
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return False, (err or out or f"rc={proc.returncode}")[:500]
+    # A zero exit with no "Installed:" line means either the skill was already
+    # present (idempotent success) or the source couldn't fetch it (failure).
+    low = out.lower()
+    if "installed:" in low or "already installed" in low:
+        return True, out
+    return False, (out or "install produced no result")[:500]
+
+
 def skills_uninstall(skill_code: str) -> tuple[bool, str]:
     return _run_cli(["skills", "uninstall", skill_code])
 
