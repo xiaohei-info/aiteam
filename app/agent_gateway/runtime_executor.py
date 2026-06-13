@@ -120,11 +120,6 @@ def _execute_run(run_id: str) -> None:
             employee_id = run.entry_employee_id or ""
             employee = uow.employees().get_by_id(employee_id) if employee_id else None
             prompt = uow.employee_prompts().get_by_employee(employee_id) if employee_id else None
-            kb_ids = [
-                b.knowledge_base_id
-                for b in (uow.employee_knowledge_bindings().list_by_employee(employee_id) if employee_id else [])
-                if getattr(b, "enabled", True)
-            ]
             message_text = _input_message_text(run)
             profile_name = (employee.profile_name if employee and employee.profile_name else employee_id) or "default"
             model_name = (employee.model_name if employee else "") or ""
@@ -138,19 +133,11 @@ def _execute_run(run_id: str) -> None:
                     payload={"profile_name": profile_name, "model": model_name},
                     employee_id=employee_id)
 
-        # Phase 2 — context assembly (persona + knowledge), then execute.
+        # Phase 2 — persona provisioning + knowledge MCP injection, then execute.
+        # 知识检索改为 agentic：员工 LLM 经 knowledge MCP 工具按需调用，不再预注入。
         system_prompt = (prompt.system_prompt if prompt else "") or ""
-        _provision_profile(profile_name, system_prompt)
-        knowledge_block, citations = _retrieve_knowledge(kb_ids, message_text)
-        full_prompt = _compose_prompt(system_prompt, knowledge_block, message_text)
-
-        if knowledge_block:
-            with UnitOfWork(conn) as uow:
-                run = uow.team_runs().get_by_id(run_id)
-                _ingest(uow, run, "tool_call",
-                        preview=f"知识库检索命中 {len(citations)} 段内容",
-                        payload={"tool": "knowledge_retrieval", "citations": citations},
-                        employee_id=employee_id)
+        _provision_profile(profile_name, system_prompt, employee_id)
+        full_prompt = _compose_prompt(system_prompt, message_text)
 
         success, output, error, session_id, usage = _run_turn_streaming(
             conn, run_id, employee_id,
@@ -165,7 +152,7 @@ def _execute_run(run_id: str) -> None:
 
         # Phase 3 — result write-back (message + terminal event + status + usage).
         _finalize(run_id, success=success, output=output, error=error,
-                  employee_id=employee_id, citations=citations, usage=usage, conn=conn)
+                  employee_id=employee_id, usage=usage, conn=conn)
     finally:
         conn.close()
 
@@ -178,14 +165,10 @@ def _input_message_text(run) -> str:
         return ""
 
 
-def _compose_prompt(system_prompt: str, knowledge_block: str, message_text: str) -> str:
+def _compose_prompt(system_prompt: str, message_text: str) -> str:
     parts = []
     if system_prompt.strip():
         parts.append(f"[你的角色设定]\n{system_prompt.strip()}")
-    if knowledge_block:
-        parts.append(
-            "[企业知识库检索结果 — 回答时优先引用以下内容]\n" + knowledge_block
-        )
     parts.append(message_text.strip())
     return "\n\n".join(parts)
 
@@ -310,8 +293,15 @@ def _persist_conversation_session(conn, run_id: str, profile_name: str,
 
 # ── Profile provisioning + persona mapping (§5.2-B minimal) ──────────────
 
-def _provision_profile(profile_name: str, system_prompt: str) -> None:
-    from agent_gateway.profile_provisioner import ensure_profile
+def _knowledge_mcp_url() -> str:
+    """Resolve the in-process knowledge MCP endpoint (D2)."""
+    port = os.getenv("KNOWLEDGE_MCP_PORT", "9701")
+    return os.getenv("AITEAM_KNOWLEDGE_MCP_URL", f"http://127.0.0.1:{port}/mcp")
+
+
+def _provision_profile(profile_name: str, system_prompt: str,
+                       employee_id: str = "") -> None:
+    from agent_gateway.profile_provisioner import ensure_profile, set_profile_mcp
 
     home = _hermes_home()
     try:
@@ -324,37 +314,13 @@ def _provision_profile(profile_name: str, system_prompt: str) -> None:
             (profile_dir / "SOUL.md").write_text(system_prompt.strip() + "\n", encoding="utf-8")
         except OSError as exc:
             logger.warning("[executor] SOUL.md write failed for %s: %s", profile_name, exc)
-
-
-# ── Knowledge retrieval (LightRAG, 演示场景①) ─────────────────────────────
-
-def _retrieve_knowledge(kb_ids: list[str], question: str) -> tuple[str, list[dict]]:
-    if not kb_ids or not question.strip():
-        return "", []
-    from team_panel.integration import lightrag_service
-
-    blocks: list[str] = []
-    citations: list[dict] = []
-    for kb_id in kb_ids[:3]:
+    # Inject knowledge MCP (token = employee_id). Must run after ensure_profile,
+    # which re-seeds config.yaml from root on every call.
+    if profile_dir.is_dir() and employee_id:
         try:
-            result = lightrag_service.query(kb_id, question, top_k=3)
-        except Exception as exc:  # noqa: BLE001 — retrieval is best-effort
-            logger.warning("[executor] kb %s retrieval failed: %s", kb_id, exc)
-            continue
-        for chunk in result.get("chunks", []):
-            content = (chunk.get("content") or "").strip()
-            if not content:
-                continue
-            source = chunk.get("file_name") or chunk.get("doc_id") or kb_id
-            blocks.append(f"- ({source}) {content}")
-            citations.append({
-                "knowledge_base_id": kb_id,
-                "document_id": chunk.get("doc_id") or "",
-                "title": source,
-                "snippet": content[:200],
-                "source_type": "knowledge_document",
-            })
-    return "\n".join(blocks), citations
+            set_profile_mcp(profile_dir, _knowledge_mcp_url(), employee_id)
+        except Exception as exc:  # noqa: BLE001 — degraded: agentic retrieval off
+            logger.warning("[executor] MCP inject failed for %s: %s", profile_name, exc)
 
 
 # ── CLI fallback (used when WebUI loopback unreachable) ───────────────────

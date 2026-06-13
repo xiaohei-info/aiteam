@@ -77,8 +77,26 @@ async def _embed_func(texts: list[str]):
 
 # ── LLM func (optional, credential-gated) ────────────────────────────────
 
+def _llm_credentials_from_provider(provider: dict | None) -> tuple[str, str, str] | None:
+    """Return (api_key, base_url, model) from an enterprise provider dict.
+
+    Provider dict shape (from LLM provider 配置中心):
+    ``{provider_key, base_url, api_key, default_model | model}``. Empty/missing
+    api_key -> None (degrade to vector-only, existing behavior preserved).
+    """
+    if not provider:
+        return None
+    api_key = str(provider.get("api_key") or "").strip()
+    if not api_key:
+        return None
+    base_url = str(provider.get("base_url") or "").strip() or "https://openrouter.ai/api/v1"
+    model = str(provider.get("default_model") or provider.get("model") or "").strip() \
+        or "openai/gpt-4o-mini"
+    return api_key, base_url, model
+
+
 def _llm_credentials() -> tuple[str, str, str] | None:
-    """Return (api_key, base_url, model) when an LLM is configured."""
+    """Return (api_key, base_url, model) when an LLM is configured via env."""
     api_key = os.getenv("LIGHTRAG_LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
     if not api_key.strip():
         return None
@@ -87,8 +105,9 @@ def _llm_credentials() -> tuple[str, str, str] | None:
     return api_key.strip(), base_url, model
 
 
-def _build_llm_func():
-    creds = _llm_credentials()
+def _build_llm_func(creds: tuple[str, str, str] | None = None):
+    if creds is None:
+        creds = _llm_credentials()
     if creds is None:
         async def _noop_llm(prompt, system_prompt=None, history_messages=None, **kw):
             # No credential: skip graph extraction; vector index stays real.
@@ -119,16 +138,17 @@ _instances_lock = threading.Lock()
 _pipeline_ready = False
 
 
-async def _create_instance(kb_id: str):
+async def _create_instance(kb_id: str, llm_provider: dict | None = None):
     from lightrag import LightRAG
     from lightrag.utils import EmbeddingFunc
     from lightrag.kg.shared_storage import initialize_pipeline_status
 
+    creds = _llm_credentials_from_provider(llm_provider)
     working_dir = _STATE_ROOT / kb_id
     working_dir.mkdir(parents=True, exist_ok=True)
     rag = LightRAG(
         working_dir=str(working_dir),
-        llm_model_func=_build_llm_func(),
+        llm_model_func=_build_llm_func(creds),
         embedding_func=EmbeddingFunc(
             embedding_dim=_EMBED_DIM, max_token_size=512, func=_embed_func,
         ),
@@ -141,11 +161,11 @@ async def _create_instance(kb_id: str):
     return rag
 
 
-def _get_instance(kb_id: str):
+def _get_instance(kb_id: str, llm_provider: dict | None = None):
     with _instances_lock:
         rag = _instances.get(kb_id)
     if rag is None:
-        rag = _run(_create_instance(kb_id))
+        rag = _run(_create_instance(kb_id, llm_provider))
         with _instances_lock:
             _instances[kb_id] = rag
     return rag
@@ -154,7 +174,7 @@ def _get_instance(kb_id: str):
 # ── Public API ───────────────────────────────────────────────────────────
 
 def ingest_document(kb_id: str, rag_document_id: str, text: str,
-                    file_name: str = "") -> int:
+                    file_name: str = "", llm_provider: dict | None = None) -> int:
     """Chunk + embed (+ extract when LLM available) a document.
 
     Returns the real chunk count stored in the vector index.
@@ -162,7 +182,7 @@ def ingest_document(kb_id: str, rag_document_id: str, text: str,
     text = (text or "").strip()
     if not text:
         raise ValueError("document text is empty")
-    rag = _get_instance(kb_id)
+    rag = _get_instance(kb_id, llm_provider)
     _run(rag.ainsert(text, ids=[rag_document_id], file_paths=[file_name or rag_document_id]))
     return _count_chunks(kb_id, rag_document_id)
 
@@ -181,7 +201,8 @@ def _count_chunks(kb_id: str, rag_document_id: str) -> int:
     )
 
 
-def query(kb_id: str, question: str, top_k: int = 5) -> dict:
+def query(kb_id: str, question: str, top_k: int = 5,
+          llm_provider: dict | None = None) -> dict:
     """Real semantic retrieval over the KB's vector index.
 
     Returns {"chunks": [{"content", "doc_id", "file_name"}...], "answer": str}.
@@ -192,7 +213,7 @@ def query(kb_id: str, question: str, top_k: int = 5) -> dict:
     """
     from lightrag import QueryParam
 
-    rag = _get_instance(kb_id)
+    rag = _get_instance(kb_id, llm_provider)
     chunks = _retrieve_chunks(kb_id, rag, question, top_k)
     answer = ""
     if llm_available():

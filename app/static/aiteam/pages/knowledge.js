@@ -92,7 +92,7 @@ window.aiteam = window.aiteam || {};
       '<h4 class="aiteam-upload-form__title">上传文档</h4>' +
       '<div class="aiteam-upload-form__row">' +
       '<select class="aiteam-upload-form__input" id="kb-upload-select">' + options + '</select>' +
-      '<input class="aiteam-upload-form__input" id="kb-upload-file" type="file" accept=".txt,.md,.markdown,.csv,.json,.log,.html">' +
+      '<input class="aiteam-upload-form__input" id="kb-upload-file" type="file" accept=".txt,.md,.markdown,.csv,.json,.log,.html,.docx">' +
       '<input class="aiteam-upload-form__input" id="kb-upload-display-name" placeholder="文档名称（选填）">' +
       '<button class="aiteam-upload-form__btn" id="kb-upload-submit">提交</button>' +
       '</div>' +
@@ -111,7 +111,7 @@ window.aiteam = window.aiteam || {};
       '<button class="aiteam-upload-form__btn" id="kb-create-submit">创建</button>' +
       '</div>' +
       '<div class="aiteam-upload-form__feedback" id="kb-create-feedback"></div>' +
-      '<div class="aiteam-kb-card__doc-meta">支持格式：PDF / Word / TXT / Markdown / Excel / CSV</div>' +
+      '<div class="aiteam-kb-card__doc-meta">支持格式：TXT / Markdown / CSV / JSON / HTML / Word(.docx)</div>' +
       '</div>'
     );
   }

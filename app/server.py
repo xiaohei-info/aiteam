@@ -491,6 +491,13 @@ def main() -> None:
     except Exception as e:
         print(f'[!!] WARNING: Gateway watcher failed to start: {e}', flush=True)
 
+    # Start the in-process knowledge MCP listener (Agentic RAG, loopback-only)
+    try:
+        from api.knowledge_mcp_boot import start_knowledge_mcp
+        start_knowledge_mcp()
+    except Exception as e:
+        print(f'[!!] WARNING: Knowledge MCP listener failed to start: {e}', flush=True)
+
     httpd = QuietHTTPServer((HOST, PORT), Handler)
 
     # ── TLS/HTTPS setup (optional) ─────────────────────────────────────────

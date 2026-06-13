@@ -47,6 +47,9 @@ def _platform_default_hermes_home() -> Path:
 HOST = os.getenv("HERMES_WEBUI_HOST", "127.0.0.1")
 PORT = int(os.getenv("HERMES_WEBUI_PORT", "8787"))
 
+# Knowledge MCP (Agentic RAG) — loopback-only in-process listener.
+KNOWLEDGE_MCP_PORT = int(os.getenv("KNOWLEDGE_MCP_PORT", "9701"))
+
 # ── TLS/HTTPS config (optional, env-overridable) ────────────────────────────
 TLS_CERT = os.getenv("HERMES_WEBUI_TLS_CERT", "").strip() or None
 TLS_KEY = os.getenv("HERMES_WEBUI_TLS_KEY", "").strip() or None
