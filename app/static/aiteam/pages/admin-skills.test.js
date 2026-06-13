@@ -147,6 +147,18 @@ async function run() {
   assert(host.innerHTML.indexOf('安装时配置授权范围') !== -1, 'page should render install-time scope controls');
   assert(host.innerHTML.indexOf('skillhub.io') !== -1, 'page should render skillhub source badge');
   assert(host.innerHTML.indexOf('clawhub.io') !== -1, 'page should render clawhub source badge');
+  assert(host.innerHTML.indexOf('已接入技能市场') !== -1, 'page should surface the connected external skill markets');
+
+  // Real backend catalog items use source_marketplace + display_name; ensure the
+  // normalizer reads those (previously it read item.source/item.name only, so
+  // external markets always collapsed to "custom").
+  const cat = page.__test.normalizeCatalogItem({ skill_code: 'web-search', display_name: 'Web Search', source_marketplace: 'builtin', version: '1.0.0' });
+  assert(cat.source === 'builtin', 'catalog item should read source_marketplace');
+  assert(cat.name === 'Web Search', 'catalog item should read display_name');
+  assert(cat.skill_id === 'web-search', 'catalog item should read skill_code');
+  const markets = page.__test.connectedMarkets([{ source: 'skillhub' }, { source: 'skillhub' }, { source: 'builtin' }]);
+  assert(markets.length === 2, 'connectedMarkets should dedupe by source');
+  assert(markets.indexOf('skillhub.io') !== -1 && markets.indexOf('内置市场') !== -1, 'connectedMarkets should friendly-label sources');
 
   assert(typeof page.__test.createController === 'function', 'page should expose controller factory for interaction tests');
   const controller = page.__test.createController(createElement('div'));

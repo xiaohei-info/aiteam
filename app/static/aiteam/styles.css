@@ -44,12 +44,13 @@ body.aiteam-shell-active .toast {
 }
 
 body.aiteam-shell-active .aiteam-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: block;
+  overflow: hidden;
 }
 
 .aiteam-shell__frame {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 56px 1fr;
   background:
@@ -201,6 +202,8 @@ body.aiteam-shell-active .aiteam-shell {
 
 .aiteam-shell__main {
   padding: 40px 48px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Global link reset inside the app shell — kills browser-default blue/underline
@@ -222,6 +225,12 @@ body.aiteam-shell-active .aiteam-shell {
   background: rgba(13, 17, 23, 0.74);
   border: 1px solid rgba(139, 148, 158, 0.16);
   box-shadow: 0 22px 48px rgba(13, 17, 23, 0.35);
+}
+
+/* Wide variant for multi-column pages (e.g. 企业设置 three-column grid) where the
+   default 920px cap leaves a large empty gutter on the right of wide screens. */
+.aiteam-shell__panel--wide {
+  max-width: 1320px;
 }
 
 .aiteam-shell__panel-kicker {
@@ -817,6 +826,19 @@ body.aiteam-shell-active .aiteam-shell {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
+.aiteam-skill-markets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.aiteam-skill-markets__label {
+  font-size: 13px;
+  color: #8b949e;
+}
+
 .aiteam-skill-summary__item,
 .aiteam-skill-notice,
 .aiteam-memory__banner,
@@ -1143,6 +1165,7 @@ body.aiteam-shell-active .aiteam-shell {
 @media (max-width: 900px) {
   .aiteam-shell__frame {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .aiteam-shell__nav {
@@ -2346,6 +2369,7 @@ body.aiteam-shell-active .aiteam-shell {
 @media (max-width: 900px) {
   .aiteam-shell__frame {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .aiteam-shell__nav {
@@ -3143,3 +3167,37 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-employee-create .aiteam-card__title { margin: 0; font-size: 16px; }
 .aiteam-employee-create__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .aiteam-employee-del { padding: 5px 12px; font-size: 12px; }
+
+/* ── centered modal dialog (新建员工 etc.) ── */
+.aiteam-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(2px);
+}
+.aiteam-modal__overlay[hidden] { display: none; }
+.aiteam-modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 28px;
+  border-radius: 20px;
+  background: var(--ait-bg2);
+  border: 1px solid var(--ait-border);
+  box-shadow: 0 28px 64px rgba(2, 6, 23, 0.5);
+}
+.aiteam-modal__title { margin: 0; font-size: 18px; font-weight: 700; color: var(--ait-text); }
+.aiteam-modal__sub { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ait-text2); }
+.aiteam-field { display: flex; flex-direction: column; gap: 6px; }
+.aiteam-field > span { font-size: 12px; color: var(--ait-text2); }
+.aiteam-textarea { resize: vertical; min-height: 96px; font-family: inherit; line-height: 1.5; }

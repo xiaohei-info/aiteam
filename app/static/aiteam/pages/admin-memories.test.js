@@ -167,6 +167,22 @@ assert(store.filter({ query: 'run_1' })[0].memory_id === 'mem_1', 'store.filter 
   assert(apiCalls[2].body.importance === 4, 'create memory should keep selected importance');
   assert(apiCalls[2].body.category === 'preference', 'create memory should keep selected category');
   assert(apiCalls[2].body.tags.join(',') === '日报,时效', 'create memory should submit tag list');
+
+  // Roster: every enterprise employee should be selectable for memory ops, even
+  // those with no memory records yet.
+  assert(typeof page.__test.normalizeRoster === 'function', 'page should expose normalizeRoster');
+  assert(page.__test.normalizeRoster({ employees: [{ employee_id: 'e1', display_name: 'X' }] }).length === 1, 'normalizeRoster should read {employees:[...]}');
+  assert(page.__test.normalizeRoster([{ employee_id: 'e2' }])[0].employee_name === '未命名员工', 'normalizeRoster should default the name');
+
+  const rosterController = page.__test.createPageController(createElement('div'));
+  rosterController.setRoster([{ employee_id: 'emp_9', display_name: '无记忆员工' }]);
+  rosterController.load([]);
+  const merged = rosterController.__test.mergedEmployees();
+  const ghost = merged.find(function (e) { return e.employee_id === 'emp_9'; });
+  assert(!!ghost, 'roster employees with no memories should still be selectable');
+  assert(ghost && ghost.employee_name === '无记忆员工', 'roster should use the authoritative display_name');
+  assert(rosterController.render && typeof rosterController.render === 'function', 'controller should expose render');
+
   if (failed) {
     console.error('admin-memories.test.js failed');
     failures.forEach(function (item) { console.error('- ' + item); });

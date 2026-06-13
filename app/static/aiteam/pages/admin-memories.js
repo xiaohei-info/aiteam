@@ -184,8 +184,22 @@ window.aiteam = window.aiteam || {};
     return '网络请求失败';
   }
 
+  function normalizeRoster(payload) {
+    var raw = [];
+    if (Array.isArray(payload)) raw = payload;
+    else if (payload && Array.isArray(payload.employees)) raw = payload.employees;
+    else if (payload && Array.isArray(payload.items)) raw = payload.items;
+    return raw.map(function (entry) {
+      return {
+        employee_id: stringValue(entry && entry.employee_id, ''),
+        employee_name: stringValue(entry && (entry.display_name || entry.employee_name), '未命名员工'),
+      };
+    }).filter(function (entry) { return !!entry.employee_id; });
+  }
+
   function createPageController(container) {
     var store = createStore([]);
+    var roster = [];
     var state = {
       employeeId: '',
       query: '',
@@ -203,6 +217,22 @@ window.aiteam = window.aiteam || {};
 
     function filteredItems() {
       return store.filter(state);
+    }
+
+    // Full selectable employee roster: the enterprise's employees (so員工 with no
+    // memories yet are still pickable) merged with any employee_ids that already
+    // appear in memory records. Roster names win (authoritative display_name).
+    function mergedEmployees() {
+      var map = {};
+      var order = [];
+      function add(id, name) {
+        if (!id || map[id]) return;
+        map[id] = { employee_id: id, employee_name: name || '未命名员工' };
+        order.push(id);
+      }
+      roster.forEach(function (entry) { add(entry.employee_id, entry.employee_name); });
+      collectEmployees(store.all()).forEach(function (entry) { add(entry.employee_id, entry.employee_name); });
+      return order.sort().map(function (id) { return map[id]; });
     }
 
     function currentRemoteQuery() {
@@ -236,7 +266,7 @@ window.aiteam = window.aiteam || {};
     }
 
     function renderToolbar(items) {
-      var employees = collectEmployees(store.all());
+      var employees = mergedEmployees();
       var categories = collectCategories(store.all());
       var draftEmployeeId = state.draftMemory.employee_id || state.employeeId || ((employees[0] && employees[0].employee_id) || '');
       return '<div class="aiteam-memory__toolbar">' +
@@ -271,7 +301,7 @@ window.aiteam = window.aiteam || {};
     }
 
     function renderEmployeeSidebar() {
-      var employees = collectEmployees(store.all());
+      var employees = mergedEmployees();
       if (!employees.length) {
         return '<div class="aiteam-inline-empty">暂无可选择的员工</div>';
       }
@@ -504,7 +534,7 @@ window.aiteam = window.aiteam || {};
     }
 
     function createMemory() {
-      var employeeId = state.draftMemory.employee_id || state.employeeId || (collectEmployees(store.all())[0] || {}).employee_id || '';
+      var employeeId = state.draftMemory.employee_id || state.employeeId || (mergedEmployees()[0] || {}).employee_id || '';
       var content = String(state.draftMemory.content || '').trim();
       if (!content) return;
       var payload = {
@@ -632,6 +662,10 @@ window.aiteam = window.aiteam || {};
         state.bannerMessages = [];
         render();
       },
+      setRoster: function (list) {
+        roster = normalizeRoster(list);
+        return roster.slice();
+      },
       showError: function (message) {
         if (!container) return;
         container.innerHTML = '<div class="aiteam-shell__panel"><p class="aiteam-shell__panel-kicker">企业后台</p><h2 class="aiteam-shell__panel-title">记忆管理</h2><p class="aiteam-shell__panel-body">' + escapeHtml(message) + '</p></div>';
@@ -642,6 +676,7 @@ window.aiteam = window.aiteam || {};
       __test: {
         fetchRemoteMemories: fetchRemoteMemories,
         currentRemoteQuery: currentRemoteQuery,
+        mergedEmployees: mergedEmployees,
         setDraftMemory: function (draft) {
           state.draftMemory = {
             employee_id: draft && draft.employee_id || '',
@@ -662,11 +697,22 @@ window.aiteam = window.aiteam || {};
       if (!container) return;
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载记忆数据...</p></div>';
       var controller = createPageController(container);
-      ns.api.getMemories({
-        query: {
-          include: 'prompt_use_trace',
-          trace_limit: 5,
-        },
+      // Load the full employee roster first so the sidebar/filter lists every
+      // employee (even those without memories yet), then load memory records.
+      var rosterPromise = (ns.api && ns.api.getEmployees)
+        ? ns.api.getEmployees().then(function (rosterResult) {
+            if (rosterResult && rosterResult.ok) {
+              controller.setRoster((rosterResult.data && rosterResult.data.employees) || rosterResult.data);
+            }
+          })
+        : Promise.resolve();
+      rosterPromise.then(function () {
+        return ns.api.getMemories({
+          query: {
+            include: 'prompt_use_trace',
+            trace_limit: 5,
+          },
+        });
       }).then(function (result) {
         if (!result.ok) {
           controller.showError(apiErrorMessage(result));
@@ -678,6 +724,7 @@ window.aiteam = window.aiteam || {};
     __test: {
       normalizeMemoryItem: normalizeMemoryItem,
       normalizePayload: normalizePayload,
+      normalizeRoster: normalizeRoster,
       createStore: createStore,
       collectEmployees: collectEmployees,
       normalizeAuditEvents: normalizeAuditEvents,

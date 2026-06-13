@@ -2039,7 +2039,8 @@ def _resolve_employee_model(cur, enterprise_id: str, template,
 
 def _seed_employee_capabilities(cur, enterprise_id: str, employee_id: str,
                                 profile_name: str, template,
-                                *, source_template_version=None) -> str:
+                                *, source_template_version=None,
+                                system_prompt_override: str | None = None) -> str:
     """Seed prompt/skill/KB/memory bindings from a template and provision the
     employee's Hermes profile (SOUL + config). Returns the seeded system_prompt.
 
@@ -2047,6 +2048,9 @@ def _seed_employee_capabilities(cur, enterprise_id: str, employee_id: str,
     the capability layer the design requires at creation time. Profile writes are
     best-effort — failures are logged but never abort recruitment (the run path
     re-provisions on demand).
+
+    system_prompt_override: when the admin provides a system prompt at creation
+    time (the 新建员工 dialog), it wins over the template default persona.
     """
     system_prompt = ""
     behavior_rules: dict = {}
@@ -2056,6 +2060,8 @@ def _seed_employee_capabilities(cur, enterprise_id: str, employee_id: str,
         system_prompt = pack.get("system_prompt", "") or ""
         behavior_rules = pack.get("behavior_rules", {}) or {}
         opening = pack.get("opening_message")
+    if system_prompt_override is not None and str(system_prompt_override).strip():
+        system_prompt = str(system_prompt_override).strip()
 
     # EmployeePrompt — SOUL source.
     EmployeePromptRepo(cur).upsert(EmployeePrompt(
@@ -2195,6 +2201,7 @@ def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
     system_prompt = _seed_employee_capabilities(
         cur, ent.id, employee_id, profile_name, template,
         source_template_version=(template.version_no if template is not None else None),
+        system_prompt_override=body.get("system_prompt"),
     )
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     conv = Conversation(

@@ -218,7 +218,7 @@ window.aiteam = window.aiteam || {};
 
   function renderSettings(container, data, notice) {
     container.innerHTML =
-      '<div class="aiteam-shell__panel">' +
+      '<div class="aiteam-shell__panel aiteam-shell__panel--wide">' +
       '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
       '<h2 class="aiteam-shell__panel-title">企业设置</h2>' +
       '<p class="aiteam-shell__panel-body">管理企业资料、管理员邀请、帮助反馈与通知策略。</p>' +

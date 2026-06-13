@@ -132,6 +132,9 @@ async function run() {
   assert(host.innerHTML.indexOf('/api/team/employees') === -1, 'page should not expose API paths in user copy');
   assert(host.innerHTML.indexOf('新建员工') !== -1, 'page should render the create-employee button');
   assert(host.innerHTML.indexOf('data-role="create-employee-form"') !== -1, 'page should render the create-employee form');
+  assert(host.innerHTML.indexOf('data-role="create-employee-modal"') !== -1, 'create-employee form should live in a modal overlay');
+  assert(host.innerHTML.indexOf('data-role="create-employee-model"') !== -1, 'create dialog should render a model selector at creation time');
+  assert(host.innerHTML.indexOf('name="system_prompt"') !== -1, 'create dialog should render a system prompt field at creation time');
   assert(host.innerHTML.indexOf('data-role="delete-employee"') !== -1, 'each row should render a delete button');
   assert(host.innerHTML.indexOf('<th>操作</th>') !== -1, 'table should include an actions column');
   host._rows[0].dispatchEvent({ type: 'click' });

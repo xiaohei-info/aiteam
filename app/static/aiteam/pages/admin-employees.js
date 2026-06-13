@@ -4,6 +4,9 @@ window.aiteam = window.aiteam || {};
 (function registerAdminEmployeesPage(ns) {
   ns.pages = ns.pages || {};
 
+  var _llmModels = [];
+  var _modelsLoaded = false;
+
   function ensureDrawerModule(done) {
     if (ns.pages && ns.pages.adminEmployeeDrawer) {
       done();
@@ -149,50 +152,107 @@ window.aiteam = window.aiteam || {};
     }).join('');
   }
 
+  function _modelOptions(models) {
+    var opts = ['<option value="">默认（继承企业默认模型）</option>'];
+    for (var i = 0; i < (models || []).length; i++) {
+      var m = models[i] || {};
+      var label = (m.provider_name || m.provider_key || '') + ' · ' + (m.label || m.model_id || '');
+      opts.push('<option value="' + _esc(m.provider_key) + '|' + _esc(m.model_id) + '">' + _esc(label) + '</option>');
+    }
+    return opts.join('');
+  }
+
+  // Lazily load the enterprise model catalog once, then invoke cb. Cached on the
+  // module so reopening the dialog does not refetch.
+  function _ensureModels(cb) {
+    if (_modelsLoaded || !ns.api || !ns.api.getLlmModels) { cb(); return; }
+    ns.api.getLlmModels().then(function (result) {
+      if (result && result.ok && result.data) _llmModels = result.data.models || [];
+      _modelsLoaded = true;
+      cb();
+    }, function () { _modelsLoaded = true; cb(); });
+  }
+
   function _renderCreateControls() {
     return '<div class="aiteam-action-row">' +
       '<button type="button" class="aiteam-btn" data-role="open-create-employee">+ 新建员工</button>' +
       '</div>' +
-      '<form class="aiteam-card aiteam-employee-create" data-role="create-employee-form" hidden>' +
-      '<h3 class="aiteam-card__title">新建数字员工</h3>' +
-      '<div class="aiteam-employee-create__grid">' +
-      '<input class="aiteam-input" name="display_name" placeholder="员工名称（必填）" required />' +
-      '<input class="aiteam-input" name="role_name" placeholder="角色 / 岗位（可选）" />' +
-      '</div>' +
-      '<p class="aiteam-card__meta">新建后会自动创建对应的 Hermes 运行档案，可在详情中继续配置模型、技能与知识。</p>' +
+      '<div class="aiteam-modal__overlay" data-role="create-employee-modal" hidden>' +
+      '<form class="aiteam-modal aiteam-employee-create" data-role="create-employee-form">' +
+      '<h3 class="aiteam-modal__title">新建数字员工</h3>' +
+      '<p class="aiteam-modal__sub">填写基础信息，并可直接选择模型、填写系统提示词。创建后仍可在员工详情中继续配置技能、知识与连接器。</p>' +
+      '<label class="aiteam-field"><span>员工名称（必填）</span>' +
+      '<input class="aiteam-input" name="display_name" placeholder="例如：产品分析助理" required /></label>' +
+      '<label class="aiteam-field"><span>角色 / 岗位（可选）</span>' +
+      '<input class="aiteam-input" name="role_name" placeholder="例如：产品顾问" /></label>' +
+      '<label class="aiteam-field"><span>模型（可选）</span>' +
+      '<select class="aiteam-select" data-role="create-employee-model">' + _modelOptions(_llmModels) + '</select></label>' +
+      '<label class="aiteam-field"><span>系统提示词（可选）</span>' +
+      '<textarea class="aiteam-input aiteam-textarea" name="system_prompt" rows="5" placeholder="留空则使用默认人设"></textarea></label>' +
       '<div class="aiteam-action-row">' +
       '<button type="submit" class="aiteam-btn">创建</button>' +
       '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="cancel-create-employee">取消</button>' +
       '<span class="aiteam-inline-note" data-role="create-employee-notice"></span>' +
       '</div>' +
-      '</form>';
+      '</form>' +
+      '</div>';
   }
 
   function _bindEmployeeActions(container) {
     if (!container || typeof container.querySelector !== 'function') return;
     var openBtn = container.querySelector('[data-role="open-create-employee"]');
+    var modal = container.querySelector('[data-role="create-employee-modal"]');
     var form = container.querySelector('[data-role="create-employee-form"]');
     var cancelBtn = container.querySelector('[data-role="cancel-create-employee"]');
     var notice = container.querySelector('[data-role="create-employee-notice"]');
-    if (openBtn && form) {
+    var modelSelect = container.querySelector('[data-role="create-employee-model"]');
+
+    function closeModal() { if (modal) modal.hidden = true; }
+
+    if (openBtn && modal) {
       openBtn.addEventListener('click', function () {
-        form.hidden = false;
-        var nameInput = form.querySelector('[name="display_name"]');
+        modal.hidden = false;
+        // Populate the model picker from the enterprise catalog on first open.
+        _ensureModels(function () {
+          if (modelSelect && !modelSelect.getAttribute('data-loaded')) {
+            modelSelect.innerHTML = _modelOptions(_llmModels);
+            modelSelect.setAttribute('data-loaded', '1');
+          }
+        });
+        var nameInput = form && form.querySelector('[name="display_name"]');
         if (nameInput && nameInput.focus) nameInput.focus();
       });
     }
-    if (cancelBtn && form) {
-      cancelBtn.addEventListener('click', function () { form.hidden = true; });
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', closeModal);
+    }
+    // Click on the dimmed backdrop (outside the dialog card) closes it.
+    if (modal) {
+      modal.addEventListener('click', function (e) {
+        if (e && e.target === modal) closeModal();
+      });
     }
     if (form) {
       form.addEventListener('submit', function (e) {
         e.preventDefault();
         var displayName = String((form.display_name && form.display_name.value) || '').trim();
         if (!displayName) { if (notice) notice.textContent = '请填写员工名称'; return; }
-        var payload = { display_name: displayName, role_name: String((form.role_name && form.role_name.value) || '').trim() };
+        var payload = {
+          display_name: displayName,
+          role_name: String((form.role_name && form.role_name.value) || '').trim(),
+        };
+        var systemPrompt = String((form.system_prompt && form.system_prompt.value) || '').trim();
+        if (systemPrompt) payload.system_prompt = systemPrompt;
+        var modelValue = String((modelSelect && modelSelect.value) || '').trim();
+        if (modelValue && modelValue.indexOf('|') !== -1) {
+          var parts = modelValue.split('|');
+          payload.model_provider = parts[0];
+          payload.model_name = parts[1];
+        }
         if (notice) notice.textContent = '创建中...';
         ns.api.createEmployee(payload).then(function (result) {
           if (result && result.ok) {
+            closeModal();
             ns.pages.adminEmployees.init(container);
           } else if (notice) {
             notice.textContent = '创建失败：' + ((result && result.data && result.data.message) || (result && result.error) || '未知错误');

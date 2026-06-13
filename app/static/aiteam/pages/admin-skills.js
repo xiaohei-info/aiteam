@@ -61,9 +61,9 @@ window.aiteam = window.aiteam || {};
   function normalizeCatalogItem(item) {
     return {
       skill_id: stringValue(item && (item.skill_id || item.skill_code), ''),
-      name: stringValue(item && item.name, item && (item.skill_id || item.skill_code) || '未命名技能'),
+      name: stringValue(item && (item.name || item.display_name), item && (item.skill_id || item.skill_code) || '未命名技能'),
       description: stringValue(item && item.description, '暂无描述'),
-      source: stringValue(item && item.source, 'custom'),
+      source: stringValue(item && (item.source_marketplace || item.source), 'custom'),
       version: stringValue(item && item.version, '—'),
       latest_version: stringValue(item && item.latest_version, ''),
       install_count: Number(item && item.install_count) || 0,
@@ -78,7 +78,23 @@ window.aiteam = window.aiteam || {};
     var value = stringValue(source, '').toLowerCase();
     if (value === 'clawhub') return 'clawhub.io';
     if (value === 'skillhub') return 'skillhub.io';
+    if (value === 'builtin') return '内置市场';
+    if (value === 'custom') return '企业自建';
     return value || 'custom';
+  }
+
+  // Distinct skill-market sources present in the catalog, so the page can show
+  // which external/builtin marketplaces are actually wired in (B02 remote pull).
+  function connectedMarkets(catalog) {
+    var seen = {};
+    var out = [];
+    (catalog || []).forEach(function (item) {
+      var key = stringValue(item && item.source, 'custom').toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(sourceLabel(key));
+    });
+    return out;
   }
 
   function installedLookup(installs) {
@@ -302,6 +318,7 @@ window.aiteam = window.aiteam || {};
     function render() {
       var installsById = installedLookup(state.installs);
       var visibleCatalog = filteredCatalog();
+      var markets = connectedMarkets(state.catalog);
       var installedMarkup = state.installs.length
         ? state.installs.map(function (item) { return renderInstallCard(item, state); }).join('')
         : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">企业技能库暂无已安装技能</div></li>';
@@ -318,6 +335,12 @@ window.aiteam = window.aiteam || {};
         '<span class="aiteam-skill-summary__item">已安装 ' + esc(state.installs.length) + ' 项</span>' +
         '<span class="aiteam-skill-summary__item">市场可见 ' + esc(visibleCatalog.length) + ' 项</span>' +
         '<span class="aiteam-skill-summary__item">员工授权入口：员工详情抽屉</span>' +
+        '</div>' +
+        '<div class="aiteam-skill-markets">' +
+        '<span class="aiteam-skill-markets__label">已接入技能市场：</span>' +
+        (markets.length
+          ? markets.map(function (m) { return '<span class="aiteam-tag">' + esc(m) + '</span>'; }).join(' ')
+          : '<span class="aiteam-inline-note">暂无可用市场来源</span>') +
         '</div>' +
         '<div class="aiteam-card aiteam-card--flat">' +
         '<div class="aiteam-card__row"><strong>安装时配置授权范围</strong><span class="aiteam-inline-note">全企业共享 / 仅指定员工可用</span></div>' +
@@ -528,6 +551,8 @@ window.aiteam = window.aiteam || {};
       normalizeInstall: normalizeInstall,
       normalizeCatalogItem: normalizeCatalogItem,
       filterCatalog: filterCatalog,
+      connectedMarkets: connectedMarkets,
+      sourceLabel: sourceLabel,
       createController: createPageController,
     }
   };
