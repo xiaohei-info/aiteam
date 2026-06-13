@@ -54,6 +54,7 @@ const document = {
 let getSolutionsCalls = 0;
 let applyCalls = 0;
 const applyPayloads = [];
+let promptCalls = 0;
 const solutionSnapshots = [
   {
     solutions: [{
@@ -95,6 +96,10 @@ const solutionSnapshots = [
 
 const context = {
   window: {
+    prompt() {
+      promptCalls += 1;
+      return '';
+    },
     aiteam: {
       api: {
         getSolutions() {
@@ -176,6 +181,10 @@ async function run() {
   assert(host.innerHTML.indexOf('覆盖重建') !== -1, 'detail modal should render replace action');
   assert(host.innerHTML.indexOf('重新应用') !== -1, 'detail modal should render reapply action');
 
+  host.lastPreviewHandler('sol_truth', { mode: 'replace', department_id: 'dept_marketing' });
+  assert(host.innerHTML.indexOf('目标部门') !== -1, 'detail modal should render department selection inline');
+  assert(host.innerHTML.indexOf('dept_marketing') !== -1, 'preview should show the selected department inline');
+
   // 模态保持打开，apply 成功后模态内刷新为后端真实状态。
   await host.lastApplyHandler('sol_truth', { mode: 'replace', department_id: 'dept_marketing' });
   await nextTick();
@@ -189,6 +198,7 @@ async function run() {
   assert(host.innerHTML.indexOf('已应用：4') !== -1, 'apply success should render backend-refreshed apply_count');
   assert(host.innerHTML.indexOf('emp_local') === -1, 'apply success should not leave speculative local employee ids in UI');
   assert(host.innerHTML.indexOf('最近一次提交：覆盖重建') !== -1, 'page should render last submitted apply mode notice');
+  assert(promptCalls === 0, 'solution apply should not rely on window.prompt for department input');
 
   if (failed) {
     console.error('admin-solutions.test.js failed');

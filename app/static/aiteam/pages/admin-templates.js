@@ -61,6 +61,7 @@ window.aiteam = window.aiteam || {};
       items: [],
       notice: '',
       pendingTemplateId: '',
+      lastRecruitNavigation: null,
     };
 
     function setNotice(message) {
@@ -73,8 +74,11 @@ window.aiteam = window.aiteam || {};
         ? '企业内已有该模板员工，可继续招募新实例'
         : '当前企业尚未招募该模板';
       var pending = state.pendingTemplateId === item.template_id;
+      var recruitedBadge = item.is_recruited
+        ? '<span class="aiteam-badge">已招募</span>'
+        : '<span class="aiteam-badge aiteam-badge--muted">未招募</span>';
       return '<li class="aiteam-skill-card">' +
-        '<div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' +
+        '<div class="aiteam-card__row"><div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' + recruitedBadge + '</div>' +
         '<div class="aiteam-skill-card__meta">角色：' + esc(item.role) + ' · 分类：' + esc(item.category) + '</div>' +
         '<div class="aiteam-skill-card__meta">标签：' + esc(tags) + '</div>' +
         '<div class="aiteam-skill-card__meta">' + esc(item.description) + '</div>' +
@@ -104,12 +108,15 @@ window.aiteam = window.aiteam || {};
       var cards = state.items.length
         ? state.items.map(renderCard).join('')
         : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">当前暂无可招募模板</div></li>';
+      var navigation = state.lastRecruitNavigation || {};
+      var chatTarget = navigation.chat || '';
       container.innerHTML =
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">人才市场</h2>' +
         '<p class="aiteam-shell__panel-body">浏览数字员工模板，查看专家详情，并一键招募到企业团队。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
+        (chatTarget ? '<div class="aiteam-action-row"><a class="aiteam-btn" href="' + esc(chatTarget) + '">开始私聊</a></div>' : '') +
         '<ul class="aiteam-skills-list">' + cards + '</ul>' +
         '</div>';
       bindEvents();
@@ -144,14 +151,17 @@ window.aiteam = window.aiteam || {};
       }).then(function (result) {
         state.pendingTemplateId = '';
         if (!result.ok) {
+          state.lastRecruitNavigation = null;
           setNotice('招募失败：' + apiErrorMessage(result));
           render();
           return result;
         }
         var navigation = result.data && result.data.navigation || {};
+        state.lastRecruitNavigation = navigation;
         var target = navigation.workbench || '/app/workbench';
         setNotice('招募成功，已创建员工。可前往工作台继续使用：' + target);
         return load().then(function () {
+          state.lastRecruitNavigation = navigation;
           setNotice('招募成功，已创建员工。可前往工作台继续使用：' + target);
           render();
           return result;

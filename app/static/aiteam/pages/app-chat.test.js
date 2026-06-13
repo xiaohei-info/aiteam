@@ -172,3 +172,86 @@ test('landing renders agent list and empty-state prompt without conversation', f
   assert.ok(container.innerHTML.includes('Nova'), 'unpinned employee in others');
   assert.ok(container.innerHTML.includes('选择'), 'expected empty-state prompt to pick a conversation');
 });
+
+test('opening a concrete conversation marks its unread count as read in workbench state', async function () {
+  var getCalls = [];
+  var updateCalls = [];
+  var loadingCalls = [];
+  var testContext = {
+    window: {
+      location: { pathname: '/app/chat/conv_luna', search: '' },
+      history: { replaceState() {} },
+      aiteam: {
+        util: context.window.aiteam.util,
+        states: {
+          renderLoading(container, message) {
+            loadingCalls.push(message);
+            container.innerHTML = '<div>loading</div>';
+          },
+          handleApiResult() {
+            throw new Error('handleApiResult should not be called in success path');
+          },
+        },
+        api: {
+          get(path) {
+            getCalls.push(path);
+            return Promise.resolve({
+              ok: true,
+              data: {
+                conversation_id: 'conv_luna',
+                display_state: 'idle',
+                employee_summary: { employee_id: 'emp_luna', display_name: 'Luna', role_name: '策略分析师' },
+                messages: { items: [], next_cursor: 0, has_more: false },
+                last_message_preview: { event_cursor: 0, preview: '' },
+                latest_run: null,
+              },
+            });
+          },
+          getWorkbench() {
+            return Promise.resolve({
+              ok: true,
+              data: {
+                employees: [
+                  {
+                    employee_id: 'emp_luna',
+                    display_name: 'Luna',
+                    role_name: '策略分析师',
+                    conversation_id: 'conv_luna',
+                    unread_count: 3,
+                    pinned: true,
+                  },
+                ],
+                groups: [],
+              },
+            });
+          },
+          updateWorkbenchState(body) {
+            updateCalls.push(body);
+            return Promise.resolve({ ok: true, data: {} });
+          },
+        },
+      },
+    },
+    document: { getElementById() { return null; } },
+    console,
+    setTimeout,
+    clearTimeout,
+  };
+  testContext.global = testContext;
+  testContext.globalThis = testContext;
+  testContext.window.document = testContext.document;
+  vm.createContext(testContext);
+  vm.runInContext(code, testContext);
+
+  var testPage = testContext.window.aiteam.pages.appChat;
+  var container = makeContainer();
+  testPage.init(container, { pathname: '/app/chat/conv_luna' });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+  assert.ok(loadingCalls.length >= 1, 'chat init should render a loading state');
+  assert.ok(getCalls.some(function (path) { return path.indexOf('/conversations/conv_luna') !== -1; }), 'chat init should fetch the conversation');
+  assert.strictEqual(updateCalls.length, 1, 'chat init should mark the opened conversation as read once');
+  assert.strictEqual(updateCalls[0].conversation_id, 'conv_luna', 'chat init should mark the opened conversation id as read');
+  assert.strictEqual(updateCalls[0].mark_read, true, 'chat init should set mark_read=true');
+});
