@@ -231,3 +231,28 @@ def test_solution_apply_reapply_keeps_previous_solution_employees_and_adds_new_b
         assert len(reapplied_bindings) == 1
         latest_record = next(record for record in apply_records if record.id == reapply_body["apply_record_id"])
         assert latest_record.mode == "reapply"
+
+
+def test_solution_apply_seeds_enterprise_collaboration_template(db_conn, seeded_enterprise):
+    """行业方案自带的协作编排在 apply 时下发到企业级 collaboration_template，
+    运行时 resolve_templates 据此读取；企业无需自行配置。"""
+    from team_panel.application.commands.system_admin_content_service import update_solution
+    from agent_gateway.orchestration_templates import resolve_templates
+
+    with UnitOfWork(db_conn) as uow:
+        update_solution(uow, seeded_enterprise["solution_id"], {
+            "planner_prompt": "PLAN {roster}",
+            "subtask_prompt": "SUB {task_title}",
+            "aggregate_prompt": "AGG {subtask_results}",
+        })
+
+    status, body = _post(
+        f"/api/team/solutions/{seeded_enterprise['solution_id']}/apply",
+        {"mode": "append", "idempotency_key": f"collab-seed-{uuid.uuid4().hex[:6]}"},
+    )
+    assert status == 201, body
+
+    templates = resolve_templates(db_conn, seeded_enterprise["enterprise_id"])
+    assert templates["planner"] == "PLAN {roster}"
+    assert templates["subtask"] == "SUB {task_title}"
+    assert templates["aggregate"] == "AGG {subtask_results}"

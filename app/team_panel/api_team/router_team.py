@@ -67,6 +67,7 @@ from ..repositories.enterprise_repo import EnterpriseRepo
 from ..repositories.connector_repo import EnterpriseConnectorRepo
 from ..repositories.department_repo import DepartmentRepo
 from ..repositories.industry_solution_repo import IndustrySolutionRepo
+from ..repositories.collaboration_template_repo import CollaborationTemplateRepo
 from ..repositories.recruitment_order_repo import RecruitmentOrderRepo
 from ..repositories.run_event_repo import RunEventRepo
 from ..repositories.solution_apply_record_repo import SolutionApplyRecordRepo
@@ -2501,6 +2502,47 @@ def _resolve_solution_template(cur, solution_id: str) -> tuple[AgentTemplate | N
     return template, None
 
 
+def _seed_collaboration_from_solution(cur, enterprise_id: str, solution, mode: str) -> None:
+    """Push a solution's bundled orchestration prompts down into the enterprise's
+    default ``collaboration_template`` so the runtime (``resolve_templates``) uses
+    them — the solution "自带协作模板", the enterprise just consumes it.
+
+    Semantics: replace/reapply overwrite the enterprise template; append only
+    seeds when the enterprise has none yet. A solution with no orchestration
+    prompts leaves the enterprise template untouched. Best-effort within the
+    apply transaction; never raises.
+    """
+    if solution is None:
+        return
+    planner = (getattr(solution, "planner_prompt", "") or "").strip()
+    subtask = (getattr(solution, "subtask_prompt", "") or "").strip()
+    aggregate = (getattr(solution, "aggregate_prompt", "") or "").strip()
+    if not (planner or subtask or aggregate):
+        return
+    repo = CollaborationTemplateRepo(cur)
+    existing = repo.get_default(enterprise_id)
+    if existing is not None and mode == "append":
+        return
+    if existing is not None:
+        existing.name = existing.name or "行业方案编排"
+        existing.planner_prompt = planner
+        existing.subtask_prompt = subtask
+        existing.aggregate_prompt = aggregate
+        repo.update(existing)
+    else:
+        repo.create(CollaborationTemplate(
+            id=f"collab_{uuid.uuid4().hex[:12]}",
+            enterprise_id=enterprise_id,
+            name="行业方案编排",
+            planner_prompt=planner,
+            subtask_prompt=subtask,
+            aggregate_prompt=aggregate,
+            is_default=True,
+            enabled=True,
+            created_by="solution_apply",
+        ))
+
+
 def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -2703,6 +2745,10 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 created_by="solution_apply",
             )
         )
+        # Bundle the solution's orchestration rules down into the enterprise's
+        # collaboration template — the enterprise consumes, doesn't author.
+        _seed_collaboration_from_solution(
+            cur, enterprise.id, IndustrySolutionRepo(cur).get_by_id(solution_id), mode)
         conn.commit()
         # Provision the Hermes profile (SOUL + pinned model) after the DB commit.
         _provision_employee_profile(profile_name, sol_system_prompt,

@@ -179,6 +179,37 @@ class TestSystemSolutions:
         assert patched["solution_stats"]["template_count"] == 1
         assert patched["publish_record"]["is_published"] is True
 
+    def test_solution_carries_collaboration_orchestration_prompts(self, seeded_enterprise):
+        # 行业方案自带协作编排（系统后台创建时设置，apply 时下发到企业）。
+        status, created = _post(
+            "/api/system-admin/solutions?role=system_admin",
+            {
+                "name": "Orchestrated Pack",
+                "template_ids": [seeded_enterprise["template_id"]],
+                "planner_prompt": "PLAN {roster}",
+                "subtask_prompt": "SUB {task_title}",
+                "aggregate_prompt": "AGG {subtask_results}",
+            },
+        )
+        assert status == 201, created
+        solution_id = created["solution_id"]
+
+        status, body = _get(_system_admin_path("/api/system-admin/solutions"))
+        assert status == 200, body
+        sol = next(item for item in body["items"] if item["solution_id"] == solution_id)
+        assert sol["planner_prompt"] == "PLAN {roster}"
+        assert sol["subtask_prompt"] == "SUB {task_title}"
+        assert sol["aggregate_prompt"] == "AGG {subtask_results}"
+
+        patch_status, _ = _patch(
+            f"/api/system-admin/solutions/{solution_id}?role=system_admin",
+            {"planner_prompt": "PLAN v2"},
+        )
+        assert patch_status == 200
+        status, body = _get(_system_admin_path("/api/system-admin/solutions"))
+        sol = next(item for item in body["items"] if item["solution_id"] == solution_id)
+        assert sol["planner_prompt"] == "PLAN v2"
+
 
 class TestSystemFinance:
     def test_finance_overview_and_reports_are_reproducible(self, db_conn, seeded_enterprise):

@@ -73,6 +73,9 @@ def list_solutions(uow) -> dict[str, Any]:
                 "default_kb_blueprint": _parse_json(solution.default_kb_blueprint_json, {}),
                 "default_skill_bundle": _parse_json(solution.default_skill_bundle_json, {}),
                 "default_collaboration_template_ref": solution.default_collaboration_template_ref,
+                "planner_prompt": solution.planner_prompt,
+                "subtask_prompt": solution.subtask_prompt,
+                "aggregate_prompt": solution.aggregate_prompt,
                 "publish_scope": _parse_json(solution.publish_scope_json, {"mode": "all"}),
                 "solution_stats": {
                     "apply_count": apply_count,

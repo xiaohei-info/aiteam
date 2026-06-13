@@ -342,7 +342,7 @@ def test_system_templates_preview_uses_flattened_field_fallbacks() -> None:
 def test_system_solutions_preview_switches_between_solution_cards() -> None:
     payload = _run_system_solutions_preview_flow()
     assert "预览效果：当前页面已保留产品位" not in payload["firstPreviewHtml"]
-    assert "方案预览" in payload["firstPreviewHtml"]
+    assert "方案详情" in payload["firstPreviewHtml"]
     assert "零售方案" in payload["firstPreviewHtml"]
     assert "覆盖门店运营、销售分析与复购增长" in payload["firstPreviewHtml"]
     assert "tpl_ops, tpl_sales" in payload["firstPreviewHtml"]

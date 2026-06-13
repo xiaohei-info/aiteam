@@ -96,6 +96,7 @@ window.aiteam = window.aiteam || {};
     var status = item.status || item.publish_state || 'draft';
     var publishLabel = status === 'published' ? '下架' : '发布';
     var publishAction = status === 'published' ? 'unpublish' : 'publish';
+    var hasOrchestration = !!(trimText(item.planner_prompt) || trimText(item.subtask_prompt) || trimText(item.aggregate_prompt));
     return '' +
       '<div class="aiteam-detail-section">' +
       '<h3>方案详情</h3>' +
@@ -103,13 +104,14 @@ window.aiteam = window.aiteam || {};
       '<h3>' + escapeHtml(item.icon || '🏭') + ' ' + escapeHtml(item.name || '') + '</h3>' +
       '<p>' + escapeHtml(item.description || '暂无方案描述') + '</p>' +
       '</div>' +
-      '<div class="aiteam-detail-kv">' +
+      '<div class="aiteam-detail-kv aiteam-detail-kv--wrap">' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">方案 ID</span><span class="aiteam-shell__meta-value">' + escapeHtml(solutionId) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(status) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">绑定模板</span><span class="aiteam-shell__meta-value">' + escapeHtml(templateIds.length ? templateIds.join(', ') : '未绑定') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用数</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.apply_count || 0) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布范围</span><span class="aiteam-shell__meta-value">' + escapeHtml(scopeLabel(item)) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + escapeHtml(tags.length ? tags.join(' / ') : '—') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">协作编排</span><span class="aiteam-shell__meta-value">' + (hasOrchestration ? '已配置（应用时随团队下发）' : '使用内置默认模板') + '</span></div>' +
       '</div>' +
       '<div class="aiteam-detail-section__actions"><span class="aiteam-inline-note">治理操作</span>' +
       '<div class="aiteam-action-row">' +
@@ -218,6 +220,16 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises hidden>' + renderEnterpriseCheckboxes(state.enterprises) + '</div>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">协作编排规则（多 Agent 团队如何协作）</h3>' +
+      '<p class="aiteam-drawer__desc">方案自带的群聊协作编排提示词，企业应用后随团队一并下发、无需自行配置。三段均可留空，留空则运行时回退到内置默认模板。</p>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">规划提示词 (Planner)</span>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-planner placeholder="主持人如何把目标拆解为子任务并分配成员。占位符：{roster} {message_text} {max_subtasks}"></textarea></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">子任务提示词 (Subtask)</span>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-subtask placeholder="成员执行各自子任务时的提示。占位符：{message_text} {task_title} {task_desc} {dep_block}"></textarea></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">汇总提示词 (Aggregate)</span>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-aggregate placeholder="主持人如何把成员结果汇总为最终交付。占位符：{message_text} {subtask_results}"></textarea></label>' +
+      '</div>' +
+      '<div class="aiteam-drawer__section">' +
       '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-sol-publish> 创建后立即发布</label>' +
       '</div>' +
       '<div class="aiteam-drawer__section" data-aiteam-sol-error hidden></div>' +
@@ -264,6 +276,9 @@ window.aiteam = window.aiteam || {};
         }
         var payload = { name: name, template_ids: templateIds };
         if (desc) payload.default_kb_blueprint = { description: desc };
+        payload.planner_prompt = trimText((drawer.querySelector('[data-aiteam-sol-planner]') || {}).value);
+        payload.subtask_prompt = trimText((drawer.querySelector('[data-aiteam-sol-subtask]') || {}).value);
+        payload.aggregate_prompt = trimText((drawer.querySelector('[data-aiteam-sol-aggregate]') || {}).value);
         var selectedMode = drawer.querySelector('[data-aiteam-scope-mode="selected"]');
         if (selectedMode && selectedMode.checked) {
           var checks = drawer.querySelectorAll('[data-aiteam-scope-ent]:checked');

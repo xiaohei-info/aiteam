@@ -159,6 +159,16 @@ async function run() {
   host._openBtn.dispatchEvent({ type: 'click' });
   assert(appRoot.children.length > before, 'clicking 创建方案 should mount a drawer into aiteam-app');
 
+  // Orchestration authoring lives in the system-backend create drawer (方案自带编排).
+  const drawerEl = appRoot.children.find(function (c) { return (c.innerHTML || '').indexOf('创建行业方案') !== -1; });
+  assert(!!drawerEl, 'create drawer should mount');
+  assert(drawerEl && drawerEl.innerHTML.indexOf('协作编排规则') !== -1, 'create drawer should include the orchestration section');
+  assert(drawerEl && drawerEl.innerHTML.indexOf('data-aiteam-sol-planner') !== -1, 'create drawer should include the planner orchestration field');
+  assert(drawerEl && drawerEl.innerHTML.indexOf('data-aiteam-sol-subtask') !== -1, 'create drawer should include the subtask orchestration field');
+  assert(drawerEl && drawerEl.innerHTML.indexOf('data-aiteam-sol-aggregate') !== -1, 'create drawer should include the aggregate orchestration field');
+  // Detail pane surfaces whether a solution bundles orchestration.
+  assert(host.innerHTML.indexOf('协作编排') !== -1, 'solution detail should surface orchestration status');
+
   // Option A refactor: redundant table dropped; cards(主) + 详情(含治理操作) master-detail.
   assert(host.innerHTML.indexOf('aiteam-table') === -1, 'redundant solutions table should be removed');
   assert(host.innerHTML.indexOf('aiteam-grid--split') !== -1, 'page should use a master-detail split layout');

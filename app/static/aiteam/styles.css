@@ -2438,6 +2438,16 @@ body.aiteam-shell-active .aiteam-shell {
   margin-top: 10px;
 }
 
+/* Wrapping variant: meta cards flow into multiple rows instead of being
+   squeezed/clipped in a single flex row (used by the 行业方案 detail pane). */
+.aiteam-detail-kv--wrap {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+.aiteam-detail-kv--wrap > .aiteam-shell__meta-card {
+  flex: 1 1 140px;
+}
+
 .aiteam-state {
   border-radius: 24px;
   padding: 32px;

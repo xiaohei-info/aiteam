@@ -210,6 +210,9 @@ def create_solution(uow, body: dict | None) -> IndustrySolution:
         default_skill_bundle_json=_json_dumps(payload.get("default_skill_bundle") or payload.get("default_skill_bundle_json"), default={}),
         default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
         publish_scope_json=_normalize_publish_scope(payload.get("publish_scope")),
+        planner_prompt=str(payload.get("planner_prompt") or ""),
+        subtask_prompt=str(payload.get("subtask_prompt") or ""),
+        aggregate_prompt=str(payload.get("aggregate_prompt") or ""),
         created_by=_SYSTEM_ACTOR_ID,
         updated_by=_SYSTEM_ACTOR_ID,
     )
@@ -276,6 +279,12 @@ def update_solution(uow, solution_id: str, body: dict | None) -> IndustrySolutio
         if solution.publish_scope_json != new_scope:
             solution.publish_scope_json = new_scope
             changed_fields.append("publish_scope")
+    for _prompt_field in ("planner_prompt", "subtask_prompt", "aggregate_prompt"):
+        if _prompt_field in payload:
+            value = str(payload.get(_prompt_field) or "")
+            if getattr(solution, _prompt_field) != value:
+                setattr(solution, _prompt_field, value)
+                changed_fields.append(_prompt_field)
 
     if "template_ids" in payload:
         template_ids = payload.get("template_ids") or []

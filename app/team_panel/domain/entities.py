@@ -48,6 +48,11 @@ class IndustrySolution:
     default_skill_bundle_json: str = "{}"
     default_collaboration_template_ref: Optional[str] = None
     publish_scope_json: str = '{"mode":"all"}'  # all | selected(enterprise_ids)
+    # 方案自带的协作编排规则（系统后台创建时设置，apply 时下发到企业级
+    # collaboration_template）。留空表示该段回退到运行时内置默认模板。
+    planner_prompt: str = ""
+    subtask_prompt: str = ""
+    aggregate_prompt: str = ""
     created_at: str = ""
     updated_at: str = ""
     created_by: str = ""
