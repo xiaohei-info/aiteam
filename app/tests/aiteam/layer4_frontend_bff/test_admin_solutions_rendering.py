@@ -75,7 +75,10 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-solutions.js' }});
   aiteam.pages.adminSolutions.init(container);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
-  console.log(JSON.stringify({{ html: container.innerHTML }}));
+  const listHtml = container.innerHTML;
+  // 列表是 slim 行；详情/应用控件在点击后的模态里。
+  container.lastOpenHandler('sol_truth');
+  console.log(JSON.stringify({{ html: container.innerHTML, listHtml }}));
 }})().catch((error) => {{
   console.error(error);
   process.exit(1);
@@ -186,7 +189,10 @@ vm.runInThisContext(moduleSource, {{ filename: 'admin-solutions.js' }});
 def test_admin_solutions_renders_detail_and_atomic_apply_hints() -> None:
     payload = _run_admin_solutions()
     assert "行业 AI 解决方案" in payload["html"]
-    assert "方案描述" in payload["html"]
+    # 列表默认只铺名字+描述（slim 行），详情在点击后的模态里。
+    assert "data-solution-open" in payload["listHtml"]
+    assert "aiteam-solution-modal" in payload["html"]
+    assert "覆盖门店运营、销售分析与复购增长" in payload["html"]  # 方案描述（模态内）
     assert "包含 AI 员工" in payload["html"]
     assert "待创建员工预览" in payload["html"]
     assert "门店运营专员" in payload["html"]

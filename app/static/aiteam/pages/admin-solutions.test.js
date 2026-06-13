@@ -159,17 +159,24 @@ async function run() {
   await nextTick();
 
   assert(getSolutionsCalls === 1, 'init should fetch solution list once');
-  assert(host.innerHTML.indexOf('最近应用状态') !== -1, 'page should render truthful backend apply state section');
-  assert(host.innerHTML.indexOf('apply_001') !== -1, 'page should render truthful backend last_apply_record_id');
-  assert(host.innerHTML.indexOf('emp_seed') !== -1, 'page should render truthful backend created_employee_ids');
-  assert(host.innerHTML.indexOf('方案描述') !== -1, 'page should render solution detail section');
-  assert(host.innerHTML.indexOf('包含 AI 员工') !== -1, 'page should render included employee/template section');
-  assert(host.innerHTML.indexOf('预期价值') !== -1, 'page should render expected value section');
-  assert(host.innerHTML.indexOf('失败时整体回滚') !== -1, 'page should render atomic rollback hint');
-  assert(host.innerHTML.indexOf('追加应用') !== -1, 'page should render append action');
-  assert(host.innerHTML.indexOf('覆盖重建') !== -1, 'page should render replace action');
-  assert(host.innerHTML.indexOf('重新应用') !== -1, 'page should render reapply action');
+  // 列表默认只铺名字+描述（slim 行）；状态/记录/员工等详情在点击后的模态里。
+  assert(host.innerHTML.indexOf('data-solution-open') !== -1, 'page should render slim list rows that open a detail modal');
+  assert(host.innerHTML.indexOf('零售增长方案') !== -1, 'list row should show the solution name');
 
+  // 点击列表行打开模态详情。
+  host.lastOpenHandler('sol_truth');
+  assert(host.innerHTML.indexOf('aiteam-solution-modal') !== -1, 'clicking a row should open the detail modal');
+  assert(host.innerHTML.indexOf('最近应用状态') !== -1, 'detail modal should render truthful backend apply state section');
+  assert(host.innerHTML.indexOf('apply_001') !== -1, 'detail modal should render truthful backend last_apply_record_id');
+  assert(host.innerHTML.indexOf('emp_seed') !== -1, 'detail modal should render truthful backend created_employee_ids');
+  assert(host.innerHTML.indexOf('包含 AI 员工') !== -1, 'detail modal should render included employee/template section');
+  assert(host.innerHTML.indexOf('预期价值') !== -1, 'detail modal should render expected value section');
+  assert(host.innerHTML.indexOf('失败时整体回滚') !== -1, 'detail modal should render atomic rollback hint');
+  assert(host.innerHTML.indexOf('追加应用') !== -1, 'detail modal should render append action');
+  assert(host.innerHTML.indexOf('覆盖重建') !== -1, 'detail modal should render replace action');
+  assert(host.innerHTML.indexOf('重新应用') !== -1, 'detail modal should render reapply action');
+
+  // 模态保持打开，apply 成功后模态内刷新为后端真实状态。
   await host.lastApplyHandler('sol_truth', { mode: 'replace', department_id: 'dept_marketing' });
   await nextTick();
 

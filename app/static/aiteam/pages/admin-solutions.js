@@ -132,6 +132,7 @@ window.aiteam = window.aiteam || {};
       lastApplyResult: null,
       previewSolutionId: '',
       previewPayload: null,
+      openSolutionId: '',
     };
 
     function setNotice(message) {
@@ -183,7 +184,25 @@ window.aiteam = window.aiteam || {};
         '</div>';
     }
 
-    function renderCard(item) {
+    // Slim list row: name + one-line description + status badge. Full detail and
+    // the apply controls live in a modal opened on click.
+    function renderRow(item) {
+      var isApplied = item.apply_count > 0 || item.last_apply_status === 'succeeded';
+      var badge = isApplied
+        ? '<span class="aiteam-badge">已应用</span>'
+        : '<span class="aiteam-badge aiteam-badge--muted">' + esc(item.status) + '</span>';
+      return '<button type="button" class="aiteam-list-row" data-solution-open="' + esc(item.solution_id) + '">' +
+        '<span class="aiteam-list-row__icon">🏭</span>' +
+        '<span class="aiteam-list-row__main">' +
+        '<span class="aiteam-list-row__title">' + esc(item.name) + '</span>' +
+        '<span class="aiteam-list-row__desc">' + esc(item.description) + '</span>' +
+        '</span>' +
+        '<span class="aiteam-list-row__aside">' + badge + '</span>' +
+        '</button>';
+    }
+
+    function renderDetailModal(item) {
+      if (!item) return '';
       var tags = item.tags.length ? item.tags.join(' / ') : '无标签';
       var createdEmployees = item.created_employee_ids.length ? item.created_employee_ids.join(', ') : '尚无最近应用结果';
       var createdKnowledge = item.created_knowledge_base_ids.length ? item.created_knowledge_base_ids.join(', ') : '—';
@@ -193,20 +212,22 @@ window.aiteam = window.aiteam || {};
       var lastApplyStatus = item.last_apply_status ? item.last_apply_status : '尚无最近应用记录';
       var lastApplyRecord = item.last_apply_record_id ? item.last_apply_record_id : '—';
       var isApplied = item.apply_count > 0 || lastApplyStatus === 'succeeded';
-      var appliedBadge = isApplied ? '<span class="aiteam-badge">已应用</span>' : '';
+      var appliedBadge = isApplied ? ' <span class="aiteam-badge">已应用</span>' : '';
       var pending = state.pendingSolutionId === item.solution_id;
       var disabled = pending ? ' disabled' : '';
       var primaryMode = isApplied ? 'reapply' : 'append';
       var primaryLabel = isApplied ? '重新应用' : '追加应用';
-      return '<li class="aiteam-skill-card">' +
-        '<div class="aiteam-card__row"><div class="aiteam-skill-card__title">' + esc(item.name) + '</div>' + appliedBadge + '</div>' +
+      var showPreview = state.previewSolutionId === item.solution_id;
+      return '<div class="aiteam-modal__overlay" data-solution-modal>' +
+        '<div class="aiteam-modal aiteam-solution-modal" role="dialog">' +
+        '<button type="button" class="aiteam-drawer__close aiteam-modal__close" data-solution-modal-close>×</button>' +
+        '<h3 class="aiteam-modal__title">🏭 ' + esc(item.name) + appliedBadge + '</h3>' +
+        '<p class="aiteam-modal__sub">' + esc(item.description) + '</p>' +
         '<div class="aiteam-skill-card__meta">状态：' + esc(item.status) + ' · 标签：' + esc(tags) + '</div>' +
         '<div class="aiteam-skill-card__meta">模板数：' + esc(item.template_count) + ' · 已应用：' + esc(item.apply_count) + ' · 激活员工：' + esc(item.active_employee_count) + '</div>' +
-        '<div class="aiteam-skill-card__meta">绑定模板：' + esc(item.template_ids.join(', ') || '未绑定') + '</div>' +
         '<div class="aiteam-skill-card__meta">' + esc(publishRecord) + '</div>' +
         '<div class="aiteam-shell__meta">' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">方案描述</span><span class="aiteam-shell__meta-value">' + esc(item.description) + '</span></div>' +
-        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">包含 AI 员工</span><span class="aiteam-shell__meta-value">' + esc(item.template_ids.join(', ') || '待绑定模板') + '</span></div>' +
+        '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">包含 AI 员工（专家）</span><span class="aiteam-shell__meta-value">' + esc(item.template_ids.join(', ') || '待绑定模板') + '</span></div>' +
         renderTemplatePreview(item) +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">预期价值</span><span class="aiteam-shell__meta-value">' + esc(expectedValueText(item)) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">原子回滚</span><span class="aiteam-shell__meta-value">失败时整体回滚，不保留局部创建结果</span></div>' +
@@ -216,6 +237,7 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近应用员工</span><span class="aiteam-shell__meta-value">' + esc(createdEmployees) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近创建知识库</span><span class="aiteam-shell__meta-value">' + esc(createdKnowledge) + '</span></div>' +
         '</div>' +
+        (showPreview ? renderApplyPreview(item, state.previewPayload) : '') +
         '<div class="aiteam-skill-card__actions">' +
         '<button type="button" class="aiteam-btn" data-role="solution-apply" data-mode="' + esc(primaryMode) + '" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>' + esc(primaryLabel) + '</button>' +
         '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="replace" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>覆盖重建</button>' +
@@ -224,11 +246,29 @@ window.aiteam = window.aiteam || {};
           : '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="solution-apply" data-mode="reapply" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>重新应用</button>') +
         '</div>' +
         (pending ? '<div class="aiteam-skill-card__meta">正在提交：' + esc(applyModeLabel(state.pendingMode)) + '</div>' : '') +
-        '</li>';
+        '</div>' +
+        '</div>';
     }
 
     function bindEvents() {
       if (!container || !container.querySelectorAll) return;
+      var openButtons = container.querySelectorAll('[data-solution-open]');
+      for (var o = 0; o < openButtons.length; o++) {
+        openButtons[o].addEventListener('click', function () {
+          container.lastOpenHandler(this.getAttribute('data-solution-open') || '');
+        });
+      }
+      var modalClose = container.querySelector ? container.querySelector('[data-solution-modal-close]') : null;
+      if (modalClose && typeof modalClose.addEventListener === 'function') {
+        modalClose.addEventListener('click', function () { container.lastCloseHandler(); });
+      }
+      var modalOverlay = container.querySelector ? container.querySelector('[data-solution-modal]') : null;
+      if (modalOverlay && typeof modalOverlay.addEventListener === 'function') {
+        modalOverlay.addEventListener('click', function (event) {
+          var target = event && event.target ? event.target : null;
+          if (!target || target === modalOverlay) container.lastCloseHandler();
+        });
+      }
       var buttons = container.querySelectorAll('[data-role="solution-apply"]');
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener('click', function () {
@@ -262,16 +302,15 @@ window.aiteam = window.aiteam || {};
     }
 
     function render() {
-      var cards = state.items.length
-        ? state.items.map(renderCard).join('')
-        : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">当前企业暂无可应用方案</div></li>';
+      var rows = state.items.length
+        ? state.items.map(renderRow).join('')
+        : '<div class="aiteam-inline-empty">当前企业暂无可应用方案</div>';
       container.innerHTML =
         '<div class="aiteam-shell__panel">' +
         '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
         '<h2 class="aiteam-shell__panel-title">行业 AI 解决方案</h2>' +
-        '<p class="aiteam-shell__panel-body">按行业一键应用预设的数字员工方案。应用后自动创建对应的员工与知识库，支持追加应用、覆盖重建与重新应用三种模式。</p>' +
+        '<p class="aiteam-shell__panel-body">按行业一键应用预设的数字员工方案。点击方案查看详情并应用——支持追加应用、覆盖重建与重新应用三种模式，应用后自动创建对应的员工与知识库。</p>' +
         (state.notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + esc(state.notice) + '</p></div>' : '') +
-        renderApplyPreview(findSolution(state.previewSolutionId), state.previewPayload) +
         '<div class="aiteam-shell__meta">' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用模式</span><span class="aiteam-shell__meta-value">追加应用 / 覆盖重建 / 重新应用</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">失败保护</span><span class="aiteam-shell__meta-value">应用失败时自动整体回滚，不会产生不完整的配置</span></div>' +
@@ -279,9 +318,10 @@ window.aiteam = window.aiteam || {};
         '</div>' +
         (state.lastSubmittedMode ? '<p class="aiteam-shell__panel-body">最近一次提交：' + esc(applyModeLabel(state.lastSubmittedMode)) + '</p>' : '') +
         (state.lastApplyResult ? '<p class="aiteam-shell__panel-body">' + esc(state.lastApplyResult) + '</p>' : '') +
-        '<ul class="aiteam-skills-list">' + cards + '</ul>' +
+        '<div class="aiteam-list aiteam-solution-list">' + rows + '</div>' +
         '<div class="aiteam-shell__panel-body">没有我的行业？告诉我们：提交你的业务场景，我们会补充对应的行业 AI 解决方案。</div>' +
-        '</div>';
+        '</div>' +
+        (state.openSolutionId ? renderDetailModal(findSolution(state.openSolutionId)) : '');
       bindEvents();
     }
 
@@ -334,6 +374,9 @@ window.aiteam = window.aiteam || {};
     container.lastPreviewHandler = function (solutionId, payload) {
       state.previewSolutionId = solutionId;
       state.previewPayload = Object.assign({}, payload || {});
+      // Apply controls live inside the detail modal, so previewing always
+      // implies that solution's modal is open.
+      state.openSolutionId = solutionId;
       setNotice('');
       render();
       return Promise.resolve({ ok: true, preview: true });
@@ -350,6 +393,20 @@ window.aiteam = window.aiteam || {};
       clearPreview();
       render();
       return Promise.resolve({ ok: true, cancelled: true });
+    };
+
+    container.lastOpenHandler = function (solutionId) {
+      state.openSolutionId = solutionId || '';
+      clearPreview();
+      render();
+      return Promise.resolve({ ok: true, opened: solutionId });
+    };
+
+    container.lastCloseHandler = function () {
+      state.openSolutionId = '';
+      clearPreview();
+      render();
+      return Promise.resolve({ ok: true, closed: true });
     };
 
     function load() {
