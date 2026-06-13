@@ -218,8 +218,13 @@ body.aiteam-shell-active .aiteam-shell {
   text-decoration: none;
 }
 
+/* Page-level wrapper used by nearly every admin/enterprise page. It fills the
+   main area (already bounded by .aiteam-shell__main padding + the frame), so
+   dashboard content — tables, card grids, master/detail — spreads to the full
+   width instead of being capped and left-aligned with an empty right gutter.
+   Long prose stays readable via the cap on .aiteam-shell__panel-body below. */
 .aiteam-shell__panel {
-  max-width: 920px;
+  max-width: none;
   border-radius: 24px;
   padding: 32px;
   background: rgba(13, 17, 23, 0.74);
@@ -227,10 +232,10 @@ body.aiteam-shell-active .aiteam-shell {
   box-shadow: 0 22px 48px rgba(13, 17, 23, 0.35);
 }
 
-/* Wide variant for multi-column pages (e.g. 企业设置 three-column grid) where the
-   default 920px cap leaves a large empty gutter on the right of wide screens. */
+/* Legacy alias — panels are full-width by default now, so this is a no-op kept
+   for the pages that still tag it. */
 .aiteam-shell__panel--wide {
-  max-width: 1320px;
+  max-width: none;
 }
 
 .aiteam-shell__panel-kicker {
@@ -249,6 +254,7 @@ body.aiteam-shell-active .aiteam-shell {
 
 .aiteam-shell__panel-body {
   margin: 16px 0 0;
+  max-width: 860px;
   font-size: 15px;
   line-height: 1.7;
   color: #c9d1d9;
