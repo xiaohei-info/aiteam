@@ -77,12 +77,22 @@ const context = {
           apiCalls.push('delete:' + installId);
           return Promise.resolve({ ok: true, data: { install_id: installId, skill_code: 'skill_excel', status: 'uninstalled' } });
         },
-        getSkillCatalog() {
-          apiCalls.push('catalog');
-          return Promise.resolve({ ok: true, data: { items: [
-            { skill_id: 'skill_excel', name: 'Excel分析', description: '处理表格', source: 'skillhub', version: '1.2.0', latest_version: '1.3.0', update_available: true, install_count: 42, tags: ['分析', '表格'], authorization_scope: 'employee_grant' },
-            { skill_id: 'skill_search', name: '联网搜索', description: '联网检索', source: 'clawhub', version: '0.9.0', install_count: 11, tags: ['搜索'] },
-          ] } });
+        getSkillCatalog(options) {
+          var q = (options && options.query) || {};
+          apiCalls.push('catalog:' + (q.source_marketplace || 'facets') + ':p' + (q.page || 1));
+          return Promise.resolve({ ok: true, data: {
+            items: [
+              { skill_code: 'skill_excel', display_name: 'Excel分析', description: '处理表格', source_marketplace: 'skillhub', version: '1.2.0', latest_version: '1.3.0', update_available: true, install_count: 42, tags: ['分析', '表格'], authorization_scope: 'employee_grant' },
+              { skill_code: 'skill_search', display_name: '联网搜索', description: '联网检索', source_marketplace: 'skillhub', version: '0.9.0', install_count: 11, tags: ['搜索'] },
+            ],
+            total: 20,
+            page: q.page || 1,
+            page_size: q.page_size || 12,
+            sources: [
+              { source_marketplace: 'skillhub', count: 14 },
+              { source_marketplace: 'clawhub', count: 6 },
+            ],
+          } });
         },
         getSkillInstalls() {
           apiCalls.push('installs');
@@ -137,17 +147,20 @@ async function run() {
   page.init(host);
   await new Promise(function (resolve) { setTimeout(resolve, 0); });
 
-  assert(apiCalls.join(',') === 'installs,catalog', 'page should request installs then catalog');
+  // Default tab is 已安装: loads installs, then a cheap facet probe for the tab bar.
+  assert(apiCalls.join(',') === 'installs,catalog:facets:p1', 'page should load installs then probe source facets');
   assert(host.innerHTML.indexOf('技能市场') !== -1, 'page should render title');
-  assert(host.innerHTML.indexOf('升级到最新') !== -1, 'page should render upgrade action');
-  assert(host.innerHTML.indexOf('卸载技能') !== -1, 'page should render uninstall action');
-  assert(host.innerHTML.indexOf('编辑授权员工') !== -1, 'page should render scope management action');
-  assert(host.innerHTML.indexOf('Excel分析') !== -1, 'page should render skill card content');
-  assert(host.innerHTML.indexOf('搜索技能名称、描述或标签') !== -1, 'page should render search guidance');
-  assert(host.innerHTML.indexOf('安装时配置授权范围') !== -1, 'page should render install-time scope controls');
-  assert(host.innerHTML.indexOf('skillhub.io') !== -1, 'page should render skillhub source badge');
-  assert(host.innerHTML.indexOf('clawhub.io') !== -1, 'page should render clawhub source badge');
-  assert(host.innerHTML.indexOf('已接入技能市场') !== -1, 'page should surface the connected external skill markets');
+  assert(host.innerHTML.indexOf('aiteam-skill-tab') !== -1, 'page should render marketplace tabs');
+  assert(host.innerHTML.indexOf('已安装') !== -1, 'page should render the 已安装 tab');
+  assert(host.innerHTML.indexOf('skillhub.io') !== -1, 'tab bar should render skillhub market tab');
+  assert(host.innerHTML.indexOf('clawhub.io') !== -1, 'tab bar should render clawhub market tab');
+  // 已安装 tab shows the installed-skill management cards.
+  assert(host.innerHTML.indexOf('升级到最新') !== -1, 'installed tab should render upgrade action');
+  assert(host.innerHTML.indexOf('卸载技能') !== -1, 'installed tab should render uninstall action');
+  assert(host.innerHTML.indexOf('编辑授权员工') !== -1, 'installed tab should render scope management action');
+  assert(host.innerHTML.indexOf('Excel分析') !== -1, 'installed tab should render install card content');
+  // On the 已安装 tab the install-scope controls are hidden (they belong to market tabs).
+  assert(host.innerHTML.indexOf('安装时配置授权范围') === -1, 'install-scope controls should be hidden on the installed tab');
 
   // Real backend catalog items use source_marketplace + display_name; ensure the
   // normalizer reads those (previously it read item.source/item.name only, so
@@ -159,6 +172,20 @@ async function run() {
   const markets = page.__test.connectedMarkets([{ source: 'skillhub' }, { source: 'skillhub' }, { source: 'builtin' }]);
   assert(markets.length === 2, 'connectedMarkets should dedupe by source');
   assert(markets.indexOf('skillhub.io') !== -1 && markets.indexOf('内置市场') !== -1, 'connectedMarkets should friendly-label sources');
+
+  // Tab switching + server-side pagination.
+  const tabHost = createElement('div');
+  const tabCtrl = page.__test.createController(tabHost);
+  await tabCtrl.load();
+  apiCalls.length = 0;
+  await tabCtrl.__test.setTab('skillhub');
+  assert(apiCalls.indexOf('catalog:skillhub:p1') !== -1, 'switching to a market tab should fetch that source page 1');
+  assert(tabHost.innerHTML.indexOf('安装时配置授权范围') !== -1, 'market tab should show install-scope controls');
+  assert(tabHost.innerHTML.indexOf('aiteam-skill-pager') !== -1, 'market tab should render pagination');
+  assert(tabHost.innerHTML.indexOf('安装到企业') !== -1, 'market tab should render catalog install buttons');
+  apiCalls.length = 0;
+  await tabCtrl.__test.goToPage(2);
+  assert(apiCalls.indexOf('catalog:skillhub:p2') !== -1, 'pagination should fetch the requested page for the active source');
 
   assert(typeof page.__test.createController === 'function', 'page should expose controller factory for interaction tests');
   const controller = page.__test.createController(createElement('div'));

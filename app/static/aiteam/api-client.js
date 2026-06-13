@@ -285,6 +285,12 @@ window.aiteam = window.aiteam || {};
     },
 
     getSkillCatalog(options) {
+      const query = options && options.query;
+      if (query) {
+        const requestOptions = { ...options };
+        delete requestOptions.query;
+        return this.get(`/skills/catalog${buildQuerySuffix(query)}`, requestOptions);
+      }
       return this.get('/skills/catalog', options);
     },
 

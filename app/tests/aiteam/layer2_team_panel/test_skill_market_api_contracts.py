@@ -10,6 +10,27 @@ class TestSkillCatalog:
         assert 'items' in body
         assert 'total' in body
         assert isinstance(body['items'], list)
+        # Pagination + source-facet envelope (tabbed marketplace UI).
+        assert 'page' in body and 'page_size' in body
+        assert 'sources' in body and isinstance(body['sources'], list)
+        assert len(body['items']) <= body['page_size']
+
+    def test_get_skill_catalog_paginates_and_reports_source_facets(self, seeded_enterprise):
+        status, body = _get('/api/team/skills/catalog?page=1&page_size=2')
+        assert status == 200, body
+        assert body['page'] == 1
+        assert body['page_size'] == 2
+        assert len(body['items']) <= 2
+        # Facets enumerate distinct source marketplaces with counts.
+        for facet in body['sources']:
+            assert 'source_marketplace' in facet
+            assert 'count' in facet
+        # Filtering by a source returns only that source's skills.
+        if body['sources']:
+            src = body['sources'][0]['source_marketplace']
+            s2, b2 = _get(f'/api/team/skills/catalog?source_marketplace={src}')
+            assert s2 == 200, b2
+            assert all(item['source_marketplace'] == src for item in b2['items'])
 
     def test_get_skill_catalog_supports_search_and_installed_only(self, seeded_enterprise):
         create_status, _ = _post('/api/team/skills/installs', {

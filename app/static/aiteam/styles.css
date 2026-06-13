@@ -789,6 +789,14 @@ body.aiteam-shell-active .aiteam-shell {
   gap: 12px;
 }
 
+/* Multi-column card grid for the skills marketplace tabs (uses the page width
+   instead of a single tall column). Scoped modifier so other pages that reuse
+   .aiteam-skills-list (e.g. 行业方案) keep their single-column layout. */
+.aiteam-skills-list--grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+}
+
 .aiteam-skill-card {
   border-radius: 16px;
   padding: 16px;
@@ -837,6 +845,66 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-skill-markets__label {
   font-size: 13px;
   color: #8b949e;
+}
+
+/* Skill marketplace tabs (内置 / 各外部市场 / 已安装) */
+.aiteam-skill-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 8px;
+  border-bottom: 1px solid var(--ait-border);
+  padding-bottom: 10px;
+}
+.aiteam-skill-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ait-border);
+  background: var(--ait-bg3);
+  color: var(--ait-text2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.aiteam-skill-tab:hover {
+  color: var(--ait-text);
+  border-color: rgba(88, 166, 255, 0.4);
+}
+.aiteam-skill-tab.is-active {
+  color: #fff;
+  background: var(--ait-brand);
+  border-color: var(--ait-brand);
+}
+.aiteam-skill-tab__count {
+  min-width: 18px;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 9px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.aiteam-skill-tab:not(.is-active) .aiteam-skill-tab__count {
+  background: rgba(139, 148, 158, 0.2);
+}
+.aiteam-skills-content {
+  margin-top: 12px;
+}
+.aiteam-skill-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.aiteam-skill-pager__info {
+  font-size: 13px;
+  color: var(--ait-text2);
 }
 
 .aiteam-skill-summary__item,

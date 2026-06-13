@@ -606,11 +606,22 @@ def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
         tag_filter = str(qs.get("tag", [""])[0] or "").strip().lower()
         source_filter = str(qs.get("source_marketplace", [""])[0] or "").strip().lower()
         installed_only = str(qs.get("installed_only", [""])[0] or "").strip().lower() in {"1", "true", "yes"}
+        try:
+            page = int(str(qs.get("page", ["1"])[0] or "1"))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(str(qs.get("page_size", ["20"])[0] or "20"))
+        except (TypeError, ValueError):
+            page_size = 20
+        page = max(1, page)
+        page_size = max(1, min(100, page_size))
+
         catalog = _get_full_catalog(search_query)
-        items = []
+        # Stage 1: search + tag filter (source-agnostic) — this is the set the
+        # source tabs/facets are computed over.
+        base = []
         for entry in catalog:
-            installed = installed_map.get(entry["skill_code"])
-            active_count = install_repo.count_active_by_skill_code(entry["skill_code"]) if installed and install_repo else 0
             haystack = " ".join(
                 [
                     str(entry["skill_code"]),
@@ -623,10 +634,36 @@ def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
                 continue
             if tag_filter and tag_filter not in {str(tag).lower() for tag in entry["tags"]}:
                 continue
+            base.append(entry)
+
+        # Source facets (for the marketplace tabs): distinct source_marketplace
+        # with counts, preserving first-seen order.
+        facet_counts: dict[str, int] = {}
+        facet_order: list[str] = []
+        for entry in base:
+            src = str(entry["source_marketplace"])
+            if src not in facet_counts:
+                facet_counts[src] = 0
+                facet_order.append(src)
+            facet_counts[src] += 1
+        sources = [{"source_marketplace": s, "count": facet_counts[s]} for s in facet_order]
+
+        # Stage 2: source + installed filter → the visible set for the active tab.
+        visible = []
+        for entry in base:
+            installed = installed_map.get(entry["skill_code"])
             if source_filter and str(entry["source_marketplace"]).lower() != source_filter:
                 continue
             if installed_only and installed is None:
                 continue
+            visible.append((entry, installed))
+
+        total = len(visible)
+        start = (page - 1) * page_size
+        page_slice = visible[start:start + page_size]
+        items = []
+        for entry, installed in page_slice:
+            active_count = install_repo.count_active_by_skill_code(entry["skill_code"]) if installed and install_repo else 0
             items.append({
                 "skill_code": entry["skill_code"],
                 "display_name": entry["display_name"],
@@ -639,7 +676,7 @@ def _handle_skill_catalog(conn, path: str, query: str) -> tuple[int, dict]:
                 "install_count": active_count,
                 "installed": installed,
             })
-        return 200, {"items": items, "total": len(items)}
+        return 200, {"items": items, "total": total, "page": page, "page_size": page_size, "sources": sources}
     finally:
         cur.close()
 

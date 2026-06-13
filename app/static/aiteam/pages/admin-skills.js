@@ -185,17 +185,32 @@ window.aiteam = window.aiteam || {};
       '</li>';
   }
 
+  var PAGE_SIZE = 12;
+
+  function filterInstalls(installs, query) {
+    var needle = stringValue(query, '').trim().toLowerCase();
+    if (!needle) return installs.slice();
+    return installs.filter(function (item) {
+      return [item.name, item.skill_id, item.source].join(' ').toLowerCase().indexOf(needle) !== -1;
+    });
+  }
+
   function createPageController(container) {
     var state = {
       installs: [],
-      catalog: [],
+      catalog: [],          // current page of the active source tab
+      sources: [],          // [{ source_marketplace, count }] facets for the tab bar
+      activeTab: 'installed',
+      page: 1,
+      pageSize: PAGE_SIZE,
+      total: 0,
       query: '',
       pendingSkillId: '',
       pendingInstallId: '',
       notices: [],
       loadState: {
         installs: 'loading',
-        catalog: 'loading'
+        catalog: 'idle'
       },
       installScopeMode: 'all_employees',
       installScopeEmployeeIds: []
@@ -207,17 +222,21 @@ window.aiteam = window.aiteam || {};
 
     function buildDegradationNotes() {
       var notices = state.notices.slice();
-      if (state.loadState.installs !== 'ready') {
+      if (state.loadState.installs !== 'ready' && state.loadState.installs !== 'loading') {
         notices.push('已安装技能列表暂时无法加载，请稍后刷新重试。');
       }
-      if (state.loadState.catalog !== 'ready') {
+      if (state.loadState.catalog === 'error') {
         notices.push('技能市场目录暂时无法加载，请稍后刷新重试。');
       }
       return notices;
     }
 
-    function filteredCatalog() {
-      return filterCatalog(state.catalog, state.query);
+    function isInstalledTab() {
+      return state.activeTab === 'installed';
+    }
+
+    function totalPages() {
+      return Math.max(1, Math.ceil((state.total || 0) / state.pageSize));
     }
 
     function setInstallScope(scopeMode, employeeIds) {
@@ -226,15 +245,44 @@ window.aiteam = window.aiteam || {};
       render();
     }
 
+    function setTab(tab) {
+      state.activeTab = tab || 'installed';
+      state.page = 1;
+      if (isInstalledTab()) {
+        render();
+        return Promise.resolve(null);
+      }
+      return loadCatalogPage();
+    }
+
+    function goToPage(page) {
+      var next = Math.max(1, Math.min(totalPages(), page));
+      if (next === state.page) return Promise.resolve(null);
+      state.page = next;
+      return loadCatalogPage();
+    }
+
     function bindEvents() {
       if (!container || !container.querySelectorAll) return;
       var searchInput = container.querySelector('[data-role="skills-search"]');
       if (searchInput) {
         searchInput.addEventListener('input', function () {
           state.query = this.value || '';
-          render();
+          state.page = 1;
+          if (isInstalledTab()) render();
+          else loadCatalogPage();
         });
       }
+      var tabButtons = container.querySelectorAll('[data-role="skills-tab"]');
+      for (var t = 0; t < tabButtons.length; t++) {
+        tabButtons[t].addEventListener('click', function () {
+          setTab(this.getAttribute('data-tab'));
+        });
+      }
+      var prevBtn = container.querySelector('[data-role="skills-page-prev"]');
+      if (prevBtn) prevBtn.addEventListener('click', function () { goToPage(state.page - 1); });
+      var nextBtn = container.querySelector('[data-role="skills-page-next"]');
+      if (nextBtn) nextBtn.addEventListener('click', function () { goToPage(state.page + 1); });
       var scopeModeButtons = container.querySelectorAll('[data-role="install-scope-mode"]');
       for (var h = 0; h < scopeModeButtons.length; h++) {
         scopeModeButtons[h].addEventListener('click', function () {
@@ -315,33 +363,52 @@ window.aiteam = window.aiteam || {};
       state.installs = next;
     }
 
-    function render() {
+    function renderTabs() {
+      var tabs = [{ key: 'installed', label: '已安装', count: state.installs.length }];
+      state.sources.forEach(function (facet) {
+        var src = stringValue(facet && facet.source_marketplace, '');
+        if (!src) return;
+        tabs.push({ key: src, label: sourceLabel(src), count: Number(facet.count) || 0 });
+      });
+      return '<div class="aiteam-skill-tabs" role="tablist">' + tabs.map(function (tab) {
+        var active = tab.key === state.activeTab ? ' is-active' : '';
+        return '<button type="button" class="aiteam-skill-tab' + active + '" data-role="skills-tab" data-tab="' + esc(tab.key) + '">' +
+          esc(tab.label) + '<span class="aiteam-skill-tab__count">' + esc(tab.count) + '</span></button>';
+      }).join('') + '</div>';
+    }
+
+    function renderPager() {
+      if (isInstalledTab()) return '';
+      var pages = totalPages();
+      return '<div class="aiteam-skill-pager">' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="skills-page-prev"' + (state.page <= 1 ? ' disabled' : '') + '>上一页</button>' +
+        '<span class="aiteam-skill-pager__info">第 ' + esc(state.page) + ' / ' + esc(pages) + ' 页 · 共 ' + esc(state.total) + ' 项</span>' +
+        '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="skills-page-next"' + (state.page >= pages ? ' disabled' : '') + '>下一页</button>' +
+        '</div>';
+    }
+
+    function renderContent() {
       var installsById = installedLookup(state.installs);
-      var visibleCatalog = filteredCatalog();
-      var markets = connectedMarkets(state.catalog);
-      var installedMarkup = state.installs.length
-        ? state.installs.map(function (item) { return renderInstallCard(item, state); }).join('')
-        : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">企业技能库暂无已安装技能</div></li>';
-      var catalogMarkup = visibleCatalog.length
-        ? visibleCatalog.map(function (item) { return renderCatalogCard(item, installsById, state); }).join('')
-        : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">当前筛选条件下暂无可展示技能</div></li>';
+      if (isInstalledTab()) {
+        var visibleInstalls = filterInstalls(state.installs, state.query);
+        var installedMarkup = visibleInstalls.length
+          ? visibleInstalls.map(function (item) { return renderInstallCard(item, state); }).join('')
+          : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">' +
+            (state.installs.length ? '当前搜索条件下暂无已安装技能' : '企业技能库暂无已安装技能') + '</div></li>';
+        return '<ul class="aiteam-skills-list aiteam-skills-list--grid">' + installedMarkup + '</ul>';
+      }
+      if (state.loadState.catalog === 'loading') {
+        return '<div class="aiteam-state aiteam-state-loading"><p>加载技能列表...</p></div>';
+      }
+      var catalogMarkup = state.catalog.length
+        ? state.catalog.map(function (item) { return renderCatalogCard(item, installsById, state); }).join('')
+        : '<li class="aiteam-skill-card"><div class="aiteam-skill-card__meta">该技能市场在当前筛选下暂无技能</div></li>';
+      return '<ul class="aiteam-skills-list aiteam-skills-list--grid">' + catalogMarkup + '</ul>' + renderPager();
+    }
+
+    function render() {
       var notices = buildDegradationNotes();
-      container.innerHTML =
-        '<div class="aiteam-shell__panel">' +
-        '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
-        '<h2 class="aiteam-shell__panel-title">技能市场</h2>' +
-        '<p class="aiteam-shell__panel-body">浏览技能市场并为企业安装技能。已安装技能支持升级、卸载与授权范围调整；安装后可在员工详情中为具体员工授权。</p>' +
-        '<div class="aiteam-skill-summary">' +
-        '<span class="aiteam-skill-summary__item">已安装 ' + esc(state.installs.length) + ' 项</span>' +
-        '<span class="aiteam-skill-summary__item">市场可见 ' + esc(visibleCatalog.length) + ' 项</span>' +
-        '<span class="aiteam-skill-summary__item">员工授权入口：员工详情抽屉</span>' +
-        '</div>' +
-        '<div class="aiteam-skill-markets">' +
-        '<span class="aiteam-skill-markets__label">已接入技能市场：</span>' +
-        (markets.length
-          ? markets.map(function (m) { return '<span class="aiteam-tag">' + esc(m) + '</span>'; }).join(' ')
-          : '<span class="aiteam-inline-note">暂无可用市场来源</span>') +
-        '</div>' +
+      var scopeCard = isInstalledTab() ? '' :
         '<div class="aiteam-card aiteam-card--flat">' +
         '<div class="aiteam-card__row"><strong>安装时配置授权范围</strong><span class="aiteam-inline-note">全企业共享 / 仅指定员工可用</span></div>' +
         '<div class="aiteam-action-row">' +
@@ -351,18 +418,22 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-card__meta"><span>员工 ID</span><span>' +
         '<input class="aiteam-input" data-role="install-scope-employees" value="' + esc(state.installScopeEmployeeIds.join(', ')) + '" placeholder="emp_1, emp_2">' +
         '</span></div>' +
-        '</div>' +
-        '<label class="aiteam-skills-search-wrap">' +
-        '<span class="aiteam-shell__panel-body">搜索技能名称、描述或标签</span>' +
-        '<input class="aiteam-skills-search" data-role="skills-search" type="search" value="' + esc(state.query) + '" placeholder="例如：搜索 / 表格 / 分析">' +
-        '</label>' +
+        '</div>';
+      container.innerHTML =
+        '<div class="aiteam-shell__panel aiteam-shell__panel--wide">' +
+        '<p class="aiteam-shell__panel-kicker">企业后台</p>' +
+        '<h2 class="aiteam-shell__panel-title">技能市场</h2>' +
+        '<p class="aiteam-shell__panel-body">按来源切换技能市场：「已安装」管理企业技能库，各市场标签分别浏览内置与外部技能（分页展示）。安装后可在员工详情中为具体员工授权。</p>' +
+        renderTabs() +
         '<div class="aiteam-skill-notices">' + notices.map(function (message) {
           return '<p class="aiteam-skill-notice">' + esc(message) + '</p>';
         }).join('') + '</div>' +
-        '<div class="aiteam-skills-grid">' +
-        '<section class="aiteam-skills-column"><h3>已安装技能</h3><ul class="aiteam-skills-list">' + installedMarkup + '</ul></section>' +
-        '<section class="aiteam-skills-column"><h3>市场浏览</h3><ul class="aiteam-skills-list">' + catalogMarkup + '</ul></section>' +
-        '</div>' +
+        '<label class="aiteam-skills-search-wrap">' +
+        '<span class="aiteam-shell__panel-body">' + (isInstalledTab() ? '搜索已安装技能' : '搜索该市场的技能名称、描述或标签') + '</span>' +
+        '<input class="aiteam-skills-search" data-role="skills-search" type="search" value="' + esc(state.query) + '" placeholder="例如：搜索 / 表格 / 分析">' +
+        '</label>' +
+        scopeCard +
+        '<div class="aiteam-skills-content">' + renderContent() + '</div>' +
         '</div>';
       bindEvents();
     }
@@ -488,9 +559,39 @@ window.aiteam = window.aiteam || {};
       });
     }
 
+    // Fetch one page of the active source tab from the backend (server-side
+    // pagination + per-source filtering). No-op on the 已安装 tab.
+    function loadCatalogPage() {
+      if (isInstalledTab()) { render(); return; }
+      state.loadState.catalog = 'loading';
+      render();
+      return ns.api.getSkillCatalog({ query: {
+        source_marketplace: state.activeTab,
+        page: state.page,
+        page_size: state.pageSize,
+        q: state.query || undefined
+      } }).then(function (result) {
+        if (result.ok) {
+          state.catalog = normalizeItems(result.data).map(normalizeCatalogItem);
+          state.total = Number(result.data && result.data.total) || state.catalog.length;
+          state.page = Number(result.data && result.data.page) || state.page;
+          if (result.data && Array.isArray(result.data.sources) && result.data.sources.length) {
+            state.sources = result.data.sources;
+          }
+          state.loadState.catalog = 'ready';
+        } else {
+          state.catalog = [];
+          state.loadState.catalog = result.status === 501 ? 'degraded' : 'error';
+          if (result.status !== 501) setNotice('技能市场读取失败：' + apiErrorMessage(result));
+        }
+        render();
+        return result;
+      });
+    }
+
     function load() {
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载技能市场...</p></div>';
-      ns.api.getSkillInstalls().then(function (installResult) {
+      return ns.api.getSkillInstalls().then(function (installResult) {
         if (installResult.ok) {
           state.installs = normalizeItems(installResult.data).map(normalizeInstall);
           state.loadState.installs = 'ready';
@@ -501,19 +602,14 @@ window.aiteam = window.aiteam || {};
             setNotice('企业技能库读取失败：' + apiErrorMessage(installResult));
           }
         }
-
-        ns.api.getSkillCatalog().then(function (catalogResult) {
-          if (catalogResult.ok) {
-            state.catalog = normalizeItems(catalogResult.data).map(normalizeCatalogItem);
-            state.loadState.catalog = 'ready';
-          } else {
-            state.catalog = [];
-            state.loadState.catalog = catalogResult.status === 501 ? 'degraded' : 'error';
-            if (catalogResult.status !== 501) {
-              setNotice('技能市场读取失败：' + apiErrorMessage(catalogResult));
-            }
+        // Cheap probe to discover the source-marketplace facets (tab bar); the
+        // default 已安装 tab renders from installs without a catalog fetch.
+        return ns.api.getSkillCatalog({ query: { page: 1, page_size: 1 } }).then(function (facetResult) {
+          if (facetResult.ok && facetResult.data && Array.isArray(facetResult.data.sources)) {
+            state.sources = facetResult.data.sources;
           }
           render();
+          return facetResult;
         });
       });
     }
@@ -526,7 +622,11 @@ window.aiteam = window.aiteam || {};
         normalizeInstall: normalizeInstall,
         normalizeCatalogItem: normalizeCatalogItem,
         filterCatalog: filterCatalog,
+        filterInstalls: filterInstalls,
         setInstallScope: setInstallScope,
+        setTab: setTab,
+        goToPage: goToPage,
+        loadCatalogPage: loadCatalogPage,
         installSkill: installSkill,
         upgradeInstall: upgradeInstall,
         updateScope: updateScope,
