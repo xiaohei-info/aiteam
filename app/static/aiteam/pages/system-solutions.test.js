@@ -176,31 +176,21 @@ async function run() {
   assert(host.innerHTML.indexOf('方案详情') !== -1, 'detail pane should render (default-selected first solution)');
   assert(host.innerHTML.indexOf('data-aiteam-action="update"') !== -1, 'governance actions should live in the detail pane');
 
-  // 更新按钮 → PATCH name + default_skill_bundle。
+  // 更新按钮 → 打开「编辑行业方案」抽屉（复用创建抽屉、全量回填，含专家选择器+编排）。
+  // 专家绑定已并入抽屉的可搜索专家选择器，不再单独 window.prompt 绑定模板。
+  // 抽屉内表单提交依赖真实 DOM，由 E2E 验证；此处验证点击挂载编辑抽屉。
   const updateHost = createHost();
   updateHost._buttons = [createActionButton('update', 'sol_retail')];
   page.init(updateHost);
   await nextTick();
   await nextTick();
-  promptQueue.push('零售方案Pro', 'bundle-retail');
+  const editBefore = appRoot.children.length;
   updateHost._buttons[0].dispatchEvent({ type: 'click' });
-  await nextTick();
-  const patchUpdate = lastCall('PATCH', '/api/system-admin/solutions/sol_retail');
-  assert(patchUpdate && patchUpdate.body.name === '零售方案Pro' && patchUpdate.body.default_skill_bundle === 'bundle-retail',
-    'update button should PATCH name + default_skill_bundle');
-
-  // 绑定按钮 → PATCH template_ids。
-  const bindHost = createHost();
-  bindHost._buttons = [createActionButton('bind', 'sol_retail')];
-  page.init(bindHost);
-  await nextTick();
-  await nextTick();
-  promptQueue.push('tpl_ops, tpl_sales');
-  bindHost._buttons[0].dispatchEvent({ type: 'click' });
-  await nextTick();
-  const patchBind = lastCall('PATCH', '/api/system-admin/solutions/sol_retail');
-  assert(patchBind && JSON.stringify(patchBind.body.template_ids) === JSON.stringify(['tpl_ops', 'tpl_sales']),
-    'bind button should PATCH template_ids');
+  const editDrawer = appRoot.children.slice(editBefore).find(function (c) { return (c.innerHTML || '').indexOf('编辑行业方案') !== -1; });
+  assert(!!editDrawer, 'clicking 编辑方案 should mount an edit drawer (reuses the create form)');
+  assert(editDrawer && editDrawer.innerHTML.indexOf('配置专家') !== -1, 'edit drawer should include the expert picker');
+  assert(editDrawer && editDrawer.innerHTML.indexOf('data-picker="sol-tpl"') !== -1, 'expert picker should be searchable');
+  assert(editDrawer && editDrawer.innerHTML.indexOf('data-aiteam-sol-planner') !== -1, 'edit drawer should include orchestration fields');
 
   // 发布按钮 → PATCH publish_action。
   const publishHost = createHost();

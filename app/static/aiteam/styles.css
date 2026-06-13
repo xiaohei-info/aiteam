@@ -2496,6 +2496,39 @@ body.aiteam-shell-active .aiteam-shell {
   flex: 1 1 140px;
 }
 
+/* Detail sub-block: a labelled group (e.g. 配置专家 chips, 协作编排规则). */
+.aiteam-detail-block {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+/* One orchestration rule (planner/subtask/aggregate) — label + full text. */
+.aiteam-orch-rule {
+  display: grid;
+  gap: 4px;
+}
+
+.aiteam-orch-rule__text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(139, 148, 158, 0.16);
+  background: rgba(13, 17, 23, 0.5);
+  color: #c9d1d9;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', Consolas, monospace;
+}
+
+.aiteam-orch-rule__empty {
+  margin: 0;
+  font-size: 12px;
+  color: #8b949e;
+}
+
 .aiteam-state {
   border-radius: 24px;
   padding: 32px;

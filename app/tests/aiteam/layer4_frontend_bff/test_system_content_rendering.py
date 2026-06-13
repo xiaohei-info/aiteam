@@ -299,7 +299,7 @@ def test_system_solutions_renders_industry_cards_sorting_slot_and_apply_stats() 
             ]
         },
     )
-    assert "绑定模板" in payload["html"]
+    assert "编辑方案" in payload["html"]  # 专家绑定已并入编辑抽屉，不再有独立「绑定模板」
     assert "应用数" in payload["html"]
     assert "拖拽排序" not in payload["html"]  # 假交互已移除
 
@@ -345,7 +345,10 @@ def test_system_solutions_preview_switches_between_solution_cards() -> None:
     assert "方案详情" in payload["firstPreviewHtml"]
     assert "零售方案" in payload["firstPreviewHtml"]
     assert "覆盖门店运营、销售分析与复购增长" in payload["firstPreviewHtml"]
-    assert "tpl_ops, tpl_sales" in payload["firstPreviewHtml"]
+    # 详情按专家名渲染成独立 chip（无 templates 时回退为 ID）+ 编排规则成块展示。
+    assert "tpl_ops" in payload["firstPreviewHtml"]
+    assert "tpl_sales" in payload["firstPreviewHtml"]
+    assert "协作编排规则" in payload["firstPreviewHtml"]
     assert "财务方案" in payload["secondPreviewHtml"]
     assert "覆盖预算分析、利润测算与经营看板" in payload["secondPreviewHtml"]
     assert "tpl_finance" in payload["secondPreviewHtml"]

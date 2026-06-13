@@ -14,6 +14,37 @@ window.aiteam = window.aiteam || {};
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // A search box + scrollable checkbox list, scoped by a unique `key` so several
+  // pickers can coexist in one drawer. `rowsHtml` is the joined <label> rows the
+  // caller already built. Filtering is pure DOM (toggle label.hidden by text).
+  function renderPicker(key, rowsHtml, opts) {
+    var o = opts || {};
+    if (!rowsHtml) {
+      return '<p class="aiteam-drawer__desc">' + escapeHtml(o.empty || '暂无可选项') + '</p>';
+    }
+    return '<div class="aiteam-picker" data-picker="' + escapeHtml(key) + '">' +
+      '<input class="aiteam-input aiteam-picker__search" type="text" data-picker-search' +
+      ' placeholder="' + escapeHtml(o.placeholder || '输入关键词筛选…') + '">' +
+      '<div class="aiteam-picker__list">' + rowsHtml + '</div>' +
+      '</div>';
+  }
+
+  function bindPicker(scope, key) {
+    if (!scope || !scope.querySelector) return;
+    var box = scope.querySelector('[data-picker="' + key + '"]');
+    if (!box || !box.querySelector) return;
+    var search = box.querySelector('[data-picker-search]');
+    if (!search || !search.addEventListener) return;
+    search.addEventListener('input', function () {
+      var q = trimText(search.value).toLowerCase();
+      var labels = box.querySelectorAll('.aiteam-drawer__check');
+      for (var i = 0; i < labels.length; i++) {
+        var text = (labels[i].textContent || '').toLowerCase();
+        labels[i].hidden = !!(q && text.indexOf(q) === -1);
+      }
+    });
+  }
+
   function normalizeItems(payload) {
     if (Array.isArray(payload)) return payload.slice();
     if (payload && Array.isArray(payload.items)) return payload.items.slice();
@@ -86,17 +117,31 @@ window.aiteam = window.aiteam || {};
     }).join('') + '</div>';
   }
 
-  function renderSolutionPreview(item) {
+  function orchestrationBlock(label, text) {
+    var value = trimText(text);
+    if (!value) {
+      return '<div class="aiteam-orch-rule"><span class="aiteam-shell__meta-label">' + escapeHtml(label) + '</span><p class="aiteam-orch-rule__empty">未配置，运行时回退到内置默认模板</p></div>';
+    }
+    return '<div class="aiteam-orch-rule"><span class="aiteam-shell__meta-label">' + escapeHtml(label) + '</span><pre class="aiteam-orch-rule__text">' + escapeHtml(value) + '</pre></div>';
+  }
+
+  function renderSolutionPreview(item, templates) {
     if (!item) {
       return '<div class="aiteam-inline-empty">选择左侧的行业方案后，在此查看详情并进行治理操作。</div>';
     }
     var templateIds = normalizeTemplateIds(item.template_ids || []);
+    var names = templateNames(templateIds, templates);
     var tags = Array.isArray(item.tags) ? item.tags : [];
     var solutionId = item.solution_id || item.id || '';
     var status = item.status || item.publish_state || 'draft';
     var publishLabel = status === 'published' ? '下架' : '发布';
     var publishAction = status === 'published' ? 'unpublish' : 'publish';
     var hasOrchestration = !!(trimText(item.planner_prompt) || trimText(item.subtask_prompt) || trimText(item.aggregate_prompt));
+
+    var expertList = names.length
+      ? '<div class="aiteam-chip-row">' + names.map(function (n) { return '<span class="aiteam-tag">' + escapeHtml(n) + '</span>'; }).join('') + '</div>'
+      : '<p class="aiteam-inline-note">未配置专家</p>';
+
     return '' +
       '<div class="aiteam-detail-section">' +
       '<h3>方案详情</h3>' +
@@ -107,16 +152,19 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-detail-kv aiteam-detail-kv--wrap">' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">方案 ID</span><span class="aiteam-shell__meta-value">' + escapeHtml(solutionId) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(status) + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">绑定模板</span><span class="aiteam-shell__meta-value">' + escapeHtml(templateIds.length ? templateIds.join(', ') : '未绑定') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用数</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.apply_count || 0) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布范围</span><span class="aiteam-shell__meta-value">' + escapeHtml(scopeLabel(item)) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + escapeHtml(tags.length ? tags.join(' / ') : '—') + '</span></div>' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">协作编排</span><span class="aiteam-shell__meta-value">' + (hasOrchestration ? '已配置（应用时随团队下发）' : '使用内置默认模板') + '</span></div>' +
+      '</div>' +
+      '<div class="aiteam-detail-block"><span class="aiteam-shell__meta-label">配置专家（' + names.length + '）</span>' + expertList + '</div>' +
+      '<div class="aiteam-detail-block"><span class="aiteam-shell__meta-label">协作编排规则' + (hasOrchestration ? '' : '（全部使用内置默认模板）') + '</span>' +
+      orchestrationBlock('规划 Planner', item.planner_prompt) +
+      orchestrationBlock('子任务 Subtask', item.subtask_prompt) +
+      orchestrationBlock('汇总 Aggregate', item.aggregate_prompt) +
       '</div>' +
       '<div class="aiteam-detail-section__actions"><span class="aiteam-inline-note">治理操作</span>' +
       '<div class="aiteam-action-row">' +
-      '<button class="aiteam-btn" data-aiteam-action="update" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">更新方案</button>' +
-      '<button class="aiteam-btn aiteam-btn--secondary" data-aiteam-action="bind" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">绑定模板</button>' +
+      '<button class="aiteam-btn" data-aiteam-action="update" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">编辑方案</button>' +
       '<button class="aiteam-btn aiteam-btn--secondary" data-aiteam-action="' + publishAction + '" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">' + publishLabel + '</button>' +
       '</div>' +
       '</div>' +
@@ -149,36 +197,47 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__toolbar"><button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-solution-create-open="1">➕ 创建方案</button></div>' +
       '<div class="aiteam-grid aiteam-grid--split">' +
       '<section class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>方案列表</h3><span class="aiteam-inline-note">共 ' + items.length + ' 个</span></div>' + renderSolutionCards(items, selectedId) + '</section>' +
-      '<section class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution) + '</section>' +
+      '<section class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution, state && state.templates) + '</section>' +
       '</div>' +
       '</div>';
   }
 
   // __PANEL_PLACEHOLDER__
 
-  function renderEnterpriseCheckboxes(enterprises) {
+  function enterpriseRows(enterprises, selectedIds) {
     var list = Array.isArray(enterprises) ? enterprises : [];
-    if (!list.length) {
-      return '<p class="aiteam-drawer__desc">暂无企业可选（创建后可在更新中调整）。</p>';
-    }
+    var picked = {};
+    (selectedIds || []).forEach(function (id) { picked[id] = true; });
     return list.map(function (ent) {
       var id = ent.enterprise_id || ent.id || '';
       var name = ent.name || id;
-      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-scope-ent="' + escapeHtml(id) + '"> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(id) + '</span></label>';
+      var checked = picked[id] ? ' checked' : '';
+      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-scope-ent="' + escapeHtml(id) + '"' + checked + '> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(id) + '</span></label>';
     }).join('');
   }
 
-  function renderTemplateCheckboxes(templates) {
+  function templateRows(templates, selectedIds) {
     var list = Array.isArray(templates) ? templates : [];
-    if (!list.length) {
-      return '<p class="aiteam-drawer__desc">暂无可选专家模板，请先在「专家管理」中创建。</p>';
-    }
+    var picked = {};
+    (selectedIds || []).forEach(function (id) { picked[id] = true; });
     return list.map(function (t) {
       var id = t.template_id || t.id || '';
       var name = t.name || id;
       var role = t.role_name || t.role || '';
-      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-pick="' + escapeHtml(id) + '"> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(role || id) + '</span></label>';
+      var checked = picked[id] ? ' checked' : '';
+      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-pick="' + escapeHtml(id) + '"' + checked + '> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(role || id) + '</span></label>';
     }).join('');
+  }
+
+  // Resolve bound template ids to display names using the loaded template list.
+  function templateNames(templateIds, templates) {
+    var list = Array.isArray(templates) ? templates : [];
+    var byId = {};
+    list.forEach(function (t) { byId[t.template_id || t.id] = t; });
+    return (templateIds || []).map(function (id) {
+      var t = byId[id];
+      return t ? (t.name || id) : id;
+    });
   }
 
   function closeDrawer() {
@@ -188,8 +247,18 @@ window.aiteam = window.aiteam || {};
     if (drawer && drawer.parentNode) drawer.parentNode.removeChild(drawer);
   }
 
-  function openCreateDrawer(state, onSubmit) {
+  function solutionDescription(item) {
+    if (!item) return '';
+    return item.description || ((item.default_kb_blueprint || {}).description) || '';
+  }
+
+  function openCreateDrawer(state, onSubmit, editSolution) {
     closeDrawer();
+    var edit = editSolution || null;
+    var selectedTplIds = edit ? normalizeTemplateIds(edit.template_ids || []) : [];
+    var scope = (edit && edit.publish_scope) || {};
+    var selectedEntIds = scope.mode === 'selected' && Array.isArray(scope.enterprise_ids) ? scope.enterprise_ids : [];
+
     var overlay = document.createElement('div');
     overlay.className = 'aiteam-drawer__overlay';
     overlay.id = 'aiteam-solution-create-overlay';
@@ -200,47 +269,54 @@ window.aiteam = window.aiteam || {};
     drawer.id = 'aiteam-solution-create-drawer';
     drawer.innerHTML =
       '<div class="aiteam-drawer__header">' +
-      '<h2 class="aiteam-drawer__title">创建行业方案</h2>' +
+      '<h2 class="aiteam-drawer__title">' + (edit ? '编辑行业方案' : '创建行业方案') + '</h2>' +
       '<button type="button" class="aiteam-drawer__close" data-aiteam-solution-create-close="1">×</button>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">方案名称 *</span>' +
-      '<input class="aiteam-input" type="text" data-aiteam-sol-name placeholder="例如：零售标准方案"></label>' +
+      '<input class="aiteam-input" type="text" data-aiteam-sol-name placeholder="例如：零售标准方案" value="' + escapeHtml(edit ? (edit.name || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">方案描述</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-desc placeholder="一句话描述这个行业方案"></textarea></label>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-desc placeholder="一句话描述这个行业方案">' + escapeHtml(solutionDescription(edit)) + '</textarea></label>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<h3 class="aiteam-drawer__section-title">配置专家</h3>' +
-      '<div class="aiteam-drawer__scope-list" data-aiteam-sol-templates>' + renderTemplateCheckboxes(state.templates) + '</div>' +
+      '<p class="aiteam-drawer__desc">勾选构成该方案数字员工团队的专家，企业应用方案时按此创建对应员工。</p>' +
+      renderPicker('sol-tpl', templateRows(state.templates, selectedTplIds), { placeholder: '搜索专家名称 / 角色…', empty: '暂无可选专家模板，请先在「专家管理」中创建。' }) +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<h3 class="aiteam-drawer__section-title">发布范围</h3>' +
-      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-sol-scope" value="all" checked data-aiteam-scope-mode="all"> 全部企业可见</label>' +
-      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-sol-scope" value="selected" data-aiteam-scope-mode="selected"> 仅指定企业可见</label>' +
-      '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises hidden>' + renderEnterpriseCheckboxes(state.enterprises) + '</div>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-sol-scope" value="all"' + (selectedEntIds.length ? '' : ' checked') + ' data-aiteam-scope-mode="all"> 全部企业可见</label>' +
+      '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-sol-scope" value="selected"' + (selectedEntIds.length ? ' checked' : '') + ' data-aiteam-scope-mode="selected"> 仅指定企业可见</label>' +
+      '<div class="aiteam-drawer__scope-list" data-aiteam-scope-enterprises' + (selectedEntIds.length ? '' : ' hidden') + '>' +
+      renderPicker('sol-ent', enterpriseRows(state.enterprises, selectedEntIds), { placeholder: '搜索企业名称…', empty: '暂无企业可选（创建后可在更新中调整）。' }) +
+      '</div>' +
       '</div>' +
       '<div class="aiteam-drawer__section">' +
       '<h3 class="aiteam-drawer__section-title">协作编排规则（多 Agent 团队如何协作）</h3>' +
       '<p class="aiteam-drawer__desc">方案自带的群聊协作编排提示词，企业应用后随团队一并下发、无需自行配置。三段均可留空，留空则运行时回退到内置默认模板。</p>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">规划提示词 (Planner)</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-planner placeholder="主持人如何把目标拆解为子任务并分配成员。占位符：{roster} {message_text} {max_subtasks}"></textarea></label>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-planner placeholder="主持人如何把目标拆解为子任务并分配成员。占位符：{roster} {message_text} {max_subtasks}">' + escapeHtml(edit ? (edit.planner_prompt || '') : '') + '</textarea></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">子任务提示词 (Subtask)</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-subtask placeholder="成员执行各自子任务时的提示。占位符：{message_text} {task_title} {task_desc} {dep_block}"></textarea></label>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-subtask placeholder="成员执行各自子任务时的提示。占位符：{message_text} {task_title} {task_desc} {dep_block}">' + escapeHtml(edit ? (edit.subtask_prompt || '') : '') + '</textarea></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">汇总提示词 (Aggregate)</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-aggregate placeholder="主持人如何把成员结果汇总为最终交付。占位符：{message_text} {subtask_results}"></textarea></label>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-sol-aggregate placeholder="主持人如何把成员结果汇总为最终交付。占位符：{message_text} {subtask_results}">' + escapeHtml(edit ? (edit.aggregate_prompt || '') : '') + '</textarea></label>' +
       '</div>' +
-      '<div class="aiteam-drawer__section">' +
-      '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-sol-publish> 创建后立即发布</label>' +
-      '</div>' +
+      (edit ? '' :
+        '<div class="aiteam-drawer__section">' +
+        '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-sol-publish> 创建后立即发布</label>' +
+        '</div>') +
       '<div class="aiteam-drawer__section" data-aiteam-sol-error hidden></div>' +
       '<div class="aiteam-drawer__footer">' +
       '<button type="button" class="aiteam-btn" data-aiteam-solution-create-close="1">取消</button> ' +
-      '<button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-sol-submit>创建</button>' +
+      '<button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-sol-submit>' + (edit ? '保存' : '创建') + '</button>' +
       '</div>';
 
     var host = document.getElementById('aiteam-app') || document.body;
     host.appendChild(overlay);
     host.appendChild(drawer);
+
+    bindPicker(drawer, 'sol-tpl');
+    bindPicker(drawer, 'sol-ent');
 
     var scopeRadios = drawer.querySelectorAll('[data-aiteam-scope-mode]');
     var scopeBox = drawer.querySelector('[data-aiteam-scope-enterprises]');
@@ -275,7 +351,7 @@ window.aiteam = window.aiteam || {};
           templateIds.push(picks[p].getAttribute('data-aiteam-tpl-pick'));
         }
         var payload = { name: name, template_ids: templateIds };
-        if (desc) payload.default_kb_blueprint = { description: desc };
+        payload.default_kb_blueprint = { description: desc };
         payload.planner_prompt = trimText((drawer.querySelector('[data-aiteam-sol-planner]') || {}).value);
         payload.subtask_prompt = trimText((drawer.querySelector('[data-aiteam-sol-subtask]') || {}).value);
         payload.aggregate_prompt = trimText((drawer.querySelector('[data-aiteam-sol-aggregate]') || {}).value);
@@ -299,7 +375,7 @@ window.aiteam = window.aiteam || {};
             closeDrawer();
           } else {
             submitBtn.disabled = false;
-            showError((result && result.error) || '创建失败，请重试');
+            showError((result && result.error) || (edit ? '保存失败，请重试' : '创建失败，请重试'));
           }
         });
       });
@@ -328,21 +404,9 @@ window.aiteam = window.aiteam || {};
         if (!solutionId || !action) return;
         var current = findSolution(state.items, solutionId) || {};
         if (action === 'update') {
-          var nextName = typeof window.prompt === 'function' ? window.prompt('请输入方案名称', current.name || '') : current.name;
-          if (nextName === null) return;
-          var nextBundle = typeof window.prompt === 'function' ? window.prompt('请输入默认技能包（可留空）', current.default_skill_bundle || '') : (current.default_skill_bundle || '');
-          if (nextBundle === null) return;
-          container.lastUpdateHandler(solutionId, {
-            name: trimText(nextName),
-            default_skill_bundle: trimText(nextBundle)
-          });
-          return;
-        }
-        if (action === 'bind') {
-          var currentTemplates = normalizeTemplateIds(current.template_ids || []).join(', ');
-          var nextTemplates = typeof window.prompt === 'function' ? window.prompt('请输入模板 ID，使用逗号分隔', currentTemplates) : currentTemplates;
-          if (nextTemplates === null) return;
-          container.lastBindHandler(solutionId, nextTemplates.split(','));
+          openCreateDrawer(state, function (payload) {
+            return container.lastUpdateHandler(solutionId, payload);
+          }, current);
           return;
         }
         container.lastPublishHandler(solutionId, action);
@@ -404,19 +468,6 @@ window.aiteam = window.aiteam || {};
             return result;
           }
           rerender('系统行业方案更新失败');
-          return result;
-        });
-      };
-
-      container.lastBindHandler = function (solutionId, templateIds) {
-        var request = { template_ids: normalizeTemplateIds(templateIds || []) };
-        return ns.api.patch('/api/system-admin/solutions/' + encodeURIComponent(solutionId), request).then(function (result) {
-          if (result && result.ok) {
-            state.items = upsertSolution(state.items, solutionId, mergeSolutionRecord(result.data || {}, request));
-            rerender('系统行业方案模板绑定已更新');
-            return result;
-          }
-          rerender('系统行业方案模板绑定失败');
           return result;
         });
       };
