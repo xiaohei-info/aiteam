@@ -122,6 +122,11 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
+  function readDepartmentInput(container) {
+    var input = container && container.querySelector ? container.querySelector('[data-role="solution-department-id"]') : null;
+    return String((input && input.value) || '').replace(/^\s+|\s+$/g, '');
+  }
+
   function createController(container) {
     var state = {
       items: [],
@@ -237,6 +242,9 @@ window.aiteam = window.aiteam || {};
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近应用员工</span><span class="aiteam-shell__meta-value">' + esc(createdEmployees) + '</span></div>' +
         '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">最近创建知识库</span><span class="aiteam-shell__meta-value">' + esc(createdKnowledge) + '</span></div>' +
         '</div>' +
+        '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">目标部门（可选）</span>' +
+        '<input class="aiteam-input" type="text" data-role="solution-department-id" placeholder="留空则按方案默认归属" value="' + esc((state.previewPayload && state.previewSolutionId === item.solution_id ? state.previewPayload.department_id : '') || '') + '">' +
+        '<span class="aiteam-inline-note">应用时如需把新建员工归属到指定部门，可在这里填写部门 ID；不再弹出额外输入框。</span></label>' +
         (showPreview ? renderApplyPreview(item, state.previewPayload) : '') +
         '<div class="aiteam-skill-card__actions">' +
         '<button type="button" class="aiteam-btn" data-role="solution-apply" data-mode="' + esc(primaryMode) + '" data-solution-id="' + esc(item.solution_id) + '"' + disabled + '>' + esc(primaryLabel) + '</button>' +
@@ -274,14 +282,9 @@ window.aiteam = window.aiteam || {};
         buttons[i].addEventListener('click', function () {
           var solutionId = this.getAttribute('data-solution-id');
           var mode = String(this.getAttribute('data-mode') || 'append');
-          var defaultDept = '';
-          var departmentId = typeof window.prompt === 'function'
-            ? window.prompt('请输入目标部门 ID（可留空）', defaultDept)
-            : defaultDept;
-          if (departmentId === null) return;
           var payload = {
             mode: mode,
-            department_id: String(departmentId || '').replace(/^\s+|\s+$/g, ''),
+            department_id: readDepartmentInput(container),
             idempotency_key: 'solution-apply-' + solutionId + '-' + mode,
           };
           container.lastPreviewHandler(solutionId, payload);

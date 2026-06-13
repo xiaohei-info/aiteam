@@ -64,7 +64,17 @@ const context = {
         },
         recruit(body) {
           apiCalls.push('recruit:' + JSON.stringify(body));
-          return Promise.resolve({ ok: true, data: { order_id: 'ord_1', employee_id: 'emp_new', navigation: { workbench: '/app/workbench' } } });
+          return Promise.resolve({
+            ok: true,
+            data: {
+              order_id: 'ord_1',
+              employee_id: 'emp_new',
+              navigation: {
+                workbench: '/app/workbench',
+                chat: '/app/chat/conv_emp_new',
+              },
+            },
+          });
         },
       },
       states: {
@@ -118,11 +128,19 @@ async function run() {
   assert(host.innerHTML.indexOf('营销分析师') !== -1, 'page should render template item');
   assert(host.innerHTML.indexOf('立即招募') !== -1, 'page should render recruit action');
   assert(host.innerHTML.indexOf('/app/marketplace/tpl_marketing') !== -1, 'page should link to frontend template detail');
+  assert(host.innerHTML.indexOf('可直接开聊') !== -1, 'page should explain the streamlined list flow');
+  assert(host.innerHTML.indexOf('已招募') !== -1, 'recruited templates should render a clear recruited badge');
+  assert(host.innerHTML.indexOf('已招募专家') !== -1, 'page should group recruited templates separately');
+  assert(host.innerHTML.indexOf('可招募专家') !== -1, 'page should group unrecruited templates separately');
+  assert(host.innerHTML.indexOf('aiteam-list-row') !== -1, 'page should render compact list rows instead of bulky cards');
 
-  const controller = page.__test.createController(createElement('div'));
+  const controllerHost = createElement('div');
+  const controller = page.__test.createController(controllerHost);
   await controller.load();
   await controller.__test.recruitTemplate('tpl_marketing');
   assert(apiCalls.indexOf('recruit:{"template_id":"tpl_marketing","display_name":"新招募员工","idempotency_key":"admin-template-recruit-tpl_marketing"}') !== -1, 'recruitTemplate should post canonical recruit payload');
+  assert(controllerHost.innerHTML.indexOf('/app/chat/conv_emp_new') !== -1, 'successful recruit should expose a direct chat CTA');
+  assert(controllerHost.innerHTML.indexOf('开始私聊') !== -1, 'successful recruit should label the direct chat CTA');
 
   if (failed) {
     console.error('admin-templates.test.js failed');

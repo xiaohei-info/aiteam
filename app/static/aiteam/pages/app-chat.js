@@ -932,6 +932,50 @@ window.aiteam = window.aiteam || {};
     return { pinned: pinned, groups: groups, others: others };
   }
 
+  function markConversationReadInSections(sections, conversationId) {
+    sections = sections || {};
+    var targetId = String(conversationId || '');
+    function clearUnread(list) {
+      var items = Array.isArray(list) ? list : [];
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i] || {};
+        if (String(item.conversation_id || '') === targetId) {
+          item.unread_count = 0;
+        }
+      }
+    }
+    clearUnread(sections.pinned);
+    clearUnread(sections.groups);
+    clearUnread(sections.others);
+    return sections;
+  }
+
+  function syncOpenedConversationRead(ns, conversationId, sections, onDone) {
+    var targetId = String(conversationId || '');
+    if (!targetId || !ns.api || typeof ns.api.updateWorkbenchState !== 'function') {
+      if (typeof onDone === 'function') onDone(sections || null);
+      return;
+    }
+    var currentSections = sections || { pinned: [], groups: [], others: [] };
+    var lists = []
+      .concat(Array.isArray(currentSections.pinned) ? currentSections.pinned : [])
+      .concat(Array.isArray(currentSections.groups) ? currentSections.groups : [])
+      .concat(Array.isArray(currentSections.others) ? currentSections.others : []);
+    var hasUnread = lists.some(function (item) {
+      return String(item && item.conversation_id || '') === targetId && Number(item && item.unread_count) > 0;
+    });
+    if (!hasUnread) {
+      if (typeof onDone === 'function') onDone(currentSections);
+      return;
+    }
+    ns.api.updateWorkbenchState({ conversation_id: targetId, mark_read: true }).then(function (result) {
+      if (result && result.ok) markConversationReadInSections(currentSections, targetId);
+      if (typeof onDone === 'function') onDone(currentSections);
+    }).catch(function () {
+      if (typeof onDone === 'function') onDone(currentSections);
+    });
+  }
+
   // Demo 对齐的消息中心三栏壳：左侧数字员工列表 / 中间会话 / 右侧智能体详情。
   function chatShell(opts) {
     opts = opts || {};
@@ -1121,7 +1165,8 @@ window.aiteam = window.aiteam || {};
         }
         if (ns.api && typeof ns.api.getWorkbench === 'function') {
           ns.api.getWorkbench().then(function (wb) {
-            finish(mapWorkbenchToSections((wb && wb.ok && wb.data) ? wb.data : {}));
+            var sections = mapWorkbenchToSections((wb && wb.ok && wb.data) ? wb.data : {});
+            syncOpenedConversationRead(ns, conv.conversation_id, sections, finish);
           }).catch(function () { finish(null); });
         } else {
           finish(null);

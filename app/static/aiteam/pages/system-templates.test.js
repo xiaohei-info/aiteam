@@ -80,7 +80,10 @@ const document = {
 };
 
 const apiCalls = [];
-const promptQueue = [];
+var resolveEnterprises;
+const enterprisesReady = new Promise((resolve) => {
+  resolveEnterprises = resolve;
+});
 const context = {
   window: {
     aiteam: {
@@ -88,7 +91,7 @@ const context = {
         get(url) {
           apiCalls.push({ method: 'GET', url, body: null });
           if (url === '/api/system-admin/enterprises') {
-            return Promise.resolve({ ok: true, data: { enterprises: [{ enterprise_id: 'ent_test', name: 'Test Corp' }] } });
+            return enterprisesReady;
           }
           return Promise.resolve({
             ok: true,
@@ -104,10 +107,6 @@ const context = {
           return Promise.resolve({ ok: true, data: {} });
         },
       },
-    },
-    prompt(message, defaultValue) {
-      if (!promptQueue.length) return defaultValue || '';
-      return promptQueue.shift();
     },
   },
   document,
@@ -158,6 +157,14 @@ async function run() {
   const drawerCountBefore = appRoot.children.length;
   host._openBtn.dispatchEvent({ type: 'click' });
   assert(appRoot.children.length > drawerCountBefore, 'clicking 创建专家 should mount a drawer into aiteam-app');
+  var createDrawer = appRoot.children[appRoot.children.length - 1];
+  assert((createDrawer.innerHTML || '').indexOf('Test Corp') === -1, 'drawer opened before enterprise fetch should not yet have enterprise rows');
+  resolveEnterprises({ ok: true, data: { enterprises: [{ enterprise_id: 'ent_test', name: 'Test Corp' }] } });
+  await nextTick();
+  await nextTick();
+  createDrawer = appRoot.children[appRoot.children.length - 1];
+  assert((createDrawer.innerHTML || '').indexOf('Test Corp') !== -1, 'drawer should refresh enterprise rows after async enterprise fetch resolves');
+  assert((createDrawer.innerHTML || '').indexOf('data-picker-search') !== -1, 'drawer should keep the searchable picker after enterprise rows arrive');
 
   // 表格更新按钮 → 打开「编辑专家」抽屉（复用创建抽屉、全量回填编辑）。
   // 抽屉内表单提交依赖真实 DOM，由 E2E 验证；此处验证点击会挂载编辑抽屉。
