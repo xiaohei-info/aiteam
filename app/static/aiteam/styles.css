@@ -1762,6 +1762,34 @@ body.aiteam-shell-active .aiteam-shell {
   padding: 18px;
 }
 
+/* Card used as a clickable <button> (master list item) — reset UA button
+   styling so it reads as a full-width left-aligned card, with an active state. */
+.aiteam-card--selectable {
+  width: 100%;
+  display: block;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.aiteam-card--selectable:hover {
+  border-color: rgba(88, 166, 255, 0.4);
+  background: rgba(33, 38, 45, 0.78);
+}
+.aiteam-card--selectable.is-active {
+  border-color: var(--ait-brand);
+  box-shadow: inset 0 0 0 1px var(--ait-brand);
+}
+.aiteam-detail-section__actions {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(139, 148, 158, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .aiteam-card__row,
 .aiteam-detail-kv {
   display: flex;

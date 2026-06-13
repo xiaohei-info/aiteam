@@ -159,6 +159,13 @@ async function run() {
   host._openBtn.dispatchEvent({ type: 'click' });
   assert(appRoot.children.length > before, 'clicking 创建方案 should mount a drawer into aiteam-app');
 
+  // Option A refactor: redundant table dropped; cards(主) + 详情(含治理操作) master-detail.
+  assert(host.innerHTML.indexOf('aiteam-table') === -1, 'redundant solutions table should be removed');
+  assert(host.innerHTML.indexOf('aiteam-grid--split') !== -1, 'page should use a master-detail split layout');
+  assert(host.innerHTML.indexOf('aiteam-card--selectable') !== -1, 'solution cards should be selectable master items');
+  assert(host.innerHTML.indexOf('方案详情') !== -1, 'detail pane should render (default-selected first solution)');
+  assert(host.innerHTML.indexOf('data-aiteam-action="update"') !== -1, 'governance actions should live in the detail pane');
+
   // 更新按钮 → PATCH name + default_skill_bundle。
   const updateHost = createHost();
   updateHost._buttons = [createActionButton('update', 'sol_retail')];

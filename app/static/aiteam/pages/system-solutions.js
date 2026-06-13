@@ -69,14 +69,15 @@ window.aiteam = window.aiteam || {};
     return '指定企业 (' + ids.length + ')';
   }
 
-  function renderSolutionCards(items) {
+  function renderSolutionCards(items, selectedId) {
     if (!items.length) {
-      return '<div class="aiteam-inline-empty">暂无行业方案卡片</div>';
+      return '<div class="aiteam-inline-empty">暂无行业方案，点击右上角「创建方案」新建。</div>';
     }
     return '<div class="aiteam-stack">' + items.map(function (item) {
       var solutionId = item.solution_id || item.id || '';
       var tags = Array.isArray(item.tags) ? item.tags : [];
-      return '<button type="button" class="aiteam-card" data-aiteam-solution-preview="' + escapeHtml(solutionId) + '">' +
+      var activeClass = solutionId && solutionId === selectedId ? ' is-active' : '';
+      return '<button type="button" class="aiteam-card aiteam-card--selectable' + activeClass + '" data-aiteam-solution-preview="' + escapeHtml(solutionId) + '">' +
         '<div class="aiteam-card__row"><strong>' + escapeHtml(item.icon || '🏭') + ' ' + escapeHtml(item.name || '未命名方案') + '</strong><span class="aiteam-badge">' + escapeHtml(item.status || item.publish_state || 'draft') + '</span></div>' +
         '<div class="aiteam-card__meta"><span>模板数 ' + escapeHtml(item.template_count || normalizeTemplateIds(item.template_ids || []).length || 0) + '</span><span>应用数 ' + escapeHtml(item.apply_count || 0) + '</span></div>' +
         '<p class="aiteam-card__body">' + escapeHtml(item.description || '暂无方案描述') + '</p>' +
@@ -87,23 +88,35 @@ window.aiteam = window.aiteam || {};
 
   function renderSolutionPreview(item) {
     if (!item) {
-      return '<div class="aiteam-inline-empty">选择一个行业方案后查看方案预览。</div>';
+      return '<div class="aiteam-inline-empty">选择左侧的行业方案后，在此查看详情并进行治理操作。</div>';
     }
     var templateIds = normalizeTemplateIds(item.template_ids || []);
     var tags = Array.isArray(item.tags) ? item.tags : [];
+    var solutionId = item.solution_id || item.id || '';
+    var status = item.status || item.publish_state || 'draft';
+    var publishLabel = status === 'published' ? '下架' : '发布';
+    var publishAction = status === 'published' ? 'unpublish' : 'publish';
     return '' +
       '<div class="aiteam-detail-section">' +
-      '<h3>方案预览</h3>' +
+      '<h3>方案详情</h3>' +
       '<div class="aiteam-chat-summary__hero">' +
       '<h3>' + escapeHtml(item.icon || '🏭') + ' ' + escapeHtml(item.name || '') + '</h3>' +
       '<p>' + escapeHtml(item.description || '暂无方案描述') + '</p>' +
       '</div>' +
       '<div class="aiteam-detail-kv">' +
-      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.status || item.publish_state || 'draft') + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">方案 ID</span><span class="aiteam-shell__meta-value">' + escapeHtml(solutionId) + '</span></div>' +
+      '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">状态</span><span class="aiteam-shell__meta-value">' + escapeHtml(status) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">绑定模板</span><span class="aiteam-shell__meta-value">' + escapeHtml(templateIds.length ? templateIds.join(', ') : '未绑定') + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">应用数</span><span class="aiteam-shell__meta-value">' + escapeHtml(item.apply_count || 0) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">发布范围</span><span class="aiteam-shell__meta-value">' + escapeHtml(scopeLabel(item)) + '</span></div>' +
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">标签</span><span class="aiteam-shell__meta-value">' + escapeHtml(tags.length ? tags.join(' / ') : '—') + '</span></div>' +
+      '</div>' +
+      '<div class="aiteam-detail-section__actions"><span class="aiteam-inline-note">治理操作</span>' +
+      '<div class="aiteam-action-row">' +
+      '<button class="aiteam-btn" data-aiteam-action="update" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">更新方案</button>' +
+      '<button class="aiteam-btn aiteam-btn--secondary" data-aiteam-action="bind" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">绑定模板</button>' +
+      '<button class="aiteam-btn aiteam-btn--secondary" data-aiteam-action="' + publishAction + '" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">' + publishLabel + '</button>' +
+      '</div>' +
       '</div>' +
       '</div>';
   }
@@ -120,50 +133,22 @@ window.aiteam = window.aiteam || {};
   function renderPanel(container, state) {
     var items = normalizeItems(state && state.items);
     var notice = state && state.notice ? state.notice : '';
-    var previewSolution = findSolution(items, state && state.previewSolutionId);
-    var rows = items.map(function (item) {
-      var solutionId = item.solution_id || item.id || '';
-      var status = item.status || item.publish_state || '';
-      var templateIds = normalizeTemplateIds(item.template_ids || (item.solution_stats && item.solution_stats.template_ids) || []);
-      var templateCount = item.template_count;
-      if (typeof templateCount === 'undefined' && item.solution_stats && typeof item.solution_stats.template_count !== 'undefined') {
-        templateCount = item.solution_stats.template_count;
-      }
-      if (typeof templateCount === 'undefined') templateCount = templateIds.length;
-      var applyCount = item.apply_count;
-      if (typeof applyCount === 'undefined' && item.solution_stats && typeof item.solution_stats.apply_count !== 'undefined') {
-        applyCount = item.solution_stats.apply_count;
-      }
-      var publishLabel = status === 'published' ? '下架' : '发布';
-      var publishAction = status === 'published' ? 'unpublish' : 'publish';
-      return '<tr>' +
-        '<td>' + escapeHtml(solutionId) + '</td>' +
-        '<td>' + escapeHtml(item.name || '') + '</td>' +
-        '<td>' + escapeHtml(status) + '</td>' +
-        '<td>' + escapeHtml(scopeLabel(item)) + '</td>' +
-        '<td>' + escapeHtml(templateCount) + '</td>' +
-        '<td>' + (typeof applyCount === 'undefined' ? '-' : escapeHtml(applyCount)) + '</td>' +
-        '<td>' + escapeHtml(templateIds.length ? templateIds.join(', ') : '未绑定') + '</td>' +
-        '<td>' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="update" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">更新</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="bind" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">绑定模板</button> ' +
-          '<button class="aiteam-btn aiteam-btn--sm" data-aiteam-action="' + publishAction + '" data-aiteam-solution-id="' + escapeHtml(solutionId) + '">' + publishLabel + '</button>' +
-        '</td>' +
-        '</tr>';
-    }).join('');
+    // Default the detail pane to the first solution so its governance actions
+    // (更新/绑定/发布) are reachable without a click; explicit selection wins.
+    var previewSolution = findSolution(items, state && state.previewSolutionId) || items[0] || null;
+    var selectedId = previewSolution ? (previewSolution.solution_id || previewSolution.id || '') : '';
 
     container.innerHTML =
-      '<div class="aiteam-shell__panel">' +
+      '<div class="aiteam-shell__panel aiteam-shell__panel--wide">' +
       '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
       '<h2 class="aiteam-shell__panel-title">行业方案管理</h2>' +
-      '<p class="aiteam-shell__panel-body">管理面向企业的行业方案：创建方案、勾选专家模板、发布与下架，并控制每个方案发布给哪些企业。</p>' +
+      '<p class="aiteam-shell__panel-body">管理面向企业的行业方案：创建方案、勾选专家模板、发布与下架，并控制每个方案发布给哪些企业。左侧选择方案，右侧查看详情并治理。</p>' +
       (notice ? '<div class="aiteam-state aiteam-state-empty"><p>' + escapeHtml(notice) + '</p></div>' : '') +
       '<div class="aiteam-shell__toolbar"><button type="button" class="aiteam-btn aiteam-btn--primary" data-aiteam-solution-create-open="1">➕ 创建方案</button></div>' +
-      '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionCards(items) + '</div>' +
-      '<div class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution) + '</div>' +
-      '<table class="aiteam-table"><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>发布范围</th><th>模板数</th><th>应用数</th><th>绑定模板</th><th>治理操作</th></tr></thead><tbody>' +
-      (rows || '<tr><td colspan="8">暂无系统行业方案</td></tr>') +
-      '</tbody></table>' +
+      '<div class="aiteam-grid aiteam-grid--split">' +
+      '<section class="aiteam-panel aiteam-panel--nested"><div class="aiteam-panel__header"><h3>方案列表</h3><span class="aiteam-inline-note">共 ' + items.length + ' 个</span></div>' + renderSolutionCards(items, selectedId) + '</section>' +
+      '<section class="aiteam-panel aiteam-panel--nested">' + renderSolutionPreview(previewSolution) + '</section>' +
+      '</div>' +
       '</div>';
   }
 
