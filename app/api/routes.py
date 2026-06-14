@@ -4046,6 +4046,14 @@ def handle_get(handler, parsed) -> bool:
             return t(handler, body, status=status, content_type=ct)
         return j(handler, body, status=status)
 
+    # ── API docs (Swagger UI + auto-extracted OpenAPI index) ──
+    if parsed.path in ("/api/docs", "/api/docs/"):
+        from api.api_docs import swagger_ui_html
+        return t(handler, swagger_ui_html(), content_type="text/html; charset=utf-8")
+    if parsed.path == "/api/openapi.json":
+        from api.api_docs import build_openapi_spec
+        return j(handler, build_openapi_spec())
+
     if parsed.path.startswith("/session/static/"):
         # Strip the leading "/session" so _serve_static() sees a path that
         # starts with "/static/" (its required prefix). _serve_static enforces
