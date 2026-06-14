@@ -635,99 +635,93 @@ window.aiteam = window.aiteam || {};
     container.lastLoadEmployeesHandler();
   }
 
-  function renderGroup(container, conversation) {
-      var members = listValue(conversation.members);
-      var memberMap = {};
-      members.forEach(function (member) {
-        if (member && member.employee_id) memberMap[member.employee_id] = member;
-        if (member && member.member_ref_id) memberMap[member.member_ref_id] = member;
-      });
+  // ── Modular builders for in-place switching ──
 
-      var initialTaskItems = conversation.task_tree && Array.isArray(conversation.task_tree.items)
-        ? conversation.task_tree.items.slice()
-        : [];
+  function buildGroupState(conversation) {
+    var members = listValue(conversation.members);
+    var memberMap = {};
+    members.forEach(function (member) {
+      if (member && member.employee_id) memberMap[member.employee_id] = member;
+      if (member && member.member_ref_id) memberMap[member.member_ref_id] = member;
+    });
 
-      var persistedSenderId = '';
-      try {
-        persistedSenderId = stringValue(window.localStorage.getItem(GROUP_SENDER_STORAGE_KEY), '');
-      } catch (_error) {
-      }
+    var initialTaskItems = conversation.task_tree && Array.isArray(conversation.task_tree.items)
+      ? conversation.task_tree.items.slice()
+      : [];
 
-      var state = {
-        conversation: conversation,
-        conversationId: conversation.conversation_id,
-        runId: conversation.latest_run && conversation.latest_run.run_id,
-        cursor: Number((conversation.timeline && conversation.timeline.latest_event_cursor) || (conversation.latest_run && conversation.latest_run.latest_event_cursor) || (conversation.last_message_preview && conversation.last_message_preview.event_cursor) || 0) || 0,
-        senderId: persistedSenderId,
-        members: members,
-        memberMap: memberMap,
-        transcriptNodes: [],
-        timelineNodes: [],
-        taskMap: {},
-        taskOrder: [],
-        seenCursors: {},
-        reconnectCount: 0,
-        runtimeHandle: conversation.latest_run && conversation.latest_run.runtime_handle ? conversation.latest_run.runtime_handle : null,
-        currentRouteMode: (conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || conversation.default_route_hint || 'auto',
-        selectedMentionIds: [],
-        recoveryStatus: 'idle',
-        recoveryMessage: '',
-        recoveryError: '',
-        lastSentText: '',
-        lastRouteHint: 'auto',
+    var persistedSenderId = '';
+    try {
+      persistedSenderId = stringValue(window.localStorage.getItem(GROUP_SENDER_STORAGE_KEY), '');
+    } catch (_error) {
+    }
+
+    var state = {
+      conversation: conversation,
+      conversationId: conversation.conversation_id,
+      runId: conversation.latest_run && conversation.latest_run.run_id,
+      cursor: Number((conversation.timeline && conversation.timeline.latest_event_cursor) || (conversation.latest_run && conversation.latest_run.latest_event_cursor) || (conversation.last_message_preview && conversation.last_message_preview.event_cursor) || 0) || 0,
+      senderId: persistedSenderId,
+      members: members,
+      memberMap: memberMap,
+      transcriptNodes: [],
+      timelineNodes: [],
+      taskMap: {},
+      taskOrder: [],
+      seenCursors: {},
+      reconnectCount: 0,
+      runtimeHandle: conversation.latest_run && conversation.latest_run.runtime_handle ? conversation.latest_run.runtime_handle : null,
+      currentRouteMode: (conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || conversation.default_route_hint || 'auto',
+      selectedMentionIds: [],
+      recoveryStatus: 'idle',
+      recoveryMessage: '',
+      recoveryError: '',
+      lastSentText: '',
+      lastRouteHint: 'auto',
+      memberCount: conversation.member_count || members.length || 0,
+      defaultStatus: (conversation.member_count || members.length || 0) + '位成员 · ' + routeModeLabel(conversation.default_route_hint || 'auto'),
+      refs: {},
+    };
+
+    initialTaskItems.forEach(function (task) {
+      if (!task || !task.task_id) return;
+      state.taskMap[task.task_id] = {
+        id: task.task_id,
+        title: stringValue(task.title, '协作任务'),
+        preview: stringValue((task.output_summary && (task.output_summary.summary || task.output_summary.error_summary)) || (task.input_payload && (task.input_payload.description || task.input_payload.task_description)) || task.description, ''),
+        status: stringValue(task.status, 'planned'),
+        statusLabel: stringValue(task.status, 'planned'),
+        employeeLabel: memberLabel(state.memberMap[task.assignee_employee_id]) || stringValue(task.assignee_employee_id, ''),
+        phase: stringValue(task.input_payload && task.input_payload.phase, ''),
+        parentTaskId: stringValue(task.parent_task_id, ''),
+        depth: Number(task.depth) || 0,
+        sequenceNo: Number(task.sequence_no) || 0,
+        runtimeTaskId: stringValue(task.runtime_task_id, ''),
+        routeMode: (conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || 'auto',
+        routeModeLabel: routeModeLabel((conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || 'auto'),
+        childCount: 0,
       };
+      state.taskOrder.push(task.task_id);
+    });
+    state.taskOrder.sort(function (left, right) {
+      var a = state.taskMap[left] || {};
+      var b = state.taskMap[right] || {};
+      if ((a.sequenceNo || 0) !== (b.sequenceNo || 0)) return (a.sequenceNo || 0) - (b.sequenceNo || 0);
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+    Object.keys(state.taskMap).forEach(function (taskId) {
+      var task = state.taskMap[taskId];
+      if (!task || !task.parentTaskId || !state.taskMap[task.parentTaskId]) return;
+      state.taskMap[task.parentTaskId].childCount = (state.taskMap[task.parentTaskId].childCount || 0) + 1;
+    });
 
-      initialTaskItems.forEach(function (task) {
-        if (!task || !task.task_id) return;
-        state.taskMap[task.task_id] = {
-          id: task.task_id,
-          title: stringValue(task.title, '协作任务'),
-          preview: stringValue((task.output_summary && (task.output_summary.summary || task.output_summary.error_summary)) || (task.input_payload && (task.input_payload.description || task.input_payload.task_description)) || task.description, ''),
-          status: stringValue(task.status, 'planned'),
-          statusLabel: stringValue(task.status, 'planned'),
-          employeeLabel: memberLabel(state.memberMap[task.assignee_employee_id]) || stringValue(task.assignee_employee_id, ''),
-          phase: stringValue(task.input_payload && task.input_payload.phase, ''),
-          parentTaskId: stringValue(task.parent_task_id, ''),
-          depth: Number(task.depth) || 0,
-          sequenceNo: Number(task.sequence_no) || 0,
-          runtimeTaskId: stringValue(task.runtime_task_id, ''),
-          routeMode: (conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || 'auto',
-          routeModeLabel: routeModeLabel((conversation.latest_route_decision && conversation.latest_route_decision.route_mode) || 'auto'),
-          childCount: 0,
-        };
-        state.taskOrder.push(task.task_id);
-      });
-      state.taskOrder.sort(function (left, right) {
-        var a = state.taskMap[left] || {};
-        var b = state.taskMap[right] || {};
-        if ((a.sequenceNo || 0) !== (b.sequenceNo || 0)) return (a.sequenceNo || 0) - (b.sequenceNo || 0);
-        return String(a.id || '').localeCompare(String(b.id || ''));
-      });
-      Object.keys(state.taskMap).forEach(function (taskId) {
-        var task = state.taskMap[taskId];
-        if (!task || !task.parentTaskId || !state.taskMap[task.parentTaskId]) return;
-        state.taskMap[task.parentTaskId].childCount = (state.taskMap[task.parentTaskId].childCount || 0) + 1;
-      });
+    return state;
+  }
 
-    var initialRunStatus = conversation.latest_run && conversation.latest_run.status;
-    var memberCount = conversation.member_count || members.length || 0;
-    var defaultStatus = memberCount + '位成员 · ' + routeModeLabel(conversation.default_route_hint || 'auto');
-
-    container.innerHTML = '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
-      '<div class="aiteam-chatwin">' +
-      // ── 左栏：数字员工 / 群组列表（与消息中心一致） ──
-      '<aside class="aiteam-chatwin__left">' +
-      '<div class="aiteam-chatwin__left-head"><span class="aiteam-chatwin__left-title">🤖 数字员工</span>' +
-      '<a class="aiteam-chatwin__add" href="/app/group" title="新建群聊">＋</a></div>' +
-      '<div class="aiteam-chatwin__search"><input type="search" placeholder="🔍 搜索智能体..." data-chat-agent-search></div>' +
-      renderListSections(lastListSections, conversation.conversation_id) +
-      '</aside>' +
-      // ── 中栏：群消息 ──
-      '<section class="aiteam-chatwin__main">' +
-      '<div class="aiteam-chatwin__header">' +
+  function buildGroupMainHtml(conversation, state) {
+    return '<div class="aiteam-chatwin__header">' +
       '<div class="aiteam-chatwin__havatar" style="background:linear-gradient(135deg,#F59E0B,#F0883E)">👥</div>' +
       '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(conversation.title || conversation.conversation_id || '群聊') + '</div>' +
-      '<div class="aiteam-chatwin__hstatus" data-group-status>' + escapeHtml(defaultStatus) + '</div></div>' +
+      '<div class="aiteam-chatwin__hstatus" data-group-status>' + escapeHtml(state.defaultStatus) + '</div></div>' +
       '<div class="aiteam-chatwin__hactions">' +
       '<button class="aiteam-chatwin__tool" type="button" data-group-reconnect title="重新同步协作进度">↻</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-group-open-settings title="群设置">⚙️</button>' +
@@ -749,11 +743,13 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<input type="hidden" data-group-sender value="">' +
       '</form>' +
-      '</div>' +
-      '</section>' +
-      // ── 右栏：群聊详情 ──
-      '<aside class="aiteam-chatwin__right aiteam-group-sidebar">' +
-      '<div class="aiteam-chatwin__right-head">群聊详情</div>' +
+      '</div>';
+  }
+
+  function buildGroupRightHtml(conversation, state) {
+    var memberCount = state.memberCount;
+    var members = state.members;
+    return '<div class="aiteam-chatwin__right-head">群聊详情</div>' +
       '<div class="aiteam-chatwin__right-body">' +
       '<div class="aiteam-agent-detail__card">' +
       renderGroupAvatarGrid(members) +
@@ -791,49 +787,81 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '</div>' +
       '</div>' +
+      '</div>';
+  }
+
+  function buildGroupShellHtml(opts) {
+    opts = opts || {};
+    return '<section class="aiteam-page aiteam-page--chat aiteam-group-page">' +
+      '<div class="aiteam-chatwin">' +
+      '<aside class="aiteam-chatwin__left">' +
+      '<div class="aiteam-chatwin__left-head"><span class="aiteam-chatwin__left-title">🤖 数字员工</span>' +
+      '<a class="aiteam-chatwin__add" href="/app/group" title="新建群聊">＋</a></div>' +
+      '<div class="aiteam-chatwin__search"><input type="search" placeholder="🔍 搜索智能体..." data-chat-agent-search></div>' +
+      opts.leftHtml +
       '</aside>' +
+      '<section class="aiteam-chatwin__main">' + opts.mainHtml + '</section>' +
+      '<aside class="aiteam-chatwin__right aiteam-group-sidebar">' + opts.rightHtml + '</aside>' +
       '</div>' +
       '</section>';
+  }
+
+  function renderGroup(container, conversation) {
+    var state = buildGroupState(conversation);
+    container.innerHTML = buildGroupShellHtml({
+      leftHtml: renderListSections(lastListSections, conversation.conversation_id),
+      mainHtml: buildGroupMainHtml(conversation, state),
+      rightHtml: buildGroupRightHtml(conversation, state),
+    });
     bindListSearch(container);
+    bindGroupInteractions(container, state);
+    bindGroupSwitch(container);
+    container.__activeGroupKey = conversation.conversation_id;
+  }
 
-    var transcriptEl = container.querySelector('[data-group-transcript]');
-    var timelineEl = container.querySelector('[data-group-timeline]');
-    var taskTreeEl = container.querySelector('[data-group-task-tree]');
-    var membersEl = container.querySelector('[data-group-members]');
-    var mentionStripEl = container.querySelector('[data-group-mention-strip]');
-    var statusEl = container.querySelector('[data-group-status]');
-    var input = container.querySelector('[data-group-input]');
-    var routeSelect = container.querySelector('[data-group-route]');
-    var senderInput = container.querySelector('[data-group-sender]');
-    var settingsCard = container.querySelector('[data-group-settings-card]');
-    var routeModeEl = container.querySelector('[data-group-route-mode]');
-    var routeDescEl = container.querySelector('[data-group-route-desc]');
-    var routeTargetsEl = container.querySelector('[data-group-route-targets]');
-    var runtimeHandleEl = container.querySelector('[data-group-runtime-handle]');
-    var mentionStateEl = container.querySelector('[data-group-mention-state]');
-    var collabStateEl = container.querySelector('[data-group-collab-state]');
-    var recoveryEl = container.querySelector('[data-group-recovery]');
+  function bindGroupInteractions(container, state) {
+    var conversation = state.conversation;
+    var defaultStatus = state.defaultStatus;
 
-    if (routeSelect) {
-      routeSelect.value = conversation.default_route_hint || 'auto';
+    state.refs = {
+      transcript: container.querySelector('[data-group-transcript]'),
+      timeline: container.querySelector('[data-group-timeline]'),
+      taskTree: container.querySelector('[data-group-task-tree]'),
+      members: container.querySelector('[data-group-members]'),
+      mentionStrip: container.querySelector('[data-group-mention-strip]'),
+      status: container.querySelector('[data-group-status]'),
+      input: container.querySelector('[data-group-input]'),
+      routeSelect: container.querySelector('[data-group-route]'),
+      senderInput: container.querySelector('[data-group-sender]'),
+      settingsCard: container.querySelector('[data-group-settings-card]'),
+      routeMode: container.querySelector('[data-group-route-mode]'),
+      routeDesc: container.querySelector('[data-group-route-desc]'),
+      routeTargets: container.querySelector('[data-group-route-targets]'),
+      runtimeHandle: container.querySelector('[data-group-runtime-handle]'),
+      mentionState: container.querySelector('[data-group-mention-state]'),
+      collabState: container.querySelector('[data-group-collab-state]'),
+      recovery: container.querySelector('[data-group-recovery]'),
+    };
+
+    if (state.refs.routeSelect) {
+      state.refs.routeSelect.value = conversation.default_route_hint || 'auto';
     }
-    if (senderInput) {
-      senderInput.value = state.senderId;
+    if (state.refs.senderInput) {
+      state.refs.senderInput.value = state.senderId;
     }
 
     function setStatus(text) {
-      if (statusEl) statusEl.textContent = text || defaultStatus;
+      if (state.refs.status) state.refs.status.textContent = text || defaultStatus;
     }
 
-    // 恢复状态只在连接异常 / 补拉中时给用户一行提示，稳定后自动隐藏。
     function setRecoveryStatus(status, message, error) {
       state.recoveryStatus = stringValue(status, 'idle');
       state.recoveryMessage = stringValue(message, '');
       state.recoveryError = stringValue(error, '');
-      if (recoveryEl) {
+      if (state.refs.recovery) {
         var active = state.recoveryStatus === 'reconnecting' || state.recoveryStatus === 'catching-up' || state.recoveryStatus === 'connecting' || state.recoveryStatus === 'error';
-        recoveryEl.textContent = state.recoveryError || state.recoveryMessage || '';
-        recoveryEl.hidden = !active || !(state.recoveryError || state.recoveryMessage);
+        state.refs.recovery.textContent = state.recoveryError || state.recoveryMessage || '';
+        state.refs.recovery.hidden = !active || !(state.recoveryError || state.recoveryMessage);
       }
     }
 
@@ -894,38 +922,36 @@ window.aiteam = window.aiteam || {};
     }
 
     function updateCollaborationState() {
-      // 输入区工具栏：展示当前 @提及选择（提及选择 / 协作状态）。
-      if (mentionStateEl) {
+      if (state.refs.mentionState) {
         var mentionHandles = selectedMentionHandles();
         if (mentionHandles.length) {
-          mentionStateEl.textContent = collaborationModeLabel(mentionHandles.length) + ' · ' + mentionHandles.join('、');
-          mentionStateEl.hidden = false;
+          state.refs.mentionState.textContent = collaborationModeLabel(mentionHandles.length) + ' · ' + mentionHandles.join('、');
+          state.refs.mentionState.hidden = false;
         } else {
-          mentionStateEl.textContent = '';
-          mentionStateEl.hidden = true;
+          state.refs.mentionState.textContent = '';
+          state.refs.mentionState.hidden = true;
         }
       }
-      // 右栏协作状态：仅在有运行时显示执行进度。
-      if (collabStateEl) {
+      if (state.refs.collabState) {
         var currentRunStatus = getLatestRunStatus();
         if (currentRunStatus) {
-          collabStateEl.innerHTML = badge('执行状态：' + runStatusLabel(currentRunStatus));
-          collabStateEl.hidden = false;
+          state.refs.collabState.innerHTML = badge('执行状态：' + runStatusLabel(currentRunStatus));
+          state.refs.collabState.hidden = false;
         } else {
-          collabStateEl.innerHTML = '';
-          collabStateEl.hidden = true;
+          state.refs.collabState.innerHTML = '';
+          state.refs.collabState.hidden = true;
         }
       }
     }
 
     function renderRuntimeHandle(runtimeHandle) {
       state.runtimeHandle = runtimeHandle || state.runtimeHandle;
-      if (!runtimeHandleEl) return;
+      if (!state.refs.runtimeHandle) return;
       if (!state.runtimeHandle || !state.runtimeHandle.kind) {
-        runtimeHandleEl.innerHTML = '';
+        state.refs.runtimeHandle.innerHTML = '';
         return;
       }
-      runtimeHandleEl.innerHTML = badge(runtimeHandleLabel(state.runtimeHandle));
+      state.refs.runtimeHandle.innerHTML = badge(runtimeHandleLabel(state.runtimeHandle));
     }
 
     function renderRouteFeedback(decision, sourceRouteHint) {
@@ -936,37 +962,37 @@ window.aiteam = window.aiteam || {};
       var planner = decision && decision.planner_employee_id ? (memberLabel(state.memberMap[decision.planner_employee_id]) || decision.planner_employee_id) : '';
       var entry = decision && decision.entry_employee_id ? (memberLabel(state.memberMap[decision.entry_employee_id]) || decision.entry_employee_id) : '';
       state.currentRouteMode = routeMode;
-      if (routeModeEl) routeModeEl.textContent = routeModeLabel(routeMode);
-      if (routeDescEl) routeDescEl.textContent = routeModeDescription(routeMode);
-      if (routeTargetsEl) {
+      if (state.refs.routeMode) state.refs.routeMode.textContent = routeModeLabel(routeMode);
+      if (state.refs.routeDesc) state.refs.routeDesc.textContent = routeModeDescription(routeMode);
+      if (state.refs.routeTargets) {
         var chips = [badge(routeModeLabel(routeMode))];
         if (targets.length) chips.push(badge('候选：' + targets.join('、')));
         if (entry) chips.push(badge('入口：' + entry));
         if (planner) chips.push(badge('编排：' + planner));
-        routeTargetsEl.innerHTML = chips.join('');
+        state.refs.routeTargets.innerHTML = chips.join('');
       }
       updateCollaborationState();
     }
 
     function renderTranscript() {
-      if (transcriptEl) {
-        transcriptEl.innerHTML = state.transcriptNodes.join('') || '<div class="aiteam-inline-empty">等待新的群聊消息或协作结果。</div>';
+      if (state.refs.transcript) {
+        state.refs.transcript.innerHTML = state.transcriptNodes.join('') || '<div class="aiteam-inline-empty">等待新的群聊消息或协作结果。</div>';
       }
     }
 
     function renderTimeline() {
-      if (timelineEl) {
-        timelineEl.innerHTML = state.timelineNodes.join('') || '<div class="aiteam-inline-empty">协作开始后，过程记录会在这里展示。</div>';
+      if (state.refs.timeline) {
+        state.refs.timeline.innerHTML = state.timelineNodes.join('') || '<div class="aiteam-inline-empty">协作开始后，过程记录会在这里展示。</div>';
       }
     }
 
     function renderTaskTree() {
-      if (!taskTreeEl) return;
+      if (!state.refs.taskTree) return;
       if (!state.taskOrder.length) {
-        taskTreeEl.innerHTML = '<li class="aiteam-task-tree__item aiteam-task-tree__item--is-auto"><div class="aiteam-task-tree__rail"></div><span class="aiteam-badge aiteam-badge--task">待命</span><div class="aiteam-task-tree__body"><strong>暂无协作任务</strong><span>多员工协作开始后，任务创建、执行与完成进度会在这里持续更新。</span></div></li>';
+        state.refs.taskTree.innerHTML = '<li class="aiteam-task-tree__item aiteam-task-tree__item--is-auto"><div class="aiteam-task-tree__rail"></div><span class="aiteam-badge aiteam-badge--task">待命</span><div class="aiteam-task-tree__body"><strong>暂无协作任务</strong><span>多员工协作开始后，任务创建、执行与完成进度会在这里持续更新。</span></div></li>';
         return;
       }
-      taskTreeEl.innerHTML = state.taskOrder.map(function (taskId) {
+      state.refs.taskTree.innerHTML = state.taskOrder.map(function (taskId) {
         var task = state.taskMap[taskId];
         if (!task) return '';
         return renderTaskItem(task);
@@ -974,37 +1000,37 @@ window.aiteam = window.aiteam || {};
     }
 
     function renderMembers() {
-      if (!membersEl || !mentionStripEl) return;
+      if (!state.refs.members || !state.refs.mentionStrip) return;
       if (!state.members.length) {
-        membersEl.innerHTML = '<div class="aiteam-inline-empty">暂无群成员。</div>';
-        mentionStripEl.innerHTML = '<span class="aiteam-inline-note">暂无可快捷提及成员</span>';
+        state.refs.members.innerHTML = '<div class="aiteam-inline-empty">暂无群成员。</div>';
+        state.refs.mentionStrip.innerHTML = '<span class="aiteam-inline-note">暂无可快捷提及成员</span>';
         return;
       }
-      membersEl.innerHTML = state.members.map(renderMemberCard).join('');
-      mentionStripEl.innerHTML = state.members.map(function (member) {
+      state.refs.members.innerHTML = state.members.map(renderMemberCard).join('');
+      state.refs.mentionStrip.innerHTML = state.members.map(function (member) {
         var employeeId = member && (member.employee_id || member.member_ref_id || member.member_id) || '';
         var active = state.selectedMentionIds.indexOf(employeeId) !== -1 ? ' is-active' : '';
         return '<button class="aiteam-filter-chip' + active + '" type="button" data-mention="' + escapeHtml(mentionHandle(member)) + '" data-mention-id="' + escapeHtml(employeeId) + '">' + escapeHtml(mentionHandle(member)) + '</button>';
       }).join('');
       Array.prototype.slice.call(container.querySelectorAll('[data-mention]')).forEach(function (button) {
         button.addEventListener('click', function () {
-          if (!input) return;
+          if (!state.refs.input) return;
           var mention = button.getAttribute('data-mention') || '';
           var employeeId = button.getAttribute('data-mention-id') || '';
           if (employeeId && state.selectedMentionIds.indexOf(employeeId) !== -1) {
             state.selectedMentionIds = state.selectedMentionIds.filter(function (id) { return id !== employeeId; });
             updateCollaborationState();
             renderMembers();
-            input.focus();
+            state.refs.input.focus();
             return;
           }
           if (employeeId) {
             state.selectedMentionIds.push(employeeId);
           }
-          input.value = (input.value || '').trim() ? input.value + ' ' + mention + ' ' : mention + ' ';
+          state.refs.input.value = (state.refs.input.value || '').trim() ? state.refs.input.value + ' ' + mention + ' ' : mention + ' ';
           updateCollaborationState();
           renderMembers();
-          input.focus();
+          state.refs.input.focus();
         });
       });
       updateCollaborationState();
@@ -1177,7 +1203,6 @@ window.aiteam = window.aiteam || {};
           setStatus('本轮协作已结束。');
           return;
         }
-        // 共享 timeline client 契约：connect(runId, cursor, onEvent, { onOpen, onReconnect })
         ns.timeline.connect(runId, state.cursor, function (event) {
           handleTimelineEvent(event || {});
         }, {
@@ -1194,34 +1219,32 @@ window.aiteam = window.aiteam || {};
       });
     }
 
-    if (senderInput) {
-      senderInput.addEventListener('change', function () {
-        rememberSenderId(senderInput.value);
+    if (state.refs.senderInput) {
+      state.refs.senderInput.addEventListener('change', function () {
+        rememberSenderId(state.refs.senderInput.value);
       });
-      senderInput.addEventListener('blur', function () {
-        rememberSenderId(senderInput.value);
+      state.refs.senderInput.addEventListener('blur', function () {
+        rememberSenderId(state.refs.senderInput.value);
       });
     }
 
     var openSettingsBtn = container.querySelector('[data-group-open-settings]');
-    if (openSettingsBtn && settingsCard && typeof settingsCard.scrollIntoView === 'function') {
+    if (openSettingsBtn && state.refs.settingsCard && typeof state.refs.settingsCard.scrollIntoView === 'function') {
       openSettingsBtn.addEventListener('click', function () {
-        settingsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        state.refs.settingsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     }
 
     var form = container.querySelector('[data-group-form]');
     function resolveSenderId() {
-      // 发送者按「记忆值 → 隐藏字段 → 群创建人 → owner」兜底，用户无需手填。
       return stringValue(state.senderId, '')
-        || (senderInput ? stringValue(senderInput.value, '') : '')
+        || (state.refs.senderInput ? stringValue(state.refs.senderInput.value, '') : '')
         || stringValue(conversation.owner_user_id, '')
         || 'owner';
     }
-    if (form && input && routeSelect) {
-      // Enter 直接发送，Shift+Enter 换行。
-      if (typeof input.addEventListener === 'function') {
-        input.addEventListener('keydown', function (event) {
+    if (form && state.refs.input && state.refs.routeSelect) {
+      if (typeof state.refs.input.addEventListener === 'function') {
+        state.refs.input.addEventListener('keydown', function (event) {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             if (typeof form.requestSubmit === 'function') {
@@ -1234,22 +1257,22 @@ window.aiteam = window.aiteam || {};
       }
       form.addEventListener('submit', function (event) {
         event.preventDefault();
-        var text = stringValue(input.value, '');
+        var text = stringValue(state.refs.input.value, '');
         var senderId = resolveSenderId();
         if (!text) return;
         state.lastSentText = text;
-        state.lastRouteHint = routeSelect.value;
+        state.lastRouteHint = state.refs.routeSelect.value;
         var selectedHandles = selectedMentionHandles();
         rememberSenderId(senderId);
-        state.pendingRouteHint = routeSelect.value;
-        renderRouteFeedback(null, routeSelect.value);
-        input.value = '';
-        state.transcriptNodes.push(messageBubble('user', '你', '<p>' + escapeHtml(text) + '</p><div class="aiteam-chip-row">' + badge(routeModeLabel(routeSelect.value)) + (selectedHandles.length ? badge('提及：' + selectedHandles.join('、')) : '') + '</div>'));
+        state.pendingRouteHint = state.refs.routeSelect.value;
+        renderRouteFeedback(null, state.refs.routeSelect.value);
+        state.refs.input.value = '';
+        state.transcriptNodes.push(messageBubble('user', '你', '<p>' + escapeHtml(text) + '</p><div class="aiteam-chip-row">' + badge(routeModeLabel(state.refs.routeSelect.value)) + (selectedHandles.length ? badge('提及：' + selectedHandles.join('、')) : '') + '</div>'));
         renderTranscript();
         setStatus('消息已发送，正在分配员工...');
         ns.api.submitGroupMessage(state.conversationId, {
           sender_id: senderId,
-          route_hint: routeSelect.value,
+          route_hint: state.refs.routeSelect.value,
           idempotency_key: 'group-' + state.conversationId + '-' + Date.now(),
           message: { text: text },
         }).then(function (result) {
@@ -1503,6 +1526,99 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  // ── In-place group switching (mirrors app-chat.js pattern) ──
+
+  function swapGroupView(container, conversation) {
+    var main = container.querySelector ? container.querySelector('.aiteam-chatwin__main') : null;
+    var right = container.querySelector ? container.querySelector('.aiteam-chatwin__right') : null;
+    if (!main || !right) {
+      renderGroup(container, conversation);
+      return;
+    }
+    var state = buildGroupState(conversation);
+    main.innerHTML = buildGroupMainHtml(conversation, state);
+    right.innerHTML = buildGroupRightHtml(conversation, state);
+    bindGroupInteractions(container, state);
+    container.__activeGroupKey = conversation.conversation_id;
+  }
+
+  function applyGroupActiveByPath(container, path) {
+    if (!container || !container.querySelectorAll) return;
+    var items = container.querySelectorAll('.aiteam-chat__agent');
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var isMatch = item && item.getAttribute && item.getAttribute('href') === path;
+      if (item && item.classList) {
+        if (isMatch) item.classList.add('is-active'); else item.classList.remove('is-active');
+      }
+      if (isMatch && item.querySelector) {
+        var badgeEl = item.querySelector('.aiteam-chat__agent-unread');
+        if (badgeEl && badgeEl.parentNode) badgeEl.parentNode.removeChild(badgeEl);
+      }
+    }
+  }
+
+  function navigateToGroupPath(container, path) {
+    if (ns.timeline && typeof ns.timeline.disconnect === 'function') ns.timeline.disconnect();
+    applyGroupActiveByPath(container, path);
+    var conversationId = getConversationId(path);
+    if (!conversationId) {
+      renderGroupLauncher(container);
+      return;
+    }
+    ns.api.getGroupConversation(conversationId).then(function (result) {
+      if (!result || !result.ok) {
+        if (typeof window !== 'undefined' && window.location && typeof window.location.assign === 'function') window.location.assign(path);
+        return;
+      }
+      var conv = result.data || {};
+      swapGroupView(container, conv);
+      if (ns.api && typeof ns.api.updateWorkbenchState === 'function' && conv.conversation_id) {
+        ns.api.updateWorkbenchState({ conversation_id: conv.conversation_id, mark_read: true });
+        markConversationReadInSections(lastListSections, conv.conversation_id);
+      }
+    }).catch(function () {
+      if (typeof window !== 'undefined' && window.location && typeof window.location.assign === 'function') window.location.assign(path);
+    });
+  }
+
+  function switchGroupConversation(container, path) {
+    var conversationId = getConversationId(path);
+    var currentKey = (container && container.__activeGroupKey) || getConversationId(window.location.pathname);
+    if (conversationId && conversationId === currentKey) return;
+    if (typeof window !== 'undefined' && window.history && typeof window.history.pushState === 'function') {
+      window.history.pushState(null, '', path);
+    }
+    navigateToGroupPath(container, path);
+  }
+
+  function bindGroupSwitch(container) {
+    if (!container || typeof container.addEventListener !== 'function') return;
+    if (!container.__groupSwitchBound) {
+      container.__groupSwitchBound = true;
+      container.addEventListener('click', function (event) {
+        if (event.defaultPrevented) return;
+        if (event.button !== undefined && event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        var anchor = event.target && event.target.closest ? event.target.closest('a.aiteam-chat__agent[data-chat-group]') : null;
+        if (!anchor) return;
+        var href = anchor.getAttribute ? anchor.getAttribute('href') : '';
+        if (!href || href.indexOf('/app/group/') !== 0) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        switchGroupConversation(container, href);
+      });
+    }
+    if (!ns.__groupPopstateBound && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      ns.__groupPopstateBound = true;
+      window.addEventListener('popstate', function () {
+        var main = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('aiteam-main') : null;
+        if (!main) return;
+        var path = (window.location && window.location.pathname) || '';
+        if (path.indexOf('/app/group') !== 0) return;
+        navigateToGroupPath(main, path);
+      });
+    }
+  }
   ns.pages.appGroup = {
     render: renderGroup,
     init: function (container, options) {
@@ -1535,5 +1651,15 @@ window.aiteam = window.aiteam || {};
         }
       });
     },
+    _switchGroupConversation: switchGroupConversation,
+    _navigateToGroupPath: navigateToGroupPath,
+    _swapGroupView: swapGroupView,
+    _buildGroupState: buildGroupState,
+    _buildGroupMainHtml: buildGroupMainHtml,
+    _buildGroupRightHtml: buildGroupRightHtml,
+    _buildGroupShellHtml: buildGroupShellHtml,
+    _bindGroupInteractions: bindGroupInteractions,
+    _bindGroupSwitch: bindGroupSwitch,
+    _applyGroupActiveByPath: applyGroupActiveByPath,
   };
 }(window.aiteam));
