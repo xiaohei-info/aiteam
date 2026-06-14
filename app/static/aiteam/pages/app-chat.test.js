@@ -58,6 +58,42 @@ test('chat renders thinking bubble', function () {
   const html = page._renderThinking();
   assert.ok(html.includes('aiteam-chat__thinking'), 'expected thinking bubble');
 });
+test('chat renders reasoning timeline item', function () {
+  const html = page._renderTimelineItem({ type: 'reasoning', text: '需要先查知识库。' });
+  assert.ok(html.includes('aiteam-chat__reasoning-card'), 'expected reasoning card');
+  assert.ok(html.includes('需要先查知识库。'), 'expected reasoning text');
+});
+test('chat renders reasoning timeline item from history', function () {
+  const conversation = {
+    conversation_id: 'c-reasoning',
+    employee_summary: { employee_id: 'e-1', display_name: '小析' },
+    messages: {
+      items: [
+        {
+          message_id: 'm-reasoning',
+          role: 'system',
+          created_at: '2026-06-14T07:00:00Z',
+          __timeline_item: {
+            kind: 'reasoning',
+            payload: { delta: '需要先查知识库。', kind: 'reasoning' },
+          },
+        },
+      ],
+      next_cursor: 1,
+      has_more: false,
+    },
+  };
+  const transcript = { innerHTML: '' };
+  const container = {
+    innerHTML: '',
+    querySelector(selector) { return selector === '[data-chat-transcript]' ? transcript : null; },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  page._renderChat(container, conversation);
+  assert.ok(transcript.innerHTML.includes('aiteam-chat__reasoning-card'), 'expected reasoning card in history');
+  assert.ok(transcript.innerHTML.includes('需要先查知识库。'), 'expected reasoning text in history');
+});
 test('chat summary panel keeps real bindings (skills + model)', function () {
   const html = page._renderSummaryPanel({ display_name: '小析', role_name: '分析师', model_provider: 'openrouter', model_name: 'gpt', skills: ['检索','写作'], knowledge_bases: ['KB1'], usage_summary: { total_runs: 4, status_counts: { succeeded: 3 } } }, { message_count: 9 });
   assert.ok(html.includes('小析'), 'name');

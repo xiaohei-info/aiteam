@@ -35,14 +35,15 @@ logger = logging.getLogger(__name__)
 class StreamChannel:
     """Broadcast SSE events to every connected subscriber for a run stream.
 
-    While no subscriber is connected, events are buffered so the first
-    subscriber still receives the tail that arrived during the gap.
+    While no subscriber is connected, a bounded tail is buffered so a late
+    subscriber can catch up without unbounded memory growth.
     """
 
-    def __init__(self):
+    def __init__(self, max_buffer_size: int = 200):
         self._lock = threading.Lock()
         self._subscribers: list[queue.Queue] = []
         self._offline_buffer: list[tuple[str, object]] = []
+        self._max_buffer_size = max(1, int(max_buffer_size or 1))
 
     def subscribe(self) -> queue.Queue:
         q: queue.Queue = queue.Queue()
@@ -64,6 +65,9 @@ class StreamChannel:
             subscribers = list(self._subscribers)
             if not subscribers:
                 self._offline_buffer.append(item)
+                overflow = len(self._offline_buffer) - self._max_buffer_size
+                if overflow > 0:
+                    del self._offline_buffer[:overflow]
                 return
             self._offline_buffer.clear()
         for q in subscribers:
@@ -74,6 +78,7 @@ class StreamChannel:
             return {
                 "subscriber_count": len(self._subscribers),
                 "offline_buffered_events": len(self._offline_buffer),
+                "max_buffer_size": self._max_buffer_size,
             }
 
 

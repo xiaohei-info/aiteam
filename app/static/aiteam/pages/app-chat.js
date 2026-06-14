@@ -230,6 +230,11 @@ window.aiteam = window.aiteam || {};
         (result ? '<pre class="aiteam-chat__tool-result">' + escapeHtml(String(result)) + '</pre>' : '') +
         '</div>';
     }
+    if (t === 'reasoning' || t === 'thinking') {
+      var reasoningText = item.text || item.delta || item.preview || '';
+      return '<div class="aiteam-chat__reasoning-card"><div class="aiteam-chat__reasoning-head">思考过程</div>' +
+        '<div class="aiteam-chat__reasoning-body">' + escapeHtml(String(reasoningText)) + '</div></div>';
+    }
     if (t === 'loop' || t === 'orchestration') {
       var steps = (item.steps || []).map(function (s) {
         var status = s.status === 'done' ? 'done' : (s.status === 'running' ? 'running' : 'pending');
@@ -423,7 +428,7 @@ window.aiteam = window.aiteam || {};
           // regular message bubbles so the execution process is visible in history.
           if (message.__timeline_item) {
             var ti = message.__timeline_item;
-            if (ti.kind === 'tool_call') {
+            if (ti.kind === 'tool_call' || ti.kind === 'tool_complete') {
               var p = ti.payload || {};
               var st = normalizeToolStatus(p);
               return renderTimelineItem({
@@ -432,6 +437,13 @@ window.aiteam = window.aiteam || {};
                 tool_args: summarizeToolArgs(p),
                 tool_result: summarizeToolResult(p),
                 status_label: st.label,
+              });
+            }
+            if (ti.kind === 'reasoning') {
+              var rp = ti.payload || {};
+              return renderTimelineItem({
+                type: 'reasoning',
+                text: rp.delta || rp.text || rp.preview || ti.preview || '',
               });
             }
             return renderTimelineNotice(ti.payload || ti);
@@ -448,6 +460,13 @@ window.aiteam = window.aiteam || {};
               tool_args: summarizeToolArgs(p),
               tool_result: summarizeToolResult(p),
               status_label: st.label,
+            });
+          }
+          if (item.kind === 'reasoning') {
+            var rp = item.payload || {};
+            return renderTimelineItem({
+              type: 'reasoning',
+              text: rp.delta || rp.text || rp.preview || item.preview || '',
             });
           }
           if (item.kind === 'loop' || item.kind === 'orchestration') {
@@ -533,7 +552,13 @@ window.aiteam = window.aiteam || {};
       state.cursor = Math.max(state.cursor || 0, Number(event.event_cursor) || 0);
       state.latestEventType = event.event_type;
       if (event.event_type === 'message_delta') {
-        var text = (event.payload && event.payload.text) || event.preview || '';
+        var payload = event.payload || {};
+        var text = payload.delta || payload.text || event.preview || '';
+        if (payload.kind === 'reasoning') {
+          state.liveItems.push({ kind: 'reasoning', payload: payload, preview: text });
+          state.statusText = '正在思考...';
+          return;
+        }
         state.streamingAssistantText = (state.streamingAssistantText || '') + text;
         state.hasLiveDelta = !!state.streamingAssistantText;
         state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });

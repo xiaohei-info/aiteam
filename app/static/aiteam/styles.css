@@ -3165,6 +3165,9 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-chat__tool-key { color:#39c5cf; }
 .aiteam-chat__tool-val { color:#3fb950; }
 .aiteam-chat__tool-result { margin:6px 0 0; padding:8px; background:rgba(0,0,0,.25); border-radius:6px; white-space:pre-wrap; word-break:break-all; max-height:160px; overflow:auto; color:var(--ait-text2); }
+.aiteam-chat__reasoning-card { background:var(--ait-bg4); border:1px solid var(--ait-border); border-left:3px solid #39c5cf; border-radius:8px; padding:10px 12px; font-size:12px; color:var(--ait-text2); max-width:520px; }
+.aiteam-chat__reasoning-head { color:#39c5cf; font-weight:700; margin-bottom:6px; }
+.aiteam-chat__reasoning-body { white-space:pre-wrap; word-break:break-word; line-height:1.55; }
 .aiteam-chat__loop-card { background:var(--ait-bg4); border:1px solid var(--ait-border); border-left:3px solid var(--ait-busy); border-radius:10px; padding:14px 16px; max-width:500px; }
 .aiteam-chat__loop-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; color:var(--ait-busy); margin-bottom:10px; }
 .aiteam-chat__loop-steps { display:flex; flex-direction:column; gap:6px; }

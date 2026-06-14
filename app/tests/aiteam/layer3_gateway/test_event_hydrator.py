@@ -245,3 +245,17 @@ def test_get_raw_event_mapping_count():
     """The mapping table should have exactly 18 direct entries."""
     # 18 direct entries (run_completed is handled specially, not in the dict)
     assert get_raw_event_mapping_count() == 18
+
+
+def test_stream_channel_caps_offline_buffer():
+    """Offline subscribers should receive only the bounded tail of buffered events."""
+    from agent_gateway.event_hydrator import StreamChannel
+
+    channel = StreamChannel(max_buffer_size=3)
+    for index in range(5):
+        channel.put_nowait(("timeline", {"index": index}))
+
+    assert channel.diagnostic_snapshot()["offline_buffered_events"] == 3
+    subscriber = channel.subscribe()
+    received = [subscriber.get_nowait()[1]["index"] for _ in range(3)]
+    assert received == [2, 3, 4]

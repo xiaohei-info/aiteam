@@ -2810,6 +2810,7 @@ def _serialize_private_history(
                 {
                     "message_id": user_message.id if user_message is not None else f"msg_{run.id}_user",
                     "cursor": 0,
+                    "__sort_cursor": 0,
                     "run_id": run.id,
                     "role": "user",
                     "sender_type": "user",
@@ -2848,6 +2849,7 @@ def _serialize_private_history(
                 {
                     "message_id": f"msg_{run.id}_assistant",
                     "cursor": 0,
+                    "__sort_cursor": 1_000_000,
                     "run_id": run.id,
                     "role": "assistant" if run.status == "succeeded" or has_knowledge_citations else "system",
                     "sender_type": "employee" if run.status == "succeeded" or has_knowledge_citations else "system",
@@ -2871,16 +2873,22 @@ def _serialize_private_history(
                 }
             )
 
-        # Inject intermediate timeline events (tool_call) so the frontend can
-        # render the execution process alongside user/assistant messages.
+        # Inject process timeline events so the frontend can render execution
+        # details in conversation history without duplicating final text deltas.
         run_events = event_repo.list_by_run(run.id, after_cursor=0, limit=200)
         for ev in run_events:
-            if ev.event_type == "tool_call":
-                tool_payload = _load_payload(ev.payload_json)
+            payload = _load_payload(ev.payload_json)
+            timeline_kind = None
+            if ev.event_type == "message_delta" and payload.get("kind") == "reasoning":
+                timeline_kind = "reasoning"
+            elif ev.event_type == "tool_call":
+                timeline_kind = "tool_complete" if payload.get("done") is True else "tool_call"
+            if timeline_kind:
                 envelopes.append(
                     {
                         "message_id": f"msg_{run.id}_evt_{ev.cursor_no}",
                         "cursor": 0,
+                        "__sort_cursor": ev.cursor_no,
                         "run_id": run.id,
                         "role": "system",
                         "sender_type": "system",
@@ -2892,10 +2900,10 @@ def _serialize_private_history(
                         "attachments": [],
                         "citations": [],
                         "metadata": {},
-                        "event_type": "tool_call",
+                        "event_type": ev.event_type,
                         "__timeline_item": {
-                            "kind": "tool_call",
-                            "payload": tool_payload,
+                            "kind": timeline_kind,
+                            "payload": payload,
                         },
                     }
                 )
@@ -2906,9 +2914,10 @@ def _serialize_private_history(
         if quote_id:
             item["quote"] = _resolve_quote_preview(quote_id, synthetic_by_id, message_repo)
 
-    envelopes.sort(key=lambda item: (item.get("created_at") or "", item.get("message_id") or ""))
+    envelopes.sort(key=lambda item: (item.get("created_at") or "", item.get("__sort_cursor") or 0, item.get("message_id") or ""))
     for index, item in enumerate(envelopes, start=1):
         item["cursor"] = index
+        item.pop("__sort_cursor", None)
 
     page = [item for item in envelopes if item["cursor"] > cursor][:limit]
     next_cursor = page[-1]["cursor"] if page else cursor
