@@ -145,6 +145,33 @@ test('draft conversation renders empty chat window with composer', function () {
   assert.ok(container.innerHTML.includes('is-active'), 'draft employee highlighted in list');
 });
 
+test('chat header exposes a new-conversation action for the current employee', function () {
+  const container = makeContainer();
+  page._renderChat(container, {
+    conversation_id: 'conv_existing',
+    employee_summary: { employee_id: 'emp_existing', display_name: '产品顾问', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    latest_run: null,
+    __agentList: [{ employee_id: 'emp_existing', display_name: '产品顾问', role_name: '顾问', status: 'online', conversation_id: 'conv_existing' }],
+  });
+  assert.ok(container.innerHTML.includes('data-chat-new-conversation'), 'new conversation action rendered');
+});
+
+test('chat renders a command menu with supported product actions', function () {
+  const container = makeContainer();
+  page._renderChat(container, {
+    conversation_id: 'conv_existing',
+    employee_summary: { employee_id: 'emp_existing', display_name: '产品顾问', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    latest_run: { run_id: 'run_existing', status: 'running' },
+    __agentList: [{ employee_id: 'emp_existing', display_name: '产品顾问', role_name: '顾问', status: 'online', conversation_id: 'conv_existing' }],
+  });
+  assert.ok(container.innerHTML.includes('data-chat-command-menu'), 'command menu rendered');
+  assert.ok(container.innerHTML.includes('data-chat-command-new'), 'new command exposed');
+  assert.ok(container.innerHTML.includes('data-chat-command-retry'), 'retry command exposed');
+  assert.ok(container.innerHTML.includes('data-chat-command-stop'), 'stop command exposed');
+});
+
 test('agent list skips empty sections', function () {
   const html = page._renderAgentList({
     pinned: [],

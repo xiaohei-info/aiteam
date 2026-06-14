@@ -730,7 +730,19 @@ window.aiteam = window.aiteam || {};
     var retryBtn = container.querySelector('[data-chat-retry]');
     var abortBtn = container.querySelector('[data-chat-abort]');
     var attachBtn = container.querySelector('[data-chat-attach]');
+    var newConversationBtn = container.querySelector('[data-chat-new-conversation]');
+    var commandNewBtn = container.querySelector('[data-chat-command-new]');
+    var commandRetryBtn = container.querySelector('[data-chat-command-retry]');
+    var commandStopBtn = container.querySelector('[data-chat-command-stop]');
     var loadMoreBtn = container.querySelector('[data-chat-load-more]');
+
+    function startDraftConversation() {
+      if (!state.employeeId) {
+        setStatus('当前员工信息缺失，无法新建会话。');
+        return;
+      }
+      switchConversation(container, '/app/chat/' + encodeURIComponent(state.employeeId));
+    }
 
     if (form && input) {
       form.addEventListener('submit', function (event) {
@@ -794,6 +806,30 @@ window.aiteam = window.aiteam || {};
           }
           renderAll();
         });
+      });
+    }
+
+    if (newConversationBtn) {
+      newConversationBtn.addEventListener('click', function () {
+        startDraftConversation();
+      });
+    }
+
+    if (commandNewBtn) {
+      commandNewBtn.addEventListener('click', function () {
+        startDraftConversation();
+      });
+    }
+
+    if (commandRetryBtn) {
+      commandRetryBtn.addEventListener('click', function () {
+        retryLatestRun();
+      });
+    }
+
+    if (commandStopBtn) {
+      commandStopBtn.addEventListener('click', function () {
+        abortActiveRun();
       });
     }
 
@@ -1086,11 +1122,23 @@ window.aiteam = window.aiteam || {};
   // Extracted so an in-place conversation switch can swap just this pane without
   // tearing down the left agent list / right detail panel (no full-page flash).
   function buildChatMainHtml(model) {
+    var commandMenu = '';
+    if (model.summary && model.summary.employee_id) {
+      commandMenu = '<details class="aiteam-chatwin__command-menu" data-chat-command-menu>' +
+        '<summary class="aiteam-chatwin__tool" title="快捷命令">⋯</summary>' +
+        '<div class="aiteam-chatwin__command-panel">' +
+        '<button class="aiteam-chatwin__command-item" type="button" data-chat-command-new>新建会话</button>' +
+        '<button class="aiteam-chatwin__command-item" type="button" data-chat-command-retry>重试上一轮</button>' +
+        '<button class="aiteam-chatwin__command-item" type="button" data-chat-command-stop>停止本轮回复</button>' +
+        '</div></details>';
+    }
     return '<div class="aiteam-chatwin__header">' +
       '<div class="aiteam-chatwin__havatar">' + escapeHtml(model.initial) + '</div>' +
       '<div class="aiteam-chatwin__hinfo"><div class="aiteam-chatwin__hname">' + escapeHtml(model.headerName) + '</div>' +
       '<div class="aiteam-chatwin__hstatus" data-chat-status>' + escapeHtml(model.defaultStatus) + '</div></div>' +
       '<div class="aiteam-chatwin__hactions">' +
+      commandMenu +
+      (model.summary && model.summary.employee_id ? '<button class="aiteam-chatwin__tool" type="button" data-chat-new-conversation title="新建会话">＋</button>' : '') +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-load-more title="加载更早的历史">⇡</button>' +
       '</div>' +
       '</div>' +

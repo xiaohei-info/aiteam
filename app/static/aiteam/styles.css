@@ -3241,6 +3241,12 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-chatwin__hstatus { font-size: 11px; color: var(--ait-green); display: flex; align-items: center; gap: 5px; }
 .aiteam-chatwin__hstatus::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--ait-green); display: inline-block; flex-shrink: 0; }
 .aiteam-chatwin__hactions { display: flex; gap: 6px; }
+.aiteam-chatwin__command-menu { position: relative; }
+.aiteam-chatwin__command-menu summary { list-style: none; }
+.aiteam-chatwin__command-menu summary::-webkit-details-marker { display: none; }
+.aiteam-chatwin__command-panel { position: absolute; top: calc(100% + 8px); right: 0; width: 160px; padding: 8px; border-radius: 10px; border: 1px solid var(--ait-border); background: var(--ait-bg2); box-shadow: 0 12px 28px rgba(0, 0, 0, .24); display: flex; flex-direction: column; gap: 6px; z-index: 5; }
+.aiteam-chatwin__command-item { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--ait-border); background: var(--ait-bg3); color: var(--ait-text); font-size: 12px; text-align: left; cursor: pointer; transition: all .12s; }
+.aiteam-chatwin__command-item:hover { background: var(--ait-bg4); border-color: var(--ait-brand); color: var(--ait-brand); }
 .aiteam-chatwin__transcript { flex: 1; min-height: 0; max-height: none; padding: 20px; }
 .aiteam-chatwin__composer { padding: 12px 20px 16px; border-top: 1px solid var(--ait-border); background: var(--ait-bg2); flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 .aiteam-chatwin__inputbox { background: var(--ait-bg3); border: 1px solid var(--ait-border); border-radius: 12px; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
