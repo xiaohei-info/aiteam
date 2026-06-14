@@ -209,6 +209,14 @@ window.aiteam = window.aiteam || {};
       '</article>';
   }
 
+  // 渲染前用户是否已贴近底部：决定本次重渲染后是否自动跟随到最新消息。
+  // 内容尚未超出视口（无滚动条）时也视为"在底部"，保证初次加载/少量消息时正常跟随。
+  function isScrolledToBottom(el, threshold) {
+    if (!el) return true;
+    var gap = (el.scrollHeight || 0) - (el.scrollTop || 0) - (el.clientHeight || 0);
+    return gap <= (threshold == null ? 40 : threshold);
+  }
+
   function renderThinking() {
     return '<div class="aiteam-chat__thinking"><div class="aiteam-chat__thinking-dots">' +
       '<span class="aiteam-chat__thinking-dot"></span><span class="aiteam-chat__thinking-dot"></span><span class="aiteam-chat__thinking-dot"></span>' +
@@ -493,8 +501,16 @@ window.aiteam = window.aiteam || {};
           }, 'aiteam-message--streaming', state.employeeSummary, state.conversation);
         }
       }
-      state.refs.transcript.innerHTML = html;
-      state.refs.transcript.scrollTop = state.refs.transcript.scrollHeight;
+      // 渲染前先采样用户是否在底部：只有原本就在底部（或刚发完消息强制跟随）时，
+      // 渲染后才滚到底；否则保留用户向上浏览历史的位置，避免被流式增量/心跳等
+      // 周期性重渲染拽回最新消息。
+      var el = state.refs.transcript;
+      var stick = state.forceScrollToBottom || isScrolledToBottom(el, 40);
+      el.innerHTML = html;
+      if (stick) {
+        el.scrollTop = el.scrollHeight;
+      }
+      state.forceScrollToBottom = false;
     }
 
     function renderSummary() {
@@ -643,6 +659,8 @@ window.aiteam = window.aiteam || {};
     function createRun(messageText) {
       state.lastSentText = messageText;
       state.statusText = '创建运行中...';
+      // 用户主动发送消息：本轮强制跟随到底，确保能看到自己刚发出的内容。
+      state.forceScrollToBottom = true;
       renderAll();
       var body = {
         employee_id: state.employeeId,
@@ -1428,4 +1446,5 @@ window.aiteam = window.aiteam || {};
   ns.pages.appChat._renderTimelineItem = renderTimelineItem;
   ns.pages.appChat._renderThinking = renderThinking;
   ns.pages.appChat._renderSummaryPanel = renderSummaryPanel;
+  ns.pages.appChat._isScrolledToBottom = isScrolledToBottom;
 }(window.aiteam));
