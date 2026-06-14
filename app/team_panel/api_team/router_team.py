@@ -3083,7 +3083,7 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
 def _load_group_members(cur, conversation_id: str) -> list[dict]:
     cur.execute(
         "SELECT cm.member_id, cm.member_type, cm.member_ref_id, cm.role, cm.status, "
-        "e.id, e.display_name, e.role_name, e.profile_name, e.status "
+        "e.id, e.display_name, e.role_name, e.profile_name, e.status, e.capabilities_json "
         "FROM conversation_member cm "
         "LEFT JOIN employee e ON e.id = cm.member_ref_id "
         "WHERE cm.conversation_id = %s AND cm.status <> 'removed' "
@@ -3091,6 +3091,16 @@ def _load_group_members(cur, conversation_id: str) -> list[dict]:
         (conversation_id,),
     )
     rows = cur.fetchall()
+
+    def _is_planner(raw) -> bool:
+        caps = raw
+        if isinstance(caps, str):
+            try:
+                caps = json.loads(caps)
+            except (TypeError, ValueError):
+                return False
+        return bool(isinstance(caps, dict) and caps.get("is_system_planner"))
+
     return [
         {
             "member_id": row[0],
@@ -3103,6 +3113,7 @@ def _load_group_members(cur, conversation_id: str) -> list[dict]:
             "role_name": row[7] or "",
             "profile_name": row[8] or "",
             "employee_status": row[9] or row[4] or "",
+            "is_system_planner": _is_planner(row[10]),
         }
         for row in rows
     ]
