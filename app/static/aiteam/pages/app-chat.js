@@ -493,8 +493,12 @@ window.aiteam = window.aiteam || {};
           }, 'aiteam-message--streaming', state.employeeSummary, state.conversation);
         }
       }
-      state.refs.transcript.innerHTML = html;
-      state.refs.transcript.scrollTop = state.refs.transcript.scrollHeight;
+      var el = state.refs.transcript;
+      var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      el.innerHTML = html;
+      if (atBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
 
     function renderSummary() {
