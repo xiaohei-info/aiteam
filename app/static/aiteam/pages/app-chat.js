@@ -684,6 +684,7 @@ window.aiteam = window.aiteam || {};
       var body = {
         employee_id: state.employeeId,
         conversation_id: state.conversationId,
+        create_new: !state.conversationId,  // 草稿模式（conversationId 为空）→ 创建新会话
         message: {
           text: messageText,
         },
@@ -716,6 +717,12 @@ window.aiteam = window.aiteam || {};
         if (newConvId && newConvId !== state.conversationId) {
           state.conversationId = newConvId;
           adoptConversationUrl(newConvId);
+          // Update the active key so the agent list highlights the new conversation
+          // and subsequent switchConversation calls recognise we've moved on.
+          if (container && container.__activeChatKey) {
+            container.__activeChatKey = newConvId;
+          }
+          applyActiveByPath(container, '/app/chat/' + encodeURIComponent(newConvId));
         }
         reloadConversation(0, 100);
         syncRun(result.data && result.data.run_id, state.cursor);
