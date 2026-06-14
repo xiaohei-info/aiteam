@@ -70,6 +70,23 @@ class EmployeeRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
+    def list_active_by_template(self, enterprise_id: str, template_id: str) -> list[Employee]:
+        """Return all non-archived, non-deleted employees for an enterprise that were
+        instantiated from a given template_id — used for conflict detection."""
+        self._cur.execute(
+            "SELECT id, enterprise_id, template_id, profile_name, display_name, "
+            "role_name, status, created_from, model_provider, model_name, "
+            "prompt_version, config_version, avatar_url, description, "
+            "archive_reason, last_provisioned_at, capabilities_json, "
+            "created_at, updated_at, created_by, updated_by, deleted_at "
+            "FROM employee WHERE enterprise_id = %s AND template_id = %s "
+            "AND status NOT IN ('archived') AND deleted_at IS NULL "
+            "ORDER BY created_at",
+            (enterprise_id, template_id),
+        )
+        rows = self._cur.fetchall()
+        return [self._row_to_entity(r) for r in rows]
+
     def update_status(self, emp: Employee) -> Employee:
         self._cur.execute(
             "UPDATE employee SET display_name=%s, status=%s, model_provider=%s, model_name=%s, "

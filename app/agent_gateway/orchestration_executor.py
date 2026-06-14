@@ -218,11 +218,24 @@ def _start_run(conn, run_id: str) -> dict | None:
 # ── Phase 1: planner 拆解 ─────────────────────────────────────────────────
 
 def _plan_subtasks(ctx: dict) -> list[dict]:
-    roster = "\n".join(
-        f"- {emp_id}: {ctx['employees'][emp_id].display_name or emp_id}"
-        f"（{ctx['employees'][emp_id].role_name or '协作成员'}）"
-        for emp_id in ctx["targets"]
-    )
+    roster_lines = []
+    for emp_id in ctx["targets"]:
+        emp = ctx["employees"][emp_id]
+        base = f"- {emp_id}: {emp.display_name or emp_id}（{emp.role_name or '协作成员'}）"
+        # 补全能力摘要：description + prompt首段
+        description = (emp.description or "").strip()
+        prompt_text = (ctx["prompts"].get(emp_id, "") or "").strip()
+        # 取 prompt 首段（最多 200 字），让 planner 知道"谁擅长什么"
+        prompt_summary = prompt_text[:200].strip() if prompt_text else ""
+        extras = []
+        if description:
+            extras.append(f"职责: {description}")
+        if prompt_summary:
+            extras.append(f"能力摘要: {prompt_summary}")
+        if extras:
+            base += " — " + "; ".join(extras)
+        roster_lines.append(base)
+    roster = "\n".join(roster_lines)
     plan_prompt = _render_tmpl(ctx, "planner",
                                roster=roster,
                                message_text=ctx["message_text"],
