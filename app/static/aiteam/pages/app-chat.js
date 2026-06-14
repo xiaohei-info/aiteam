@@ -647,6 +647,7 @@ window.aiteam = window.aiteam || {};
       var body = {
         employee_id: state.employeeId,
         conversation_id: state.conversationId,
+        create_new: !state.conversationId,  // 草稿模式（conversationId 为空）→ 创建新会话
         message: {
           text: messageText,
         },
