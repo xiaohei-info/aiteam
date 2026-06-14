@@ -359,6 +359,84 @@ window.aiteam = window.aiteam || {};
     }).filter(Boolean);
   }
 
+  var LOOP_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+  function _pad2(value) {
+    var n = Number(value);
+    if (!isFinite(n) || n < 0) n = 0;
+    return (n < 10 ? '0' : '') + n;
+  }
+
+  function _isCronNumber(token) {
+    return /^\d+$/.test(String(token));
+  }
+
+  // Build a 5-field cron expression from a friendly schedule description.
+  function _buildCron(schedule) {
+    var s = schedule || {};
+    var minute = _isCronNumber(s.minute) ? Number(s.minute) : 0;
+    var hour = _isCronNumber(s.hour) ? Number(s.hour) : 9;
+    var weekday = _isCronNumber(s.weekday) ? Number(s.weekday) : 1;
+    var day = _isCronNumber(s.day) ? Number(s.day) : 1;
+    switch (s.frequency) {
+      case 'hourly':
+        return minute + ' * * * *';
+      case 'weekly':
+        return minute + ' ' + hour + ' * * ' + weekday;
+      case 'monthly':
+        return minute + ' ' + hour + ' ' + day + ' * *';
+      case 'custom':
+        return String(s.custom || '').replace(/^\s+|\s+$/g, '');
+      case 'daily':
+      default:
+        return minute + ' ' + hour + ' * * *';
+    }
+  }
+
+  // Parse a cron expression back into a friendly schedule description.
+  // Falls back to a custom (raw) expression when the shape is not recognized.
+  function _parseCron(expr) {
+    var raw = String(expr == null ? '' : expr).replace(/^\s+|\s+$/g, '');
+    var fallback = { frequency: 'custom', minute: 0, hour: 9, weekday: 1, day: 1, custom: raw };
+    if (!raw) return { frequency: 'daily', minute: 0, hour: 9, weekday: 1, day: 1, custom: '' };
+    var parts = raw.split(/\s+/);
+    if (parts.length !== 5) return fallback;
+    var minute = parts[0], hour = parts[1], dom = parts[2], mon = parts[3], dow = parts[4];
+    if (mon !== '*') return fallback;
+    if (_isCronNumber(minute) && hour === '*' && dom === '*' && dow === '*') {
+      return { frequency: 'hourly', minute: Number(minute), hour: 9, weekday: 1, day: 1, custom: '' };
+    }
+    if (!_isCronNumber(minute) || !_isCronNumber(hour)) return fallback;
+    if (dom === '*' && dow === '*') {
+      return { frequency: 'daily', minute: Number(minute), hour: Number(hour), weekday: 1, day: 1, custom: '' };
+    }
+    if (dom === '*' && _isCronNumber(dow) && Number(dow) <= 6) {
+      return { frequency: 'weekly', minute: Number(minute), hour: Number(hour), weekday: Number(dow), day: 1, custom: '' };
+    }
+    if (_isCronNumber(dom) && dow === '*') {
+      return { frequency: 'monthly', minute: Number(minute), hour: Number(hour), weekday: 1, day: Number(dom), custom: '' };
+    }
+    return fallback;
+  }
+
+  function _loopFrequencyLabel(schedule) {
+    var s = schedule || {};
+    var time = _pad2(s.hour) + ':' + _pad2(s.minute);
+    switch (s.frequency) {
+      case 'hourly':
+        return '每小时（第 ' + _pad2(s.minute) + ' 分钟）';
+      case 'weekly':
+        return '每周' + (LOOP_WEEKDAYS[s.weekday] || '一').slice(1) + ' ' + time;
+      case 'monthly':
+        return '每月 ' + (s.day || 1) + ' 号 ' + time;
+      case 'custom':
+        return '自定义 Cron：' + (s.custom || '未设置');
+      case 'daily':
+      default:
+        return '每天 ' + time;
+    }
+  }
+
   function _applyLocalEmployeePatch(patch) {
     if (!_employeeData || !patch) return;
     if (Object.prototype.hasOwnProperty.call(patch, 'display_name')) {
@@ -480,34 +558,79 @@ window.aiteam = window.aiteam || {};
             prompt_behavior_rules_json: document.getElementById('aiteam-prompt-rules-input') ? document.getElementById('aiteam-prompt-rules-input').value : '',
             prompt_opening_message: document.getElementById('aiteam-prompt-opening-input') ? document.getElementById('aiteam-prompt-opening-input').value : '',
           }, '提示词配置已保存');
-        } else if (tabId === 'knowledge') {
-          _saveEmployeePatch('knowledge', {
-            knowledge_base_ids: _parseCommaList(document.getElementById('aiteam-knowledge-ids-input') ? document.getElementById('aiteam-knowledge-ids-input').value : ''),
-          }, '知识库绑定已保存');
-        } else if (tabId === 'memory') {
-          _saveEmployeePatch('memory', {
-            memory_mode: document.getElementById('aiteam-memory-mode-input') ? document.getElementById('aiteam-memory-mode-input').value : '',
-            memory_provider_code: document.getElementById('aiteam-memory-provider-input') ? document.getElementById('aiteam-memory-provider-input').value : '',
-            memory_retention_days: Number((document.getElementById('aiteam-memory-retention-input') || {}).value || 0) || null,
-            memory_writeback_enabled: !!((document.getElementById('aiteam-memory-writeback-input') || {}).checked),
-          }, '记忆配置已保存');
-        } else if (tabId === 'connectors') {
-          _saveEmployeePatch('connectors', {
-            connector_ids: _parseCommaList(document.getElementById('aiteam-connector-ids-input') ? document.getElementById('aiteam-connector-ids-input').value : ''),
-          }, '连接器绑定已保存');
         } else if (tabId === 'loop') {
+          var schedule = _collectLoopSchedule();
           _saveEmployeePatch('loop', {
             scheduled_job: {
               scheduled_job_id: document.getElementById('aiteam-loop-job-id-input') ? document.getElementById('aiteam-loop-job-id-input').value : '',
               name: document.getElementById('aiteam-loop-name-input') ? document.getElementById('aiteam-loop-name-input').value : '',
               goal: document.getElementById('aiteam-loop-goal-input') ? document.getElementById('aiteam-loop-goal-input').value : '',
-              schedule_expr: document.getElementById('aiteam-loop-cron-input') ? document.getElementById('aiteam-loop-cron-input').value : '',
+              schedule_expr: _buildCron(schedule),
               status: document.getElementById('aiteam-loop-status-input') ? document.getElementById('aiteam-loop-status-input').value : 'enabled',
             },
           }, 'Loop 配置已保存');
         }
       });
     }
+  }
+
+  function _collectLoopSchedule() {
+    function val(id) {
+      var el = document.getElementById(id);
+      return el ? el.value : '';
+    }
+    var frequency = val('aiteam-loop-frequency-input') || 'daily';
+    var timeRaw = val('aiteam-loop-time-input') || '';
+    var timeParts = timeRaw.split(':');
+    var hour = _isCronNumber(timeParts[0]) ? Number(timeParts[0]) : 9;
+    var minute = _isCronNumber(timeParts[1]) ? Number(timeParts[1]) : 0;
+    if (frequency === 'hourly') {
+      var hm = val('aiteam-loop-minute-input');
+      minute = _isCronNumber(hm) ? Number(hm) : 0;
+    }
+    return {
+      frequency: frequency,
+      hour: hour,
+      minute: minute,
+      weekday: _isCronNumber(val('aiteam-loop-weekday-input')) ? Number(val('aiteam-loop-weekday-input')) : 1,
+      day: _isCronNumber(val('aiteam-loop-day-input')) ? Number(val('aiteam-loop-day-input')) : 1,
+      custom: val('aiteam-loop-custom-input') || '',
+    };
+  }
+
+  function _refreshLoopPreview() {
+    var preview = document.getElementById('aiteam-loop-schedule-preview');
+    if (!preview) return;
+    preview.textContent = _loopFrequencyLabel(_collectLoopSchedule());
+  }
+
+  function _wireLoopScheduler() {
+    if (!_drawer || !_drawer.querySelector) return;
+    var freqSelect = document.getElementById('aiteam-loop-frequency-input');
+    if (freqSelect) {
+      freqSelect.addEventListener('change', function () {
+        var freq = freqSelect.value;
+        var visibility = {
+          time: freq === 'daily' || freq === 'weekly' || freq === 'monthly',
+          weekday: freq === 'weekly',
+          day: freq === 'monthly',
+          minute: freq === 'hourly',
+          custom: freq === 'custom',
+        };
+        Object.keys(visibility).forEach(function (rowKey) {
+          var row = _drawer.querySelector('[data-loop-row="' + rowKey + '"]');
+          if (row && row.style) row.style.display = visibility[rowKey] ? '' : 'none';
+        });
+        _refreshLoopPreview();
+      });
+    }
+    ['aiteam-loop-time-input', 'aiteam-loop-weekday-input', 'aiteam-loop-day-input', 'aiteam-loop-minute-input', 'aiteam-loop-custom-input'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el && el.addEventListener) {
+        el.addEventListener('change', _refreshLoopPreview);
+        el.addEventListener('input', _refreshLoopPreview);
+      }
+    });
   }
 
   function _renderEnterpriseSkillAssignments() {
@@ -713,58 +836,47 @@ window.aiteam = window.aiteam || {};
       },
       knowledge: function () {
         return '<div class="aiteam-drawer__section">' +
-          '<h3 class="aiteam-drawer__section-title">知识库绑定</h3>' +
+          '<h3 class="aiteam-drawer__section-title">已绑定知识库</h3>' +
           _bindingList(d.knowledge, '暂无已绑定知识库') +
-          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">知识库 ID（逗号分隔）</span>' +
-          '<input id="aiteam-knowledge-ids-input" class="aiteam-input" value="' + _escapeHtml((d.knowledgeIds || []).join(', ')) + '">' +
-          '</div>' +
-          _configActionsMarkup('knowledge', '保存知识库绑定') +
+          '<p class="aiteam-drawer__desc">知识库与员工的绑定关系在「知识库」管理页维护：在 <a href="/admin/knowledge">知识库</a> 中按名称选择知识库并指定授权员工即可，无需在此填写知识库 ID。</p>' +
           '</div>';
       },
       memory: function () {
         return '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">记忆内容</h3>' +
+          '<p class="aiteam-drawer__desc">员工的记忆内容（会写入其 Hermes Profile 的 MEMORY.md）在「记忆管理」中查看与编辑。前往 <a href="/admin/memories">记忆管理</a> 可按员工筛选、新增或撤销记忆条目。</p>' +
+          '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">记忆策略</h3>' +
+          '<p class="aiteam-drawer__desc">以下为系统级存储策略，已采用安全默认值，无需逐个员工手动配置。如需变更存储后端或保留周期，请在企业记忆设置中统一调整。</p>' +
           _bindingList(d.memoryItems, '暂无记忆配置') +
-          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">记忆模式</span>' +
-          '<input id="aiteam-memory-mode-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.mode !== '未设置' ? d.memory.mode : '') + '">' +
-          '</div>' +
-          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">Provider Code</span>' +
-          '<input id="aiteam-memory-provider-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.providerCode !== '未设置' ? d.memory.providerCode : '') + '">' +
-          '</div>' +
-          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">保留天数</span>' +
-          '<input id="aiteam-memory-retention-input" class="aiteam-input" value="' + _escapeHtml(d.memory && d.memory.retentionDays !== '未设置' ? d.memory.retentionDays : '') + '">' +
-          '</div>' +
-          '<div class="aiteam-drawer__field">' +
-          '<span class="aiteam-drawer__field-label">自动写回</span>' +
-          '<input id="aiteam-memory-writeback-input" type="checkbox"' + (d.memory && d.memory.writebackEnabled === '开启' ? ' checked' : '') + '>' +
-          '</div>' +
-          _configActionsMarkup('memory', '保存记忆配置') +
           '</div>' +
           '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">使用摘要</h3>' +
           _bindingList(d.usageItems, '暂无使用数据') +
+          '</div>' +
           '</div>';
       },
       connectors: function () {
         return '<div class="aiteam-drawer__section">' +
-          '<h3 class="aiteam-drawer__section-title">连接器绑定</h3>' +
+          '<h3 class="aiteam-drawer__section-title">已绑定连接器</h3>' +
           _bindingList(d.connectors, '暂无已绑定连接器') +
-          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">连接器 ID（逗号分隔）</span>' +
-          '<input id="aiteam-connector-ids-input" class="aiteam-input" value="' + _escapeHtml((d.connectorNames || []).join(', ')) + '">' +
-          '</div>' +
-          _configActionsMarkup('connectors', '保存连接器绑定') +
+          '<p class="aiteam-drawer__desc">连接器与员工的授权关系在「连接器」管理页维护：在 <a href="/admin/connectors">连接器</a> 中选择连接器并勾选要授权的员工即可，无需在此填写连接器 ID。</p>' +
           '</div>';
       },
       loop: function () {
         var job = d.scheduledJobs && d.scheduledJobs[0] ? d.scheduledJobs[0] : {};
+        var sched = _parseCron(job.schedule_expr || '');
+        var freq = sched.frequency;
+        function freqOpt(value, label) {
+          return '<option value="' + value + '"' + (freq === value ? ' selected' : '') + '>' + label + '</option>';
+        }
+        function weekdayOpt(idx) {
+          return '<option value="' + idx + '"' + (sched.weekday === idx ? ' selected' : '') + '>' + LOOP_WEEKDAYS[idx] + '</option>';
+        }
+        var timeValue = _pad2(sched.hour) + ':' + _pad2(sched.minute);
         return '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">Loop 配置</h3>' +
-          '<p class="aiteam-drawer__desc">为员工配置周期性自主任务（Loop）。员工将按设定的周期自动执行任务并产出结果。</p>' +
+          '<p class="aiteam-drawer__desc">为员工配置周期性自主任务（Loop）。选择执行频率即可，无需手写 Cron 表达式；系统会自动换算为调度计划。</p>' +
           _scheduledJobsMarkup(d.scheduledJobs) +
           '<input id="aiteam-loop-job-id-input" type="hidden" value="' + _escapeHtml(job.scheduled_job_id || '') + '">' +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
@@ -776,12 +888,47 @@ window.aiteam = window.aiteam || {};
           '<input id="aiteam-loop-goal-input" class="aiteam-input" value="' + _escapeHtml(job.goal || '') + '">' +
           '</div>' +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
-          '<span class="aiteam-drawer__field-label">Cron</span>' +
-          '<input id="aiteam-loop-cron-input" class="aiteam-input" value="' + _escapeHtml(job.schedule_expr || '') + '">' +
+          '<span class="aiteam-drawer__field-label">执行频率</span>' +
+          '<select id="aiteam-loop-frequency-input" class="aiteam-input">' +
+          freqOpt('hourly', '每小时') +
+          freqOpt('daily', '每天') +
+          freqOpt('weekly', '每周') +
+          freqOpt('monthly', '每月') +
+          freqOpt('custom', '自定义 Cron') +
+          '</select>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block" data-loop-row="time"' + (freq === 'hourly' || freq === 'custom' ? ' style="display:none"' : '') + '>' +
+          '<span class="aiteam-drawer__field-label">执行时间</span>' +
+          '<input id="aiteam-loop-time-input" type="time" class="aiteam-input" value="' + _escapeHtml(timeValue) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block" data-loop-row="weekday"' + (freq === 'weekly' ? '' : ' style="display:none"') + '>' +
+          '<span class="aiteam-drawer__field-label">每周几执行</span>' +
+          '<select id="aiteam-loop-weekday-input" class="aiteam-input">' +
+          weekdayOpt(1) + weekdayOpt(2) + weekdayOpt(3) + weekdayOpt(4) + weekdayOpt(5) + weekdayOpt(6) + weekdayOpt(0) +
+          '</select>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block" data-loop-row="day"' + (freq === 'monthly' ? '' : ' style="display:none"') + '>' +
+          '<span class="aiteam-drawer__field-label">每月几号执行</span>' +
+          '<input id="aiteam-loop-day-input" type="number" min="1" max="31" class="aiteam-input" value="' + _escapeHtml(String(sched.day || 1)) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block" data-loop-row="minute"' + (freq === 'hourly' ? '' : ' style="display:none"') + '>' +
+          '<span class="aiteam-drawer__field-label">每小时第几分钟执行</span>' +
+          '<input id="aiteam-loop-minute-input" type="number" min="0" max="59" class="aiteam-input" value="' + _escapeHtml(String(sched.minute || 0)) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block" data-loop-row="custom"' + (freq === 'custom' ? '' : ' style="display:none"') + '>' +
+          '<span class="aiteam-drawer__field-label">自定义 Cron 表达式</span>' +
+          '<input id="aiteam-loop-custom-input" class="aiteam-input" placeholder="例如：0 9 * * 1-5" value="' + _escapeHtml(sched.frequency === 'custom' ? sched.custom : '') + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">调度预览</span>' +
+          '<div id="aiteam-loop-schedule-preview" class="aiteam-drawer__prompt-text">' + _escapeHtml(_loopFrequencyLabel(sched)) + '</div>' +
           '</div>' +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">状态</span>' +
-          '<input id="aiteam-loop-status-input" class="aiteam-input" value="' + _escapeHtml(job.status || 'enabled') + '">' +
+          '<select id="aiteam-loop-status-input" class="aiteam-input">' +
+          '<option value="enabled"' + ((job.status || 'enabled') !== 'paused' ? ' selected' : '') + '>启用</option>' +
+          '<option value="paused"' + ((job.status || 'enabled') === 'paused' ? ' selected' : '') + '>暂停</option>' +
+          '</select>' +
           '</div>' +
           _configActionsMarkup('loop', '保存 Loop 配置') +
           '</div>' +
@@ -805,6 +952,9 @@ window.aiteam = window.aiteam || {};
     }
     if (_activeTab === 'model') {
       _wireModelPicker();
+    }
+    if (_activeTab === 'loop') {
+      _wireLoopScheduler();
     }
     _wireConfigButtons();
   }
@@ -1002,8 +1152,13 @@ window.aiteam = window.aiteam || {};
     open: open,
     close: close,
     normalizeEmployeePayload: normalizeEmployeePayload,
+    buildCron: _buildCron,
+    parseCron: _parseCron,
     __test: {
       normalizeEmployeePayload: normalizeEmployeePayload,
+      buildCron: _buildCron,
+      parseCron: _parseCron,
+      collectLoopSchedule: _collectLoopSchedule,
       saveProfileConfig: function (patch) { return _saveEmployeePatch('profile', patch, '基础资料已保存'); },
       saveModelConfig: function (patch) { return _saveEmployeePatch('model', patch, '模型配置已保存'); },
       savePromptConfig: function (patch) { return _saveEmployeePatch('prompt', patch, '提示词配置已保存'); },
