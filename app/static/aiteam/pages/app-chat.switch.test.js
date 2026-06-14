@@ -104,7 +104,7 @@ function freshPage(state) {
 }
 
 function newState() {
-  return { getCalls: [], updateCalls: [], pushCalls: [], assignCalls: [], workbenchCalls: 0, disconnectCalls: 0 };
+  return { getCalls: [], updateCalls: [], pushCalls: [], assignCalls: [], workbenchCalls: 0, disconnectCalls: 0, createRunCalls: [] };
 }
 
 test('switching to another conversation swaps in place without a full reload or workbench refetch', async function () {
@@ -248,4 +248,50 @@ test('command menu actions reuse the in-page new/retry/stop behaviours', async f
   newBtn._handlers.click({ preventDefault() {} });
   await new Promise(function (r) { setTimeout(r, 0); });
   assert.deepStrictEqual(state.pushCalls, ['/app/chat/emp_a'], 'menu new action should switch to the employee draft route');
+});
+
+test('after draft→real conversion the activeChatKey advances to the new conversation id', async function () {
+  const state = newState();
+  const { page, context } = freshPage(state);
+
+  const container = makeNode();
+  container.__activeChatKey = 'emp_a';  // Start in draft mode
+
+  // Mock createRun to return a new conversation id
+  context.window.aiteam.api.createRun = function (body) {
+    state.createRunCalls.push(body);
+    return Promise.resolve({
+      ok: true,
+      data: {
+        run_id: 'run_new_conv',
+        conversation_id: 'conv_new_from_draft',
+        stream_url: '/api/team/runs/run_new_conv/stream?cursor=0',
+      },
+    });
+  };
+
+  page.render(container, {
+    conversation_id: '',  // draft mode
+    employee_summary: { employee_id: 'emp_a', display_name: 'Alpha', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    last_message_preview: { event_cursor: 0, preview: '' },
+    latest_run: null,
+    __draft_employee_id: 'emp_a',
+    __agentList: [{ employee_id: 'emp_a', display_name: 'Alpha', role_name: '顾问', status: 'online' }],
+  });
+
+  // Simulate sending a message in draft mode
+  const form = container.querySelector('[data-chat-form]');
+  const input = container.querySelector('[data-chat-input]');
+  input.value = '新消息';
+  if (form && form._handlers && form._handlers.submit) {
+    form._handlers.submit({ preventDefault() {} });
+  }
+
+  await new Promise(function (r) { setTimeout(r, 0); });
+  await new Promise(function (r) { setTimeout(r, 0); });
+
+  assert.ok(state.createRunCalls.length >= 1, 'createRun should be called');
+  assert.strictEqual(state.createRunCalls[0].create_new, true, 'draft mode should pass create_new=true');
+  assert.strictEqual(container.__activeChatKey, 'conv_new_from_draft', 'activeChatKey should advance to the new conversation id');
 });
