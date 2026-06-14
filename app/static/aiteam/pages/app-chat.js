@@ -418,6 +418,24 @@ window.aiteam = window.aiteam || {};
         html = '<div class="aiteam-inline-empty">开始与这位数字员工对话吧，右侧可查看智能体详情。</div>';
       } else {
         html += state.messages.map(function (message) {
+          // Intermediate timeline items (tool_call, etc.) injected by the backend
+          // carry a __timeline_item marker — render them as tool cards instead of
+          // regular message bubbles so the execution process is visible in history.
+          if (message.__timeline_item) {
+            var ti = message.__timeline_item;
+            if (ti.kind === 'tool_call') {
+              var p = ti.payload || {};
+              var st = normalizeToolStatus(p);
+              return renderTimelineItem({
+                type: 'tool_call',
+                tool_name: p.tool_name || p.tool || p.name,
+                tool_args: summarizeToolArgs(p),
+                tool_result: summarizeToolResult(p),
+                status_label: st.label,
+              });
+            }
+            return renderTimelineNotice(ti.payload || ti);
+          }
           return renderMessageBubble(message, '', state.employeeSummary, state.conversation);
         }).join('');
         html += state.liveItems.map(function (item) {
@@ -588,7 +606,11 @@ window.aiteam = window.aiteam || {};
           return;
         }
         result.data.items.forEach(function (event) {
-          applyTimelineEvent(event);
+          if (event.event_type === 'tool_call' && event.payload) {
+            state.liveItems.push({ kind: 'tool_call', payload: event.payload });
+          } else {
+            applyTimelineEvent(event);
+          }
         });
       });
     }
