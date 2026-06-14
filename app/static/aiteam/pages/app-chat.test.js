@@ -318,3 +318,116 @@ test('opening a concrete conversation marks its unread count as read in workbenc
   assert.strictEqual(updateCalls[0].conversation_id, 'conv_luna', 'chat init should mark the opened conversation id as read');
   assert.strictEqual(updateCalls[0].mark_read, true, 'chat init should set mark_read=true');
 });
+
+test('draft-mode createRun passes create_new=true to API', async function () {
+  var createRunCalls = [];
+  var testContext = {
+    window: {
+      location: { pathname: '/app/chat/emp_draft', search: '' },
+      history: { replaceState() {}, pushState() {} },
+      addEventListener() {},
+      aiteam: {
+        util: context.window.aiteam.util,
+        states: { renderLoading() {}, handleApiResult() {} },
+        timeline: { disconnect() {}, connect() {}, getRunEvents() {} },
+        api: {
+          createRun(body) {
+            createRunCalls.push(body);
+            return Promise.resolve({
+              ok: true,
+              data: {
+                run_id: 'run_new',
+                conversation_id: 'conv_new',
+                stream_url: '/api/team/runs/run_new/stream?cursor=0',
+              },
+            });
+          },
+          get(path) {
+            return Promise.resolve({
+              ok: true,
+              data: {
+                conversation_id: 'conv_new',
+                display_state: 'idle',
+                employee_summary: { employee_id: 'emp_draft', display_name: '草稿员工', role_name: '顾问' },
+                messages: { items: [], next_cursor: 0, has_more: false },
+                last_message_preview: { event_cursor: 0, preview: '' },
+                latest_run: null,
+              },
+            });
+          },
+          getWorkbench() {
+            return Promise.resolve({ ok: true, data: { employees: [], groups: [] } });
+          },
+          getRunEvents() {
+            return Promise.resolve({ ok: true, data: { items: [] } });
+          },
+          updateWorkbenchState() {
+            return Promise.resolve({ ok: true, data: {} });
+          },
+        },
+      },
+    },
+    document: { getElementById() { return null; }, createElement() { return makeNode(); } },
+    console, setTimeout, clearTimeout,
+  };
+  testContext.global = testContext;
+  testContext.globalThis = testContext;
+  testContext.window.document = testContext.document;
+  vm.createContext(testContext);
+  vm.runInContext(code, testContext);
+
+  // Use makeNode-style container so addEventListener captures handlers
+  function makeDraftNode() {
+    const cache = {};
+    const node = {
+      innerHTML: '',
+      value: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      hidden: false,
+      style: {},
+      dataset: {},
+      _handlers: {},
+      addEventListener(name, handler) { this._handlers[name] = handler; },
+      removeEventListener() {},
+      querySelector(sel) { if (!cache[sel]) cache[sel] = makeDraftNode(); return cache[sel]; },
+      querySelectorAll() { return []; },
+      classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
+      setAttribute() {},
+      getAttribute() { return null; },
+      focus() {},
+      scrollIntoView() {},
+      closest() { return null; },
+      appendChild() {},
+      removeChild() {},
+    };
+    return node;
+  }
+
+  var testPage = testContext.window.aiteam.pages.appChat;
+  var container = makeDraftNode();
+  container.__activeChatKey = 'emp_draft';
+
+  testPage.render(container, {
+    conversation_id: '',
+    employee_summary: { employee_id: 'emp_draft', display_name: '草稿员工', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    last_message_preview: { event_cursor: 0, preview: '' },
+    latest_run: null,
+    __draft_employee_id: 'emp_draft',
+    __agentList: [{ employee_id: 'emp_draft', display_name: '草稿员工', role_name: '顾问', status: 'online' }],
+  });
+
+  // Trigger form submit with input text
+  var formEl = container.querySelector('[data-chat-form]');
+  var inputEl = container.querySelector('[data-chat-input]');
+  inputEl.value = '测试消息';
+  if (formEl._handlers && formEl._handlers.submit) {
+    formEl._handlers.submit({ preventDefault() {} });
+  }
+  await new Promise(function (r) { setTimeout(r, 0); });
+  await new Promise(function (r) { setTimeout(r, 0); });
+
+  assert.ok(createRunCalls.length >= 1, 'createRun should be called');
+  assert.strictEqual(createRunCalls[0].create_new, true, 'draft mode should pass create_new=true');
+});
