@@ -12,9 +12,11 @@ re-implementing an execution path:
     GET  /api/chat/stream?stream_id=...                      -> SSE
 
 SSE named events consumed (same contract the WebUI's own frontend uses):
+    reasoning     {text}                  -> thinking/reasoning delta
     token         {text}                  -> streaming delta
     tool          {name, args, preview}   -> tool call started
     tool_complete {...}                   -> tool call finished
+    metering      {usage}                 -> running token usage snapshot
     done          {...}                   -> turn succeeded
     (default)     {type: "error"|...}     -> turn failed
 
@@ -99,9 +101,9 @@ def run_turn(
 ) -> TurnResult:
     """Execute one conversational turn through the WebUI chat chain.
 
-    ``on_event(kind, payload)`` receives live ``token`` / ``tool`` /
-    ``tool_complete`` events for northbound streaming. The accumulated final
-    text and terminal state come back in the TurnResult.
+    ``on_event(kind, payload)`` receives live ``reasoning`` / ``token`` /
+    ``tool`` / ``tool_complete`` events for northbound streaming. The accumulated
+    final text and terminal state come back in the TurnResult.
     """
     sid = (session_id or "").strip()
     if not sid:
@@ -147,7 +149,9 @@ def _consume_stream(stream_id: str, session_id: str,
     try:
         with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout_seconds) as resp:
             for kind, payload in _iter_sse(resp, deadline):
-                if kind == "token":
+                if kind == "reasoning":
+                    _emit(on_event, "reasoning", payload)
+                elif kind == "token":
                     chunk = str(payload.get("text") or "")
                     if chunk:
                         text_parts.append(chunk)

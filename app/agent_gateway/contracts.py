@@ -92,6 +92,18 @@ EventCursor = int  # bigint, monotonic per run_id (§5.1)
 
 _FIXED_EVENT_TYPE_COUNT = 18
 
+# ── Payload sub-kind conventions ──────────────────────────────────────────
+# V1 event types are a closed set (§4.3).  Differentiation of reasoning
+# vs text deltas and tool_call start vs completion is carried inside the
+# existing event type's *payload* dict using these constants, NOT by adding
+# new TimelineEventType values.
+
+REASONING_PAYLOAD_KIND = "reasoning"   # message_delta.payload.kind when delta is reasoning
+
+TOOL_CALL_DONE_KEY = "done"           # tool_call.payload.done — False=started, True=completed
+TOOL_CALL_RESULT_KEY = "result_snippet"  # tool_call.payload.result_snippet on completion
+TOOL_CALL_IS_ERROR_KEY = "is_error"   # tool_call.payload.is_error on completion
+
 # ── RunTimelineEvent ─────────────────────────────────────────────────────
 
 def _utcnow_iso() -> str:

@@ -145,6 +145,13 @@ _WORKBENCH_ROLE_ENV = "HERMES_AITEAM_WORKBENCH_ROLE"
 def _today_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+# ── SSE live-stream sentinel ──────────────────────────────────────────────
+# When _handle_run_stream detects an active EventHydrator StreamChannel,
+# it returns this sentinel string as the body.  The routes.py dispatch layer
+# detects it and switches to a persistent SSE long-connection mode, writing
+# real-time events directly to handler.wfile instead of sending a static body.
+_SSE_LIVE_SENTINEL = "__SSE_LIVE__"
+
 
 def _load_payload(value) -> dict:
     if not value or value == "{}":
@@ -3444,6 +3451,23 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
 
 
 def _handle_run_stream(conn, path: str, run_id: str, query: str) -> tuple[int, str, str]:
+    """Northbound SSE endpoint for run events.
+
+    Two modes:
+    1. Active stream (run is currently executing): subscribe to the
+       EventHydrator StreamChannel and hold a persistent SSE long-connection
+       with 15-second heartbeats, terminating on stream_end / terminal event.
+    2. Inactive stream (run already finished): pull history from run_event
+       table and return as a single SSE response body (short-pull fallback).
+    """
+    from agent_gateway.event_hydrator import get_hydrator
+    hydrator = get_hydrator()
+
+    # ── Active stream mode: persistent SSE long-connection ──
+    if hydrator.has_active_stream(run_id):
+        return 200, _SSE_LIVE_SENTINEL, "text/event-stream"
+
+    # ── Inactive stream mode: short-pull from DB ──
     cur = conn.cursor()
     try:
         run_repo = TeamRunRepo(cur)
