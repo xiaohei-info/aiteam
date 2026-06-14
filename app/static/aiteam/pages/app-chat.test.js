@@ -356,3 +356,31 @@ test('opening a concrete conversation marks its unread count as read in workbenc
   assert.strictEqual(updateCalls[0].conversation_id, 'conv_luna', 'chat init should mark the opened conversation id as read');
   assert.strictEqual(updateCalls[0].mark_read, true, 'chat init should set mark_read=true');
 });
+
+// ---------------------------------------------------------------------------
+// 回归：上拉浏览历史时滚动条不应被流式/心跳等重渲染拽回底部（AITEAM-27）
+// 验证决定"渲染后是否自动跟随到底"的纯函数 isScrolledToBottom。
+test('isScrolledToBottom: at bottom → stick (auto-follow)', function () {
+  assert.strictEqual(typeof page._isScrolledToBottom, 'function', 'expected _isScrolledToBottom export');
+  // 紧贴底部：gap = 1000 - 880 - 120 = 0
+  assert.strictEqual(page._isScrolledToBottom({ scrollHeight: 1000, scrollTop: 880, clientHeight: 120 }, 40), true);
+});
+
+test('isScrolledToBottom: scrolled up reading history → do NOT stick', function () {
+  // 用户上拉浏览历史：gap = 1000 - 200 - 120 = 680 > 40 → 不跟随
+  assert.strictEqual(page._isScrolledToBottom({ scrollHeight: 1000, scrollTop: 200, clientHeight: 120 }, 40), false);
+});
+
+test('isScrolledToBottom: within threshold counts as bottom', function () {
+  // gap = 1000 - 850 - 120 = 30 <= 40 → 仍视为在底部
+  assert.strictEqual(page._isScrolledToBottom({ scrollHeight: 1000, scrollTop: 850, clientHeight: 120 }, 40), true);
+});
+
+test('isScrolledToBottom: no scrollbar (content fits) → treated as bottom', function () {
+  // 内容未超出视口：gap 为负 → 视为在底部，初次加载/少量消息正常跟随
+  assert.strictEqual(page._isScrolledToBottom({ scrollHeight: 100, scrollTop: 0, clientHeight: 400 }, 40), true);
+});
+
+test('isScrolledToBottom: missing element → bottom (safe default)', function () {
+  assert.strictEqual(page._isScrolledToBottom(null, 40), true);
+});
