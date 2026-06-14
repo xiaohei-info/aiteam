@@ -55,9 +55,20 @@ def decide_route(
         )
 
     if _looks_like_collaboration_request(message_text):
+        target_employee_ids = _non_system_planner_employee_ids(members)
+        if not _has_system_planner(members):
+            target_employee_ids = employee_ids
         return RouteDecision(
             route_mode="orchestration",
-            target_employee_ids=tuple(employee_ids),
+            target_employee_ids=tuple(target_employee_ids),
+            planner_employee_id=planner_employee_id,
+        )
+
+    non_planner_employee_ids = _non_system_planner_employee_ids(members)
+    if _has_system_planner(members) and len(non_planner_employee_ids) > 1:
+        return RouteDecision(
+            route_mode="orchestration",
+            target_employee_ids=tuple(non_planner_employee_ids),
             planner_employee_id=planner_employee_id,
         )
 
@@ -135,6 +146,18 @@ def _pick_planner_employee_id(members: list[dict[str, str]], candidate_ids: list
         if _matches(member):
             return member["employee_id"]
     return candidate_ids[0] if candidate_ids else ""
+
+
+def _non_system_planner_employee_ids(members: list[dict[str, str]]) -> list[str]:
+    return [
+        member["employee_id"]
+        for member in members
+        if member["employee_id"] and member.get("role_name", "").lower() != "orchestrator"
+    ]
+
+
+def _has_system_planner(members: list[dict[str, str]]) -> bool:
+    return any(member.get("role_name", "").lower() == "orchestrator" for member in members)
 
 
 def _normalize_text(text: str) -> str:

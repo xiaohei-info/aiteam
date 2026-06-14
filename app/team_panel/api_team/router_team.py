@@ -3319,6 +3319,7 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
             "error": "MISSING_SENDER_ID",
             "message": "sender_id is required",
         }
+    goal = str(body.get("goal") or body.get("message", {}).get("goal") or "").strip()
 
     uow = UnitOfWork(conn)
     try:
@@ -3330,6 +3331,7 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
                 route_hint,
                 idempotency_key,
                 sender_id,
+                goal=goal,
             )
         # 群聊 single_agent 与 orchestration 均进入真实执行; execute_run_async
         # 内部按 execution_mode 分流: kanban_orchestration → orchestration_executor

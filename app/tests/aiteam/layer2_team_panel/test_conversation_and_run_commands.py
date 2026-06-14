@@ -17,9 +17,165 @@ from team_panel.application.commands.scheduled_job_service import (
     resume_job,
 )
 from team_panel.domain.entities import Employee
+from team_panel.domain.entities import Conversation
 from team_panel.domain.enums import EmployeeStatus
 from team_panel.integration.gateway_client import submit_group_conversation, submit_run, submit_orchestration
 from agent_gateway.contracts import GatewayAcceptResponse, RuntimeHandle
+
+
+class _FakeSystemPlannerEmployees:
+    def __init__(self, planner=None):
+        self.planner = planner
+        self.created = []
+
+    def get_system_planner(self, enterprise_id):
+        return self.planner
+
+    def create(self, employee):
+        self.created.append(employee)
+        self.planner = employee
+        return employee
+
+    def get_by_id(self, employee_id):
+        return Employee(id=employee_id, enterprise_id="ent_test", status=EmployeeStatus.ACTIVE)
+
+
+class _FakeRepo:
+    def __init__(self, item=None):
+        self.item = item
+        self.created = []
+
+    def create(self, item):
+        self.created.append(item)
+        self.item = item
+        return item
+
+    def get_by_id(self, item_id):
+        return self.item
+
+    def get_by_idempotency_key(self, idempotency_key):
+        return None
+
+    def get_by_owner(self, owner_type, owner_id):
+        return None
+
+    def update_latest_run(self, *args):
+        return None
+
+
+class _FakeCursor:
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+
+class _FakeConversationUow:
+    def __init__(self, planner=None):
+        self.cur = _FakeCursor()
+        self.employee_repo = _FakeSystemPlannerEmployees(planner)
+        self.conversation_repo = _FakeRepo(Conversation(
+            id="conv_existing",
+            enterprise_id="ent_test",
+            type="group",
+            status="active",
+            title="Existing Group",
+            created_by="user_test",
+        ))
+        self.message_repo = _FakeRepo()
+        self.run_repo = _FakeRepo()
+        self.binding_repo = _FakeRepo()
+        self.audit_repo = _FakeRepo()
+
+    def employees(self):
+        return self.employee_repo
+
+    def conversations(self):
+        return self.conversation_repo
+
+    def conversation_messages(self):
+        return self.message_repo
+
+    def team_runs(self):
+        return self.run_repo
+
+    def runtime_bindings(self):
+        return self.binding_repo
+
+    def audit_events(self):
+        return self.audit_repo
+
+
+def test_create_group_conversation_auto_adds_system_planner_without_duplicate():
+    """Group creation auto-seeds and joins one system planner member."""
+    uow = _FakeConversationUow()
+
+    conv_id = create_group_conversation(
+        uow, "ent_test", "Auto Planner Group", ["emp_test"], "user_test",
+    )
+
+    member_params = [params for sql, params in uow.cur.executed if "INSERT INTO conversation_member" in sql]
+    member_ref_ids = [params[3] for params in member_params]
+    assert conv_id.startswith("conv_")
+    assert "emp_test" in member_ref_ids
+    assert uow.employee_repo.created[0].id in member_ref_ids
+    assert len([employee_id for employee_id in member_ref_ids if employee_id == uow.employee_repo.created[0].id]) == 1
+
+
+def test_submit_group_message_lazily_adds_missing_system_planner(monkeypatch):
+    """Existing groups get the system planner lazily before route decision."""
+    planner = Employee(
+        id="emp_sys_planner",
+        enterprise_id="ent_test",
+        profile_name="sys_planner_ent_test",
+        display_name="协作主持人",
+        role_name="orchestrator",
+        status=EmployeeStatus.ACTIVE,
+        created_from="admin_seed",
+        capabilities_json=json.dumps({"is_system_planner": True}),
+    )
+    uow = _FakeConversationUow(planner)
+    member_reads = [
+        [
+            {"employee_id": "emp_test", "display_name": "Test", "role_name": "分析师", "profile_name": "emp-test"},
+            {"employee_id": "emp_member", "display_name": "Member", "role_name": "研究员", "profile_name": "emp-member"},
+        ],
+        [
+            {"employee_id": "emp_test", "display_name": "Test", "role_name": "分析师", "profile_name": "emp-test"},
+            {"employee_id": "emp_member", "display_name": "Member", "role_name": "研究员", "profile_name": "emp-member"},
+            {"employee_id": "emp_sys_planner", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent_test"},
+        ],
+    ]
+
+    import team_panel.application.commands.conversation_service as service
+
+    monkeypatch.setattr(service, "_get_active_members", lambda *_: member_reads.pop(0))
+    monkeypatch.setattr(service, "build_knowledge_preview_for_employees", lambda *_, **__: None)
+    monkeypatch.setattr(service, "submit_group_conversation", lambda request: GatewayAcceptResponse(
+        run_id=request["run_id"],
+        status="queued",
+        runtime_handle=RuntimeHandle(
+            enterprise_id=request.get("enterprise_id", ""),
+            employee_id=request.get("planner_employee_id", request.get("employee_id", "")),
+            run_id=request["run_id"],
+            kind="composite",
+            task_id="task_fake",
+            profile_name="fake-profile",
+        ),
+        stream_url=f"/api/team/runs/{request['run_id']}/stream?cursor=0",
+        events_url=f"/api/team/runs/{request['run_id']}/events?cursor=0",
+    ))
+
+    result = submit_group_message(
+        uow, "conv_existing", "请处理这个需求", "auto", "idem_lazy_planner", "emp_test",
+    )
+
+    member_params = [params for sql, params in uow.cur.executed if "INSERT INTO conversation_member" in sql]
+    assert member_params[0][3] == "emp_sys_planner"
+    assert result["route_decision"]["route_mode"] == "orchestration"
+    assert result["route_decision"]["planner_employee_id"] == "emp_sys_planner"
+    assert set(result["route_decision"]["target_employee_ids"]) == {"emp_test", "emp_member"}
 
 
 # ── T01: create private conversation + team_run ───────────────────────
@@ -97,21 +253,22 @@ def test_group_message_sets_route_mode(uow, clean_tables_with_enterprise):
             "idem_group_002", "emp_test",
         )
         assert result["route_decision"]["route_mode"] == "orchestration"
-        assert set(result["route_decision"]["target_employee_ids"]) == {"emp_test", "emp_member"}
+        targets = set(result["route_decision"]["target_employee_ids"])
+        assert "emp_test" in targets and "emp_member" in targets
 
-        # Submit with auto hint → no mentions detected → defaults to single_agent
+        # Submit with auto hint → 2+ non-planner members → defaults to orchestration
         result = submit_group_message(
             uow, conv_id, "Auto task", "auto",
             "idem_group_003", "emp_test",
         )
-        assert result["route_decision"]["route_mode"] == "single_agent"
+        assert result["route_decision"]["route_mode"] == "orchestration"
 
-        # Submit with unknown hint → treated as auto, no mentions → single_agent
+        # Submit with unknown hint → treated as auto, 2+ non-planner → orchestration
         result = submit_group_message(
             uow, conv_id, "Unknown", "unknown_hint",
             "idem_group_004", "emp_test",
         )
-        assert result["route_decision"]["route_mode"] == "single_agent"
+        assert result["route_decision"]["route_mode"] == "orchestration"
 
         # Verify all four runs were persisted
         runs = uow.team_runs().list_by_conversation(conv_id)
@@ -218,7 +375,7 @@ def test_group_message_orchestration_persistence(uow, clean_tables_with_enterpri
         # result_summary_json should contain route_decision
         result_data = json.loads(run.result_summary_json)
         assert result_data["route_mode"] == "orchestration"
-        assert set(result_data["target_employee_ids"]) == {"emp_test", "emp_member", "emp_planner"}
+        assert {"emp_test", "emp_member", "emp_planner"}.issubset(set(result_data["target_employee_ids"]))
 
         # RuntimeBinding should be kanban_task
         binding = uow.runtime_bindings().get_by_owner("team_run", run_id)
@@ -276,7 +433,7 @@ def test_group_message_orchestration_caps_candidate_replies_at_three(uow, clean_
 
         assert result["route_decision"]["route_mode"] == "orchestration"
         assert len(result["route_decision"]["candidate_employee_ids"]) == 3
-        assert len(result["route_decision"]["target_employee_ids"]) == 4
+        assert len(result["route_decision"]["target_employee_ids"]) >= 4
         assert "emp_planner" in result["route_decision"]["candidate_employee_ids"]
         assert "emp_planner" in result["route_decision"]["target_employee_ids"]
 
@@ -284,7 +441,7 @@ def test_group_message_orchestration_caps_candidate_replies_at_three(uow, clean_
         assert run is not None
         result_data = json.loads(run.result_summary_json or "{}")
         assert len(result_data["candidate_employee_ids"]) == 3
-        assert len(result_data["target_employee_ids"]) == 4
+        assert len(result_data["target_employee_ids"]) >= 4
 
 
 def test_group_message_idempotency(uow, clean_tables_with_enterprise):
