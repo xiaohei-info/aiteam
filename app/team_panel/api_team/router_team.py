@@ -3374,6 +3374,7 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     message = body.get("message") or {}
     message_text = str(message.get("text") or body.get("message_text") or "").strip()
     idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
+    create_new = bool(body.get("create_new", False))
     message_payload = {
         "attachments": message.get("attachments") or body.get("attachments") or [],
         "quote_message_id": message.get("quote_message_id") or body.get("quote_message_id"),
@@ -3397,20 +3398,25 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
                 return 404, {"error": "CONVERSATION_NOT_FOUND", "message": f"Conversation {conversation_id} not found"}
             ent_id = conversation.enterprise_id
         elif employee is not None:
-            conversations = ConversationRepo(cur).list_by_enterprise(employee.enterprise_id)
-            private_conv = next(
-                (
-                    conv for conv in conversations
-                    if conv.type == "private" and conv.entry_employee_id == employee_id and not conv.deleted_at
-                ),
-                None,
-            )
-            if private_conv is not None:
-                conversation_id = private_conv.id
-            else:
-                # First message to an employee that has no private conversation yet:
-                # lazy-create one so chatting from a draft (/app/chat/emp_xxx) just works.
+            if create_new:
+                # "新建会话"语义：始终创建新的 private conversation，
+                # 不复用旧的，确保用户得到全新的对话上下文和 Hermes session。
                 create_private_for_employee = True
+            else:
+                conversations = ConversationRepo(cur).list_by_enterprise(employee.enterprise_id)
+                private_conv = next(
+                    (
+                        conv for conv in conversations
+                        if conv.type == "private" and conv.entry_employee_id == employee_id and not conv.deleted_at
+                    ),
+                    None,
+                )
+                if private_conv is not None:
+                    conversation_id = private_conv.id
+                else:
+                    # First message to an employee that has no private conversation yet:
+                    # lazy-create one so chatting from a draft (/app/chat/emp_xxx) just works.
+                    create_private_for_employee = True
         if not ent_id:
             enterprise_repo = EnterpriseRepo(cur)
             enterprises = enterprise_repo.list_all()
