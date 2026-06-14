@@ -276,6 +276,9 @@ async function run() {
     knowledgeTab.dispatchEvent({ type: 'click' });
   }
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('kb_marketing_001') !== -1, 'knowledge tab should render truthful knowledge base ids from backend');
+  const knowledgeHtml = document.getElementById('aiteam-drawer-body').innerHTML;
+  assert(knowledgeHtml.indexOf('aiteam-knowledge-ids-input') === -1, 'knowledge tab should not expose raw knowledge-id text input');
+  assert(knowledgeHtml.indexOf('/admin/knowledge') !== -1, 'knowledge tab should direct users to the knowledge admin page for binding');
 
   const memoryTab = tabs.filter(function (item) { return item.getAttribute('data-tab') === 'memory'; })[0];
   if (memoryTab) {
@@ -284,12 +287,19 @@ async function run() {
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('mem0') !== -1, 'memory tab should render truthful provider_code from backend');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('365') !== -1, 'memory tab should render truthful retention_days from backend');
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('开启') !== -1, 'memory tab should render truthful writeback_enabled from backend');
+  const memoryHtml = document.getElementById('aiteam-drawer-body').innerHTML;
+  assert(memoryHtml.indexOf('aiteam-memory-mode-input') === -1, 'memory tab should not expose editable storage-strategy inputs');
+  assert(memoryHtml.indexOf('aiteam-memory-writeback-input') === -1, 'memory tab should not expose editable writeback toggle');
+  assert(memoryHtml.indexOf('记忆管理') !== -1, 'memory tab should point to the memory management page for content edits');
 
   const connectorsTab = tabs.filter(function (item) { return item.getAttribute('data-tab') === 'connectors'; })[0];
   if (connectorsTab) {
     connectorsTab.dispatchEvent({ type: 'click' });
   }
   assert(document.getElementById('aiteam-drawer-body').innerHTML.indexOf('conn_docs') !== -1, 'connectors tab should render truthful connector bindings from backend');
+  const connectorsHtml = document.getElementById('aiteam-drawer-body').innerHTML;
+  assert(connectorsHtml.indexOf('aiteam-connector-ids-input') === -1, 'connectors tab should not expose raw connector-id text input');
+  assert(connectorsHtml.indexOf('/admin/connectors') !== -1, 'connectors tab should direct users to the connector admin page for authorization');
 
   const loopTab = tabs.filter(function (item) { return item.getAttribute('data-tab') === 'loop'; })[0];
   if (loopTab) {
