@@ -4036,6 +4036,12 @@ def handle_get(handler, parsed) -> bool:
     team_path = parsed.path if not getattr(parsed, "query", "") else f"{parsed.path}?{parsed.query}"
     dispatched, status, body, ct = _try_aiteam_dispatch(handler, team_path, "GET")
     if dispatched:
+        # ── SSE live-stream detection ──
+        # The Team Panel router returns this sentinel when an EventHydrator
+        # StreamChannel is active, so the host must write a persistent SSE
+        # response directly instead of sending a static body.
+        if ct == "text/event-stream" and isinstance(body, str) and body == "__SSE_LIVE__":
+            return _handle_aiteam_sse_stream(handler, parsed)
         if ct is not None:
             return t(handler, body, status=status, content_type=ct)
         return j(handler, body, status=status)
@@ -7423,6 +7429,59 @@ def _handle_sse_stream(handler, parsed):
                 _sse_with_id(handler, event, data, event_id)
             else:
                 _sse(handler, event, data)
+            if event in ("stream_end", "error", "cancel"):
+                break
+    except _CLIENT_DISCONNECT_ERRORS:
+        pass
+    finally:
+        if subscriber is not stream and hasattr(stream, "unsubscribe"):
+            try:
+                stream.unsubscribe(subscriber)
+            except Exception:
+                pass
+    return True
+
+
+def _handle_aiteam_sse_stream(handler, parsed):
+    """Stream active AI Team run timeline events over a persistent SSE response."""
+    match = re.match(r"^/api/team/runs/([^/]+)/stream$", parsed.path or "")
+    if not match:
+        return j(handler, {"error": "invalid run stream path"}, status=404)
+
+    run_id = match.group(1)
+    from agent_gateway.event_hydrator import get_hydrator
+
+    hydrator = get_hydrator()
+    stream = hydrator.subscribe_stream(run_id)
+    if stream is None:
+        return j(handler, {"error": "stream not found"}, status=404)
+
+    subscriber = stream.subscribe() if hasattr(stream, "subscribe") else stream
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("X-Accel-Buffering", "no")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+
+    def _write_frame(event: str, data) -> None:
+        payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+        handler.wfile.write(f"event: {event}\ndata: {payload}\n\n".encode("utf-8"))
+        flush = getattr(handler.wfile, "flush", None)
+        if callable(flush):
+            flush()
+
+    try:
+        while True:
+            try:
+                event, data = subscriber.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
+            except queue.Empty:
+                handler.wfile.write(b": heartbeat\n\n")
+                flush = getattr(handler.wfile, "flush", None)
+                if callable(flush):
+                    flush()
+                continue
+            _write_frame(event, data)
             if event in ("stream_end", "error", "cancel"):
                 break
     except _CLIENT_DISCONNECT_ERRORS:

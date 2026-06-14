@@ -11,8 +11,12 @@ Responsibilities:
 - employee persona: EmployeePrompt.system_prompt → profile SOUL.md (§5.2-B)
 - employee model mapping: Employee.model_name/model_provider → chat request
 - knowledge injection: enabled KB bindings → LightRAG chunks in prompt (场景①)
-- 结果回流主链: token/tool events stream live into run_event via
-  ``event_ingest_service``; status machine queued→running→terminal
+- 结果回流主链: token/tool/reasoning events stream live into run_event via
+  ``event_ingest_service`` AND are broadcast to SSE subscribers via
+  ``event_hydrator``; status machine queued→running→terminal
+- SSE 实时推送: on_event callback simultaneously pushes RunTimelineEvent
+  to the per-run StreamChannel so northbound SSE subscribers receive events
+  in real-time (§9.4 Event Hydrator pattern)
 - 会话承接: the WebUI session_id is persisted on a conversation-scoped
   RuntimeBinding so follow-up turns share context.
 """
@@ -173,6 +177,20 @@ def _compose_prompt(system_prompt: str, message_text: str) -> str:
     return "\n\n".join(parts)
 
 
+def _current_event_cursor(conn, run_id: str) -> int:
+    """Return the last persisted run_event cursor for a run, best-effort."""
+    if conn is None:
+        return 0
+    from team_panel.transactions.uow import UnitOfWork
+    try:
+        with UnitOfWork(conn) as uow:
+            binding = uow.runtime_bindings().get_by_owner("team_run", run_id)
+            return int(binding.event_cursor or 0) if binding is not None else 0
+    except Exception:  # noqa: BLE001 — live streaming must still proceed.
+        logger.exception("[executor] failed to read current event cursor for run %s", run_id)
+        return 0
+
+
 # ── Turn execution: WebUI chain first, CLI fallback ───────────────────────
 
 def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
@@ -181,20 +199,92 @@ def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
                         webui_session_id: str) -> tuple[bool, str, str, str, dict]:
     """Returns (success, final_text, error, webui_session_id, usage)."""
     from agent_gateway import webui_runtime_adapter as webui
+    from agent_gateway.event_hydrator import get_hydrator
+    from agent_gateway.contracts import (
+        RunTimelineEvent, TimelineEventType, REASONING_PAYLOAD_KIND,
+        TOOL_CALL_DONE_KEY, TOOL_CALL_RESULT_KEY, TOOL_CALL_IS_ERROR_KEY,
+    )
 
-    flusher = _DeltaFlusher(conn, run_id, employee_id)
+    hydrator = get_hydrator()
+    hydrator.register_stream(run_id)
+
+    # Per-run SSE cursor counter (monotonic, mirrors _ingest cursor logic).
+    _sse_cursor = [_current_event_cursor(conn, run_id)]
+    _sse_cursor_lock = threading.Lock()
+
+    def _next_sse_cursor() -> int:
+        with _sse_cursor_lock:
+            _sse_cursor[0] += 1
+            return _sse_cursor[0]
+
+    def _push_timeline(event_type: TimelineEventType, preview: str,
+                       payload: dict) -> None:
+        """Push a RunTimelineEvent to SSE subscribers (no DB wait)."""
+        cursor = _next_sse_cursor()
+        tl = RunTimelineEvent(
+            event_id=f"evt_{run_id}_{cursor}",
+            event_cursor=cursor,
+            run_id=run_id,
+            event_type=event_type,
+            source_type="session",
+            source_id=webui_session_id,
+            employee_id=employee_id,
+            preview=preview,
+            payload=payload,
+        )
+        hydrator.push_event(run_id, tl)
+
+    def _push_flushed_delta(delta: str, payload: dict) -> None:
+        _push_timeline(TimelineEventType.MESSAGE_DELTA, delta[:200], payload)
+
+    flusher = _DeltaFlusher(conn, run_id, employee_id, on_flush=_push_flushed_delta)
 
     def on_event(kind: str, payload: dict) -> None:
-        if kind == "token":
-            flusher.add(str(payload.get("text") or ""))
+        if kind == "reasoning":
+            reasoning_text = str(payload.get("text") or "")
+            if reasoning_text:
+                flusher.flush()
+                _ingest_standalone(conn, run_id, "message_delta",
+                                   preview=reasoning_text[:200],
+                                   payload={"delta": reasoning_text,
+                                            "kind": REASONING_PAYLOAD_KIND},
+                                   employee_id=employee_id)
+                _push_timeline(TimelineEventType.MESSAGE_DELTA,
+                               reasoning_text[:200],
+                               {"delta": reasoning_text,
+                                "kind": REASONING_PAYLOAD_KIND})
+        elif kind == "token":
+            token_text = str(payload.get("text") or "")
+            if token_text:
+                flusher.add(token_text)
         elif kind == "tool":
             flusher.flush()
+            tool_payload = {"tool": payload.get("name", ""),
+                            "args": payload.get("args") or {},
+                            "tid": payload.get("tid", ""),
+                            TOOL_CALL_DONE_KEY: False}
             _ingest_standalone(conn, run_id, "tool_call",
                                preview=f"调用工具 {payload.get('name', '')}",
-                               payload={"tool": payload.get("name", ""),
-                                        "args": payload.get("args") or {},
-                                        "tid": payload.get("tid", "")},
+                               payload=tool_payload,
                                employee_id=employee_id)
+            _push_timeline(TimelineEventType.TOOL_CALL,
+                           f"调用工具 {payload.get('name', '')}",
+                           tool_payload)
+        elif kind == "tool_complete":
+            flusher.flush()
+            tc_payload = {"tool": payload.get("name", ""),
+                          "args": payload.get("args") or {},
+                          "tid": payload.get("tid", ""),
+                          TOOL_CALL_DONE_KEY: True,
+                          TOOL_CALL_RESULT_KEY: payload.get("preview") or "",
+                          TOOL_CALL_IS_ERROR_KEY: bool(payload.get("is_error", False))}
+            _ingest_standalone(conn, run_id, "tool_call",
+                               preview=f"工具 {payload.get('name', '')} 完成",
+                               payload=tc_payload,
+                               employee_id=employee_id)
+            _push_timeline(TimelineEventType.TOOL_CALL,
+                           f"工具 {payload.get('name', '')} 完成",
+                           tc_payload)
 
     try:
         result = webui.run_turn(
@@ -211,21 +301,24 @@ def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
         flusher.flush()
         ok, out = _invoke_hermes_cli(profile, prompt_text)
         if ok and out:
-            # CLI returns the whole answer at once; emit it as a single delta
-            # so the northbound timeline contract stays identical.
+            payload = {"delta": out}
             _ingest_standalone(conn, run_id, "message_delta",
-                               preview=out[:200], payload={"delta": out},
+                               preview=out[:200], payload=payload,
                                employee_id=employee_id)
+            _push_timeline(TimelineEventType.MESSAGE_DELTA, out[:200], payload)
         return ok, out, ("" if ok else out), "", {}
+    finally:
+        hydrator.close_stream(run_id)
 
 
 class _DeltaFlusher:
     """Batches streamed tokens into message_delta events (避免逐 token 写库)."""
 
-    def __init__(self, conn, run_id: str, employee_id: str):
+    def __init__(self, conn, run_id: str, employee_id: str, on_flush=None):
         self._conn = conn
         self._run_id = run_id
         self._employee_id = employee_id
+        self._on_flush = on_flush
         self._buf: list[str] = []
         self._chars = 0
         self._last_flush = time.time()
@@ -245,9 +338,12 @@ class _DeltaFlusher:
         self._buf = []
         self._chars = 0
         self._last_flush = time.time()
+        payload = {"delta": delta}
         _ingest_standalone(self._conn, self._run_id, "message_delta",
-                           preview=delta[:200], payload={"delta": delta},
+                           preview=delta[:200], payload=payload,
                            employee_id=self._employee_id)
+        if self._on_flush is not None:
+            self._on_flush(delta, payload)
 
 
 def _ingest_standalone(conn, run_id: str, event_type: str, *,
@@ -414,6 +510,9 @@ def _finalize(run_id: str, *, success: bool, output: str,
     finally:
         if own_conn:
             conn.close()
+        # Clean up hydrator stream after finalize.
+        from agent_gateway.event_hydrator import get_hydrator
+        get_hydrator().remove_stream(run_id)
 
 
 def _ingest(uow, run, event_type: str, *, preview: str = "",

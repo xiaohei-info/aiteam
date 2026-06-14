@@ -411,3 +411,46 @@ def test_non_team_paths_not_dispatched():
     ]:
         status, body = _get(path)
         assert status != 501, f"GET {path}: should NOT be dispatched to 501, got status {status}"
+
+
+def test_team_run_active_stream_uses_persistent_sse_handler():
+    """Active Team run streams must write live timeline frames to handler.wfile."""
+    from agent_gateway.contracts import RunTimelineEvent, TimelineEventType
+    from agent_gateway.event_hydrator import get_hydrator
+    from api import routes
+
+    run_id = "run_live_host_route"
+    hydrator = get_hydrator()
+    hydrator.remove_stream(run_id)
+    hydrator.register_stream(run_id)
+    try:
+        hydrator.push_event(
+            run_id,
+            RunTimelineEvent(
+                event_id="evt_live_1",
+                event_cursor=1,
+                run_id=run_id,
+                event_type=TimelineEventType.MESSAGE_DELTA,
+                source_type="session",
+                source_id="sess_live",
+                employee_id="emp_live",
+                preview="hello",
+                payload={"delta": "hello"},
+            ),
+        )
+        hydrator.close_stream(run_id)
+
+        handler = _FakeHandler()
+        parsed = urlparse(f"http://example.com/api/team/runs/{run_id}/stream?cursor=0")
+
+        handled = routes._handle_aiteam_sse_stream(handler, parsed)
+
+        body = handler.body.decode("utf-8")
+        assert handled is True
+        assert handler.status == 200
+        assert ("Content-Type", "text/event-stream") in handler.sent_headers
+        assert "event: timeline\n" in body
+        assert '"event_type": "message_delta"' in body
+        assert "event: stream_end\n" in body
+    finally:
+        hydrator.remove_stream(run_id)

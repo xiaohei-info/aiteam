@@ -84,8 +84,14 @@ def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):
 
     status, events = _get(f"/api/team/runs/{run_id}/events?cursor=0")
     assert status == 200, events
-    assert [item["event_type"] for item in events["items"]] == ["message_delta", "run_succeeded"]
-    assert events["next_cursor"] == 2
+    assert [item["event_type"] for item in events["items"]] == [
+        "message_delta",
+        "tool_call",
+        "tool_call",
+        "message_delta",
+        "run_succeeded",
+    ]
+    assert events["next_cursor"] == 5
     assert events["run_status"] == "succeeded"
 
     status, conv = _get(f"/api/team/conversations/{conv_id}")
@@ -95,13 +101,26 @@ def test_timeline_events_consumable_by_conversation_view(seeded_private_chat):
     assert conv["display_state"] == "resolved"
     assert conv["latest_run"]["run_id"] == run_id
     assert conv["latest_run"]["status"] == "succeeded"
-    assert conv["last_message_preview"]["event_cursor"] == 2
+    assert conv["last_message_preview"]["event_cursor"] == 5
     assert conv["last_message_preview"]["preview"] == "已根据企业知识库整理出入职流程。"
-    assert conv["message_count"] == 2
-    assert [item["role"] for item in conv["messages"]["items"]] == ["user", "assistant"]
+    assert conv["message_count"] == 5
+    assert [item["role"] for item in conv["messages"]["items"]] == [
+        "user",
+        "system",
+        "system",
+        "system",
+        "assistant",
+    ]
     assert conv["messages"]["items"][0]["text"] == "请基于企业知识库总结入职流程。"
-    assert conv["messages"]["items"][1]["citations"][0]["title"] == "入职手册"
-    assert conv["messages"]["items"][1]["text"] == "已根据企业知识库整理出入职流程。"
+    timeline_items = [item["__timeline_item"] for item in conv["messages"]["items"] if item.get("__timeline_item")]
+    assert [item["kind"] for item in timeline_items] == ["reasoning", "tool_call", "tool_complete"]
+    assert timeline_items[0]["payload"]["kind"] == "reasoning"
+    assert timeline_items[0]["payload"]["delta"] == "需要先查知识库。"
+    assert timeline_items[1]["payload"]["done"] is False
+    assert timeline_items[2]["payload"]["done"] is True
+    assert timeline_items[2]["payload"]["result_snippet"] == "入职流程包含账号激活、制度学习。"
+    assert conv["messages"]["items"][-1]["citations"][0]["title"] == "入职手册"
+    assert conv["messages"]["items"][-1]["text"] == "已根据企业知识库整理出入职流程。"
     assert conv["employee_summary"]["employee_id"] == seeded_private_chat["employee_id"]
     assert conv["employee_summary"]["usage_summary"]["total_runs"] >= 1
 

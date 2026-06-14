@@ -34,8 +34,8 @@ def seeded_private_chat(seeded_enterprise, db_conn):
                 "source_type": "session",
                 "source_id": "sess_l5_private",
                 "employee_id": seeded_enterprise["employee_id"],
-                "preview_text": "正在检索企业知识库中的入职说明…",
-                "payload_json": {"delta": "正在检索企业知识库中的入职说明…"},
+                "preview_text": "需要先查知识库。",
+                "payload_json": {"delta": "需要先查知识库。", "kind": "reasoning"},
             },
         )
         ingest_timeline_event(
@@ -45,6 +45,63 @@ def seeded_private_chat(seeded_enterprise, db_conn):
                 "enterprise_id": enterprise_id,
                 "run_id": run_id,
                 "cursor_no": 2,
+                "event_type": "tool_call",
+                "source_type": "session",
+                "source_id": "sess_l5_private",
+                "employee_id": seeded_enterprise["employee_id"],
+                "preview_text": "调用工具 knowledge_search",
+                "payload_json": {
+                    "tool": "knowledge_search",
+                    "args": {"query": "入职流程"},
+                    "tid": "tool_l5_private",
+                    "done": False,
+                },
+            },
+        )
+        ingest_timeline_event(
+            uow,
+            {
+                "id": "evt_l5_private_3",
+                "enterprise_id": enterprise_id,
+                "run_id": run_id,
+                "cursor_no": 3,
+                "event_type": "tool_call",
+                "source_type": "session",
+                "source_id": "sess_l5_private",
+                "employee_id": seeded_enterprise["employee_id"],
+                "preview_text": "工具 knowledge_search 完成",
+                "payload_json": {
+                    "tool": "knowledge_search",
+                    "args": {"query": "入职流程"},
+                    "tid": "tool_l5_private",
+                    "done": True,
+                    "result_snippet": "入职流程包含账号激活、制度学习。",
+                    "is_error": False,
+                },
+            },
+        )
+        ingest_timeline_event(
+            uow,
+            {
+                "id": "evt_l5_private_4",
+                "enterprise_id": enterprise_id,
+                "run_id": run_id,
+                "cursor_no": 4,
+                "event_type": "message_delta",
+                "source_type": "session",
+                "source_id": "sess_l5_private",
+                "employee_id": seeded_enterprise["employee_id"],
+                "preview_text": "正在检索企业知识库中的入职说明…",
+                "payload_json": {"delta": "正在检索企业知识库中的入职说明…"},
+            },
+        )
+        ingest_timeline_event(
+            uow,
+            {
+                "id": "evt_l5_private_5",
+                "enterprise_id": enterprise_id,
+                "run_id": run_id,
+                "cursor_no": 5,
                 "event_type": "run_succeeded",
                 "source_type": "session",
                 "source_id": "sess_l5_private",

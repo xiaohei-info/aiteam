@@ -145,6 +145,13 @@ _WORKBENCH_ROLE_ENV = "HERMES_AITEAM_WORKBENCH_ROLE"
 def _today_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+# ── SSE live-stream sentinel ──────────────────────────────────────────────
+# When _handle_run_stream detects an active EventHydrator StreamChannel,
+# it returns this sentinel string as the body.  The routes.py dispatch layer
+# detects it and switches to a persistent SSE long-connection mode, writing
+# real-time events directly to handler.wfile instead of sending a static body.
+_SSE_LIVE_SENTINEL = "__SSE_LIVE__"
+
 
 def _load_payload(value) -> dict:
     if not value or value == "{}":
@@ -2803,6 +2810,7 @@ def _serialize_private_history(
                 {
                     "message_id": user_message.id if user_message is not None else f"msg_{run.id}_user",
                     "cursor": 0,
+                    "__sort_cursor": 0,
                     "run_id": run.id,
                     "role": "user",
                     "sender_type": "user",
@@ -2841,6 +2849,7 @@ def _serialize_private_history(
                 {
                     "message_id": f"msg_{run.id}_assistant",
                     "cursor": 0,
+                    "__sort_cursor": 1_000_000,
                     "run_id": run.id,
                     "role": "assistant" if run.status == "succeeded" or has_knowledge_citations else "system",
                     "sender_type": "employee" if run.status == "succeeded" or has_knowledge_citations else "system",
@@ -2864,16 +2873,22 @@ def _serialize_private_history(
                 }
             )
 
-        # Inject intermediate timeline events (tool_call) so the frontend can
-        # render the execution process alongside user/assistant messages.
+        # Inject process timeline events so the frontend can render execution
+        # details in conversation history without duplicating final text deltas.
         run_events = event_repo.list_by_run(run.id, after_cursor=0, limit=200)
         for ev in run_events:
-            if ev.event_type == "tool_call":
-                tool_payload = _load_payload(ev.payload_json)
+            payload = _load_payload(ev.payload_json)
+            timeline_kind = None
+            if ev.event_type == "message_delta" and payload.get("kind") == "reasoning":
+                timeline_kind = "reasoning"
+            elif ev.event_type == "tool_call":
+                timeline_kind = "tool_complete" if payload.get("done") is True else "tool_call"
+            if timeline_kind:
                 envelopes.append(
                     {
                         "message_id": f"msg_{run.id}_evt_{ev.cursor_no}",
                         "cursor": 0,
+                        "__sort_cursor": ev.cursor_no,
                         "run_id": run.id,
                         "role": "system",
                         "sender_type": "system",
@@ -2885,10 +2900,10 @@ def _serialize_private_history(
                         "attachments": [],
                         "citations": [],
                         "metadata": {},
-                        "event_type": "tool_call",
+                        "event_type": ev.event_type,
                         "__timeline_item": {
-                            "kind": "tool_call",
-                            "payload": tool_payload,
+                            "kind": timeline_kind,
+                            "payload": payload,
                         },
                     }
                 )
@@ -2899,9 +2914,10 @@ def _serialize_private_history(
         if quote_id:
             item["quote"] = _resolve_quote_preview(quote_id, synthetic_by_id, message_repo)
 
-    envelopes.sort(key=lambda item: (item.get("created_at") or "", item.get("message_id") or ""))
+    envelopes.sort(key=lambda item: (item.get("created_at") or "", item.get("__sort_cursor") or 0, item.get("message_id") or ""))
     for index, item in enumerate(envelopes, start=1):
         item["cursor"] = index
+        item.pop("__sort_cursor", None)
 
     page = [item for item in envelopes if item["cursor"] > cursor][:limit]
     next_cursor = page[-1]["cursor"] if page else cursor
@@ -3444,6 +3460,23 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
 
 
 def _handle_run_stream(conn, path: str, run_id: str, query: str) -> tuple[int, str, str]:
+    """Northbound SSE endpoint for run events.
+
+    Two modes:
+    1. Active stream (run is currently executing): subscribe to the
+       EventHydrator StreamChannel and hold a persistent SSE long-connection
+       with 15-second heartbeats, terminating on stream_end / terminal event.
+    2. Inactive stream (run already finished): pull history from run_event
+       table and return as a single SSE response body (short-pull fallback).
+    """
+    from agent_gateway.event_hydrator import get_hydrator
+    hydrator = get_hydrator()
+
+    # ── Active stream mode: persistent SSE long-connection ──
+    if hydrator.has_active_stream(run_id):
+        return 200, _SSE_LIVE_SENTINEL, "text/event-stream"
+
+    # ── Inactive stream mode: short-pull from DB ──
     cur = conn.cursor()
     try:
         run_repo = TeamRunRepo(cur)
