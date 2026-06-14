@@ -94,6 +94,44 @@ test('chat renders reasoning timeline item from history', function () {
   assert.ok(transcript.innerHTML.includes('aiteam-chat__reasoning-card'), 'expected reasoning card in history');
   assert.ok(transcript.innerHTML.includes('需要先查知识库。'), 'expected reasoning text in history');
 });
+
+test('reasoning deltas accumulate into a single bubble instead of splitting per token', function () {
+  // Simulate multiple message_delta events with kind=reasoning arriving in sequence.
+  // Before the fix each delta created a separate liveItem → multiple "思考过程" cards.
+  // After the fix all deltas accumulate into one reasoning bubble.
+  const state = {
+    liveItems: [],
+    streamingAssistantText: '',
+    cursor: 0,
+    isSyncing: false,
+    hasLiveDelta: false,
+    latestEventType: '',
+    statusText: '',
+  };
+
+  // Delta 1: "用户"
+  page._applyTimelineEvent(state, { event_type: 'message_delta', event_cursor: 1, payload: { delta: '用户', kind: 'reasoning' } });
+  assert.strictEqual(state.liveItems.length, 1, 'first reasoning delta should create one live item');
+
+  // Delta 2: "用中文"
+  page._applyTimelineEvent(state, { event_type: 'message_delta', event_cursor: 2, payload: { delta: '用中文', kind: 'reasoning' } });
+  assert.strictEqual(state.liveItems.length, 1, 'second reasoning delta should accumulate into the same live item, not create a new one');
+
+  // Delta 3: "打招呼"
+  page._applyTimelineEvent(state, { event_type: 'message_delta', event_cursor: 3, payload: { delta: '打招呼', kind: 'reasoning' } });
+  assert.strictEqual(state.liveItems.length, 1, 'third reasoning delta should also accumulate into the single live item');
+
+  // The single live item should contain the full accumulated text.
+  var reasoningItem = state.liveItems[0];
+  assert.strictEqual(reasoningItem.kind, 'reasoning');
+  assert.strictEqual(reasoningItem.payload.delta, '用户用中文打招呼', 'accumulated delta should be the concatenation of all three deltas');
+
+  // Render the accumulated reasoning via renderTimelineItem
+  var html = page._renderTimelineItem({ type: 'reasoning', text: reasoningItem.payload.delta });
+  assert.ok(html.includes('用户用中文打招呼'), 'rendered reasoning card should contain full accumulated text');
+  var cardCount = (html.match(/aiteam-chat__reasoning-card/g) || []).length;
+  assert.strictEqual(cardCount, 1, 'rendered HTML should contain exactly one reasoning card');
+});
 test('chat summary panel keeps real bindings (skills + model)', function () {
   const html = page._renderSummaryPanel({ display_name: '小析', role_name: '分析师', model_provider: 'openrouter', model_name: 'gpt', skills: ['检索','写作'], knowledge_bases: ['KB1'], usage_summary: { total_runs: 4, status_counts: { succeeded: 3 } } }, { message_count: 9 });
   assert.ok(html.includes('小析'), 'name');

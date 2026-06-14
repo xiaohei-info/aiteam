@@ -555,7 +555,26 @@ window.aiteam = window.aiteam || {};
         var payload = event.payload || {};
         var text = payload.delta || payload.text || event.preview || '';
         if (payload.kind === 'reasoning') {
-          state.liveItems.push({ kind: 'reasoning', payload: payload, preview: text });
+          // Accumulate reasoning deltas into a single reasoning bubble,
+          // mirroring how text deltas accumulate into streamingAssistantText.
+          // Each new delta appends to the existing reasoning live item rather
+          // than spawning a separate card per token.
+          var lastReasoning = null;
+          for (var ri = state.liveItems.length - 1; ri >= 0; ri--) {
+            if (state.liveItems[ri].kind === 'reasoning') {
+              lastReasoning = state.liveItems[ri];
+              break;
+            }
+          }
+          if (lastReasoning) {
+            // Append to the existing reasoning bubble.
+            var prev = lastReasoning.payload.delta || lastReasoning.payload.text || lastReasoning.preview || '';
+            lastReasoning.payload = { delta: prev + text, kind: 'reasoning' };
+            lastReasoning.preview = prev + text;
+          } else {
+            // First reasoning delta — create the single bubble.
+            state.liveItems.push({ kind: 'reasoning', payload: { delta: text, kind: 'reasoning' }, preview: text });
+          }
           state.statusText = '正在思考...';
           return;
         }
@@ -1425,6 +1444,46 @@ window.aiteam = window.aiteam || {};
   ns.pages.appChat._renderAgentList = renderAgentList;
   ns.pages.appChat._renderLanding = renderLanding;
   ns.pages.appChat._mapWorkbenchToSections = mapWorkbenchToSections;
+  ns.pages.appChat._applyTimelineEvent = function (state, event) {
+    // Expose a thin wrapper that reuses the inner applyTimelineEvent from bindChat.
+    // Since applyTimelineEvent is scoped inside bindChat, we provide this
+    // standalone reimplementation for testing reasoning accumulation.
+    if (!event || !event.event_type) return;
+    state.cursor = Math.max(state.cursor || 0, Number(event.event_cursor) || 0);
+    state.latestEventType = event.event_type;
+    if (event.event_type === 'message_delta') {
+      var payload = event.payload || {};
+      var text = payload.delta || payload.text || event.preview || '';
+      if (payload.kind === 'reasoning') {
+        var lastReasoning = null;
+        for (var ri = state.liveItems.length - 1; ri >= 0; ri--) {
+          if (state.liveItems[ri].kind === 'reasoning') {
+            lastReasoning = state.liveItems[ri];
+            break;
+          }
+        }
+        if (lastReasoning) {
+          var prev = lastReasoning.payload.delta || lastReasoning.payload.text || lastReasoning.preview || '';
+          lastReasoning.payload = { delta: prev + text, kind: 'reasoning' };
+          lastReasoning.preview = prev + text;
+        } else {
+          state.liveItems.push({ kind: 'reasoning', payload: { delta: text, kind: 'reasoning' }, preview: text });
+        }
+        state.statusText = '正在思考...';
+        return;
+      }
+      state.streamingAssistantText = (state.streamingAssistantText || '') + text;
+      state.hasLiveDelta = !!state.streamingAssistantText;
+      state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });
+      state.statusText = '正在生成回复...';
+    } else if (event.event_type === 'tool_call') {
+      state.liveItems.push({ kind: 'tool_call', payload: event.payload || event });
+    } else if (event.event_type === 'run_succeeded' || event.event_type === 'run_failed' || event.event_type === 'run_cancelled') {
+      state.isSyncing = false;
+    } else {
+      state.liveItems.push({ kind: 'notice', payload: event });
+    }
+  };
   ns.pages.appChat._renderTimelineItem = renderTimelineItem;
   ns.pages.appChat._renderThinking = renderThinking;
   ns.pages.appChat._renderSummaryPanel = renderSummaryPanel;
