@@ -74,6 +74,7 @@ from ..repositories.solution_apply_record_repo import SolutionApplyRecordRepo
 from ..repositories.solution_template_binding_repo import SolutionTemplateBindingRepo
 from ..repositories.employee_skill_binding_repo import EmployeeSkillBindingRepo
 from ..repositories.employee_memory_binding_repo import EmployeeMemoryBindingRepo
+from ..repositories.employee_connector_binding_repo import EmployeeConnectorBindingRepo
 from ..repositories.knowledge_base_repo import KnowledgeBaseRepo
 from ..repositories.knowledge_document_repo import KnowledgeDocumentRepo
 from ..repositories.knowledge_ingestion_job_repo import KnowledgeIngestionJobRepo
@@ -124,7 +125,9 @@ from agent_gateway.contracts import (
 from agent_gateway import profile_capability
 
 _ALLOWED_PATCH_FIELDS = {"display_name", "status", "skills_add", "skills_remove",
-                         "model_provider", "model_name", "prompt_version",
+                         "model_provider", "model_name",
+                         "temperature", "max_tokens", "avatar_url",
+                         "prompt_version",
                          "config_version", "capabilities_json", "description",
                          "prompt_system", "prompt_behavior_rules_json", "prompt_opening_message",
                          "memory_mode", "memory_provider_code", "memory_retention_days",
@@ -2158,9 +2161,12 @@ def _seed_employee_capabilities(cur, enterprise_id: str, employee_id: str,
 
 
 def _provision_employee_profile(profile_name: str, system_prompt: str,
-                                model_provider: str, model_name: str) -> None:
+                                model_provider: str, model_name: str,
+                                temperature: float | None = None,
+                                max_tokens: int | None = None) -> None:
     """Create the employee's Hermes profile, write SOUL, and pin the chosen
-    model into the profile config.yaml. Best-effort; never raises."""
+    model (with optional temperature/max_tokens) into the profile config.yaml.
+    Best-effort; never raises."""
     try:
         from agent_gateway.runtime_executor import _provision_profile, _profile_home
         from agent_gateway.profile_provisioner import set_profile_model
@@ -2172,7 +2178,8 @@ def _provision_employee_profile(profile_name: str, system_prompt: str,
         return
     if model_provider and model_name:
         try:
-            set_profile_model(_profile_home(profile_name), model_provider, model_name)
+            set_profile_model(_profile_home(profile_name), model_provider, model_name,
+                              temperature=temperature, max_tokens=max_tokens)
         except Exception:  # noqa: BLE001
             pass
 
@@ -2203,6 +2210,7 @@ def _reconcile_employee_profile(cur, employee, *, system_prompt: str | None = No
     _provision_employee_profile(
         employee.profile_name, system_prompt,
         employee.model_provider or "", employee.model_name or "",
+        temperature=employee.temperature, max_tokens=employee.max_tokens,
     )
     _fire_skill_sync(cur, employee.id)
     _fire_memory_sync(cur, employee.id)
@@ -2239,6 +2247,10 @@ def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
         created_from=created_from,
         model_provider=model_provider,
         model_name=model_name,
+        temperature=float(body.get("temperature") or 0.7),
+        max_tokens=int(body.get("max_tokens") or 2048),
+        avatar_url=body.get("avatar_url"),
+        description=body.get("description"),
     )
     EmployeeRepo(cur).create(emp)
     # Seed prompt/skill/KB/memory at creation time so the employee is functional
@@ -2248,6 +2260,50 @@ def _create_employee_with_profile(conn, cur, ent, *, display_name: str,
         source_template_version=(template.version_no if template is not None else None),
         system_prompt_override=body.get("system_prompt"),
     )
+    # Seed additional skill/KB/connector bindings from body (not from template).
+    skill_ids = body.get("skill_ids") or []
+    if skill_ids and template is None:
+        skill_repo = EmployeeSkillBindingRepo(cur)
+        for skill_code in skill_ids:
+            if not skill_code:
+                continue
+            skill_repo.create(EmployeeSkillBinding(
+                id=f"sb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=ent.id,
+                employee_id=employee_id,
+                skill_code=str(skill_code),
+                enabled=True,
+                source_type="manual",
+                visibility="allow",
+            ))
+    kb_ids = body.get("kb_ids") or []
+    if kb_ids:
+        kb_repo = EmployeeKnowledgeBindingRepo(cur)
+        for kb_id in kb_ids:
+            if not kb_id:
+                continue
+            kb_repo.create(EmployeeKnowledgeBinding(
+                id=f"kb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=ent.id,
+                employee_id=employee_id,
+                knowledge_base_id=str(kb_id),
+                scope_mode="read",
+                enabled=True,
+            ))
+    connector_ids_from_body = body.get("connector_ids") or []
+    if connector_ids_from_body:
+        conn_repo = EmployeeConnectorBindingRepo(cur)
+        for cid in connector_ids_from_body:
+            if not cid:
+                continue
+            conn_repo.create(EmployeeConnectorBinding(
+                id=f"cb_{uuid.uuid4().hex[:12]}",
+                enterprise_id=ent.id,
+                employee_id=employee_id,
+                connector_id=str(cid),
+                enabled=True,
+                access_mode="invoke",
+            ))
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     conv = Conversation(
         id=conversation_id,
@@ -2759,7 +2815,8 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
         conn.commit()
         # Provision the Hermes profile (SOUL + pinned model) after the DB commit.
         _provision_employee_profile(profile_name, sol_system_prompt,
-                                    sol_model_provider, sol_model_name)
+                                    sol_model_provider, sol_model_name,
+                                    temperature=0.7, max_tokens=2048)
         _fire_skill_sync(cur, employee_id)
         return 201, {
             "apply_record_id": apply_record_id,
@@ -4319,6 +4376,8 @@ def _handle_employee_detail(conn, path: str, emp_id: str, query: str) -> tuple[i
         "usage_summary": usage_summary,
         "model_provider": view.model_provider,
         "model_name": view.model_name,
+        "temperature": view.temperature,
+        "max_tokens": view.max_tokens,
         "prompt_version": view.prompt_version,
         "prompt_config": view.prompt_config,
         "knowledge_bases": view.knowledge_bases,
@@ -5047,13 +5106,21 @@ def _handle_employee_patch(conn, path: str, emp_id: str, query: str, body: dict 
             for field_name in (
                 "model_provider",
                 "model_name",
+                "temperature",
+                "max_tokens",
+                "avatar_url",
                 "prompt_version",
                 "config_version",
                 "capabilities_json",
                 "description",
             ):
                 if field_name in body:
-                    setattr(emp, field_name, body.get(field_name))
+                    raw_value = body.get(field_name)
+                    if field_name == "temperature":
+                        raw_value = float(raw_value) if raw_value is not None else 0.7
+                    elif field_name == "max_tokens":
+                        raw_value = int(raw_value) if raw_value is not None else 2048
+                    setattr(emp, field_name, raw_value)
 
             skills_add = body.get("skills_add")
             skills_remove = body.get("skills_remove")

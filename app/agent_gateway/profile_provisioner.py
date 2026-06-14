@@ -140,8 +140,11 @@ def materialize_root_providers(providers: list[dict], *,
 
 
 def set_profile_model(profile_dir: str | Path, provider_key: str,
-                      model_id: str) -> bool:
-    """Write the default model/provider into a profile's config.yaml model block.
+                      model_id: str,
+                      temperature: float | None = None,
+                      max_tokens: int | None = None) -> bool:
+    """Write the default model/provider (and optional temperature/max_tokens)
+    into a profile's config.yaml model block.
 
     Lets the employee's selected model take effect when the profile is active,
     without depending on per-run model passthrough. Preserves all other fields.
@@ -156,6 +159,10 @@ def set_profile_model(profile_dir: str | Path, provider_key: str,
         model_block = cfg.setdefault("model", {})
         model_block["default"] = model_id
         model_block["provider"] = provider_key
+        if temperature is not None:
+            model_block["temperature"] = float(temperature)
+        if max_tokens is not None:
+            model_block["max_tokens"] = int(max_tokens)
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
                            encoding="utf-8")
