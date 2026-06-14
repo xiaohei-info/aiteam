@@ -9,11 +9,37 @@ from team_panel.domain.entities import (
     Conversation,
     ConversationMember,
     ConversationMessage,
+    Employee,
     RuntimeBinding,
     TeamRun,
 )
 from team_panel.application.policies.route_decision_service import decide_route
 from team_panel.integration.gateway_client import submit_group_conversation
+
+_SYSTEM_PLANNER_DISPLAY_NAME = "协作主持人"
+_SYSTEM_PLANNER_ROLE_NAME = "orchestrator"
+
+
+def ensure_system_planner(uow, enterprise_id: str) -> Employee:
+    """Ensure a system planner employee exists for the enterprise; create if absent."""
+    existing = uow.employees().get_system_planner(enterprise_id)
+    if existing is not None:
+        return existing
+
+    emp_id = f"emp_sys_planner_{enterprise_id[:8]}_{uuid.uuid4().hex[:6]}"
+    profile_name = f"sys_planner_{enterprise_id[:8]}"
+    emp = Employee(
+        id=emp_id,
+        enterprise_id=enterprise_id,
+        profile_name=profile_name,
+        display_name=_SYSTEM_PLANNER_DISPLAY_NAME,
+        role_name=_SYSTEM_PLANNER_ROLE_NAME,
+        status="active",
+        created_from="admin_seed",
+        capabilities_json='{"is_system_planner": true}',
+    )
+    uow.employees().create(emp)
+    return emp
 
 
 def create_private_conversation(uow, enterprise_id: str, employee_id: str,
@@ -36,7 +62,6 @@ def create_private_conversation(uow, enterprise_id: str, employee_id: str,
 def create_group_conversation(uow, enterprise_id: str, title: str,
                               member_employee_ids: list[str],
                               created_by: str) -> str:
-    """Create a group conversation with membership entries, activate, return id."""
     conv_id = f"conv_{uuid.uuid4().hex[:12]}"
     conv = Conversation(
         id=conv_id,
@@ -49,16 +74,27 @@ def create_group_conversation(uow, enterprise_id: str, title: str,
     conv.activate()
     uow.conversations().create(conv)
 
+    planner = ensure_system_planner(uow, enterprise_id)
+    _create_member(uow, ConversationMember(
+        member_id=f"mem_{uuid.uuid4().hex[:12]}",
+        conversation_id=conv_id,
+        member_type="employee",
+        member_ref_id=planner.id,
+        role="participant",
+        status="active",
+    ))
+
     for employee_id in member_employee_ids:
-        member = ConversationMember(
+        if employee_id == planner.id:
+            continue
+        _create_member(uow, ConversationMember(
             member_id=f"mem_{uuid.uuid4().hex[:12]}",
             conversation_id=conv_id,
             member_type="employee",
             member_ref_id=employee_id,
             role="participant",
             status="active",
-        )
-        _create_member(uow, member)
+        ))
 
     return conv_id
 
@@ -154,12 +190,7 @@ def archive_group_conversation(uow, conversation_id: str) -> dict:
 
 def submit_group_message(uow, conversation_id: str, message_text: str,
                          route_hint: str, idempotency_key: str,
-                         sender_id: str) -> dict:
-    """Submit a message to a group conversation.
-
-    Computes route_decision from @mentions / route_hint, persists a TeamRun,
-    RuntimeBinding, and audit event, then returns the northbound response.
-    """
+                         sender_id: str, goal: str = "") -> dict:
     conv = uow.conversations().get_by_id(conversation_id)
     if conv is None:
         raise ValueError(f"Conversation {conversation_id} not found")
@@ -207,7 +238,19 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
     if sender_id not in available_employee_ids:
         raise ValueError(f"sender_id {sender_id} is not an active conversation member")
 
-    # ── Compute route decision ─────────────────────────────────────
+    planner = ensure_system_planner(uow, conv.enterprise_id)
+    if planner.id not in available_employee_ids:
+        _create_member(uow, ConversationMember(
+            member_id=f"mem_{uuid.uuid4().hex[:12]}",
+            conversation_id=conversation_id,
+            member_type="employee",
+            member_ref_id=planner.id,
+            role="participant",
+            status="active",
+        ))
+        available_members = _get_active_members(uow, conversation_id)
+        available_employee_ids = [m["employee_id"] for m in available_members]
+
     decision = decide_route(message_text, available_members, route_hint)
     entry_employee_id = _pick_entry_employee_id(decision, sender_id)
     candidate_employee_ids = _pick_candidate_employee_ids(decision, available_employee_ids)
@@ -251,6 +294,7 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
         input_message_json=json.dumps({
             "message_text": message_text,
             "route_hint": route_hint,
+            **({"goal": goal} if goal else {}),
         }),
         result_summary_json=json.dumps({
             "route_mode": decision.route_mode,
