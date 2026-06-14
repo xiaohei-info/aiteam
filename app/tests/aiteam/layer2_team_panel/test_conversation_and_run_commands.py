@@ -123,6 +123,60 @@ def test_create_group_conversation_auto_adds_system_planner_without_duplicate():
     assert len([employee_id for employee_id in member_ref_ids if employee_id == uow.employee_repo.created[0].id]) == 1
 
 
+def test_submit_group_message_excludes_system_planner_from_worker_candidates(monkeypatch):
+    """The system planner coordinates orchestration but is not a worker target."""
+    planner = Employee(
+        id="emp_sys_planner",
+        enterprise_id="ent_test",
+        profile_name="sys_planner_ent_test",
+        display_name="协作主持人",
+        role_name="orchestrator",
+        status=EmployeeStatus.ACTIVE,
+        created_from="admin_seed",
+        capabilities_json=json.dumps({"is_system_planner": True}),
+    )
+    uow = _FakeConversationUow(planner)
+    members = [
+        {"employee_id": "emp_test", "display_name": "Test", "role_name": "分析师", "profile_name": "emp-test", "is_system_planner": False},
+        {"employee_id": "emp_member", "display_name": "Member", "role_name": "研究员", "profile_name": "emp-member", "is_system_planner": False},
+        {"employee_id": "emp_sys_planner", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent_test", "is_system_planner": True},
+    ]
+    captured = {}
+
+    import team_panel.application.commands.conversation_service as service
+
+    monkeypatch.setattr(service, "_get_active_members", lambda *_: list(members))
+    monkeypatch.setattr(service, "build_knowledge_preview_for_employees", lambda *_, **__: None)
+
+    def fake_submit(request):
+        captured.update(request)
+        return GatewayAcceptResponse(
+            run_id=request["run_id"],
+            status="queued",
+            runtime_handle=RuntimeHandle(
+                enterprise_id=request.get("enterprise_id", ""),
+                employee_id=request.get("planner_employee_id", request.get("employee_id", "")),
+                run_id=request["run_id"],
+                kind="composite",
+                task_id="task_fake",
+                profile_name="fake-profile",
+            ),
+            stream_url=f"/api/team/runs/{request['run_id']}/stream?cursor=0",
+            events_url=f"/api/team/runs/{request['run_id']}/events?cursor=0",
+        )
+
+    monkeypatch.setattr(service, "submit_group_conversation", fake_submit)
+
+    result = submit_group_message(
+        uow, "conv_existing", "请大家一起完成这份报告", "auto", "idem_no_planner_worker", "emp_test",
+    )
+
+    assert result["route_decision"]["planner_employee_id"] == "emp_sys_planner"
+    assert result["route_decision"]["candidate_employee_ids"] == ["emp_test", "emp_member"]
+    assert captured["planner_employee_id"] == "emp_sys_planner"
+    assert captured["target_employee_ids"] == ["emp_test", "emp_member"]
+
+
 def test_submit_group_message_lazily_adds_missing_system_planner(monkeypatch):
     """Existing groups get the system planner lazily before route decision."""
     planner = Employee(
@@ -144,7 +198,7 @@ def test_submit_group_message_lazily_adds_missing_system_planner(monkeypatch):
         [
             {"employee_id": "emp_test", "display_name": "Test", "role_name": "分析师", "profile_name": "emp-test"},
             {"employee_id": "emp_member", "display_name": "Member", "role_name": "研究员", "profile_name": "emp-member"},
-            {"employee_id": "emp_sys_planner", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent_test"},
+            {"employee_id": "emp_sys_planner", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent_test", "is_system_planner": True},
         ],
     ]
 

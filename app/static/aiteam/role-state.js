@@ -77,6 +77,7 @@ var aiteam = window.aiteam;
         items.push({ label: '员工', href: '/admin/employees', note: 'Employees' });
         items.push({ label: '技能', href: '/admin/skills', note: 'Skills' });
         items.push({ label: '人才市场', href: '/admin/templates', note: 'Templates' });
+        items.push({ label: '协作编排', href: '/admin/collaboration', note: 'Collaboration' });
       }
       if (_hasPermission(role, 'manage_connectors')) {
         items.push({ label: '连接器', href: '/admin/connectors', note: 'Connectors' });

@@ -545,13 +545,16 @@ class TestGroupConversationDetail:
         ):
             assert key in body, f"Missing {key}: {body}"
         assert body["conversation_type"] == "group"
-        assert body["member_count"] == 3
-        assert len(body["members"]) == 3
+        assert body["member_count"] == 4
+        assert len(body["members"]) == 4
+        system_planner = next(member for member in body["members"] if member.get("is_system_planner"))
+        assert system_planner["display_name"] == "协作主持人"
         assert body["latest_run"]["run_id"].startswith("run_")
         assert body["latest_run"]["runtime_handle"]["kind"] == "kanban_task"
         assert body["timeline"]["latest_event_cursor"] == 0
         assert body["latest_route_decision"]["route_mode"] == "orchestration"
         assert sorted(body["latest_route_decision"]["candidate_employee_ids"]) == ["emp_member", "emp_planner", "emp_test"]
+        assert system_planner["employee_id"] not in body["latest_route_decision"]["candidate_employee_ids"]
         assert isinstance(body["task_tree"]["items"], list)
 
     def test_get_group_conversation_missing_returns_404(self, seeded_enterprise):
@@ -581,7 +584,13 @@ class TestGroupConversationDetail:
 
         detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
         assert detail_status == 200, detail
-        assert detail["member_count"] == 3
+        assert detail["member_count"] == 4
+        system_planner = next(member for member in detail["members"] if member.get("is_system_planner"))
+        planner_remove_status, planner_remove_body = _delete(
+            f"/api/team/group-conversations/{conv_id}/members/{system_planner['member_id']}"
+        )
+        assert planner_remove_status == 409, planner_remove_body
+        assert planner_remove_body["error"] == "GROUP_MEMBER_REMOVE_FAILED"
         removed_member = next(member for member in detail["members"] if member["employee_id"] == "emp_member")
 
         remove_status, remove_body = _delete(
@@ -593,8 +602,9 @@ class TestGroupConversationDetail:
 
         detail_status, detail = _get(f"/api/team/group-conversations/{conv_id}")
         assert detail_status == 200, detail
-        assert detail["member_count"] == 2
-        assert sorted(member["employee_id"] for member in detail["members"]) == ["emp_planner", "emp_test"]
+        assert detail["member_count"] == 3
+        assert sorted(member["employee_id"] for member in detail["members"] if not member.get("is_system_planner")) == ["emp_planner", "emp_test"]
+        assert any(member.get("is_system_planner") for member in detail["members"])
 
         archive_status, archive_body = _delete(f"/api/team/group-conversations/{conv_id}")
         assert archive_status == 200, archive_body

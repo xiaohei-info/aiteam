@@ -16,7 +16,7 @@
    未达成则带上一轮成果再次执行 Phase 1-5, 直到 done 或轮次封顶。
 
 Goal 循环口径:
-- 触发: input_message_json 含 "goal" 字段 (非空字符串)。
+- 触发: 编排默认把用户消息作为 goal; input_message_json.goal 可覆盖, "__off__" 显式关闭。
 - 判断: 复用 hermes_cli.goals.judge_goal(goal_text, last_response) → "done" | "continue"。
 - 封顶: AITEAM_ORCH_GOAL_MAX_ROUNDS 环境变量, 默认 5 轮。
 - 降级: judge_goal 不可用时 (hermes_cli 未安装) 照常单轮收口, 不阻断。
@@ -102,6 +102,7 @@ def execute_orchestration(conn, run_id: str) -> None:
         goal_text = (ctx.get("goal_text") or "").strip()
         round_no = 0
         prior_round_output = ""
+        original_message_text = ctx.get("message_text") or ""
 
         while True:
             round_no += 1
@@ -112,16 +113,18 @@ def execute_orchestration(conn, run_id: str) -> None:
 
             if goal_text and round_no > 1:
                 ctx["message_text"] = _build_continuation_message(
-                    ctx["message_text"], goal_text, prior_round_output, round_no)
+                    original_message_text, goal_text, prior_round_output, round_no)
+            else:
+                ctx["message_text"] = original_message_text
 
             subtasks = _plan_subtasks(ctx)
 
             if _is_cancelled(run_id):
                 _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
                 return
-            _emit_task_tree(run_id, ctx, subtasks)
+            _emit_task_tree(run_id, ctx, subtasks, round_no)
 
-            results = _execute_waves(run_id, ctx, subtasks)
+            results = _execute_waves(run_id, ctx, subtasks, round_no)
 
             if _is_cancelled(run_id):
                 succeeded = [i for i, r in results.items() if r["success"]]
@@ -145,7 +148,7 @@ def execute_orchestration(conn, run_id: str) -> None:
                              source_id=ctx["root_task_id"],
                              preview=f"已汇总 {len(succeeded)}/{len(subtasks)} 个子任务成果 (第{round_no}轮)",
                              payload={"subtasks": [
-                                 {"task_id": _subtask_id(run_id, i),
+                                 {"task_id": _subtask_id(run_id, round_no, i),
                                   "title": t["title"],
                                   "assignee_employee_id": t["assignee"],
                                   "status": "succeeded" if results[i]["success"] else "failed",
@@ -165,23 +168,17 @@ def execute_orchestration(conn, run_id: str) -> None:
 
             if verdict == "done":
                 logger.info("[orch] goal achieved after %d round(s) for run %s", round_no, run_id)
-                _emit_standalone(run_id, "goal_achieved",
-                                 source_id=ctx["root_task_id"],
-                                 preview=f"目标已达成 (共{round_no}轮)",
-                                 payload={"goal": goal_text, "rounds": round_no},
-                                 employee_id=ctx["planner_id"])
+                _emit_goal_status(run_id, ctx, "achieved", f"目标已达成 (共{round_no}轮)",
+                                  {"goal": goal_text, "rounds": round_no})
                 _finalize(run_id, success=True, output=final_text,
                           employee_id=ctx["planner_id"], conn=conn)
                 return
 
             if round_no >= GOAL_MAX_ROUNDS:
                 logger.info("[orch] goal max rounds (%d) reached for run %s", GOAL_MAX_ROUNDS, run_id)
-                _emit_standalone(run_id, "goal_budget_exhausted",
-                                 source_id=ctx["root_task_id"],
-                                 preview=f"已达最大轮次上限 ({GOAL_MAX_ROUNDS} 轮)",
-                                 payload={"goal": goal_text, "rounds": round_no,
-                                          "max_rounds": GOAL_MAX_ROUNDS},
-                                 employee_id=ctx["planner_id"])
+                _emit_goal_status(run_id, ctx, "budget_exhausted", f"已达最大轮次上限 ({GOAL_MAX_ROUNDS} 轮)",
+                                  {"goal": goal_text, "rounds": round_no,
+                                   "max_rounds": GOAL_MAX_ROUNDS})
                 _finalize(run_id, success=True, output=final_text,
                           employee_id=ctx["planner_id"], conn=conn)
                 return
@@ -223,7 +220,7 @@ def _start_run(conn, run_id: str) -> dict | None:
             emp = uow.employees().get_by_id(emp_id) if emp_id else None
             if emp is not None:
                 employees[emp_id] = emp
-        targets = [e for e in targets if e in employees]
+        targets = [e for e in targets if e in employees and e != planner_id]
         if not targets:
             logger.warning("[orch] run %s has no resolvable target employees", run_id)
             run.status = "failed"
@@ -243,11 +240,15 @@ def _start_run(conn, run_id: str) -> dict | None:
                          "target_employee_ids": targets},
                 employee_id=planner_id)
 
+        message_text = str(input_payload.get("message_text") or "")
+        goal_value = str(input_payload.get("goal") or "").strip()
+        goal_text = "" if goal_value == "__off__" else (goal_value or message_text).strip()
+
         return {
             "enterprise_id": run.enterprise_id,
             "conversation_id": run.conversation_id,
-            "message_text": str(input_payload.get("message_text") or ""),
-            "goal_text": str(input_payload.get("goal") or "").strip(),
+            "message_text": message_text,
+            "goal_text": goal_text,
             "targets": targets,
             "planner_id": planner_id,
             "employees": employees,
@@ -346,25 +347,26 @@ def _extract_json(text: str):
 
 # ── Phase 2: 任务树事件 ───────────────────────────────────────────────────
 
-def _subtask_id(run_id: str, index: int) -> str:
-    return f"sub_{run_id}_{index}"
+def _subtask_id(run_id: str, round_no: int, index: int) -> str:
+    return f"sub_{run_id}_r{round_no}_{index}"
 
 
-def _emit_task_tree(run_id: str, ctx: dict, subtasks: list[dict]) -> None:
-    _emit_standalone(run_id, "task_created",
-                     source_id=ctx["root_task_id"],
-                     preview=f"协作根任务: {ctx['message_text'][:80]}",
-                     payload={"title": ctx["message_text"][:80] or "协作任务",
-                              "description": ctx["message_text"]},
-                     employee_id=ctx["planner_id"])
+def _emit_task_tree(run_id: str, ctx: dict, subtasks: list[dict], round_no: int) -> None:
+    if round_no == 1:
+        _emit_standalone(run_id, "task_created",
+                         source_id=ctx["root_task_id"],
+                         preview=f"协作根任务: {ctx['message_text'][:80]}",
+                         payload={"title": ctx["message_text"][:80] or "协作任务",
+                                  "description": ctx["message_text"]},
+                         employee_id=ctx["planner_id"])
     for i, task in enumerate(subtasks):
         _emit_standalone(run_id, "task_created",
-                         source_id=_subtask_id(run_id, i),
+                         source_id=_subtask_id(run_id, round_no, i),
                          preview=f"子任务: {task['title']}",
                          payload={"title": task["title"],
                                   "description": task["description"],
                                   "parent_task_id": ctx["root_task_id"],
-                                  "depends_on": [_subtask_id(run_id, d) for d in task["depends_on"]]},
+                                  "depends_on": [_subtask_id(run_id, round_no, d) for d in task["depends_on"]]},
                          employee_id=task["assignee"])
 
 
@@ -386,12 +388,12 @@ def build_waves(subtasks: list[dict]) -> list[list[int]]:
     return waves
 
 
-def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict]) -> dict[int, dict]:
+def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict], round_no: int) -> dict[int, dict]:
     results: dict[int, dict] = {}
     for wave in build_waves(subtasks):
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(wave))) as pool:
             futures = {
-                pool.submit(_run_subtask_safe, run_id, ctx, subtasks, i, dict(results)): i
+                pool.submit(_run_subtask_safe, run_id, ctx, subtasks, i, dict(results), round_no): i
                 for i in wave
             }
             for future in as_completed(futures):
@@ -400,13 +402,13 @@ def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict]) -> dict[int, di
 
 
 def _run_subtask_safe(run_id: str, ctx: dict, subtasks: list[dict],
-                      index: int, prior: dict[int, dict]) -> dict:
+                      index: int, prior: dict[int, dict], round_no: int) -> dict:
     try:
-        return _run_subtask(run_id, ctx, subtasks, index, prior)
+        return _run_subtask(run_id, ctx, subtasks, index, prior, round_no)
     except Exception as exc:  # noqa: BLE001 — 单个子任务崩溃不拖垮协作流程
         logger.exception("[orch] subtask %s/%s crashed", run_id, index)
         _emit_standalone(run_id, "task_failed",
-                         source_id=_subtask_id(run_id, index),
+                         source_id=_subtask_id(run_id, round_no, index),
                          preview=f"子任务异常: {exc}",
                          payload={"error": str(exc)},
                          employee_id=subtasks[index]["assignee"])
@@ -414,9 +416,9 @@ def _run_subtask_safe(run_id: str, ctx: dict, subtasks: list[dict],
 
 
 def _run_subtask(run_id: str, ctx: dict, subtasks: list[dict],
-                 index: int, prior: dict[int, dict]) -> dict:
+                 index: int, prior: dict[int, dict], round_no: int) -> dict:
     task = subtasks[index]
-    task_id = _subtask_id(run_id, index)
+    task_id = _subtask_id(run_id, round_no, index)
     assignee = task["assignee"]
 
     _emit_standalone(run_id, "task_started",
@@ -622,6 +624,16 @@ def _emit_standalone(run_id: str, event_type: str, *, source_id: str,
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _emit_goal_status(run_id: str, ctx: dict, status: str, preview: str, payload: dict) -> None:
+    merged_payload = dict(payload or {})
+    merged_payload["goal_status"] = status
+    _emit_standalone(run_id, "result_merged",
+                     source_id=ctx["root_task_id"],
+                     preview=preview,
+                     payload=merged_payload,
+                     employee_id=ctx["planner_id"])
+
 
 def _evaluate_goal(goal_text: str, last_response: str) -> str:
     if _judge_goal is None:

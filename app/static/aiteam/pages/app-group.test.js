@@ -116,3 +116,37 @@ test('opening a group conversation with no unread does not call updateWorkbenchS
 
   assert.strictEqual(testState.updateCalls.length, 0, 'no unread means no mark_read write');
 });
+
+test('system Planner is labeled and excluded from removable members', function () {
+  const testState = { getCalls: [], updateCalls: [], loadingCalls: [] };
+  const context = buildContext(testState);
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const page = context.window.aiteam.pages.appGroup;
+  assert.ok(page._renderMemberCard, 'appGroup should expose renderMemberCard test helper');
+  assert.ok(page._removableMemberOptions, 'appGroup should expose removableMemberOptions test helper');
+
+  const planner = {
+    member_id: 'mem_planner',
+    employee_id: 'emp_sys_planner',
+    display_name: '协作主持人',
+    role_name: 'orchestrator',
+    is_system_planner: true,
+  };
+  const member = {
+    member_id: 'mem_worker',
+    employee_id: 'emp_worker',
+    display_name: '分析师',
+    role_name: '研究员',
+    is_system_planner: false,
+  };
+
+  const plannerHtml = page._renderMemberCard(planner);
+  assert.ok(plannerHtml.indexOf('主持') !== -1, 'system Planner member card should show host badge');
+  assert.strictEqual(plannerHtml.indexOf('/admin/employees/emp_sys_planner'), -1, 'system Planner should not link to employee detail');
+
+  const options = page._removableMemberOptions([planner, member]);
+  assert.strictEqual(options.indexOf('mem_planner'), -1, 'system Planner should not appear in remove select');
+  assert.ok(options.indexOf('mem_worker') !== -1, 'normal members should remain removable');
+});

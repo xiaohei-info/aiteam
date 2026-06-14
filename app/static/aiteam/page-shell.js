@@ -20,10 +20,7 @@ window.aiteam = window.aiteam || {};
       { label: '记忆',      href: '/admin/memories',         note: 'Memories' },
       { label: '连接器',    href: '/admin/connectors',       note: 'Connectors' },
       { label: '模型',      href: '/admin/llm-providers',     note: 'Models' },
-      // 群聊编排归属行业方案（系统后台创建方案时配置，apply 时下发到企业级
-      // collaboration_template，运行时读取不变）。企业只用不管，故不再在企业后台
-      // 暴露独立的「编排」管理入口；/admin/collaboration 路由与后端端点保留，
-      // 作为运行时存储由方案 apply 写入。
+      { label: '协作编排',  href: '/admin/collaboration',     note: 'Collaboration' },
       { label: '费用',      href: '/admin/billing/usage',    note: 'Billing' },
       { label: '充值',      href: '/admin/billing/recharge', note: 'Recharge' },
       { label: '设置',      href: '/admin/settings',         note: 'Settings' },
@@ -117,6 +114,7 @@ window.aiteam = window.aiteam || {};
     if (pathname.indexOf('/admin/employees') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/skills') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/templates') === 0) return ns.role.hasPermission(role, 'manage_employees');
+    if (pathname.indexOf('/admin/collaboration') === 0) return ns.role.hasPermission(role, 'manage_employees');
     if (pathname.indexOf('/admin/connectors') === 0) return ns.role.hasPermission(role, 'manage_connectors');
     if (pathname.indexOf('/admin/billing') === 0) return ns.role.hasPermission(role, 'view_billing');
     if (pathname.indexOf('/system/') === 0) return ns.role.hasPermission(role, 'system_read');

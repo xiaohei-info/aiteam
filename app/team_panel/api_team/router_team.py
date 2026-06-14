@@ -168,6 +168,19 @@ def _load_payload(value) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _capabilities_has_system_planner(raw) -> bool:
+    if isinstance(raw, dict):
+        return bool(raw.get("is_system_planner"))
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        try:
+            payload = ast.literal_eval(str(raw or "{}"))
+        except (SyntaxError, ValueError):
+            return False
+    return isinstance(payload, dict) and bool(payload.get("is_system_planner"))
+
+
 def _load_json_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
@@ -3099,7 +3112,8 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
 def _load_group_members(cur, conversation_id: str) -> list[dict]:
     cur.execute(
         "SELECT cm.member_id, cm.member_type, cm.member_ref_id, cm.role, cm.status, "
-        "e.id, e.display_name, e.role_name, e.profile_name, e.status "
+        "e.id, e.display_name, e.role_name, e.profile_name, e.status, "
+        "COALESCE(e.capabilities_json, '{}'::jsonb) "
         "FROM conversation_member cm "
         "LEFT JOIN employee e ON e.id = cm.member_ref_id "
         "WHERE cm.conversation_id = %s AND cm.status <> 'removed' "
@@ -3119,6 +3133,7 @@ def _load_group_members(cur, conversation_id: str) -> list[dict]:
             "role_name": row[7] or "",
             "profile_name": row[8] or "",
             "employee_status": row[9] or row[4] or "",
+            "is_system_planner": _capabilities_has_system_planner(row[10]),
         }
         for row in rows
     ]
