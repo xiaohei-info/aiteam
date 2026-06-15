@@ -7,6 +7,14 @@ window.aiteam = window.aiteam || {};
   var _llmModels = [];
   var _modelsLoaded = false;
 
+  // Cached enterprise resources for the creation modal multi-select pickers.
+  var _enterpriseSkillInstalls = [];
+  var _skillsLoaded = false;
+  var _enterpriseKnowledgeBases = [];
+  var _kbsLoaded = false;
+  var _enterpriseConnectors = [];
+  var _connectorsLoaded = false;
+
   function ensureDrawerModule(done) {
     if (ns.pages && ns.pages.adminEmployeeDrawer) {
       done();
@@ -173,14 +181,62 @@ window.aiteam = window.aiteam || {};
     }, function () { _modelsLoaded = true; cb(); });
   }
 
+  function _ensureSkills(cb) {
+    if (_skillsLoaded || !ns.api || !ns.api.getSkillInstalls) { cb(); return; }
+    ns.api.getSkillInstalls().then(function (result) {
+      if (result && result.ok && result.data) _enterpriseSkillInstalls = Array.isArray(result.data.items) ? result.data.items : [];
+      _skillsLoaded = true;
+      cb();
+    }, function () { _skillsLoaded = true; cb(); });
+  }
+
+  function _ensureKbs(cb) {
+    if (_kbsLoaded || !ns.api || !ns.api.getKnowledgeBases) { cb(); return; }
+    ns.api.getKnowledgeBases().then(function (result) {
+      if (result && result.ok && result.data) _enterpriseKnowledgeBases = Array.isArray(result.data.knowledge_bases) ? result.data.knowledge_bases : [];
+      _kbsLoaded = true;
+      cb();
+    }, function () { _kbsLoaded = true; cb(); });
+  }
+
+  function _ensureConnectors(cb) {
+    if (_connectorsLoaded || !ns.api || !ns.api.getConnectors) { cb(); return; }
+    ns.api.getConnectors().then(function (result) {
+      if (result && result.ok && result.data) _enterpriseConnectors = Array.isArray(result.data.connectors) ? result.data.connectors : [];
+      _connectorsLoaded = true;
+      cb();
+    }, function () { _connectorsLoaded = true; cb(); });
+  }
+
+  function _renderCheckItems(label, items, nameKey, idKey, dataRole) {
+    if (!items.length) return '<p class="aiteam-modal__meta">暂无可用' + _esc(label) + '</p>';
+    return '<details class="aiteam-create-detail"><summary>' + _esc(label) + '（' + items.length + '）</summary>' +
+      '<div class="aiteam-create-checkgroup">' + items.map(function (item) {
+        var id = item[idKey] || '';
+        var name = item[nameKey] || id || '';
+        return '<label class="aiteam-drawer__check"><input type="checkbox" data-role="' + _esc(dataRole) + '" value="' + _esc(id) + '"> ' + _esc(name) + '</label>';
+      }).join('') + '</div></details>';
+  }
+
+  function _refreshCapabilitiesSection(section) {
+    if (!section) return;
+    section.innerHTML =
+      _renderCheckItems('技能', _enterpriseSkillInstalls, 'display_name', 'skill_code', 'create-skill-check') +
+      _renderCheckItems('知识库', _enterpriseKnowledgeBases, 'name', 'knowledge_base_id', 'create-kb-check') +
+      _renderCheckItems('连接器', _enterpriseConnectors, 'name', 'connector_id', 'create-connector-check');
+  }
+
   function _renderCreateControls() {
+    var skillsHtml = _skillsLoaded ? _renderCheckItems('技能', _enterpriseSkillInstalls, 'display_name', 'skill_code', 'create-skill-check') : '<p class="aiteam-modal__meta">加载技能库中...</p>';
+    var kbsHtml = _kbsLoaded ? _renderCheckItems('知识库', _enterpriseKnowledgeBases, 'name', 'knowledge_base_id', 'create-kb-check') : '<p class="aiteam-modal__meta">加载知识库中...</p>';
+    var connsHtml = _connectorsLoaded ? _renderCheckItems('连接器', _enterpriseConnectors, 'name', 'connector_id', 'create-connector-check') : '<p class="aiteam-modal__meta">加载连接器中...</p>';
     return '<div class="aiteam-action-row">' +
       '<button type="button" class="aiteam-btn" data-role="open-create-employee">+ 新建员工</button>' +
       '</div>' +
       '<div class="aiteam-modal__overlay" data-role="create-employee-modal" hidden>' +
       '<form class="aiteam-modal aiteam-employee-create" data-role="create-employee-form">' +
       '<h3 class="aiteam-modal__title">新建数字员工</h3>' +
-      '<p class="aiteam-modal__sub">填写基础信息，并可直接选择模型、填写系统提示词和描述。创建后仍可在员工详情中继续配置技能、知识与连接器。</p>' +
+      '<p class="aiteam-modal__sub">填写基础信息并选择模型/技能/知识库/连接器，创建即可生效。</p>' +
       '<label class="aiteam-field"><span>员工名称（必填）</span>' +
       '<input class="aiteam-input" name="display_name" placeholder="例如：产品分析助理" required /></label>' +
       '<label class="aiteam-field"><span>角色 / 岗位（可选）</span>' +
@@ -191,6 +247,9 @@ window.aiteam = window.aiteam || {};
       '<select class="aiteam-select" data-role="create-employee-model">' + _modelOptions(_llmModels) + '</select></label>' +
       '<label class="aiteam-field"><span>系统提示词（可选）</span>' +
       '<textarea class="aiteam-input aiteam-textarea" name="system_prompt" rows="5" placeholder="留空则使用默认人设"></textarea></label>' +
+      '<div class="aiteam-create-capabilities" data-role="create-capabilities-section">' +
+      skillsHtml + kbsHtml + connsHtml +
+      '</div>' +
       '<div class="aiteam-action-row">' +
       '<button type="submit" class="aiteam-btn">创建</button>' +
       '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-role="cancel-create-employee">取消</button>' +
@@ -221,6 +280,13 @@ window.aiteam = window.aiteam || {};
             modelSelect.setAttribute('data-loaded', '1');
           }
         });
+        // Lazy-load enterprise skills, KBs, connectors for multi-select.
+        var capsSection = container.querySelector('[data-role="create-capabilities-section"]');
+        if (capsSection && capsSection.innerHTML.indexOf('create-skill-check') === -1) {
+          _ensureSkills(function () { _refreshCapabilitiesSection(capsSection); });
+          _ensureKbs(function () { _refreshCapabilitiesSection(capsSection); });
+          _ensureConnectors(function () { _refreshCapabilitiesSection(capsSection); });
+        }
         var nameInput = form && form.querySelector('[name="display_name"]');
         if (nameInput && nameInput.focus) nameInput.focus();
       });
@@ -253,6 +319,19 @@ window.aiteam = window.aiteam || {};
           payload.model_provider = parts[0];
           payload.model_name = parts[1];
         }
+        // Collect selected skills, KBs, connectors from checkboxes.
+        var selectedSkills = [];
+        var skillChecks = form.querySelectorAll('[data-role="create-skill-check"]:checked');
+        for (var si = 0; si < skillChecks.length; si++) { selectedSkills.push(skillChecks[si].value); }
+        if (selectedSkills.length) payload.skill_ids = selectedSkills;
+        var selectedKbs = [];
+        var kbChecks = form.querySelectorAll('[data-role="create-kb-check"]:checked');
+        for (var ki = 0; ki < kbChecks.length; ki++) { selectedKbs.push(kbChecks[ki].value); }
+        if (selectedKbs.length) payload.kb_ids = selectedKbs;
+        var selectedConns = [];
+        var connChecks = form.querySelectorAll('[data-role="create-connector-check"]:checked');
+        for (var ci = 0; ci < connChecks.length; ci++) { selectedConns.push(connChecks[ci].value); }
+        if (selectedConns.length) payload.connector_ids = selectedConns;
         if (notice) notice.textContent = '创建中...';
         ns.api.createEmployee(payload).then(function (result) {
           if (result && result.ok) {

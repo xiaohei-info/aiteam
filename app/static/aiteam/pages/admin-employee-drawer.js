@@ -833,7 +833,7 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">Temperature（0.0 ~ 2.0）</span>' +
           '<input id="aiteam-model-temperature-input" type="range" min="0" max="2" step="0.1" class="aiteam-input" value="' + _escapeHtml(String(d.modelTemperature)) + '">' +
-          '<span class="aiteam-drawer__field-value">' + _escapeHtml(String(d.modelTemperature)) + '</span>' +
+          '<span id="aiteam-model-temperature-display" class="aiteam-drawer__field-value">' + _escapeHtml(String(d.modelTemperature)) + '</span>' +
           '</div>' +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">Max Tokens（响应最大长度）</span>' +
@@ -1146,9 +1146,10 @@ window.aiteam = window.aiteam || {};
   function _wireTemperatureSlider() {
     var slider = document.getElementById('aiteam-model-temperature-input');
     if (!slider) return;
+    if (!_drawer) return;
     slider.addEventListener('input', function () {
-      var label = _drawer.querySelector('.aiteam-drawer__field-value');
-      if (label) label.textContent = slider.value;
+      var display = document.getElementById('aiteam-model-temperature-display');
+      if (display) display.textContent = slider.value;
     });
   }
 
