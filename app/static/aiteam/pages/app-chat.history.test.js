@@ -15,9 +15,26 @@ const escapeHtml = function (v) {
 };
 
 function loadPage() {
+  const loaded = loadPageWithContext();
+  return loaded.window.aiteam.pages.appChat;
+}
+
+function loadPageWithContext(overrides) {
+  overrides = overrides || {};
   const context = {
-    window: { aiteam: { util: { escapeHtml }, pages: {} }, addEventListener() {} },
-    document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
+    window: {
+      aiteam: {
+        util: { escapeHtml },
+        pages: {},
+        api: overrides.api || {},
+      },
+      addEventListener() {},
+    },
+    document: overrides.document || {
+      getElementById() { return null; },
+      createElement() { return {}; },
+      addEventListener() {},
+    },
     console,
     setTimeout,
     clearTimeout,
@@ -28,7 +45,31 @@ function loadPage() {
   const code = fs.readFileSync(path.join(__dirname, 'app-chat.js'), 'utf8');
   vm.createContext(context);
   vm.runInContext(code, context);
-  return context.window.aiteam.pages.appChat;
+  return context;
+}
+
+function makeStubElement(extra) {
+  const el = Object.assign({
+    hidden: false,
+    open: false,
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    events: {},
+    addEventListener(type, fn) {
+      this.events[type] = this.events[type] || [];
+      this.events[type].push(fn);
+    },
+    dispatch(type, event) {
+      (this.events[type] || []).forEach(function (fn) {
+        fn(event || {});
+      });
+    },
+    focus() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  }, extra || {});
+  return el;
 }
 
 test('renderHistoryPanel lists conversations with title/preview/time and marks active', function () {
@@ -76,4 +117,81 @@ test('chat header omits history button when no employee is bound', function () {
     modelLine: '',
   });
   assert.ok(!html.includes('data-chat-history'), 'no history button without an employee');
+});
+
+test('clicking outside closes chat header dropdowns', async function () {
+  const documentEvents = {};
+  const historyButton = makeStubElement();
+  const historyPanel = makeStubElement({ hidden: true });
+  const commandMenu = makeStubElement({ open: true });
+  const transcript = makeStubElement();
+  const status = makeStubElement();
+  const quoteBanner = makeStubElement();
+  const pendingAttachments = makeStubElement();
+
+  const documentStub = {
+    getElementById() { return null; },
+    createElement() { return {}; },
+    addEventListener(type, fn) {
+      documentEvents[type] = fn;
+    },
+  };
+
+  const container = {
+    innerHTML: '',
+    __chatHistoryOutsideBound: false,
+    querySelector(selector) {
+      const map = {
+        '[data-chat-history]': historyButton,
+        '[data-chat-history-panel]': historyPanel,
+        '[data-chat-command-menu]': commandMenu,
+        '[data-chat-transcript]': transcript,
+        '[data-chat-status]': status,
+        '[data-chat-quote-banner]': quoteBanner,
+        '[data-chat-pending-attachments]': pendingAttachments,
+      };
+      return Object.prototype.hasOwnProperty.call(map, selector) ? map[selector] : null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+
+  const context = loadPageWithContext({
+    document: documentStub,
+    api: {
+      getEmployeeConversations() {
+        return Promise.resolve({ ok: true, data: { items: [] } });
+      },
+    },
+  });
+  const page = context.window.aiteam.pages.appChat;
+  page._renderChat(container, {
+    conversation_id: 'conv_1',
+    employee_summary: { employee_id: 'emp_1', display_name: 'Alice' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    latest_run: null,
+    __sections: { pinned: [], groups: [], others: [] },
+  });
+
+  historyButton.dispatch('click', {
+    stopPropagation() {},
+    target: {
+      closest(selector) {
+        return selector === '[data-chat-history-wrap]' ? historyButton : null;
+      },
+    },
+  });
+  await Promise.resolve();
+  assert.strictEqual(historyPanel.hidden, false, 'history panel opens after clicking the history button');
+  assert.strictEqual(commandMenu.open, true, 'command menu starts in the expanded state');
+  assert.strictEqual(typeof documentEvents.click, 'function', 'binds a document click handler for outside-close behavior');
+
+  documentEvents.click({
+    target: {
+      closest() { return null; },
+    },
+  });
+
+  assert.strictEqual(historyPanel.hidden, true, 'outside click closes the history panel');
+  assert.strictEqual(commandMenu.open, false, 'outside click closes the command menu');
 });
