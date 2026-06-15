@@ -2800,6 +2800,7 @@ def _serialize_private_history(
         input_payload = _load_payload(run.input_message_json)
         run_messages = persisted_by_run.get(run.id, [])
         user_message = next((msg for msg in run_messages if msg.sender_type == "user"), None)
+        assistant_message = next((msg for msg in reversed(run_messages) if msg.sender_type == "employee"), None)
         user_payload = _load_payload(user_message.message_json) if user_message is not None else input_payload
         user_text = (
             (user_message.message_text if user_message is not None else "")
@@ -2840,6 +2841,11 @@ def _serialize_private_history(
         else:
             assistant_preview = _run_summary_text(run, assistant_payload)
             assistant_created_at = run.finished_at or run.updated_at or run.created_at or _today_iso()
+
+        if not assistant_preview and assistant_message is not None:
+            assistant_preview = str(assistant_message.message_text or "").strip()
+            if assistant_message.created_at:
+                assistant_created_at = assistant_message.created_at
 
         if assistant_preview:
             has_knowledge_citations = bool(
