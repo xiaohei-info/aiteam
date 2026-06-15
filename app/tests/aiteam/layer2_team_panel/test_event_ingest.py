@@ -304,6 +304,34 @@ def test_run_failed_updates_team_run_with_error(db_conn):
     assert compute_display_state("active", "failed") == "resolved"
 
 
+def test_run_failed_uses_payload_error_as_visible_error_summary(db_conn):
+    """Runtime failures that only provide payload.error must still be visible."""
+    ent_id = _make_enterprise(db_conn)
+    conv_id = _make_conversation(db_conn, ent_id)
+    run_id = _make_run(db_conn, ent_id, conv_id)
+    _make_binding(db_conn, ent_id, run_id)
+
+    event = _make_event_payload("run_failed",
+                                enterprise_id=ent_id,
+                                run_id=run_id,
+                                cursor_no=16,
+                                preview_text="stream timeout (> 300s)",
+                                payload_json={
+                                    "error": "model `minimax-m2.5` is not supported.",
+                                    "success": False,
+                                })
+
+    with UnitOfWork(db_conn) as uow:
+        ingest_timeline_event(uow, event)
+
+    with UnitOfWork(db_conn) as uow:
+        run = uow.team_runs().get_by_id(run_id)
+        summary = json.loads(run.result_summary_json or "{}")
+        assert run.status == "failed"
+        assert run.error_message == "model `minimax-m2.5` is not supported."
+        assert summary["error_summary"] == "model `minimax-m2.5` is not supported."
+
+
 def test_run_cancelled_updates_team_run(db_conn):
     """After ingesting run_cancelled: team_run.status → cancelled."""
     ent_id = _make_enterprise(db_conn)

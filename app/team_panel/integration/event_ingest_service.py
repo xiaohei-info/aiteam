@@ -86,6 +86,7 @@ def _apply_terminal_mirror(uow, run_id: str, event_type: str, event: dict) -> No
         elif payload and not run.result_summary_json:
             run.result_summary_json = json.dumps(payload)
     elif event_type == "run_failed":
+        visible_error = preview or "Run failed"
         if run.status not in run._TERMINAL:
             error_code = event.get("error_code", "")
             error_message = event.get("error_message", "")
@@ -93,13 +94,19 @@ def _apply_terminal_mirror(uow, run_id: str, event_type: str, event: dict) -> No
                 if not error_code:
                     error_code = payload.get("error_code", "")
                 if not error_message:
-                    error_message = payload.get("error_message", "")
+                    error_message = (
+                        payload.get("error_message", "")
+                        or payload.get("error", "")
+                        or payload.get("error_summary", "")
+                        or payload.get("message", "")
+                    )
+            visible_error = error_message or preview or "Run failed"
             run.mark_failed(
                 error_code=error_code or "run_failed",
-                error_message=error_message or preview or "Run failed",
+                error_message=visible_error,
             )
-        if not run.result_summary_json and preview:
-            run.result_summary_json = json.dumps({"error_summary": preview})
+        if not run.result_summary_json:
+            run.result_summary_json = json.dumps({"error_summary": visible_error})
     elif event_type == "run_cancelled":
         if run.status not in run._TERMINAL:
             run.cancel()
