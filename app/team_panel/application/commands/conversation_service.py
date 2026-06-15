@@ -1,5 +1,6 @@
 """Conversation command service -- write-side operations for conversations."""
 
+import ast
 import json
 import uuid
 
@@ -9,11 +10,37 @@ from team_panel.domain.entities import (
     Conversation,
     ConversationMember,
     ConversationMessage,
+    Employee,
     RuntimeBinding,
     TeamRun,
 )
 from team_panel.application.policies.route_decision_service import decide_route
 from team_panel.integration.gateway_client import submit_group_conversation
+
+_SYSTEM_PLANNER_DISPLAY_NAME = "协作主持人"
+_SYSTEM_PLANNER_ROLE_NAME = "orchestrator"
+
+
+def ensure_system_planner(uow, enterprise_id: str) -> Employee:
+    """Ensure a system planner employee exists for the enterprise; create if absent."""
+    existing = uow.employees().get_system_planner(enterprise_id)
+    if existing is not None:
+        return existing
+
+    emp_id = f"emp_sys_planner_{enterprise_id[:8]}_{uuid.uuid4().hex[:6]}"
+    profile_name = f"sys_planner_{enterprise_id[:8]}"
+    emp = Employee(
+        id=emp_id,
+        enterprise_id=enterprise_id,
+        profile_name=profile_name,
+        display_name=_SYSTEM_PLANNER_DISPLAY_NAME,
+        role_name=_SYSTEM_PLANNER_ROLE_NAME,
+        status="active",
+        created_from="admin_seed",
+        capabilities_json='{"is_system_planner": true}',
+    )
+    uow.employees().create(emp)
+    return emp
 
 
 def create_private_conversation(uow, enterprise_id: str, employee_id: str,
@@ -36,7 +63,6 @@ def create_private_conversation(uow, enterprise_id: str, employee_id: str,
 def create_group_conversation(uow, enterprise_id: str, title: str,
                               member_employee_ids: list[str],
                               created_by: str) -> str:
-    """Create a group conversation with membership entries, activate, return id."""
     conv_id = f"conv_{uuid.uuid4().hex[:12]}"
     conv = Conversation(
         id=conv_id,
@@ -49,16 +75,27 @@ def create_group_conversation(uow, enterprise_id: str, title: str,
     conv.activate()
     uow.conversations().create(conv)
 
+    planner = ensure_system_planner(uow, enterprise_id)
+    _create_member(uow, ConversationMember(
+        member_id=f"mem_{uuid.uuid4().hex[:12]}",
+        conversation_id=conv_id,
+        member_type="employee",
+        member_ref_id=planner.id,
+        role="participant",
+        status="active",
+    ))
+
     for employee_id in member_employee_ids:
-        member = ConversationMember(
+        if employee_id == planner.id:
+            continue
+        _create_member(uow, ConversationMember(
             member_id=f"mem_{uuid.uuid4().hex[:12]}",
             conversation_id=conv_id,
             member_type="employee",
             member_ref_id=employee_id,
             role="participant",
             status="active",
-        )
-        _create_member(uow, member)
+        ))
 
     return conv_id
 
@@ -128,6 +165,9 @@ def remove_group_member(uow, conversation_id: str, member_id: str) -> dict:
     row = uow.cur.fetchone()
     if row is None:
         raise ValueError(f"Conversation member {member_id} not found")
+    employee = uow.employees().get_by_id(row[0]) if row[0] else None
+    if employee is not None and _is_system_planner_employee(employee):
+        raise ValueError("SYSTEM_PLANNER_CANNOT_REMOVE")
     if row[1] != "removed":
         uow.cur.execute(
             """
@@ -154,12 +194,7 @@ def archive_group_conversation(uow, conversation_id: str) -> dict:
 
 def submit_group_message(uow, conversation_id: str, message_text: str,
                          route_hint: str, idempotency_key: str,
-                         sender_id: str) -> dict:
-    """Submit a message to a group conversation.
-
-    Computes route_decision from @mentions / route_hint, persists a TeamRun,
-    RuntimeBinding, and audit event, then returns the northbound response.
-    """
+                         sender_id: str, goal: str = "") -> dict:
     conv = uow.conversations().get_by_id(conversation_id)
     if conv is None:
         raise ValueError(f"Conversation {conversation_id} not found")
@@ -207,7 +242,19 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
     if sender_id not in available_employee_ids:
         raise ValueError(f"sender_id {sender_id} is not an active conversation member")
 
-    # ── Compute route decision ─────────────────────────────────────
+    planner = ensure_system_planner(uow, conv.enterprise_id)
+    if planner.id not in available_employee_ids:
+        _create_member(uow, ConversationMember(
+            member_id=f"mem_{uuid.uuid4().hex[:12]}",
+            conversation_id=conversation_id,
+            member_type="employee",
+            member_ref_id=planner.id,
+            role="participant",
+            status="active",
+        ))
+        available_members = _get_active_members(uow, conversation_id)
+        available_employee_ids = [m["employee_id"] for m in available_members]
+
     decision = decide_route(message_text, available_members, route_hint)
     entry_employee_id = _pick_entry_employee_id(decision, sender_id)
     candidate_employee_ids = _pick_candidate_employee_ids(decision, available_employee_ids)
@@ -251,6 +298,7 @@ def submit_group_message(uow, conversation_id: str, message_text: str,
         input_message_json=json.dumps({
             "message_text": message_text,
             "route_hint": route_hint,
+            **({"goal": goal} if goal else {}),
         }),
         result_summary_json=json.dumps({
             "route_mode": decision.route_mode,
@@ -364,7 +412,7 @@ def _get_active_members(uow, conversation_id: str) -> list[dict[str, str]]:
     """Return active employee members with aliases for a group conversation."""
     uow.cur.execute(
         "SELECT cm.member_ref_id, COALESCE(e.display_name, ''), COALESCE(e.role_name, ''), "
-        "COALESCE(e.profile_name, '') "
+        "COALESCE(e.profile_name, ''), COALESCE(e.capabilities_json, '{}'::jsonb) "
         "FROM conversation_member cm "
         "LEFT JOIN employee e ON e.id = cm.member_ref_id "
         "WHERE cm.conversation_id = %s AND cm.member_type = 'employee' "
@@ -379,6 +427,7 @@ def _get_active_members(uow, conversation_id: str) -> list[dict[str, str]]:
             "display_name": row[1],
             "role_name": row[2],
             "profile_name": row[3],
+            "is_system_planner": _capabilities_has_system_planner(row[4]),
         }
         for row in rows if row[0]
     ]
@@ -413,40 +462,40 @@ def _pick_entry_employee_id(decision, sender_id: str) -> str:
 def _pick_candidate_employee_ids(decision, available_employee_ids: list[str]) -> list[str]:
     max_candidates = 3
 
+    def _without_planner(employee_ids: list[str]) -> list[str]:
+        if decision.route_mode != "orchestration" or not decision.planner_employee_id:
+            return employee_ids
+        return [employee_id for employee_id in employee_ids if employee_id != decision.planner_employee_id]
+
     def _cap_orchestration_targets(employee_ids: list[str]) -> list[str]:
         if decision.route_mode != "orchestration":
             return employee_ids
-        if len(employee_ids) <= max_candidates:
-            return employee_ids
-        if decision.planner_employee_id and decision.planner_employee_id in employee_ids:
-            planner_first = [decision.planner_employee_id]
-            planner_first.extend(
-                employee_id
-                for employee_id in employee_ids
-                if employee_id != decision.planner_employee_id
-            )
-            return planner_first[:max_candidates]
-        return employee_ids[:max_candidates]
+        return _without_planner(employee_ids)[:max_candidates]
 
     if decision.target_employee_ids:
         ordered_targets = list(decision.target_employee_ids)
-        if decision.route_mode == "orchestration" and decision.planner_employee_id:
-            ordered = [employee_id for employee_id in available_employee_ids if employee_id == decision.planner_employee_id]
-            ordered.extend(employee_id for employee_id in ordered_targets if employee_id != decision.planner_employee_id)
-            for employee_id in available_employee_ids:
-                if employee_id not in ordered and employee_id in ordered_targets:
-                    ordered.append(employee_id)
-            return _cap_orchestration_targets(ordered)
         return _cap_orchestration_targets(ordered_targets)
     ordered_available = list(available_employee_ids)
     if decision.route_mode == "single_agent":
         return ordered_available
-    if decision.planner_employee_id:
-        if decision.planner_employee_id in ordered_available:
-            return _cap_orchestration_targets(
-                [decision.planner_employee_id, *[employee_id for employee_id in ordered_available if employee_id != decision.planner_employee_id]]
-            )
     return _cap_orchestration_targets(ordered_available)
+
+
+def _is_system_planner_employee(employee: Employee) -> bool:
+    return _capabilities_has_system_planner(getattr(employee, "capabilities_json", None))
+
+
+def _capabilities_has_system_planner(raw) -> bool:
+    if isinstance(raw, dict):
+        return bool(raw.get("is_system_planner"))
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        try:
+            payload = ast.literal_eval(str(raw or "{}"))
+        except (SyntaxError, ValueError):
+            return False
+    return isinstance(payload, dict) and bool(payload.get("is_system_planner"))
 
 
 def _create_member(uow, member: ConversationMember) -> None:

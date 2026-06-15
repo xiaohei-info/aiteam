@@ -11,7 +11,15 @@
    复用 event_ingest_service 既有 TeamTask 镜像构建任务树;
 3. 子任务按依赖分波执行, 同波并行; 失败不阻塞其他分支;
 4. 每个子任务产出受派员工署名的群聊消息(多智能体并发响应);
-5. planner 汇总轮流式输出, 发 result_merged 与终态事件。
+5. planner 汇总轮流式输出, 发 result_merged 与终态事件;
+6. (Goal 模式) planner 汇总后由 judge_goal 评估是否达成目标;
+   未达成则带上一轮成果再次执行 Phase 1-5, 直到 done 或轮次封顶。
+
+Goal 循环口径:
+- 触发: 编排默认把用户消息作为 goal; input_message_json.goal 可覆盖, "__off__" 显式关闭。
+- 判断: 复用 hermes_cli.goals.judge_goal(goal_text, last_response) → "done" | "continue"。
+- 封顶: AITEAM_ORCH_GOAL_MAX_ROUNDS 环境变量, 默认 5 轮。
+- 降级: judge_goal 不可用时 (hermes_cli 未安装) 照常单轮收口, 不阻断。
 
 并发口径: 事件游标由 runtime_binding.event_cursor+1 分配, 并行线程统一经
 _EVENT_LOCK 串行写入, 避免游标撞号; 每个工作线程持有独立 DB 连接。
@@ -32,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 MAX_SUBTASKS = int(os.getenv("AITEAM_ORCH_MAX_SUBTASKS", "6"))
 MAX_PARALLEL = int(os.getenv("AITEAM_ORCH_MAX_PARALLEL", "3"))
+GOAL_MAX_ROUNDS = int(os.getenv("AITEAM_ORCH_GOAL_MAX_ROUNDS", "5"))
+
+try:
+    from hermes_cli.goals import judge_goal as _judge_goal  # type: ignore
+except Exception:
+    _judge_goal = None  # type: ignore
 
 _EVENT_LOCK = threading.Lock()
 
@@ -73,7 +87,6 @@ def execute_orchestration(conn, run_id: str) -> None:
     """Execute a kanban_orchestration run. Caller owns ``conn``."""
     from agent_gateway.runtime_executor import _finalize
 
-    # Register cancellation event.
     event = threading.Event()
     with _CANCEL_LOCK:
         _CANCEL_EVENTS[run_id] = event
@@ -83,61 +96,95 @@ def execute_orchestration(conn, run_id: str) -> None:
         if ctx is None:
             return
 
-        # Resolve enterprise-configured orchestration prompt templates (falls
-        # back to built-in defaults). Done after _start_run's UoW closes to
-        # avoid nesting transactions on the shared connection.
         from agent_gateway.orchestration_templates import resolve_templates
         ctx["templates"] = resolve_templates(conn, ctx["enterprise_id"])
 
-        # Phase 1 — planner 拆解 (失败降级为按目标员工均分).
-        if _is_cancelled(run_id):
-            _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
-            return
-        subtasks = _plan_subtasks(ctx)
+        goal_text = (ctx.get("goal_text") or "").strip()
+        round_no = 0
+        prior_round_output = ""
+        original_message_text = ctx.get("message_text") or ""
 
-        # Phase 2 — 任务树事件 (root + children), 镜像由 event_ingest 完成.
-        if _is_cancelled(run_id):
-            _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
-            return
-        _emit_task_tree(run_id, ctx, subtasks)
+        while True:
+            round_no += 1
 
-        # Phase 3 — 按依赖分波执行, 同波并行; 中止信号在 wave 间和子任务前检查.
-        results = _execute_waves(run_id, ctx, subtasks)
-
-        if _is_cancelled(run_id):
-            # Still aggregate whatever partial results we have before finalizing.
-            succeeded = [i for i, r in results.items() if r["success"]]
-            if succeeded:
-                partial = _partial_aggregate(ctx, subtasks, results)
-                _finalize(run_id, success=False, output=partial,
-                          error="CANCELLED — 已生成部分成果", conn=conn)
-            else:
+            if _is_cancelled(run_id):
                 _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
-            return
+                return
 
-        # Phase 4 — planner 汇总 + result_merged + 终态.
-        succeeded = [i for i, r in results.items() if r["success"]]
-        if not succeeded:
-            first_error = next((r["error"] for r in results.values() if r["error"]), "全部子任务执行失败")
-            _finalize(run_id, success=False, output="多智能体协作执行失败",
-                      error=first_error, employee_id=ctx["planner_id"], conn=conn)
-            return
+            if goal_text and round_no > 1:
+                ctx["message_text"] = _build_continuation_message(
+                    original_message_text, goal_text, prior_round_output, round_no)
+            else:
+                ctx["message_text"] = original_message_text
 
-        final_text = _aggregate(conn, run_id, ctx, subtasks, results)
-        _emit_standalone(run_id, "result_merged",
-                         source_id=ctx["root_task_id"],
-                         preview=f"已汇总 {len(succeeded)}/{len(subtasks)} 个子任务成果",
-                         payload={"subtasks": [
-                             {"task_id": _subtask_id(run_id, i),
-                              "title": t["title"],
-                              "assignee_employee_id": t["assignee"],
-                              "status": "succeeded" if results[i]["success"] else "failed",
-                              "preview": (results[i]["output"] or results[i]["error"])[:200]}
-                             for i, t in enumerate(subtasks)]},
-                         employee_id=ctx["planner_id"])
+            subtasks = _plan_subtasks(ctx)
 
-        _finalize(run_id, success=True, output=final_text,
-                  employee_id=ctx["planner_id"], conn=conn)
+            if _is_cancelled(run_id):
+                _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
+                return
+            _emit_task_tree(run_id, ctx, subtasks, round_no)
+
+            results = _execute_waves(run_id, ctx, subtasks, round_no)
+
+            if _is_cancelled(run_id):
+                succeeded = [i for i, r in results.items() if r["success"]]
+                if succeeded:
+                    partial = _partial_aggregate(ctx, subtasks, results)
+                    _finalize(run_id, success=False, output=partial,
+                              error="CANCELLED — 已生成部分成果", conn=conn)
+                else:
+                    _finalize(run_id, success=False, output="协作已被用户中止", error="CANCELLED", conn=conn)
+                return
+
+            succeeded = [i for i, r in results.items() if r["success"]]
+            if not succeeded:
+                first_error = next((r["error"] for r in results.values() if r["error"]), "全部子任务执行失败")
+                _finalize(run_id, success=False, output="多智能体协作执行失败",
+                          error=first_error, employee_id=ctx["planner_id"], conn=conn)
+                return
+
+            final_text = _aggregate(conn, run_id, ctx, subtasks, results)
+            _emit_standalone(run_id, "result_merged",
+                             source_id=ctx["root_task_id"],
+                             preview=f"已汇总 {len(succeeded)}/{len(subtasks)} 个子任务成果 (第{round_no}轮)",
+                             payload={"subtasks": [
+                                 {"task_id": _subtask_id(run_id, round_no, i),
+                                  "title": t["title"],
+                                  "assignee_employee_id": t["assignee"],
+                                  "status": "succeeded" if results[i]["success"] else "failed",
+                                  "preview": (results[i]["output"] or results[i]["error"])[:200]}
+                                 for i, t in enumerate(subtasks)],
+                                      "round_no": round_no,
+                                      "goal": goal_text or None},
+                             employee_id=ctx["planner_id"])
+
+            if not goal_text:
+                _finalize(run_id, success=True, output=final_text,
+                          employee_id=ctx["planner_id"], conn=conn)
+                return
+
+            verdict = _evaluate_goal(goal_text, final_text)
+            prior_round_output = final_text
+
+            if verdict == "done":
+                logger.info("[orch] goal achieved after %d round(s) for run %s", round_no, run_id)
+                _emit_goal_status(run_id, ctx, "achieved", f"目标已达成 (共{round_no}轮)",
+                                  {"goal": goal_text, "rounds": round_no})
+                _finalize(run_id, success=True, output=final_text,
+                          employee_id=ctx["planner_id"], conn=conn)
+                return
+
+            if round_no >= GOAL_MAX_ROUNDS:
+                logger.info("[orch] goal max rounds (%d) reached for run %s", GOAL_MAX_ROUNDS, run_id)
+                _emit_goal_status(run_id, ctx, "budget_exhausted", f"已达最大轮次上限 ({GOAL_MAX_ROUNDS} 轮)",
+                                  {"goal": goal_text, "rounds": round_no,
+                                   "max_rounds": GOAL_MAX_ROUNDS})
+                _finalize(run_id, success=True, output=final_text,
+                          employee_id=ctx["planner_id"], conn=conn)
+                return
+
+            logger.info("[orch] goal not yet achieved, starting round %d for run %s",
+                        round_no + 1, run_id)
     finally:
         _cleanup_cancel(run_id)
 
@@ -173,7 +220,7 @@ def _start_run(conn, run_id: str) -> dict | None:
             emp = uow.employees().get_by_id(emp_id) if emp_id else None
             if emp is not None:
                 employees[emp_id] = emp
-        targets = [e for e in targets if e in employees]
+        targets = [e for e in targets if e in employees and e != planner_id]
         if not targets:
             logger.warning("[orch] run %s has no resolvable target employees", run_id)
             run.status = "failed"
@@ -193,10 +240,15 @@ def _start_run(conn, run_id: str) -> dict | None:
                          "target_employee_ids": targets},
                 employee_id=planner_id)
 
+        message_text = str(input_payload.get("message_text") or "")
+        goal_value = str(input_payload.get("goal") or "").strip()
+        goal_text = "" if goal_value == "__off__" else (goal_value or message_text).strip()
+
         return {
             "enterprise_id": run.enterprise_id,
             "conversation_id": run.conversation_id,
-            "message_text": str(input_payload.get("message_text") or ""),
+            "message_text": message_text,
+            "goal_text": goal_text,
             "targets": targets,
             "planner_id": planner_id,
             "employees": employees,
@@ -218,11 +270,24 @@ def _start_run(conn, run_id: str) -> dict | None:
 # ── Phase 1: planner 拆解 ─────────────────────────────────────────────────
 
 def _plan_subtasks(ctx: dict) -> list[dict]:
-    roster = "\n".join(
-        f"- {emp_id}: {ctx['employees'][emp_id].display_name or emp_id}"
-        f"（{ctx['employees'][emp_id].role_name or '协作成员'}）"
-        for emp_id in ctx["targets"]
-    )
+    roster_lines = []
+    for emp_id in ctx["targets"]:
+        emp = ctx["employees"][emp_id]
+        base = f"- {emp_id}: {emp.display_name or emp_id}（{emp.role_name or '协作成员'}）"
+        # 补全能力摘要：description + prompt首段
+        description = (emp.description or "").strip()
+        prompt_text = (ctx["prompts"].get(emp_id, "") or "").strip()
+        # 取 prompt 首段（最多 200 字），让 planner 知道"谁擅长什么"
+        prompt_summary = prompt_text[:200].strip() if prompt_text else ""
+        extras = []
+        if description:
+            extras.append(f"职责: {description}")
+        if prompt_summary:
+            extras.append(f"能力摘要: {prompt_summary}")
+        if extras:
+            base += " — " + "; ".join(extras)
+        roster_lines.append(base)
+    roster = "\n".join(roster_lines)
     plan_prompt = _render_tmpl(ctx, "planner",
                                roster=roster,
                                message_text=ctx["message_text"],
@@ -295,25 +360,26 @@ def _extract_json(text: str):
 
 # ── Phase 2: 任务树事件 ───────────────────────────────────────────────────
 
-def _subtask_id(run_id: str, index: int) -> str:
-    return f"sub_{run_id}_{index}"
+def _subtask_id(run_id: str, round_no: int, index: int) -> str:
+    return f"sub_{run_id}_r{round_no}_{index}"
 
 
-def _emit_task_tree(run_id: str, ctx: dict, subtasks: list[dict]) -> None:
-    _emit_standalone(run_id, "task_created",
-                     source_id=ctx["root_task_id"],
-                     preview=f"协作根任务: {ctx['message_text'][:80]}",
-                     payload={"title": ctx["message_text"][:80] or "协作任务",
-                              "description": ctx["message_text"]},
-                     employee_id=ctx["planner_id"])
+def _emit_task_tree(run_id: str, ctx: dict, subtasks: list[dict], round_no: int) -> None:
+    if round_no == 1:
+        _emit_standalone(run_id, "task_created",
+                         source_id=ctx["root_task_id"],
+                         preview=f"协作根任务: {ctx['message_text'][:80]}",
+                         payload={"title": ctx["message_text"][:80] or "协作任务",
+                                  "description": ctx["message_text"]},
+                         employee_id=ctx["planner_id"])
     for i, task in enumerate(subtasks):
         _emit_standalone(run_id, "task_created",
-                         source_id=_subtask_id(run_id, i),
+                         source_id=_subtask_id(run_id, round_no, i),
                          preview=f"子任务: {task['title']}",
                          payload={"title": task["title"],
                                   "description": task["description"],
                                   "parent_task_id": ctx["root_task_id"],
-                                  "depends_on": [_subtask_id(run_id, d) for d in task["depends_on"]]},
+                                  "depends_on": [_subtask_id(run_id, round_no, d) for d in task["depends_on"]]},
                          employee_id=task["assignee"])
 
 
@@ -335,12 +401,12 @@ def build_waves(subtasks: list[dict]) -> list[list[int]]:
     return waves
 
 
-def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict]) -> dict[int, dict]:
+def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict], round_no: int) -> dict[int, dict]:
     results: dict[int, dict] = {}
     for wave in build_waves(subtasks):
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(wave))) as pool:
             futures = {
-                pool.submit(_run_subtask_safe, run_id, ctx, subtasks, i, dict(results)): i
+                pool.submit(_run_subtask_safe, run_id, ctx, subtasks, i, dict(results), round_no): i
                 for i in wave
             }
             for future in as_completed(futures):
@@ -349,13 +415,13 @@ def _execute_waves(run_id: str, ctx: dict, subtasks: list[dict]) -> dict[int, di
 
 
 def _run_subtask_safe(run_id: str, ctx: dict, subtasks: list[dict],
-                      index: int, prior: dict[int, dict]) -> dict:
+                      index: int, prior: dict[int, dict], round_no: int) -> dict:
     try:
-        return _run_subtask(run_id, ctx, subtasks, index, prior)
+        return _run_subtask(run_id, ctx, subtasks, index, prior, round_no)
     except Exception as exc:  # noqa: BLE001 — 单个子任务崩溃不拖垮协作流程
         logger.exception("[orch] subtask %s/%s crashed", run_id, index)
         _emit_standalone(run_id, "task_failed",
-                         source_id=_subtask_id(run_id, index),
+                         source_id=_subtask_id(run_id, round_no, index),
                          preview=f"子任务异常: {exc}",
                          payload={"error": str(exc)},
                          employee_id=subtasks[index]["assignee"])
@@ -363,9 +429,9 @@ def _run_subtask_safe(run_id: str, ctx: dict, subtasks: list[dict],
 
 
 def _run_subtask(run_id: str, ctx: dict, subtasks: list[dict],
-                 index: int, prior: dict[int, dict]) -> dict:
+                 index: int, prior: dict[int, dict], round_no: int) -> dict:
     task = subtasks[index]
-    task_id = _subtask_id(run_id, index)
+    task_id = _subtask_id(run_id, round_no, index)
     assignee = task["assignee"]
 
     _emit_standalone(run_id, "task_started",
@@ -571,6 +637,41 @@ def _emit_standalone(run_id: str, event_type: str, *, source_id: str,
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _emit_goal_status(run_id: str, ctx: dict, status: str, preview: str, payload: dict) -> None:
+    merged_payload = dict(payload or {})
+    merged_payload["goal_status"] = status
+    _emit_standalone(run_id, "result_merged",
+                     source_id=ctx["root_task_id"],
+                     preview=preview,
+                     payload=merged_payload,
+                     employee_id=ctx["planner_id"])
+
+
+def _evaluate_goal(goal_text: str, last_response: str) -> str:
+    if _judge_goal is None:
+        logger.debug("[orch] judge_goal unavailable; treating goal as done (degraded)")
+        return "done"
+    try:
+        verdict, reason = _judge_goal(goal_text, last_response or "")
+        logger.debug("[orch] goal verdict=%s reason=%s", verdict, reason)
+        return "done" if verdict == "done" else "continue"
+    except Exception as exc:
+        logger.warning("[orch] judge_goal raised %s; treating as done (degraded)", exc)
+        return "done"
+
+
+def _build_continuation_message(original_text: str, goal_text: str,
+                                 prior_output: str, round_no: int) -> str:
+    header = (
+        f"[目标持续追踪 — 第 {round_no} 轮]\n"
+        f"目标: {goal_text}\n\n"
+        f"上一轮的汇总结果尚未完全达成目标，请基于以下已有成果继续推进:\n\n"
+        f"{prior_output[:1500]}\n\n"
+        f"原始任务: {original_text}"
+    )
+    return header
+
 
 def _render_tmpl(ctx: dict, kind: str, **kwargs) -> str:
     from agent_gateway.orchestration_templates import (

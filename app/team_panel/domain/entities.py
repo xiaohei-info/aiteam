@@ -731,6 +731,7 @@ class SolutionApplyRecord:
     status: str = "succeeded"  # pending | succeeded | failed | cancelled
     requested_by: str = ""
     department_id: Optional[str] = None
+    conversation_id: Optional[str] = None  # 应用后自动建的群；复用+刷新的锚点
     created_employee_ids_json: str = "[]"
     created_knowledge_base_ids_json: str = "[]"
     error_code: Optional[str] = None

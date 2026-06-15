@@ -171,6 +171,19 @@ def _load_payload(value) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _capabilities_has_system_planner(raw) -> bool:
+    if isinstance(raw, dict):
+        return bool(raw.get("is_system_planner"))
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        try:
+            payload = ast.literal_eval(str(raw or "{}"))
+        except (SyntaxError, ValueError):
+            return False
+    return isinstance(payload, dict) and bool(payload.get("is_system_planner"))
+
+
 def _load_json_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
@@ -2535,7 +2548,9 @@ def _extract_template_knowledge_bases(template: AgentTemplate) -> list[str]:
     return knowledge_ids
 
 
-def _resolve_solution_template(cur, solution_id: str) -> tuple[AgentTemplate | None, tuple[int, dict] | None]:
+def _resolve_solution_templates(cur, solution_id: str) -> tuple[list[AgentTemplate] | None, tuple[int, dict] | None]:
+    """Return all enabled, published template bindings for a solution.
+    Returns (templates_list, None) on success, or (None, error_response) on failure."""
     solution = IndustrySolutionRepo(cur).get_by_id(solution_id)
     if solution is None or solution.deleted_at is not None:
         return None, (404, {"error": "SOLUTION_NOT_FOUND", "message": f"Solution {solution_id} not found"})
@@ -2552,17 +2567,32 @@ def _resolve_solution_template(cur, solution_id: str) -> tuple[AgentTemplate | N
             },
         )
 
-    binding = bindings[0]
-    template = AgentTemplateRepo(cur).get_by_id(binding.template_id)
-    if template is None or template.status != "published" or template.deleted_at is not None:
+    templates = []
+    for binding in bindings:
+        template = AgentTemplateRepo(cur).get_by_id(binding.template_id)
+        if template is None or template.status != "published" or template.deleted_at is not None:
+            continue  # skip unavailable bindings rather than failing entirely
+        templates.append(template)
+    if not templates:
         return None, (
             409,
             {
                 "error": "BOUND_TEMPLATE_UNAVAILABLE",
-                "message": f"Bound template {binding.template_id} is unavailable for solution {solution_id}",
+                "message": f"No usable published templates bound to solution {solution_id}",
             },
         )
-    return template, None
+    return templates, None
+
+
+def _resolve_solution_template(cur, solution_id: str) -> tuple[AgentTemplate | None, tuple[int, dict] | None]:
+    """Legacy wrapper: returns the first enabled template only.
+    Kept for backward compatibility; new code should use _resolve_solution_templates."""
+    templates, error = _resolve_solution_templates(cur, solution_id)
+    if error is not None:
+        return None, error
+    if templates is None or not templates:
+        return None, (409, {"error": "BOUND_TEMPLATE_UNAVAILABLE", "message": f"No usable template for solution {solution_id}"})
+    return templates[0], None
 
 
 def _seed_collaboration_from_solution(cur, enterprise_id: str, solution, mode: str) -> None:
@@ -2606,6 +2636,41 @@ def _seed_collaboration_from_solution(cur, enterprise_id: str, solution, mode: s
         ))
 
 
+def _handle_solution_apply_preview(conn, path: str, solution_id: str, body: dict | None) -> tuple[int, dict]:
+    """Preview endpoint: return each agent in the solution with conflict markers.
+    A conflict means the enterprise already has an active employee from the same template."""
+    cur = conn.cursor()
+    try:
+        enterprise_repo = EnterpriseRepo(cur)
+        enterprises = enterprise_repo.list_all()
+        enterprise = enterprises[0] if enterprises else None
+        if enterprise is None:
+            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
+
+        templates, error_response = _resolve_solution_templates(cur, solution_id)
+        if error_response is not None:
+            return error_response
+        if templates is None:
+            return 409, {"error": "BOUND_TEMPLATE_UNAVAILABLE", "message": f"No usable templates for solution {solution_id}"}
+
+        employee_repo = EmployeeRepo(cur)
+        agents = []
+        for template in templates:
+            existing_employees = employee_repo.list_active_by_template(enterprise.id, template.id)
+            conflict = len(existing_employees) > 0
+            existing_employee_id = existing_employees[0].id if conflict else None
+            agents.append({
+                "template_id": template.id,
+                "role_name": template.role_name or template.name,
+                "display_name": template.role_name or template.name,
+                "conflict": conflict,
+                "existing_employee_id": existing_employee_id,
+            })
+        return 200, {"solution_id": solution_id, "agents": agents}
+    finally:
+        cur.close()
+
+
 def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -2618,7 +2683,9 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
     if mode not in ("append", "replace", "reapply"):
         return 400, {"error": "UNSUPPORTED_MODE", "message": f"Mode '{mode}' is not supported; use append, replace, or reapply"}
 
-    apply_key = f"solution_apply:{solution_id}:{idempotency_key}"
+    agent_decisions = body.get("agent_decisions") or []
+    agent_conflict_policy = str(body.get("agent_conflict_policy") or "overwrite")
+
     cur = conn.cursor()
     try:
         enterprise_repo = EnterpriseRepo(cur)
@@ -2627,11 +2694,13 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
         if enterprise is None:
             return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
 
-        template, error_response = _resolve_solution_template(cur, solution_id)
+        user_id = _resolve_workbench_user_id(enterprise, path, body)
+
+        templates, error_response = _resolve_solution_templates(cur, solution_id)
         if error_response is not None:
             return error_response
-        if template is None:
-            return 409, {"error": "BOUND_TEMPLATE_UNAVAILABLE", "message": f"No usable template bound to solution {solution_id}"}
+        if templates is None:
+            return 409, {"error": "BOUND_TEMPLATE_UNAVAILABLE", "message": f"No usable templates for solution {solution_id}"}
 
         record_repo = SolutionApplyRecordRepo(cur)
         existing_record = record_repo.get_by_idempotency_key(enterprise.id, solution_id, idempotency_key)
@@ -2642,6 +2711,7 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 "status": existing_record.status,
                 "created_employee_ids": _load_json_list(existing_record.created_employee_ids_json),
                 "created_knowledge_base_ids": _load_json_list(existing_record.created_knowledge_base_ids_json),
+                "conversation_id": existing_record.conversation_id,
             }
 
         previous_records = [
@@ -2658,35 +2728,10 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 seen_employee_ids.add(previous_employee_id)
                 previous_employee_ids.append(previous_employee_id)
 
-        knowledge_base_ids = _extract_template_knowledge_bases(template)
-        employee_id = f"emp_{uuid.uuid4().hex[:12]}"
-        apply_record_id = f"sol_apply_{uuid.uuid4().hex[:8]}"
-        display_name = template.role_name or template.name or "Solution Employee"
-        profile_name = _next_solution_profile_name(cur, enterprise.id, enterprise.slug, solution_id, display_name)
         replaced_employee_ids: list[str] = []
-
         employee_repo = EmployeeRepo(cur)
         kb_repo = EmployeeKnowledgeBindingRepo(cur)
-        # 场景④ "一键应用自动创建知识库结构": a template's knowledge_bindings may
-        # reference KBs that don't exist yet in this enterprise (the solution
-        # blueprint ships the structure, not the tenant's data). Auto-provision
-        # any missing referenced KB so the employee binding is never dangling.
-        knowledge_base_repo = KnowledgeBaseRepo(cur)
-        for knowledge_base_id in knowledge_base_ids:
-            if knowledge_base_repo.get_by_id(knowledge_base_id) is not None:
-                continue
-            knowledge_base_repo.create(
-                KnowledgeBase(
-                    id=knowledge_base_id,
-                    enterprise_id=enterprise.id,
-                    name=f"{template.role_name or template.name or '方案'}知识库",
-                    description=f"由行业方案 {solution_id} 一键应用自动创建",
-                    status="active",
-                    storage_prefix=f"aiteam/{enterprise.id}/knowledge/{knowledge_base_id}",
-                    created_by="solution_apply",
-                    updated_by="solution_apply",
-                )
-            )
+
         if mode == "replace":
             for previous_employee_id in previous_employee_ids:
                 previous_employee = employee_repo.get_by_id(previous_employee_id)
@@ -2694,12 +2739,282 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                     continue
                 if previous_employee.status != EmployeeStatus.ARCHIVED:
                     previous_employee.archive("solution replaced")
-                    previous_employee.updated_by = "solution_apply"
+                    previous_employee.updated_by = user_id
                     employee_repo.update_status(previous_employee)
                 for binding in kb_repo.list_by_employee(previous_employee_id):
                     kb_repo.delete(binding.id)
                 replaced_employee_ids.append(previous_employee_id)
 
+        all_employee_ids: list[str] = []
+        employee_details: list[dict] = []
+        knowledge_base_ids_all: list[str] = []
+
+        for template in templates:
+            conflict_employees = employee_repo.list_active_by_template(enterprise.id, template.id)
+            has_conflict = len(conflict_employees) > 0
+
+            decision_action = agent_conflict_policy
+            for decision in agent_decisions:
+                if decision.get("template_id") == template.id:
+                    decision_action = str(decision.get("action") or agent_conflict_policy)
+                    break
+
+            knowledge_base_ids = _extract_template_knowledge_bases(template)
+            knowledge_base_repo = KnowledgeBaseRepo(cur)
+            for kb_id in knowledge_base_ids:
+                if knowledge_base_repo.get_by_id(kb_id) is None:
+                    knowledge_base_repo.create(KnowledgeBase(
+                        id=kb_id,
+                        enterprise_id=enterprise.id,
+                        name=f"{template.role_name or template.name or '方案'}知识库",
+                        description=f"由行业方案 {solution_id} 一键应用自动创建",
+                        status="active",
+                        storage_prefix=f"aiteam/{enterprise.id}/knowledge/{kb_id}",
+                        created_by=user_id,
+                        updated_by=user_id,
+                    ))
+            knowledge_base_ids_all.extend(knowledge_base_ids)
+
+            if has_conflict and decision_action == "overwrite":
+                existing_employee = conflict_employees[0]
+                employee_id = existing_employee.id
+
+                sol_model_provider, sol_model_name = _resolve_employee_model(
+                    cur, enterprise.id, template, body)
+                existing_employee.model_provider = sol_model_provider
+                existing_employee.model_name = sol_model_name
+                existing_employee.display_name = template.role_name or template.name or existing_employee.display_name
+                existing_employee.description = template.role_name or template.name
+                existing_employee.updated_by = user_id
+                employee_repo.update_status(existing_employee)
+
+                sol_pack = _template_prompt_pack(template)
+                sol_system_prompt = sol_pack.get("system_prompt", "") or ""
+                EmployeePromptRepo(cur).upsert(EmployeePrompt(
+                    employee_id=employee_id,
+                    system_prompt=sol_system_prompt,
+                    behavior_rules_json=json.dumps(sol_pack.get("behavior_rules", {}) or {}, ensure_ascii=False),
+                    opening_message=sol_pack.get("opening_message"),
+                    version_no=1,
+                    source_template_version=template.version_no,
+                ))
+
+                skill_repo = EmployeeSkillBindingRepo(cur)
+                for old_binding in skill_repo.list_by_employee(employee_id):
+                    if old_binding.source_type == "template_default":
+                        skill_repo.delete(old_binding.id)
+                for _sc in (_template_default_bindings(template).get("skills") or []):
+                    if _sc:
+                        skill_repo.create(EmployeeSkillBinding(
+                            id=f"sb_{uuid.uuid4().hex[:12]}",
+                            enterprise_id=enterprise.id,
+                            employee_id=employee_id,
+                            skill_code=str(_sc),
+                            enabled=True,
+                            source_type="template_default",
+                        ))
+
+                for old_kb in kb_repo.list_by_employee(employee_id):
+                    kb_repo.delete(old_kb.id)
+                for kb_id in knowledge_base_ids:
+                    kb_repo.create(EmployeeKnowledgeBinding(
+                        id=f"kb_{uuid.uuid4().hex[:12]}",
+                        enterprise_id=enterprise.id,
+                        employee_id=employee_id,
+                        knowledge_base_id=kb_id,
+                        scope_mode="read",
+                        enabled=True,
+                        binding_version=1,
+                        created_by=user_id,
+                        updated_by=user_id,
+                    ))
+
+                _sol_mem = _template_memory_config(template)
+                EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
+                    id=f"mb_{uuid.uuid4().hex[:12]}",
+                    enterprise_id=enterprise.id,
+                    employee_id=employee_id,
+                    memory_mode=str(_sol_mem.get("mode") or "builtin"),
+                    provider_code=_sol_mem.get("provider_code"),
+                    retention_days=_sol_mem.get("retention_days"),
+                    writeback_enabled=bool(_sol_mem.get("writeback_enabled", True)),
+                ))
+
+                profile_name = existing_employee.profile_name or existing_employee.id
+                _provision_employee_profile(profile_name, sol_system_prompt,
+                                            sol_model_provider, sol_model_name)
+                _fire_skill_sync(cur, employee_id)
+
+                all_employee_ids.append(employee_id)
+                employee_details.append({
+                    "employee_id": employee_id,
+                    "template_id": template.id,
+                    "action": "overwrite",
+                    "display_name": existing_employee.display_name,
+                    "role_name": existing_employee.role_name,
+                })
+
+            elif has_conflict and decision_action == "new":
+                display_name = template.role_name or template.name or "Solution Employee"
+                profile_name = _next_solution_profile_name(cur, enterprise.id, enterprise.slug, solution_id, display_name)
+                employee_id = f"emp_{uuid.uuid4().hex[:12]}"
+                sol_model_provider, sol_model_name = _resolve_employee_model(
+                    cur, enterprise.id, template, body)
+
+                employee_repo.create(Employee(
+                    id=employee_id,
+                    enterprise_id=enterprise.id,
+                    template_id=template.id,
+                    profile_name=profile_name,
+                    display_name=display_name,
+                    role_name=template.role_name,
+                    status=EmployeeStatus.ACTIVE,
+                    created_from="solution_apply",
+                    description=template.role_name or template.name,
+                    created_by=user_id,
+                    updated_by=user_id,
+                    model_provider=sol_model_provider,
+                    model_name=sol_model_name,
+                ))
+
+                sol_pack = _template_prompt_pack(template)
+                sol_system_prompt = sol_pack.get("system_prompt", "") or ""
+                EmployeePromptRepo(cur).upsert(EmployeePrompt(
+                    employee_id=employee_id,
+                    system_prompt=sol_system_prompt,
+                    behavior_rules_json=json.dumps(sol_pack.get("behavior_rules", {}) or {}, ensure_ascii=False),
+                    opening_message=sol_pack.get("opening_message"),
+                    version_no=1,
+                    source_template_version=template.version_no,
+                ))
+                for _sc in (_template_default_bindings(template).get("skills") or []):
+                    if _sc:
+                        EmployeeSkillBindingRepo(cur).create(EmployeeSkillBinding(
+                            id=f"sb_{uuid.uuid4().hex[:12]}",
+                            enterprise_id=enterprise.id,
+                            employee_id=employee_id,
+                            skill_code=str(_sc),
+                            enabled=True,
+                            source_type="template_default",
+                        ))
+                _sol_mem = _template_memory_config(template)
+                EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
+                    id=f"mb_{uuid.uuid4().hex[:12]}",
+                    enterprise_id=enterprise.id,
+                    employee_id=employee_id,
+                    memory_mode=str(_sol_mem.get("mode") or "builtin"),
+                    provider_code=_sol_mem.get("provider_code"),
+                    retention_days=_sol_mem.get("retention_days"),
+                    writeback_enabled=bool(_sol_mem.get("writeback_enabled", True)),
+                ))
+                for kb_id in knowledge_base_ids:
+                    kb_repo.create(EmployeeKnowledgeBinding(
+                        id=f"kb_{uuid.uuid4().hex[:12]}",
+                        enterprise_id=enterprise.id,
+                        employee_id=employee_id,
+                        knowledge_base_id=kb_id,
+                        scope_mode="read",
+                        enabled=True,
+                        binding_version=1,
+                        created_by=user_id,
+                        updated_by=user_id,
+                    ))
+
+                _provision_employee_profile(profile_name, sol_system_prompt,
+                                            sol_model_provider, sol_model_name)
+                _fire_skill_sync(cur, employee_id)
+
+                all_employee_ids.append(employee_id)
+                employee_details.append({
+                    "employee_id": employee_id,
+                    "template_id": template.id,
+                    "action": "new",
+                    "display_name": display_name,
+                    "role_name": template.role_name or "",
+                })
+
+            else:
+                display_name = template.role_name or template.name or "Solution Employee"
+                profile_name = _next_solution_profile_name(cur, enterprise.id, enterprise.slug, solution_id, display_name)
+                employee_id = f"emp_{uuid.uuid4().hex[:12]}"
+                sol_model_provider, sol_model_name = _resolve_employee_model(
+                    cur, enterprise.id, template, body)
+
+                employee_repo.create(Employee(
+                    id=employee_id,
+                    enterprise_id=enterprise.id,
+                    template_id=template.id,
+                    profile_name=profile_name,
+                    display_name=display_name,
+                    role_name=template.role_name,
+                    status=EmployeeStatus.ACTIVE,
+                    created_from="solution_apply",
+                    description=template.role_name or template.name,
+                    created_by=user_id,
+                    updated_by=user_id,
+                    model_provider=sol_model_provider,
+                    model_name=sol_model_name,
+                ))
+
+                sol_pack = _template_prompt_pack(template)
+                sol_system_prompt = sol_pack.get("system_prompt", "") or ""
+                EmployeePromptRepo(cur).upsert(EmployeePrompt(
+                    employee_id=employee_id,
+                    system_prompt=sol_system_prompt,
+                    behavior_rules_json=json.dumps(sol_pack.get("behavior_rules", {}) or {}, ensure_ascii=False),
+                    opening_message=sol_pack.get("opening_message"),
+                    version_no=1,
+                    source_template_version=template.version_no,
+                ))
+                for _sc in (_template_default_bindings(template).get("skills") or []):
+                    if _sc:
+                        EmployeeSkillBindingRepo(cur).create(EmployeeSkillBinding(
+                            id=f"sb_{uuid.uuid4().hex[:12]}",
+                            enterprise_id=enterprise.id,
+                            employee_id=employee_id,
+                            skill_code=str(_sc),
+                            enabled=True,
+                            source_type="template_default",
+                        ))
+                _sol_mem = _template_memory_config(template)
+                EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
+                    id=f"mb_{uuid.uuid4().hex[:12]}",
+                    enterprise_id=enterprise.id,
+                    employee_id=employee_id,
+                    memory_mode=str(_sol_mem.get("mode") or "builtin"),
+                    provider_code=_sol_mem.get("provider_code"),
+                    retention_days=_sol_mem.get("retention_days"),
+                    writeback_enabled=bool(_sol_mem.get("writeback_enabled", True)),
+                ))
+                for kb_id in knowledge_base_ids:
+                    kb_repo.create(EmployeeKnowledgeBinding(
+                        id=f"kb_{uuid.uuid4().hex[:12]}",
+                        enterprise_id=enterprise.id,
+                        employee_id=employee_id,
+                        knowledge_base_id=kb_id,
+                        scope_mode="read",
+                        enabled=True,
+                        binding_version=1,
+                        created_by=user_id,
+                        updated_by=user_id,
+                    ))
+
+                _provision_employee_profile(profile_name, sol_system_prompt,
+                                            sol_model_provider, sol_model_name)
+                _fire_skill_sync(cur, employee_id)
+
+                all_employee_ids.append(employee_id)
+                employee_details.append({
+                    "employee_id": employee_id,
+                    "template_id": template.id,
+                    "action": "create",
+                    "display_name": display_name,
+                    "role_name": template.role_name or "",
+                })
+
+        # ── 创建 apply_record ──
+        apply_record_id = f"sol_apply_{uuid.uuid4().hex[:8]}"
+        apply_key = f"solution_apply:{solution_id}:{idempotency_key}"
         record_repo.create(
             SolutionApplyRecord(
                 id=apply_record_id,
@@ -2708,86 +3023,22 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                 idempotency_key=idempotency_key,
                 mode=mode,
                 status="succeeded",
-                requested_by="solution_apply",
+                requested_by=user_id,
                 department_id=str(body.get("department_id") or "") or None,
-                created_employee_ids_json=json.dumps([employee_id], ensure_ascii=False),
-                created_knowledge_base_ids_json=json.dumps(knowledge_base_ids, ensure_ascii=False),
-                created_by="solution_apply",
-                updated_by="solution_apply",
+                conversation_id=None,
+                created_employee_ids_json=json.dumps(all_employee_ids, ensure_ascii=False),
+                created_knowledge_base_ids_json=json.dumps(knowledge_base_ids_all, ensure_ascii=False),
+                created_by=user_id,
+                updated_by=user_id,
             )
         )
-        sol_model_provider, sol_model_name = _resolve_employee_model(
-            cur, enterprise.id, template, body)
-        employee_repo.create(
-            Employee(
-                id=employee_id,
-                enterprise_id=enterprise.id,
-                template_id=template.id,
-                profile_name=profile_name,
-                display_name=display_name,
-                role_name=template.role_name,
-                status=EmployeeStatus.ACTIVE,
-                created_from="solution_apply",
-                created_by="solution_apply",
-                updated_by="solution_apply",
-                model_provider=sol_model_provider,
-                model_name=sol_model_name,
-            )
-        )
-        # Seed persona + skill + memory from the template (KB bindings are created
-        # explicitly below from the solution blueprint). Mirrors recruitment.
-        sol_system_prompt = ""
-        sol_pack = _template_prompt_pack(template)
-        sol_system_prompt = sol_pack.get("system_prompt", "") or ""
-        EmployeePromptRepo(cur).upsert(EmployeePrompt(
-            employee_id=employee_id,
-            system_prompt=sol_system_prompt,
-            behavior_rules_json=json.dumps(sol_pack.get("behavior_rules", {}) or {}, ensure_ascii=False),
-            opening_message=sol_pack.get("opening_message"),
-            version_no=1,
-            source_template_version=template.version_no,
-        ))
-        _sol_skill_repo = EmployeeSkillBindingRepo(cur)
-        for _sc in (_template_default_bindings(template).get("skills") or []):
-            if _sc:
-                _sol_skill_repo.create(EmployeeSkillBinding(
-                    id=f"sb_{uuid.uuid4().hex[:12]}",
-                    enterprise_id=enterprise.id,
-                    employee_id=employee_id,
-                    skill_code=str(_sc),
-                    enabled=True,
-                    source_type="template_default",
-                ))
-        _sol_mem = _template_memory_config(template)
-        EmployeeMemoryBindingRepo(cur).upsert(EmployeeMemoryBinding(
-            id=f"mb_{uuid.uuid4().hex[:12]}",
-            enterprise_id=enterprise.id,
-            employee_id=employee_id,
-            memory_mode=str(_sol_mem.get("mode") or "builtin"),
-            provider_code=_sol_mem.get("provider_code"),
-            retention_days=_sol_mem.get("retention_days"),
-            writeback_enabled=bool(_sol_mem.get("writeback_enabled", True)),
-        ))
-        for knowledge_base_id in knowledge_base_ids:
-            kb_repo.create(
-                EmployeeKnowledgeBinding(
-                    id=f"kb_{uuid.uuid4().hex[:12]}",
-                    enterprise_id=enterprise.id,
-                    employee_id=employee_id,
-                    knowledge_base_id=knowledge_base_id,
-                    scope_mode="read",
-                    enabled=True,
-                    binding_version=1,
-                    created_by="solution_apply",
-                    updated_by="solution_apply",
-                )
-            )
+
         AuditEventRepo(cur).create(
             AuditEvent(
                 id=f"audit_{uuid.uuid4().hex[:12]}",
                 enterprise_id=enterprise.id,
-                actor_type="system",
-                actor_id="solution_apply",
+                actor_type="user",
+                actor_id=user_id,
                 event_type="solution.apply",
                 target_type="solution",
                 target_id=solution_id,
@@ -2796,42 +3047,112 @@ def _handle_solution_apply_post(conn, path: str, solution_id: str, body: dict | 
                     {
                         "mode": mode,
                         "department_id": body.get("department_id"),
-                        "template_id": template.id,
+                        "employee_details": employee_details,
                         "replaced_employee_ids": replaced_employee_ids,
                         "reapplied_from_employee_ids": previous_employee_ids if mode == "reapply" else [],
-                        "created_employee_ids": [employee_id],
-                        "created_knowledge_base_ids": knowledge_base_ids,
+                        "created_employee_ids": all_employee_ids,
+                        "created_knowledge_base_ids": knowledge_base_ids_all,
                         "apply_record_id": apply_record_id,
+                        "agent_conflict_policy": agent_conflict_policy,
                     },
                     ensure_ascii=False,
                 ),
-                created_by="solution_apply",
+                created_by=user_id,
             )
         )
-        # Bundle the solution's orchestration rules down into the enterprise's
-        # collaboration template — the enterprise consumes, doesn't author.
+
         _seed_collaboration_from_solution(
             cur, enterprise.id, IndustrySolutionRepo(cur).get_by_id(solution_id), mode)
+
+        # ── 自动建群 / 复用+刷新 ──
+        conversation_id = None
+        latest_record = record_repo.get_latest_successful(enterprise.id, solution_id)
+        # Skip the just-created record (same idempotency_key) — look at earlier ones
+        if latest_record is not None and latest_record.id != apply_record_id and latest_record.conversation_id:
+            candidate_conv_id = latest_record.conversation_id
+            conv_repo = ConversationRepo(cur)
+            conv = conv_repo.get_by_id(candidate_conv_id)
+            if conv is not None and conv.status == "active" and conv.type == "group":
+                conversation_id = candidate_conv_id
+                for emp_id in all_employee_ids:
+                    cur.execute(
+                        "SELECT member_id FROM conversation_member "
+                        "WHERE conversation_id = %s AND member_type = 'employee' AND member_ref_id = %s AND status = 'active'",
+                        (conversation_id, emp_id),
+                    )
+                    if cur.fetchone() is None:
+                        cur.execute(
+                            "INSERT INTO conversation_member (member_id, conversation_id, member_type, member_ref_id, role, status) "
+                            "VALUES (%s, %s, 'employee', %s, 'participant', 'active')",
+                            (f"mem_{uuid.uuid4().hex[:12]}", conversation_id, emp_id),
+                        )
+                cur.execute(
+                    "SELECT member_id FROM conversation_member "
+                    "WHERE conversation_id = %s AND member_type = 'user' AND member_ref_id = %s AND status = 'active'",
+                    (conversation_id, user_id),
+                )
+                if cur.fetchone() is None:
+                    cur.execute(
+                        "INSERT INTO conversation_member (member_id, conversation_id, member_type, member_ref_id, role, status) "
+                        "VALUES (%s, %s, 'user', %s, 'owner', 'active')",
+                        (f"mem_{uuid.uuid4().hex[:12]}", conversation_id, user_id),
+                    )
+                solution = IndustrySolutionRepo(cur).get_by_id(solution_id)
+                cur.execute(
+                    "UPDATE conversation SET title = %s, updated_at = now(), updated_by = %s WHERE id = %s",
+                    (solution.name if solution else "", user_id, conversation_id),
+                )
+
+        if conversation_id is None:
+            solution = IndustrySolutionRepo(cur).get_by_id(solution_id)
+            group_title = solution.name if solution else f"方案协作 {solution_id}"
+            conversation_id = _create_solution_group_conversation(
+                cur, enterprise.id, group_title, all_employee_ids, user_id)
+
+        record_repo.update_conversation_id(apply_record_id, conversation_id)
+
         conn.commit()
-        # Provision the Hermes profile (SOUL + pinned model) after the DB commit.
-        _provision_employee_profile(profile_name, sol_system_prompt,
-                                    sol_model_provider, sol_model_name,
-                                    temperature=0.7, max_tokens=2048)
-        _fire_skill_sync(cur, employee_id)
         return 201, {
             "apply_record_id": apply_record_id,
             "mode": mode,
             "status": "succeeded",
             "replaced_employee_ids": replaced_employee_ids,
             "reapplied_from_employee_ids": previous_employee_ids if mode == "reapply" else [],
-            "created_employee_ids": [employee_id],
-            "created_knowledge_base_ids": knowledge_base_ids,
+            "created_employee_ids": all_employee_ids,
+            "created_knowledge_base_ids": knowledge_base_ids_all,
+            "conversation_id": conversation_id,
+            "employee_details": employee_details,
         }
     except Exception:
         conn.rollback()
         raise
     finally:
         cur.close()
+
+
+def _create_solution_group_conversation(cur, enterprise_id: str, title: str,
+                                        member_employee_ids: list[str],
+                                        user_id: str) -> str:
+    """Create a group conversation for a solution apply, with employees as participants
+    and the applying user as owner. Returns the conversation_id."""
+    conv_id = f"conv_{uuid.uuid4().hex[:12]}"
+    cur.execute(
+        "INSERT INTO conversation (id, enterprise_id, type, status, title, created_by, updated_by) "
+        "VALUES (%s, %s, 'group', 'active', %s, %s, %s)",
+        (conv_id, enterprise_id, title, user_id, user_id),
+    )
+    for emp_id in member_employee_ids:
+        cur.execute(
+            "INSERT INTO conversation_member (member_id, conversation_id, member_type, member_ref_id, role, status) "
+            "VALUES (%s, %s, 'employee', %s, 'participant', 'active')",
+            (f"mem_{uuid.uuid4().hex[:12]}", conv_id, emp_id),
+        )
+    cur.execute(
+        "INSERT INTO conversation_member (member_id, conversation_id, member_type, member_ref_id, role, status) "
+        "VALUES (%s, %s, 'user', %s, 'owner', 'active')",
+        (f"mem_{uuid.uuid4().hex[:12]}", conv_id, user_id),
+    )
+    return conv_id
 
 
 def _serialize_private_history(
@@ -3156,7 +3477,8 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
 def _load_group_members(cur, conversation_id: str) -> list[dict]:
     cur.execute(
         "SELECT cm.member_id, cm.member_type, cm.member_ref_id, cm.role, cm.status, "
-        "e.id, e.display_name, e.role_name, e.profile_name, e.status "
+        "e.id, e.display_name, e.role_name, e.profile_name, e.status, "
+        "COALESCE(e.capabilities_json, '{}'::jsonb) "
         "FROM conversation_member cm "
         "LEFT JOIN employee e ON e.id = cm.member_ref_id "
         "WHERE cm.conversation_id = %s AND cm.status <> 'removed' "
@@ -3176,6 +3498,7 @@ def _load_group_members(cur, conversation_id: str) -> list[dict]:
             "role_name": row[7] or "",
             "profile_name": row[8] or "",
             "employee_status": row[9] or row[4] or "",
+            "is_system_planner": _capabilities_has_system_planner(row[10]),
         }
         for row in rows
     ]
@@ -3392,6 +3715,7 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
             "error": "MISSING_SENDER_ID",
             "message": "sender_id is required",
         }
+    goal = str(body.get("goal") or body.get("message", {}).get("goal") or "").strip()
 
     uow = UnitOfWork(conn)
     try:
@@ -3403,6 +3727,7 @@ def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body:
                 route_hint,
                 idempotency_key,
                 sender_id,
+                goal=goal,
             )
         # 群聊 single_agent 与 orchestration 均进入真实执行; execute_run_async
         # 内部按 execution_mode 分流: kanban_orchestration → orchestration_executor
@@ -3431,6 +3756,7 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
     message = body.get("message") or {}
     message_text = str(message.get("text") or body.get("message_text") or "").strip()
     idempotency_key = body.get("idempotency_key", str(uuid.uuid4()))
+    create_new = bool(body.get("create_new", False))
     message_payload = {
         "attachments": message.get("attachments") or body.get("attachments") or [],
         "quote_message_id": message.get("quote_message_id") or body.get("quote_message_id"),
@@ -3454,20 +3780,25 @@ def _handle_runs_post(conn, path: str, body: dict | None) -> tuple[int, dict]:
                 return 404, {"error": "CONVERSATION_NOT_FOUND", "message": f"Conversation {conversation_id} not found"}
             ent_id = conversation.enterprise_id
         elif employee is not None:
-            conversations = ConversationRepo(cur).list_by_enterprise(employee.enterprise_id)
-            private_conv = next(
-                (
-                    conv for conv in conversations
-                    if conv.type == "private" and conv.entry_employee_id == employee_id and not conv.deleted_at
-                ),
-                None,
-            )
-            if private_conv is not None:
-                conversation_id = private_conv.id
-            else:
-                # First message to an employee that has no private conversation yet:
-                # lazy-create one so chatting from a draft (/app/chat/emp_xxx) just works.
+            if create_new:
+                # "新建会话"语义：始终创建新的 private conversation，
+                # 不复用旧的，确保用户得到全新的对话上下文和 Hermes session。
                 create_private_for_employee = True
+            else:
+                conversations = ConversationRepo(cur).list_by_enterprise(employee.enterprise_id)
+                private_conv = next(
+                    (
+                        conv for conv in conversations
+                        if conv.type == "private" and conv.entry_employee_id == employee_id and not conv.deleted_at
+                    ),
+                    None,
+                )
+                if private_conv is not None:
+                    conversation_id = private_conv.id
+                else:
+                    # First message to an employee that has no private conversation yet:
+                    # lazy-create one so chatting from a draft (/app/chat/emp_xxx) just works.
+                    create_private_for_employee = True
         if not ent_id:
             enterprise_repo = EnterpriseRepo(cur)
             enterprises = enterprise_repo.list_all()
@@ -4788,6 +5119,11 @@ def _handle_collab_template_get(conn, path: str) -> tuple[int, dict]:
             "subtask_prompt": ["{message_text}", "{task_title}", "{task_desc}", "{dep_block}"],
             "aggregate_prompt": ["{message_text}", "{subtask_results}"],
         },
+        "prompt_config_hint": {
+            "planner_prompt": {"editable": True, "description": "方案编排规则（planner 拆解派单）"},
+            "subtask_prompt": {"editable": False, "description": "运行时内置默认，不建议编辑"},
+            "aggregate_prompt": {"editable": False, "description": "运行时内置默认，不建议编辑"},
+        },
     }
     if current is not None:
         payload["template"] = {
@@ -5400,6 +5736,14 @@ def handle_team_route(
         org_assignment_id = _match_prefix(sub, "/org/assignments/")
         if method == "PATCH" and org_assignment_id is not None and "/" not in org_assignment_id:
             route_handler = lambda conn, matched_assignment_id=org_assignment_id: _handle_org_assignment_patch(conn, sub, matched_assignment_id, query, body)
+
+    # ── solutions/{id}/apply/preview (must be checked before /apply) ──
+    if route_handler is None:
+        solution_preview = _match_prefix(sub, "/solutions/")
+        if method == "POST" and solution_preview is not None and solution_preview.endswith("/apply/preview"):
+            solution_id = solution_preview[:-len("/apply/preview")]
+            if "/" not in solution_id:
+                route_handler = lambda conn, matched_solution_id=solution_id: _handle_solution_apply_preview(conn, sub, matched_solution_id, body)
 
     # ── solutions/{id}/apply ──
     if route_handler is None:

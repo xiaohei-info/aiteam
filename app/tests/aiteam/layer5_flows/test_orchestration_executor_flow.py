@@ -111,7 +111,7 @@ def test_orchestration_executor_end_to_end(db_conn, clean_tables_with_enterprise
         messages = uow.conversation_messages().list_by_conversation(conv_id)
         senders = {m.sender_id for m in messages if m.sender_type == "employee"}
         assert "emp_test" in senders and "emp_member" in senders   # 各成员署名消息
-        final = [m for m in messages if m.sender_id == "emp_planner"]
+        final = [m for m in messages if m.sender_id == run.planner_employee_id]
         assert any("最终报告" in m.message_text for m in final)     # planner 汇总
 
 
@@ -150,3 +150,62 @@ def test_orchestration_executor_partial_failure_still_merges(
         assert "task_failed" in events
         assert "task_completed" in events
         assert "result_merged" in events
+
+@pytest.mark.integration
+def test_orchestration_executor_defaults_message_to_goal_and_uses_round_scoped_task_ids(
+        db_conn, clean_tables_with_enterprise, monkeypatch):
+    """Group orchestration should goal-loop by default and avoid task mirror id collisions."""
+    import agent_gateway.orchestration_executor as executor
+
+    monkeypatch.setattr(runtime_executor, "_provision_profile", lambda *a, **k: None)
+    verdicts = iter(["continue", "done"])
+    monkeypatch.setattr(executor, "_judge_goal", lambda goal, response: (next(verdicts), "mock"))
+
+    calls = {"plan": 0, "aggregate": 0}
+
+    def fake_run_turn(*, profile, message, on_event=None, **kw):
+        if "只输出 JSON" in message:
+            calls["plan"] += 1
+            plan = {"subtasks": [
+                {"title": f"第{calls['plan']}轮调研", "description": "收集资料", "assignee": "emp_test", "depends_on": []},
+                {"title": f"第{calls['plan']}轮分析", "description": "分析资料", "assignee": "emp_member", "depends_on": [0]},
+            ]}
+            if calls["plan"] == 2:
+                assert "原始任务: 请一起协作完成一篇新能源行业报告" in message
+                assert message.count("[目标持续追踪") == 1
+            return _FakeTurn(True, json.dumps(plan, ensure_ascii=False))
+        if "请汇总为面向用户的最终交付" in message:
+            calls["aggregate"] += 1
+            return _FakeTurn(True, f"第{calls['aggregate']}轮汇总")
+        return _FakeTurn(True, f"[{profile}] 子任务成果")
+
+    monkeypatch.setattr(webui_runtime_adapter, "run_turn", fake_run_turn)
+
+    conv_id, run_id = _seed_orchestration_run(db_conn)
+    conn = runtime_executor._connect()
+    try:
+        execute_orchestration(conn, run_id)
+    finally:
+        conn.close()
+
+    with UnitOfWork(db_conn) as uow:
+        run = uow.team_runs().get_by_id(run_id)
+        assert run.status == "succeeded"
+        assert calls == {"plan": 2, "aggregate": 2}
+
+        events = uow.run_events().list_by_run(run_id, after_cursor=0, limit=300)
+        source_ids = [e.source_id for e in events if e.event_type == "task_created"]
+        assert f"sub_{run_id}_r1_0" in source_ids
+        assert f"sub_{run_id}_r2_0" in source_ids
+        assert "goal_achieved" not in [e.event_type for e in events]
+        assert "goal_budget_exhausted" not in [e.event_type for e in events]
+
+        result_events = [e for e in events if e.event_type == "result_merged"]
+        assert len(result_events) >= 2
+        payloads = [json.loads(e.payload_json or "{}") for e in result_events]
+        assert any(payload.get("goal_status") == "achieved" for payload in payloads)
+
+        messages = uow.conversation_messages().list_by_conversation(conv_id)
+        employee_senders = [m.sender_id for m in messages if m.sender_type == "employee"]
+        assert "emp_test" in employee_senders
+        assert "emp_member" in employee_senders

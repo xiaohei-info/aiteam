@@ -32,6 +32,7 @@ window.aiteam = window.aiteam || {};
   function memberRole(member) {
     if (!member) return '成员';
     if (member.is_human) return '人类成员';
+    if (member.is_system_planner) return '协作主持';
     return stringValue(member.role_name || member.role, '数字员工');
   }
 
@@ -184,12 +185,13 @@ window.aiteam = window.aiteam || {};
     var status = memberStatus(member);
     var dotClass = (status === 'busy' || status === 'running') ? 'is-busy' : ((status === 'offline' || status === 'paused') ? 'is-offline' : 'is-online');
     var initial = memberLabel(member).slice(0, 1) || '?';
-    var detailLink = member.employee_id
+    var plannerBadge = member.is_system_planner ? '<span class="aiteam-badge aiteam-badge--host">主持</span>' : '';
+    var detailLink = (member.employee_id && !member.is_system_planner)
       ? '<a class="aiteam-group-member__link" href="/admin/employees/' + encodeURIComponent(member.employee_id) + '" title="成员详情">⚙</a>'
       : '';
     return '<div class="aiteam-group-member" data-member-id="' + escapeHtml(member.member_id || member.employee_id || '') + '">' +
       '<div class="aiteam-chat__agent-avatar">' + escapeHtml(initial) + '<span class="aiteam-chat__agent-dot ' + dotClass + '"></span></div>' +
-      '<div class="aiteam-group-member__info"><div class="aiteam-group-member__name">' + escapeHtml(memberLabel(member)) + '</div>' +
+      '<div class="aiteam-group-member__info"><div class="aiteam-group-member__name">' + escapeHtml(memberLabel(member)) + plannerBadge + '</div>' +
       '<div class="aiteam-group-member__role">' + escapeHtml(memberRole(member)) + '</div></div>' +
       '<button class="aiteam-chatwin__tool" type="button" data-mention="' + escapeHtml(handle) + '" data-mention-id="' + escapeHtml(stringValue(member.employee_id || member.member_ref_id || member.member_id, '')) + '" title="插入提及">@</button>' +
       detailLink +
@@ -209,7 +211,7 @@ window.aiteam = window.aiteam || {};
 
   function removableMemberOptions(members) {
     var removable = listValue(members).filter(function (member) {
-      return stringValue(member.member_id, '');
+      return stringValue(member.member_id, '') && !member.is_system_planner;
     });
     if (!removable.length) {
       return '<option value="">当前没有可移除成员</option>';
@@ -1659,6 +1661,8 @@ window.aiteam = window.aiteam || {};
     _buildGroupRightHtml: buildGroupRightHtml,
     _buildGroupShellHtml: buildGroupShellHtml,
     _bindGroupInteractions: bindGroupInteractions,
+    _renderMemberCard: renderMemberCard,
+    _removableMemberOptions: removableMemberOptions,
     _bindGroupSwitch: bindGroupSwitch,
     _applyGroupActiveByPath: applyGroupActiveByPath,
   };
