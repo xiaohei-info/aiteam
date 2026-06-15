@@ -211,6 +211,29 @@ class TestRouteDecisionOutputSchema:
         assert result.route_mode == "orchestration"
         assert result.target_employee_ids == ("emp-1", "emp-2")
 
+    def test_route_decision_matches_display_name_mentions_before_profile_aliases(self):
+        result = decide_route(
+            "@张三 @李四 你们好",
+            [
+                {
+                    "employee_id": "emp-a",
+                    "display_name": "张三",
+                    "role_name": "产品经理",
+                    "profile_name": "test-corp-sol-2167e55d75ba-1",
+                },
+                {
+                    "employee_id": "emp-b",
+                    "display_name": "李四",
+                    "role_name": "工程师",
+                    "profile_name": "test-corp-sol-2167e55d75ba-2",
+                },
+            ],
+            route_hint="auto",
+        )
+
+        assert result.route_mode == "orchestration"
+        assert result.target_employee_ids == ("emp-a", "emp-b")
+
     def test_route_decision_output_schema_auto_single_mention(self):
         """A single @mention still returns single_agent (needs >1 for orchestration)."""
         result = decide_route("@emp-1 help me", ["emp-1", "emp-2"], route_hint="auto")

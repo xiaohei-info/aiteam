@@ -3315,6 +3315,12 @@ body.aiteam-shell-active .aiteam-shell {
 .aiteam-group-manage .aiteam-input { background: var(--ait-bg3); border: 1px solid var(--ait-border); border-radius: 6px; color: var(--ait-text); font-size: 12px; padding: 6px 10px; outline: none; }
 .aiteam-chatwin__composer .aiteam-mention-strip { gap: 6px; }
 .aiteam-chatwin__composer .aiteam-mention-strip:empty { display: none; }
+.aiteam-mention-suggest { border-top: 1px solid var(--ait-border); padding: 6px; display: flex; flex-direction: column; gap: 4px; background: var(--ait-bg3); }
+.aiteam-mention-suggest[hidden] { display: none; }
+.aiteam-mention-suggest__item { width: 100%; border: 1px solid transparent; background: transparent; color: var(--ait-text); border-radius: 6px; padding: 7px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; text-align: left; }
+.aiteam-mention-suggest__item:hover,
+.aiteam-mention-suggest__item:focus { border-color: var(--ait-brand); background: var(--ait-brand-dim); outline: none; }
+.aiteam-mention-suggest__item span { color: var(--ait-text2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .aiteam-chatwin__right .aiteam-group-avatar-grid { margin: 0 auto 10px; max-width: 168px; gap: 6px; }
 .aiteam-chatwin__right .aiteam-group-avatar-grid__cell { min-height: 52px; padding: 6px; border-radius: 10px; gap: 2px; align-items: center; }
 .aiteam-chatwin__right .aiteam-group-avatar-grid__cell strong { font-size: 14px; }

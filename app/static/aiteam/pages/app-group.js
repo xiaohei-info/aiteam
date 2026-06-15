@@ -20,7 +20,7 @@ window.aiteam = window.aiteam || {};
   }
 
   function mentionHandle(member) {
-    var raw = member && (member.profile_name || member.display_name || member.employee_id || member.member_ref_id || member.member_id);
+    var raw = member && (member.display_name || member.profile_name || member.employee_id || member.member_ref_id || member.member_id);
     raw = stringValue(raw, 'member');
     return '@' + raw.replace(/^@+/, '').replace(/\s+/g, '_');
   }
@@ -735,6 +735,7 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-mention-strip" data-group-mention-strip></div>' +
       '<form class="aiteam-chatwin__inputbox" data-group-form>' +
       '<textarea data-group-input rows="2" placeholder="输入群聊任务，@提及可指定员工优先回复，Enter 发送..."></textarea>' +
+      '<div class="aiteam-mention-suggest" data-group-mention-suggest hidden></div>' +
       '<div class="aiteam-chatwin__toolbar">' +
       '<select class="aiteam-chatwin__route" data-group-route title="协作策略"><option value="auto">自动路由</option><option value="single_agent">单员工</option><option value="orchestration">多员工协作</option></select>' +
       '<span class="aiteam-chatwin__model" data-group-mention-state hidden></span>' +
@@ -841,6 +842,7 @@ window.aiteam = window.aiteam || {};
       routeTargets: container.querySelector('[data-group-route-targets]'),
       runtimeHandle: container.querySelector('[data-group-runtime-handle]'),
       mentionState: container.querySelector('[data-group-mention-state]'),
+      mentionSuggest: container.querySelector('[data-group-mention-suggest]'),
       collabState: container.querySelector('[data-group-collab-state]'),
       recovery: container.querySelector('[data-group-recovery]'),
     };
@@ -921,6 +923,108 @@ window.aiteam = window.aiteam || {};
       return state.selectedMentionIds.map(function (employeeId) {
         return mentionHandle(state.memberMap[employeeId] || { employee_id: employeeId, profile_name: employeeId });
       }).filter(Boolean);
+    }
+
+    function activeMemberIds() {
+      return state.members.map(function (member) {
+        return stringValue(member && (member.employee_id || member.member_ref_id), '');
+      }).filter(Boolean);
+    }
+
+    function firstSendableMemberId() {
+      var nonPlanner = state.members.filter(function (member) {
+        return member && !member.is_system_planner && stringValue(member.employee_id || member.member_ref_id, '');
+      });
+      var first = nonPlanner[0] || state.members[0] || {};
+      return stringValue(first.employee_id || first.member_ref_id, '');
+    }
+
+    function isActiveMemberId(value) {
+      return activeMemberIds().indexOf(stringValue(value, '')) !== -1;
+    }
+
+    function syncSelectedMention(employeeId) {
+      employeeId = stringValue(employeeId, '');
+      if (employeeId && state.selectedMentionIds.indexOf(employeeId) === -1) {
+        state.selectedMentionIds.push(employeeId);
+      }
+    }
+
+    function currentMentionQuery() {
+      if (!state.refs.input) return null;
+      var text = state.refs.input.value || '';
+      var caret = typeof state.refs.input.selectionStart === 'number' ? state.refs.input.selectionStart : text.length;
+      var before = text.slice(0, caret);
+      var match = /(^|\s)@([^\s@]*)$/.exec(before);
+      if (!match) return null;
+      return {
+        start: before.length - match[2].length - 1,
+        end: caret,
+        query: stringValue(match[2], '').toLowerCase(),
+      };
+    }
+
+    function mentionMatches(member, query) {
+      if (!query) return true;
+      var haystack = [
+        memberLabel(member),
+        mentionHandle(member),
+        memberRole(member),
+        stringValue(member && (member.employee_id || member.member_ref_id || member.profile_name), ''),
+      ].join(' ').toLowerCase();
+      return haystack.indexOf(query) !== -1;
+    }
+
+    function applyMention(member, token) {
+      if (!state.refs.input || !member) return;
+      var employeeId = stringValue(member.employee_id || member.member_ref_id || member.member_id, '');
+      var handle = mentionHandle(member);
+      var text = state.refs.input.value || '';
+      var range = token || currentMentionQuery();
+      if (range) {
+        state.refs.input.value = text.slice(0, range.start) + handle + ' ' + text.slice(range.end);
+      } else {
+        state.refs.input.value = text.trim() ? text + ' ' + handle + ' ' : handle + ' ';
+      }
+      if (typeof state.refs.input.setSelectionRange === 'function') {
+        var nextCaret = (range ? range.start : (text.trim() ? text.length + 1 : 0)) + handle.length + 1;
+        state.refs.input.setSelectionRange(nextCaret, nextCaret);
+      }
+      syncSelectedMention(employeeId);
+      updateCollaborationState();
+      renderMembers();
+      renderMentionSuggestions();
+      state.refs.input.focus();
+    }
+
+    function renderMentionSuggestions() {
+      if (!state.refs.mentionSuggest) return;
+      var token = currentMentionQuery();
+      if (!token) {
+        state.refs.mentionSuggest.innerHTML = '';
+        state.refs.mentionSuggest.hidden = true;
+        return;
+      }
+      var matches = state.members.filter(function (member) {
+        return member && mentionMatches(member, token.query);
+      }).slice(0, 6);
+      if (!matches.length) {
+        state.refs.mentionSuggest.innerHTML = '<span class="aiteam-inline-note">没有匹配成员</span>';
+        state.refs.mentionSuggest.hidden = false;
+        return;
+      }
+      state.refs.mentionSuggest.innerHTML = matches.map(function (member) {
+        var employeeId = stringValue(member.employee_id || member.member_ref_id || member.member_id, '');
+        return '<button class="aiteam-mention-suggest__item" type="button" data-mention-suggestion data-mention="' + escapeHtml(mentionHandle(member)) + '" data-mention-id="' + escapeHtml(employeeId) + '">' +
+          '<strong>' + escapeHtml(mentionHandle(member)) + '</strong><span>' + escapeHtml(memberRole(member)) + '</span></button>';
+      }).join('');
+      state.refs.mentionSuggest.hidden = false;
+      Array.prototype.slice.call(container.querySelectorAll('[data-mention-suggestion]')).forEach(function (button) {
+        button.addEventListener('click', function () {
+          var employeeId = button.getAttribute('data-mention-id') || '';
+          applyMention(state.memberMap[employeeId] || { employee_id: employeeId, display_name: (button.getAttribute('data-mention') || '').replace(/^@/, '') }, token);
+        });
+      });
     }
 
     function updateCollaborationState() {
@@ -1017,7 +1121,6 @@ window.aiteam = window.aiteam || {};
       Array.prototype.slice.call(container.querySelectorAll('[data-mention]')).forEach(function (button) {
         button.addEventListener('click', function () {
           if (!state.refs.input) return;
-          var mention = button.getAttribute('data-mention') || '';
           var employeeId = button.getAttribute('data-mention-id') || '';
           if (employeeId && state.selectedMentionIds.indexOf(employeeId) !== -1) {
             state.selectedMentionIds = state.selectedMentionIds.filter(function (id) { return id !== employeeId; });
@@ -1026,13 +1129,7 @@ window.aiteam = window.aiteam || {};
             state.refs.input.focus();
             return;
           }
-          if (employeeId) {
-            state.selectedMentionIds.push(employeeId);
-          }
-          state.refs.input.value = (state.refs.input.value || '').trim() ? state.refs.input.value + ' ' + mention + ' ' : mention + ' ';
-          updateCollaborationState();
-          renderMembers();
-          state.refs.input.focus();
+          applyMention(state.memberMap[employeeId] || { employee_id: employeeId, display_name: (button.getAttribute('data-mention') || '').replace(/^@/, '') });
         });
       });
       updateCollaborationState();
@@ -1239,14 +1336,28 @@ window.aiteam = window.aiteam || {};
 
     var form = container.querySelector('[data-group-form]');
     function resolveSenderId() {
-      return stringValue(state.senderId, '')
-        || (state.refs.senderInput ? stringValue(state.refs.senderInput.value, '') : '')
+      var configured = stringValue(state.senderId, '')
+        || (state.refs.senderInput ? stringValue(state.refs.senderInput.value, '') : '');
+      if (isActiveMemberId(configured)) return configured;
+      return firstSendableMemberId()
         || stringValue(conversation.owner_user_id, '')
         || 'owner';
     }
     if (form && state.refs.input && state.refs.routeSelect) {
       if (typeof state.refs.input.addEventListener === 'function') {
+        state.refs.input.addEventListener('input', function () {
+          renderMentionSuggestions();
+        });
+        state.refs.input.addEventListener('blur', function () {
+          setTimeout(function () {
+            if (state.refs.mentionSuggest) state.refs.mentionSuggest.hidden = true;
+          }, 150);
+        });
         state.refs.input.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape' && state.refs.mentionSuggest) {
+            state.refs.mentionSuggest.hidden = true;
+            return;
+          }
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             if (typeof form.requestSubmit === 'function') {
