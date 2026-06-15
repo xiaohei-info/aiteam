@@ -1,5 +1,6 @@
 """Conversation command service -- write-side operations for conversations."""
 
+import ast
 import json
 import uuid
 
@@ -164,6 +165,9 @@ def remove_group_member(uow, conversation_id: str, member_id: str) -> dict:
     row = uow.cur.fetchone()
     if row is None:
         raise ValueError(f"Conversation member {member_id} not found")
+    employee = uow.employees().get_by_id(row[0]) if row[0] else None
+    if employee is not None and _is_system_planner_employee(employee):
+        raise ValueError("SYSTEM_PLANNER_CANNOT_REMOVE")
     if row[1] != "removed":
         uow.cur.execute(
             """
@@ -408,7 +412,7 @@ def _get_active_members(uow, conversation_id: str) -> list[dict[str, str]]:
     """Return active employee members with aliases for a group conversation."""
     uow.cur.execute(
         "SELECT cm.member_ref_id, COALESCE(e.display_name, ''), COALESCE(e.role_name, ''), "
-        "COALESCE(e.profile_name, '') "
+        "COALESCE(e.profile_name, ''), COALESCE(e.capabilities_json, '{}'::jsonb) "
         "FROM conversation_member cm "
         "LEFT JOIN employee e ON e.id = cm.member_ref_id "
         "WHERE cm.conversation_id = %s AND cm.member_type = 'employee' "
@@ -423,6 +427,7 @@ def _get_active_members(uow, conversation_id: str) -> list[dict[str, str]]:
             "display_name": row[1],
             "role_name": row[2],
             "profile_name": row[3],
+            "is_system_planner": _capabilities_has_system_planner(row[4]),
         }
         for row in rows if row[0]
     ]
@@ -457,40 +462,40 @@ def _pick_entry_employee_id(decision, sender_id: str) -> str:
 def _pick_candidate_employee_ids(decision, available_employee_ids: list[str]) -> list[str]:
     max_candidates = 3
 
+    def _without_planner(employee_ids: list[str]) -> list[str]:
+        if decision.route_mode != "orchestration" or not decision.planner_employee_id:
+            return employee_ids
+        return [employee_id for employee_id in employee_ids if employee_id != decision.planner_employee_id]
+
     def _cap_orchestration_targets(employee_ids: list[str]) -> list[str]:
         if decision.route_mode != "orchestration":
             return employee_ids
-        if len(employee_ids) <= max_candidates:
-            return employee_ids
-        if decision.planner_employee_id and decision.planner_employee_id in employee_ids:
-            planner_first = [decision.planner_employee_id]
-            planner_first.extend(
-                employee_id
-                for employee_id in employee_ids
-                if employee_id != decision.planner_employee_id
-            )
-            return planner_first[:max_candidates]
-        return employee_ids[:max_candidates]
+        return _without_planner(employee_ids)[:max_candidates]
 
     if decision.target_employee_ids:
         ordered_targets = list(decision.target_employee_ids)
-        if decision.route_mode == "orchestration" and decision.planner_employee_id:
-            ordered = [employee_id for employee_id in available_employee_ids if employee_id == decision.planner_employee_id]
-            ordered.extend(employee_id for employee_id in ordered_targets if employee_id != decision.planner_employee_id)
-            for employee_id in available_employee_ids:
-                if employee_id not in ordered and employee_id in ordered_targets:
-                    ordered.append(employee_id)
-            return _cap_orchestration_targets(ordered)
         return _cap_orchestration_targets(ordered_targets)
     ordered_available = list(available_employee_ids)
     if decision.route_mode == "single_agent":
         return ordered_available
-    if decision.planner_employee_id:
-        if decision.planner_employee_id in ordered_available:
-            return _cap_orchestration_targets(
-                [decision.planner_employee_id, *[employee_id for employee_id in ordered_available if employee_id != decision.planner_employee_id]]
-            )
     return _cap_orchestration_targets(ordered_available)
+
+
+def _is_system_planner_employee(employee: Employee) -> bool:
+    return _capabilities_has_system_planner(getattr(employee, "capabilities_json", None))
+
+
+def _capabilities_has_system_planner(raw) -> bool:
+    if isinstance(raw, dict):
+        return bool(raw.get("is_system_planner"))
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        try:
+            payload = ast.literal_eval(str(raw or "{}"))
+        except (SyntaxError, ValueError):
+            return False
+    return isinstance(payload, dict) and bool(payload.get("is_system_planner"))
 
 
 def _create_member(uow, member: ConversationMember) -> None:

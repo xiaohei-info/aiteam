@@ -126,23 +126,6 @@ class EmployeeRepo:
         )
         return emp
 
-    def get_system_planner(self, enterprise_id: str) -> "Optional[Employee]":
-        self._cur.execute(
-            "SELECT id, enterprise_id, template_id, profile_name, display_name, "
-            "role_name, status, created_from, model_provider, model_name, "
-            "prompt_version, config_version, avatar_url, description, "
-            "archive_reason, last_provisioned_at, capabilities_json, "
-            "created_at, updated_at, created_by, updated_by, deleted_at "
-            "FROM employee WHERE enterprise_id = %s "
-            "AND capabilities_json @> '{\"is_system_planner\": true}'::jsonb "
-            "AND deleted_at IS NULL LIMIT 1",
-            (enterprise_id,),
-        )
-        row = self._cur.fetchone()
-        if row is None:
-            return None
-        return self._row_to_entity(row)
-
     def delete(self, employee_id: str) -> None:
         self._cur.execute(
             "UPDATE employee SET deleted_at=now() WHERE id=%s",

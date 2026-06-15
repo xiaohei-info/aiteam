@@ -79,6 +79,12 @@ assert(document.head._lastChild && document.head._lastChild.src === 'static/aite
 
 // Regression: /app/workbench must lazy-load app-workbench.js via the regex
 // table (previously fell through to "页面模块加载失败").
+
+context.window.location.pathname = '/admin/collaboration';
+shell.init('/admin/collaboration');
+assert(nodes['#aiteam-nav'].innerHTML.indexOf('/admin/collaboration') !== -1, 'admin nav should include /admin/collaboration');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/admin-collaboration.js', 'shell should lazy-load admin-collaboration.js for /admin/collaboration');
+
 context.window.location.pathname = '/app/workbench';
 shell.init('/app/workbench');
 assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/app-workbench.js', 'shell should lazy-load app-workbench.js for /app/workbench');
@@ -92,6 +98,12 @@ shell.init('/app/group');
 assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/app-group.js', 'shell should lazy-load app-group.js for /app/group');
 
 // Icon rail: nav renders rail items carrying hrefs and tooltips.
+
+context.window.location.pathname = '/admin/collaboration';
+shell.init('/admin/collaboration');
+assert(nodes['#aiteam-nav'].innerHTML.indexOf('/admin/collaboration') !== -1, 'admin nav should include /admin/collaboration');
+assert(document.head._lastChild && document.head._lastChild.src === 'static/aiteam/pages/admin-collaboration.js', 'shell should lazy-load admin-collaboration.js for /admin/collaboration');
+
 context.window.location.pathname = '/app/workbench';
 shell.init('/app/workbench');
 assert(nodes['#aiteam-nav'].innerHTML.indexOf('aiteam-rail__item') !== -1, 'app nav should render icon-rail items');

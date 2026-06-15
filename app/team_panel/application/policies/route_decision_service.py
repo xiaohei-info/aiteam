@@ -28,9 +28,12 @@ def decide_route(
     planner_employee_id = _pick_planner_employee_id(members, mentioned or employee_ids)
 
     if route_hint == "orchestration":
+        target_employee_ids = _non_system_planner_employee_ids(members)
+        if not target_employee_ids:
+            target_employee_ids = employee_ids
         return RouteDecision(
             route_mode="orchestration",
-            target_employee_ids=tuple(employee_ids),
+            target_employee_ids=tuple(target_employee_ids),
             planner_employee_id=planner_employee_id,
         )
 
@@ -85,6 +88,7 @@ def _normalize_member(member) -> dict[str, str]:
             "display_name": "",
             "role_name": "",
             "profile_name": "",
+            "is_system_planner": False,
         }
     if isinstance(member, dict):
         return {
@@ -92,6 +96,7 @@ def _normalize_member(member) -> dict[str, str]:
             "display_name": str(member.get("display_name") or ""),
             "role_name": str(member.get("role_name") or ""),
             "profile_name": str(member.get("profile_name") or ""),
+            "is_system_planner": _coerce_bool(member.get("is_system_planner")),
         }
     raise TypeError(f"Unsupported member descriptor: {type(member)!r}")
 
@@ -140,6 +145,13 @@ def _pick_planner_employee_id(members: list[dict[str, str]], candidate_ids: list
     candidate_set = set(candidate_ids)
     for member in members:
         employee_id = member["employee_id"]
+        if employee_id in candidate_set and member.get("is_system_planner"):
+            return employee_id
+    for member in members:
+        if member.get("is_system_planner"):
+            return member["employee_id"]
+    for member in members:
+        employee_id = member["employee_id"]
         if employee_id in candidate_set and _matches(member):
             return employee_id
     for member in members:
@@ -152,12 +164,20 @@ def _non_system_planner_employee_ids(members: list[dict[str, str]]) -> list[str]
     return [
         member["employee_id"]
         for member in members
-        if member["employee_id"] and member.get("role_name", "").lower() != "orchestrator"
+        if member["employee_id"] and not member.get("is_system_planner")
     ]
 
 
 def _has_system_planner(members: list[dict[str, str]]) -> bool:
-    return any(member.get("role_name", "").lower() == "orchestrator" for member in members)
+    return any(bool(member.get("is_system_planner")) for member in members)
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
 
 
 def _normalize_text(text: str) -> str:

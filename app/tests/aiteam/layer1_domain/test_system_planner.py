@@ -83,7 +83,7 @@ def test_decide_route_defaults_to_orchestration_for_non_planner_members():
         [
             {"employee_id": "emp_a", "display_name": "A", "role_name": "分析师", "profile_name": "a"},
             {"employee_id": "emp_b", "display_name": "B", "role_name": "研究员", "profile_name": "b"},
-            {"employee_id": "emp_sys", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent"},
+            {"employee_id": "emp_sys", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent", "is_system_planner": True},
         ],
         route_hint="auto",
     )
@@ -97,10 +97,26 @@ def test_decide_route_only_system_planner_degrades_to_single_agent():
     decision = decide_route(
         "请处理这个需求",
         [
-            {"employee_id": "emp_sys", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent"},
+            {"employee_id": "emp_sys", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent", "is_system_planner": True},
         ],
         route_hint="auto",
     )
 
     assert decision.route_mode == "single_agent"
     assert decision.target_employee_ids == ()
+
+
+def test_decide_route_does_not_treat_business_orchestrator_role_as_system_planner():
+    decision = decide_route(
+        "请处理这个需求",
+        [
+            {"employee_id": "emp_a", "display_name": "A", "role_name": "orchestrator", "profile_name": "a", "is_system_planner": False},
+            {"employee_id": "emp_b", "display_name": "B", "role_name": "研究员", "profile_name": "b", "is_system_planner": False},
+            {"employee_id": "emp_sys", "display_name": "协作主持人", "role_name": "orchestrator", "profile_name": "sys_planner_ent", "is_system_planner": True},
+        ],
+        route_hint="auto",
+    )
+
+    assert decision.route_mode == "orchestration"
+    assert decision.target_employee_ids == ("emp_a", "emp_b")
+    assert decision.planner_employee_id == "emp_sys"
