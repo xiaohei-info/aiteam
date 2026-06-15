@@ -84,6 +84,57 @@ class TestSystemAdminListEnterprises:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# T01B: Register enterprise
+# ═══════════════════════════════════════════════════════════════════
+
+class TestSystemAdminRegisterEnterprise:
+    def test_register_enterprise_returns_201_and_persists_row(self, clean_tables):
+        payload = {
+            "name": "Taiyi Demo Enterprise",
+            "slug": "taiyi-demo",
+            "owner_user_id": "usr_taiyi_admin",
+        }
+        status, body = _post(_system_admin_path("/api/system-admin/enterprises"), payload)
+
+        assert status == 201, f"Expected 201, got {status}: {body}"
+        assert body["id"].startswith("ent_")
+        assert body["slug"] == "taiyi-demo"
+        assert body["name"] == "Taiyi Demo Enterprise"
+        assert body["status"] == "active"
+        assert body["owner_user_id"] == "usr_taiyi_admin"
+
+        list_status, list_body = _get(_system_admin_path("/api/system-admin/enterprises?name=Taiyi"))
+        assert list_status == 200
+        assert list_body["total"] == 1
+        assert list_body["enterprises"][0]["slug"] == "taiyi-demo"
+
+    def test_register_enterprise_rejects_duplicate_slug(self, seeded_enterprise):
+        status, body = _post(
+            _system_admin_path("/api/system-admin/enterprises"),
+            {
+                "name": "Duplicate Test Corp",
+                "slug": "test-corp",
+                "owner_user_id": "usr_duplicate",
+            },
+        )
+
+        assert status == 409, f"Expected 409, got {status}: {body}"
+        assert body["error"] == "ENTERPRISE_SLUG_EXISTS"
+
+    def test_register_enterprise_requires_system_admin(self):
+        status, body = _post(
+            "/api/system-admin/enterprises?role=system_operator",
+            {
+                "name": "Operator Created Corp",
+                "slug": "operator-created",
+                "owner_user_id": "usr_operator",
+            },
+        )
+
+        assert status == 403, f"Expected 403, got {status}: {body}"
+
+
+# ═══════════════════════════════════════════════════════════════════
 # T02: Search enterprises
 # ═══════════════════════════════════════════════════════════════════
 

@@ -6,12 +6,13 @@ Aggregate root: Enterprise.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date
 from urllib.parse import parse_qs, urlparse
 
 from api.system_health import build_system_health_payload
-from ..domain.entities import AuditEvent
+from ..domain.entities import AuditEvent, Enterprise
 from ..repositories.audit_event_repo import AuditEventRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..transactions.db import create_connection
@@ -132,6 +133,58 @@ def _handle_list_enterprises(path: str) -> tuple[int, dict]:
                 "page": page,
                 "limit": limit,
                 "has_more": (page * limit) < total,
+            }
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+
+def _slugify_enterprise_slug(raw: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", raw.strip().lower())
+    return normalized.strip("-")
+
+
+def _handle_create_enterprise(path: str, body: dict | None) -> tuple[int, dict]:
+    payload = body or {}
+    name = str(payload.get("name") or "").strip()
+    slug = _slugify_enterprise_slug(str(payload.get("slug") or name))
+    owner_user_id = str(payload.get("owner_user_id") or "").strip()
+    actor_id = _request_actor_id(path.split("?", 1)[1] if "?" in path else "", body) or "system_admin"
+
+    if not name:
+        return 400, {"error": "INVALID_REQUEST", "message": "Enterprise name is required"}
+    if not slug:
+        return 400, {"error": "INVALID_REQUEST", "message": "Enterprise slug is required"}
+    if not owner_user_id:
+        return 400, {"error": "INVALID_REQUEST", "message": "Owner user id is required"}
+
+    conn = _make_conn()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1 FROM enterprise WHERE slug = %s AND deleted_at IS NULL", (slug,))
+            if cur.fetchone() is not None:
+                conn.rollback()
+                return 409, {"error": "ENTERPRISE_SLUG_EXISTS", "message": f"Enterprise slug '{slug}' already exists"}
+            enterprise = Enterprise(
+                id=f"ent_{uuid.uuid4().hex[:12]}",
+                slug=slug,
+                name=name,
+                status="active",
+                owner_user_id=owner_user_id,
+                created_by=actor_id,
+                updated_by=actor_id,
+            )
+            EnterpriseRepo(cur).create(enterprise)
+            conn.commit()
+            return 201, {
+                "id": enterprise.id,
+                "enterprise_id": enterprise.id,
+                "slug": enterprise.slug,
+                "name": enterprise.name,
+                "status": enterprise.status,
+                "owner_user_id": enterprise.owner_user_id,
             }
         finally:
             cur.close()
@@ -630,6 +683,11 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
         if denial is not None:
             return denial
         return _handle_list_enterprises(path)
+    if method == "POST" and sub_clean.rstrip("/") == "/enterprises":
+        denial = _require_system_write(query, body)
+        if denial is not None:
+            return denial
+        return _handle_create_enterprise(path, body)
     if method == "GET" and sub_clean.startswith("/enterprises/") and sub_clean.count("/") == 2:
         denial = _require_system_read(query, None)
         if denial is not None:

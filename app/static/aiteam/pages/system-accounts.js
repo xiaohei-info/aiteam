@@ -288,6 +288,60 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">API 限流</span><span class="aiteam-shell__meta-value">' + (detailQuota.api_rate_limit != null ? detailQuota.api_rate_limit : '—') + '</span></div>';
   }
 
+  function renderRegisterEnterpriseForm(canMutate) {
+    if (!canMutate) return '';
+    return '' +
+      '<div class="aiteam-shell__panel">' +
+      '<div class="aiteam-panel__header"><h3>注册企业</h3><span class="aiteam-inline-note">创建后即可作为人才市场招募的企业空间</span></div>' +
+      '<form class="aiteam-shell__meta" data-role="enterprise-register-form">' +
+      '<div class="aiteam-shell__meta-card"><label>企业名称<br><input class="aiteam-input" type="text" data-role="enterprise-register-name" placeholder="Taiyi Demo Enterprise"></label></div>' +
+      '<div class="aiteam-shell__meta-card"><label>企业 slug<br><input class="aiteam-input" type="text" data-role="enterprise-register-slug" placeholder="taiyi-demo"></label></div>' +
+      '<div class="aiteam-shell__meta-card"><label>所有者用户 ID<br><input class="aiteam-input" type="text" data-role="enterprise-register-owner" placeholder="usr_taiyi_admin"></label></div>' +
+      '<div class="aiteam-shell__meta-card"><button class="aiteam-button" type="submit">注册企业</button></div>' +
+      '</form>' +
+      '<div id="aiteam-sys-accounts-register-feedback"></div>' +
+      '</div>';
+  }
+
+  function _setRegisterFeedback(html) {
+    var fb = findById('aiteam-sys-accounts-register-feedback');
+    if (fb) fb.innerHTML = html;
+  }
+
+  function registerEnterpriseFromForm(container, refresh) {
+    var nameInput = container.querySelector('[data-role="enterprise-register-name"]');
+    var slugInput = container.querySelector('[data-role="enterprise-register-slug"]');
+    var ownerInput = container.querySelector('[data-role="enterprise-register-owner"]');
+    var payload = {
+      name: trimText(nameInput && nameInput.value),
+      slug: trimText(slugInput && slugInput.value),
+      owner_user_id: trimText(ownerInput && ownerInput.value),
+    };
+    if (!payload.name || !payload.slug || !payload.owner_user_id) {
+      _setRegisterFeedback('<p class="aiteam-state aiteam-state-error">请填写企业名称、slug 和所有者用户 ID</p>');
+      return Promise.resolve({ ok: false, status: 400, error: 'invalid_form' });
+    }
+    return ns.api.post('/api/system-admin/enterprises', payload).then(function (result) {
+      if (!result.ok) {
+        _setRegisterFeedback('<p class="aiteam-state aiteam-state-error">注册企业失败：' + (result.error || '未知错误') + '</p>');
+        return result;
+      }
+      _setRegisterFeedback('<p class="aiteam-state aiteam-state-success">企业已注册</p>');
+      if (typeof refresh === 'function') refresh();
+      return result;
+    });
+  }
+
+  function bindRegisterEnterpriseForm(container, refresh) {
+    if (!container || !container.querySelector) return;
+    var form = container.querySelector('[data-role="enterprise-register-form"]');
+    if (!form || !form.addEventListener) return;
+    form.addEventListener('submit', function (ev) {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      return registerEnterpriseFromForm(container, refresh);
+    });
+  }
+
   ns.pages.systemAccounts = {
     init: function (container) {
       if (!container) return;
@@ -304,6 +358,7 @@ window.aiteam = window.aiteam || {};
         container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载企业账号数据...</p></div>';
       }
 
+      function loadAndRender() {
       ns.api.get('/api/system-admin/enterprises').then(function (result) {
         if (!result.ok) {
           if (result.status === 501) {
@@ -323,14 +378,20 @@ window.aiteam = window.aiteam || {};
           return;
         }
         var data = result.data;
+        var canMutate = _hasSystemWrite(role);
         if (!data || !data.enterprises || data.enterprises.length === 0) {
-          if (ns.states && ns.states.renderEmpty) {
-            ns.states.renderEmpty(container, '暂无企业账号');
-          }
+          container.innerHTML =
+            '<div class="aiteam-shell__panel">' +
+            '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
+            '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
+            '<p class="aiteam-shell__panel-body">暂无企业账号。请先注册企业，再前往人才市场招募员工。</p>' +
+            '</div>' +
+            renderRegisterEnterpriseForm(canMutate) +
+            (canMutate ? '' : '<p class="aiteam-shell__meta">当前角色仅可查看企业账号，注册企业需要 system_write 权限。</p>');
+          bindRegisterEnterpriseForm(container, loadAndRender);
           return;
         }
 
-        var canMutate = _hasSystemWrite(role);
         var state = {
           query: '',
           statusFilter: '',
@@ -393,6 +454,7 @@ window.aiteam = window.aiteam || {};
             '<p class="aiteam-shell__panel-kicker">系统后台</p>' +
             '<h2 class="aiteam-shell__panel-title">企业账号管理</h2>' +
             '<p class="aiteam-shell__panel-body">管理平台上的企业账号：查看企业概况与配额，执行充值、封禁、解封与通知等运营操作。</p>' +
+            renderRegisterEnterpriseForm(canMutate) +
             '<div class="aiteam-billing__stats">' +
             '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">总企业数</span><span class="aiteam-shell__meta-value">' + stats.total + '</span></div>' +
             '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">本月新增</span><span class="aiteam-shell__meta-value">' + stats.monthNew + '</span></div>' +
@@ -427,6 +489,7 @@ window.aiteam = window.aiteam || {};
             var search = container.querySelector('[data-role="enterprise-search"]');
             var filter = container.querySelector('[data-role="enterprise-status"]');
             var createdRangeInput = container.querySelector('[data-role="enterprise-created-range"]');
+            bindRegisterEnterpriseForm(container, loadAndRender);
             if (search && search.addEventListener) {
               search.addEventListener('input', function () {
                 state.query = this.value || '';
@@ -477,6 +540,8 @@ window.aiteam = window.aiteam || {};
 
         refreshSelectedEnterpriseData().then(render);
       });
+      }
+      loadAndRender();
     },
 
     collectActionRequest: function (enterpriseId, action, overrides) {
