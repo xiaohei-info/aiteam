@@ -102,6 +102,112 @@ def _get_raw(parsed_path: str) -> "_FakeHandler":
     return handler
 
 
+def test_private_history_keeps_assistant_reply_when_terminal_summary_is_empty_but_reasoning_events_exist(
+    uow, clean_tables_with_enterprise
+):
+    from team_panel.api_team import router_team
+    from team_panel.domain.entities import ConversationMessage, RunEvent, TeamRun
+
+    with uow:
+        conversation = uow.conversations().get_by_id("conv_test")
+        assert conversation is not None
+
+        run = TeamRun(
+            id="run_reasoning_only_summary_gap",
+            enterprise_id="ent_test",
+            conversation_id=conversation.id,
+            trigger_type="private_message",
+            execution_mode="single_agent",
+            status="succeeded",
+            entry_employee_id="emp_test",
+            input_message_json=json.dumps({"message_text": "帮我做一份大模型行业简报"}, ensure_ascii=False),
+            result_summary_json=json.dumps({}, ensure_ascii=False),
+        )
+        uow.team_runs().create(run)
+
+        uow.conversation_messages().create(
+            ConversationMessage(
+                id="msg_user_reasoning_gap",
+                conversation_id=conversation.id,
+                run_id=run.id,
+                sender_id="user_test",
+                sender_type="user",
+                message_text="帮我做一份大模型行业简报",
+                message_json=json.dumps({"message_text": "帮我做一份大模型行业简报"}, ensure_ascii=False),
+            )
+        )
+        uow.conversation_messages().create(
+            ConversationMessage(
+                id="msg_assistant_reasoning_gap",
+                conversation_id=conversation.id,
+                run_id=run.id,
+                sender_id="emp_test",
+                sender_type="employee",
+                message_text="以下是大模型行业简要调研：市场持续增长，企业落地聚焦提效与降本。",
+                message_json=json.dumps(
+                    {
+                        "message_text": "以下是大模型行业简要调研：市场持续增长，企业落地聚焦提效与降本。",
+                        "citations": [],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        uow.run_events().create(
+            RunEvent(
+                id="evt_reasoning_gap_1",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=1,
+                event_type="message_delta",
+                source_type="session",
+                source_id="src_reasoning_gap",
+                employee_id="emp_test",
+                preview_text="报告，不是",
+                payload_json=json.dumps(
+                    {"delta": "报告，不是", "kind": "reasoning"},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        uow.run_events().create(
+            RunEvent(
+                id="evt_reasoning_gap_2",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=2,
+                event_type="run_succeeded",
+                source_type="session",
+                source_id="src_reasoning_gap",
+                employee_id="emp_test",
+                preview_text="",
+                payload_json=json.dumps({"success": True, "citations": []}, ensure_ascii=False),
+            )
+        )
+
+        page, total, next_cursor, has_more = router_team._serialize_private_history(
+            uow.cur,
+            conversation.id,
+            cursor=0,
+            limit=50,
+        )
+
+    assert total >= 3
+    assert next_cursor >= 3
+    assert has_more is False
+
+    assistant_messages = [item for item in page if item["role"] == "assistant"]
+    assert assistant_messages, "assistant reply must still render even when run_succeeded has no summary text"
+    assert assistant_messages[-1]["text"] == "以下是大模型行业简要调研：市场持续增长，企业落地聚焦提效与降本。"
+
+    reasoning_items = [
+        item for item in page
+        if item.get("__timeline_item", {}).get("kind") == "reasoning"
+    ]
+    assert reasoning_items, "reasoning timeline item should still be preserved"
+
+
 # ═══════════════════════════════════════════════════════
 # Batch 1: GET endpoints
 # ═══════════════════════════════════════════════════════════════════════════
