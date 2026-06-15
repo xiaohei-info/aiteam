@@ -63,6 +63,20 @@ test('chat renders reasoning timeline item', function () {
   assert.ok(html.includes('aiteam-chat__reasoning-card'), 'expected reasoning card');
   assert.ok(html.includes('需要先查知识库。'), 'expected reasoning text');
 });
+
+test('chat renders concrete run failure reason from payload', function () {
+  const html = page._renderTimelineNotice({
+    event_type: 'run_failed',
+    payload: {
+      error_code: 'MODEL_ERROR',
+      error_message: 'model `minimax-m2.5` is not supported.',
+    },
+  });
+  assert.ok(html.includes('运行失败'), 'expected failed label');
+  assert.ok(html.includes('model `minimax-m2.5` is not supported.'), 'expected concrete model error');
+  assert.ok(!html.includes('本次运行失败，可重试发送。'), 'must not hide concrete error behind generic text');
+});
+
 test('chat renders reasoning timeline item from history', function () {
   const conversation = {
     conversation_id: 'c-reasoning',

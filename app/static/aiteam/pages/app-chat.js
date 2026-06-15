@@ -301,6 +301,11 @@ window.aiteam = window.aiteam || {};
     };
     var label = labels[eventType] || '时间线事件';
     var preview = event && event.preview ? event.preview : '';
+    var payload = (event && event.payload) || {};
+    var failureReason = payload.error_message || payload.error || payload.error_summary || payload.message || '';
+    if (!preview && eventType === 'run_failed' && failureReason) {
+      preview = failureReason;
+    }
     if (!preview) {
       if (eventType === 'run_failed') preview = '本次运行失败，可重试发送。';
       else if (eventType === 'run_cancelled') preview = '本次运行已取消。';
@@ -1646,6 +1651,7 @@ window.aiteam = window.aiteam || {};
     }
   };
   ns.pages.appChat._renderTimelineItem = renderTimelineItem;
+  ns.pages.appChat._renderTimelineNotice = renderTimelineNotice;
   ns.pages.appChat._renderThinking = renderThinking;
   ns.pages.appChat._renderSummaryPanel = renderSummaryPanel;
   ns.pages.appChat._isScrolledToBottom = isScrolledToBottom;
