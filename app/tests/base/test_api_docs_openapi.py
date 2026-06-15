@@ -424,9 +424,12 @@ class TestOpenApiSpec:
 class TestSwaggerUiHtml:
     def test_html_references_swagger_and_spec_url(self):
         html = api_docs.swagger_ui_html()
-        assert "swagger-ui" in html
+        assert "接口目录" in html
         assert "/api/openapi.json" in html
-        assert "SwaggerUIBundle" in html
+        assert "/api/team/runs" in html
+        assert "method-post" in html
+        assert "unpkg.com" not in html
+        assert "SwaggerUIBundle" not in html
 
 
 class TestRouteWiring:
@@ -442,4 +445,5 @@ class TestRouteWiring:
         routes.handle_get(handler, urlparse("http://example.com/api/docs"))
         assert handler.status == 200
         assert "text/html" in handler.headers.get("Content-Type", "")
-        assert "swagger-ui" in handler.body_text()
+        assert "接口目录" in handler.body_text()
+        assert "/api/openapi.json" in handler.body_text()

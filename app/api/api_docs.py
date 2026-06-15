@@ -1,4 +1,4 @@
-"""Auto-generated API index + Swagger UI for the AI Team backend.
+"""Auto-generated API index + browser-readable docs for the AI Team backend.
 
 The backend has no web framework — routing is hand-written string matching in
 ``api/routes.py``, ``api/kanban_bridge.py`` and ``team_panel/api_team/router_*.py``.
@@ -11,13 +11,14 @@ response body schemas are not present in the source, so they are not emitted.
 
 Served read-only at:
   - ``GET /api/openapi.json`` — the generated OpenAPI document
-  - ``GET /api/docs``         — Swagger UI (loads swagger-ui-dist from CDN)
+  - ``GET /api/docs``         — self-contained browser-readable API docs
 
 Zero changes to existing route code; the only base-file change is a small
 hook in ``api/routes.handle_get``.
 """
 from __future__ import annotations
 
+import html
 import re
 from pathlib import Path
 
@@ -2038,33 +2039,265 @@ def build_openapi_spec() -> dict:
     }
 
 
-_SWAGGER_UI_HTML = """<!DOCTYPE html>
+def _operation_detail_html(method: str, path: str, operation: dict) -> str:
+    summary = html.escape(str(operation.get("summary") or f"{method.upper()} {path}"))
+    description = html.escape(str(operation.get("description") or ""))
+    tags = ", ".join(operation.get("tags") or [])
+    tag = html.escape(tags or "other")
+    op_id = html.escape(f"{method}-{path}".replace("/", "-").replace("{", "").replace("}", ""))
+
+    parts = [
+        f'<section class="operation" id="{op_id}">',
+        '<div class="operation-heading">',
+        f'<span class="method method-{html.escape(method)}">{html.escape(method.upper())}</span>',
+        f'<code>{html.escape(path)}</code>',
+        f'<span class="tag">{tag}</span>',
+        '</div>',
+        f"<h3>{summary}</h3>",
+    ]
+    if description:
+        parts.append(f"<p>{description}</p>")
+
+    for title, key in (("Path / Query 参数", "parameters"), ("请求体", "requestBody"), ("响应", "responses")):
+        value = operation.get(key)
+        if not value:
+            continue
+        rendered = html.escape(_pretty(value))
+        parts.extend([f"<h4>{title}</h4>", f"<pre>{rendered}</pre>"])
+
+    parts.append("</section>")
+    return "\n".join(parts)
+
+
+def _pretty(value: object) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _docs_body_html(spec: dict) -> str:
+    operation_count = sum(len(methods) for methods in spec["paths"].values())
+    nav = []
+    sections = []
+    for path, methods in spec["paths"].items():
+        for method, operation in methods.items():
+            op_id = html.escape(f"{method}-{path}".replace("/", "-").replace("{", "").replace("}", ""))
+            nav.append(
+                '<a class="nav-item" href="#{op_id}">'
+                '<span class="method method-{method}">{method_label}</span>'
+                '<code>{path}</code>'
+                '</a>'.format(
+                    op_id=op_id,
+                    method=html.escape(method),
+                    method_label=html.escape(method.upper()),
+                    path=html.escape(path),
+                )
+            )
+            sections.append(_operation_detail_html(method, path, operation))
+
+    title = html.escape(spec["info"]["title"])
+    version = html.escape(str(spec["info"]["version"]))
+    description = html.escape(spec["info"].get("description", ""))
+    return f"""
+  <header>
+    <p class="eyebrow">AI Team Backend API</p>
+    <h1>{title}</h1>
+    <p class="description">{description}</p>
+    <div class="meta">
+      <span>Version: <strong>{version}</strong></span>
+      <span>Paths: <strong>{len(spec["paths"])}</strong></span>
+      <span>Operations: <strong>{operation_count}</strong></span>
+      <a href="/api/openapi.json">OpenAPI JSON</a>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <div class="aside-title">接口目录</div>
+      {''.join(nav)}
+    </aside>
+    <div class="content">
+      {''.join(sections)}
+    </div>
+  </main>
+"""
+
+
+_DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>AI Team API Docs</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+  <style>
+    :root {
+      --bg: #f6f3ec;
+      --panel: #fffdf8;
+      --ink: #1f2933;
+      --muted: #64748b;
+      --line: #d8d1c2;
+      --accent: #0f766e;
+      --get: #2563eb;
+      --post: #0f766e;
+      --patch: #b45309;
+      --put: #7c3aed;
+      --delete: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.10), transparent 28rem),
+        linear-gradient(315deg, rgba(180, 83, 9, 0.08), transparent 24rem),
+        var(--bg);
+      font: 14px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      padding: 32px 36px 24px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--accent);
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.08;
+    }
+    h3 { margin: 12px 0 8px; font-size: 18px; }
+    h4 { margin: 16px 0 8px; color: var(--muted); font-size: 13px; }
+    .description {
+      max-width: 980px;
+      margin: 14px 0 0;
+      color: var(--muted);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .meta span, .meta a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(255, 253, 248, .72);
+      color: var(--ink);
+      text-decoration: none;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) 1fr;
+      gap: 24px;
+      padding: 24px 36px 48px;
+    }
+    aside {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 253, 248, .82);
+    }
+    .aside-title {
+      position: sticky;
+      top: 0;
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      font-weight: 700;
+    }
+    .nav-item {
+      display: grid;
+      grid-template-columns: 62px 1fr;
+      gap: 8px;
+      align-items: center;
+      padding: 9px 14px;
+      color: var(--ink);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(216, 209, 194, .55);
+    }
+    .nav-item:hover { background: rgba(15, 118, 110, .08); }
+    code {
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .content {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+    }
+    .operation {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 253, 248, .92);
+      padding: 18px;
+      scroll-margin-top: 20px;
+    }
+    .operation-heading {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .tag {
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+    .method {
+      display: inline-flex;
+      justify-content: center;
+      min-width: 54px;
+      padding: 3px 7px;
+      border-radius: 5px;
+      color: white;
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: .02em;
+    }
+    .method-get { background: var(--get); }
+    .method-post { background: var(--post); }
+    .method-patch { background: var(--patch); }
+    .method-put { background: var(--put); }
+    .method-delete { background: var(--delete); }
+    pre {
+      overflow: auto;
+      max-height: 520px;
+      margin: 0;
+      padding: 14px;
+      border-radius: 7px;
+      background: #17202a;
+      color: #f8fafc;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    @media (max-width: 900px) {
+      header { padding: 24px 18px 18px; }
+      main { grid-template-columns: 1fr; padding: 18px; }
+      aside { position: static; max-height: 360px; }
+    }
+  </style>
 </head>
 <body>
-  <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
-  <script>
-    window.onload = function () {
-      window.ui = SwaggerUIBundle({
-        url: "/api/openapi.json",
-        dom_id: "#swagger-ui",
-        deepLinking: true,
-        docExpansion: "none",
-        defaultModelsExpandDepth: -1,
-      });
-    };
-  </script>
+__API_DOCS_BODY__
 </body>
 </html>
 """
 
 
 def swagger_ui_html() -> str:
-    """Return the Swagger UI page (loads swagger-ui-dist from CDN in browser)."""
-    return _SWAGGER_UI_HTML
+    """Return a self-contained API docs page backed by the OpenAPI spec."""
+    return _DOCS_HTML_TEMPLATE.replace("__API_DOCS_BODY__", _docs_body_html(build_openapi_spec()))
