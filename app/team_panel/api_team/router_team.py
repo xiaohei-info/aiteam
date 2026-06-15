@@ -3155,6 +3155,37 @@ def _create_solution_group_conversation(cur, enterprise_id: str, title: str,
     return conv_id
 
 
+def _reasoning_timeline_envelope(run_id: str, anchor_cursor: int, created_at: str, text: str) -> dict:
+    """One coalesced reasoning bubble for the persisted history timeline.
+
+    The model streams reasoning a few characters per ``message_delta``; emitting
+    one bubble per delta floods the history view. We merge a consecutive run of
+    reasoning deltas into a single bubble, mirroring the live accumulation the
+    frontend does in ``applyTimelineEvent``.
+    """
+    return {
+        "message_id": f"msg_{run_id}_evt_{anchor_cursor}",
+        "cursor": 0,
+        "__sort_cursor": anchor_cursor,
+        "run_id": run_id,
+        "role": "system",
+        "sender_type": "system",
+        "sender_id": "",
+        "status": "completed",
+        "created_at": created_at,
+        "text": "",
+        "quote": None,
+        "attachments": [],
+        "citations": [],
+        "metadata": {},
+        "event_type": "message_delta",
+        "__timeline_item": {
+            "kind": "reasoning",
+            "payload": {"kind": "reasoning", "delta": text},
+        },
+    }
+
+
 def _serialize_private_history(
     cur,
     conversation_id: str,
@@ -3260,14 +3291,25 @@ def _serialize_private_history(
         # Inject process timeline events so the frontend can render execution
         # details in conversation history without duplicating final text deltas.
         run_events = event_repo.list_by_run(run.id, after_cursor=0, limit=200)
+        # Buffer consecutive reasoning deltas so a streamed reasoning span renders
+        # as ONE bubble; any other event (e.g. tool_call) closes the span.
+        reasoning_buf: list[str] = []
+        reasoning_cursor = 0
+        reasoning_ts: str | None = None
         for ev in run_events:
             payload = _load_payload(ev.payload_json)
-            timeline_kind = None
             if ev.event_type == "message_delta" and payload.get("kind") == "reasoning":
-                timeline_kind = "reasoning"
-            elif ev.event_type == "tool_call":
+                if not reasoning_buf:
+                    reasoning_cursor = ev.cursor_no
+                    reasoning_ts = ev.event_ts
+                reasoning_buf.append(str(payload.get("delta") or payload.get("text") or ev.preview_text or ""))
+                continue
+            if reasoning_buf:
+                envelopes.append(_reasoning_timeline_envelope(
+                    run.id, reasoning_cursor, reasoning_ts or assistant_created_at, "".join(reasoning_buf)))
+                reasoning_buf = []
+            if ev.event_type == "tool_call":
                 timeline_kind = "tool_complete" if payload.get("done") is True else "tool_call"
-            if timeline_kind:
                 envelopes.append(
                     {
                         "message_id": f"msg_{run.id}_evt_{ev.cursor_no}",
@@ -3291,6 +3333,9 @@ def _serialize_private_history(
                         },
                     }
                 )
+        if reasoning_buf:
+            envelopes.append(_reasoning_timeline_envelope(
+                run.id, reasoning_cursor, reasoning_ts or assistant_created_at, "".join(reasoning_buf)))
 
     synthetic_by_id = {item["message_id"]: item for item in envelopes}
     for item in envelopes:
@@ -4589,6 +4634,35 @@ def _handle_employee_list(conn, path: str, query: str) -> tuple[int, dict]:
             "limit": 20,
             "effective_role": role,
         }
+    finally:
+        cur.close()
+
+
+def _handle_employee_conversations(conn, path: str, emp_id: str) -> tuple[int, dict]:
+    """List an employee's private conversation history, newest-first.
+
+    Powers the chat header's history picker so a user can re-open an earlier
+    private conversation instead of only seeing the latest one. Mirrors the
+    (ungated) sensitivity of the conversation-detail endpoint.
+    """
+    cur = conn.cursor()
+    try:
+        emp = EmployeeRepo(cur).get_by_id(emp_id)
+        if emp is None or emp.deleted_at:
+            return 404, {"error": "EMPLOYEE_NOT_FOUND", "message": f"Employee {emp_id} not found"}
+        conversations = ConversationRepo(cur).list_private_by_employee(emp.enterprise_id, emp_id)
+        items = [
+            {
+                "conversation_id": conv.id,
+                "title": conv.title or "",
+                "status": conv.status,
+                "last_preview": conv.last_message_preview or "",
+                "last_message_at": conv.last_message_at or conv.created_at or "",
+                "navigation_target": f"/app/chat/{conv.id}",
+            }
+            for conv in conversations
+        ]
+        return 200, {"employee_id": emp_id, "items": items}
     finally:
         cur.close()
 
@@ -5999,6 +6073,14 @@ def handle_team_route(
         elif method == "DELETE" and memory_id_route is not None and "/" not in memory_id_route:
             route_handler = lambda conn, matched_memory_id=memory_id_route: _handle_memory_delete(conn, sub, matched_memory_id)
 
+
+    # ── employees/{id}/conversations (private history list) ──
+    if route_handler is None:
+        emp_convs = _match_prefix(sub, "/employees/")
+        if method == "GET" and emp_convs is not None and emp_convs.endswith("/conversations"):
+            employee_id = emp_convs[:-len("/conversations")]
+            if employee_id and "/" not in employee_id:
+                route_handler = lambda conn, matched_employee_id=employee_id: _handle_employee_conversations(conn, sub, matched_employee_id)
 
     # ── employees/{id} detail ──
     if route_handler is None:

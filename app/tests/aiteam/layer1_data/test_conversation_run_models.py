@@ -613,6 +613,46 @@ def test_conversation_repo_list_by_enterprise(db_conn):
     assert ids == {"c1", "c2"}
 
 
+def test_conversation_repo_list_private_by_employee(db_conn):
+    """Private conversations for one employee, newest-first, excluding group/deleted/other-employee."""
+    from team_panel.repositories.conversation_repo import ConversationRepo
+    repo = ConversationRepo(db_conn.cursor())
+
+    cur = db_conn.cursor()
+    cur.execute("INSERT INTO enterprise (id, slug, name, owner_user_id) VALUES (%s, %s, %s, %s)",
+                ("ent_emp_hist", "ent-emp-hist", "Test", "usr_001"))
+    for emp_id in ("emp_A", "emp_B"):
+        cur.execute(
+            "INSERT INTO employee (id, enterprise_id, profile_name, display_name, role_name, status, created_from) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (emp_id, "ent_emp_hist", emp_id, emp_id, "tester", "active", "manual"),
+        )
+    cur.close()
+
+    # Two private chats for emp_A, one group, one private for emp_B, one soft-deleted.
+    repo.create(Conversation(id="h1", enterprise_id="ent_emp_hist", type="private", status="active",
+                             entry_employee_id="emp_A", created_by="u1"))
+    repo.create(Conversation(id="h2", enterprise_id="ent_emp_hist", type="private", status="archived",
+                             entry_employee_id="emp_A", created_by="u1"))
+    repo.create(Conversation(id="hg", enterprise_id="ent_emp_hist", type="group", status="active",
+                             entry_employee_id="emp_A", created_by="u1"))
+    repo.create(Conversation(id="hb", enterprise_id="ent_emp_hist", type="private", status="active",
+                             entry_employee_id="emp_B", created_by="u1"))
+    repo.create(Conversation(id="hd", enterprise_id="ent_emp_hist", type="private", status="active",
+                             entry_employee_id="emp_A", created_by="u1"))
+
+    # Order h1 < h2 by last_message_at so newest-first puts h2 first.
+    cur = db_conn.cursor()
+    cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s", ("2026-06-10 10:00:00+00", "h1"))
+    cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s", ("2026-06-14 10:00:00+00", "h2"))
+    cur.execute("UPDATE conversation SET deleted_at = now() WHERE id = %s", ("hd",))
+    cur.close()
+
+    results = repo.list_private_by_employee("ent_emp_hist", "emp_A")
+    ids = [c.id for c in results]
+    assert ids == ["h2", "h1"]  # newest-first, group/other-employee/deleted excluded
+
+
 def test_team_run_repo_create_and_get(db_conn):
     from team_panel.repositories.team_run_repo import TeamRunRepo
     repo = TeamRunRepo(db_conn.cursor())

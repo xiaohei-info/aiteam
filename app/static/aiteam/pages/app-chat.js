@@ -887,6 +887,43 @@ window.aiteam = window.aiteam || {};
       });
     }
 
+    var historyBtn = container.querySelector('[data-chat-history]');
+    var historyPanel = container.querySelector('[data-chat-history-panel]');
+    if (historyBtn && historyPanel) {
+      function closeHistory() { historyPanel.hidden = true; }
+      historyBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (!historyPanel.hidden) { closeHistory(); return; }
+        if (!state.employeeId) { setStatus('当前员工信息缺失，无法查看历史会话。'); return; }
+        historyPanel.innerHTML = '<div class="aiteam-chatwin__history-empty">加载中…</div>';
+        historyPanel.hidden = false;
+        ns.api.getEmployeeConversations(state.employeeId).then(function (result) {
+          if (historyPanel.hidden) return;
+          var items = (result && result.data && result.data.items) || [];
+          historyPanel.innerHTML = renderHistoryPanel(items, state.conversationId);
+        }).catch(function () {
+          historyPanel.innerHTML = '<div class="aiteam-chatwin__history-empty">加载历史会话失败</div>';
+        });
+      });
+      historyPanel.addEventListener('click', function (event) {
+        var anchor = event.target.closest ? event.target.closest('[data-history-conv]') : null;
+        if (!anchor) return;
+        event.preventDefault();
+        var href = anchor.getAttribute('href') || '';
+        closeHistory();
+        if (href) switchConversation(container, href);
+      });
+      // Click-outside closes the popover (bound once per container).
+      if (!container.__chatHistoryOutsideBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+        container.__chatHistoryOutsideBound = true;
+        document.addEventListener('click', function (event) {
+          var panel = container.querySelector('[data-chat-history-panel]');
+          var wrap = event.target && event.target.closest ? event.target.closest('[data-chat-history-wrap]') : null;
+          if (panel && !wrap) panel.hidden = true;
+        });
+      }
+    }
+
     if (commandNewBtn) {
       commandNewBtn.addEventListener('click', function () {
         startDraftConversation();
@@ -1210,6 +1247,11 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-chatwin__hstatus" data-chat-status>' + escapeHtml(model.defaultStatus) + '</div></div>' +
       '<div class="aiteam-chatwin__hactions">' +
       commandMenu +
+      (model.summary && model.summary.employee_id ?
+        '<div class="aiteam-chatwin__history" data-chat-history-wrap>' +
+        '<button class="aiteam-chatwin__tool" type="button" data-chat-history title="历史会话">🕘</button>' +
+        '<div class="aiteam-chatwin__history-panel" data-chat-history-panel hidden></div>' +
+        '</div>' : '') +
       (model.summary && model.summary.employee_id ? '<button class="aiteam-chatwin__tool" type="button" data-chat-new-conversation title="新建会话">＋</button>' : '') +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-load-more title="加载更早的历史">⇡</button>' +
       '</div>' +
@@ -1395,6 +1437,28 @@ window.aiteam = window.aiteam || {};
   }
 
   // Push the new URL then swap in place. No-op when the target is already active.
+  // Render the history popover body from a /employees/{id}/conversations payload.
+  // activeConvId highlights the conversation currently open.
+  function renderHistoryPanel(items, activeConvId) {
+    if (!items || !items.length) {
+      return '<div class="aiteam-chatwin__history-empty">暂无历史会话</div>';
+    }
+    return items.map(function (item) {
+      var convId = item.conversation_id || '';
+      var active = convId && String(convId) === String(activeConvId || '') ? ' is-active' : '';
+      var title = item.title || '未命名会话';
+      var preview = item.last_preview || '';
+      var time = formatTime(item.last_message_at);
+      return '<a class="aiteam-chatwin__history-item' + active + '" href="' +
+        escapeHtml(item.navigation_target || ('/app/chat/' + encodeURIComponent(convId))) + '" ' +
+        'data-history-conv="' + escapeHtml(convId) + '">' +
+        '<div class="aiteam-chatwin__history-title">' + escapeHtml(title) + '</div>' +
+        (preview ? '<div class="aiteam-chatwin__history-preview">' + escapeHtml(preview) + '</div>' : '') +
+        '<div class="aiteam-chatwin__history-time">' + escapeHtml(time) + '</div>' +
+        '</a>';
+    }).join('');
+  }
+
   function switchConversation(container, path) {
     var convId = getConversationId(path);
     var currentKey = (container && container.__activeChatKey) || getConversationId(window.location.pathname);
@@ -1490,6 +1554,7 @@ window.aiteam = window.aiteam || {};
   ns.pages.appChat._navigateToChatPath = navigateToChatPath;
   ns.pages.appChat._swapConversationView = swapConversationView;
   ns.pages.appChat._buildChatMainHtml = buildChatMainHtml;
+  ns.pages.appChat._renderHistoryPanel = renderHistoryPanel;
   ns.pages.appChat._buildChatModel = buildChatModel;
   ns.pages.appChat._renderAgentList = renderAgentList;
   ns.pages.appChat._moveAgentToTop = moveAgentToTop;

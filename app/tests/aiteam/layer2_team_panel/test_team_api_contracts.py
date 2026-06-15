@@ -208,6 +208,64 @@ def test_private_history_keeps_assistant_reply_when_terminal_summary_is_empty_bu
     assert reasoning_items, "reasoning timeline item should still be preserved"
 
 
+def test_private_history_coalesces_consecutive_reasoning_deltas_into_one_bubble(
+    uow, clean_tables_with_enterprise
+):
+    """A streamed reasoning span (many few-char deltas) must render as ONE
+    reasoning bubble in the persisted history — otherwise it floods the view."""
+    from team_panel.api_team import router_team
+    from team_panel.domain.entities import RunEvent, TeamRun
+
+    deltas = ["用户", "问", "今天", "天气", "怎么样。", "根据", "我的角色", "设定。"]
+
+    with uow:
+        conversation = uow.conversations().get_by_id("conv_test")
+        assert conversation is not None
+
+        run = TeamRun(
+            id="run_reasoning_flood",
+            enterprise_id="ent_test",
+            conversation_id=conversation.id,
+            trigger_type="private_message",
+            execution_mode="single_agent",
+            status="succeeded",
+            entry_employee_id="emp_test",
+            input_message_json=json.dumps({"message_text": "你好"}, ensure_ascii=False),
+            result_summary_json=json.dumps({"summary": "您好！"}, ensure_ascii=False),
+        )
+        uow.team_runs().create(run)
+
+        for idx, delta in enumerate(deltas, start=1):
+            uow.run_events().create(
+                RunEvent(
+                    id=f"evt_flood_{idx}",
+                    enterprise_id="ent_test",
+                    run_id=run.id,
+                    cursor_no=idx,
+                    event_type="message_delta",
+                    source_type="session",
+                    source_id="src_flood",
+                    employee_id="emp_test",
+                    preview_text=delta,
+                    payload_json=json.dumps({"delta": delta, "kind": "reasoning"}, ensure_ascii=False),
+                )
+            )
+
+        page, _total, _next_cursor, _has_more = router_team._serialize_private_history(
+            uow.cur, conversation.id, cursor=0, limit=50,
+        )
+
+    reasoning_items = [
+        item for item in page
+        if item.get("__timeline_item", {}).get("kind") == "reasoning"
+        and item["run_id"] == "run_reasoning_flood"
+    ]
+    assert len(reasoning_items) == 1, (
+        f"expected ONE coalesced reasoning bubble, got {len(reasoning_items)}"
+    )
+    assert reasoning_items[0]["__timeline_item"]["payload"]["delta"] == "".join(deltas)
+
+
 # ═══════════════════════════════════════════════════════
 # Batch 1: GET endpoints
 # ═══════════════════════════════════════════════════════════════════════════
@@ -945,6 +1003,55 @@ class TestEmployeeDetail:
         assert binding_counts["knowledge_bases"] == 1
         assert binding_counts["connectors"] == 1
         assert binding_counts["loop"] == 1
+
+
+class TestEmployeeConversationHistory:
+    """GET /api/team/employees/{id}/conversations — private history picker source."""
+
+    def test_missing_employee_returns_404(self, seeded_enterprise):
+        status, body = _get("/api/team/employees/nonexistent/conversations")
+        assert status == 404
+        assert body.get("error") == "EMPLOYEE_NOT_FOUND"
+
+    def test_lists_private_conversations_newest_first(self, seeded_enterprise, db_conn):
+        emp_id = seeded_enterprise["employee_id"]
+        ent_id = seeded_enterprise["enterprise_id"]
+        cur = db_conn.cursor()
+        try:
+            # Seed an older + a newer private conversation alongside the fixture's conv_test.
+            cur.execute(
+                "INSERT INTO conversation (id, enterprise_id, type, status, title, entry_employee_id, "
+                "last_message_preview, last_message_at, created_by) "
+                "VALUES (%s, %s, 'private', 'active', %s, %s, %s, %s, 'user_test')",
+                ("conv_old", ent_id, "Older Chat", emp_id, "old preview", "2026-06-10 09:00:00+00"),
+            )
+            cur.execute(
+                "INSERT INTO conversation (id, enterprise_id, type, status, title, entry_employee_id, "
+                "last_message_preview, last_message_at, created_by) "
+                "VALUES (%s, %s, 'private', 'active', %s, %s, %s, %s, 'user_test')",
+                ("conv_new", ent_id, "Newer Chat", emp_id, "new preview", "2026-06-14 09:00:00+00"),
+            )
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        status, body = _get(f"/api/team/employees/{emp_id}/conversations")
+        assert status == 200, f"Expected 200, got {status}: {body}"
+        assert body["employee_id"] == emp_id
+        ids = [item["conversation_id"] for item in body["items"]]
+        # All three private chats are present; newer activity sorts ahead of older.
+        assert {"conv_test", "conv_new", "conv_old"} <= set(ids)
+        assert ids.index("conv_new") < ids.index("conv_old")
+        new_item = next(item for item in body["items"] if item["conversation_id"] == "conv_new")
+        for key in ("conversation_id", "title", "status", "last_preview", "last_message_at", "navigation_target"):
+            assert key in new_item, f"Missing {key}: {new_item}"
+        assert new_item["navigation_target"] == "/app/chat/conv_new"
+
+    def test_excludes_other_employees(self, seeded_enterprise):
+        # emp_planner has no private conversations seeded → empty list, still 200.
+        status, body = _get("/api/team/employees/emp_planner/conversations")
+        assert status == 200
+        assert body["items"] == []
 
 
 class TestGovernanceBillingAndExport:

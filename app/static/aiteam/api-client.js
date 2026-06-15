@@ -202,6 +202,10 @@ window.aiteam = window.aiteam || {};
       return this.get(`/conversations/${encodeURIComponent(conversationId)}`, options);
     },
 
+    getEmployeeConversations(employeeId, options) {
+      return this.get(`/employees/${encodeURIComponent(employeeId)}/conversations`, options);
+    },
+
     getGroupConversation(conversationId, options) {
       return this.get(`/group-conversations/${encodeURIComponent(conversationId)}`, options);
     },

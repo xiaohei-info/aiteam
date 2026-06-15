@@ -46,6 +46,28 @@ class ConversationRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
+    def list_private_by_employee(
+        self, enterprise_id: str, employee_id: str
+    ) -> list[Conversation]:
+        """Private conversation history for one employee, newest-first.
+
+        Excludes group conversations and soft-deleted rows. Ordered by last
+        activity (last_message_at, falling back to created_at) so the most
+        recently used conversation surfaces first.
+        """
+        self._cur.execute(
+            "SELECT id, enterprise_id, type, status, title, entry_employee_id, "
+            "latest_run_id, latest_message_id, last_message_preview, last_message_at, "
+            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at "
+            "FROM conversation "
+            "WHERE enterprise_id = %s AND entry_employee_id = %s "
+            "AND type = 'private' AND deleted_at IS NULL "
+            "ORDER BY COALESCE(last_message_at, created_at) DESC, created_at DESC",
+            (enterprise_id, employee_id),
+        )
+        rows = self._cur.fetchall()
+        return [self._row_to_entity(r) for r in rows]
+
     def update_status(self, conv: Conversation) -> Conversation:
         self._cur.execute(
             "UPDATE conversation SET status=%s, title=%s, "
