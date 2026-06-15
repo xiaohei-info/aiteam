@@ -397,12 +397,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
-  if (passkeyBtn && window.PublicKeyCredential && navigator.credentials) {
-    fetch(scopedUrl('/api/auth/status'), { credentials: 'include' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (s) { if (s && s.passkeys_enabled) passkeyBtn.style.display = 'block'; })
-      .catch(function () {});
-    passkeyBtn.addEventListener('click', doPasskeyLogin);
+  if (passkeyBtn) {
+    passkeyBtn.style.display = 'none';
   }
 
   if (wechatStartBtn) wechatStartBtn.addEventListener('click', runWechatLogin);
@@ -479,7 +475,7 @@ document.addEventListener('DOMContentLoaded', function () {
     probe();
   })();
 
+  showPasswordPanel(true);
   setActiveTab('wechat');
-  setStatus(wechatStatus, 'Preparing WeChat sign-in…', false);
-  runWechatLogin();
+  if (wechatStatus) setStatus(wechatStatus, 'Password sign-in is enabled for this workspace.', false);
 });

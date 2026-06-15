@@ -297,6 +297,8 @@ Promise.resolve()
       wechatStatus: elements['wechat-status'].textContent,
       wechatHref: elements['wechat-qr-link'].href,
       wechatDisplay: elements['wechat-qr-link'].style.display,
+      passwordPanelOpen: elements['password-panel'].classList.contains('is-open'),
+      passwordToggleText: elements['password-login-toggle'].textContent,
       phoneSendDisabled: elements['phone-send-code'].disabled,
       phoneSendText: elements['phone-send-code'].textContent,
       phoneStatus: elements['phone-status'].textContent,
@@ -323,14 +325,14 @@ Promise.resolve()
 def test_login_page_starts_wechat_login_on_load():
     result = _run_login_page_node()
 
-    assert any("/api/auth/login/wechat/init" in call["url"] for call in result["fetchCalls"])
-    assert any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
+    assert not any("/api/auth/login/wechat/init" in call["url"] for call in result["fetchCalls"])
+    assert not any("/api/auth/login/wechat/poll" in call["url"] for call in result["fetchCalls"])
     assert not any("/api/auth/login/wechat/callback" in call["url"] for call in result["fetchCalls"])
-    assert result["wechatHref"].endswith("/mock/wechat-qr?state=wx_test")
-    assert result["wechatDisplay"] == "inline-flex"
-    assert "QR" in result["wechatStatus"] or "二维码" in result["wechatStatus"]
+    assert result["wechatHref"] == ""
+    assert "password sign-in is enabled" in result["wechatStatus"].lower()
     assert result["wechatPanelActive"] is True
     assert result["phonePanelActive"] is False
+    assert result["passwordPanelOpen"] is True
     assert result["href"] == "http://localhost/login"
 
 
