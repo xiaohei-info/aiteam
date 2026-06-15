@@ -184,6 +184,49 @@ class TestWorkbenchView:
         ordered_ids = [item.employee_id for item in view.employees]
         assert ordered_ids == [emp_c, emp_a, emp_b]
 
+    def test_workbench_employee_resolves_to_newest_private_conversation(self, db_conn):
+        """When 新建会话 gives an employee multiple private conversations, the
+        left-list agent must point at the NEWEST one — otherwise the freshly
+        created conversation is unreachable and refresh lands on the old chat."""
+        ent_id = _eid("ent")
+        _seed_enterprise(db_conn, ent_id)
+
+        emp_id = _eid("emp")
+        old_conv = _eid("convOld")
+        new_conv = _eid("convNew")
+        with UnitOfWork(db_conn) as uow:
+            uow.employees().create(Employee(
+                id=emp_id, enterprise_id=ent_id,
+                profile_name=f"p-{emp_id[:8]}", display_name="Emp",
+                status=EmployeeStatus.ACTIVE,
+            ))
+            for conv_id in (old_conv, new_conv):
+                uow.conversations().create(Conversation(
+                    id=conv_id, enterprise_id=ent_id, type="private", status="active",
+                    title="Chat", entry_employee_id=emp_id, created_by="user_1",
+                ))
+
+        # old_conv interacted yesterday, new_conv just now.
+        cur = db_conn.cursor()
+        try:
+            cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s",
+                        ("2026-06-14 12:56:44+00", old_conv))
+            cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s",
+                        ("2026-06-15 03:30:22+00", new_conv))
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        with UnitOfWork(db_conn) as uow:
+            from team_panel.application.queries.workbench_view_service import get_workbench_view
+            view = get_workbench_view(uow, ent_id)
+
+        item = next(e for e in view.employees if e.employee_id == emp_id)
+        assert item.conversation_id == new_conv, (
+            "agent list must resolve to the newest private conversation, "
+            f"got {item.conversation_id}"
+        )
+
     def test_workbench_view_includes_navigation_and_task_digest(self, db_conn):
         ent_id = _eid("ent")
         employee_id = _eid("emp")

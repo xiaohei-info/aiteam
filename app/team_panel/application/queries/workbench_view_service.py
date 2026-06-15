@@ -86,11 +86,13 @@ def get_workbench_view(
     ]
     group_items = [item for item in conversation_items if item.conv_type == "group"]
 
-    conversation_by_employee = {
-        conversation.entry_employee_id: conversation
-        for conversation in sorted_conversations
-        if conversation.entry_employee_id and conversation.type == "private"
-    }
+    # sorted_conversations is newest-first; keep the FIRST (newest) private
+    # conversation per employee. A plain dict-comprehension would let the last
+    # (oldest) entry win, so 新建会话 would point the agent at the stale chat.
+    conversation_by_employee: dict[str, Conversation] = {}
+    for conversation in sorted_conversations:
+        if conversation.entry_employee_id and conversation.type == "private":
+            conversation_by_employee.setdefault(conversation.entry_employee_id, conversation)
     employee_items = [
         _build_employee_item(
             employee,
