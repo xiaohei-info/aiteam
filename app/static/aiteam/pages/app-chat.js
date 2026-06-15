@@ -889,8 +889,12 @@ window.aiteam = window.aiteam || {};
 
     var historyBtn = container.querySelector('[data-chat-history]');
     var historyPanel = container.querySelector('[data-chat-history-panel]');
+    var commandMenu = container.querySelector('[data-chat-command-menu]');
     if (historyBtn && historyPanel) {
       function closeHistory() { historyPanel.hidden = true; }
+      function closeCommandMenu() {
+        if (commandMenu && commandMenu.open) commandMenu.open = false;
+      }
       historyBtn.addEventListener('click', function (event) {
         event.stopPropagation();
         if (!historyPanel.hidden) { closeHistory(); return; }
@@ -918,8 +922,11 @@ window.aiteam = window.aiteam || {};
         container.__chatHistoryOutsideBound = true;
         document.addEventListener('click', function (event) {
           var panel = container.querySelector('[data-chat-history-panel]');
+          var menu = container.querySelector('[data-chat-command-menu]');
           var wrap = event.target && event.target.closest ? event.target.closest('[data-chat-history-wrap]') : null;
+          var commandWrap = event.target && event.target.closest ? event.target.closest('[data-chat-command-menu]') : null;
           if (panel && !wrap) panel.hidden = true;
+          if (menu && !commandWrap) menu.open = false;
         });
       }
     }
