@@ -1,9 +1,11 @@
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 
 from tests._pytest_port import BASE
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def get(path):

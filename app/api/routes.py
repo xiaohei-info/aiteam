@@ -2737,7 +2737,7 @@ _LOGIN_LOCALE = {
     "en": {
         "lang": "en",
         "title": "Sign in",
-        "subtitle": "Enter your password to continue",
+        "subtitle": "Secure sign-in for your AI Team workspace",
         "placeholder": "Password",
         "btn": "Sign in",
         "invalid_pw": "Invalid password",
@@ -2921,7 +2921,7 @@ button:hover{background:rgba(47,129,247,.28)}
 </style></head><body>
 <div class="card">
   <div class="logo">{{BOT_NAME_INITIAL}}</div>
-  <h1>{{BOT_NAME}}</h1>
+  <h1>AI Team Console</h1>
   <p class="sub">{{LOGIN_SUBTITLE}}</p>
   <div class="auth-tabs" role="tablist" aria-label="Login methods">
     <button type="button" class="auth-tab is-active" data-auth-tab="wechat">WeChat QR</button>

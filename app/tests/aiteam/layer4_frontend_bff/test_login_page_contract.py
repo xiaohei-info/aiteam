@@ -23,6 +23,15 @@ def test_login_page_shell_mentions_qr_lifecycle_and_agreements():
     assert "Refresh QR code" in source
 
 
+def test_login_page_shell_uses_aiteam_branding_not_hermes():
+    source = (ROOT / "api" / "routes.py").read_text(encoding="utf-8")
+    assert "AI Team Console" in source
+    assert "Secure sign-in for your AI Team workspace" in source
+    assert '<h1>AI Team Console</h1>' in source
+    assert 'Hermes Web UI</h1>' not in source
+    assert 'Hermes Web UI</title>' not in source
+
+
 def _run_login_page_node(
     *,
     phone: str = "",
