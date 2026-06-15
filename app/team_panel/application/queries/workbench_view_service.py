@@ -103,6 +103,12 @@ def get_workbench_view(
         )
         for employee in employees
     ]
+    # Left-list ordering: most recently interacted agent rises to the top.
+    # Agents never chatted with (empty last_active_at) sink to the bottom.
+    employee_items.sort(
+        key=lambda item: (item.last_active_at or "", item.employee_id),
+        reverse=True,
+    )
 
     task_status_digest = _merge_task_digests(task_digest_by_run.values())
     office_digest = {

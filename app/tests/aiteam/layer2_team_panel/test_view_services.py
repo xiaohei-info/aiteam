@@ -138,6 +138,52 @@ class TestWorkbenchView:
         assert view.active_employees == 1  # only the active one
         assert view.active_conversations == 0
 
+    def test_workbench_employees_ordered_by_last_interaction(self, db_conn):
+        """Left-list agents must be ordered by most-recent conversation time, desc."""
+        ent_id = _eid("ent")
+        _seed_enterprise(db_conn, ent_id)
+
+        emp_a = _eid("empA")
+        emp_b = _eid("empB")
+        emp_c = _eid("empC")
+        # Created in order A, B, C — so creation order != desired interaction order.
+        with UnitOfWork(db_conn) as uow:
+            for emp_id, name in ((emp_a, "Emp A"), (emp_b, "Emp B"), (emp_c, "Emp C")):
+                uow.employees().create(Employee(
+                    id=emp_id, enterprise_id=ent_id,
+                    profile_name=f"p-{emp_id[:8]}", display_name=name,
+                    status=EmployeeStatus.ACTIVE,
+                ))
+            # Private conversations linked to each employee.
+            conv_a = _eid("convA")
+            conv_b = _eid("convB")
+            conv_c = _eid("convC")
+            for conv_id, emp_id in ((conv_a, emp_a), (conv_b, emp_b), (conv_c, emp_c)):
+                uow.conversations().create(Conversation(
+                    id=conv_id, enterprise_id=ent_id, type="private", status="active",
+                    title="Chat", entry_employee_id=emp_id, created_by="user_1",
+                ))
+
+        # Set last_message_at so interaction order is C (newest) > A > B (oldest).
+        cur = db_conn.cursor()
+        try:
+            cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s",
+                        ("2026-06-15 10:00:00+00", conv_b))
+            cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s",
+                        ("2026-06-15 11:00:00+00", conv_a))
+            cur.execute("UPDATE conversation SET last_message_at = %s WHERE id = %s",
+                        ("2026-06-15 12:00:00+00", conv_c))
+            db_conn.commit()
+        finally:
+            cur.close()
+
+        with UnitOfWork(db_conn) as uow:
+            from team_panel.application.queries.workbench_view_service import get_workbench_view
+            view = get_workbench_view(uow, ent_id)
+
+        ordered_ids = [item.employee_id for item in view.employees]
+        assert ordered_ids == [emp_c, emp_a, emp_b]
+
     def test_workbench_view_includes_navigation_and_task_digest(self, db_conn):
         ent_id = _eid("ent")
         employee_id = _eid("emp")

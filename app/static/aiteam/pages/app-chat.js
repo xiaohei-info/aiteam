@@ -724,6 +724,9 @@ window.aiteam = window.aiteam || {};
           }
           applyActiveByPath(container, '/app/chat/' + encodeURIComponent(newConvId));
         }
+        // The user just messaged this agent → raise it to the top of the list,
+        // matching the backend last-interaction ordering on the next page load.
+        moveAgentToTop(container, state.employeeId);
         reloadConversation(0, 100);
         syncRun(result.data && result.data.run_id, state.cursor);
         state.selectedQuoteId = '';
@@ -1327,6 +1330,28 @@ window.aiteam = window.aiteam || {};
     }
   }
 
+  // Lift the agent the user just messaged to the top of its sidebar section, in
+  // place. Mirrors the backend last-interaction ordering without rebuilding the
+  // list, so search text and scroll position survive. The anchor is matched by
+  // data-chat-agent (the employee id), which is stable across the draft→real
+  // conversation transition (the href changes, the employee id does not).
+  function moveAgentToTop(container, employeeId) {
+    if (!container || !employeeId || typeof container.querySelector !== 'function') return;
+    var anchor = container.querySelector('a.aiteam-chat__agent[data-chat-agent="' + employeeId + '"]');
+    if (!anchor || !anchor.parentNode) return;
+    // Walk back to the nearest section header so the agent lands first within its
+    // own group (📌置顶 / 🤖其他智能体), never jumping across sections.
+    var label = null;
+    var prev = anchor.previousElementSibling;
+    while (prev) {
+      if (prev.classList && prev.classList.contains('aiteam-chat__group-label')) { label = prev; break; }
+      prev = prev.previousElementSibling;
+    }
+    var target = label ? label.nextSibling : anchor.parentNode.firstChild;
+    if (target === anchor) return;  // already first in its section
+    anchor.parentNode.insertBefore(anchor, target);
+  }
+
   // Load the conversation/draft/landing for `path` and swap it into the existing
   // shell. Does NOT push history — callers (switch + popstate) own the URL.
   function navigateToChatPath(container, path) {
@@ -1467,6 +1492,7 @@ window.aiteam = window.aiteam || {};
   ns.pages.appChat._buildChatMainHtml = buildChatMainHtml;
   ns.pages.appChat._buildChatModel = buildChatModel;
   ns.pages.appChat._renderAgentList = renderAgentList;
+  ns.pages.appChat._moveAgentToTop = moveAgentToTop;
   ns.pages.appChat._renderLanding = renderLanding;
   ns.pages.appChat._mapWorkbenchToSections = mapWorkbenchToSections;
   ns.pages.appChat._applyTimelineEvent = function (state, event) {
