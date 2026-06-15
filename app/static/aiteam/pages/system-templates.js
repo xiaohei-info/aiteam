@@ -209,14 +209,33 @@ window.aiteam = window.aiteam || {};
     openCreateDrawer(state, active.onSubmit, active.editTemplate || null);
   }
 
+  function tplSkillRows(skillItems, selectedCodes) {
+    var list = Array.isArray(skillItems) ? skillItems : [];
+    var picked = {};
+    (selectedCodes || []).forEach(function (code) { picked[code] = true; });
+    return list.map(function (s) {
+      var code = s.skill_code || s.id || '';
+      var name = s.display_name || s.name || code;
+      var checked = picked[code] ? ' checked' : '';
+      return '<label class="aiteam-drawer__check"><input type="checkbox" data-aiteam-tpl-skill="' + escapeHtml(code) + '"' + checked + '> ' + escapeHtml(name) + ' <span class="aiteam-drawer__binding-meta">' + escapeHtml(code) + '</span></label>';
+    }).join('');
+  }
+
   function openCreateDrawer(state, onSubmit, editTemplate) {
     closeDrawer();
     var edit = editTemplate || null;
     var promptPack = (edit && edit.prompt_pack) || {};
     var modelRef = (edit && edit.default_model_ref) || {};
+    var defaultBinding = (edit && edit.default_binding) || {};
     var scope = (edit && edit.publish_scope) || {};
     var selectedEntIds = scope.mode === 'selected' && Array.isArray(scope.enterprise_ids) ? scope.enterprise_ids : [];
     var selectedModel = modelRef.provider || modelRef.model ? (modelRef.provider || '') + '|' + (modelRef.model || '') : '';
+    var temperature = modelRef.temperature != null ? modelRef.temperature : 0.7;
+    var maxTokens = modelRef.max_tokens != null ? modelRef.max_tokens : 2048;
+    var selectedSkills = Array.isArray(defaultBinding.skills) ? defaultBinding.skills : [];
+    var memConfig = defaultBinding.memory_config || {};
+    var skillCatalog = state.skillCatalog || [];
+    var behaviorRules = promptPack.behavior_rules || '';
 
     var overlay = document.createElement('div');
     overlay.className = 'aiteam-drawer__overlay';
@@ -231,7 +250,9 @@ window.aiteam = window.aiteam || {};
       '<h2 class="aiteam-drawer__title">' + (edit ? '编辑专家' : '创建专家') + '</h2>' +
       '<button type="button" class="aiteam-drawer__close" data-aiteam-template-create-close="1">×</button>' +
       '</div>' +
+      // ── 基础信息 ──
       '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">基础信息</h3>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">模板名称 *</span>' +
       '<input class="aiteam-input" type="text" data-aiteam-tpl-name placeholder="例如：销售专家" value="' + escapeHtml(edit ? (edit.name || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">角色标识 *</span>' +
@@ -239,12 +260,44 @@ window.aiteam = window.aiteam || {};
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">分类</span>' +
       '<input class="aiteam-input" type="text" data-aiteam-tpl-category placeholder="例如：sales" value="' + escapeHtml(edit ? (edit.category_code || edit.category || '') : '') + '"></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">岗位描述</span>' +
-      '<textarea class="aiteam-input" rows="3" data-aiteam-tpl-desc placeholder="一句话描述这个专家擅长什么">' + escapeHtml(promptPack.description || '') + '</textarea></label>' +
-      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">默认模型</span>' +
-      '<select class="aiteam-select" data-aiteam-tpl-model>' + modelOptions(state.models, selectedModel) + '</select></label>' +
+      '<textarea class="aiteam-input" rows="2" data-aiteam-tpl-desc placeholder="一句话描述这个专家擅长什么">' + escapeHtml(promptPack.description || '') + '</textarea></label>' +
       '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">系统提示词</span>' +
       '<textarea class="aiteam-input" rows="4" data-aiteam-tpl-prompt placeholder="专家的系统人设提示词，留空则使用默认">' + escapeHtml(promptPack.system_prompt || '') + '</textarea></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">行为规则（每行一条）</span>' +
+      '<textarea class="aiteam-input" rows="3" data-aiteam-tpl-behavior placeholder="例如：始终使用中文回复&#10;遇到不确定的情况先询问">' + escapeHtml(typeof behaviorRules === 'string' ? behaviorRules : (Array.isArray(behaviorRules) ? behaviorRules.join('\n') : '')) + '</textarea></label>' +
       '</div>' +
+      // ── 模型配置 ──
+      '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">模型配置</h3>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">默认模型</span>' +
+      '<select class="aiteam-select" data-aiteam-tpl-model>' + modelOptions(state.models, selectedModel) + '</select></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">Temperature（' + escapeHtml(String(temperature)) + '）</span>' +
+      '<input class="aiteam-input" type="range" id="aiteam-tpl-temperature" min="0" max="2" step="0.1" value="' + escapeHtml(String(temperature)) + '"></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">Max Tokens</span>' +
+      '<input class="aiteam-input" type="number" id="aiteam-tpl-max-tokens" min="1" max="128000" value="' + escapeHtml(String(maxTokens)) + '"></label>' +
+      '</div>' +
+      // ── 技能 ──
+      '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">默认技能</h3>' +
+      '<p class="aiteam-drawer__desc">勾选后将随模板下发给企业招募的员工。</p>' +
+      (skillCatalog.length ? renderPicker('tpl-skill', tplSkillRows(skillCatalog, selectedSkills), { placeholder: '搜索技能…', empty: '暂无可选技能' }) : '<p class="aiteam-drawer__desc">技能目录加载中…</p>') +
+      '</div>' +
+      // ── 记忆 ──
+      '<div class="aiteam-drawer__section">' +
+      '<h3 class="aiteam-drawer__section-title">默认记忆策略</h3>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">记忆模式</span>' +
+      '<select class="aiteam-input" id="aiteam-tpl-mem-mode">' +
+      '<option value="builtin"' + ((memConfig.mode || 'builtin') === 'builtin' ? ' selected' : '') + '>内置</option>' +
+      '<option value="external"' + ((memConfig.mode || '') === 'external' ? ' selected' : '') + '>外部</option>' +
+      '<option value="disabled"' + ((memConfig.mode || '') === 'disabled' ? ' selected' : '') + '>禁用</option>' +
+      '</select></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">Provider Code</span>' +
+      '<input class="aiteam-input" type="text" id="aiteam-tpl-mem-provider" placeholder="留空使用默认" value="' + escapeHtml(memConfig.provider_code || '') + '"></label>' +
+      '<label class="aiteam-drawer__field aiteam-drawer__field--block"><span class="aiteam-drawer__field-label">保留天数</span>' +
+      '<input class="aiteam-input" type="number" id="aiteam-tpl-mem-retention" min="1" max="365" value="' + escapeHtml(memConfig.retention_days != null ? String(memConfig.retention_days) : '30') + '"></label>' +
+      '<label class="aiteam-drawer__check"><input type="checkbox" id="aiteam-tpl-mem-writeback"' + (memConfig.writeback_enabled !== false ? ' checked' : '') + '> 自动写回</label>' +
+      '</div>' +
+      // ── 发布范围 ──
       '<div class="aiteam-drawer__section">' +
       '<h3 class="aiteam-drawer__section-title">发布范围</h3>' +
       '<label class="aiteam-drawer__check"><input type="radio" name="aiteam-tpl-scope" value="all"' + (selectedEntIds.length ? '' : ' checked') + ' data-aiteam-scope-mode="all"> 全部企业可见</label>' +
@@ -268,6 +321,16 @@ window.aiteam = window.aiteam || {};
     host.appendChild(drawer);
 
     bindPicker(drawer, 'tpl-ent');
+    bindPicker(drawer, 'tpl-skill');
+
+    // Wire temperature slider display
+    var tempSlider = drawer.querySelector('#aiteam-tpl-temperature');
+    if (tempSlider) {
+      tempSlider.addEventListener('input', function () {
+        var label = tempSlider.parentElement.querySelector('.aiteam-drawer__field-label');
+        if (label) label.textContent = 'Temperature（' + tempSlider.value + '）';
+      });
+    }
 
     var scopeRadios = drawer.querySelectorAll('[data-aiteam-scope-mode]');
     var scopeBox = drawer.querySelector('[data-aiteam-scope-enterprises]');
@@ -298,17 +361,41 @@ window.aiteam = window.aiteam || {};
         var category = trimText((drawer.querySelector('[data-aiteam-tpl-category]') || {}).value);
         var desc = trimText((drawer.querySelector('[data-aiteam-tpl-desc]') || {}).value);
         var systemPrompt = trimText((drawer.querySelector('[data-aiteam-tpl-prompt]') || {}).value);
+        var behaviorRaw = trimText((drawer.querySelector('[data-aiteam-tpl-behavior]') || {}).value);
         var modelValue = trimText((drawer.querySelector('[data-aiteam-tpl-model]') || {}).value);
+        var temperatureVal = parseFloat((drawer.querySelector('#aiteam-tpl-temperature') || {}).value) || 0.7;
+        var maxTokensVal = parseInt((drawer.querySelector('#aiteam-tpl-max-tokens') || {}).value, 10) || 2048;
         if (!name) { showError('请填写模板名称'); return; }
         if (!role) { showError('请填写角色标识'); return; }
         var payload = { name: name, role_name: role, category_code: category };
         payload.prompt_pack = { description: desc, system_prompt: systemPrompt };
+        if (behaviorRaw) {
+          payload.prompt_pack.behavior_rules = behaviorRaw.split('\n').map(function (line) { return line.replace(/^\s+|\s+$/g, ''); }).filter(Boolean);
+        }
         if (modelValue) {
           var parts = modelValue.split('|');
-          payload.default_model_ref = { provider: parts[0] || '', model: parts[1] || '' };
+          payload.default_model_ref = { provider: parts[0] || '', model: parts[1] || '', temperature: temperatureVal, max_tokens: maxTokensVal };
         } else {
-          payload.default_model_ref = {};
+          payload.default_model_ref = { temperature: temperatureVal, max_tokens: maxTokensVal };
         }
+        // Collect selected skills
+        var skillChecks = drawer.querySelectorAll('[data-aiteam-tpl-skill]:checked');
+        var skillCodes = [];
+        for (var si = 0; si < skillChecks.length; si++) { skillCodes.push(skillChecks[si].getAttribute('data-aiteam-tpl-skill')); }
+        // Collect memory config
+        var memMode = (drawer.querySelector('#aiteam-tpl-mem-mode') || {}).value || 'builtin';
+        var memProvider = trimText((drawer.querySelector('#aiteam-tpl-mem-provider') || {}).value);
+        var memRetention = parseInt((drawer.querySelector('#aiteam-tpl-mem-retention') || {}).value, 10) || 30;
+        var memWriteback = (drawer.querySelector('#aiteam-tpl-mem-writeback') || {}).checked;
+        payload.default_binding = {
+          skills: skillCodes,
+          memory_config: {
+            mode: memMode,
+            provider_code: memProvider || null,
+            retention_days: memRetention,
+            writeback_enabled: memWriteback,
+          },
+        };
         var selectedMode = drawer.querySelector('[data-aiteam-scope-mode="selected"]');
         if (selectedMode && selectedMode.checked) {
           var checks = drawer.querySelectorAll('[data-aiteam-scope-ent]:checked');
@@ -393,7 +480,7 @@ window.aiteam = window.aiteam || {};
 
       container.innerHTML = '<div class="aiteam-state aiteam-state-loading"><p>加载模板治理数据...</p></div>';
 
-      var state = { items: [], notice: '', enterprises: [], models: [] };
+      var state = { items: [], notice: '', enterprises: [], models: [], skillCatalog: [] };
 
       function rerender(notice) {
         state.notice = notice || '';
@@ -458,6 +545,15 @@ window.aiteam = window.aiteam || {};
           reopenTemplateDrawer(container, state);
         }
       });
+
+      // 拉取技能目录供创建/编辑专家时勾选默认技能（失败不阻断主流程）。
+      if (ns.api && ns.api.getSkillCatalog) {
+        ns.api.getSkillCatalog().then(function (result) {
+          if (result && result.ok && result.data) {
+            state.skillCatalog = Array.isArray(result.data.items) ? result.data.items : [];
+          }
+        });
+      }
 
       // 拉取企业模型目录供创建/编辑专家时选择默认模型（失败不阻断主流程）。
       if (ns.api && ns.api.getLlmModels) {
