@@ -550,6 +550,163 @@ Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).t
     return json.loads(completed.stdout)
 
 
+def _run_group_keyboard_mention_and_submit_flow() -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const pageSource = fs.readFileSync({json.dumps(str(GROUP_PAGE_PATH))}, 'utf8');
+const apiCalls = [];
+const noopNode = () => ({{
+  innerHTML: '',
+  textContent: '',
+  value: '',
+  hidden: false,
+  listeners: {{}},
+  addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+  focus() {{ this.focused = true; }},
+  setSelectionRange(start, end) {{ this.selectionStart = start; this.selectionEnd = end; }},
+}});
+const refs = {{
+  transcript: noopNode(),
+  timeline: noopNode(),
+  taskTree: noopNode(),
+  members: noopNode(),
+  mentionStrip: noopNode(),
+  mentionSuggest: noopNode(),
+  status: noopNode(),
+  input: Object.assign(noopNode(), {{ value: '', selectionStart: 0, selectionEnd: 0 }}),
+  route: Object.assign(noopNode(), {{ value: 'auto' }}),
+  sender: Object.assign(noopNode(), {{ value: '' }}),
+  settingsCard: noopNode(),
+  routeMode: noopNode(),
+  routeDesc: noopNode(),
+  routeTargets: noopNode(),
+  runtimeHandle: noopNode(),
+  mentionState: noopNode(),
+  collabState: noopNode(),
+  recovery: noopNode(),
+}};
+function makeButton(handle, employeeId) {{
+  return {{
+    listeners: {{}},
+    getAttribute(name) {{
+      if (name === 'data-mention') return handle;
+      if (name === 'data-mention-id') return employeeId;
+      return null;
+    }},
+    addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+    click() {{
+      if (this.listeners.click) this.listeners.click.call(this, {{ preventDefault() {{}} }});
+    }},
+  }};
+}}
+const mentionButtons = [
+  makeButton('@张三', 'emp_a'),
+  makeButton('@李四', 'emp_b'),
+];
+const form = {{
+  listeners: {{}},
+  addEventListener(type, handler) {{ this.listeners[type] = handler; }},
+  requestSubmit() {{
+    if (this.listeners.submit) this.listeners.submit({{ preventDefault() {{}} }});
+  }},
+}};
+const container = {{
+  innerHTML: '',
+  querySelector(selector) {{
+    const map = {{
+      '[data-group-transcript]': refs.transcript,
+      '[data-group-timeline]': refs.timeline,
+      '[data-group-task-tree]': refs.taskTree,
+      '[data-group-members]': refs.members,
+      '[data-group-mention-strip]': refs.mentionStrip,
+      '[data-group-mention-suggest]': refs.mentionSuggest,
+      '[data-group-status]': refs.status,
+      '[data-group-input]': refs.input,
+      '[data-group-route]': refs.route,
+      '[data-group-sender]': refs.sender,
+      '[data-group-settings-card]': refs.settingsCard,
+      '[data-group-route-mode]': refs.routeMode,
+      '[data-group-route-desc]': refs.routeDesc,
+      '[data-group-route-targets]': refs.routeTargets,
+      '[data-group-runtime-handle]': refs.runtimeHandle,
+      '[data-group-mention-state]': refs.mentionState,
+      '[data-group-collab-state]': refs.collabState,
+      '[data-group-recovery]': refs.recovery,
+      '[data-group-form]': form,
+    }};
+    return map[selector] || null;
+  }},
+  querySelectorAll(selector) {{
+    if (selector === '[data-mention]') return mentionButtons;
+    if (selector === '[data-mention-suggestion]') return mentionButtons;
+    return [];
+  }},
+}};
+global.window = {{
+  location: {{ pathname: '/app/group/group_ops', href: 'http://example.test/app/group/group_ops' }},
+  localStorage: {{ getItem() {{ return ''; }}, setItem() {{}}, removeItem() {{}} }},
+  aiteam: {{
+    util: {{ escapeHtml(value) {{ return String(value == null ? '' : value); }} }},
+    states: {{ renderLoading() {{}}, renderError() {{}}, handleApiResult() {{}} }},
+    timeline: {{ connect() {{}}, disconnect() {{}}, setCurrentCursor() {{}}, getCurrentCursor() {{ return 0; }} }},
+    api: {{
+      getRunEvents() {{ return Promise.resolve({{ ok: true, data: {{ items: [], next_cursor: 0, latest_event_cursor: 0, run_status: 'idle' }} }}); }},
+      submitGroupMessage(conversationId, body) {{
+        apiCalls.push({{ conversationId, body }});
+        return Promise.resolve({{ ok: true, data: {{ run_id: 'run_1', route_decision: {{ route_mode: 'orchestration', target_employee_ids: ['emp_a', 'emp_b'] }}, runtime_handle: {{ kind: 'kanban_task', task_id: 'task_1' }} }} }});
+      }},
+    }},
+    pages: {{}},
+  }},
+}};
+global.document = {{ baseURI: 'http://example.test/app/group/group_ops' }};
+global.aiteam = global.window.aiteam;
+vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
+aiteam.pages.appGroup.render(container, {{
+  conversation_id: 'group_ops',
+  title: '运营协作组',
+  display_state: 'active',
+  default_route_hint: 'auto',
+  member_count: 2,
+  members: [
+    {{ employee_id: 'emp_a', display_name: '张三', profile_name: 'test-corp-sol-2167e55d75ba-1', role_name: '产品经理' }},
+    {{ employee_id: 'emp_b', display_name: '李四', profile_name: 'test-corp-sol-2167e55d75ba-2', role_name: '工程师' }},
+  ],
+  latest_run: null,
+  timeline: {{ run_id: null, latest_event_cursor: 0 }},
+  latest_route_decision: null,
+  task_tree: {{ items: [] }},
+}});
+Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
+  const renderedHtml = container.innerHTML + refs.mentionStrip.innerHTML;
+  refs.input.value = '@';
+  refs.input.selectionStart = refs.input.selectionEnd = 1;
+  refs.input.listeners.input({{ target: refs.input }});
+  const suggestionHtml = refs.mentionSuggest.innerHTML;
+  mentionButtons[0].click();
+  const afterPickValue = refs.input.value;
+  const selectedStateBeforeSubmit = refs.mentionState.textContent;
+  refs.input.value = afterPickValue + '@李四 你们好';
+  refs.input.selectionStart = refs.input.selectionEnd = refs.input.value.length;
+  form.requestSubmit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  console.log(JSON.stringify({{
+    renderedHtml,
+    suggestionHtml,
+    afterPickValue,
+    selectedStateBeforeSubmit,
+    apiCalls,
+  }}));
+}}).catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    completed = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    return json.loads(completed.stdout)
+
+
 def _run_group_open_settings_flow() -> dict:
     script = f"""
 const fs = require('fs');
@@ -1157,6 +1314,18 @@ def test_group_page_mention_toggle_updates_selected_state() -> None:
     assert "@Alice" in payload["selectedState"]
     assert payload["inputValue"].startswith("@Alice")
     assert payload["deselectedState"] == ""
+
+
+def test_group_page_uses_display_name_mentions_and_valid_member_sender() -> None:
+    payload = _run_group_keyboard_mention_and_submit_flow()
+    assert "@张三" in payload["renderedHtml"]
+    assert "@李四" in payload["renderedHtml"]
+    assert "test-corp-sol-2167e55d75ba" not in payload["renderedHtml"]
+    assert "@张三" in payload["suggestionHtml"]
+    assert payload["afterPickValue"].startswith("@张三 ")
+    assert "单人协作偏好 · @张三" in payload["selectedStateBeforeSubmit"]
+    assert payload["apiCalls"][0]["body"]["sender_id"] == "emp_a"
+    assert payload["apiCalls"][0]["body"]["message"]["text"] == "@张三 @李四 你们好"
 
 
 def test_group_page_open_settings_button_scrolls_to_settings_card() -> None:
