@@ -198,6 +198,8 @@ class EmployeeAdminView:
     role_name: str = ""
     model_provider: str = ""
     model_name: str = ""
+    temperature: float = 0.7
+    max_tokens: int = 2048
     prompt_version: int = 1
     config_version: int = 1
     capabilities_json: str = "{}"

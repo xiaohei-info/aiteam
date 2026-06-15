@@ -825,6 +825,8 @@ class Employee:
     created_from: str = ""                # talent_market|manual|solution_apply|admin_seed
     model_provider: str = ""
     model_name: str = ""
+    temperature: float = 0.7                # §4.5 model block; range 0.0–2.0
+    max_tokens: int = 2048                  # §4.5 model block; response token budget
     prompt_version: int = 1
     config_version: int = 1
     avatar_url: Optional[str] = None

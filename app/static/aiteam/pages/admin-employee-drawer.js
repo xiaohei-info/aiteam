@@ -22,7 +22,12 @@ window.aiteam = window.aiteam || {};
   var _drawer = null;
   var _container = null;
   var _enterpriseSkillInstalls = [];
-  var _skillInstallState = 'idle';
+  var _enterpriseKnowledgeBases = [];
+  var _kbInstallState = 'idle';
+  var _kbNotice = '';
+  var _enterpriseConnectors = [];
+  var _connectorInstallState = 'idle';
+  var _connectorNotice = '';
   var _skillNotice = '';
   var _lastEmployeeId = '';
   var _skillActionLoading = null;
@@ -176,6 +181,10 @@ window.aiteam = window.aiteam || {};
     // profile_config.model is not present in the current backend response.
     var modelProvider = data.model_provider || (profileConfig.model || {}).provider || '未设置';
     var modelName = data.model_name || (profileConfig.model || {}).name || '未设置';
+    var modelTemperature = data.temperature != null ? data.temperature : 0.7;
+    var modelMaxTokens = data.max_tokens != null ? data.max_tokens : 2048;
+    var avatarUrl = data.avatar_url || '';
+    var description = data.description || '';
 
     // prompt_version is a top-level Employee entity field, not inside profile_config.prompt
     var promptVersion = data.prompt_version != null ? String(data.prompt_version) : '—';
@@ -189,6 +198,10 @@ window.aiteam = window.aiteam || {};
       profileName: profileConfig.profile_name || '未配置',
       modelProvider: modelProvider,
       modelName: modelName,
+      modelTemperature: modelTemperature,
+      modelMaxTokens: modelMaxTokens,
+      avatarUrl: avatarUrl,
+      description: description,
       systemPrompt: _stringValue(promptConfig.system_prompt, '未设置'),
       openingMessage: _stringValue(promptConfig.opening_message, '—'),
       promptVersion: promptVersion,
@@ -258,11 +271,12 @@ window.aiteam = window.aiteam || {};
       '</div>';
   }
 
-  function _bindingList(items, emptyMsg) {
+  function _bindingList(items, emptyMsg, removable) {
     if (!items || items.length === 0) {
       return '<p class="aiteam-drawer__desc">' + _escapeHtml(emptyMsg) + '</p>';
     }
     return '<ul class="aiteam-drawer__binding-list">' + items.map(function (item) {
+      var removeBtn = removable && item.id ? '<button type="button" class="aiteam-btn aiteam-btn--secondary" data-remove-id="' + _escapeHtml(item.id) + '" data-remove-type="' + _escapeHtml(removable) + '">移除</button>' : '';
       return '<li class="aiteam-drawer__binding-item">' +
         '<div>' +
         '<span class="aiteam-drawer__binding-name">' + _escapeHtml(item.name || '') + '</span>' +
@@ -270,6 +284,7 @@ window.aiteam = window.aiteam || {};
         (item.accessMode ? '<div class="aiteam-drawer__binding-meta">访问模式: ' + _escapeHtml(item.accessMode) + '</div>' : '') +
         '</div>' +
         (item.status ? '<span class="aiteam-drawer__binding-status">' + _escapeHtml(item.status) + '</span>' : '') +
+        removeBtn +
         '</li>';
     }).join('') + '</ul>';
   }
@@ -442,11 +457,23 @@ window.aiteam = window.aiteam || {};
     if (Object.prototype.hasOwnProperty.call(patch, 'display_name')) {
       _employeeData.displayName = _stringValue(patch.display_name, '未设置');
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'description')) {
+      _employeeData.description = patch.description || '';
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'avatar_url')) {
+      _employeeData.avatarUrl = patch.avatar_url || '';
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'model_provider')) {
       _employeeData.modelProvider = _stringValue(patch.model_provider, '未设置');
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'model_name')) {
       _employeeData.modelName = _stringValue(patch.model_name, '未设置');
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'temperature')) {
+      _employeeData.modelTemperature = patch.temperature != null ? patch.temperature : 0.7;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'max_tokens')) {
+      _employeeData.modelMaxTokens = patch.max_tokens != null ? patch.max_tokens : 2048;
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'prompt_system')) {
       _employeeData.systemPrompt = _stringValue(patch.prompt_system, '未设置');
@@ -545,11 +572,15 @@ window.aiteam = window.aiteam || {};
         if (tabId === 'profile') {
           _saveEmployeePatch('profile', {
             display_name: document.getElementById('aiteam-profile-display-name-input') ? document.getElementById('aiteam-profile-display-name-input').value : '',
+            description: document.getElementById('aiteam-profile-description-input') ? document.getElementById('aiteam-profile-description-input').value : '',
+            avatar_url: document.getElementById('aiteam-profile-avatar-input') ? document.getElementById('aiteam-profile-avatar-input').value : '',
           }, '基础资料已保存');
         } else if (tabId === 'model') {
           _saveEmployeePatch('model', {
             model_provider: document.getElementById('aiteam-model-provider-input') ? document.getElementById('aiteam-model-provider-input').value : '',
             model_name: document.getElementById('aiteam-model-name-input') ? document.getElementById('aiteam-model-name-input').value : '',
+            temperature: document.getElementById('aiteam-model-temperature-input') ? parseFloat(document.getElementById('aiteam-model-temperature-input').value) : 0.7,
+            max_tokens: document.getElementById('aiteam-model-max-tokens-input') ? parseInt(document.getElementById('aiteam-model-max-tokens-input').value, 10) : 2048,
           }, '模型配置已保存');
         } else if (tabId === 'prompt') {
           _saveEmployeePatch('prompt', {
@@ -558,6 +589,13 @@ window.aiteam = window.aiteam || {};
             prompt_behavior_rules_json: document.getElementById('aiteam-prompt-rules-input') ? document.getElementById('aiteam-prompt-rules-input').value : '',
             prompt_opening_message: document.getElementById('aiteam-prompt-opening-input') ? document.getElementById('aiteam-prompt-opening-input').value : '',
           }, '提示词配置已保存');
+        } else if (tabId === 'memory') {
+          _saveEmployeePatch('memory', {
+            memory_mode: document.getElementById('aiteam-memory-mode-input') ? document.getElementById('aiteam-memory-mode-input').value : 'builtin',
+            memory_provider_code: document.getElementById('aiteam-memory-provider-input') ? document.getElementById('aiteam-memory-provider-input').value : '',
+            memory_retention_days: document.getElementById('aiteam-memory-retention-input') ? parseInt(document.getElementById('aiteam-memory-retention-input').value, 10) : 30,
+            memory_writeback_enabled: document.getElementById('aiteam-memory-writeback-input') ? document.getElementById('aiteam-memory-writeback-input').value === 'true' : true,
+          }, '记忆策略已保存');
         } else if (tabId === 'loop') {
           var schedule = _collectLoopSchedule();
           _saveEmployeePatch('loop', {
@@ -751,6 +789,14 @@ window.aiteam = window.aiteam || {};
           '<span class="aiteam-drawer__field-label">编辑员工名称</span>' +
           '<input id="aiteam-profile-display-name-input" class="aiteam-input" value="' + _escapeHtml(d.displayName === '未设置' ? '' : d.displayName) + '">' +
           '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">描述</span>' +
+          '<textarea id="aiteam-profile-description-input" class="aiteam-input" rows="3">' + _escapeHtml(d.description || '') + '</textarea>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">头像 URL</span>' +
+          '<input id="aiteam-profile-avatar-input" class="aiteam-input" value="' + _escapeHtml(d.avatarUrl || '') + '" placeholder="输入头像图片地址">' +
+          '</div>' +
           _configActionsMarkup('profile', '保存基础资料') +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">运行安全操作</span>' +
@@ -770,6 +816,8 @@ window.aiteam = window.aiteam || {};
           '<h3 class="aiteam-drawer__section-title">模型配置</h3>' +
           _fieldRow('Provider', d.modelProvider) +
           _fieldRow('模型名称', d.modelName) +
+          _fieldRow('Temperature', String(d.modelTemperature)) +
+          _fieldRow('Max Tokens', String(d.modelMaxTokens)) +
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">从已配置模型选择</span>' +
           '<select id="aiteam-model-picker" class="aiteam-input">' + _modelPickerOptions() + '</select>' +
@@ -781,6 +829,15 @@ window.aiteam = window.aiteam || {};
           '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
           '<span class="aiteam-drawer__field-label">编辑模型名称</span>' +
           '<input id="aiteam-model-name-input" class="aiteam-input" value="' + _escapeHtml(d.modelName === '未设置' ? '' : d.modelName) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">Temperature（0.0 ~ 2.0）</span>' +
+          '<input id="aiteam-model-temperature-input" type="range" min="0" max="2" step="0.1" class="aiteam-input" value="' + _escapeHtml(String(d.modelTemperature)) + '">' +
+          '<span class="aiteam-drawer__field-value">' + _escapeHtml(String(d.modelTemperature)) + '</span>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">Max Tokens（响应最大长度）</span>' +
+          '<input id="aiteam-model-max-tokens-input" type="number" min="1" max="128000" class="aiteam-input" value="' + _escapeHtml(String(d.modelMaxTokens)) + '">' +
           '</div>' +
           _configActionsMarkup('model', '保存模型配置') +
           '</div>';
@@ -835,20 +892,84 @@ window.aiteam = window.aiteam || {};
           '</div>';
       },
       knowledge: function () {
+        var assignedKbIds = _employeeData && _employeeData.knowledgeIds ? _employeeData.knowledgeIds : [];
+        var kbPicker = '';
+        if (_kbInstallState === 'loading') {
+          kbPicker = '<p class="aiteam-drawer__desc">正在加载企业知识库...</p>';
+        } else if (_kbInstallState === 'unavailable') {
+          kbPicker = '<p class="aiteam-drawer__desc">企业知识库暂时不可用，请稍后重试。</p>';
+        } else if (!_enterpriseKnowledgeBases.length) {
+          kbPicker = '<p class="aiteam-drawer__desc">企业暂无知识库；请先在 <a href="/admin/knowledge">知识库管理</a> 创建。</p>';
+        } else {
+          var availableKbs = _enterpriseKnowledgeBases.filter(function (kb) {
+            return assignedKbIds.indexOf(kb.knowledge_base_id) === -1;
+          });
+          if (availableKbs.length) {
+            kbPicker = '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+              '<span class="aiteam-drawer__field-label">添加知识库</span>' +
+              '<select id="aiteam-kb-picker" class="aiteam-input">' +
+              availableKbs.map(function (kb) {
+                return '<option value="' + _escapeHtml(kb.knowledge_base_id) + '">' + _escapeHtml(kb.name || kb.knowledge_base_id) + '</option>';
+              }).join('') +
+              '</select>' +
+              '<button type="button" class="aiteam-btn" data-action="add-kb">绑定</button>' +
+              '</div>';
+          } else {
+            kbPicker = '<p class="aiteam-drawer__desc">所有企业知识库已绑定该员工。</p>';
+          }
+        }
+        var currentBindings = assignedKbIds.map(function (kbId) {
+          var kbMeta = _enterpriseKnowledgeBases.filter(function (kb) { return kb.knowledge_base_id === kbId; })[0] || {};
+          return {
+            name: kbMeta.name || kbId,
+            status: '已绑定',
+            meta: kbMeta.description || '',
+            id: kbId,
+          };
+        });
         return '<div class="aiteam-drawer__section">' +
-          '<h3 class="aiteam-drawer__section-title">已绑定知识库</h3>' +
-          _bindingList(d.knowledge, '暂无已绑定知识库') +
-          '<p class="aiteam-drawer__desc">知识库与员工的绑定关系在「知识库」管理页维护：在 <a href="/admin/knowledge">知识库</a> 中按名称选择知识库并指定授权员工即可，无需在此填写知识库 ID。</p>' +
+          '<h3 class="aiteam-drawer__section-title">知识库绑定</h3>' +
+          (_kbNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_kbNotice) + '</p>' : '') +
+          kbPicker +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">当前绑定知识库</span>' +
+          _bindingList(currentBindings, '暂无已绑定知识库', 'kb') +
+          '</div>' +
           '</div>';
       },
       memory: function () {
+        var mem = d.memory || { mode: 'builtin', providerCode: '未设置', retentionDays: '30', writebackEnabled: '开启' };
         return '<div class="aiteam-drawer__section">' +
-          '<h3 class="aiteam-drawer__section-title">记忆内容</h3>' +
-          '<p class="aiteam-drawer__desc">员工的记忆内容（会写入其 Hermes Profile 的 MEMORY.md）在「记忆管理」中查看与编辑。前往 <a href="/admin/memories">记忆管理</a> 可按员工筛选、新增或撤销记忆条目。</p>' +
-          '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">记忆策略</h3>' +
-          '<p class="aiteam-drawer__desc">以下为系统级存储策略，已采用安全默认值，无需逐个员工手动配置。如需变更存储后端或保留周期，请在企业记忆设置中统一调整。</p>' +
-          _bindingList(d.memoryItems, '暂无记忆配置') +
+          '<p class="aiteam-drawer__desc">配置员工的记忆模式、存储后端及保留策略。</p>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">记忆模式</span>' +
+          '<select id="aiteam-memory-mode-input" class="aiteam-input">' +
+          '<option value="builtin"' + (mem.mode === 'builtin' ? ' selected' : '') + '>内置</option>' +
+          '<option value="external"' + (mem.mode === 'external' ? ' selected' : '') + '>外部</option>' +
+          '<option value="disabled"' + (mem.mode === 'disabled' ? ' selected' : '') + '>禁用</option>' +
+          '</select>' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">Provider Code</span>' +
+          '<input id="aiteam-memory-provider-input" class="aiteam-input" value="' + _escapeHtml(mem.providerCode === '未设置' ? '' : mem.providerCode) + '" placeholder="留空使用默认">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">保留天数</span>' +
+          '<input id="aiteam-memory-retention-input" type="number" class="aiteam-input" value="' + _escapeHtml(mem.retentionDays === '未设置' ? '30' : String(mem.retentionDays)) + '">' +
+          '</div>' +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">自动写回</span>' +
+          '<select id="aiteam-memory-writeback-input" class="aiteam-input">' +
+          '<option value="true"' + (mem.writebackEnabled === '开启' ? ' selected' : '') + '>开启</option>' +
+          '<option value="false"' + (mem.writebackEnabled !== '开启' ? ' selected' : '') + '>关闭</option>' +
+          '</select>' +
+          '</div>' +
+          _configActionsMarkup('memory', '保存记忆策略') +
+          '</div>' +
+          '<div class="aiteam-drawer__section">' +
+          '<h3 class="aiteam-drawer__section-title">记忆内容</h3>' +
+          '<p class="aiteam-drawer__desc">员工的记忆内容在「记忆管理」中查看与编辑。前往 <a href="/admin/memories">记忆管理</a> 可按员工筛选、新增或撤销记忆条目。</p>' +
           '</div>' +
           '<div class="aiteam-drawer__section">' +
           '<h3 class="aiteam-drawer__section-title">使用摘要</h3>' +
@@ -857,10 +978,49 @@ window.aiteam = window.aiteam || {};
           '</div>';
       },
       connectors: function () {
+        var assignedConnIds = _employeeData && _employeeData.connectorNames ? _employeeData.connectorNames : [];
+        var connPicker = '';
+        if (_connectorInstallState === 'loading') {
+          connPicker = '<p class="aiteam-drawer__desc">正在加载企业连接器...</p>';
+        } else if (_connectorInstallState === 'unavailable') {
+          connPicker = '<p class="aiteam-drawer__desc">企业连接器暂时不可用，请稍后重试。</p>';
+        } else if (!_enterpriseConnectors.length) {
+          connPicker = '<p class="aiteam-drawer__desc">企业暂无连接器；请先在 <a href="/admin/connectors">连接器管理</a> 创建。</p>';
+        } else {
+          var availableConns = _enterpriseConnectors.filter(function (c) {
+            return assignedConnIds.indexOf(c.connector_id) === -1;
+          });
+          if (availableConns.length) {
+            connPicker = '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+              '<span class="aiteam-drawer__field-label">添加连接器</span>' +
+              '<select id="aiteam-connector-picker" class="aiteam-input">' +
+              availableConns.map(function (c) {
+                return '<option value="' + _escapeHtml(c.connector_id) + '">' + _escapeHtml(c.name || c.connector_id) + '</option>';
+              }).join('') +
+              '</select>' +
+              '<button type="button" class="aiteam-btn" data-action="add-connector">绑定</button>' +
+              '</div>';
+          } else {
+            connPicker = '<p class="aiteam-drawer__desc">所有企业连接器已绑定该员工。</p>';
+          }
+        }
+        var currentBindings = assignedConnIds.map(function (cid) {
+          var connMeta = _enterpriseConnectors.filter(function (c) { return c.connector_id === cid; })[0] || {};
+          return {
+            name: connMeta.name || cid,
+            status: '已绑定',
+            meta: connMeta.provider_code || '',
+            id: cid,
+          };
+        });
         return '<div class="aiteam-drawer__section">' +
-          '<h3 class="aiteam-drawer__section-title">已绑定连接器</h3>' +
-          _bindingList(d.connectors, '暂无已绑定连接器') +
-          '<p class="aiteam-drawer__desc">连接器与员工的授权关系在「连接器」管理页维护：在 <a href="/admin/connectors">连接器</a> 中选择连接器并勾选要授权的员工即可，无需在此填写连接器 ID。</p>' +
+          '<h3 class="aiteam-drawer__section-title">连接器绑定</h3>' +
+          (_connectorNotice ? '<p class="aiteam-drawer__desc">' + _escapeHtml(_connectorNotice) + '</p>' : '') +
+          connPicker +
+          '<div class="aiteam-drawer__field aiteam-drawer__field--block">' +
+          '<span class="aiteam-drawer__field-label">当前绑定连接器</span>' +
+          _bindingList(currentBindings, '暂无已绑定连接器', 'connector') +
+          '</div>' +
           '</div>';
       },
       loop: function () {
@@ -952,6 +1112,16 @@ window.aiteam = window.aiteam || {};
     }
     if (_activeTab === 'model') {
       _wireModelPicker();
+      _wireTemperatureSlider();
+    }
+    if (_activeTab === 'knowledge') {
+      _wireKbButtons();
+    }
+    if (_activeTab === 'memory') {
+      _wireMemoryConfigButtons();
+    }
+    if (_activeTab === 'connectors') {
+      _wireConnectorButtons();
     }
     if (_activeTab === 'loop') {
       _wireLoopScheduler();
@@ -971,6 +1141,177 @@ window.aiteam = window.aiteam || {};
       if (provInput) provInput.value = parts[0] || '';
       if (nameInput) nameInput.value = parts[1] || '';
     });
+  }
+
+  function _wireTemperatureSlider() {
+    var slider = document.getElementById('aiteam-model-temperature-input');
+    if (!slider) return;
+    slider.addEventListener('input', function () {
+      var label = _drawer.querySelector('.aiteam-drawer__field-value');
+      if (label) label.textContent = slider.value;
+    });
+  }
+
+  function _loadEnterpriseKnowledgeBases() {
+    if (!ns.api || !ns.api.getKnowledgeBases) {
+      _kbInstallState = 'unavailable';
+      _renderTabContent();
+      return;
+    }
+    _kbInstallState = 'loading';
+    ns.api.getKnowledgeBases().then(function (result) {
+      if (!result.ok) {
+        _enterpriseKnowledgeBases = [];
+        _kbInstallState = result.status === 501 ? 'unavailable' : 'error';
+        if (result.status !== 501) {
+          _kbNotice = '企业知识库加载失败：' + _apiErrorMsg(result);
+        }
+        _renderTabContent();
+        return;
+      }
+      var data = result.data || {};
+      _enterpriseKnowledgeBases = Array.isArray(data.knowledge_bases) ? data.knowledge_bases : [];
+      _kbInstallState = 'ready';
+      _renderTabContent();
+    });
+  }
+
+  function _loadEnterpriseConnectors() {
+    if (!ns.api || !ns.api.getConnectors) {
+      _connectorInstallState = 'unavailable';
+      _renderTabContent();
+      return;
+    }
+    _connectorInstallState = 'loading';
+    ns.api.getConnectors().then(function (result) {
+      if (!result.ok) {
+        _enterpriseConnectors = [];
+        _connectorInstallState = result.status === 501 ? 'unavailable' : 'error';
+        if (result.status !== 501) {
+          _connectorNotice = '企业连接器加载失败：' + _apiErrorMsg(result);
+        }
+        _renderTabContent();
+        return;
+      }
+      var data = result.data || {};
+      _enterpriseConnectors = Array.isArray(data.connectors) ? data.connectors : [];
+      _connectorInstallState = 'ready';
+      _renderTabContent();
+    });
+  }
+
+  function _wireKbButtons() {
+    if (!_drawer || !_drawer.querySelectorAll) return;
+    var addBtn = _drawer.querySelector('[data-action="add-kb"]');
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        var picker = document.getElementById('aiteam-kb-picker');
+        if (!picker) return;
+        var kbId = picker.value;
+        if (!kbId) return;
+        var currentIds = _employeeData.knowledgeIds ? _employeeData.knowledgeIds.slice() : [];
+        if (currentIds.indexOf(kbId) !== -1) return;
+        currentIds.push(kbId);
+        _kbNotice = '';
+        ns.api.updateEmployee(_lastEmployeeId, { knowledge_base_ids: currentIds }).then(function (result) {
+          if (!result.ok) {
+            _kbNotice = '知识库绑定失败：' + _apiErrorMsg(result);
+            _renderTabContent();
+            return;
+          }
+          _employeeData.knowledgeIds = currentIds;
+          _employeeData.knowledge = currentIds.map(function (id) {
+            var kbMeta = _enterpriseKnowledgeBases.filter(function (kb) { return kb.knowledge_base_id === id; })[0] || {};
+            return { name: kbMeta.name || id, status: 'enabled', meta: 'read' };
+          });
+          _kbNotice = '已绑定知识库';
+          _renderTabContent();
+        });
+      });
+    }
+    // Wire remove buttons for existing KB bindings
+    var removeBtns = _drawer.querySelectorAll('[data-remove-type="kb"]');
+    for (var i = 0; i < removeBtns.length; i++) {
+      removeBtns[i].addEventListener('click', function () {
+        var removeId = this.getAttribute('data-remove-id');
+        if (!removeId) return;
+        var currentIds = (_employeeData.knowledgeIds || []).filter(function (id) { return id !== removeId; });
+        _kbNotice = '';
+        ns.api.updateEmployee(_lastEmployeeId, { knowledge_base_ids: currentIds }).then(function (result) {
+          if (!result.ok) {
+            _kbNotice = '移除失败：' + _apiErrorMsg(result);
+            _renderTabContent();
+            return;
+          }
+          _employeeData.knowledgeIds = currentIds;
+          _employeeData.knowledge = currentIds.map(function (id) {
+            var kbMeta = _enterpriseKnowledgeBases.filter(function (kb) { return kb.knowledge_base_id === id; })[0] || {};
+            return { name: kbMeta.name || id, status: 'enabled', meta: 'read' };
+          });
+          _kbNotice = '已移除知识库';
+          _renderTabContent();
+        });
+      });
+    }
+  }
+
+  function _wireConnectorButtons() {
+    if (!_drawer || !_drawer.querySelectorAll) return;
+    var addBtn = _drawer.querySelector('[data-action="add-connector"]');
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        var picker = document.getElementById('aiteam-connector-picker');
+        if (!picker) return;
+        var connId = picker.value;
+        if (!connId) return;
+        var currentIds = _employeeData.connectorNames ? _employeeData.connectorNames.slice() : [];
+        if (currentIds.indexOf(connId) !== -1) return;
+        currentIds.push(connId);
+        _connectorNotice = '';
+        ns.api.updateEmployee(_lastEmployeeId, { connector_ids: currentIds }).then(function (result) {
+          if (!result.ok) {
+            _connectorNotice = '连接器绑定失败：' + _apiErrorMsg(result);
+            _renderTabContent();
+            return;
+          }
+          _employeeData.connectorNames = currentIds;
+          _employeeData.connectors = currentIds.map(function (id) {
+            var connMeta = _enterpriseConnectors.filter(function (c) { return c.connector_id === id; })[0] || {};
+            return { name: connMeta.name || id, status: 'enabled', meta: connMeta.provider_code || '', accessMode: 'invoke' };
+          });
+          _connectorNotice = '已绑定连接器';
+          _renderTabContent();
+        });
+      });
+    }
+    // Wire remove buttons for existing connector bindings
+    var removeBtns = _drawer.querySelectorAll('[data-remove-type="connector"]');
+    for (var i = 0; i < removeBtns.length; i++) {
+      removeBtns[i].addEventListener('click', function () {
+        var removeId = this.getAttribute('data-remove-id');
+        if (!removeId) return;
+        var currentIds = (_employeeData.connectorNames || []).filter(function (id) { return id !== removeId; });
+        _connectorNotice = '';
+        ns.api.updateEmployee(_lastEmployeeId, { connector_ids: currentIds }).then(function (result) {
+          if (!result.ok) {
+            _connectorNotice = '移除失败：' + _apiErrorMsg(result);
+            _renderTabContent();
+            return;
+          }
+          _employeeData.connectorNames = currentIds;
+          _employeeData.connectors = currentIds.map(function (id) {
+            var connMeta = _enterpriseConnectors.filter(function (c) { return c.connector_id === id; })[0] || {};
+            return { name: connMeta.name || id, status: 'enabled', meta: connMeta.provider_code || '', accessMode: 'invoke' };
+          });
+          _connectorNotice = '已移除连接器';
+          _renderTabContent();
+        });
+      });
+    }
+  }
+
+  function _wireMemoryConfigButtons() {
+    // Memory config save is handled by _wireConfigButtons via 'memory' tabId.
   }
 
   function _switchTab(tabId) {
@@ -1088,6 +1429,12 @@ window.aiteam = window.aiteam || {};
     _skillInstallState = 'idle';
     _skillNotice = '';
     _skillActionLoading = null;
+    _enterpriseKnowledgeBases = [];
+    _kbInstallState = 'idle';
+    _kbNotice = '';
+    _enterpriseConnectors = [];
+    _connectorInstallState = 'idle';
+    _connectorNotice = '';
     _statusNotice = '';
     _statusActionLoading = '';
     _configNoticeByTab = {};
@@ -1118,6 +1465,8 @@ window.aiteam = window.aiteam || {};
       _suppressHistorySync = false;
       _renderTabContent();
       _loadEnterpriseSkillInstalls();
+      _loadEnterpriseKnowledgeBases();
+      _loadEnterpriseConnectors();
       _loadLlmModels();
     });
   }

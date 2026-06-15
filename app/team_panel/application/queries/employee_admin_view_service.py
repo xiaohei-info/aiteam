@@ -168,6 +168,8 @@ def get_employee_admin_view(
         role_name=emp.role_name,
         model_provider=emp.model_provider,
         model_name=emp.model_name,
+        temperature=emp.temperature,
+        max_tokens=emp.max_tokens,
         prompt_version=emp.prompt_version or 1,
         config_version=emp.config_version or 1,
         capabilities_json=emp.capabilities_json,

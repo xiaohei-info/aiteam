@@ -180,11 +180,13 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-modal__overlay" data-role="create-employee-modal" hidden>' +
       '<form class="aiteam-modal aiteam-employee-create" data-role="create-employee-form">' +
       '<h3 class="aiteam-modal__title">新建数字员工</h3>' +
-      '<p class="aiteam-modal__sub">填写基础信息，并可直接选择模型、填写系统提示词。创建后仍可在员工详情中继续配置技能、知识与连接器。</p>' +
+      '<p class="aiteam-modal__sub">填写基础信息，并可直接选择模型、填写系统提示词和描述。创建后仍可在员工详情中继续配置技能、知识与连接器。</p>' +
       '<label class="aiteam-field"><span>员工名称（必填）</span>' +
       '<input class="aiteam-input" name="display_name" placeholder="例如：产品分析助理" required /></label>' +
       '<label class="aiteam-field"><span>角色 / 岗位（可选）</span>' +
       '<input class="aiteam-input" name="role_name" placeholder="例如：产品顾问" /></label>' +
+      '<label class="aiteam-field"><span>描述（可选）</span>' +
+      '<textarea class="aiteam-input aiteam-textarea" name="description" rows="3" placeholder="简要描述员工职责与特长"></textarea></label>' +
       '<label class="aiteam-field"><span>模型（可选）</span>' +
       '<select class="aiteam-select" data-role="create-employee-model">' + _modelOptions(_llmModels) + '</select></label>' +
       '<label class="aiteam-field"><span>系统提示词（可选）</span>' +
@@ -241,6 +243,8 @@ window.aiteam = window.aiteam || {};
           display_name: displayName,
           role_name: String((form.role_name && form.role_name.value) || '').trim(),
         };
+        var description = String((form.description && form.description.value) || '').trim();
+        if (description) payload.description = description;
         var systemPrompt = String((form.system_prompt && form.system_prompt.value) || '').trim();
         if (systemPrompt) payload.system_prompt = systemPrompt;
         var modelValue = String((modelSelect && modelSelect.value) || '').trim();
