@@ -25,11 +25,14 @@ def test_login_page_shell_mentions_qr_lifecycle_and_agreements():
 
 def test_login_page_shell_uses_aiteam_branding_not_hermes():
     source = (ROOT / "api" / "routes.py").read_text(encoding="utf-8")
-    assert "AI Team Console" in source
-    assert "Secure sign-in for your AI Team workspace" in source
-    assert '<h1>AI Team Console</h1>' in source
+    assert "AIFred Console" in source
+    assert "Secure sign-in for your AIFred workspace" in source
+    assert '<h1>AIFred Console</h1>' in source
     assert 'Hermes Web UI</h1>' not in source
     assert 'Hermes Web UI</title>' not in source
+    login_block = source[source.find('if parsed.path == "/login"'):source.find('if parsed.path == "/api/auth/status"')]
+    assert 'or "Hermes"' not in login_block
+    assert 'or "AIFred"' in login_block
 
 
 def _run_login_page_node(

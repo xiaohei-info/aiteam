@@ -143,12 +143,16 @@ def test_auth_status_reports_passkey_availability_source_contract():
 
 
 def test_login_page_has_default_hidden_passkey_button_and_script_wiring():
-    routes = open("api/routes.py", encoding="utf-8").read()
-    login_js = open("static/login.js", encoding="utf-8").read()
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    routes = (root / "app" / "api" / "routes.py").read_text(encoding="utf-8")
+    login_js = (root / "app" / "static" / "login.js").read_text(encoding="utf-8")
     assert 'id="passkey-login"' in routes
     assert 'style="display:none"' in routes
     assert "api/auth/passkey/options" in login_js
     assert "navigator.credentials.get" in login_js
+    assert "_ = body" in routes
 
 
 def test_passwordless_mode_keeps_auth_enabled_with_passkeys(monkeypatch, tmp_path):

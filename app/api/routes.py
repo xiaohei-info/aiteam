@@ -2737,7 +2737,7 @@ _LOGIN_LOCALE = {
     "en": {
         "lang": "en",
         "title": "Sign in",
-        "subtitle": "Secure sign-in for your AI Team workspace",
+        "subtitle": "Secure sign-in for your AIFred workspace",
         "placeholder": "Password",
         "btn": "Sign in",
         "invalid_pw": "Invalid password",
@@ -2921,7 +2921,7 @@ button:hover{background:rgba(47,129,247,.28)}
 </style></head><body>
 <div class="card">
   <div class="logo">{{BOT_NAME_INITIAL}}</div>
-  <h1>AI Team Console</h1>
+  <h1>AIFred Console</h1>
   <p class="sub">{{LOGIN_SUBTITLE}}</p>
   <div class="auth-tabs" role="tablist" aria-label="Login methods">
     <button type="button" class="auth-tab is-active" data-auth-tab="wechat">WeChat QR</button>
@@ -4128,7 +4128,7 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/login":
         _settings = load_settings()
-        _bn = _html.escape(_settings.get("bot_name") or "Hermes")
+        _bn = _html.escape(_settings.get("bot_name") or "AIFred")
         _lang = _settings.get("language", "en")
         _login_strings = _LOGIN_LOCALE[
             _resolve_login_locale_key(_lang)
@@ -6908,6 +6908,9 @@ def handle_post(handler, parsed) -> bool:
         from api.auth import _passkey_feature_flag_enabled, is_auth_enabled
         from api.passkeys import PasskeyError, authentication_options
 
+        # login.js posts "{}" here; consume the body before responding so the
+        # next keep-alive request does not inherit stray bytes as a bogus method.
+        _ = body
         if not _passkey_feature_flag_enabled():
             return j(handler, {"error": "Passkey support is disabled. Set HERMES_WEBUI_PASSKEY=1 or webui_passkey_enabled: true to enable."}, status=404)
         if not is_auth_enabled():
