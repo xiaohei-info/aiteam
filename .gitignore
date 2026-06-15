@@ -1,6 +1,10 @@
 /hermes-agent/
 /.hermes/
 /.serena/
+/.playwright-mcp/
+/.sisyphus/
+/app/.serena/
+/tmux
 /.plans/
 /.worktrees/
 /docs/复盘/*.html
