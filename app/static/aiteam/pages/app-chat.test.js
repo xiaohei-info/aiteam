@@ -95,6 +95,134 @@ test('chat renders reasoning timeline item from history', function () {
   assert.ok(transcript.innerHTML.includes('需要先查知识库。'), 'expected reasoning text in history');
 });
 
+test('chat does not inject quote-history items into the top-right history-session button', function () {
+  const historyBtn = {
+    innerHTML: '',
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  };
+  const transcript = { innerHTML: '', scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+  const quoteBanner = { innerHTML: '', querySelector() { return null; } };
+  const pendingAttachments = { innerHTML: '', querySelector() { return null; } };
+  const summary = { innerHTML: '' };
+  const status = { textContent: '' };
+  const quoteHistory = { innerHTML: '', addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
+  const input = { value: '', focus() {}, addEventListener() {} };
+  const form = { addEventListener() {} };
+  const attachBtn = { addEventListener() {} };
+  const quoteBtn = { addEventListener() {} };
+  const retryBtn = { addEventListener() {} };
+  const abortBtn = { addEventListener() {} };
+  const loadMoreBtn = { addEventListener() {} };
+  const newConversationBtn = null;
+  const historyPanel = { hidden: true, innerHTML: '', addEventListener() {} };
+  const commandRetryBtn = null;
+  const commandNewBtn = null;
+  const commandStopBtn = null;
+  const container = {
+    innerHTML: '',
+    addEventListener() {},
+    querySelector(sel) {
+      const map = {
+        '[data-chat-history]': historyBtn,
+        '[data-chat-quote-history]': quoteHistory,
+        '[data-chat-transcript]': transcript,
+        '[data-chat-status]': status,
+        '[data-chat-quote-banner]': quoteBanner,
+        '[data-chat-pending-attachments]': pendingAttachments,
+        '[data-chat-input]': input,
+        '[data-chat-summary]': summary,
+        '[data-chat-form]': form,
+        '[data-chat-attach]': attachBtn,
+        '[data-chat-quote]': quoteBtn,
+        '[data-chat-retry]': retryBtn,
+        '[data-chat-abort]': abortBtn,
+        '[data-chat-load-more]': loadMoreBtn,
+        '[data-chat-new-conversation]': newConversationBtn,
+        '[data-chat-history-panel]': historyPanel,
+        '[data-chat-command-retry]': commandRetryBtn,
+        '[data-chat-command-new]': commandNewBtn,
+        '[data-chat-command-stop]': commandStopBtn,
+      };
+      return Object.prototype.hasOwnProperty.call(map, sel) ? map[sel] : null;
+    },
+    querySelectorAll() { return []; },
+  };
+
+  page._renderChat(container, {
+    conversation_id: 'c-history-bind',
+    employee_summary: { employee_id: 'e-1', display_name: '小析' },
+    messages: {
+      items: [
+        { message_id: 'm1', role: 'user', text: '第一条消息', created_at: '2026-06-15T00:00:00Z' },
+      ],
+      next_cursor: 1,
+      has_more: false,
+    },
+    latest_run: null,
+    __agentList: [{ employee_id: 'e-1', display_name: '小析', conversation_id: 'c-history-bind' }],
+  });
+
+  assert.strictEqual(historyBtn.innerHTML, '', 'session history button container must stay empty until the popover is opened');
+  assert.ok(transcript.innerHTML.includes('第一条消息'), 'message should still render in transcript');
+});
+
+test('chat suppresses settled reasoning card when it mostly duplicates the final assistant reply', function () {
+  const assistantText = [
+    '根据搜索结果，以下是最终回答的完整版本。',
+    '第一部分：背景说明与发布日期。',
+    '第二部分：关键特性与上下文窗口。',
+    '第三部分：API 与开源时间安排。',
+    '第四部分：结论与建议。'
+  ].join('');
+  const reasoningText = assistantText + '补充说明：这些信息来自公开搜索结果汇总。';
+  const conversation = {
+    conversation_id: 'c-dedupe',
+    employee_summary: { employee_id: 'e-1', display_name: '小析' },
+    messages: {
+      items: [
+        {
+          message_id: 'm-r1',
+          role: 'system',
+          created_at: '2026-06-15T00:00:00Z',
+          __timeline_item: {
+            kind: 'reasoning',
+            payload: {
+              delta: reasoningText,
+              kind: 'reasoning',
+            },
+          },
+        },
+        {
+          message_id: 'm-a1',
+          role: 'assistant',
+          sender_id: 'e-1',
+          created_at: '2026-06-15T00:00:01Z',
+          text: assistantText,
+          quote: null,
+          attachments: [],
+          citations: [],
+          metadata: {},
+        },
+      ],
+      next_cursor: 2,
+      has_more: false,
+    },
+    latest_run: null,
+  };
+  const transcript = { innerHTML: '', scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+  const container = {
+    innerHTML: '',
+    querySelector(selector) { return selector === '[data-chat-transcript]' ? transcript : null; },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  page._renderChat(container, conversation);
+  assert.ok(transcript.innerHTML.includes(assistantText), 'assistant answer should still render');
+  assert.ok(!transcript.innerHTML.includes('aiteam-chat__reasoning-card'), 'duplicated settled reasoning card should be suppressed');
+});
+
 test('reasoning deltas accumulate into a single bubble instead of splitting per token', function () {
   // Simulate multiple message_delta events with kind=reasoning arriving in sequence.
   // Before the fix each delta created a separate liveItem → multiple "思考过程" cards.

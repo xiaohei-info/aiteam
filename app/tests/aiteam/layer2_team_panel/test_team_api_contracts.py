@@ -266,6 +266,188 @@ def test_private_history_coalesces_consecutive_reasoning_deltas_into_one_bubble(
     assert reasoning_items[0]["__timeline_item"]["payload"]["delta"] == "".join(deltas)
 
 
+def test_private_history_prefers_terminal_payload_summary_over_preview_snippet(
+    uow, clean_tables_with_enterprise
+):
+    from team_panel.api_team import router_team
+    from team_panel.domain.entities import RunEvent, TeamRun
+
+    full_summary = (
+        "根据搜索结果，以下是完整答复。\n\n"
+        "第一部分：背景。\n"
+        "第二部分：结论。\n"
+        "第三部分：建议。"
+    )
+    truncated_preview = full_summary[:24]
+
+    with uow:
+        conversation = uow.conversations().get_by_id("conv_test")
+        assert conversation is not None
+
+        run = TeamRun(
+            id="run_terminal_preview_truncated",
+            enterprise_id="ent_test",
+            conversation_id=conversation.id,
+            trigger_type="private_message",
+            execution_mode="single_agent",
+            status="succeeded",
+            entry_employee_id="emp_test",
+            input_message_json=json.dumps({"message_text": "给我完整答复"}, ensure_ascii=False),
+            result_summary_json=json.dumps({"summary": full_summary}, ensure_ascii=False),
+        )
+        uow.team_runs().create(run)
+
+        uow.run_events().create(
+            RunEvent(
+                id="evt_terminal_preview_truncated",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=1,
+                event_type="run_succeeded",
+                source_type="session",
+                source_id="src_terminal_preview_truncated",
+                employee_id="emp_test",
+                preview_text=truncated_preview,
+                payload_json=json.dumps(
+                    {"summary": full_summary, "success": True, "citations": []},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        page, _total, _next_cursor, _has_more = router_team._serialize_private_history(
+            uow.cur, conversation.id, cursor=0, limit=50,
+        )
+
+    assistant_messages = [
+        item for item in page
+        if item["run_id"] == "run_terminal_preview_truncated" and item["role"] == "assistant"
+    ]
+    assert assistant_messages, "assistant history row should be present"
+    assert assistant_messages[-1]["text"] == full_summary
+
+
+def test_private_history_suppresses_reasoning_item_that_duplicates_final_answer(
+    uow, clean_tables_with_enterprise
+):
+    from team_panel.api_team import router_team
+    from team_panel.domain.entities import ConversationMessage, RunEvent, TeamRun
+
+    final_answer = (
+        "根据搜索结果，以下是完整答复。\n\n"
+        "第一部分：背景。\n"
+        "第二部分：结论。\n"
+        "第三部分：建议。"
+    )
+
+    with uow:
+        conversation = uow.conversations().get_by_id("conv_test")
+        assert conversation is not None
+
+        run = TeamRun(
+            id="run_reasoning_duplicates_final_answer",
+            enterprise_id="ent_test",
+            conversation_id=conversation.id,
+            trigger_type="private_message",
+            execution_mode="single_agent",
+            status="succeeded",
+            entry_employee_id="emp_test",
+            input_message_json=json.dumps({"message_text": "给我完整答复"}, ensure_ascii=False),
+            result_summary_json=json.dumps({"summary": final_answer}, ensure_ascii=False),
+        )
+        uow.team_runs().create(run)
+
+        uow.conversation_messages().create(
+            ConversationMessage(
+                id="msg_user_reasoning_duplicates",
+                conversation_id=conversation.id,
+                run_id=run.id,
+                sender_id="user_test",
+                sender_type="user",
+                message_text="给我完整答复",
+                message_json=json.dumps({"message_text": "给我完整答复"}, ensure_ascii=False),
+            )
+        )
+        uow.conversation_messages().create(
+            ConversationMessage(
+                id="msg_assistant_reasoning_duplicates",
+                conversation_id=conversation.id,
+                run_id=run.id,
+                sender_id="emp_test",
+                sender_type="employee",
+                message_text=final_answer,
+                message_json=json.dumps(
+                    {"message_text": final_answer, "citations": []},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        uow.run_events().create(
+            RunEvent(
+                id="evt_reasoning_duplicates_1",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=1,
+                event_type="message_delta",
+                source_type="session",
+                source_id="src_reasoning_duplicates",
+                employee_id="emp_test",
+                preview_text="先整理一下搜索结果",
+                payload_json=json.dumps(
+                    {"delta": "先整理一下搜索结果", "kind": "reasoning"},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        uow.run_events().create(
+            RunEvent(
+                id="evt_reasoning_duplicates_2",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=2,
+                event_type="message_delta",
+                source_type="session",
+                source_id="src_reasoning_duplicates",
+                employee_id="emp_test",
+                preview_text=final_answer[:200],
+                payload_json=json.dumps(
+                    {"delta": final_answer, "kind": "reasoning"},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        uow.run_events().create(
+            RunEvent(
+                id="evt_reasoning_duplicates_3",
+                enterprise_id="ent_test",
+                run_id=run.id,
+                cursor_no=3,
+                event_type="run_succeeded",
+                source_type="session",
+                source_id="src_reasoning_duplicates",
+                employee_id="emp_test",
+                preview_text=final_answer[:24],
+                payload_json=json.dumps(
+                    {"summary": final_answer, "success": True, "citations": []},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        page, _total, _next_cursor, _has_more = router_team._serialize_private_history(
+            uow.cur, conversation.id, cursor=0, limit=50,
+        )
+
+    reasoning_items = [
+        item for item in page
+        if item["run_id"] == "run_reasoning_duplicates_final_answer"
+        and item.get("__timeline_item", {}).get("kind") == "reasoning"
+    ]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["__timeline_item"]["payload"]["delta"] == "先整理一下搜索结果"
+
+
 # ═══════════════════════════════════════════════════════
 # Batch 1: GET endpoints
 # ═══════════════════════════════════════════════════════════════════════════

@@ -223,6 +223,33 @@ window.aiteam = window.aiteam || {};
       '</div>正在思考中...</div>';
   }
 
+  function normalizeComparableText(text) {
+    return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  }
+
+  function shouldSuppressReasoningTimeline(reasoningText, assistantText) {
+    var reasoning = normalizeComparableText(reasoningText);
+    var assistant = normalizeComparableText(assistantText);
+    if (!reasoning || !assistant) {
+      return false;
+    }
+    if (reasoning === assistant) {
+      return true;
+    }
+    if (reasoning.length < 60 || assistant.length < 60) {
+      return false;
+    }
+    if (reasoning.indexOf(assistant) !== -1) {
+      return true;
+    }
+    var prefix = 0;
+    var max = Math.min(reasoning.length, assistant.length);
+    while (prefix < max && reasoning.charAt(prefix) === assistant.charAt(prefix)) {
+      prefix += 1;
+    }
+    return prefix >= Math.min(assistant.length, Math.floor(reasoning.length * 0.7));
+  }
+
   function renderTimelineItem(item) {
     item = item || {};
     var t = String(item.type || item.kind || '').toLowerCase();
@@ -362,7 +389,7 @@ window.aiteam = window.aiteam || {};
 
   function bindChat(container, state) {
     state.refs = {
-      history: container.querySelector('[data-chat-history]'),
+      history: container.querySelector('[data-chat-quote-history]'),
       transcript: container.querySelector('[data-chat-transcript]'),
       status: container.querySelector('[data-chat-status]'),
       quoteBanner: container.querySelector('[data-chat-quote-banner]'),
@@ -379,13 +406,7 @@ window.aiteam = window.aiteam || {};
 
     function renderHistory() {
       if (!state.refs.history) return;
-      if (!state.messages.length) {
-        state.refs.history.innerHTML = '<div class="aiteam-inline-empty">当前会话还没有历史记录。</div>';
-        return;
-      }
-      state.refs.history.innerHTML = state.messages.map(function (message) {
-        return historyItem(message, state.selectedQuoteId);
-      }).join('');
+      state.refs.history.innerHTML = '';
     }
 
     function renderQuoteBanner() {
@@ -430,7 +451,7 @@ window.aiteam = window.aiteam || {};
       if (!state.messages.length && !state.liveItems.length && !state.streamingAssistantText) {
         html = '<div class="aiteam-inline-empty">开始与这位数字员工对话吧，右侧可查看智能体详情。</div>';
       } else {
-        html += state.messages.map(function (message) {
+        html += state.messages.map(function (message, idx) {
           // Intermediate timeline items (tool_call, etc.) injected by the backend
           // carry a __timeline_item marker — render them as tool cards instead of
           // regular message bubbles so the execution process is visible in history.
@@ -449,9 +470,24 @@ window.aiteam = window.aiteam || {};
             }
             if (ti.kind === 'reasoning') {
               var rp = ti.payload || {};
+              var nextAssistant = null;
+              for (var ni = idx + 1; ni < state.messages.length; ni++) {
+                var candidate = state.messages[ni];
+                if (!candidate || candidate.role !== 'assistant' || candidate.__timeline_item) {
+                  continue;
+                }
+                if (!message.run_id || !candidate.run_id || candidate.run_id === message.run_id) {
+                  nextAssistant = candidate;
+                  break;
+                }
+              }
+              var reasoningText = rp.delta || rp.text || rp.preview || ti.preview || '';
+              if (shouldSuppressReasoningTimeline(reasoningText, nextAssistant && nextAssistant.text)) {
+                return '';
+              }
               return renderTimelineItem({
                 type: 'reasoning',
-                text: rp.delta || rp.text || rp.preview || ti.preview || '',
+                text: reasoningText,
               });
             }
             return renderTimelineNotice(ti.payload || ti);
@@ -668,6 +704,7 @@ window.aiteam = window.aiteam || {};
         result.data.items.forEach(function (event) {
           if (event.event_type === 'tool_call' && event.payload) {
             state.liveItems.push({ kind: 'tool_call', payload: event.payload });
+            renderAll();
           } else {
             applyTimelineEvent(event);
           }
@@ -1265,6 +1302,7 @@ window.aiteam = window.aiteam || {};
       '</div>' +
       '<div class="aiteam-chat-transcript aiteam-chatwin__transcript" data-chat-transcript></div>' +
       '<div class="aiteam-chatwin__composer">' +
+      '<div class="aiteam-chat-history" data-chat-quote-history></div>' +
       '<div data-chat-quote-banner></div>' +
       '<div data-chat-pending-attachments></div>' +
       '<form class="aiteam-chatwin__inputbox" data-chat-form>' +
@@ -1611,4 +1649,5 @@ window.aiteam = window.aiteam || {};
   ns.pages.appChat._renderThinking = renderThinking;
   ns.pages.appChat._renderSummaryPanel = renderSummaryPanel;
   ns.pages.appChat._isScrolledToBottom = isScrolledToBottom;
+  ns.pages.appChat._shouldSuppressReasoningTimeline = shouldSuppressReasoningTimeline;
 }(window.aiteam));

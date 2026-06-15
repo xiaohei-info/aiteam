@@ -3186,6 +3186,31 @@ def _reasoning_timeline_envelope(run_id: str, anchor_cursor: int, created_at: st
     }
 
 
+def _normalize_comparable_text(value: str) -> str:
+    return "".join(str(value or "").split())
+
+
+def _should_suppress_reasoning_timeline(reasoning_text: str, assistant_text: str) -> bool:
+    reasoning = _normalize_comparable_text(reasoning_text)
+    assistant = _normalize_comparable_text(assistant_text)
+    if not reasoning or not assistant:
+        return False
+    if reasoning == assistant:
+        return True
+    return len(reasoning) >= min(len(assistant), 24) and reasoning in assistant
+
+
+def _trim_duplicate_reasoning_suffix(reasoning_text: str, assistant_text: str) -> str:
+    reasoning_raw = str(reasoning_text or "")
+    assistant_raw = str(assistant_text or "").strip()
+    if not reasoning_raw or not assistant_raw:
+        return reasoning_raw
+    candidate = reasoning_raw.rstrip()
+    if candidate.endswith(assistant_raw):
+        return candidate[:-len(assistant_raw)].rstrip()
+    return reasoning_raw
+
+
 def _serialize_private_history(
     cur,
     conversation_id: str,
@@ -3244,15 +3269,16 @@ def _serialize_private_history(
         terminal_event_type = None
         if terminal_event is not None and terminal_event.event_type in {"run_succeeded", "run_failed", "run_cancelled"}:
             assistant_payload = _load_payload(terminal_event.payload_json) or assistant_payload
-            assistant_preview = terminal_event.preview_text or _run_summary_text(run, assistant_payload)
+            assistant_preview = _run_summary_text(run, assistant_payload) or terminal_event.preview_text
             assistant_created_at = terminal_event.event_ts or run.finished_at or run.updated_at or run.created_at or _today_iso()
             terminal_event_type = terminal_event.event_type
         else:
             assistant_preview = _run_summary_text(run, assistant_payload)
             assistant_created_at = run.finished_at or run.updated_at or run.created_at or _today_iso()
 
-        if not assistant_preview and assistant_message is not None:
-            assistant_preview = str(assistant_message.message_text or "").strip()
+        assistant_message_text = str(assistant_message.message_text or "").strip() if assistant_message is not None else ""
+        if assistant_message_text:
+            assistant_preview = assistant_message_text
             if assistant_message.created_at:
                 assistant_created_at = assistant_message.created_at
 
@@ -3299,14 +3325,22 @@ def _serialize_private_history(
         for ev in run_events:
             payload = _load_payload(ev.payload_json)
             if ev.event_type == "message_delta" and payload.get("kind") == "reasoning":
+                delta_text = _trim_duplicate_reasoning_suffix(
+                    str(payload.get("delta") or payload.get("text") or ev.preview_text or ""),
+                    assistant_preview,
+                )
+                if not delta_text:
+                    continue
                 if not reasoning_buf:
                     reasoning_cursor = ev.cursor_no
                     reasoning_ts = ev.event_ts
-                reasoning_buf.append(str(payload.get("delta") or payload.get("text") or ev.preview_text or ""))
+                reasoning_buf.append(delta_text)
                 continue
             if reasoning_buf:
-                envelopes.append(_reasoning_timeline_envelope(
-                    run.id, reasoning_cursor, reasoning_ts or assistant_created_at, "".join(reasoning_buf)))
+                reasoning_text = _trim_duplicate_reasoning_suffix("".join(reasoning_buf), assistant_preview)
+                if reasoning_text and not _should_suppress_reasoning_timeline(reasoning_text, assistant_preview):
+                    envelopes.append(_reasoning_timeline_envelope(
+                        run.id, reasoning_cursor, reasoning_ts or assistant_created_at, reasoning_text))
                 reasoning_buf = []
             if ev.event_type == "tool_call":
                 timeline_kind = "tool_complete" if payload.get("done") is True else "tool_call"
@@ -3334,8 +3368,10 @@ def _serialize_private_history(
                     }
                 )
         if reasoning_buf:
-            envelopes.append(_reasoning_timeline_envelope(
-                run.id, reasoning_cursor, reasoning_ts or assistant_created_at, "".join(reasoning_buf)))
+            reasoning_text = _trim_duplicate_reasoning_suffix("".join(reasoning_buf), assistant_preview)
+            if reasoning_text and not _should_suppress_reasoning_timeline(reasoning_text, assistant_preview):
+                envelopes.append(_reasoning_timeline_envelope(
+                    run.id, reasoning_cursor, reasoning_ts or assistant_created_at, reasoning_text))
 
     synthetic_by_id = {item["message_id"]: item for item in envelopes}
     for item in envelopes:

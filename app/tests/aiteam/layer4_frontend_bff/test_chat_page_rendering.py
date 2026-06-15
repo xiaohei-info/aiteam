@@ -164,6 +164,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
 
   console.log(JSON.stringify({{
     transcriptHtml: transcript.innerHTML,
+    historyHtml: history.innerHTML,
     statusText: status.textContent,
     pendingAttachmentsHtml: pendingAttachments.innerHTML,
     calls,
@@ -277,6 +278,15 @@ def test_chat_page_renders_quote_attachment_and_tool_card_html() -> None:
     assert "brief.pdf" in result["transcriptHtml"]
     assert "预览" in result["transcriptHtml"]
     assert "市场周报" in result["transcriptHtml"]
+
+
+def test_chat_page_does_not_render_message_history_inside_header_history_button() -> None:
+    payload = {
+        "conversation": _conversation_fixture(),
+    }
+    result = _run_chat_module(payload)
+    assert result["historyHtml"] == "", "header history trigger must stay an icon button, not a message list container"
+    assert "aiteam-history-item" not in result["historyHtml"]
 
 
 def test_chat_page_tool_call_card_is_interpretable() -> None:
