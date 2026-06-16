@@ -102,8 +102,10 @@ MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计�
 - **运营端 Operation**：平台运营控制面，负责企业开通、目录治理、负责人凭据、跨企业汇总。
 - **企业端 Manager**：企业配置控制面，负责成员账号/认证、专家/方案配置、成员级授权、企业治理。
 - **用户端 Agent**：本地数据面，负责会话/群聊/run/task/loop 全本地执行，pull 装载已授权专家/方案。
-- **Agent Gateway（用户端内）**：通用运行时接入网关，把运行请求接入不同本地 runtime 并输出统一运行事件；能力适配走中立 `RunSpec` + Driver 按 runtime 翻译（设计借鉴 multica）。
-- **外部能力**：知识=LightRAG、记忆=mem0（OpenMemory 本地优先 MCP）、技能=Hermes skills/SkillHub、连接器；A 类能力统一经 `mcp_config` MCP 注入任意 runtime，内容不出本机（见 v1 概要设计 §6.6/§7.5）。
+- **Agent Gateway（用户端内）**：通用运行时接入网关，把运行请求接入不同本地 runtime 并输出统一运行事件。
+- **外部能力复用**：知识=LightRAG、记忆=mem0、技能=Hermes skills/SkillHub、连接器；统一经 MCP 注入、本地执行、内容不出本机（机制见 v1 概要设计 §6.6/§7.5）。
+
+> 能力适配、事件协议、状态枚举、认证等详细契约一律以 v1 概要设计为准，本文只作仓库结构与边界导航。
 
 核心原则：
 

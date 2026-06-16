@@ -85,9 +85,8 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ### 3.5 Gateway 只做运行时接入
 
 - 不定义企业/员工/权限/账单等业务对象
-- Executor 按协议族复用（ACP / JSON-RPC stdio / JSON stream CLI），Driver 收口 runtime 差异
-- 事件先归一为 `AgentRuntimeEvent`，再映射为 `Business Timeline Event`；前端不消费 runtime-native event
-- **能力适配统一走中立 `RunSpec`**：persona/model/thinking/skill 等由 Driver 按 runtime 翻译（优先 flag/协议、**弃用 `SOUL.md`/`MEMORY.md`/`skills/`/`config.yaml` profile 文件直写**）；知识/记忆/连接器经 `mcp_config` 统一 MCP 注入（知识=LightRAG、记忆=mem0/OpenMemory）。详见 v1 概要设计 §7.5
+- Executor 按协议族复用、Driver 收口 runtime 差异；事件先归一再映射为业务时间线，前端不消费 runtime-native event
+- 能力适配走**中立 `RunSpec`**：B 类（persona/model/skill）由 Driver 按 runtime 翻译、优先 flag/协议、**不直写 profile 文件**；A 类（知识/记忆/连接器）统一经 MCP 注入。机制详见 v1 概要设计 §7.5
 
 ### 3.6 联邦认证
 
@@ -97,7 +96,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 ### 3.7 运行时接入配置（不复用旧 `app/.env`）
 
-runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 路径、默认参数、运行环境由对应 Driver 在用户端自身配置中声明（见 v1 概要设计 §7.3）。**v1 不读取 `app/.env`，不使用 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 等旧 WebUI loopback 环境变量**——该执行链已废弃。Hermes 经 `AcpExecutor` + `HermesAcpDriver` 经 ACP 接入，不走旧运行入口。
+runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明。**v1 不读取 `app/.env`、不使用旧 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 已废弃）。机制详见 v1 概要设计 §7.3/§7.5。
 
 ---
 
@@ -121,11 +120,13 @@ runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 
 
 ## 5. 开发顺序（v1 阶段实施，见 v1 概要设计 §18）
 
-1. **Phase 0 架构冻结** —— 已完成（v1 概要设计定稿）
-2. **Phase 1**：三端 FastAPI 骨架 + 部署绑定入户链 + 联邦认证 + `shared` 底座（auth/service_client/错误模型/trace）+ Gateway skeleton + fake runtime
-3. **Phase 2**：企业端配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载 + `EmployeeExecutionSnapshot` 冻结 + streaming/timeline 主链路打通并对齐基线事件契约（对照冻结 `app/` 契约基线，不调用旧系统）
-4. **Phase 3**：Runtime 接入（`AcpExecutor`+`HermesAcpDriver` / `JsonRpcStdioExecutor`+`CodexJsonRpcDriver` / `JsonStreamCliExecutor`+ClaudeCode/OpenCode/OpenClaw driver）
+1. **Phase 0**：架构冻结（已完成）
+2. **Phase 1**：三端骨架 + 部署绑定入户链 + 联邦认证 + `shared` 底座 + Gateway skeleton
+3. **Phase 2**：企业端配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载与快照冻结 + streaming parity
+4. **Phase 3**：多 runtime 接入（Executor + Driver）
 5. **Phase 4**：运营端 + 治理摘要逐级上报闭环
+
+> 各 Phase 的范围/验收口径见 v1 概要设计 §18，不在此展开。
 
 ---
 
@@ -184,37 +185,16 @@ runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 
 目标态工程结构（单仓，层优先）：
 
 ```
-server/                # 后端（Python / FastAPI）
-├── operation_service/ # 运营端
-├── manager_service/   # 企业端
-├── agent_service/     # 用户端（本地会话与执行）
-├── agent_gateway/     # 用户端运行时接入网关（Executor+Driver）
-├── shared/            # service_client / auth / 错误模型 / db / schema base
-└── run.py             # 统一启动器 --tier=operation|manager|agent
-web/                   # 前端（JS/TS），按端分离
-├── operation/  manager/  agent/  shared/
-deploy/                # docker-compose / Dockerfile / 安装包 / ctl.sh
-app/                   # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成后删除
-./.hermes/hermes-agent/ # Hermes Runtime（外部仓，禁止写入业务逻辑）
+server/   # 后端 FastAPI：operation_service / manager_service / agent_service / agent_gateway / shared / run.py
+web/      # 前端：operation / manager / agent / shared（按端分离）
+deploy/   # docker-compose / Dockerfile / 安装包 / ctl.sh
+app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成后删除
+./.hermes/hermes-agent/  # Hermes Runtime（外部仓，禁止写入业务逻辑）
 ```
 
-北向 SSE（用户端本地）：
-```
-event: timeline
-data: {RunTimelineEvent JSON}
-```
-统一 numeric cursor（禁止对外暴露 `{timestamp}-{sequence}` 内部游标）。
+权限角色：企业侧 `owner | enterprise_admin | finance_admin | member`；平台侧 `system_admin | system_operator`（禁用旧 `admin/manager/viewer`）。
 
-事件双层映射：`runtime raw → Driver → AgentRuntimeEvent → mapper → Business Timeline Event`。
-
-主状态枚举（Conversation）：`draft | active | paused | muted | archived`
-展示态（不写入 DB）：`idle | routing | waiting_reply | streaming | busy | resolved | reconnecting`
-
-权限角色：企业侧 `owner | enterprise_admin | finance_admin | member`；平台侧 `system_admin | system_operator`
-
-Executor（协议族）：`AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`（+ `PlainCliExecutor` 降级）
-首批 Driver：`HermesAcpDriver` / `CodexJsonRpcDriver` / `ClaudeCodeJsonStreamDriver` / `OpenCodeJsonStreamDriver` / `OpenClawJsonStreamDriver`
-能力适配：中立 `RunSpec`（system_prompt/model/thinking_level/mcp_config/resume_session_id/custom_args）→ Driver 按 runtime 翻译；A 类能力（知识=LightRAG、记忆=mem0/OpenMemory、连接器）统一经 `mcp_config` 注入
+**关键契约一律以 v1 概要设计为准，不在此复制**：事件协议/游标（§8）、状态枚举（§8）、Executor/Driver（§7.2/§7.3）、能力适配 RunSpec/MCP（§7.5）、数据所有权（§6）、认证（§9）。
 
 ---
 
