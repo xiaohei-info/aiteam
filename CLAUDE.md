@@ -1,47 +1,60 @@
 > 本文档为 Agent 提供全局指导，确保开发不偏离既定设计。
+> **v1 正式架构地基**：`docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md`（下称「v1 概要设计」）。任何冲突一律以该文档为准。
 > 详细设计见 `docs/` 目录，Agent 应按需深入阅读。
+
+---
+
+## 0. 当前阶段（必读）
+
+AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是**全新重建**：新架构**不与任何旧端点交互**（无反代、无桥接、无双写），**不迁移旧库数据**（新架构全新建库，测试库数据无需迁移）。
+
+- **正式口径**：v1 概要设计已冻结地基级裁决（D1–D15）。新开发一律按 v1 架构落地。
+- **旧实现状态**：`app/` 是冻结的 MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照），**只读不写、不再扩写**；v1 重建稳定后删除。
+- **新代码落点**：`server/`（后端）+ `web/`（前端），按端分目录（见 §9）。当前尚未创建，由 v1 开发逐步建立。
+- **历史文档**：MVP 阶段的业务方案、概要设计与历史详细设计已归档进 `docs/mvp版本/`，仅作历史参照，**不再作为开发口径**。
 
 ---
 
 ## 1. 项目定位
 
-**AI Team 是多 Agent 数字员工团队平台，不是单一聊天工具。**
+**AI Team 是三端独立部署的「控制面 SaaS + 本地数据面」多 Agent 数字员工平台**，不是单一聊天工具，也不是中心化 SaaS。
 
-- 用户通过人才市场/行业方案招募数字员工
-- 员工配置模型、知识、技能、记忆、连接器
-- 通过私聊、群聊、协作编排、Loop 发起任务
-- 提供完整的企业后台治理与经营闭环
+三端（可独立部署的部署单元）：
 
-**MVP 原则**：功能广度优先，深度适中，优先可演示。覆盖 BRD 所有核心模块，但每个模块只做到可配置、可运行、可展示的基础深度。
+- **运营端 Operator（中心化 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、负责人初始凭据、跨企业治理汇总。
+- **企业端 Manager（企业自部署）**：成员账号与认证、专家/方案配置、成员级授权、企业治理汇总。
+- **用户端 Agent（每用户本机自部署）**：工作台、私聊、群聊、Run、Task、Loop——**全部本地执行与落库，会话内容绝不上传**。
 
-**核心演示场景**（MVP 验收口径）：
-1. 私聊 + 企业知识库问答
-2. 群聊多智能体协作（@提及触发编排）
-3. Loop 自主执行（员工级周期任务）
-4. 行业方案一键应用
-5. 后台治理闭环（费用、审计、统计）
+核心承诺：
 
-**Phase 1 优先级**：优先打通私聊闭环与群聊入口联调，再扩展编排与 Loop。
+- **本地优先、内容不出端**：会话/群聊/run/usage 全在用户本机；跨端只流转认证、授权配置、脱敏计量/审计摘要。
+- **跨端单向 pull**：只有 Agent→Manager、Manager→Operator 两条自下而上的 HTTPS pull；用户机器无入站连接，无中心 Edge/Identity/消息总线。
+
+**术语统一**：「员工」与「专家」指同一概念（数字员工 Agent）。运营端目录存放**模板**，企业端从模板**招募**得到**实例**（`employee` 表 + 企业配置 + 成员级授权），用户端 pull 已授权实例本地装载执行。
+
+核心演示场景（保留 MVP 已验证业务闭环）：私聊+知识库、群聊多专家协作、Loop 自主执行、行业方案应用、治理闭环（摘要上报）。
 
 ---
 
 ## 2. 架构边界（核心约束）
 
 ```
-前端交互页面 → Team Panel 北向 API → Agent Gateway → Hermes Runtime
+运营端 Operator ◀──pull── 企业端 Manager ◀──pull── 用户端 Agent
+ (oper 库)                 (mgr 库)                (agent 库, 本地)
+                                                    └─ Agent Gateway ─ Executor ─ Driver ─ runtime
 ```
 
-**五层职责划分：**
+**三端 + 用户端内组件职责划分：**
 
 | 层级 | 职责 | 禁止事项 |
 |------|------|----------|
-| **前端交互** | 页面交互与展示 | 直接调用 Hermes Runtime；消费 Runtime 原始事件名 |
-| **Team Panel** | 业务对象真相、权限、审计、治理 | 执行主循环；把展示态写入持久化主状态 |
-| **Agent Gateway** | 业务对象→Runtime 翻译、事件回流转换 | 定义业务对象；漂移成第二套业务后台 |
-| **Hermes Runtime** | 执行态真相、模型调用、工具执行 | 企业后台、业务对象、治理展示 |
-| **External Capability** | 知识、技能、连接器接入 | 内部协作编排语义 |
+| **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站 |
+| **企业端 Manager Service** | 成员账号·认证 / 专家·方案配置 / 成员级授权 / 企业治理与计量汇总 | 持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向下端入站 |
+| **用户端 Agent Service** | 本地会话/群聊/run/task/loop / 事件流 / pull 装载已授权专家·方案 | 改企业端配置主数据；承担运营治理；直调 runtime CLI；暴露 runtime 原始事件；上传会话明细 |
+| **Agent Gateway（用户端内）** | run 接入、Executor+Driver、事件归一 | 定义业务对象；漂移成第二套业务后台 |
+| **External Capability（用户端本地接入）** | 知识/技能/连接器/MCP 本地执行 | 内部协作编排语义 |
 
-**主链路**：前端 → Team Panel → Gateway → Runtime。禁止前端绕过 Team Panel。
+**主链路**：每端前端 → 本端服务（同 origin）；跨端只走窄 pull。禁止前端跨端直调、禁止跨端/跨库直写、禁止上端向下端入站。
 
 ---
 
@@ -49,71 +62,69 @@
 
 ### 3.1 复用优先，不自造底层
 
-- **Hermes 作为统一执行底座**：不自建任务编排内核
-- **知识库**：复用 LightRAG，只做管理层封装
-- **技能生态**：复用 Hermes skills runtime + SkillHub
-- **AI Relay**：接已有服务
+- **Hermes 为执行底座之一**（经 `AcpExecutor` + `HermesAcpDriver` 接入），不自建任务编排内核
+- **知识库**复用 LightRAG、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 接已有服务
+- **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter
 
-AI Team 只做业务装配层，不重复建设已有成熟能力。
+### 3.2 库-per-tier，单写者
 
-### 3.2 对扩展开放、对修改封闭
+- 三端各自独立库（oper / mgr / agent），按部署位置分布
+- 每张核心表只有一个写端；跨端读取走 pull API 或本地只读投影，**禁止跨端/跨库直写**
 
-- **新能力优先落新模块**：`app/team-panel/`、`app/agent-gateway/`
-- **基座文件只做挂接**：`server.py`、`api/routes.py`、`api/streaming.py` 只允许挂接性改造
-- **禁止复制平行维护**：不复制整份基座文件再平行维护
-- **运行时入口统一走 `app/.env`**：凡涉及 Python 解释器、Hermes CLI、Hermes Home 或 config 的运行入口，必须优先复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，禁止裸用其他 Python/Hermes 环境作为主路径
+### 3.3 本地优先、内容不出端
 
-### 3.3 业务口径与运行口径分离
+- 会话/执行内容不离开用户本机；跨端只流转认证、授权配置、脱敏摘要
+- raw runtime event 仅用户端本地脱敏受控归档（设保留期），不跨端
+- 展示态（streaming / waiting_reply / resolved）不写入持久化主状态；状态冲突以本地 Runtime 执行口径为准
 
-- **Team Panel**：业务/控制面口径（持久化主状态）
-- **Gateway**：运行适配口径（事件转换、句柄管理）
-- **Runtime**：执行态口径（真实执行对象）
+### 3.4 跨端单向 pull
 
-展示态（streaming/waiting_reply/resolved）不写入持久化主状态字段。
+- 只保留 Agent→Manager、Manager→Operator 两条自下而上 pull；上端**绝不**向下端入站/推送
+- 配置变更靠下端周期/触发式轮询感知；上端短暂离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作
 
-**状态冲突裁决规则**：若 Team Panel 业务状态与 Runtime 执行状态不一致，以 Runtime 执行口径为准；Team Panel 通过事件回流更新业务镜像状态，不可伪造 Runtime 已完成。
+### 3.5 Gateway 只做运行时接入
 
-### 3.4 共享口径必须统一
+- 不定义企业/员工/权限/账单等业务对象
+- Executor 按协议族复用（ACP / JSON-RPC stdio / JSON stream CLI），Driver 收口 runtime 差异
+- 事件先归一为 `AgentRuntimeEvent`，再映射为 `Business Timeline Event`；前端不消费 runtime-native event
 
-跨模块契约统一以以下两份文档共同裁决：
+### 3.6 联邦认证
 
-- `docs/技术设计/详细设计文档/2026-05-28-AI Team-共享运行口径定稿版.md`：事件/游标/状态/角色基础口径
-- `docs/技术设计/详细设计文档/2026-06-02-AI Team-Phase2共享契约与架构冻结说明.md`：Phase 2 范围冻结、B03/Loop/payment/provider/auth 收口口径
+- 凭据按端联邦持有：负责人初始凭据归运营端、成员凭据 + 负责人本地密码归企业端、用户端只持本会话 token
+- 验签/鉴权/签发为共享库 `shared/auth`，本地无状态验签，**无中心 Identity、无中心 Edge**
+- 登录方式多样性收敛到 `Authenticator` 一层，单一 token 出口（`user` + `auth_identity` 扩展模型）
 
-其中若旧详细设计与 Phase 2 冻结说明冲突，一律以后者为准。当前共享契约重点包括：
+### 3.7 运行时接入配置（不复用旧 `app/.env`）
 
-- 事件协议：北向统一 `event: timeline` + `RunTimelineEvent`
-- 游标格式：统一 numeric cursor（禁止 `{timestamp}-{sequence}` 对外暴露）
-- 状态机：持久化主状态固定枚举
-- 北向 API：第一批 12 个接口定稿路径/请求/响应
-- 权限角色：统一 `owner/enterprise_admin/finance_admin/member` + `system_admin/system_operator`
+runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 路径、默认参数、运行环境由对应 Driver 在用户端自身配置中声明（见 v1 概要设计 §7.3）。**v1 不读取 `app/.env`，不使用 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 等旧 WebUI loopback 环境变量**——该执行链已废弃。Hermes 经 `AcpExecutor` + `HermesAcpDriver` 经 ACP 接入，不走旧运行入口。
 
 ---
 
-## 4. 命名映射
+## 4. 命名映射（三处对齐）
 
-设计文档中的概念名与代码目录映射：
+后端模块 ↔ 前端目录 ↔ 接口前缀三处同名对齐：
 
-| 设计概念名 | 代码目录 |
-|------------|----------|
-| Agent Service / agent-service | `app/` |
-| Agent Runtime / Hermes Runtime | `./.hermes/hermes-agent/` |
+| 端 | 后端（`server/`） | 前端（`web/`） | 接口前缀 |
+|----|------------------|---------------|----------|
+| 运营端 | `operation_service/` | `operation/` | `/api/operation/*` + `/api/auth/*` |
+| 企业端 | `manager_service/` | `manager/` | `/api/manager/*` + `/api/auth/*` |
+| 用户端 | `agent_service/` | `agent/` | `/api/agent/*` + `/api/auth/*` |
 
-**治理原则**：
-- AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`
-- 必须改 Hermes 时只做最小补丁或可复用增强
+- **运行时接入网关**：`server/agent_gateway/`（随 `agent_service` 部署在用户端）
+- **Hermes Runtime**：`./.hermes/hermes-agent/`（外部独立仓，禁止写入业务逻辑）
+- **历史命名映射**：旧设计文档中的 `Agent Service` ≈ 用户端 `agent_service`；旧 `Team Panel` 已解散按端重分（配置态→Manager、执行态→Agent、开通/治理→Operation）
+
+**弃用旧路径** `/api/team/*`、`/api/system/*`、`/api/enterprise/*`，不留 alias、不做兼容。
 
 ---
 
-## 5. 开发顺序
+## 5. 开发顺序（v1 阶段实施，见 v1 概要设计 §18）
 
-按以下顺序推进：
-
-1. **数据层** → `docs/技术设计/详细设计文档/2026-05-27-AI Team-Team Panel领域模型与数据架构详细设计.md`
-2. **Team Panel 内部服务** → `docs/技术设计/详细设计文档/2026-05-28-AI Team-Team Panel内部服务与聚合视图详细设计.md`
-3. **Gateway 适配** → `docs/技术设计/详细设计文档/2026-05-27-AI Team-Agent Gateway运行时适配与事件流详细设计.md`
-4. **前端/BFF 并行** → `docs/技术设计/详细设计文档/2026-05-27-AI Team-前端页面与接口契约详细设计.md`
-5. **私聊 → 群聊 → 编排 → Loop** → `docs/技术设计/详细设计文档/2026-05-27-AI Team-会话群聊编排Loop核心流程详细设计.md`
+1. **Phase 0 架构冻结** —— 已完成（v1 概要设计定稿）
+2. **Phase 1**：三端 FastAPI 骨架 + 部署绑定入户链 + 联邦认证 + `shared` 底座（auth/service_client/错误模型/trace）+ Gateway skeleton + fake runtime
+3. **Phase 2**：企业端配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载 + `EmployeeExecutionSnapshot` 冻结 + streaming/timeline 主链路打通并对齐基线事件契约（对照桌面端接入 API 基线，不调用旧系统）
+4. **Phase 3**：Runtime 接入（`AcpExecutor`+`HermesAcpDriver` / `JsonRpcStdioExecutor`+`CodexJsonRpcDriver` / `JsonStreamCliExecutor`+ClaudeCode/OpenCode/OpenClaw driver）
+5. **Phase 4**：运营端 + 治理摘要逐级上报闭环
 
 ---
 
@@ -124,23 +135,13 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 | 文档 | 用途 |
 |------|------|
 | `README.md` | 仓库结构与边界 |
-| `docs/技术设计/技术设计.md` | 文档体系导航 |
-| `docs/技术设计/详细设计文档/2026-05-28-AI Team-共享运行口径定稿版.md` | 跨模块事件/游标/状态/角色基础裁决 |
-| `docs/技术设计/详细设计文档/2026-06-02-AI Team-Phase2共享契约与架构冻结说明.md` | Phase 2 范围冻结与共享 contract 收口 |
-| `docs/技术设计/详细设计文档/2026-06-02-AI Team-Auth与登录会话企业入户契约收口.md` | 认证、会话、企业入户统一口径 |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（D1–D15 已冻结） |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-桌面端接入API文档-基线版.md` | 桌面端接入北向 API 基线（已验证的业务契约参照，供 v1 重建对齐语义） |
+| `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
 
-### 按任务选择
+### 历史参照（不再作为开发口径）
 
-| 任务类型 | 指定文档 |
-|----------|----------|
-| 数据库建模、状态枚举 | `Team Panel领域模型与数据架构详细设计.md` |
-| Team Panel API、服务实现 | `Team Panel内部服务与聚合视图详细设计.md` |
-| Gateway 适配、事件流 | `Agent Gateway运行时适配与事件流详细设计.md` |
-| 前端页面、接口契约 | `前端页面与接口契约详细设计.md` |
-| 群聊/编排/Loop 流程 | `会话群聊编排Loop核心流程详细设计.md` |
-| 业务目标、复用判断 | `2026-05-25-AI Team-业务解决方案设计.md` |
-| 系统分层、模块边界 | `2026-05-26-AI Team-技术概要设计.md` |
-| 认证、登录、会话、企业入户 | `2026-06-02-AI Team-Auth与登录会话企业入户契约收口.md` |
+- `docs/mvp版本/`：MVP 阶段业务解决方案设计、技术概要设计与历史详细设计文档
 
 ---
 
@@ -148,13 +149,13 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 
 每次提交前自查：
 
-- ✅ 新能力是否落在正确模块（Team Panel / Gateway）？
+- ✅ 新能力是否落在正确端（Operation / Manager / Agent）与正确目录（`server/` / `web/`）？
 - ✅ 是否复用而非自造底层能力？
-- ✅ 前端是否只调用 Team Panel API？
+- ✅ 前端是否只调本端服务 + 必要窄 pull，未跨端直调、未跨库直写？
+- ✅ 会话/执行内容是否未上传（本地优先）？跨端是否只流转认证/授权/脱敏摘要？
 - ✅ 展示态是否未写入持久化主状态？
-- ✅ 共享口径是否与定稿版一致？
-- ✅ 是否避免直接修改 Hermes 核心文件？
-- ✅ 是否避免复制平行维护基座文件？
+- ✅ 是否未扩写、未调用、未桥接、未读取冻结的 `app/`（含不读 `app/.env`、不用 `HERMES_WEBUI_*`）？
+- ✅ 是否未直接修改 `./.hermes/hermes-agent/` 核心文件？
 
 ---
 
@@ -162,14 +163,17 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 
 **高风险操作需确认**：
 - 修改 `./.hermes/hermes-agent/` 核心文件
-- 修改共享口径（事件协议、游标、状态枚举）
-- 新增北向 API 路径或修改第一批定稿接口
-- 修改数据库主状态枚举
+- 修改共享口径（事件协议、游标、状态枚举、跨端 pull 契约、脱敏摘要 schema、Executor/Driver contract）
+- 新增/修改北向 API 路径契约
+- 修改库-per-tier 表所有权或主状态枚举
 
 **禁止**：
-- 前端直接绑定 Hermes Runtime 内部对象
-- Team Panel 执行主循环或直接调用模型
-- Gateway 定义业务对象或权限规则
+- 前端跨端直调或绑定 runtime 原始对象
+- 跨端/跨库直写；上端向下端入站/推送
+- 会话内容/执行明细上传企业端/运营端
+- Manager 持会话或提交执行；Agent 改企业端配置主数据；Gateway 定义业务对象或权限规则
+- 扩写、平行维护、调用、桥接或读取冻结的 `app/`（含读 `app/.env`、用 `HERMES_WEBUI_*` 旧运行入口）；与旧系统双写；迁移旧库数据
+- 重新引入中心 Edge / Identity / 消息总线
 - 多文件各自维护 `STREAMS` / `CANCEL_FLAGS` 等全局口径
 - 使用 `admin/manager/viewer` 等旧角色枚举
 
@@ -177,25 +181,39 @@ AI Team 只做业务装配层，不重复建设已有成熟能力。
 
 ## 9. 快速参考
 
-```
-app/
-├── team-panel/          # Team Panel 北向业务 API
-├── agent-gateway/       # Gateway 适配层（adapters、event_hydrator）
-└── api/                 # 基座复用（streaming、config、profiles）
+目标态工程结构（单仓，层优先）：
 
-./.hermes/hermes-agent/  # Hermes Runtime（禁止写入业务逻辑）
+```
+server/                # 后端（Python / FastAPI）
+├── operation_service/ # 运营端
+├── manager_service/   # 企业端
+├── agent_service/     # 用户端（本地会话与执行）
+├── agent_gateway/     # 用户端运行时接入网关（Executor+Driver）
+├── shared/            # service_client / auth / 错误模型 / db / schema base
+└── run.py             # 统一启动器 --tier=operation|manager|agent
+web/                   # 前端（JS/TS），按端分离
+├── operation/  manager/  agent/  shared/
+deploy/                # docker-compose / Dockerfile / 安装包 / ctl.sh
+app/                   # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成后删除
+./.hermes/hermes-agent/ # Hermes Runtime（外部仓，禁止写入业务逻辑）
 ```
 
-北向 SSE 格式：
+北向 SSE（用户端本地）：
 ```
 event: timeline
 data: {RunTimelineEvent JSON}
 ```
+统一 numeric cursor（禁止对外暴露 `{timestamp}-{sequence}` 内部游标）。
+
+事件双层映射：`runtime raw → Driver → AgentRuntimeEvent → mapper → Business Timeline Event`。
 
 主状态枚举（Conversation）：`draft | active | paused | muted | archived`
 展示态（不写入 DB）：`idle | routing | waiting_reply | streaming | busy | resolved | reconnecting`
 
-权限角色：`owner | enterprise_admin | finance_admin | member`（企业侧）
+权限角色：企业侧 `owner | enterprise_admin | finance_admin | member`；平台侧 `system_admin | system_operator`
+
+Executor（协议族）：`AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`（+ `PlainCliExecutor` 降级）
+首批 Driver：`HermesAcpDriver` / `CodexJsonRpcDriver` / `ClaudeCodeJsonStreamDriver` / `OpenCodeJsonStreamDriver` / `OpenClawJsonStreamDriver`
 
 ---
 
@@ -307,4 +325,4 @@ Agent 不得仅以"代码写完"作为完成标准，必须提供可验证证据
 
 ---
 
-**如有不确定，优先查阅共享口径定稿版文档。**
+**如有不确定，优先查阅 v1 概要设计（地基级裁决口径）。**

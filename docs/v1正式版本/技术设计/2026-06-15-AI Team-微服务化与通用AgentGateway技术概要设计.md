@@ -30,14 +30,14 @@ supersedes:
 - 数据结构：配置态 / 执行态 / 运营态必须按端拆开所有权，并落实为**库-per-tier**：Operation 持平台运营对象与企业账号、Manager 持企业配置与授权、Agent 持本地会话与运行态。
 - 跨端通信：三端跨网络，通信面**极窄且单向 pull**——Manager→Operator（招募专家/方案、负责人凭据校验与重置）、Agent→Manager（成员登录认证、拉取已授权专家/方案）。不存在中心 Edge 收口，不存在用户机器的入站连接。
 - 运行时抽象：Agent Gateway 与本地 runtime 都在**用户端**，不按 agent 品牌堆 adapter、也不假设所有 runtime 都是 JSON stream；按**协议族抽象 Executor**，再用 **Driver** 收口 runtime 差异。
-- 风险点：最大破坏性风险不是删旧实现，而是①让新端继续共享旧库、旧 router、旧事件名、旧 adapter 导致双系统并存；②对**存量 streaming 主链路**做无验证的 big-bang 重写；③误把会话/usage 数据上传破坏"本地优先"隐私承诺。
+- 风险点：最大破坏性风险不是删旧实现，而是①让新端继续共享旧库、旧 router、旧事件名、旧 adapter 或桥接旧端点导致双系统并存；②对 **streaming 主链路**做无验证的 big-bang 重写（应逐模块对照冻结契约基线验证）；③误把会话/usage 数据上传破坏"本地优先"隐私承诺。
 
 【技术方案】
 1. 第一步定死三端边界与部署形态：Operation（中心运营端）/ Manager（企业端）/ Agent（用户端）各自独立部署、独立库、独立前端、独立写路径。
 2. 跨端通信只保留两条 pull 链路 + 联邦认证；不设中心 Edge Gateway，认证以 `shared/auth` 库 + 各端入口中间件实现。
 3. 定死端内/跨端通信：端内同步走 HTTP/JSON + 共享 client SDK；运行事件在用户端内走专用流式通道 + 事件落库；跨端只上报脱敏计量/审计摘要逐级汇总。
 4. 消除 Hermes 特殊情况：用户端 Agent Gateway 统一接入 `AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`，runtime 差异收敛到 Driver。
-5. 确保零产品破坏性：保留业务北向接口语义与对话页能力，但不兼容旧内部包、旧 router、旧 adapter；存量 streaming 主链路用绞杀者模式逐模块切换、逐模块验证 parity。
+5. 确保零产品破坏性：保留业务北向接口语义与对话页能力，但不兼容旧内部包、旧 router、旧 adapter；streaming 主链路**全新重建**，逐模块对照冻结契约基线验证 parity（不与旧系统并跑、不切流、不桥接旧端点）。
 
 ---
 
@@ -109,7 +109,7 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 - Agent Gateway 如何在用户端脱离 Hermes WebUI loopback，并以统一抽象接入多 runtime。
 - 三端前端如何分离与组织。
 - 后端 Web 框架与基础设施如何选型。
-- 重构时哪些契约保留、哪些历史实现必须删除、存量主链路如何安全切换。
+- 重构时哪些契约保留、哪些历史实现必须删除、主链路如何全新重建并对照契约基线验证。
 
 ### 2.2 解决方式
 
@@ -147,9 +147,9 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 - **继续保留**：已验证的北向业务语义（员工、会话、Run、Timeline、Loop、知识库、治理等分组）。
 - **允许重定路径与 schema**：生产契约可在新 OpenAPI 中重新定稿更清晰的路径、字段、错误模型。
 - **不兼容旧内部实现**：不为旧 router、旧 Python 模块、旧 adapter、旧 DTO、旧写法保留兼容层。
-- **不做迁移期双写**：新服务拥有自己的库与写路径，旧写路径切换后删除。但"无兼容层 / 无双写"不等于"无验证切换"——见 §17 迁移与切换策略。
+- **全新重建，不与旧系统交互**：新服务拥有自己的库与写路径，**全新建库、不迁移旧数据、不与旧系统双写、不桥接/反代旧 `app/` 端点**。但"全新重建"不等于"无验证"——见 §17 重建与验证策略。
 
-一句话：**产品业务口径延续，工程实现必须清理；清理过程必须可验证。**
+一句话：**产品业务口径延续，工程实现全新重建；重建结果必须对照契约基线独立验证。**
 
 ### 2.4 术语定义
 
@@ -266,9 +266,9 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 
 ### 4.3 Team Panel 拆分口径
 
-现有 `team_panel/` 解散，按**端**重分：
+现有 `team_panel/` 的**业务能力**按**端**重新归属，在新服务中**全新实现**。下表「现有载体」列仅用于标识能力来源（供对照旧契约理解范围），**不代表搬迁/拆分旧代码、也不调用旧 router**——新端按 §17 对照契约基线重建：
 
-| 现有载体 | 归属端 | 能力 |
+| 能力来源（旧载体，仅作范围标识） | 归属端 | 能力 |
 |---|---|---|
 | `router_system_admin.py` | 运营端 Operation | 企业开通 / 平台模板 / 行业方案目录 / 企业账号治理 / 平台审计 / 跨企业统计 |
 | `router_enterprise_admin.py`、`router_team_settings_billing.py` | 企业端 Manager | 企业 / 成员 / 角色 / 组织 / 企业账单设置 / 招募专家 / 成员级授权 |
@@ -324,7 +324,7 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 ### 5.5 服务发现与配置
 
 - 各端互相可达地址通过环境变量/配置注入：运营端为公网地址；企业端地址下发给本企业用户端；用户端默认 localhost。
-- 沿用现有 `app/.env` 统一运行口径（**只读取、不回写**，见 §14.1）：Python 解释器、Hermes Home、Hermes config 等运行入口继续复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，不裸用其他环境作为主路径。
+- 运行时启动配置（各 runtime 的 CLI 路径/默认参数/运行环境）由用户端 **Agent Gateway 的 Driver 层各自声明**（§7.3），按用户端自身配置注入；**不依赖旧 `app/.env`、不复用 `HERMES_WEBUI_*` 等旧 WebUI loopback 环境变量**——该执行链已废弃，Hermes 改由 `AcpExecutor` + `HermesAcpDriver` 经 ACP 接入。
 
 ---
 
@@ -364,13 +364,13 @@ EmployeeExecutionSnapshot
 
 **所有权裁决（解原 §10-4）**：快照由**用户端 Agent Service 在装载专家/提交 run 时从企业端 Manager 拉取并冻结**，连同 `snapshot_version` 落用户端本地库；run 全程只引用该快照。理由：快照生命周期与 run 绑定，run 归用户端本地所有；企业端只需提供"按 employee_id+version 生成快照"的 pull 接口。这样保证一次 run 配置稳定、避免长任务上下文漂移，且企业端离线时本地已冻结快照仍可执行。
 
-### 6.4 存量数据迁移映射
+### 6.4 全新建库（不迁移旧数据）
 
-存量为单库（macmini 测试库已有数据）。库-per-tier 是目标态，迁移采用**逻辑归属先行、物理分库随切**：
-- 详设须产出"现有表 → 写端 → 目标库（部署位置）"完整映射表。
-- 迁移随端切换分批进行：某模块切到新端时，其表归入该端库，旧写路径删除（不双写）。
-- 现有 `team_panel/migrations` 按归属拆分到各端的 migrations 目录；沿用"迁移在首次 DB 连接时自动应用"的现有机制。
-- 注意：会话/run 等表归用户端**本机库**，存量演示库中的此类数据不迁往中心，按"本地优先"在用户端重新落地。
+库-per-tier 是**全新重建**：三端各自从零建库，**不迁移 MVP 单库（macmini 测试库）中的任何存量数据**。旧库只在需要时作为字段/口径的只读参照，不作数据源。
+- 详设产出"各端表 → 写端 → 目标库（部署位置）"的 **schema 设计**（按端定义，非"现有表→新库"的搬迁映射）。
+- 各端 schema migration（DDL 脚本）按端独立编写，落在该端的 migrations 目录；沿用"schema migration 在首次 DB 连接时自动应用"的现有机制（这是建表脚本，非数据迁移）。
+- 会话/run 等表本就归用户端**本机库**，全新建库后随用户本地使用自然落地；MVP 演示库中的此类数据不导入、不迁移。
+- 如需演示数据，由各端通过正常业务流程（企业开通、招募专家、发起会话）重新产生，不从旧库拷贝。
 
 ### 6.5 治理摘要上报（替代跨端 usage 事件）
 
@@ -442,6 +442,8 @@ Executor 负责通用机制：进程启动/退出；stdin/stdout/stderr 管理�
 ### 7.3 Driver 分层（按 runtime 差异）
 
 Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始化握手；prompt/message/tool/MCP 配置注入方式；原始事件 schema 解析；session_id/thread_id 提取；usage 提取；错误归类。
+
+> **runtime 启动配置的唯一归属**：runtime（含 Hermes）的可执行路径、参数、运行环境一律由对应 Driver 在用户端自身配置中声明，是 v1 runtime 接入配置的唯一来源。`HermesAcpDriver` 经 ACP 启动/连接 Hermes，**取代旧 WebUI loopback 执行链**；旧 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 与 `app/.env` 在 v1 一概不再使用。
 
 首批 driver：
 
@@ -670,7 +672,7 @@ auth_identity             # 一个 user 可挂 N 行
 ### 11.3 配置与健康检查
 
 - 每端服务提供 `/healthz`（存活）、`/readyz`（依赖就绪：本端 DB；跨端依赖以"可降级 pull"对待，上端不可达不致本端 not-ready）、`/docs`。
-- 配置经环境变量/配置中心注入，运行入口统一**只读复用** `app/.env` 口径（§14.1）。
+- 配置经各端自身环境变量/配置中心注入；runtime 启动配置归 Agent Gateway Driver 层（§7.3）。**不复用旧 `app/.env` 与 `HERMES_WEBUI_*` 键。**
 
 ### 11.4 安全与隔离
 
@@ -699,7 +701,7 @@ web/
 └── shared/      # 共享前端包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统
 ```
 
-> `web/`（前端）与 `server/`（后端）层优先对称，各端目录一一对应（详见 §14.1 工程目录目标态）；按端独立构建、按端产物精简（§14.2）。旧 `app/static/aiteam/` 保留为只读参考，按端逐目录搬运（绞杀者），各端前端由各端服务自身静态托管，不再由中心 Edge 指向统一产物。
+> `web/`（前端）与 `server/`（后端）层优先对称，各端目录一一对应（详见 §14.1 工程目录目标态）；按端独立构建、按端产物精简（§14.2）。旧 `app/static/aiteam/` 保留为只读参考，各端前端**全新重建**（参考旧实现对齐契约，不搬运、不桥接旧代码），由各端服务自身静态托管，不再由中心 Edge 指向统一产物。
 
 每端 `api-client` 基于 `web/shared` 的基类，只调用**本端服务**的 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口；用户端前端只绑定本地 Agent Service 的产品事件，不直接绑定 runtime 原始事件。
 
@@ -713,7 +715,7 @@ web/
 
 | 关注点 | 选型 | 理由 |
 |---|---|---|
-| 后端框架 | **FastAPI**（三端各一服务） | 原生 OpenAPI / Swagger / ReDoc；Pydantic 作 API 边界；APIRouter 按模块拆分；异步 SSE/WebSocket/后台任务成熟；Python 资产迁移成本最低 |
+| 后端框架 | **FastAPI**（三端各一服务） | 原生 OpenAPI / Swagger / ReDoc；Pydantic 作 API 边界；APIRouter 按模块拆分；异步 SSE/WebSocket/后台任务成熟；Python 资产复用成本最低 |
 | 端入口与认证 | 各端服务自带 `shared/auth` 中间件 | 无中心 Edge/Identity；验签本地、零网络跳、无 SPOF（§9） |
 | 跨端通信 | HTTPS/JSON 单向 pull + 共享 `service_client` | 通信面窄、单向、用户机器无入站；TLS + 服务身份签名 |
 | 端内通信（用户端） | 本地 HTTP/JSON + 本地运行时流式通道 | 运行事件不跨端；落本地库可回放 |
@@ -735,18 +737,18 @@ web/
 - **用户端 Agent（每用户本机自部署）**：Agent Service + 用户端前端 + Agent Gateway + Local Runtime Worker + 本机库；默认仅 localhost。每用户一套。
 
 部署细节：
-- **开发（单机模拟三端）**：docker-compose 起三端服务 + 各自 DB + 用户端 Local Runtime Worker；沿用 `ctl.sh` 与 macmini 测试环境（pull + `ctl.sh restart` 部署，迁移首次连接自动应用）。**不再需要中心 Edge 与中心消息总线**。
+- **开发（单机模拟三端）**：docker-compose 起三端服务 + 各自 DB + 用户端 Local Runtime Worker；沿用 `ctl.sh` 与 macmini 测试环境（pull + `ctl.sh restart` 部署，schema migration 首次连接自动应用）。**不再需要中心 Edge 与中心消息总线**。
 - **生产**：三端各自独立交付与升级；运营端中心运维，企业端/用户端提供安装包/镜像由企业与用户自部署；跨端只暴露窄 pull 接口（TLS）。
-- **运行入口统一**：凡涉及 Python 解释器、Hermes CLI、Hermes Home、config，复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`。
+- **运行时接入配置**：runtime（含 Hermes）经 Agent Gateway Executor/Driver 接入，CLI 路径/参数/运行环境由对应 Driver 在用户端配置声明（§7.3）；**不再使用旧 `HERMES_WEBUI_*` 环境变量与 `app/.env`**（旧 WebUI loopback 链已废弃）。
 
 ### 14.1 工程落点裁决：单仓「层优先（`server/` 后端 + `web/` 前端）→ 端」，`app/` 降级为只读参考
 
-**裁决**：**单仓库**，顶层按层分——`server/`（后端 Python）+ `web/`（前端 JS/TS），各自再按端分子目录；**不拆前端仓/后端仓双仓**。旧 `app/` 整体冻结为旧架构（单体基座）只读参考实现——**只读不写**，绞杀者迁移完成（parity 验证通过）后再删除。
+**裁决**：**单仓库**，顶层按层分——`server/`（后端 Python）+ `web/`（前端 JS/TS），各自再按端分子目录；**不拆前端仓/后端仓双仓**。旧 `app/` 整体冻结为旧架构（单体基座）只读参考实现——**只读不写**，v1 全新重建稳定后再删除。
 
 **理由**：
 1. **不拆双仓**：一次端内改动常同时动该端前端 + 同端后端 + 跨端契约（认证/摘要 schema）；双仓会逼出两个 PR、版本对不齐、契约漂移。本团队 trunk-based（master 直推），多仓协调税远大于收益。前后端"各自独立构建/部署"靠目录分层 + 独立流水线即可拿到，**仓库边界 ≠ 部署边界**。
 2. **层优先（`server/`+`web/`）而非端优先**：因构建期已按端组装产物（见 §14.2），源码布局不必 1:1 镜像部署单元；层优先让前后端各用各的工具链（`server/` 一套 Python、`web/` 一套 JS），共享代码各归各层（`server/shared`、`web/shared`），更顺手。
-3. **不复用 `app/` 作新后端根**：`app/` 是冻结的旧单体契约对照基线（状态机/角色/cursor/timeline 以它为事实参照），迁移期新旧必须并存（§17）；新后端用 `server/`，待旧 `app/` 删除后若需要可再改名回 `app/`，届时无冲突、成本极低。
+3. **不复用 `app/` 作新后端根**：`app/` 是冻结的旧单体契约对照基线（状态机/角色/cursor/timeline 以它为事实参照），v1 重建期作为**只读契约参照**保留（新旧不并跑、不互调，§17）；新后端用 `server/`，待旧 `app/` 删除后若需要可再改名回 `app/`，届时无冲突、成本极低。
 
 > 工程目录目标态（单仓，层优先）：
 > ```text
@@ -764,14 +766,14 @@ web/
 > │   ├── agent/             # 用户端前端
 > │   └── shared/            # 共享前端包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统
 > ├── deploy/                # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
-> └── app/                   # 🔒 旧架构单体基座——只读参考，迁移完成后删除
+> └── app/                   # 🔒 旧架构单体基座——只读契约参考，v1 重建完成后删除
 > ```
 >
 > **无 `edge_gateway/`**：早期目标态中的 `edge_gateway/` 随"取消中心 Edge"裁决删除；其认证职责下沉为 `server/shared/auth` + 各端服务自带入口中间件。
 >
 > **命名口径**：后端 Python 包名统一用下划线（`agent_service`），维持"后端模块 ↔ 前端目录 ↔ 接口前缀"三处对齐：`server/agent_service` ↔ `web/agent` ↔ `/api/agent`；口语里的 `agent-service` 即指此目录。
 >
-> **`app/` 只读的两点例外**：① 运行口径 `app/.env`（`HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR`）继续被新服务**读取**复用，不在此处新增业务配置——**待 `app/` 删除时，这些 `HERMES_*` 运行口径键迁到 `server/.env`（或仓库根 `.env`），键名与语义不变**；② 绞杀者切换期间允许新服务以 HTTP 反代/适配方式**调用**尚未迁移的旧 `app/` 端点，但不得回写 `app/` 代码。
+> **`app/` 无任何运行期例外**：新服务**不读取 `app/.env`、不调用、不反代、不桥接** `app/` 的任何端点，**不与旧系统并跑或双写**。`app/` 仅作**只读契约对照基线**（状态机/角色/cursor/timeline 口径参照，见 §17），不参与 v1 运行链。runtime 启动配置（含 Hermes，经 `AcpExecutor` + `HermesAcpDriver`）由 Agent Gateway Driver 层在用户端自身配置中声明（§7.3），与旧 `HERMES_WEBUI_*` 口径无关——旧 WebUI loopback 执行链已废弃。
 
 ### 14.2 统一启动器 + 构建期分端产物
 
@@ -821,13 +823,13 @@ web/
 8. **跨端可用性硬依赖** → 上端离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影继续工作；快照/授权缺失时拒绝执行而非陈旧硬跑。
 9. **联邦密钥扩散（key sprawl）** → MVP 对称密钥限单企业内；推荐尽早换非对称（企业端私钥签发、用户端公钥验签），企业间天然隔离。
 10. **退化成"伪三端共址"** → 禁止跨端共享库、禁止上端向下端入站推送、禁止把会话态外置到企业端。
-11. **存量 streaming 主链路 big-bang 重写破坏演示** → 用绞杀者模式逐模块切换验证（见 §17）。
+11. **streaming 主链路 big-bang 无验证重写破坏演示** → 全新重建，逐模块对照冻结契约基线验证 parity（不与旧系统并跑/切流，见 §17）。
 
 ### 16.2 工程约束
 
 - 新服务统一 FastAPI；不再扩写手写 router。
 - 不再依赖 Hermes WebUI loopback 作生产执行链路。
-- 不为旧内部模块保留兼容层；不做迁移期双写。
+- 不为旧内部模块保留兼容层；不与旧系统双写、不桥接/反代旧 `app/` 端点、不迁移旧库数据。
 - 北向路径按 §10 统一收口；旧路径切换后删除。
 - **Loop / 周期任务仅在用户端运行期间执行**（本地优先的固有取舍）：用户端关机即不跑，不做服务端常驻调度代用户执行；这是产品取舍而非缺陷，前端需对用户明示。
 - AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`；必须改 Hermes 时只做最小补丁或可复用增强。
@@ -835,15 +837,15 @@ web/
 
 ---
 
-## 17. 迁移与切换策略（新增）
+## 17. 重建与验证策略（新增）
 
-"无兼容层 / 无双写"针对**最终态**，切换过程必须可验证。
+v1 是**全新重建**：不与旧系统并跑、不切流、不桥接/反代旧 `app/` 端点、不迁移旧库数据。"全新重建"不等于"无验证"——重建结果必须对照**冻结的契约基线**独立验证。
 
-- **DB 写路径**：一刀切——某模块切到新服务时表归新库、旧写路径删除，不双写。
-- **Streaming / Timeline 主链路（高风险）**：用**绞杀者模式逐模块切换**。新 FastAPI 服务起来后按模块灰度切流，每切一个模块先校验北向 `event: timeline` 事件 parity（事件类型、顺序、cursor、payload 关键字段），验证通过再删旧路径。这不是兼容层，是有验证的迁移，符合 CLAUDE.md §10.4「完成前必须独立验证」。
-- **存量数据**：按 §6.4 逻辑归属先行、物理分库随切；现有 migrations 按归属拆分到各端。
-- **验证环境**：绞杀者 parity 校验在**单机合并 dev/test 环境**（macmini 模拟三端、共址跑）完成，**不在分发到用户机器后才验证**；只有 parity 通过的产物才进入按端分发（§14.2）。
-- **回退**：每个切换批次保留可回退点（旧路径在 parity 验证期内不立即物理删除，验证期满再删）。
+- **契约基线（验证靶子）**：旧 `app/` 只读冻结，连同《桌面端接入 API 文档-基线版》与现有 L2/L4 契约测试，共同构成新实现要对齐的**业务契约基线**。验证是"新实现 vs 静态契约基线"，**不是"新实现 vs 运行中的旧系统"**。旧测试仅作**行为参照**用于理解期望覆盖面；新服务编写**自己的**契约/集成测试（针对新 OpenAPI 与新库），**不复用旧测试代码、不依赖旧测试运行环境**。
+- **DB 写路径**：各端全新建库、各自写路径；不与旧库双写、不导入旧数据（§6.4）。
+- **Streaming / Timeline 主链路（高风险）**：**全新重建**。逐模块实现并校验北向 `event: timeline` 事件 parity（事件类型、顺序、cursor、payload 关键字段）是否符合契约基线，逐模块验证通过再推进下一模块。这是有验证的重建，符合 CLAUDE.md §10.4「完成前必须独立验证」。
+- **验证环境**：parity 校验在**单机模拟三端的 dev/test 环境**（macmini 共址跑三端新服务）完成，**不在分发到用户机器后才验证**；只有 parity 通过的产物才进入按端分发（§14.2）。
+- **推进节奏**：逐模块重建、逐模块对照基线验证、验证通过即定稿；旧 `app/` 全程只读保留作参照，全部模块重建并验证通过后整体删除 `app/`。
 
 ---
 
@@ -851,7 +853,7 @@ web/
 
 ### Phase 0：架构冻结
 冻结三端边界与部署形态、用户端 Agent Gateway executor/driver 抽象、事件双层模型、库-per-tier 所有权、跨端 pull 通信面、联邦认证模型、成员级授权、外部能力归属（§6.6）、部署绑定入户链（§14.3）、治理摘要上报、路径收口。
-产物：本概要设计定稿、三端边界 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨端契约草案、存量表所有权映射草案、脱敏摘要 schema 草案、部署绑定令牌/入户流程草案。
+产物：本概要设计定稿、三端边界 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨端契约草案、各端表所有权与 schema 草案（全新建库，非旧表搬迁）、脱敏摘要 schema 草案、部署绑定令牌/入户流程草案。
 
 ### Phase 1：三端骨架 + 部署绑定 + 联邦认证
 建立 Operation/Manager/Agent 三端 FastAPI 服务骨架（各自前端壳）；统一错误模型、`shared/auth` 验签中间件、request-id/trace、共享 `service_client`、各端 OpenAPI；**部署绑定入户链打通**（运营端开通企业发引导令牌 → 企业端 pull 绑定 → 用户端凭成员凭据 pull 绑定，§14.3）；联邦认证打通（运营端发负责人初始凭据 → 企业端首登 bootstrap+重置 → 企业端创建成员 → 用户端首次在线登录+本地 token）；用户端 Agent Gateway skeleton + fake runtime。
@@ -859,7 +861,7 @@ web/
 
 ### Phase 2：企业端配置授权 + 用户端本地主链
 企业端承接员工/专家配置、知识、技能、连接器、招募专家、**成员级授权**；用户端承接本地 conversation/run/task/event/loop；用户端 pull 已授权专家/方案 → 本地装载 → EmployeeExecutionSnapshot 冻结。
-验收：企业端授权某专家给某成员 → 用户端 pull 装载 → 本地私聊主链打通、群聊（本地多专家）入口打通、Loop 基础任务打通、事件实时推送 + 历史回放；streaming 主链路按绞杀者完成首批模块 parity 验证；验证会话内容不外泄。
+验收：企业端授权某专家给某成员 → 用户端 pull 装载 → 本地私聊主链打通、群聊（本地多专家）入口打通、Loop 基础任务打通、事件实时推送 + 历史回放；streaming 主链路逐模块对照契约基线完成首批 parity 验证；验证会话内容不外泄。
 
 ### Phase 3：Runtime 接入（用户端）
 实现 AcpExecutor + HermesAcpDriver；JsonRpcStdioExecutor + CodexJsonRpcDriver；JsonStreamCliExecutor + ClaudeCode/OpenCode/OpenClaw driver。
@@ -901,7 +903,7 @@ web/
 | D8 | 认证 | **三端联邦认证**：负责人初始凭据归运营端、成员凭据+负责人本地密码归企业端、用户端只持本会话 token；运营端不保留密码；用户端首次在线认证、之后本地验签；`user`+`auth_identity`+`Authenticator` 扩展点 + 单一 token 出口；验签/鉴权/签发为共享库 `shared/auth`。**无中心 Identity、无中心 Edge**。〔修订早期"折叠进 Edge"〕 |
 | D9 | 端入口形态 | **取消中心 Edge Gateway**；认证/限流/CORS 下沉为各端服务自带 `shared/auth` 中间件。〔**推翻**早期"轻量 Edge 反代/单 origin"〕 |
 | D10 | 后端框架 | FastAPI，弃用手写 router |
-| D11 | 工程落点 | **单仓，层优先**：`server/`（后端，按端分 `*_service/` + `agent_gateway/` + `shared/`）+ `web/`（前端，按端分 + `shared/`）；**无 `edge_gateway/`**；`app/` 冻结只读，迁移完成后删除，仅例外**读取** `app/.env`、绞杀期**调用**未迁移旧端点（§14.1） |
+| D11 | 工程落点 | **单仓，层优先**：`server/`（后端，按端分 `*_service/` + `agent_gateway/` + `shared/`）+ `web/`（前端，按端分 + `shared/`）；**无 `edge_gateway/`**；`app/` 冻结只读、v1 重建完成后删除，**仅作只读契约参照、不参与运行链**；新服务不读 `app/.env`、不用 `HERMES_WEBUI_*`、不调用/不桥接/不双写旧 `app/`（§14.1） |
 | D12 | 配置下发与授权 | 企业端招募专家/配方案时指定**成员级授权**；用户端**主动 pull** 已授权条目本地装载；不靠上端推送 |
 | D13 | 本地优先与隐私 | 会话/群聊/run/usage **全本地、内容不上传**；跨端只流转认证、授权配置、**脱敏计量/审计摘要**逐级汇总 |
 | D14 | 跨端可用性 | 上端短暂离线只影响"拉新配置/新登录"；已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作 |
@@ -915,6 +917,6 @@ web/
 4. 脱敏计量/审计**摘要 schema** 与脱敏字段清单（哪些字段可上报、哪些必须留本地）。
 5. `runtime_session/raw_runtime_event` 在用户端本地库的归属与保留期。
 6. 运营端→企业端"招募专家/行业方案应用包"的拉取契约、版本与幂等边界。
-7. 存量表 → 写端 → 目标库（部署位置）的完整映射表（详设产出）；会话类表在用户端本地重新落地的口径。
+7. 各端表 → 写端 → 目标库（部署位置）的 schema 设计（详设产出，全新建库、不迁旧数据）；会话类表在用户端本地全新落地的口径。
 8. 外部能力本地化（§6.6）：知识索引按授权集的切分/增量拉取/缓存淘汰策略；技能包与连接器凭据的本地分发与回收。
 9. 部署绑定（§14.3）：企业部署引导令牌的生成/时效/吊销、用户端 `MANAGER_URL` 下发载体（二维码/配置串）格式、服务身份密钥建立细节。

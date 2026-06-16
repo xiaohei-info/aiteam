@@ -1,187 +1,120 @@
 # AI Team
 
-## 当前项目结构
+**AI Team 是三端独立部署的「控制面 SaaS + 本地数据面」多 Agent 数字员工平台。** 三端可独立部署，跨端只走自下而上的窄 pull 与联邦认证；会话与执行全部在用户本机本地化，**内容不上传**。
+
+正式架构地基见 `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md`（下称「v1 概要设计」）。任何冲突一律以该文档为准。
+
+## 当前阶段
+
+项目正从 **MVP 单体**（`app/`）演进到 **v1 三端微服务**（`server/` + `web/`）。v1 是**全新重建**——不与旧端点交互、不迁移旧库数据。
+
+- `app/`：冻结的 MVP 单体基座，仅作**契约/实现参考**，**只读不写、不再扩写**，v1 重建稳定后删除。
+- `server/`、`web/`：v1 新架构落点，按端分目录，由 v1 开发逐步建立（**当前尚未创建**）。
+
+新开发一律落在 `server/` + `web/`，按 v1 概要设计的三端边界推进。
+
+## 目标态仓库结构（v1，单仓·层优先）
 
 ```text
 aiteam/
-├── app/            # AI Team 主项目代码
-├── docs/           # 需求文档、业务方案、概要设计、详细设计、架构图
-├── scripts/        # 项目级脚本
+├── server/                # 后端（Python / FastAPI）
+│   ├── operation_service/ # 运营端：企业开通 / 目录治理 / 跨企业汇总
+│   ├── manager_service/   # 企业端：配置 / 授权 / 成员认证
+│   ├── agent_service/     # 用户端：本地会话与执行
+│   ├── agent_gateway/     # 用户端运行时接入网关（Executor + Driver）
+│   ├── shared/            # service_client / auth / 错误模型 / db / schema base
+│   └── run.py             # 统一启动器 --tier=operation|manager|agent
+├── web/                   # 前端（JS/TS），按端独立工程/独立构建
+│   ├── operation/         # 运营端前端
+│   ├── manager/           # 企业端前端
+│   ├── agent/             # 用户端前端
+│   └── shared/            # page-shell / api-client 基类 / timeline-client / i18n / 设计系统
+├── deploy/                # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
+├── docs/                  # 需求、业务方案、技术设计、部署运维
+├── scripts/               # 项目级脚本
+├── app/                   # 🔒 冻结的 MVP 单体基座——只读契约参考，v1 重建完成后删除
 ├── .hermes/
-│   └── hermes-agent/ # 外部 Hermes Agent 源码仓库（独立 Git，不归 aiteam 主仓管理）
+│   └── hermes-agent/      # 外部 Hermes Agent 源码仓（独立 Git，不归 aiteam 主仓管理）
 ├── .gitignore
-├── README.md
+└── README.md
 ```
+
+> `server/`（后端）与 `web/`（前端）层优先对称，各端目录一一对应；按端独立构建、按端产物精简。**无中心 Edge Gateway**——认证下沉为 `server/shared/auth` + 各端服务自带入口中间件。
+
+## 三端边界
+
+| 端 | 部署位置 | 职责 | 库 |
+|----|----------|------|----|
+| **运营端 Operator** | 平台方中心化 SaaS | 企业开通、负责人凭据、人才市场/行业方案目录、跨企业治理汇总 | oper（中心） |
+| **企业端 Manager** | 企业自部署（内网/私有云） | 成员账号与认证、专家/方案配置、成员级授权、企业治理与计量汇总 | mgr（企业） |
+| **用户端 Agent** | 每用户本机自部署 | 工作台/私聊/群聊/Run/Task/Loop——全本地执行不上传；Agent Gateway 接入多 runtime | agent（本机） |
+
+**跨端通信只有自下而上的 HTTPS pull**：
+
+- Agent → Manager：成员登录认证、拉取已授权专家/方案与执行快照、上报脱敏计量/审计摘要
+- Manager → Operator：招募专家/方案、负责人凭据校验/重置、上报企业级汇总
+
+用户机器**无入站连接**；上端**绝不**向下端推送。上端短暂离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作。
 
 ## 各目录职责
 
-### `app/`
-AI Team 当前的主开发目录。
+### `server/`（后端，目标态）
+三端 FastAPI 服务 + 用户端 Agent Gateway + 共享后端包。统一启动器 `run.py --tier=operation|manager|agent` 只挂载对应端的 router / DB / migrations；CI 按端产出三个精简产物，**用户端交付物绝不打包控制面代码**。
 
-承载：
+### `web/`（前端，目标态）
+三套独立前端工程，按端分离、按端独立构建；公共能力（设计系统、i18n、timeline-client、api-client 基类）抽到 `web/shared` 复用。每端前端只调本端服务 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口，由各端服务自身静态托管。
 
-- Team Panel 北向业务接口
-- Agent Gateway 进程内适配层
-- 页面、BFF、SSE、会话宿主与上传/工作区等可复用基座能力
+### `app/`（冻结，只读参考）
+MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照基线），**只读不写、不再扩写**，v1 重建稳定后删除。v1 是**全新重建**：新架构**不与任何旧 `app/` 端点交互**（无反代、无桥接、无双写），**不迁移旧库数据**（新架构全新建库）。
 
-注意：
-- `app/` 已经归属 `aiteam` 主仓管理
-- 后续主要开发工作默认都落在这里
-- 项目原则上优先**新增业务模块 / 适配层**，避免继续把 AI Team 业务大量堆进上游巨型基座文件
+**无运行期例外**：v1 **不读取 `app/.env`、不使用 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 等旧 WebUI loopback 环境变量**（该执行链已废弃）。runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明（见 v1 概要设计 §7.3）。`app/` 仅作只读契约参照，不参与 v1 运行链。
 
 ### `docs/`
-AI Team 的正式文档目录，包含需求、方案、设计和架构图。
+AI Team 的正式文档目录，包含需求、业务方案、技术设计、部署运维与架构图。详见下文「文档导航」。
 
-这是当前项目最重要的非代码资产，已经形成一套可用于进入实施阶段的设计输入。
-
-### `scripts/`
-项目级脚本目录。
-
-存放：
-
-- 开发环境初始化脚本
-- 本地启动脚本
-- 集成检查脚本
-- 发布/部署辅助脚本
+### `scripts/` / `deploy/`
+`scripts/` 存放项目级脚本（开发环境初始化、本地启动、集成检查）；`deploy/` 为 v1 目标态，承载三端 docker-compose、各端 Dockerfile、安装包与 `ctl.sh`。
 
 ### `./.hermes/hermes-agent/`
-Hermes Agent 外部源码仓库。
+外部 Hermes Agent 源码仓——**独立 Git 仓库**，不归 aiteam 主仓管理（根 `.gitignore` 已忽略 `.hermes/`）。拉取/切分支/同步上游应在其目录内单独操作。v1 中 Hermes 经用户端 Agent Gateway 的 `HermesAcpDriver`（ACP）接入，CLI 路径/参数由该 Driver 配置声明（见 v1 概要设计 §7.3），**不再依赖旧 `app/.env` 的 `HERMES_WEBUI_*` 运行入口**。
 
-说明：
-- 它是一个**独立 Git 仓库**
-- 当前默认放在仓库内的 `./.hermes/hermes-agent/`，主要是为了方便 `app` 近场引用 Hermes Runtime / Python SDK 能力
-- **不归 `aiteam` 主仓 Git 管理**，根目录 `.gitignore` 已忽略 `.hermes/`
-- 运行入口路径以 `app/.env` 中的 `HERMES_WEBUI_AGENT_DIR` 为准
-
-治理原则：
-- AI Team 产品逻辑不应写进 `./.hermes/hermes-agent/`
-- 若未来必须改 Hermes，本仓应只承载最小补丁、可复用增强或通用能力改进
-- 默认策略仍然是：**能外挂就外挂，能配置就配置，能 wrapper 就 wrapper**
-
-## 代码与仓库边界
-
-当前仓库采用的是：
-
-- **aiteam 主仓**：承载产品代码与设计文档
-- **hermes-agent 外部仓**：承载运行时源码，不纳入主仓提交
-
-因此请注意：
-
-1. `git -C /home/ubuntu/code/aiteam status` 不会纳管 `./.hermes/hermes-agent/`
-2. `./.hermes/hermes-agent/` 的拉取、切分支、同步上游，应在其目录内单独操作
-3. `app/` 是 AI Team 的正式代码主干，不再按“轻量 fork 保持长期紧跟上游”来治理
+治理原则：AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`；必须改 Hermes 时只做最小补丁或可复用增强。Hermes 经 `AcpExecutor` + `HermesAcpDriver` 作为多 runtime 之一接入，不作默认特例写进上层业务。
 
 ## 文档导航
 
-`docs/` 目录当前分为两大块：
+### 必读（开发前）
 
-### 1. `docs/需求文档/`
-包含业务输入和页面参考材料，例如：
+| 文档 | 用途 |
+|------|------|
+| `README.md` | 仓库结构与边界 |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（三端边界、库-per-tier、联邦认证、Agent Gateway、D1–D15 裁决） |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-桌面端接入API文档-基线版.md` | 桌面端接入北向 API 基线（已验证的业务契约参照，供 v1 重建对齐语义） |
+| `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
+| `CLAUDE.md` / `AGENTS.md` | Agent 开发全局指导与边界约束 |
 
-- `需求文档.md`
-- `AI Team — 商业产品文档（BPD）.pdf`
-- `AI-Team-PRD.html`
-- `AI-Team-PRD-v2.html`
-- `AI-Team-Demo.html`
-- `AI-Team-Office.html`
-- `具体页面描述.docx`
+### 需求与产品输入：`docs/需求文档/`
+业务输入和页面参考材料（BPD、PRD、Demo、页面描述等），回答"业务目标是什么、页面交互想表达什么、演示口径是什么"。
 
-这些文档回答的是：
-- 业务目标是什么
-- 页面和交互想表达什么
-- 演示口径和产品诉求是什么
+### 历史参照（不再作为开发口径）：`docs/mvp版本/`
+MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计文档，以及 `docs/mvp版本/resources/` 下的架构图产物。仅作演进历史参照，**v1 开发以 v1 概要设计为准**。
 
-### 2. `docs/技术设计/`
-包含当前 AI Team 的正式设计体系。
+## 当前设计口径（v1）
 
-建议先读：
+- **运营端 Operation**：平台运营控制面，负责企业开通、目录治理、负责人凭据、跨企业汇总。
+- **企业端 Manager**：企业配置控制面，负责成员账号/认证、专家/方案配置、成员级授权、企业治理。
+- **用户端 Agent**：本地数据面，负责会话/群聊/run/task/loop 全本地执行，pull 装载已授权专家/方案。
+- **Agent Gateway（用户端内）**：通用运行时接入网关，把运行请求接入不同本地 runtime 并输出统一运行事件。
 
-1. `技术设计.md`
-   - 技术设计总导航
-   - 说明当前有哪些正式设计产物、阅读顺序和开发建议
+核心原则：
 
-2. `2026-05-25-AI Team-业务解决方案设计.md`
-   - 业务视角的方案正式稿
-
-3. `2026-05-26-AI Team-技术概要设计.md`
-   - 系统级概要设计
-   - 说明分层、模块职责、边界与复用判断
-
-4. `2026-05-27-AI Team-技术详细设计.md`
-   - 详细设计主稿 / hub 文档
-   - 说明 Team Panel、Agent Gateway、Hermes Runtime 的总体映射关系
-
-5. `详细设计文档/2026-05-28-AI Team-共享运行口径定稿版.md`
-   - 当前跨模块共享契约的唯一裁决口径
-   - 重点冻结：事件协议、游标、主状态机、北向 API 最小固定契约、权限角色模型
-
-6. `详细设计文档/` 下的 5 份模块级详细设计子文档
-   - `2026-05-27-AI Team-Team Panel领域模型与数据架构详细设计.md`
-   - `2026-05-28-AI Team-Team Panel内部服务与聚合视图详细设计.md`
-   - `2026-05-27-AI Team-Agent Gateway运行时适配与事件流详细设计.md`
-   - `2026-05-27-AI Team-会话群聊编排Loop核心流程详细设计.md`
-   - `2026-05-27-AI Team-前端页面与接口契约详细设计.md`
-
-### 3. `docs/resources/`
-存放当前正式架构图产物：
-
-- 业务解决方案架构图
-- 系统架构图
-- 功能架构图
-
-同时保留 `.svg` 与 `.html` 版本，便于浏览和后续继续编辑。
-
-## 当前设计口径
-
-当前项目已经形成以下统一口径：
-
-- **Team Panel**：业务控制面，负责企业、员工、模板、会话、任务、治理、审计等业务对象
-- **Agent Gateway**：运行时适配层，负责把业务请求翻译成 Hermes Runtime 可执行对象，并统一承接事件回流
-- **Hermes Runtime / Hermes Agent**：执行事实层，负责 Profile、Session、Task、Cron、Memory、Skills 等真实运行机制
-
-一个重要原则是：
-
-> AI Team 不自建复杂任务编排内核，而是做业务任务与 Hermes 既有运行机制之间的转换、翻译和包装。
+> AI Team 不自建复杂任务编排内核，而是做业务任务与多 runtime 既有运行机制之间的转换、翻译和包装。
 >
-> 凡涉及 Python 解释器、Hermes CLI、Hermes Home 或 config 的运行入口，必须优先复用 `app/.env` 中的 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，禁止裸用其他 Python/Hermes 环境作为主路径。
+> 库-per-tier、单写者、跨端单向 pull、本地优先内容不出端是硬约束。runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明；v1 **不复用旧 `app/.env` 与 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 链已废弃）。
 
-## 历史命名与当前目录映射
+## 第一次进入本仓库的阅读顺序
 
-当前设计文档中仍可能出现历史命名。为了避免阅读歧义，统一按下面的映射关系理解：
-
-- **Agent Service** / `agent-service`
-  - 对应当前仓库中的 **`app/`**
-  - 含义：AI Team 主项目代码目录，也就是当前承载 Team Panel 与 Agent Gateway 二次开发的代码基座
-
-- **Agent Runtime** / **Hermes Runtime**
-  - 对应当前仓库中的 **`./.hermes/hermes-agent/`**
-  - 含义：外部 Hermes Agent 运行时源码仓库，提供 Profile、Session、Task、Cron、Memory、Skills 等真实执行机制
-
-因此，阅读设计文档时可以直接做如下替换理解：
-
-- 文档里写 `Agent Service`，当前项目里看 `app/`
-- 文档里写 `Agent Runtime`，当前项目里看 `./.hermes/hermes-agent/`
-
-这两个名字反映的是**设计分层语义**，而 `app/`、`./.hermes/hermes-agent/` 反映的是**当前仓库物理目录结构**。两者并不冲突。
-
-## 备注
-
-当前部分设计文档正文中仍可能出现：
-
-- `Agent Service`
-- `agent-service`
-- `Agent Runtime`
-- 基于早期目录结构的路径示例
-
-这些主要反映的是设计演进过程中的历史口径。**以当前仓库实际结构为准**：
-
-- 主项目代码目录：`/home/ubuntu/code/aiteam/app`
-- 外部运行时源码目录：`/home/ubuntu/code/aiteam/.hermes/hermes-agent`
-
-如果你第一次进入这个仓库，建议按下面顺序理解项目：
-
-1. 先看本 README，理解仓库结构和边界
-2. 再看 `docs/技术设计/技术设计.md`，理解设计文档地图
-3. 再看 `app/README.md`、`app/ARCHITECTURE.md`，理解当前代码基座
-4. 开发时默认把 AI Team 新能力优先落在 `app/` 的新增模块中，而不是直接扩写旧的大文件
+1. 先看本 README，理解三端边界与"MVP→v1 重建"现状
+2. 再读 v1 概要设计，理解三端架构地基与 D1–D15 裁决
+3. 读 `CLAUDE.md` / `AGENTS.md`，掌握开发边界与流程约束
+4. 开发时把新能力落在 `server/` + `web/` 的对应端目录，不扩写冻结的 `app/`
 5. 不要把 AI Team 业务逻辑写入 `./.hermes/hermes-agent/`
