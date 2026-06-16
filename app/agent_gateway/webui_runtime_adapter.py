@@ -51,6 +51,15 @@ def _base_url() -> str:
     return f"http://{host}:{port}"
 
 
+def _internal_headers(path: str) -> dict[str, str]:
+    from api.auth import INTERNAL_AUTH_HEADER_NAME, build_internal_auth_token
+
+    return {
+        "Content-Type": "application/json",
+        INTERNAL_AUTH_HEADER_NAME: build_internal_auth_token(path),
+    }
+
+
 @dataclass
 class TurnResult:
     success: bool
@@ -65,7 +74,7 @@ def _post_json(path: str, body: dict, timeout: int = 30) -> dict:
     req = urllib.request.Request(
         _base_url() + path,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=_internal_headers(path),
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -147,7 +156,12 @@ def _consume_stream(stream_id: str, session_id: str,
     done = False
 
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout_seconds) as resp:
+        req = urllib.request.Request(
+            url,
+            headers=_internal_headers("/api/chat/stream"),
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
             for kind, payload in _iter_sse(resp, deadline):
                 if kind == "reasoning":
                     _emit(on_event, "reasoning", payload)
