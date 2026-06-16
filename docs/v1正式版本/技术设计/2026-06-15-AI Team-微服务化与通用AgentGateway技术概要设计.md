@@ -1,6 +1,6 @@
 ---
 created: 2026-06-15
-updated: 2026-06-15
+updated: 2026-06-16
 status: draft-for-review
 tags: [project, aiteam, technical-design, overview-design, microservices, gateway, runtime]
 canonical_name: 2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计
@@ -23,7 +23,7 @@ supersedes:
 【核心判断】
 ✅ 值得做：单体后端、手写 router、Team Panel 大一统模块、Hermes WebUI loopback 执行链路已成为生产阶段的主要复杂度来源。本次同时完成两件事：① 按**真·微服务**重建内部结构（业务北向契约延续，内部实现彻底重做）；② 把系统重构为**三端独立部署的「控制面 SaaS + 本地数据面」分层产品形态**——运营端中心化、企业端与用户端各自自部署，会话与执行完全本地化、不上传，跨端只走自下而上的 pull 与首次在线认证。
 
-> **形态变更说明（推翻早期单体收口假设）**：本文早期版本曾把 Operation/Manager/Agent 设计为"由单一 Edge Gateway 收口、单 origin、单 SPA"的三个**共址**业务服务。经业务模型重新定型，三者升级为**三个可独立部署、跨网络通信的「端」**。服务名延续（仍叫 Operation/Manager/Agent Service），但部署边界、前端形态、认证模型随之改写——详见各章被标注"形态变更"处，以及 §20 裁决表对 D1/D3/D8/D9 的更新。
+> **形态变更说明（推翻早期单体收口假设）**：本文早期版本曾把 Operation/Manager/Agent 设计为"由单一 Edge Gateway 收口、单 origin、单 SPA"的三个**共址**业务服务。经业务模型重新定型，三者升级为**三个可独立部署、跨网络通信的「端」**。服务名延续（仍叫 Operation/Manager/Agent Service），但部署边界、前端形态、认证模型随之改写——详见各章被标注"形态变更"处，以及 §20 裁决表对 D1/D3/D4/D8/D9/D11 的修订与新增的 D12–D15。
 
 【关键洞察】
 - 部署形态：这是一套 **B 端本地化交付产品**，不是中心化 SaaS。运营端是控制面（企业开通、人才市场目录、凭据来源、治理汇总）；企业端是企业侧控制面（成员账号、专家/方案配置与**成员级授权**）；用户端是数据面（会话/群聊/run 全本地执行）。**会话内容绝不离开用户机器**，跨端只上报脱敏计量/审计摘要。
@@ -165,6 +165,7 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 - **EmployeeExecutionSnapshot**：执行前固化的员工/专家执行快照，由用户端在装载已授权专家时从企业端拉取配置并冻结，保证一次 run 使用稳定配置。
 - **联邦认证（Federated Auth）**：认证主体与凭据按端联邦持有——运营端持企业负责人初始凭据来源、企业端持成员账号与负责人重置后本地密码、用户端只持本会话 token。无状态验签/签发为共享库 `shared/auth`，各端自带登录入口中间件，**无中心 Identity 服务、无中心 Edge Gateway**（见 §9）。
 - **成员级授权（Member-scoped Grant）**：企业端招募专家/配置行业方案时，可指定该专家/方案授权给哪些成员账号；用户端 pull 时只能取到授权给本账号的条目。
+- **员工 / 专家 / 模板 / 实例（术语统一，全文一致）**：「员工」与「专家」在本文指**同一概念**——一个可对话、可执行任务的数字员工（Agent）。运营端人才市场存放的是**专家/员工模板**（定义、persona、推荐配置）；企业端从模板**招募**后得到**员工/专家实例**（数据表 `employee`，带企业侧配置与成员级授权）；用户端 pull 已授权实例并本地装载执行。下文出现的「专家」「员工」「员工/专家实例」均指此实例，**不再区分**；模板仅指运营端目录条目。
 
 ---
 
@@ -292,7 +293,7 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 
 跨端约定：
 - **方向单一**：只允许下端主动 pull 上端；上端**绝不**向下端发起入站连接或推送。配置变更靠下端**周期/触发式轮询**感知（见 §6 配置投影），不靠服务端推送。
-- **传输**：HTTPS/JSON；跨端走公网/企业网，必须 TLS + 服务身份签名（见 §9.3 服务间认证）。
+- **传输**：HTTPS/JSON；跨端走公网/企业网，必须 TLS + 服务身份签名（服务间认证即 §9.1 平面③，流程见 §9.6）。
 - **超时/重试/降级**：所有 pull 必须设超时；只读 pull 可幂等重试（request-id 去重）；上端短暂不可用时，**已装载配置与已登录 token 在本地继续可用**（本地优先），仅"拉新配置/新登录"受影响。
 - **摘要上报**：用户端只上报脱敏计量与审计摘要（见 §6.5），失败可本地缓冲后补传；**绝不上传会话内容**。
 
@@ -336,8 +337,8 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 | 数据域 | 写端 | 库（部署位置） |
 |---|---|---|
 | system_user / system_role / **enterprise_registration** / **owner_credential**（初始/重置，不存可逆密码）/ platform_template / industry_solution / platform_finance / platform_audit / **cross_enterprise_usage_rollup** | 运营端 Operation | oper（中心） |
-| enterprise / member（成员账号 + 凭据）/ **owner_local_credential**（重置后本地）/ role / org / employee / expert / prompt / knowledge / skill_binding / connector / memory / **member_grant**（成员级授权）/ billing_setting / enterprise_audit / **enterprise_usage_rollup** | 企业端 Manager | mgr（企业自部署） |
-| conversation / message / run / task / loop / runtime_binding / run_event / orchestration / **loaded_expert_projection**（pull 的只读专家/方案投影）/ runtime_worker / runtime_capability / runtime_session / raw_runtime_event / **local_session_token** | 用户端 Agent | agent（用户本机） |
+| enterprise / member（成员账号 + 凭据）/ **owner_local_credential**（重置后本地）/ role / org / employee（专家/员工实例）/ prompt / knowledge（管理面+源文档，见 §6.6）/ skill_binding / connector / memory / **member_grant**（成员级授权）/ billing_setting / enterprise_audit / **enterprise_usage_rollup** | 企业端 Manager | mgr（企业自部署） |
+| conversation / message / run / task / loop / runtime_binding / run_event / orchestration / **loaded_expert_projection**（pull 的只读专家/方案投影）/ **local_capability_cache**（本地化的知识索引/技能/连接器配置，见 §6.6）/ runtime_worker / runtime_capability / runtime_session / raw_runtime_event / **local_session_token** | 用户端 Agent | agent（用户本机） |
 
 跨端读取走 pull API 或本地投影，**禁止跨端/跨库直写**。
 
@@ -378,6 +379,23 @@ EmployeeExecutionSnapshot
 - **上报路径**：用户端 → 企业端（成员级聚合，落 `enterprise_usage_rollup`）→ 运营端（企业级聚合，落 `cross_enterprise_usage_rollup`）。
 - **可靠性**：上报失败本地缓冲后补传，按 `summary_id` 幂等去重；上报是尽力而为，不阻塞本地执行。
 - **隐私边界**：脱敏在用户端**上报前**完成；详设产出摘要 schema 与脱敏字段清单。
+
+### 6.6 外部能力的归属与本地化（消除"企业端 vs 本地"歧义）
+
+知识/技能/连接器/MCP 既是**企业资产**（在企业端管理）又要**本地执行**（在用户端运行），二者按"管理面 / 执行面"分开，避免歧义：
+
+| 能力 | 管理面（企业端 Manager 持有） | 执行面（用户端 Agent 本地） |
+|---|---|---|
+| 知识库（LightRAG） | 文档源、索引构建配置、知识集定义、成员/专家绑定 | pull 已授权知识集的**索引产物**到 `local_capability_cache`，**本地检索**；查询与命中内容不出本机 |
+| 技能（SkillHub/Hermes skills） | 技能目录、版本、安装与绑定策略 | pull 已授权技能并**本地安装/执行** |
+| 连接器（Connectors） | 连接器定义、可见性、凭据授权（grant，谁能用） | 运行时**最小权限注入**凭据，本地发起对外部 SaaS 的调用 |
+| MCP | MCP server 定义与授权 | 本地启动/连接 MCP，本地调用 |
+
+**裁决与隐私口径**：
+- **管理面真相在企业端**（写在 mgr 库），用户端只持 pull 下来的**只读投影/产物**（`local_capability_cache`），随专家快照或独立 pull 一并装载、随授权变更失效。
+- **流向单一**：企业资产（知识索引、技能包、连接器凭据）**自上而下流到本机**（企业把自己的资产发给自己员工的机器，不违反隐私承诺）；用户的会话/查询内容**绝不上行**。
+- **连接器的对外调用是其本职**：连接器按定义调用外部 SaaS（数据出本机到该 SaaS），这是连接器语义本身，**不属于**"会话内容上传企业端/运营端"的禁止项；凭据按 §11.4 最小注入、用后不留痕。
+- **大语料权衡**：知识索引可能较大，本地化采用"按已授权知识集 + 增量"拉取，不整库复制；具体切分与缓存淘汰留详设（§20.2）。
 
 ---
 
@@ -552,7 +570,7 @@ auth_identity             # 一个 user 可挂 N 行
 用户本机部署用户端 → 登录页
   → 成员输入 手机号 + 初始密码
   → 用户端 pull 企业端校验凭据（首次必须在线）
-  → 企业端校验通过（首登可强制重置，新密码存企业端）
+  → 企业端校验通过（**首登强制重置**，新密码 hash 存企业端）
   → 企业端 issue_token + 下发验签公钥/参数
   → 用户端缓存 token，此后本地验签；token 过期需重新联网登录
 ```
@@ -744,7 +762,7 @@ web/
 > │   ├── operation/         # 运营端前端
 > │   ├── manager/           # 企业端前端
 > │   ├── agent/             # 用户端前端
-> │   └── shared/            # 共享前端包：page-shell / api-client 基类 / timeline-client / i18n / 设计系统
+> │   └── shared/            # 共享前端包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统
 > ├── deploy/                # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
 > └── app/                   # 🔒 旧架构单体基座——只读参考，迁移完成后删除
 > ```
@@ -753,7 +771,7 @@ web/
 >
 > **命名口径**：后端 Python 包名统一用下划线（`agent_service`），维持"后端模块 ↔ 前端目录 ↔ 接口前缀"三处对齐：`server/agent_service` ↔ `web/agent` ↔ `/api/agent`；口语里的 `agent-service` 即指此目录。
 >
-> **`app/` 只读的两点例外**：① 运行口径 `app/.env`（`HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR`）继续被新服务**读取**复用，不在此处新增业务配置；② 绞杀者切换期间允许新服务以 HTTP 反代/适配方式**调用**尚未迁移的旧 `app/` 端点，但不得回写 `app/` 代码。
+> **`app/` 只读的两点例外**：① 运行口径 `app/.env`（`HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR`）继续被新服务**读取**复用，不在此处新增业务配置——**待 `app/` 删除时，这些 `HERMES_*` 运行口径键迁到 `server/.env`（或仓库根 `.env`），键名与语义不变**；② 绞杀者切换期间允许新服务以 HTTP 反代/适配方式**调用**尚未迁移的旧 `app/` 端点，但不得回写 `app/` 代码。
 
 ### 14.2 统一启动器 + 构建期分端产物
 
@@ -763,6 +781,17 @@ web/
 - **构建期分端（生产/分发）**：CI 按端产出**三个精简产物**，各产物只含本端代码 + 对应 `shared`，互不含对方后端/前端。
 - **用户端是硬隔离线**：用户端交付物**绝不打包**运营端/企业端的后端代码与前端界面（隐私 + 最小攻击面）。
 - **禁止运行时胖产物**：不做"一个含三端全部代码的产物在运行时 `APP_TIER` 切端"——尤其前端不做"一个 bundle 运行时切端"（那会把控制面 UI 下发到用户浏览器）。`--tier` 只用于 dev 与按端构建入口选择，不等于把三端代码塞进同一交付物。
+
+### 14.3 部署绑定与入户引导（端之间如何互相找到、如何绑定企业）
+
+三端各自独立部署，必须先解决"新部署的端如何知道自己属于哪个企业、如何连上上端"，否则跨端 pull/认证无从发起。绑定全程**自下而上、不依赖上端入站**：
+
+1. **运营端开通企业**：运营端创建企业记录，生成 `enterprise_id` + 一次性**企业部署引导令牌（deploy bootstrap token）** + 负责人初始凭据（手机号+初始密码），交付给企业负责人（线下/邮件/控制台展示）。
+2. **企业端首次部署绑定**：企业端安装时配置 `OPERATOR_URL` + `enterprise_bootstrap_token`；启动后企业端**主动 pull 运营端**完成绑定（领取 `enterprise_id`、建立服务身份/密钥），令牌一次性失效。此后负责人按 §9.4-A 首登。
+3. **用户端首次部署绑定**：用户端安装时配置 `MANAGER_URL`（由企业端在创建成员时通过安装包参数/二维码/配置串下发给该成员）；成员按 §9.4-C 首次在线登录，登录成功即完成用户端↔企业端绑定（领取 token + 验签密钥）。
+4. **地址变更**：上端地址变更通过同一配置渠道下发；下端持久化上端地址，pull 失败按 §5 降级（已登录/已装载本地继续可用）。
+
+> 绑定令牌、`enterprise_id` 生成规则、二维码/配置串格式、服务身份密钥建立细节留详设；本节定死的是**"运营端发引导令牌 → 企业端 pull 绑定 → 用户端凭成员凭据 pull 绑定"这条单向自下而上的入户链**，不得反向（上端不入站、不推送）。
 
 ---
 
@@ -800,8 +829,9 @@ web/
 - 不再依赖 Hermes WebUI loopback 作生产执行链路。
 - 不为旧内部模块保留兼容层；不做迁移期双写。
 - 北向路径按 §10 统一收口；旧路径切换后删除。
+- **Loop / 周期任务仅在用户端运行期间执行**（本地优先的固有取舍）：用户端关机即不跑，不做服务端常驻调度代用户执行；这是产品取舍而非缺陷，前端需对用户明示。
 - AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`；必须改 Hermes 时只做最小补丁或可复用增强。
-- 详设须补齐：服务表所有权映射、各服务 API schema、事件 schema、executor/driver contract、验证矩阵。
+- 详设须补齐：各端表所有权映射、各端 API schema、跨端 pull 契约、脱敏摘要 schema、executor/driver contract、验证矩阵。
 
 ---
 
@@ -811,7 +841,8 @@ web/
 
 - **DB 写路径**：一刀切——某模块切到新服务时表归新库、旧写路径删除，不双写。
 - **Streaming / Timeline 主链路（高风险）**：用**绞杀者模式逐模块切换**。新 FastAPI 服务起来后按模块灰度切流，每切一个模块先校验北向 `event: timeline` 事件 parity（事件类型、顺序、cursor、payload 关键字段），验证通过再删旧路径。这不是兼容层，是有验证的迁移，符合 CLAUDE.md §10.4「完成前必须独立验证」。
-- **存量数据**：按 §6.4 逻辑归属先行、物理分库随切；现有 migrations 按归属拆分到各服务。
+- **存量数据**：按 §6.4 逻辑归属先行、物理分库随切；现有 migrations 按归属拆分到各端。
+- **验证环境**：绞杀者 parity 校验在**单机合并 dev/test 环境**（macmini 模拟三端、共址跑）完成，**不在分发到用户机器后才验证**；只有 parity 通过的产物才进入按端分发（§14.2）。
 - **回退**：每个切换批次保留可回退点（旧路径在 parity 验证期内不立即物理删除，验证期满再删）。
 
 ---
@@ -819,12 +850,12 @@ web/
 ## 18. 阶段实施建议
 
 ### Phase 0：架构冻结
-冻结三端边界与部署形态、用户端 Agent Gateway executor/driver 抽象、事件双层模型、库-per-tier 所有权、跨端 pull 通信面、联邦认证模型、成员级授权、治理摘要上报、路径收口。
-产物：本概要设计定稿、三端边界 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨端契约草案、存量表所有权映射草案、脱敏摘要 schema 草案。
+冻结三端边界与部署形态、用户端 Agent Gateway executor/driver 抽象、事件双层模型、库-per-tier 所有权、跨端 pull 通信面、联邦认证模型、成员级授权、外部能力归属（§6.6）、部署绑定入户链（§14.3）、治理摘要上报、路径收口。
+产物：本概要设计定稿、三端边界 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨端契约草案、存量表所有权映射草案、脱敏摘要 schema 草案、部署绑定令牌/入户流程草案。
 
-### Phase 1：三端骨架与联邦认证
-建立 Operation/Manager/Agent 三端 FastAPI 服务骨架（各自前端壳）；统一错误模型、`shared/auth` 验签中间件、request-id/trace、共享 `service_client`、各端 OpenAPI；联邦认证打通（运营端发负责人初始凭据 → 企业端首登 bootstrap+重置 → 企业端创建成员 → 用户端首次在线登录+本地 token）；用户端 Agent Gateway skeleton + fake runtime。
-验收：三端各自 `/healthz` `/readyz` `/docs` 可访问；负责人/成员两类登录全链路可走通；用户端 pull 企业端鉴权成功；fake runtime 产生 text/reasoning/tool/usage/completed 事件并映射为本地 timeline。
+### Phase 1：三端骨架 + 部署绑定 + 联邦认证
+建立 Operation/Manager/Agent 三端 FastAPI 服务骨架（各自前端壳）；统一错误模型、`shared/auth` 验签中间件、request-id/trace、共享 `service_client`、各端 OpenAPI；**部署绑定入户链打通**（运营端开通企业发引导令牌 → 企业端 pull 绑定 → 用户端凭成员凭据 pull 绑定，§14.3）；联邦认证打通（运营端发负责人初始凭据 → 企业端首登 bootstrap+重置 → 企业端创建成员 → 用户端首次在线登录+本地 token）；用户端 Agent Gateway skeleton + fake runtime。
+验收：三端各自 `/healthz` `/readyz` `/docs` 可访问；空白部署的企业端/用户端能按入户链完成绑定；负责人/成员两类登录全链路可走通；用户端 pull 企业端鉴权成功；fake runtime 产生 text/reasoning/tool/usage/completed 事件并映射为本地 timeline。
 
 ### Phase 2：企业端配置授权 + 用户端本地主链
 企业端承接员工/专家配置、知识、技能、连接器、招募专家、**成员级授权**；用户端承接本地 conversation/run/task/event/loop；用户端 pull 已授权专家/方案 → 本地装载 → EmployeeExecutionSnapshot 冻结。
@@ -885,3 +916,5 @@ web/
 5. `runtime_session/raw_runtime_event` 在用户端本地库的归属与保留期。
 6. 运营端→企业端"招募专家/行业方案应用包"的拉取契约、版本与幂等边界。
 7. 存量表 → 写端 → 目标库（部署位置）的完整映射表（详设产出）；会话类表在用户端本地重新落地的口径。
+8. 外部能力本地化（§6.6）：知识索引按授权集的切分/增量拉取/缓存淘汰策略；技能包与连接器凭据的本地分发与回收。
+9. 部署绑定（§14.3）：企业部署引导令牌的生成/时效/吊销、用户端 `MANAGER_URL` 下发载体（二维码/配置串）格式、服务身份密钥建立细节。
