@@ -382,14 +382,17 @@ EmployeeExecutionSnapshot
 
 ### 6.6 外部能力的归属与本地化（消除"企业端 vs 本地"歧义）
 
-知识/技能/连接器/MCP 既是**企业资产**（在企业端管理）又要**本地执行**（在用户端运行），二者按"管理面 / 执行面"分开，避免歧义：
+知识/记忆/技能/连接器/MCP 既是**企业资产**（在企业端管理）又要**本地执行**（在用户端运行），二者按"管理面 / 执行面"分开，避免歧义：
 
 | 能力 | 管理面（企业端 Manager 持有） | 执行面（用户端 Agent 本地） |
 |---|---|---|
-| 知识库（LightRAG） | 文档源、索引构建配置、知识集定义、成员/专家绑定 | pull 已授权知识集的**索引产物**到 `local_capability_cache`，**本地检索**；查询与命中内容不出本机 |
-| 技能（SkillHub/Hermes skills） | 技能目录、版本、安装与绑定策略 | pull 已授权技能并**本地安装/执行** |
+| 知识库（**LightRAG**） | 文档源、索引构建配置、知识集定义、成员/专家绑定 | pull 已授权知识集的**索引产物**到 `local_capability_cache`，**本地检索**经 MCP 注入 runtime；查询与命中内容不出本机 |
+| 记忆（**mem0 / OpenMemory**） | 记忆策略、种子记忆、保留期、可见性绑定 | 本机运行 mem0/OpenMemory 作为**本地 MCP 记忆服务**，经 MCP 注入 runtime；记忆读写内容不出本机，跨 runtime 可移植 |
+| 技能（SkillHub/Hermes skills） | 技能目录、版本、安装与绑定策略 | pull 已授权技能并**本地安装/执行**；无原生技能机制的 runtime 降级为 MCP 工具暴露 |
 | 连接器（Connectors） | 连接器定义、可见性、凭据授权（grant，谁能用） | 运行时**最小权限注入**凭据，本地发起对外部 SaaS 的调用 |
 | MCP | MCP server 定义与授权 | 本地启动/连接 MCP，本地调用 |
+
+> **复用裁决**：知识库复用 **LightRAG**、记忆复用 **mem0（其 OpenMemory 为本地优先 MCP 记忆服务）**——二者都开源（Apache 2.0 级）、成熟、可本机自部署，且**统一经 MCP 工具注入任意 runtime**（见 §7.5），职责互补不重叠：LightRAG 管文档语料检索，mem0 管 agent 跨交互的 user/session/agent 级记忆。AI Team 只做管理层封装与本地装配，不自造记忆/检索内核。
 
 **裁决与隐私口径**：
 - **管理面真相在企业端**（写在 mgr 库），用户端只持 pull 下来的**只读投影/产物**（`local_capability_cache`），随专家快照或独立 pull 一并装载、随授权变更失效。
@@ -464,6 +467,57 @@ Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始�
 3. **Cloud Worker**：平台托管 runtime worker（隔离容器、弹性调度）。**与"本地优先/不上传"取向相悖，仅作为企业显式选择的可选项**，非默认。
 
 **裁决（解原 §10-2）**：首期实现 **Local Worker + 清晰 Worker 接口**，Daemon Worker **接口同步设计、实现后置**，Cloud Worker 列入后续且默认关闭。不一开始把调度系统做复杂。
+
+### 7.5 能力适配：中立 RunSpec + 能力 MCP 注入 + 每 runtime 映射（借鉴 multica）
+
+> **设计借鉴**：本节抽象参考开源项目 **multica**（`github.com/multica-ai/multica`，`server/pkg/agent/`）的运行时适配机制——单一 `Backend.Execute(ctx, prompt, opts)` 接口 + runtime 中立入参 + 归一事件流 + 每 runtime 一个适配文件。我们以 Python 重实现其**设计**（非拷贝代码），落为 Executor/Driver 契约。
+
+**核心裁决**：员工的 persona / 模型 / 技能 / 知识 / 记忆 / 连接器配置，**不再像旧架构那样写进 runtime 原生 profile 文件**（旧 `SOUL.md` / `MEMORY.md` / `skills/` 目录 / `config.yaml` 直写一律废弃）。改为：业务层只产出**中立 `RunSpec`**，由 Driver 翻译注入，**优先级 协议/flag > 文件**，文件 materialize 仅作个别 runtime 的最后兜底（run 作用域临时产物，不碰共享 profile）。
+
+#### 7.5.1 中立 RunSpec（runtime 无关，由 EmployeeExecutionSnapshot 派生）
+
+```text
+RunSpec
+  system_prompt        # ← persona（中立文本，不写 SOUL.md）
+  model                # ← 中立 model id（空=让该 runtime CLI 自解析默认）
+  thinking_level       # ← 中立 reasoning/effort 档位
+  mcp_config           # ← 能力统一注入通道（见 7.5.2）
+  resume_session_id    # ← 续接上次 session
+  custom_args          # ← 透传参数（必须过 Driver 的 denylist 安全过滤）
+  timeout / cancellation
+```
+
+#### 7.5.2 A 类能力：统一经 `mcp_config` 注入（runtime 无关）
+
+知识 / 记忆 / 连接器 / 技能（无原生机制时）本质都是"运行时按需访问的工具"，**一律打包进 `RunSpec.mcp_config`**，对任何支持 MCP 的 runtime 同构注入：
+
+| 能力 | 本地 MCP 提供者 | 说明 |
+|---|---|---|
+| 知识 | LightRAG 本地检索 MCP | 已授权知识集索引产物，本地检索 |
+| 记忆 | **mem0 / OpenMemory** 本地 MCP | 本机记忆库读写，跨 runtime 可移植 |
+| 连接器 | 连接器 MCP/tool | 调用时最小权限注入凭据 |
+| 技能（降级） | 技能包装为 MCP tool | 仅当 runtime 无原生技能机制 |
+
+#### 7.5.3 B 类能力：中立字段 → Driver 按 runtime 翻译（优先 flag/协议）
+
+| 中立字段 | Claude Code | Hermes(ACP) | Codex/其它 | 兜底 |
+|---|---|---|---|---|
+| `system_prompt` | `--append-system-prompt` | ACP session 参数 | 各自 inline/flag | 仅个别 runtime 需文件时临时生成 |
+| `model` | `--model <id>` | ACP `session/set_model` RPC | flag / `--agent` by id / 空则 CLI 默认 | —— |
+| `thinking_level` | `--effort` | 协议字段 | 各自 | —— |
+| `mcp_config` | 写临时文件 → `--mcp-config` | 经 ACP 注入 | 各自 MCP 入口 | —— |
+| `resume_session_id` | `--resume <sid>` | ACP session | 各自 | 落地校验失败则清空回退 |
+| 技能（原生） | 原生 skill 机制 | profile skills（Driver 内封装） | 各自 | 降级见 7.5.2 |
+
+模型目录：**静态目录（稳定阵容如 Claude）+ 动态发现（shell 出 CLI 列模型、短期缓存）**，与 multica 一致。
+
+#### 7.5.4 规则与兼容
+
+1. **配置真相 runtime 中立、存企业端 Manager**；snapshot/RunSpec 不含任何 runtime 原生格式。
+2. **Driver 是唯一翻译点**；网关核心与业务层不碰 runtime 原生文件/参数。
+3. **能力声明 + 优雅降级**：Driver 声明支持的 materialization（原生技能?原生记忆?persona 注入方式?）；不支持的回落到 7.5.2 的 MCP 投影或明确标 unsupported，**绝不静默丢弃**。
+4. **安全**：`custom_args` 必须过 Driver 的参数 denylist（防止破坏协议/越权 flag）。
+5. **向后兼容 Hermes**：旧 `profile_capability.py` 的 SOUL/MEMORY/skills/config 写入逻辑**不再需要**（persona 走协议、记忆/知识走 MCP）；如个别能力仍需 Hermes profile 文件，封装在 `HermesAcpDriver` 内、run 作用域临时生成，**不手改 `.hermes/hermes-agent/`**。
 
 ---
 
@@ -908,6 +962,8 @@ v1 是**全新重建**：不与旧系统并跑、不切流、不桥接/反代旧
 | D13 | 本地优先与隐私 | 会话/群聊/run/usage **全本地、内容不上传**；跨端只流转认证、授权配置、**脱敏计量/审计摘要**逐级汇总 |
 | D14 | 跨端可用性 | 上端短暂离线只影响"拉新配置/新登录"；已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作 |
 | D15 | 仓库与构建 | **单仓不拆双仓**；后端统一启动器 `run.py --tier=...`（dev 便利）；**构建期按端产出三个精简产物**，用户端绝不含控制面代码；禁止运行时胖产物/前端运行时切端（§14.2） |
+| D16 | 能力适配 | **中立 `RunSpec` + 能力经 `mcp_config` 统一注入 + Driver 按 runtime 翻译（优先 flag/协议、弃用 profile 文件直写）**；借鉴 multica `server/pkg/agent` 设计（Python 重实现）。旧 `SOUL.md`/`MEMORY.md`/`skills/`/`config.yaml` 直写废弃（§7.5） |
+| D17 | 记忆组件 | 记忆复用 **mem0（OpenMemory 本地优先 MCP）**，与知识库 **LightRAG** 并列、均经 MCP 注入；二者职责互补（记忆 vs 文档检索），AI Team 只做封装与本地装配（§6.6/§7.5） |
 
 ### 20.2 待详设裁决
 

@@ -63,8 +63,8 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ### 3.1 复用优先，不自造底层
 
 - **Hermes 为执行底座之一**（经 `AcpExecutor` + `HermesAcpDriver` 接入），不自建任务编排内核
-- **知识库**复用 LightRAG、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 接已有服务
-- **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter
+- **知识库**复用 LightRAG、**记忆**复用 mem0（OpenMemory 本地优先 MCP）、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 接已有服务
+- **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter（设计借鉴 multica `server/pkg/agent`，Python 重实现）
 
 ### 3.2 库-per-tier，单写者
 
@@ -87,6 +87,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 - 不定义企业/员工/权限/账单等业务对象
 - Executor 按协议族复用（ACP / JSON-RPC stdio / JSON stream CLI），Driver 收口 runtime 差异
 - 事件先归一为 `AgentRuntimeEvent`，再映射为 `Business Timeline Event`；前端不消费 runtime-native event
+- **能力适配统一走中立 `RunSpec`**：persona/model/thinking/skill 等由 Driver 按 runtime 翻译（优先 flag/协议、**弃用 `SOUL.md`/`MEMORY.md`/`skills/`/`config.yaml` profile 文件直写**）；知识/记忆/连接器经 `mcp_config` 统一 MCP 注入（知识=LightRAG、记忆=mem0/OpenMemory）。详见 v1 概要设计 §7.5
 
 ### 3.6 联邦认证
 
@@ -213,6 +214,7 @@ data: {RunTimelineEvent JSON}
 
 Executor（协议族）：`AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`（+ `PlainCliExecutor` 降级）
 首批 Driver：`HermesAcpDriver` / `CodexJsonRpcDriver` / `ClaudeCodeJsonStreamDriver` / `OpenCodeJsonStreamDriver` / `OpenClawJsonStreamDriver`
+能力适配：中立 `RunSpec`（system_prompt/model/thinking_level/mcp_config/resume_session_id/custom_args）→ Driver 按 runtime 翻译；A 类能力（知识=LightRAG、记忆=mem0/OpenMemory、连接器）统一经 `mcp_config` 注入
 
 ---
 
