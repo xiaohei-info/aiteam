@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Hermes",
-  "short_name": "Hermes",
-  "description": "Hermes AI Agent Web UI",
+  "name": "AIFred",
+  "short_name": "AIFred",
+  "description": "AIFred AI Agent Web UI",
   "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",
@@ -15,7 +15,7 @@
     {
       "name": "New conversation",
       "short_name": "New chat",
-      "description": "Open Hermes ready for a new chat",
+      "description": "Open AIFred ready for a new chat",
       "url": "./?source=pwa&action=new-chat",
       "icons": [
         {

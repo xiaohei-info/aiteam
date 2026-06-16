@@ -130,7 +130,7 @@ self.addEventListener('fetch', (event) => {
         return caches.match('./').then((cached) => cached || new Response(
           '<html><body style="font-family:sans-serif;padding:2rem;background:#1a1a1a;color:#ccc">' +
           '<h2>You are offline</h2>' +
-          '<p>Hermes requires a server connection. Please check your network and try again.</p>' +
+          '<p>AIFred requires a server connection. Please check your network and try again.</p>' +
           '</body></html>',
           { headers: { 'Content-Type': 'text/html' } }
         ));
