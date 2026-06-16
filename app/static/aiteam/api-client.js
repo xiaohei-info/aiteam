@@ -12,6 +12,9 @@ window.aiteam = window.aiteam || {};
   function normalizeError(data, fallback) {
     if (data && data.error) {
       if (typeof data.error === 'string') {
+        if (typeof data.message === 'string' && data.message) {
+          return data.message;
+        }
         return data.error;
       }
       if (data.error && typeof data.error === 'object') {

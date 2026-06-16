@@ -748,8 +748,16 @@ window.aiteam = window.aiteam || {};
       }
       ns.api.createRun(body).then(function (result) {
         if (!result.ok) {
-          state.liveItems.push({ kind: 'notice', payload: { event_type: 'run_failed', preview: result.error || '消息发送失败，可重试。' } });
-          state.statusText = '发送失败，可重试发送。';
+          var failureMessage = result.error || '消息发送失败，可重试。';
+          state.liveItems.push({
+            kind: 'notice',
+            payload: {
+              event_type: 'run_failed',
+              preview: failureMessage,
+              error_message: failureMessage,
+            },
+          });
+          state.statusText = failureMessage;
           renderAll();
           return;
         }

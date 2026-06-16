@@ -77,6 +77,113 @@ test('chat renders concrete run failure reason from payload', function () {
   assert.ok(!html.includes('本次运行失败，可重试发送。'), 'must not hide concrete error behind generic text');
 });
 
+test('chat create-run failure should surface human-readable billing message instead of raw error code', async function () {
+  var createRunCalls = [];
+  var testContext = {
+    window: {
+      location: { pathname: '/app/chat/emp_billing', search: '' },
+      history: { replaceState() {}, pushState() {} },
+      addEventListener() {},
+      aiteam: {
+        util: context.window.aiteam.util,
+        states: { renderLoading() {}, handleApiResult() {} },
+        timeline: { disconnect() {}, connect() {}, getRunEvents() {} },
+        api: {
+          createRun(body) {
+            createRunCalls.push(body);
+            return Promise.resolve({
+              ok: false,
+              error: 'Enterprise balance is insufficient for a new run',
+              data: {
+                error: 'INSUFFICIENT_BALANCE',
+                message: 'Enterprise balance is insufficient for a new run',
+              },
+            });
+          },
+          get(path) {
+            return Promise.resolve({
+              ok: true,
+              data: {
+                conversation_id: '',
+                display_state: 'idle',
+                employee_summary: { employee_id: 'emp_billing', display_name: '小析', role_name: '顾问' },
+                messages: { items: [], next_cursor: 0, has_more: false },
+                last_message_preview: { event_cursor: 0, preview: '' },
+                latest_run: null,
+              },
+            });
+          },
+          getWorkbench() {
+            return Promise.resolve({ ok: true, data: { employees: [], groups: [] } });
+          },
+          getRunEvents() {
+            return Promise.resolve({ ok: true, data: { items: [] } });
+          },
+          updateWorkbenchState() {
+            return Promise.resolve({ ok: true, data: {} });
+          },
+        },
+      },
+    },
+    document: { getElementById() { return null; }, createElement() { return makeNode(); } },
+    console, setTimeout, clearTimeout,
+  };
+  testContext.global = testContext;
+  testContext.globalThis = testContext;
+  testContext.window.document = testContext.document;
+  vm.createContext(testContext);
+  vm.runInContext(code, testContext);
+
+  function makeDraftNode() {
+    const cache = {};
+    const node = {
+      innerHTML: '',
+      value: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      hidden: false,
+      style: {},
+      dataset: {},
+      _handlers: {},
+      addEventListener(name, handler) { this._handlers[name] = handler; },
+      removeEventListener() {},
+      querySelector(sel) { if (!cache[sel]) cache[sel] = makeDraftNode(); return cache[sel]; },
+      querySelectorAll() { return []; },
+      classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
+      setAttribute() {},
+      getAttribute() { return null; },
+      focus() {},
+      scrollIntoView() {},
+      closest() { return null; },
+      appendChild() {},
+      removeChild() {},
+    };
+    return node;
+  }
+
+  var testPage = testContext.window.aiteam.pages.appChat;
+  var container = makeDraftNode();
+  container.__activeChatKey = 'emp_billing';
+
+  testPage.render(container, {
+    conversation_id: '',
+    employee_summary: { employee_id: 'emp_billing', display_name: '小析', role_name: '顾问' },
+    messages: { items: [], next_cursor: 0, has_more: false },
+    latest_run: null,
+    __agentList: [{ employee_id: 'emp_billing', display_name: '小析', conversation_id: '' }],
+  });
+
+  const form = container.querySelector('[data-chat-form]');
+  const input = container.querySelector('[data-chat-input]');
+  const status = container.querySelector('[data-chat-status]');
+  input.value = '发起一轮新对话';
+  await form._handlers.submit({ preventDefault() {} });
+
+  assert.strictEqual(createRunCalls.length, 1, 'expected createRun to be invoked');
+  assert.strictEqual(status.textContent, 'Enterprise balance is insufficient for a new run', 'expected human-readable billing message in status area');
+  assert.notStrictEqual(status.textContent, 'INSUFFICIENT_BALANCE', 'must not expose raw billing error code in chat status');
+});
+
 test('chat renders reasoning timeline item from history', function () {
   const conversation = {
     conversation_id: 'c-reasoning',
