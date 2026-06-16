@@ -1,6 +1,6 @@
 # AI Team
 
-**AI Team 是三端独立部署的「控制面 SaaS + 本地数据面」多 Agent 数字员工平台。** 三端可独立部署，跨端只走自下而上的窄 pull 与联邦认证；会话与执行全部在用户本机本地化，**内容不上传**。
+**AI Team 是「云侧双控制面 + 用户本地数据面」的多 Agent 数字员工平台。** Operator 与 Manager 是平台方云侧控制面，Manager 是多租户企业管理 SaaS；Agent 是每用户本机数据面。会话与执行全部在用户本机本地化，**内容不上传 Manager/Operator**。
 
 正式架构地基见 `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md`（下称「v1 概要设计」）。任何冲突一律以该文档为准。
 
@@ -46,15 +46,15 @@ aiteam/
 | 端 | 部署位置 | 职责 | 库 |
 |----|----------|------|----|
 | **运营端 Operator** | 平台方中心化 SaaS | 企业开通、负责人凭据、人才市场/行业方案目录、跨企业治理汇总 | oper（中心） |
-| **企业端 Manager** | 企业自部署（内网/私有云） | 成员账号与认证、专家/方案配置、成员级授权、企业治理与计量汇总 | mgr（企业） |
+| **企业端 Manager** | 平台托管多租户 SaaS | tenant 管理、成员账号与认证、专家/方案配置、成员级授权、企业 RAG、企业治理与计量汇总 | manager_control_db + tenant data space（中心，按 tenant 隔离） |
 | **用户端 Agent** | 每用户本机自部署 | 工作台/私聊/群聊/Run/Task/Loop——全本地执行不上传；Agent Gateway 接入多 runtime | agent（本机） |
 
-**跨端通信只有自下而上的 HTTPS pull**：
+**跨端通信只有两类窄通道**：
 
 - Agent → Manager：成员登录认证、拉取已授权专家/方案与执行快照、上报脱敏计量/审计摘要
-- Manager → Operator：招募专家/方案、负责人凭据校验/重置、上报企业级汇总
+- Operator ↔ Manager：云侧服务间调用，用于企业开通/负责人 bootstrap 同步/目录发布、招募专家或方案包拉取、企业级汇总上报
 
-用户机器**无入站连接**；上端**绝不**向下端推送。上端短暂离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作。
+用户机器**无入站连接**；Operator/Manager 绝不向用户机器推送。Manager 短暂不可用只影响"拉新配置/新登录/摘要上报"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作。
 
 ## 各目录职责
 
@@ -62,7 +62,7 @@ aiteam/
 三端 FastAPI 服务 + 用户端 Agent Gateway + 共享后端包。统一启动器 `run.py --tier=operation|manager|agent` 只挂载对应端的 router / DB / migrations；CI 按端产出三个精简产物，**用户端交付物绝不打包控制面代码**。
 
 ### `web/`（前端，目标态）
-三套独立前端工程，按端分离、按端独立构建；公共能力（设计系统、i18n、timeline-client、api-client 基类）抽到 `web/shared` 复用。每端前端只调本端服务 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口，由各端服务自身静态托管。
+三套独立前端工程，按端分离、按端独立构建；公共能力（设计系统、i18n、timeline-client、api-client 基类）抽到 `web/shared` 复用。每端前端只调本端服务 `/api/<tier>/*`（同 origin），跨系统访问只能由本端服务端或本机 Agent Service 通过 `service_client` 发起，由各端服务自身静态托管。
 
 ### `app/`（冻结，只读参考）
 MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照基线），**只读不写、不再扩写**，v1 重建稳定后删除。v1 是**全新重建**：新架构**不与任何旧 `app/` 端点交互**（无反代、无桥接、无双写），**不迁移旧库数据**（新架构全新建库）。
@@ -87,7 +87,7 @@ AI Team 的正式文档目录，包含需求、业务方案、技术设计、部
 | 文档 | 用途 |
 |------|------|
 | `README.md` | 仓库结构与边界 |
-| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（三端边界、库-per-tier、联邦认证、Agent Gateway、D1–D15 裁决） |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（三端边界、Manager 多租户隔离、认证、Agent Gateway、D1–D24 裁决） |
 | `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
 | `CLAUDE.md` / `AGENTS.md` | Agent 开发全局指导与边界约束 |
 
@@ -99,8 +99,8 @@ MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计�
 
 ## 当前设计口径（v1）
 
-- **运营端 Operation**：平台运营控制面，负责企业开通、目录治理、负责人凭据、跨企业汇总。
-- **企业端 Manager**：企业配置控制面，负责成员账号/认证、专家/方案配置、成员级授权、企业治理。
+- **运营端 Operation**：平台运营控制面，负责企业开通、目录治理、负责人 bootstrap、跨企业汇总。
+- **企业端 Manager**：平台托管多租户企业管理控制面，负责 tenant 数据隔离、成员账号/认证、专家/方案配置、成员级授权、企业 RAG、企业治理。
 - **用户端 Agent**：本地数据面，负责会话/群聊/run/task/loop 全本地执行，pull 装载已授权专家/方案。
 - **Agent Gateway（用户端内）**：通用运行时接入网关，把运行请求接入不同本地 runtime 并输出统一运行事件。
 - **外部能力复用**：知识=LightRAG、记忆=mem0、技能=Hermes skills/SkillHub、连接器；统一经 MCP 注入、本地执行、内容不出本机（机制见 v1 概要设计 §6.6/§7.5）。
@@ -111,12 +111,12 @@ MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计�
 
 > AI Team 不自建复杂任务编排内核，而是做业务任务与多 runtime 既有运行机制之间的转换、翻译和包装。
 >
-> 库-per-tier、单写者、跨端单向 pull、本地优先内容不出端是硬约束。runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明；v1 **不复用旧 `app/.env` 与 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 链已废弃）。
+> 系统所有权分库、单写者、Manager tenant 隔离、本地优先内容不上传控制面是硬约束。runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明；v1 **不复用旧 `app/.env` 与 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 链已废弃）。
 
 ## 第一次进入本仓库的阅读顺序
 
 1. 先看本 README，理解三端边界与"MVP→v1 重建"现状
-2. 再读 v1 概要设计，理解三端架构地基与 D1–D15 裁决
+2. 再读 v1 概要设计，理解三端架构地基与 D1–D24 裁决
 3. 读 `CLAUDE.md` / `AGENTS.md`，掌握开发边界与流程约束
 4. 开发时把新能力落在 `server/` + `web/` 的对应端目录，不扩写冻结的 `app/`
 5. 不要把 AI Team 业务逻辑写入 `./.hermes/hermes-agent/`

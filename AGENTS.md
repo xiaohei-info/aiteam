@@ -8,7 +8,7 @@
 
 AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是**全新重建**：新架构**不与任何旧端点交互**（无反代、无桥接、无双写），**不迁移旧库数据**（新架构全新建库，测试库数据无需迁移）。
 
-- **正式口径**：v1 概要设计已冻结地基级裁决（D1–D15）。新开发一律按 v1 架构落地。
+- **正式口径**：v1 概要设计已冻结地基级裁决（D1–D24）。新开发一律按 v1 架构落地。
 - **旧实现状态**：`app/` 是冻结的 MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照），**只读不写、不再扩写**；v1 重建稳定后删除。
 - **新代码落点**：`server/`（后端）+ `web/`（前端），按端分目录（见 §9）。当前尚未创建，由 v1 开发逐步建立。
 - **历史文档**：MVP 阶段的业务方案、概要设计与历史详细设计已归档进 `docs/mvp版本/`，仅作历史参照，**不再作为开发口径**。
@@ -17,18 +17,18 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 ## 1. 项目定位
 
-**AI Team 是三端独立部署的「控制面 SaaS + 本地数据面」多 Agent 数字员工平台**，不是单一聊天工具，也不是中心化 SaaS。
+**AI Team 是「云侧双控制面 + 用户本地数据面」多 Agent 数字员工平台**，不是单一聊天工具，也不是纯中心化 SaaS。
 
 三端（可独立部署的部署单元）：
 
-- **运营端 Operator（中心化 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、负责人初始凭据、跨企业治理汇总。
-- **企业端 Manager（企业自部署）**：成员账号与认证、专家/方案配置、成员级授权、企业治理汇总。
+- **运营端 Operator（平台运营 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、负责人初始凭据、跨企业治理汇总。
+- **企业端 Manager（平台托管多租户企业管理 SaaS）**：tenant 管理、成员账号与认证、专家/方案配置、成员级授权、企业 RAG、企业治理汇总。
 - **用户端 Agent（每用户本机自部署）**：工作台、私聊、群聊、Run、Task、Loop——**全部本地执行与落库，会话内容绝不上传**。
 
 核心承诺：
 
-- **本地优先、内容不出端**：会话/群聊/run/usage 全在用户本机；跨端只流转认证、授权配置、脱敏计量/审计摘要。
-- **跨端单向 pull**：只有 Agent→Manager、Manager→Operator 两条自下而上的 HTTPS pull；用户机器无入站连接，无中心 Edge/Identity/消息总线。
+- **本地优先、内容不上传控制面**：会话/群聊/run、usage 原始事件与明细全在用户本机；跨端只流转认证、授权配置、执行快照、脱敏计量/审计聚合摘要。
+- **窄通信面**：Operator↔Manager 是云侧受控服务间调用；Agent→Manager 是用户端主动访问；用户机器无入站连接，无中心 Edge/Identity/消息总线。
 
 **术语统一**：「员工」与「专家」指同一概念（数字员工 Agent）。运营端目录存放**模板**，企业端从模板**招募**得到**实例**（`employee` 表 + 企业配置 + 成员级授权），用户端 pull 已授权实例本地装载执行。
 
@@ -39,8 +39,8 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ## 2. 架构边界（核心约束）
 
 ```
-运营端 Operator ◀──pull── 企业端 Manager ◀──pull── 用户端 Agent
- (oper 库)                 (mgr 库)                (agent 库, 本地)
+运营端 Operator ⇄ service call ⇄ 企业端 Manager ◀──active access── 用户端 Agent
+ (oper 库)                         (manager_control_db + tenant data space)   (agent 库, 本地)
                                                     └─ Agent Gateway ─ Executor ─ Driver ─ runtime
 ```
 
@@ -49,12 +49,12 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 | 层级 | 职责 | 禁止事项 |
 |------|------|----------|
 | **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站 |
-| **企业端 Manager Service** | 成员账号·认证 / 专家·方案配置 / 成员级授权 / 企业治理与计量汇总 | 持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向下端入站 |
+| **企业端 Manager Service** | tenant 隔离 / 成员账号·认证 / 专家·方案配置 / 成员级授权 / 企业 RAG / 企业治理与计量汇总 | 持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向用户机器入站 |
 | **用户端 Agent Service** | 本地会话/群聊/run/task/loop / 事件流 / pull 装载已授权专家·方案 | 改企业端配置主数据；承担运营治理；直调 runtime CLI；暴露 runtime 原始事件；上传会话明细 |
 | **Agent Gateway（用户端内）** | run 接入、Executor+Driver、事件归一 | 定义业务对象；漂移成第二套业务后台 |
 | **External Capability（用户端本地接入）** | 知识/技能/连接器/MCP 本地执行 | 内部协作编排语义 |
 
-**主链路**：每端前端 → 本端服务（同 origin）；跨端只走窄 pull。禁止前端跨端直调、禁止跨端/跨库直写、禁止上端向下端入站。
+**主链路**：每端前端 → 本端服务（同 origin）；跨系统只走受控窄通道。禁止前端跨端直调、禁止跨端/跨库直写、禁止 Operator/Manager 向用户机器入站。
 
 ---
 
@@ -66,21 +66,22 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 - **知识库**复用 LightRAG、**记忆**复用 mem0（OpenMemory 本地优先 MCP）、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 接已有服务
 - **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter（设计借鉴 multica `server/pkg/agent`，Python 重实现）
 
-### 3.2 库-per-tier，单写者
+### 3.2 系统所有权分库，单写者
 
-- 三端各自独立库（oper / mgr / agent），按部署位置分布
+- 三端按系统所有权分库：Operator 持 oper 库；Manager 持 manager_control_db + tenant data space（默认 PostgreSQL shared tables + RLS，可演进 schema/db-per-tenant）；Agent 持本机 agent 库。
 - 每张核心表只有一个写端；跨端读取走 pull API 或本地只读投影，**禁止跨端/跨库直写**
+- Manager 内部所有业务数据、RAG workspace、对象存储、缓存、队列/outbox、审计日志都必须绑定 `tenant_id`，并经 TenantContext 访问。
 
-### 3.3 本地优先、内容不出端
+### 3.3 本地优先、内容不上传控制面
 
-- 会话/执行内容不离开用户本机；跨端只流转认证、授权配置、脱敏摘要
+- 会话/执行内容、usage 原始事件与逐 token 明细不上传 Manager/Operator；跨端只流转认证、授权配置、执行快照、脱敏摘要
 - raw runtime event 仅用户端本地脱敏受控归档（设保留期），不跨端
 - 展示态（streaming / waiting_reply / resolved）不写入持久化主状态；状态冲突以本地 Runtime 执行口径为准
 
-### 3.4 跨端单向 pull
+### 3.4 窄通信面
 
-- 只保留 Agent→Manager、Manager→Operator 两条自下而上 pull；上端**绝不**向下端入站/推送
-- 配置变更靠下端周期/触发式轮询感知；上端短暂离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作
+- Operator↔Manager 允许云侧服务身份调用；Agent→Manager 只能由用户端主动访问；Operator/Manager **绝不**向用户机器入站/推送。
+- 配置变更靠 Agent 周期/触发式 sync 感知；Manager 短暂离线只影响"拉新配置/新登录/摘要上报"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作。
 
 ### 3.5 Gateway 只做运行时接入
 
@@ -88,10 +89,10 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 - Executor 按协议族复用、Driver 收口 runtime 差异；事件先归一再映射为业务时间线，前端不消费 runtime-native event
 - 能力适配走**中立 `RunSpec`**：B 类（persona/model/skill）由 Driver 按 runtime 翻译、优先 flag/协议、**不直写 profile 文件**；A 类（知识/记忆/连接器）统一经 MCP 注入。机制详见 v1 概要设计 §7.5
 
-### 3.6 联邦认证
+### 3.6 多租户认证
 
-- 凭据按端联邦持有：负责人初始凭据归运营端、成员凭据 + 负责人本地密码归企业端、用户端只持本会话 token
-- 验签/鉴权/签发为共享库 `shared/auth`，本地无状态验签，**无中心 Identity、无中心 Edge**
+- 凭据按端持有：负责人 bootstrap 来源归 Operator；负责人重置后凭据、成员凭据与 tenant 签名私钥归 Manager；Agent 只持本会话 token 与公钥/JWKS。
+- 验签/鉴权/签发为共享库 `shared/auth`，本地无状态验签，**无中心 Identity、无中心 Edge**；v1 直接采用非对称签名，禁止向用户端下发 HMAC 对称签名密钥。
 - 登录方式多样性收敛到 `Authenticator` 一层，单一 token 出口（`user` + `auth_identity` 扩展模型）
 
 ### 3.7 运行时接入配置（不复用旧 `app/.env`）
@@ -137,7 +138,7 @@ runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配�
 | 文档 | 用途 |
 |------|------|
 | `README.md` | 仓库结构与边界 |
-| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（D1–D15 已冻结） |
+| `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（D1–D24 已冻结） |
 | `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
 
 ### 历史参照（不再作为开发口径）
