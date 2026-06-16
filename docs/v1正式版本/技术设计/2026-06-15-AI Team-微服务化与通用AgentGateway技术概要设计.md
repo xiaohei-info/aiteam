@@ -12,6 +12,8 @@ supersedes:
 
 > 本文是 AI Team 进入 v1 正式生产阶段的**地基文档**。MVP 阶段的单体实现(单 `server.py` 进程、手写 `_match_prefix` 路由、Team Panel 大一统、Hermes WebUI loopback 执行链)已完成验证使命，本文定型 v1 的微服务架构底座，保留已验证的北向业务契约，推翻内部历史实现。
 >
+> **产品形态定性**：v1 是**三端独立部署的「控制面 SaaS + 本地数据面」分层产品**——运营端 Operator（中心化，企业开通与平台目录）、企业端 Manager（企业自部署，配置/授权/成员认证）、用户端 Agent（每用户本机自部署，会话与执行全本地、内容不上传）。三端可独立部署，跨端只走自下而上的窄 pull 与联邦认证。
+>
 > **本文是概要设计**：定型服务边界、通信方式、数据所有权、认证模型、事件模型、部署形态等**地基级决策**；不下沉到逐接口 schema、逐表 DDL，这些留待详细设计。但凡"彻底定型底层架构"所必需的决策，本文一律给出明确裁决，不留待定。
 
 ---
@@ -19,19 +21,22 @@ supersedes:
 ## 0. 核心判断
 
 【核心判断】
-✅ 值得做：单体后端、手写 router、Team Panel 大一统模块、Hermes WebUI loopback 执行链路已成为生产阶段的主要复杂度来源。本次按**真·微服务**重建内部结构：业务北向契约延续，内部实现彻底重做。
+✅ 值得做：单体后端、手写 router、Team Panel 大一统模块、Hermes WebUI loopback 执行链路已成为生产阶段的主要复杂度来源。本次同时完成两件事：① 按**真·微服务**重建内部结构（业务北向契约延续，内部实现彻底重做）；② 把系统重构为**三端独立部署的「控制面 SaaS + 本地数据面」分层产品形态**——运营端中心化、企业端与用户端各自自部署，会话与执行完全本地化、不上传，跨端只走自下而上的 pull 与首次在线认证。
+
+> **形态变更说明（推翻早期单体收口假设）**：本文早期版本曾把 Operation/Manager/Agent 设计为"由单一 Edge Gateway 收口、单 origin、单 SPA"的三个**共址**业务服务。经业务模型重新定型，三者升级为**三个可独立部署、跨网络通信的「端」**。服务名延续（仍叫 Operation/Manager/Agent Service），但部署边界、前端形态、认证模型随之改写——详见各章被标注"形态变更"处，以及 §20 裁决表对 D1/D3/D8/D9 的更新。
 
 【关键洞察】
-- 数据结构：配置态 / 执行态 / 运营态必须按服务拆开所有权，并落实为**库-per-service**。Manager 持有员工与能力配置，Agent 持有会话与运行态，Operation 持有平台运营对象。
-- 复杂度：真微服务的成本不在"拆服务"，而在**服务间通信、数据一致性、认证透传、可观测性**。这四项必须在概要阶段先定死，否则会演变成"看似微服务、实则分布式单体"。
-- 运行时抽象：Agent Gateway 不按 agent 品牌堆 adapter，也不假设所有 runtime 都是 JSON stream；按**协议族抽象 Executor**，再用 **Driver** 收口 runtime 差异。
-- 风险点：最大破坏性风险不是删旧实现，而是让新服务继续共享旧库、旧 router、旧事件名、旧 adapter，导致双系统并存；以及对**存量 streaming 主链路**做无验证的 big-bang 重写，破坏正在演示的产品。
+- 部署形态：这是一套 **B 端本地化交付产品**，不是中心化 SaaS。运营端是控制面（企业开通、人才市场目录、凭据来源、治理汇总）；企业端是企业侧控制面（成员账号、专家/方案配置与**成员级授权**）；用户端是数据面（会话/群聊/run 全本地执行）。**会话内容绝不离开用户机器**，跨端只上报脱敏计量/审计摘要。
+- 数据结构：配置态 / 执行态 / 运营态必须按端拆开所有权，并落实为**库-per-tier**：Operation 持平台运营对象与企业账号、Manager 持企业配置与授权、Agent 持本地会话与运行态。
+- 跨端通信：三端跨网络，通信面**极窄且单向 pull**——Manager→Operator（招募专家/方案、负责人凭据校验与重置）、Agent→Manager（成员登录认证、拉取已授权专家/方案）。不存在中心 Edge 收口，不存在用户机器的入站连接。
+- 运行时抽象：Agent Gateway 与本地 runtime 都在**用户端**，不按 agent 品牌堆 adapter、也不假设所有 runtime 都是 JSON stream；按**协议族抽象 Executor**，再用 **Driver** 收口 runtime 差异。
+- 风险点：最大破坏性风险不是删旧实现，而是①让新端继续共享旧库、旧 router、旧事件名、旧 adapter 导致双系统并存；②对**存量 streaming 主链路**做无验证的 big-bang 重写；③误把会话/usage 数据上传破坏"本地优先"隐私承诺。
 
 【技术方案】
-1. 第一步简化数据与服务边界：Operation / Manager / Agent 三业务服务，各自独立库与写路径。
-2. 在三服务前置**北向接入网关(Edge Gateway)**：统一认证、路由、限流、request-id/trace 注入。
-3. 定死服务间通信：同步走内网 HTTP/JSON + 共享 client SDK；异步业务事件走消息总线；运行时事件走专用流式通道 + 事件落库。
-4. 消除 Hermes 特殊情况：Agent Gateway 统一接入 `AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`，runtime 差异收敛到 Driver。
+1. 第一步定死三端边界与部署形态：Operation（中心运营端）/ Manager（企业端）/ Agent（用户端）各自独立部署、独立库、独立前端、独立写路径。
+2. 跨端通信只保留两条 pull 链路 + 联邦认证；不设中心 Edge Gateway，认证以 `shared/auth` 库 + 各端入口中间件实现。
+3. 定死端内/跨端通信：端内同步走 HTTP/JSON + 共享 client SDK；运行事件在用户端内走专用流式通道 + 事件落库；跨端只上报脱敏计量/审计摘要逐级汇总。
+4. 消除 Hermes 特殊情况：用户端 Agent Gateway 统一接入 `AcpExecutor` / `JsonRpcStdioExecutor` / `JsonStreamCliExecutor`，runtime 差异收敛到 Driver。
 5. 确保零产品破坏性：保留业务北向接口语义与对话页能力，但不兼容旧内部包、旧 router、旧 adapter；存量 streaming 主链路用绞杀者模式逐模块切换、逐模块验证 parity。
 
 ---
@@ -56,23 +61,35 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 
 ### 1.3 分析总结
 
-**AI Team 应保留已验证的业务对象与北向业务接口语义，但推翻旧内部实现形态，并按真微服务重建。**
+**AI Team 应保留已验证的业务对象与北向业务接口语义，但推翻旧内部实现形态，按真微服务重建，并落定为三端独立部署的「控制面 SaaS + 本地数据面」产品形态。**
 
-系统升级为：
+系统升级为三端独立部署、跨端 pull 通信：
 
 ```text
-Frontend
-  -> Edge Gateway(北向接入网关：认证 / 路由 / 限流 / trace)
-      -> Operation Service / Manager Service / Agent Service
-          -> Agent Gateway(运行时接入网关)
-              -> Runtime Executor(协议族)
-                  -> Runtime Driver(runtime 差异)
-                      -> Codex / Claude Code / OpenCode / Hermes / OpenClaw / ...
+┌─ 运营端 Operator（中心化 SaaS） ──────────────────┐
+│  Operation Service（企业开通 / 人才市场目录 / 治理汇总） │
+│  + 运营端前端                                       │
+└───────────────▲──────────────────────────────────┘
+                │ pull：招募专家·方案 / 负责人凭据校验·重置
+┌───────────────┴── 企业端 Manager（企业自部署） ──────┐
+│  Manager Service（成员账号 / 专家·方案配置 / 成员级授权） │
+│  + 企业端前端                                       │
+└───────────────▲──────────────────────────────────┘
+                │ pull：成员登录认证 / 拉取已授权专家·方案 / 上报计量·审计摘要
+┌───────────────┴── 用户端 Agent（每用户本机自部署） ───┐
+│  Agent Service（会话 / 群聊 / run / task / loop 全本地）  │
+│   -> Agent Gateway -> Executor(协议族) -> Driver       │
+│        -> Codex / Claude / OpenCode / Hermes / OpenClaw │
+│  + 用户端前端                                       │
+└──────────────────────────────────────────────────┘
 ```
 
-> **命名消歧（贯穿全文）**：本文有两个"网关"，职责完全不同，不可混淆。
-> - **Edge Gateway / 北向接入网关**：前端流量入口，负责认证、路由到业务服务、限流、request-id/trace 注入。
-> - **Agent Gateway / 运行时接入网关**：Agent Service 之后的运行时抽象层，负责把运行请求接入不同 Agent Runtime 并输出统一运行事件。
+跨端通信面**极窄且单向自下而上 pull**：用户机器无入站连接；会话/执行内容只在本地，跨端只上报脱敏计量与审计摘要。
+
+> **命名消歧（贯穿全文）**：
+> - **三个"端"**：Operator（运营端）/ Manager（企业端）/ Agent（用户端），是**可独立部署的部署单元**。每端各含一个同名业务服务 + 一套独立前端。
+> - **服务名沿用**：Operation Service / Manager Service / Agent Service —— 名字不变，但部署边界从"共址"改为"分端独立部署"。
+> - **Agent Gateway / 运行时接入网关**：位于**用户端内部**，负责把运行请求接入不同本地 Agent Runtime 并输出统一运行事件。**不再有中心化的 Edge Gateway**——认证与入口下沉为各端自带的 `shared/auth` 中间件（见 §9）。
 
 ---
 
@@ -80,41 +97,49 @@ Frontend
 
 ### 2.1 要解决什么问题
 
-在不丢失既有业务闭环的前提下，把演示型单体后端升级为：可独立部署、可独立伸缩、可多 runtime 接入、可独立治理、可长期维护的生产级微服务架构。
+在不丢失既有业务闭环的前提下，把演示型单体后端升级为：三端可独立部署、可独立伸缩、可多 runtime 接入、可独立治理、可长期维护，且满足"会话本地化、不上传"隐私承诺的生产级架构。
 
 具体问题：
-- 企业前台 / 企业后台 / 系统后台的服务所有权如何划分。
-- Team Panel 现有能力如何拆分到 Manager Service 与 Agent Service。
-- 真微服务下，服务间如何通信、如何保证一致性、如何透传认证与 trace。
-- 数据如何按库-per-service 拆分，存量表如何归属与迁移。
-- Agent Gateway 如何脱离 Hermes WebUI loopback，并以统一抽象接入多 runtime。
-- 前端是否随服务拆分，如何组织。
+- 运营端 / 企业端 / 用户端三端的部署边界与服务所有权如何划分。
+- Team Panel 现有能力如何拆分到 Manager（企业端配置）与 Agent（用户端执行）。
+- 三端跨网络如何通信、如何把通信面收窄为单向 pull、如何保证最终一致。
+- **跨端联邦认证**如何成立：运营端发负责人初始凭据 → 企业端首登重置并本地保存 → 企业端发成员凭据 → 用户端首次在线认证后本地 token 验签。
+- **配置下发与成员级授权**如何成立：企业端招募专家/配方案时指定授权给哪些成员账号，用户端如何主动 pull 装载。
+- 数据如何按库-per-tier 拆分，会话/usage 如何留在本地、治理摘要如何逐级上报。
+- Agent Gateway 如何在用户端脱离 Hermes WebUI loopback，并以统一抽象接入多 runtime。
+- 三端前端如何分离与组织。
 - 后端 Web 框架与基础设施如何选型。
 - 重构时哪些契约保留、哪些历史实现必须删除、存量主链路如何安全切换。
 
 ### 2.2 解决方式
 
-采用"**北向接入网关 + 三业务服务 + 通用 Agent Gateway + 协议族 Executor + Runtime Driver + 外部能力域**"的总体结构，并配套"库-per-service + 内网同步调用 + 业务事件总线 + 运行时流式通道"的通信与数据底座。
+采用"**三端独立部署（运营端/企业端/用户端）+ 各端自带认证入口 + 用户端通用 Agent Gateway + 协议族 Executor + Runtime Driver + 外部能力域**"的总体结构，并配套"库-per-tier + 端内同步调用 + 跨端单向 pull + 用户端内运行时流式通道 + 治理摘要逐级上报"的通信与数据底座。
 
 ```text
-前端页面群组（单一 SPA，按模块分目录）
-  -> Edge Gateway（认证/路由/限流/trace）
-      -> Operation Service   （系统后台 / 平台运营）
-      -> Manager Service      （企业后台 / 配置与治理）
-      -> Agent Service        （企业前台 / 会话与执行）
-            -> Agent Gateway
-                  -> AcpExecutor / JsonRpcStdioExecutor / JsonStreamCliExecutor
-                        -> Runtime Driver
-                              -> codex / claude / opencode / hermes / openclaw / ...
-            -> External Capability（知识 / MCP / Skills / Relay / Connectors）
+运营端 Operator（中心化 SaaS）
+  运营端前端 -> Operation Service（企业开通 / 人才市场·行业方案目录 / 平台治理与跨企业汇总）
+                    ▲
+                    │ pull：招募专家·方案；负责人凭据校验与重置
+企业端 Manager（企业自部署）
+  企业端前端 -> Manager Service（成员账号与认证 / 专家·方案配置 / 成员级授权 / 企业治理汇总）
+                    ▲
+                    │ pull：成员登录认证；拉取已授权专家·方案；上报脱敏计量·审计摘要
+用户端 Agent（每用户本机自部署）
+  用户端前端 -> Agent Service（会话 / 群聊 / run / task / loop —— 全本地）
+                  -> Agent Gateway
+                        -> AcpExecutor / JsonRpcStdioExecutor / JsonStreamCliExecutor
+                              -> Runtime Driver
+                                    -> codex / claude / opencode / hermes / openclaw / ...
+                  -> External Capability（知识 / MCP / Skills / Relay / Connectors，本地接入）
 ```
 
-业务主链路按场景分流：
-- 系统后台页面 → Operation Service。
-- 企业后台页面 → Manager Service。
-- 企业前台工作台 / 私聊 / 群聊 / Loop → Agent Service。
-- Agent Service 生成运行请求 → Agent Gateway → Executor + Driver 启动/连接具体 runtime。
-- runtime 原始事件统一转换为 Agent Runtime Event，再映射为业务时间线事件回流 Agent Service。
+业务主链路按端分流：
+- 运营端页面 → Operation Service（企业开通、人才市场/行业方案目录治理、跨企业治理看板）。
+- 企业端页面 → Manager Service（成员账号、招募专家、配置行业方案、成员级授权、企业治理）。
+- 用户端工作台 / 私聊 / 群聊 / Loop → 本地 Agent Service（全部本地执行，内容不上传）。
+- 用户端 Agent Service 生成运行请求 → 本地 Agent Gateway → Executor + Driver 启动/连接本地 runtime。
+- runtime 原始事件统一转换为 Agent Runtime Event，再映射为业务时间线事件回流本地对话页。
+- 跨端只发生：用户端 pull Manager（认证 + 拉授权配置 + 上报摘要）、Manager pull Operator（招募 + 凭据 + 上报汇总）。
 
 ### 2.3 对既有业务接口的处理原则
 
@@ -128,17 +153,18 @@ Frontend
 
 ### 2.4 术语定义
 
-- **Edge Gateway（北向接入网关）**：前端唯一入口，负责认证校验、按路径路由到业务服务、限流、request-id/trace 注入、统一 CORS/CSP。承担轻量 BFF 职责与**有状态认证面**（登录端点 + `user`/`auth_identity` 身份表 + 签名密钥，见 §9.8），不承载业务对象。
-- **Operation Service**：平台运营服务，承接系统后台、平台模板、行业方案、企业账号治理、平台审计、平台财务与运营统计。
-- **Manager Service**：企业管理服务，承接企业后台、组织、成员、员工配置、知识库、技能、连接器、记忆、企业账单治理等管理面。
-- **Agent Service**：企业前台与任务服务，承接工作台、私聊、群聊、Run、Task、Loop、事件流、运行快照与协作编排。
-- **Agent Gateway（运行时接入网关）**：通用运行时接入网关，把运行请求接入不同 Agent Runtime，输出统一运行事件。
+- **运营端 Operator / 企业端 Manager / 用户端 Agent**：三个**可独立部署的部署单元（端）**。运营端中心化 SaaS，企业端由企业自部署，用户端由每个用户在本机自部署。每端各含一个同名业务服务 + 一套独立前端 + 独立库。
+- **Operation Service（运营端）**：平台运营服务，承接**企业注册/开通**、企业负责人初始凭据签发与重置（不保留密码）、人才市场/平台模板/行业方案目录治理、平台级内容发布/下架/审核、企业账号治理、平台审计、**跨企业计量/财务/运营统计汇总**。
+- **Manager Service（企业端）**：企业管理服务，承接企业后台、组织、成员账号与**成员认证**、员工/专家配置、知识库、技能、连接器、记忆、**招募专家与配置行业方案 + 成员级授权映射**、企业账单治理、企业级计量/审计汇总。**不持有任何会话与运行态。**
+- **Agent Service（用户端）**：用户端前台与任务服务，承接工作台、私聊、群聊、办公室动态、Conversation、Message、Run、Task、Loop、事件流、运行快照与协作编排，**全部在用户本机本地执行与落库，不上传内容**；主动 pull 企业端拉取已授权专家/方案并本地装载。
+- **Agent Gateway（运行时接入网关）**：位于**用户端内部**的通用运行时接入网关，把运行请求接入不同本地 Agent Runtime，输出统一运行事件。
 - **Runtime Executor**：按协议族抽象的执行器，负责进程、stdio、stream、超时、取消、session、日志等通用机制。
 - **Runtime Driver**：具体 runtime 适配器，负责命令参数、握手、原始事件解析、session_id 提取、usage 解析与能力声明。
 - **Agent Runtime Event**：Gateway 内部统一运行事件，不暴露 runtime 原生事件名。
-- **Business Timeline Event（RunTimelineEvent）**：Agent Service 对前端暴露的业务时间线事件，用于对话页、任务树、工具调用与审计回放；沿用现有 `event: timeline` 协议语义。
-- **EmployeeExecutionSnapshot**：执行前固化的员工执行快照，保证一次 run 使用稳定配置。
-- **Identity 能力域**：认证、登录、企业入户能力的逻辑统称，**非独立服务**——无状态部分(验签/鉴权/签发)为共享库 `shared/auth`，有状态部分(登录端点+身份表+密钥)折叠进 Edge Gateway；principal 主数据按所有者联邦（系统账号归 Operation、企业成员归 Manager）。
+- **Business Timeline Event（RunTimelineEvent）**：用户端 Agent Service 对本地前端暴露的业务时间线事件，用于对话页、任务树、工具调用与审计回放；沿用现有 `event: timeline` 协议语义。
+- **EmployeeExecutionSnapshot**：执行前固化的员工/专家执行快照，由用户端在装载已授权专家时从企业端拉取配置并冻结，保证一次 run 使用稳定配置。
+- **联邦认证（Federated Auth）**：认证主体与凭据按端联邦持有——运营端持企业负责人初始凭据来源、企业端持成员账号与负责人重置后本地密码、用户端只持本会话 token。无状态验签/签发为共享库 `shared/auth`，各端自带登录入口中间件，**无中心 Identity 服务、无中心 Edge Gateway**（见 §9）。
+- **成员级授权（Member-scoped Grant）**：企业端招募专家/配置行业方案时，可指定该专家/方案授权给哪些成员账号；用户端 pull 时只能取到授权给本账号的条目。
 
 ---
 
@@ -146,25 +172,29 @@ Frontend
 
 ### 3.1 系统建设目标
 
-1. 后端服务边界清晰，系统后台 / 企业后台 / 企业前台职责分离，可独立部署、独立伸缩。
-2. Team Panel 大一统模块被拆解为 Manager Service 与 Agent Service。
-3. Agent Gateway 不依赖 Hermes WebUI，不依赖任一 runtime SDK。
-4. Codex / Claude Code / OpenCode / Hermes / OpenClaw 均可通过统一运行时抽象接入。
-5. 对话页能展示文本、思考过程、工具调用、bash/file 操作输入输出、错误、usage 和最终结果。
-6. 服务 API 具备 schema 校验、OpenAPI 文档、统一错误模型与可测试契约。
-7. 服务间通信、数据一致性、认证透传、可观测性有统一底座，不在每个服务各自发明。
-8. 新架构不保留内部历史包袱，避免兼容层长期污染生产代码。
+1. 三端边界清晰，运营端 / 企业端 / 用户端职责分离，可独立部署、独立交付、独立伸缩。
+2. Team Panel 大一统模块被拆解为企业端 Manager Service（配置与授权）与用户端 Agent Service（本地会话与执行）。
+3. **本地优先与隐私承诺**：会话/群聊/run/usage 全部在用户本机执行与落库，内容不上传；跨端只上报脱敏计量/审计摘要。
+4. **跨端联邦认证成立**：运营端发负责人初始凭据、企业端首登重置本地保存、企业端发成员凭据、用户端首次在线认证后本地 token 验签；企业端短暂离线不阻断已登录用户的本地工作。
+5. **配置下发与成员级授权成立**：企业端招募专家/配方案并指定授权成员，用户端主动 pull 装载到本地。
+6. Agent Gateway 不依赖 Hermes WebUI，不依赖任一 runtime SDK；Codex / Claude Code / OpenCode / Hermes / OpenClaw 均可通过统一运行时抽象在用户端本地接入。
+7. 对话页能展示文本、思考过程、工具调用、bash/file 操作输入输出、错误、usage 和最终结果。
+8. 各端服务 API 具备 schema 校验、OpenAPI 文档、统一错误模型与可测试契约。
+9. 端内通信、数据一致性、认证、可观测性有统一底座（共享库），不在每端各自发明。
+10. 新架构不保留内部历史包袱，避免兼容层长期污染生产代码。
 
 ### 3.2 设计原则
 
 1. **业务契约稳定，内部实现清理**：北向业务语义可继续使用，旧内部实现不作为兼容对象。
-2. **服务按业务所有权拆分**：Operation 管平台运营，Manager 管企业配置与治理，Agent 管任务/对话/执行/事件。
-3. **库-per-service，单写者**：每张核心表只能有一个写服务；跨服务读取走 API 或事件投影，禁止跨库直写。
-4. **Gateway 只做运行时接入**：不定义企业、员工、权限、账单等业务对象，不漂移成第二套业务后台。
-5. **Executor 按协议族复用，Driver 收口差异**：ACP 走 AcpExecutor，JSON-RPC stdio 走 JsonRpcStdioExecutor，JSON stream CLI 走 JsonStreamCliExecutor。
-6. **事件先归一，再产品化**：Driver 把原始事件转为 Agent Runtime Event，Agent Service 再映射为 Business Timeline Event；前端不消费 runtime-native event。
-7. **显式删除特殊情况**：不留 alias，不留双写，不把 Hermes 作为默认特例写进上层业务。
-8. **底座统一，服务收敛**：认证、错误模型、日志、trace、配置、健康检查由共享基础设施统一，服务内不重复造。
+2. **按端拆分业务所有权**：Operation 管平台运营与企业开通，Manager 管企业配置/授权/成员认证，Agent 管本地任务/对话/执行/事件。
+3. **库-per-tier，单写者**：每张核心表只能有一个写端；跨端读取走 pull API 或本地投影，禁止跨端/跨库直写。
+4. **本地优先、内容不出端**：用户端会话/执行内容不离开本机；跨端只流转认证、授权配置、脱敏计量/审计摘要。
+5. **跨端通信单向 pull、面尽量窄**：只保留 Manager→Operator、Agent→Manager 两条 pull 链路；用户机器无入站连接，不做跨端实时编排。
+6. **Gateway 只做运行时接入**：不定义企业、员工、权限、账单等业务对象，不漂移成第二套业务后台。
+7. **Executor 按协议族复用，Driver 收口差异**：ACP 走 AcpExecutor，JSON-RPC stdio 走 JsonRpcStdioExecutor，JSON stream CLI 走 JsonStreamCliExecutor。
+8. **事件先归一，再产品化**：Driver 把原始事件转为 Agent Runtime Event，用户端再映射为 Business Timeline Event；前端不消费 runtime-native event。
+9. **显式删除特殊情况**：不留 alias，不留双写，不把 Hermes 作为默认特例写进上层业务。
+10. **底座统一，端内收敛**：认证、错误模型、日志、trace、配置、健康检查由共享库统一，各端不重复造。
 
 ---
 
@@ -173,160 +203,156 @@ Frontend
 ### 4.1 整体系统架构
 
 ```text
-┌──────────────────────────────────────────────────────────┐
-│                        Frontend                           │
-│  单一 SPA：企业前台 / 企业后台 / 系统后台 / 工作台 / 对话页    │
-│  static/aiteam/pages/{agent, manager, operation, shared}  │
-└───────────────────────────┬──────────────────────────────┘
-                            │ HTTPS（单一 origin）
-                  ┌─────────▼──────────┐
-                  │   Edge Gateway      │  认证 / 路由 / 限流 / request-id / trace
-                  └───┬─────┬─────┬─────┘
-        /api/operation │     │/api/manager   │/api/agent
-          ┌────────────▼┐ ┌──▼──────────┐ ┌─▼─────────────┐
-          │ Operation    │ │ Manager     │ │ Agent          │
-          │ Service      │ │ Service     │ │ Service        │
-          │ (DB: oper)   │ │ (DB: mgr)   │ │ (DB: agent)    │
-          └──────┬───────┘ └─────┬───────┘ └──────┬─────────┘
-                 │   内网同步 HTTP/JSON + 业务事件总线  │
-                 └───────────┬───────────────────────┘
-                             │（Agent Service 提交 run）
-                   ┌─────────▼──────────┐
-                   │   Agent Gateway     │  运行时接入 / 事件归一 / 取消超时恢复
-                   └─────────┬──────────┘
-              ┌──────────────▼───────────────┐
-              │ Runtime Executor + Driver     │  ACP / JSON-RPC stdio / JSON stream CLI
-              └──────────────┬───────────────┘
-                  Local / Daemon / Cloud Worker
-                             │
-                   Codex / Claude / OpenCode / Hermes / OpenClaw
+╔═══════════ 运营端 Operator（中心化 SaaS，平台方部署） ═══════════╗
+║  运营端前端 SPA（web/operation） ── HTTPS ──▶ Operation Service    ║
+║                                              (DB: oper)            ║
+║  企业开通 / 负责人初始凭据·重置 / 人才市场·行业方案目录 / 跨企业治理汇总  ║
+╚════════════════════════════▲══════════════════════════════════════╝
+                             │ HTTPS pull（企业端→运营端）
+                             │ 招募专家·方案 · 负责人凭据校验/重置 · 上报企业汇总
+╔═══════════ 企业端 Manager（企业自部署，企业内网/私有云） ══════════╗
+║  企业端前端 SPA（web/manager） ── HTTPS ──▶ Manager Service        ║
+║                                            (DB: mgr)              ║
+║  成员账号·成员认证 / 专家·方案配置 / 成员级授权 / 企业治理与计量汇总    ║
+╚════════════════════════════▲══════════════════════════════════════╝
+                             │ HTTPS pull（用户端→企业端）
+                             │ 成员登录认证 · 拉取已授权专家·方案 · 上报脱敏计量·审计摘要
+╔═══════════ 用户端 Agent（每用户本机自部署） ═════════════════════╗
+║  用户端前端 SPA（web/agent） ── HTTPS(localhost) ──▶ Agent Service  ║
+║                                                   (DB: agent，本地)  ║
+║  会话 / 群聊 / run / task / loop —— 全本地，内容不上传               ║
+║        └─▶ Agent Gateway ─▶ Runtime Executor + Driver             ║
+║                 ACP / JSON-RPC stdio / JSON stream CLI            ║
+║                 └─▶ Codex / Claude / OpenCode / Hermes / OpenClaw  ║
+║        └─▶ External Capability（Knowledge/MCP/Skills/Relay/Connectors，本地接入）║
+╚═══════════════════════════════════════════════════════════════════╝
 
-────────────── 横向：External Capability ──────────────
- Knowledge(LightRAG) / MCP / Skills(SkillHub) / AI Relay / Connectors / Storage / Search
-
-────────────── 横向：基础设施底座 ──────────────
- 业务事件总线 / 可观测(日志·trace·metrics) / 配置中心 / Identity
+────────────── 各端横向：基础设施底座（共享库，非中心服务） ──────────────
+ shared/auth（验签·鉴权·签发） / 可观测(日志·trace·metrics) / 错误模型 / service_client / 配置
 ```
+
+> **关键差异**：不存在中心化 Edge Gateway 与单一 origin；每端各有自己的前端 origin 与入口。认证下沉为各端自带的 `shared/auth` 中间件。跨端通信全部是**自下而上的 HTTPS pull**，用户机器**无入站连接**。
 
 ### 4.2 服务职责说明
 
-#### 4.2.1 Operation Service（平台运营，对应系统后台）
+#### 4.2.1 Operation Service（运营端，中心化 SaaS）
 
-主要职责：平台企业账号管理；平台模板、员工模板、行业方案治理；平台级内容发布/下架/审核；平台财务、充值、配额、成本统计；系统账号、系统角色、平台审计；平台运营看板。
+主要职责：**企业注册/开通**，设置并签发企业负责人初始凭据（手机号 + 初始密码）、负责人凭据**重置（不保留密码明文/可逆形式）**；平台模板、员工/专家模板、行业方案目录治理；平台级内容发布/下架/审核；系统账号、系统角色、平台审计；**跨企业计量/财务/配额/成本汇总**与平台运营看板。
 
-禁止事项：不执行 Agent 任务；不维护企业前台会话；不直接调用 runtime；不修改企业内部运行态。
+禁止事项：不执行 Agent 任务；不维护任何会话；不直接调用 runtime；不持有企业成员密码或会话内容；不向用户机器发起入站连接。
 
-#### 4.2.2 Manager Service（企业管理，对应企业后台）
+#### 4.2.2 Manager Service（企业端，企业自部署）
 
-主要职责：企业、成员、角色、组织结构；员工实例配置、模型配置、Prompt、能力开关；知识库、文档、索引、员工知识绑定；技能安装与员工绑定；连接器定义、凭据授权、可见性控制；记忆管理、人工校正、治理视图；企业账单、用量、审计、设置。
+主要职责：企业、成员账号、角色、组织结构；**成员认证**（成员登录凭据校验与 token 签发）；负责人首登后**本地保存重置密码**；员工/专家实例配置、模型配置、Prompt、能力开关；知识库、文档、索引、知识绑定；技能安装与绑定；连接器定义、凭据授权、可见性控制；记忆管理与治理视图；**从运营端招募专家/配置行业方案，并指定成员级授权（哪些专家/方案授权给哪些成员账号）**；企业账单、企业级计量/审计汇总与设置。
 
-禁止事项：不提交 runtime 执行；不维护 Run/Task 执行状态机；不消费 runtime 原始事件；不把展示态写入业务主状态字段。
+禁止事项：不持有/不维护任何会话与 Run/Task 执行状态机；不提交 runtime 执行；不消费 runtime 原始事件；不接收上传的会话内容；不向用户机器发起入站连接。
 
-#### 4.2.3 Agent Service（企业前台与任务，对应企业前台执行能力）
+#### 4.2.3 Agent Service（用户端，每用户本机自部署）
 
-主要职责：工作台、私聊、群聊、办公室动态；Conversation、Message、Run、Task、Loop；@提及路由、多员工协作编排；执行前员工快照构建；调用 Agent Gateway；运行事件落库、任务树构建、SSE/WebSocket 推送；运行结果、usage、artifact、错误回流。
+主要职责：工作台、私聊、群聊、办公室动态；Conversation、Message、Run、Task、Loop（**全部本地落库**）；@提及路由、本地多专家协作编排；**主动 pull 企业端拉取已授权专家/方案并本地装载**；执行前从企业端拉取并冻结员工/专家执行快照；调用本地 Agent Gateway；运行事件落本地库、任务树构建、SSE/WebSocket 推送（localhost）；运行结果、usage、artifact、错误本地回流；**仅向企业端上报脱敏计量与审计摘要，不上传会话内容**。
 
-禁止事项：不直接修改员工配置主数据；不承担系统后台运营治理；不直接调用具体 runtime CLI；不把 runtime 原始事件暴露给前端。
+禁止事项：不直接修改企业端员工配置主数据；不承担运营治理；不直接调用具体 runtime CLI（经 Gateway）；不把 runtime 原始事件暴露给前端；不上传会话/执行明细。
 
-#### 4.2.4 Edge Gateway（北向接入网关）
+#### 4.2.4 各端入口与认证下沉（取消中心 Edge Gateway）
 
-主要职责：作为前端唯一 origin；校验用户会话/令牌并注入内部身份上下文；按路径前缀路由到三业务服务；统一限流、CORS/CSP、request-id 与 trace 注入；聚合三服务的 OpenAPI 为统一在线文档入口。**兼任有状态认证面 owner**：承载登录端点、`user`/`auth_identity` 身份表与签名密钥（见 §9.8），但无状态验签/鉴权由共享库 `shared/auth` 提供，不集中为服务调用。
+**形态变更（推翻早期"单一 Edge Gateway / 单 origin"假设）**：三端跨网络独立部署，不存在统一前端入口，因此**不设中心化 Edge Gateway**。每端各自承担自己的接入职责：
 
-禁止事项：不承载业务对象与业务规则；不直接访问业务库（自持的窄身份存储除外）；不解析 runtime 事件；不集中管授权（授权留各业务服务）。
+- 每端各有独立前端 origin 与 HTTPS 入口；服务自带认证中间件（`shared/auth` 本地验签）、限流、CORS/CSP、request-id/trace 注入。
+- **登录端点与身份存储按端联邦持有**：运营端持企业负责人初始凭据与重置入口；企业端持成员账号、成员认证端点与负责人重置后本地密码；用户端只持本会话 token，登录请求转发企业端校验（见 §9）。
+- 跨端调用方（企业端 client、用户端 client）通过 `shared/service_client` 发起带签名身份的 HTTPS pull，被调端本地验签 + 授权。
 
-> **形态裁决**：Edge Gateway 首期采用**轻量 FastAPI 反向代理/BFF**（统一鉴权中间件 + httpx 转发），不引入重型 API 网关产品；待规模增长再评估 Envoy/Kong。这样兼顾"单一 origin + 统一认证"与"最小复杂度"。
+禁止事项：任一端不集中代理其它端业务；不在入口层写业务逻辑；用户端不暴露除 localhost 外的入站监听（除非用户显式开启）。
 
 ### 4.3 Team Panel 拆分口径
 
-现有 `team_panel/` 解散，按所有权重分：
+现有 `team_panel/` 解散，按**端**重分：
 
-| 现有载体 | 归属服务 | 能力 |
+| 现有载体 | 归属端 | 能力 |
 |---|---|---|
-| `router_system_admin.py` | Operation | 平台模板 / 行业方案 / 企业账号治理 / 平台审计 / 财务统计 |
-| `router_enterprise_admin.py`、`router_team_settings_billing.py` | Manager | 企业 / 成员 / 角色 / 组织 / 企业账单设置 |
-| `router_team.py`（6069 行）中配置态部分 | Manager | employee config / prompt / knowledge / skill binding / connector grant / memory governance |
-| `router_team.py` 中执行态部分 | Agent | conversation / message / run / task / loop / run event / orchestration / runtime binding / office view / event stream |
-| `router_auth.py`（640 行） | Identity（Edge + 联邦 principal） | login / session / passkeys / oauth / onboarding；principal 主数据按 Operation/Manager 联邦 |
+| `router_system_admin.py` | 运营端 Operation | 企业开通 / 平台模板 / 行业方案目录 / 企业账号治理 / 平台审计 / 跨企业统计 |
+| `router_enterprise_admin.py`、`router_team_settings_billing.py` | 企业端 Manager | 企业 / 成员 / 角色 / 组织 / 企业账单设置 / 招募专家 / 成员级授权 |
+| `router_team.py`（6069 行）中配置态部分 | 企业端 Manager | employee/expert config / prompt / knowledge / skill binding / connector grant / memory governance |
+| `router_team.py` 中执行态部分 | 用户端 Agent（本地） | conversation / message / run / task / loop / run event / orchestration / runtime binding / office view / event stream |
+| `router_auth.py`（640 行） | 按端联邦 | 运营端：负责人凭据/重置；企业端：成员登录/session/onboarding；用户端：本地 token。passkeys/oauth 按端归位 |
 
-拆分原则：配置态归 Manager，执行态归 Agent，平台治理归 Operation，认证归 Identity 域；外部能力接入通过明确 integration client，不跨服务直接写库。
+拆分原则：配置态与授权归企业端 Manager，执行态归用户端 Agent（本地），企业开通与平台治理归运营端 Operation，认证按端联邦；外部能力在用户端本地接入，不跨端直接写库。
 
 ---
 
-## 5. 服务间通信架构（真微服务地基·新增）
+## 5. 通信架构（跨端 pull + 端内通信·改写）
 
-真微服务的成本主要在这一章。三类通信通道各司其职，不混用。
+**形态变更（推翻早期"内网三通道 + 业务事件总线"假设）**：三端跨网络独立部署、用户机器无入站连接，跨端不再使用共享内网与中心消息总线。通信分两层：**跨端只有自下而上的窄 pull**，**端内（主要在用户端）才有高频运行事件流**。
 
-### 5.1 三类通信通道
+### 5.1 跨端通信（自下而上 pull，面尽量窄）
 
-| 通道 | 用途 | 形态 | 一致性 |
+| 链路 | 用途 | 形态 | 一致性 |
 |---|---|---|---|
-| **北向同步**（前端→Edge→服务） | 用户请求/响应 | HTTPS / JSON | 强一致（请求内） |
-| **内网同步**（服务↔服务） | 即时查询/命令，如取员工快照、提交 run、校验可用性 | 内网 HTTP/JSON + 共享 client SDK | 调用内强一致，跨服务最终一致 |
-| **业务事件总线**（异步） | 配置变更广播、usage 结算、审计回流、行业方案应用包同步 | 消息总线（at-least-once） | 最终一致 |
-| **运行时流式通道**（Gateway→Agent） | 高频运行事件（text_delta 等） | 专用流式（gRPC stream / 内网 SSE）+ 事件落库 | 实时 + 可回放 |
+| **Agent → Manager**（用户端→企业端） | 成员登录认证；拉取已授权专家/方案与执行快照；上报脱敏计量/审计摘要 | HTTPS / JSON pull + `shared/service_client` | 最终一致（本地优先） |
+| **Manager → Operator**（企业端→运营端） | 招募专家/方案、拉取目录更新；负责人凭据校验/重置；上报企业级汇总 | HTTPS / JSON pull + `shared/service_client` | 最终一致 |
 
-> **好品味裁决**：高频 `text_delta` 等运行事件**不进**业务事件总线（durable broker 扛不住逐 token 写入，也无必要）。运行事件走专用流式通道直推 Agent Service，同时落 Agent 事件库供回放；只有**业务语义事件**（run 终态、usage 结算、审计、配置变更）才上业务事件总线。
+跨端约定：
+- **方向单一**：只允许下端主动 pull 上端；上端**绝不**向下端发起入站连接或推送。配置变更靠下端**周期/触发式轮询**感知（见 §6 配置投影），不靠服务端推送。
+- **传输**：HTTPS/JSON；跨端走公网/企业网，必须 TLS + 服务身份签名（见 §9.3 服务间认证）。
+- **超时/重试/降级**：所有 pull 必须设超时；只读 pull 可幂等重试（request-id 去重）；上端短暂不可用时，**已装载配置与已登录 token 在本地继续可用**（本地优先），仅"拉新配置/新登录"受影响。
+- **摘要上报**：用户端只上报脱敏计量与审计摘要（见 §6.5），失败可本地缓冲后补传；**绝不上传会话内容**。
 
-### 5.2 同步调用约定
+### 5.2 端内通信（主要在用户端）
 
-- **传输**：内网 HTTP/JSON 优先（FastAPI 原生、迁移成本最低、可观测成熟）。仅当性能剖析证明某热点路径必要时，才将其升级为 gRPC，并在详设备案；不预先为假想性能上 gRPC。
-- **客户端**：提供 `shared/service_client`，统一 base-url 解析、超时、重试、熔断、trace 透传、错误模型解码。各服务不手写 httpx 调用。
-- **超时与重试**：所有同步调用必须设超时；只读调用可幂等重试（带 request-id 去重），写调用默认不自动重试，由调用方依据 `Idempotency-Key` 决定。
-- **熔断与降级**：被调服务不可用时，调用方按业务定义降级（如快照拉取失败则 run 拒绝并回明确错误，绝不用陈旧配置硬跑）。
+| 通道 | 用途 | 形态 |
+|---|---|---|
+| **本地同步**（Agent Service ↔ Agent Gateway） | 提交 run、取消 run、查询 runtime capability | 本地 HTTP/JSON 或进程内调用 |
+| **运行时流式通道**（Gateway → Agent Service） | 高频运行事件（text_delta 等） | 本地流式 + 事件落本地库 |
 
-### 5.3 异步事件约定
+> **好品味裁决**：高频 `text_delta` 等运行事件**始终留在用户端本地**——直推本地 Agent Service 并落本地事件库供回放，**永不跨端**。跨端只看到脱敏的计量/审计摘要，看不到逐 token 流。
 
-- **投递语义**：at-least-once；消费者必须幂等（按 `event_id` 去重）。
-- **事件信封**：统一 `{ event_id, type, source_service, tenant_id, occurred_at, version, payload }`。
-- **典型事件**：
-  - Manager → Agent：`employee.config.changed`（触发 Agent 侧只读员工投影刷新/快照失效）。
-  - Agent/Gateway → Manager/Operation：`run.usage.settled`、`run.completed`、`audit.event.recorded`。
-  - Operation → Manager：`industry_solution.published`、`platform_template.published`（应用包同步）。
-- **选型**：消息总线首选 **Redis Streams**（若已在栈内，最低引入成本，支持消费组与回放）或 **NATS JetStream**；高吞吐期再评估 Kafka。本文定 Redis Streams 为默认，详设确认。
+### 5.3 调用约定（跨端与端内统一）
 
-### 5.4 服务间接口清单（不复用前端 API）
+- **客户端**：提供 `shared/service_client`，统一 base-url 解析、超时、重试、trace 透传、服务身份签名与错误模型解码；各端不手写 httpx 调用。
+- **超时与重试**：所有调用必须设超时；只读幂等重试（request-id 去重），写调用默认不自动重试，由调用方依据 `Idempotency-Key` 决定。
+- **降级口径**：快照/授权拉取失败时，run 拒绝并回明确错误，**绝不用陈旧或缺失配置硬跑**；但已成功装载的专家/方案在企业端离线期内仍可本地使用。
+
+### 5.4 跨端接口清单（不复用前端 API）
 
 | 调用方 → 被调方 | 接口语义 | 通道 |
 |---|---|---|
-| Agent → Manager | 拉取 EmployeeExecutionSnapshot、校验员工可用性 | 内网同步 |
-| Manager → Agent | 员工配置变更广播 | 事件总线 |
-| Agent → Agent Gateway | 提交 run、取消 run、查询 runtime capability | 内网同步 |
-| Agent Gateway → Agent | 运行事件回流、终态回调、usage 回调 | 流式通道 + 事件总线（终态/usage） |
-| Operation → Manager | 平台模板发布、行业方案应用包同步 | 事件总线 |
-| Edge → 各服务 | 透传带身份上下文的用户请求 | 北向同步 |
+| Agent → Manager | 成员登录认证；拉取已授权专家/方案列表；拉取 EmployeeExecutionSnapshot；上报脱敏计量/审计摘要 | 跨端 pull |
+| Manager → Operator | 拉取人才市场/行业方案目录；招募专家/方案；负责人凭据校验/重置；上报企业级计量/审计汇总 | 跨端 pull |
+| Agent Service → Agent Gateway（端内） | 提交 run、取消 run、查询 runtime capability | 本地同步 |
+| Agent Gateway → Agent Service（端内） | 运行事件回流、终态回调、usage 回调 | 本地流式 + 本地落库 |
 
 ### 5.5 服务发现与配置
 
-- 各服务地址通过环境变量/配置中心注入（dev 用 compose service name，prod 用平台 DNS/服务注册）。
-- 沿用现有 `app/.env` 统一运行口径：Python 解释器、Hermes Home、Hermes config 等运行入口继续复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，不裸用其他环境作为主路径。
+- 各端互相可达地址通过环境变量/配置注入：运营端为公网地址；企业端地址下发给本企业用户端；用户端默认 localhost。
+- 沿用现有 `app/.env` 统一运行口径（**只读取、不回写**，见 §14.1）：Python 解释器、Hermes Home、Hermes config 等运行入口继续复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`，不裸用其他环境作为主路径。
 
 ---
 
-## 6. 数据架构（库-per-service·新增/扩展）
+## 6. 数据架构（库-per-tier + 配置投影 + 治理摘要上报·改写）
 
 ### 6.1 数据所有权原则
 
-每张核心表只能有一个写服务。库-per-service：三业务服务各自独立数据库（dev 可同实例不同 database/schema，prod 独立实例）。Gateway 运行态数据归 Agent 库或独立 Gateway 库，按部署裁决。
+每张核心表只能有一个写端。**库-per-tier**：三端各自独立数据库，分布在不同部署位置（运营端中心库、企业端企业库、用户端本机库）。
 
-| 数据域 | 写服务 | 库 |
+| 数据域 | 写端 | 库（部署位置） |
 |---|---|---|
-| system_user / system_role / platform_template / industry_solution / platform_finance / platform_audit | Operation | oper |
-| enterprise / member / role / org / employee / prompt / knowledge / skill_binding / connector / memory / billing_setting / enterprise_audit | Manager | mgr |
-| conversation / message / run / task / loop / runtime_binding / run_event / orchestration | Agent | agent |
-| runtime_worker / runtime_capability / runtime_session / raw_runtime_event | Agent Gateway（或 Agent 库） | agent/gw |
-| user / auth_identity（provider→user 映射）/ refresh_token / onboarding_state | Edge Gateway（认证面，窄身份存储） | identity |
+| system_user / system_role / **enterprise_registration** / **owner_credential**（初始/重置，不存可逆密码）/ platform_template / industry_solution / platform_finance / platform_audit / **cross_enterprise_usage_rollup** | 运营端 Operation | oper（中心） |
+| enterprise / member（成员账号 + 凭据）/ **owner_local_credential**（重置后本地）/ role / org / employee / expert / prompt / knowledge / skill_binding / connector / memory / **member_grant**（成员级授权）/ billing_setting / enterprise_audit / **enterprise_usage_rollup** | 企业端 Manager | mgr（企业自部署） |
+| conversation / message / run / task / loop / runtime_binding / run_event / orchestration / **loaded_expert_projection**（pull 的只读专家/方案投影）/ runtime_worker / runtime_capability / runtime_session / raw_runtime_event / **local_session_token** | 用户端 Agent | agent（用户本机） |
 
-跨服务读取走 API 组合或事件投影，**禁止跨库直写**。
+跨端读取走 pull API 或本地投影，**禁止跨端/跨库直写**。
 
-### 6.2 跨服务读取策略
+> **认证存储联邦**：身份不再集中于单一 identity 库——企业负责人初始凭据来源在运营端、成员凭据与负责人重置后密码在企业端、用户端只持本会话 token。详见 §9。
 
-- **新鲜读**：调用所有者服务 API（API 组合）。
-- **热点读**：所有者通过事件总线广播变更，消费者维护**本地只读投影**（CQRS-lite）。典型：Agent Service 维护只读员工投影，由 Manager 的 `employee.config.changed` 驱动刷新，避免对话路径每次跨服务取配置。
+### 6.2 跨端读取策略（pull + 本地投影）
+
+- **新鲜读**：下端按需 pull 上端 API（如成员登录认证实时问企业端）。
+- **配置投影（本地优先）**：用户端**周期/触发式 pull** 企业端"已授权给本账号的专家/方案"，落 `loaded_expert_projection` 本地只读投影；对话路径只读本地投影，不每次跨端取配置。企业端离线时用本地投影继续工作。
 - **执行固化读**：见 §6.3 快照。
+- **变更感知**：不靠上端推送；下端 pull 时带本地投影版本号/etag，上端只回增量，未授权条目自动从投影中失效移除。
 
-### 6.3 员工执行快照（EmployeeExecutionSnapshot）
+### 6.3 员工/专家执行快照（EmployeeExecutionSnapshot）
 
-Agent Service 发起 run 时，不直接读运行中可变的员工配置，而是固化执行快照：
+用户端 Agent Service 发起 run 时，不直接读可变配置，而是固化执行快照：
 
 ```text
 EmployeeExecutionSnapshot
@@ -335,18 +361,29 @@ EmployeeExecutionSnapshot
   tools / skills / knowledge_refs / connector_refs / memory_policy
 ```
 
-**所有权裁决（解原 §10-4）**：快照由 **Agent Service 在提交 run 时从 Manager Service 拉取并冻结**，连同 `snapshot_version` 落 Agent 库；run 全程只引用该快照。理由：快照生命周期与 run 绑定，run 归 Agent 所有；Manager 只需提供"按 employee_id+version 生成快照"的内网接口。这样保证一次 run 配置稳定，避免长任务上下文漂移。
+**所有权裁决（解原 §10-4）**：快照由**用户端 Agent Service 在装载专家/提交 run 时从企业端 Manager 拉取并冻结**，连同 `snapshot_version` 落用户端本地库；run 全程只引用该快照。理由：快照生命周期与 run 绑定，run 归用户端本地所有；企业端只需提供"按 employee_id+version 生成快照"的 pull 接口。这样保证一次 run 配置稳定、避免长任务上下文漂移，且企业端离线时本地已冻结快照仍可执行。
 
 ### 6.4 存量数据迁移映射
 
-存量为单库（macmini 测试库已有数据）。库-per-service 是目标态，迁移采用**逻辑归属先行、物理分库随切**：
-- 详设须产出"现有表 → 写服务 → 目标库"完整映射表。
-- 迁移随服务切换分批进行：某模块切到新服务时，其表归入新服务库，旧写路径删除（不双写）。
-- 现有 `team_panel/migrations` 按归属拆分到各服务的 migrations 目录；沿用"迁移在首次 DB 连接时自动应用"的现有机制。
+存量为单库（macmini 测试库已有数据）。库-per-tier 是目标态，迁移采用**逻辑归属先行、物理分库随切**：
+- 详设须产出"现有表 → 写端 → 目标库（部署位置）"完整映射表。
+- 迁移随端切换分批进行：某模块切到新端时，其表归入该端库，旧写路径删除（不双写）。
+- 现有 `team_panel/migrations` 按归属拆分到各端的 migrations 目录；沿用"迁移在首次 DB 连接时自动应用"的现有机制。
+- 注意：会话/run 等表归用户端**本机库**，存量演示库中的此类数据不迁往中心，按"本地优先"在用户端重新落地。
+
+### 6.5 治理摘要上报（替代跨端 usage 事件）
+
+**形态变更**：会话/usage 不上传，治理闭环靠**脱敏摘要逐级上报**：
+- **上报内容**：计量（token/成本、run 次数/时长、错误率，按员工/专家/时间聚合）、关键审计事件（专家招募装载、登录、授权变更、越权尝试）。**不含**会话文本、文件、工具输入输出明细。
+- **上报路径**：用户端 → 企业端（成员级聚合，落 `enterprise_usage_rollup`）→ 运营端（企业级聚合，落 `cross_enterprise_usage_rollup`）。
+- **可靠性**：上报失败本地缓冲后补传，按 `summary_id` 幂等去重；上报是尽力而为，不阻塞本地执行。
+- **隐私边界**：脱敏在用户端**上报前**完成；详设产出摘要 schema 与脱敏字段清单。
 
 ---
 
 ## 7. Agent Gateway 通用运行时设计
+
+> **部署位置**：Agent Gateway 与本地 runtime 都运行在**用户端**进程内/同机，与本地 Agent Service 共址。运行请求与运行事件**全程不跨端**；下文抽象（Executor/Driver/事件归一）与部署边界变更无关，沿用。
 
 ### 7.1 运行请求与运行事件
 
@@ -402,11 +439,11 @@ Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始�
 
 ### 7.4 Runtime Worker 与部署形态
 
-1. **Local Worker**：服务进程所在机器直接运行 runtime CLI。适合开发、单机、早期验证。
-2. **Daemon Worker**：参考 multica 模式，用户/企业机器运行 runtime daemon，上报可用 CLI、版本、模型能力与心跳；Gateway 分发任务，daemon 回传事件。
-3. **Cloud Worker**：平台托管 runtime worker，隔离容器、弹性调度。
+1. **Local Worker**：用户端本机直接运行 runtime CLI。**这是本架构的默认与主形态**——会话/执行本地化、内容不上传，天然落在 Local Worker。
+2. **Daemon Worker**：用户本机运行 runtime daemon，向同机 Gateway 上报可用 CLI、版本、模型能力与心跳；适合一机多 runtime 的管理，仍是本地范畴。
+3. **Cloud Worker**：平台托管 runtime worker（隔离容器、弹性调度）。**与"本地优先/不上传"取向相悖，仅作为企业显式选择的可选项**，非默认。
 
-**裁决（解原 §10-2）**：首期实现 **Local Worker + 清晰 Worker 接口**，Daemon Worker **接口同步设计、实现后置**，Cloud Worker 列入后续。不一开始把调度系统做复杂。
+**裁决（解原 §10-2）**：首期实现 **Local Worker + 清晰 Worker 接口**，Daemon Worker **接口同步设计、实现后置**，Cloud Worker 列入后续且默认关闭。不一开始把调度系统做复杂。
 
 ---
 
@@ -430,117 +467,150 @@ runtime raw event
 
 **Raw event 归档裁决（解原 §10-3）**：**保留** raw runtime event 归档表（`raw_runtime_event`），**脱敏后落库、受控访问、设保留期**，仅供调试与 Driver 回归。前端与审计查询只消费脱敏后的产品事件。理由：多 runtime 调试期，Driver 解析出错时没有原始流就无法定位根因，这是廉价保险。
 
-**状态口径继承**：Conversation 持久化主状态固定枚举 `draft | active | paused | muted | archived`；展示态 `idle | routing | waiting_reply | streaming | busy | resolved | reconnecting` **不写入持久化主状态**。Team Panel/Manager 业务镜像状态与 Runtime 执行状态冲突时，以 Runtime 执行口径为准，业务侧通过事件回流更新镜像，不伪造 Runtime 已完成。
+**状态口径继承**：Conversation 持久化主状态固定枚举 `draft | active | paused | muted | archived`；展示态 `idle | routing | waiting_reply | streaming | busy | resolved | reconnecting` **不写入持久化主状态**。会话主状态与运行态**都在用户端本地**，二者冲突时以本地 Runtime 执行口径为准，业务侧通过本地事件回流更新镜像，不伪造 Runtime 已完成。企业端/运营端不持有会话状态，只接收脱敏计量/审计摘要（§6.5）。
 
 ---
 
-## 9. 认证与身份（Identity·新增）
+## 9. 认证与身份（三端联邦认证·改写）
 
-> 现状是技术债：业务多租户 auth（`router_auth.py` + `auth_service.py`）是**纯进程内存 mock**（全局 dict + RLock、`mock_wechat_guest`、硬编码 `ent_001`、手机验证码写死），且与基座单密码门（`api/auth.py` `check_auth`）两套割裂。内存 token 在微服务多进程下无法共享，是迁移的硬阻塞。本章定型一套**最简但可扩展**的认证，全部退役旧 mock。
+> 现状是技术债：业务多租户 auth（`router_auth.py` + `auth_service.py`）是**纯进程内存 mock**（全局 dict + RLock、`mock_wechat_guest`、硬编码 `ent_001`、手机验证码写死），且与基座单密码门（`api/auth.py` `check_auth`）两套割裂。本章定型一套**三端联邦、最简可扩展**的认证，全部退役旧 mock。
+>
+> **形态变更（推翻早期"中心 Identity 折叠进单一 Edge"假设）**：三端跨网络独立部署，没有单一 origin，也没有可承载中心身份库的 Edge。认证因此**按端联邦**——凭据分端持有、登录在各端入口、验签靠共享库本地完成、跨端校验靠窄 pull。
 
 ### 9.1 三个平面（先分清，别混）
 
 | 平面 | 回答 | 谁对谁 | 机制 |
 |---|---|---|---|
-| ① 用户认证 | "你是哪个人/哪个企业成员" | 人 → 系统 | 登录 → 签发**用户 JWT** |
-| ② 用户授权 | "你这角色能不能做这事、能不能碰这租户数据" | 已登录用户 → 资源 | 租户隔离 + 角色 + 资源归属校验 |
-| ③ 服务间认证 | "这个内网调用是不是可信服务发来的" | 服务 → 服务 | mTLS / 签名服务令牌，与用户身份无关 |
+| ① 用户认证 | "你是哪个人/哪个企业成员/负责人" | 人 → 某端 | 登录 → 签发**用户 JWT** |
+| ② 用户授权 | "你这角色能不能做这事、能不能碰这数据" | 已登录用户 → 资源 | 角色 + 资源归属 + 成员级授权校验 |
+| ③ 服务间认证 | "这个跨端 pull 是不是可信端发来的" | 端 → 端 | TLS + 签名服务令牌，与用户身份无关 |
 
-边界口径：**用户 JWT 管 ①②；服务身份管 ③；用户上下文在 ③ 的通道里透传**（供下游做 ② 与审计），不以用户 JWT 替代服务身份。
+边界口径：**用户 JWT 管 ①②；服务身份管 ③；用户上下文在 ③ 的通道里透传**（供上端做审计），不以用户 JWT 替代服务身份。
 
-### 9.2 核心设计：多样性隔离在一层，token 永远单一路径
+### 9.2 联邦凭据持有（谁持有谁、谁校验谁）
 
-登录方式（微信/手机/账密/未来 oauth…）的多样性**只活在 Authenticator 一层**；所有方式收敛到同一个 `user`，再走同一个 token 出口。token 签发与校验**不认识你怎么登的**。
+| 主体 | 凭据来源 | 长期凭据存放 | 谁校验登录 |
+|---|---|---|---|
+| 企业负责人 | **运营端**签发初始/重置凭据（手机号 + 初始密码） | **企业端本地**（首登重置后） | 首登：企业端 pull 运营端校验初始凭据；重置后：企业端本地校验 |
+| 企业成员 | **企业端**创建（手机号 + 初始密码） | **企业端** | 用户端 pull 企业端校验 |
+| 系统账号 | 运营端创建 | 运营端 | 运营端本地校验 |
+
+**运营端不保留密码**：运营端只持"初始/重置 bootstrap 凭据"（仅存校验所需的 hash，供一次性首登/重置校验）；负责人重置后的有效密码只存企业端本地，运营端永不持有。
+
+### 9.3 核心设计：多样性隔离在一层，token 永远单一路径
+
+登录方式（手机+密码/手机验证码/未来微信/oauth…）的多样性**只活在 Authenticator 一层**；所有方式收敛到同一个 `user`，再走同一个 token 出口。token 签发与校验**不认识你怎么登的**。
 
 ```text
-微信 / 手机 / 账密 / ...        ← 多样性只在这层
+手机+密码 / 验证码 / 微信 / ...   ← 多样性只在这层
       │  各自 verify → 外部身份(external_id)
       ▼
-   auth_identity 映射表          ← 外部身份 → 内部 user
+   auth_identity 映射表          ← 外部身份 → 内部 user（在凭据持有端）
       │  统一 user_id
       ▼
    issue_token(user_id, ...)     ← 单一出口，与登录方式无关
 ```
 
-### 9.3 数据结构（关键，token 反而最简单）
+数据结构（在各凭据持有端各有一份，结构同构）：
 
 ```text
 user                      # 规范账号(principal)
   id / enterprise_id / display_name / status / roles
 
-auth_identity             # "映射"就是这张表；一个 user 可挂 N 行
-  id
-  user_id      -> user.id
+auth_identity             # 一个 user 可挂 N 行
+  id / user_id -> user.id
   provider     ∈ {password, phone, wechat, ...}
-  external_id  # password=用户名 / phone=手机号 / wechat=openid|unionid
+  external_id  # phone=手机号 / password=用户名 / wechat=openid
   secret       # password=hash；其它=null 或 provider 侧引用
   unique(provider, external_id)
 ```
 
-一个用户多行 auth_identity（微信与账密登进同一账号 = 同 user_id 挂两行）。**新增一种登录方式 = 多一个 provider 取值 + 一个 Authenticator，`user` 与 token 层零改动。**
+**新增一种登录方式 = 多一个 provider 取值 + 一个 Authenticator，`user` 与 token 层零改动。**
 
-### 9.4 统一登录流程
+### 9.4 三端登录流程
+
+**A. 负责人首登（企业端，凭运营端初始凭据 bootstrap）**
 
 ```text
-登录(provider, credential)
-  → Authenticator[provider].verify(credential) → external_id   # 各方式只负责这步
-  → 查 auth_identity(provider, external_id) → user_id          # 查不到按策略注册/绑定
-  → issue_token(user_id, enterprise_id, roles)                 # 单一出口
-  → 返回 token
+企业端首次访问 → 负责人登录页
+  → 负责人输入 手机号 + 初始密码
+  → 企业端本地无该负责人凭据 → pull 运营端校验初始凭据
+  → 校验通过 → 强制重置密码 → 新密码 hash 落企业端本地 owner_local_credential
+  → 此后负责人登录由企业端本地校验，不再 pull 运营端
+  → 企业端 issue_token → 负责人进入企业端管理后台
 ```
 
-`Authenticator` 是唯一扩展点：`PasswordAuthenticator`（用户名+密码 hash）、`PhoneAuthenticator`（手机号+验证码）、`WechatAuthenticator`（code 换 openid）……新方式实现同一接口、插入注册表，下游流程一行不改。
+运营端重置：运营端将该负责人标记为"待重置"并下发新初始密码；企业端本地凭据失效，负责人下次需用新初始密码重新 bootstrap。
 
-### 9.5 token 层（先用最简方案）
+**B. 企业端创建成员账号**
+
+负责人/管理员在企业端创建个人账号（手机号 + 初始密码），写入企业端 `member`；可指定其角色与可用专家/方案（成员级授权，§9.7/§6）。
+
+**C. 成员在用户端登录（用户端，凭企业端凭据）**
+
+```text
+用户本机部署用户端 → 登录页
+  → 成员输入 手机号 + 初始密码
+  → 用户端 pull 企业端校验凭据（首次必须在线）
+  → 企业端校验通过（首登可强制重置，新密码存企业端）
+  → 企业端 issue_token + 下发验签公钥/参数
+  → 用户端缓存 token，此后本地验签；token 过期需重新联网登录
+```
+
+`Authenticator` 是唯一扩展点：`PasswordAuthenticator`、`PhoneAuthenticator`、`WechatAuthenticator`……新方式实现同一接口、插入注册表，下游流程一行不改。
+
+### 9.5 token 层（最简方案 + 跨端验签）
 
 | 项 | 最简做法 | 演进 |
 |---|---|---|
-| 签发 | **HMAC 对称签名 JWT**，单一密钥，载荷 `{user_id, enterprise_id, roles, exp}` | 待"服务各自独立验签、不共享密钥"时换非对称，不影响业务结构 |
-| 校验 | 共享库 `shared/auth` 本地验签，不查库、不回调签发方 | —— |
-| 映射 | token 内只放 `user_id`，登录方式细节留在 `auth_identity` | —— |
-| 健全（过期/续期） | 短期 access JWT + 一行 refresh 记录；可先只发较长期 JWT、到期重登 | 后续补完整 refresh 轮换 |
+| 签发 | **JWT**，载荷 `{user_id, enterprise_id, roles, exp}`；由凭据持有端（企业端发成员/负责人 token、运营端发系统 token）签发 | —— |
+| 校验 | 共享库 `shared/auth` 本地验签，不查库、不回调签发端 | —— |
+| 跨端验签密钥 | 用户端首登时由企业端**下发验签密钥**：MVP 用对称 HMAC（企业端与本企业用户端共享密钥）；演进换**非对称**（企业端持私钥签发、用户端持公钥验签，更安全） | 推荐尽早上非对称 |
+| 健全（过期/续期） | 短期 access JWT；过期需重新联网登录（符合"首次在线、之后本地"） | 后续补 refresh 轮换 |
 
-原则：**集中签发 + 分布式无状态校验**。绝不做"每请求回调 Identity 验 token"。
+原则：**凭据持有端集中签发 + 本地无状态校验**。绝不做"每请求回调上端验 token"。
 
 ### 9.6 请求流程（公开端点 / 401 vs 403）
 
 ```text
-登录(无token) → Identity 验凭据(§9.4) → 签发 JWT
+登录(无token) → 凭据持有端验凭据(§9.4) → 签发 JWT
 后续请求带 Authorization: Bearer <jwt>
-Edge Gateway:
-  ├─ 公开端点(login / healthz / oauth 回调 / 验证码) → 放行，不要 token
-  ├─ 受保护端点：无 token / 验签失败 / 过期 → 401（认证失败，Edge 拒）
-  └─ 有效 → 解出身份，以签名内部头透传
-业务服务(Operation/Manager/Agent):
-  ├─ 共享库本地再验签一次（纵深防御，非对称下近乎零成本）→ 失败 401
-  └─ 读 roles/tenant 做授权 → 越权 403（授权失败，服务拒）
+各端入口中间件（shared/auth）:
+  ├─ 公开端点(login / healthz / 验证码 / 负责人 bootstrap) → 放行，不要 token
+  ├─ 受保护端点：无 token / 验签失败 / 过期 → 401（认证失败）
+  └─ 有效 → 解出身份，进入业务处理
+业务处理:
+  └─ 读 roles + 成员级授权做鉴权 → 越权 403（授权失败）
+跨端 pull（service_client）:
+  └─ 附服务身份签名 → 被调端验服务身份(③) + 透传的用户上下文
 ```
 
-要点：**不是"所有端点没 token 就拒"**，而是受保护端点拒、一小撮公开端点放行；**401（你没证明你是谁，Edge）与 403（你是谁我知道但没权限，服务）分清**。
+要点：**受保护端点拒、公开端点放行**；**401（没证明你是谁）与 403（知道你是谁但没权限）分清**；用户端企业端离线时，已登录用户凭本地 token 继续工作。
 
-### 9.7 角色模型（继承现有枚举）
+### 9.7 角色模型与成员级授权（继承现有枚举）
 
 - 企业侧：`owner | enterprise_admin | finance_admin | member`。
 - 平台侧：`system_admin | system_operator`。
 - **禁止**使用 `admin/manager/viewer` 等旧角色枚举。
+- **成员级授权**：企业端招募专家/配置行业方案时，记录"专家/方案 → 授权成员账号"映射（`member_grant`）；用户端 pull 时只返回授权给本账号的条目，鉴权②在用户端 + 企业端两侧校验。
 
-### 9.8 职责归位与形态裁决（不设独立 Identity 服务）
+### 9.8 职责归位与形态裁决（无中心 Identity、无中心 Edge）
 
-把"认证"拆成**无状态**与**有状态**两块，各归其位——**不新增独立 Identity 微服务**：
+把"认证"拆成**无状态**与**有状态**两块，各归其位——**既不设独立 Identity 服务，也不设中心 Edge Gateway**：
 
 | 能力 | 本质 | 归位 |
 |---|---|---|
-| 验签 + 解身份 | 纯计算 | **共享库 `shared/auth`**，Edge 与各服务直接 import，**不是网络服务、不回调** |
-| 鉴权（②） | 纯逻辑 | 共享库提供 helper，**策略留各业务服务**（资源归属/角色只有业务自己懂） |
-| 签发 token | 纯计算 | 共享库 helper，仅由认证面 owner 在凭据校验通过后调用 |
-| 凭据校验 + 登录端点 + `user`/`auth_identity`/`refresh` 表 + 签名密钥 | **有状态 + 外部集成 + 持密钥** | **折叠进 Edge Gateway**（认证面 owner，唯一写者） |
+| 验签 + 解身份 | 纯计算 | **共享库 `shared/auth`**，各端直接 import，**不是网络服务、不回调** |
+| 鉴权（②） | 纯逻辑 | 共享库提供 helper，**策略留各端**（资源归属/成员授权只有业务自己懂） |
+| 签发 token | 纯计算 | 共享库 helper，仅由凭据持有端在校验通过后调用 |
+| 凭据校验 + 登录端点 + `user`/`auth_identity` 表 + 签名密钥 | **有状态 + 持密钥** | **按端联邦**：负责人初始凭据归运营端；成员凭据、负责人本地密码归企业端；系统账号归运营端；用户端只持本会话 token |
 
-**为什么不做独立服务**：验签/鉴权天然是库（人人一份、零网络跳、无 SPOF），无需服务化；只有"写身份表 + 承载登录入口 + 持签名密钥"这一小块有状态、需唯一 owner。该 owner 折叠进 **Edge Gateway**——它本就是认证咽喉与单一 origin，且身份跨企业成员(Manager)与系统账号(Operation)、塞进任一业务服务都别扭，Edge 是中立基础设施位。如此拓扑保持"**3 业务服务 + 2 网关**"，不增第 4 服务。
+**为什么联邦而非中心**：三端跨网络、用户机器无入站连接，根本没有一个能让三端都低延迟访问的中心身份库；强行做中心 Identity 会成为所有端的 SPOF 且违背"本地优先"。验签/鉴权天然是库（人人一份、零网络跳、无 SPOF）；只有"持凭据 + 登录入口 + 持密钥"这块有状态，按其自然归属落到对应端即可，跨端只在 bootstrap/成员登录时做窄 pull 校验。
 
 边界与权衡：
-- **Edge 拥有一个很窄的 identity 存储，但不碰任何业务对象**（employee/conversation/billing 一概不沾）；身份是接入层基础设施，不是业务域，不违反"Edge 不承载业务对象"。
-- **principal 联邦**：企业成员主数据归 Manager、系统账号归 Operation；Edge 认证面通过内网接口查询，不复制业务主数据，仅自持 `user`/`auth_identity` 映射与凭据。
-- **密钥权衡**：HMAC 对称下验签方共享同一密钥（key sprawl），MVP 可接受；将来换**非对称**——私钥只留 Edge（签发）、公钥分发各服务（验签），不影响任何业务结构。
+- **各端的身份存储都很窄、不碰跨域业务对象**；身份是接入层基础设施，分端持有不违反"端不越界"。
+- **密钥权衡**：MVP 用 HMAC 对称（企业端与本企业用户端共享密钥，key sprawl 限于单企业内，可接受）；推荐尽早换**非对称**——企业端持私钥签发、用户端持公钥验签，企业间天然隔离。
+- **跨端可用性**：上端短暂离线只影响"拉新配置/新登录"，不影响已登录用户的本地工作（本地 token + 本地投影）。
 
 ---
 
@@ -548,21 +618,20 @@ Edge Gateway:
 
 ### 10.1 路径裁决（解原 §10-1）
 
-采纳生产统一命名，**弃用旧 `/api/team/*`、`/api/system/*`、`/api/enterprise/*`，不留 alias、不做兼容**：
+采纳生产统一命名，**弃用旧 `/api/team/*`、`/api/system/*`、`/api/enterprise/*`，不留 alias、不做兼容**。每端在**自己的 origin** 下暴露自己的前缀（不再有中心 Edge 统一 origin）：
 
-| 新前缀 | 服务 | 取代 |
+| 端 origin | 新前缀 | 取代 |
 |---|---|---|
-| `/api/operation/*` | Operation | 旧 `/api/system/*` |
-| `/api/manager/*` | Manager | 旧 `/api/enterprise/*` + `/api/team/*` 配置态 |
-| `/api/agent/*` | Agent | 旧 `/api/team/*` 执行态 |
-| `/api/auth/*` | Edge 认证面 | 沿用 `/api/auth/*` 语义，实现重做 |
+| 运营端 | `/api/operation/*`、`/api/auth/*`（系统账号 + 负责人凭据/重置） | 旧 `/api/system/*` |
+| 企业端 | `/api/manager/*`、`/api/auth/*`（成员认证 + 负责人本地登录） | 旧 `/api/enterprise/*` + `/api/team/*` 配置态 |
+| 用户端 | `/api/agent/*`、`/api/auth/*`（本地登录/登出） | 旧 `/api/team/*` 执行态 |
 
-达成**三处同名对齐**：后端模块 `agent_service` ↔ 前端 `pages/agent/` ↔ 接口 `/api/agent/*`，结构自解释。
+达成**三处同名对齐**：后端模块 `agent_service` ↔ 前端 `web/agent/` ↔ 接口 `/api/agent/*`，三端同构。`/api/auth/*` 语义沿用，但按端实现各自的认证职责（§9）。
 
 ### 10.2 API 规范
 
-- 各服务用 FastAPI `APIRouter` 按业务模块拆分，Pydantic schema 作 API 边界，自动产出 OpenAPI / Swagger UI / ReDoc。
-- Edge Gateway 聚合三服务 OpenAPI 为统一文档入口。
+- 各端服务用 FastAPI `APIRouter` 按业务模块拆分，Pydantic schema 作 API 边界，自动产出 OpenAPI / Swagger UI / ReDoc。
+- **每端各自发布自己的 OpenAPI 文档入口**（不做跨端聚合——三端不在同一 origin、且互不信任彼此内部接口）。跨端 pull 接口单独成一份"跨端契约"文档。
 - 统一错误模型（见 §11.2），统一 numeric cursor 分页，禁止对外暴露 `{timestamp}-{sequence}` 内部游标。
 
 ---
@@ -572,18 +641,18 @@ Edge Gateway:
 ### 11.1 可观测性
 
 - **日志**：结构化日志，强制携带 `request_id`、`trace_id`、`tenant_id`、`service`。
-- **Trace**：OpenTelemetry 分布式追踪，trace 贯穿 Edge → 服务 → Agent Gateway → Executor/Driver，运行事件携带 `run_id` 关联。
-- **Metrics**：各服务暴露 `/metrics`（请求量/延迟/错误率、run 时长、runtime 成功率、usage）。
+- **Trace**：OpenTelemetry 分布式追踪；端内 trace 贯穿入口 → 服务 →（用户端）Agent Gateway → Executor/Driver，运行事件携带 `run_id` 关联；跨端 pull 透传 `trace_id` 以串起端间链路（但运行明细不跨端，跨端只见摘要）。
+- **Metrics**：各端服务暴露 `/metrics`（请求量/延迟/错误率、run 时长、runtime 成功率、usage）。
 
 ### 11.2 统一错误模型
 
-- 所有服务返回统一错误结构（problem+json 风格）：`{ code, message, request_id, details? }`。
-- Edge 与共享 client SDK 统一解码错误，不让各服务自定义错误形态。
+- 所有端服务返回统一错误结构（problem+json 风格）：`{ code, message, request_id, details? }`。
+- 各端入口中间件与共享 `service_client` 统一解码错误，不让各端自定义错误形态。
 
 ### 11.3 配置与健康检查
 
-- 每服务提供 `/healthz`（存活）、`/readyz`（依赖就绪：DB、事件总线、被依赖服务）、`/docs`。
-- 配置经环境变量/配置中心注入，运行入口统一复用 `app/.env` 口径。
+- 每端服务提供 `/healthz`（存活）、`/readyz`（依赖就绪：本端 DB；跨端依赖以"可降级 pull"对待，上端不可达不致本端 not-ready）、`/docs`。
+- 配置经环境变量/配置中心注入，运行入口统一**只读复用** `app/.env` 口径（§14.1）。
 
 ### 11.4 安全与隔离
 
@@ -591,31 +660,34 @@ Runtime Worker 必须具备：工作目录隔离；凭据最小注入；环境�
 
 ---
 
-## 12. 前端架构（新增·明确裁决）
+## 12. 前端架构（按端分离·改写）
 
-### 12.1 裁决：单一前端代码库，按模块分目录，不拆独立前端工程
+### 12.1 裁决：三套独立前端，按端分离，各端自服务自己的前端
 
-**理由（基于实证）**：
-1. 现有前端是**单一 SPA 单壳**：`boot.js` / `page-shell.js` / 单 `index.html` / 共享 `api-client.js`、`i18n.js`、`role-state.js`、`timeline-client.js`。拆三个前端工程 = 把外壳、登录、i18n、设计系统、SSE timeline 客户端复制三份，纯亏。
-2. pages 已按 `admin-*`(12) / `app-*`(6) / `system-*`(5) 天然分簇，与 manager/agent/operation 1:1。改为子目录即得模块化收益，零架构成本。
-3. 用户跨面（企业管理员既配员工也进对话），单 SPA + 角色路由才是对的 UX；三独立 app 会逼用户跨应用跳转/重复登录。
-4. 仅当未来服务真独立部署 + 独立团队 + 技术栈分叉时，才值得拆独立前端工程；现在不满足任何一条。
+**形态变更（推翻早期"单一 SPA 不拆前端"裁决）**：早期裁决基于"三服务共址、单一 origin、用户跨面"的假设而主张不拆。现产品形态变为**三端跨网络独立部署、互不同 origin、互不信任彼此内部接口**，该假设不再成立：
+
+1. **部署形态强制分离**：运营端在平台方、企业端在企业、用户端在每个用户本机——物理上就是三套独立交付物，不可能共用一个 origin/一份产物。
+2. **受众与信任域分离**：运营端面向平台运营者、企业端面向企业管理员、用户端面向终端用户；三者不再"同一用户跨面"，跨端只剩登录与 pull，单 SPA 角色路由的 UX 理由消失。
+3. **独立部署 + 独立交付 + 信任域分叉**三条当初"才值得拆"的条件，现在**全部满足**。
+4. 公共能力（设计系统、i18n、timeline 客户端、api-client 基类）抽为**共享前端包**复用，避免重复——拆工程不等于复制代码。
 
 ### 12.2 前端目录结构
 
 ```text
-static/aiteam/pages/
-├── agent/      ← app-chat / app-group / app-workbench / app-org / office...
-├── manager/    ← admin-employees / admin-knowledge / admin-skills / admin-connectors / admin-billing...
-├── operation/  ← system-accounts / system-finance / system-templates / system-solutions...
-└── shared/     ← page-shell / api-client / timeline-client / role-state / i18n
+web/
+├── operation/   # 运营端前端（独立工程/独立构建）— 企业开通 / 模板·方案目录 / 跨企业治理看板
+├── manager/     # 企业端前端（独立工程/独立构建）— 成员账号 / 招募专家 / 成员级授权 / 企业治理
+├── agent/       # 用户端前端（独立工程/独立构建）— 工作台 / 私聊 / 群聊 / 对话页（本地）
+└── shared/      # 共享前端包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统
 ```
 
-`api-client.js` 按 `agent / manager / operation` 三段组织，镜像后端 router 与前端目录。前端只调用 Edge Gateway（单一 origin），不直接调用业务服务，不直接绑定 runtime 原始事件。
+> 旧 `app/static/aiteam/` 保留为只读参考；按端逐目录搬运（绞杀者），各端前端由各端服务自身静态托管，不再由中心 Edge 指向统一产物。
 
-### 12.3 BFF 边界
+每端 `api-client` 基于 `shared` 的基类，只调用**本端服务**的 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口；用户端前端只绑定本地 Agent Service 的产品事件，不直接绑定 runtime 原始事件。
 
-Edge Gateway 承担轻量 BFF：认证、路由、聚合文档、必要的响应裁剪。不在 Edge 写业务逻辑；需要跨服务聚合的页面数据，由前端并行调用或由所有者服务提供聚合视图接口，而非在 Edge 拼装业务。
+### 12.3 各端前端托管（无中心 BFF）
+
+**无中心 Edge Gateway，也就无中心 BFF**：每端服务自服务自己的前端静态资源 + 认证中间件。需要的"轻 BFF"职责（响应裁剪、页面聚合视图）由**各端自己的服务**提供聚合接口完成，不存在跨端 BFF 拼装。跨端数据获取一律走 §5 的窄 pull 接口。
 
 ---
 
@@ -623,45 +695,74 @@ Edge Gateway 承担轻量 BFF：认证、路由、聚合文档、必要的响应
 
 | 关注点 | 选型 | 理由 |
 |---|---|---|
-| 后端框架 | **FastAPI** | 原生 OpenAPI / Swagger / ReDoc；Pydantic 作 API 边界；APIRouter 按模块拆分；异步 SSE/WebSocket/后台任务成熟；Python 资产迁移成本最低 |
-| Edge Gateway | 轻量 FastAPI + httpx 反向代理 | 单一 origin + 统一认证，最小复杂度；规模增长再评估 Envoy/Kong |
-| 服务间同步 | 内网 HTTP/JSON + 共享 client SDK | 迁移成本最低、可观测成熟；gRPC 仅按剖析升级热点 |
-| 业务事件总线 | Redis Streams（默认）/ NATS JetStream | 轻量、消费组、可回放；高吞吐期再评估 Kafka |
-| 数据库 | 库-per-service（PostgreSQL） | 单写者隔离；dev 同实例分库，prod 独立实例 |
-| 可观测 | OpenTelemetry + 结构化日志 + Prometheus | trace 贯穿全链路 |
-| 运行时 | Executor 协议族 + Driver | 见 §7 |
+| 后端框架 | **FastAPI**（三端各一服务） | 原生 OpenAPI / Swagger / ReDoc；Pydantic 作 API 边界；APIRouter 按模块拆分；异步 SSE/WebSocket/后台任务成熟；Python 资产迁移成本最低 |
+| 端入口与认证 | 各端服务自带 `shared/auth` 中间件 | 无中心 Edge/Identity；验签本地、零网络跳、无 SPOF（§9） |
+| 跨端通信 | HTTPS/JSON 单向 pull + 共享 `service_client` | 通信面窄、单向、用户机器无入站；TLS + 服务身份签名 |
+| 端内通信（用户端） | 本地 HTTP/JSON + 本地运行时流式通道 | 运行事件不跨端；落本地库可回放 |
+| 数据库 | 库-per-tier（PostgreSQL；用户端可用轻量本地库） | 单写者隔离，三端各自库、按部署位置分布 |
+| 治理数据回流 | 脱敏计量/审计摘要逐级 pull 上报（§6.5） | 替代跨端事件总线；不上传会话内容 |
+| 可观测 | OpenTelemetry + 结构化日志 + Prometheus | 端内 trace 贯穿，跨端透传 trace_id |
+| 运行时 | Executor 协议族 + Driver（用户端） | 见 §7 |
 
-不再使用手写 Python HTTP router / `_match_prefix` 分发器。
+不再使用手写 Python HTTP router / `_match_prefix` 分发器；不引入中心消息总线（跨端用 pull + 摘要上报）。
 
 ---
 
 ## 14. 部署与运行形态（新增）
 
-- **开发（单机）**：docker-compose 起 Edge + 三服务 + Agent Gateway + Postgres + Redis + Local Runtime Worker；沿用 `ctl.sh` 与 macmini 测试环境（pull + `ctl.sh restart` 部署，迁移首次连接自动应用）。
-- **生产**：每服务独立容器、独立部署/伸缩；Edge Gateway 前置；业务事件总线、per-service DB、Runtime Worker（Local/Daemon/Cloud）。
+系统是**三个独立交付物**，分别部署在三个位置：
+
+- **运营端 Operator（平台方部署）**：Operation Service + 运营端前端 + oper 库，公网可达。一套，平台方运维。
+- **企业端 Manager（企业自部署）**：Manager Service + 企业端前端 + mgr 库，部署在企业内网/私有云；公网/企业网可被本企业用户端 pull 到。每企业一套。
+- **用户端 Agent（每用户本机自部署）**：Agent Service + 用户端前端 + Agent Gateway + Local Runtime Worker + 本机库；默认仅 localhost。每用户一套。
+
+部署细节：
+- **开发（单机模拟三端）**：docker-compose 起三端服务 + 各自 DB + 用户端 Local Runtime Worker；沿用 `ctl.sh` 与 macmini 测试环境（pull + `ctl.sh restart` 部署，迁移首次连接自动应用）。**不再需要中心 Edge 与中心消息总线**。
+- **生产**：三端各自独立交付与升级；运营端中心运维，企业端/用户端提供安装包/镜像由企业与用户自部署；跨端只暴露窄 pull 接口（TLS）。
 - **运行入口统一**：凡涉及 Python 解释器、Hermes CLI、Hermes Home、config，复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`。
 
-> 工程目录目标态：
+### 14.1 工程落点裁决：新架构在项目根路径开发，`app/` 降级为只读参考
+
+**裁决**：微服务新架构代码不再往 `app/` 子目录塞，直接在**项目根路径**新建各服务目录;`app/` 整体冻结为旧架构（单体基座）只读参考实现——**只读不写**。
+
+**理由**：
+1. `app/` 是单体外壳（`server.py` 手写 router + `_match_prefix` 分发 + 全局 `STREAMS`/`CANCEL_FLAGS`），把微服务塞进它的子目录会被它的进程模型/全局态反向污染,违背"对修改封闭"。
+2. 各服务要独立容器、独立伸缩、独立 DB、独立 CI——根路径平级目录才是这种部署形态的自然投影;埋在 `app/` 下会持续诱导对基座文件的平行维护。
+3. 旧实现不删除、不重写,留作契约对照（状态机、角色、cursor、timeline 等冻结口径以它为事实参照），用绞杀者模式逐模块切换（见 §17）。
+
+> 工程目录目标态（项目根，按端分组）：
 > ```text
-> app/
-> ├── edge_gateway/      # 北向接入网关
-> ├── operation_service/ # 系统后台 / 平台运营
-> ├── manager_service/   # 企业后台 / 配置与治理
-> ├── agent_service/     # 企业前台 / 会话与执行
-> ├── agent_gateway/     # 运行时接入网关（已存在，升级 Executor+Driver）
-> ├── shared/            # service_client / 认证中间件 / 错误模型 / 事件信封 / db / schema base
-> └── api/               # 基座挂接收缩（server.py 仅做 app 组装）
+> <repo-root>/
+> ├── operation_service/ # 运营端：企业开通 / 目录治理 / 跨企业汇总（含运营端认证面）
+> ├── manager_service/   # 企业端：配置 / 授权 / 成员认证（含企业端认证面）
+> ├── agent_service/     # 用户端：本地会话与执行（含用户端本地登录）
+> ├── agent_gateway/     # 用户端运行时接入网关（Executor+Driver），随 agent_service 部署
+> ├── shared/            # 共享 Python 包：service_client / auth(验签·鉴权·签发) / 错误模型 / db / schema base
+> ├── web/
+> │   ├── operation/     # 运营端前端
+> │   ├── manager/       # 企业端前端
+> │   ├── agent/         # 用户端前端
+> │   └── shared/        # 共享前端包（见 §12）
+> ├── deploy/            # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
+> └── app/               # 🔒 旧架构单体基座——只读参考，不再新增/修改业务代码
 > ```
+>
+> **无 `edge_gateway/`**：早期目标态中的 `edge_gateway/` 随"取消中心 Edge"裁决删除；其认证职责下沉为 `shared/auth` + 各端服务自带入口中间件。
+>
+> **命名口径**：根目录与 Python 包名统一用下划线（`agent_service`），保证可 `import agent_service` 并维持"后端模块 ↔ 前端目录 ↔ 接口前缀"三处同名对齐；口语里的 `agent-service` 即指此目录。
+>
+> **`app/` 只读的两点例外**：① 运行口径 `app/.env`（`HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR`）继续被新服务**读取**复用，不在此处新增业务配置；② 绞杀者切换期间允许新服务以 HTTP 反代/适配方式**调用**尚未迁移的旧 `app/` 端点，但不得回写 `app/` 代码。
 
 ---
 
 ## 15. 复杂度分析
 
-- **服务拆分复杂度**：仅按业务所有权拆三业务服务 + 两网关，不继续细拆为大量小服务。
+- **拆分复杂度**：仅按部署边界拆三端（运营端/企业端/用户端）+ 用户端内 Agent Gateway，不继续细拆为大量小服务。
 - **Gateway 抽象复杂度**：只抽象真实存在的协议族（ACP / JSON-RPC stdio / JSON stream CLI），不为假想 runtime 设计复杂插件系统。
-- **服务间一致性复杂度**：同步走内网 HTTP、异步走事件总线、运行事件走流式通道，三通道分明；写操作最终一致 + 幂等，避免分布式事务。
-- **事件一致性复杂度**：事件先落稳定内部结构，再映射 timeline；前端不解析 runtime 原始 JSON。
-- **配置一致性复杂度**：执行前固化 EmployeeExecutionSnapshot，run 只引用 snapshot version。
+- **跨端一致性复杂度**：跨端只有单向 pull + 摘要上报，无中心总线、无分布式事务；本地优先 + 幂等，最终一致即可。
+- **事件一致性复杂度**：运行事件留本地，先落稳定内部结构再映射 timeline；前端不解析 runtime 原始 JSON；跨端只见脱敏摘要。
+- **配置一致性复杂度**：用户端 pull 配置投影 + 执行前固化 EmployeeExecutionSnapshot，run 只引用 snapshot version。
+- **认证复杂度**：联邦凭据 + 共享库本地验签，无中心 Identity SPOF；多样性收敛到 Authenticator 一层。
 - **安全隔离复杂度**：见 §11.4。
 
 ---
@@ -670,14 +771,17 @@ Edge Gateway 承担轻量 BFF：认证、路由、聚合文档、必要的响应
 
 ### 16.1 技术风险
 
-1. **拆服务过细反噬** → 只拆三业务服务 + 两网关。
+1. **拆分过细反噬** → 只拆三端 + 用户端内 Agent Gateway。
 2. **Gateway 抽象过度泛化** → 只抽象真实协议族。
 3. **Driver 泄漏业务语义** → Driver 只解析 runtime 事件，不懂企业/员工/账单/权限。
-4. **Agent Service 漂移成 Manager** → 只消费员工快照，不维护配置主数据。
-5. **Manager Service 漂移成 Runtime** → 只管配置治理，不提交执行、不处理 runtime 原始事件。
-6. **事件原始数据泄漏** → raw event 仅调试归档（脱敏受控），前端/审计消费脱敏产品事件。
-7. **分布式单体陷阱** → 服务间禁止跨库直写、禁止共享旧库、禁止同步链路串联过长；热点读用本地投影。
-8. **存量 streaming 主链路 big-bang 重写破坏演示** → 用绞杀者模式逐模块切换验证（见 §17）。
+4. **用户端 Agent 漂移成 Manager** → 只消费拉取的员工快照，不维护配置主数据。
+5. **企业端 Manager 漂移成 Runtime** → 只管配置/授权/认证，不提交执行、不处理 runtime 原始事件、不持会话。
+6. **事件原始数据泄漏** → raw event 仅本地调试归档（脱敏受控），前端/审计消费脱敏产品事件。
+7. **隐私承诺被破坏（会话/内容上传）** → 跨端只准流转认证/授权配置/脱敏摘要；脱敏在用户端上报前完成；评审与测试必须验证"无内容外泄"。
+8. **跨端可用性硬依赖** → 上端离线只影响"拉新配置/新登录"，已登录用户凭本地 token + 本地投影继续工作；快照/授权缺失时拒绝执行而非陈旧硬跑。
+9. **联邦密钥扩散（key sprawl）** → MVP 对称密钥限单企业内；推荐尽早换非对称（企业端私钥签发、用户端公钥验签），企业间天然隔离。
+10. **退化成"伪三端共址"** → 禁止跨端共享库、禁止上端向下端入站推送、禁止把会话态外置到企业端。
+11. **存量 streaming 主链路 big-bang 重写破坏演示** → 用绞杀者模式逐模块切换验证（见 §17）。
 
 ### 16.2 工程约束
 
@@ -704,24 +808,24 @@ Edge Gateway 承担轻量 BFF：认证、路由、聚合文档、必要的响应
 ## 18. 阶段实施建议
 
 ### Phase 0：架构冻结
-冻结三服务边界、两网关职责、Gateway executor/driver 抽象、事件双层模型、库-per-service 所有权、服务间通信三通道、认证模型、路径收口。
-产物：本概要设计定稿、服务边界 ADR、Gateway runtime contract 草案、新 OpenAPI 分组草案、存量表所有权映射草案。
+冻结三端边界与部署形态、用户端 Agent Gateway executor/driver 抽象、事件双层模型、库-per-tier 所有权、跨端 pull 通信面、联邦认证模型、成员级授权、治理摘要上报、路径收口。
+产物：本概要设计定稿、三端边界 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨端契约草案、存量表所有权映射草案、脱敏摘要 schema 草案。
 
-### Phase 1：底座与骨架
-建立 Edge Gateway + Operation/Manager/Agent 三 FastAPI 服务骨架；统一错误模型、认证中间件、request-id/trace、共享 service_client、事件信封、OpenAPI；Agent Gateway skeleton + fake runtime。
-验收：Edge + 三服务 `/healthz` `/readyz` `/docs` 可访问；服务间同步调用与事件总线打通；fake runtime 产生 text/reasoning/tool/usage/completed 事件；Agent 把 fake 事件映射为 timeline。
+### Phase 1：三端骨架与联邦认证
+建立 Operation/Manager/Agent 三端 FastAPI 服务骨架（各自前端壳）；统一错误模型、`shared/auth` 验签中间件、request-id/trace、共享 `service_client`、各端 OpenAPI；联邦认证打通（运营端发负责人初始凭据 → 企业端首登 bootstrap+重置 → 企业端创建成员 → 用户端首次在线登录+本地 token）；用户端 Agent Gateway skeleton + fake runtime。
+验收：三端各自 `/healthz` `/readyz` `/docs` 可访问；负责人/成员两类登录全链路可走通；用户端 pull 企业端鉴权成功；fake runtime 产生 text/reasoning/tool/usage/completed 事件并映射为本地 timeline。
 
-### Phase 2：Manager 与 Agent 主链
-Manager 承接员工配置/知识/技能/连接器主对象；Agent 承接 conversation/run/task/event/loop；EmployeeExecutionSnapshot 打通；员工配置变更事件 → Agent 投影刷新。
-验收：私聊主链打通、群聊入口打通、Loop 基础任务打通、事件实时推送 + 历史回放、streaming 主链路按绞杀者完成首批模块 parity 验证。
+### Phase 2：企业端配置授权 + 用户端本地主链
+企业端承接员工/专家配置、知识、技能、连接器、招募专家、**成员级授权**；用户端承接本地 conversation/run/task/event/loop；用户端 pull 已授权专家/方案 → 本地装载 → EmployeeExecutionSnapshot 冻结。
+验收：企业端授权某专家给某成员 → 用户端 pull 装载 → 本地私聊主链打通、群聊（本地多专家）入口打通、Loop 基础任务打通、事件实时推送 + 历史回放；streaming 主链路按绞杀者完成首批模块 parity 验证；验证会话内容不外泄。
 
-### Phase 3：Runtime 接入
+### Phase 3：Runtime 接入（用户端）
 实现 AcpExecutor + HermesAcpDriver；JsonRpcStdioExecutor + CodexJsonRpcDriver；JsonStreamCliExecutor + ClaudeCode/OpenCode/OpenClaw driver。
 验收：每个 driver 有 golden raw event → AgentRuntimeEvent 测试；每个 executor 有取消/超时/stderr/异常退出测试；对话页能展示工具调用输入输出。
 
-### Phase 4：Operation 与治理闭环
-Operation 承接系统后台；平台模板/行业方案/企业治理/财务统计接入；usage 与审计经事件总线回流。
-验收：系统后台可管理模板与行业方案；企业后台可查员工用量与审计；平台运营看板可读。
+### Phase 4：运营端 + 治理闭环（摘要上报）
+运营端承接企业开通、负责人凭据/重置、平台模板/行业方案目录、企业治理；用户端→企业端→运营端**脱敏计量/审计摘要逐级上报**汇总。
+验收：运营端可开通企业并下发负责人初始凭据；企业端可招募专家/配方案并查成员级用量与审计汇总；运营端跨企业运营看板可读；全程不含会话内容。
 
 ---
 
@@ -733,6 +837,9 @@ Operation 承接系统后台；平台模板/行业方案/企业治理/财务统�
 - 真实支付 / 短信 / 企业微信等外部 provider 深度联调。
 - 对旧内部 router / adapter / DTO 的兼容迁移方案。
 - gRPC 全面铺开（仅按热点剖析按需升级）。
+- **跨用户实时协作**（如多个用户机器间共享同一群聊会话）——群聊只是单用户本机多专家协作，不做跨机器会话同步。
+- **会话内容/执行明细上云**——本地优先、内容不出端是硬约束，云端 worker 仅作企业显式选择的可选项。
+- **中心化 Edge Gateway / 中心 Identity 服务 / 中心消息总线**——已被三端联邦与窄 pull 取代，不重新引入。
 
 ---
 
@@ -742,22 +849,27 @@ Operation 承接系统后台；平台模板/行业方案/企业治理/财务统�
 
 | 编号 | 议题 | 裁决 |
 |---|---|---|
-| D1 | 架构形态 | 真·微服务：三业务服务 + Edge Gateway + Agent Gateway，库-per-service |
-| D2 | 北向路径 | 统一 `/api/operation` `/api/manager` `/api/agent`，弃用旧 `/api/team` `/api/system` `/api/enterprise`，不留 alias |
-| D3 | 前端 | 单一前端代码库，按 `agent/manager/operation/shared` 分目录，不拆独立前端工程 |
-| D4 | 服务间通信 | 同步内网 HTTP/JSON + 共享 SDK；异步业务事件走 Redis Streams；运行事件走流式通道 + 落库 |
-| D5 | 员工快照 | Agent 提交 run 时从 Manager 拉取并冻结，落 Agent 库 |
-| D6 | Raw event 归档 | 保留，脱敏受控、设保留期，仅调试 |
-| D7 | Runtime Worker | 首期 Local Worker，Daemon 接口同步设计、实现后置 |
-| D8 | 认证 | 最简可扩展：`user` + `auth_identity`(provider→user 映射) + `Authenticator` 扩展点 + **单一 token 出口**；token 先用 HMAC JWT、refresh 最小化。**不设独立 Identity 服务**：验签/鉴权/签发为共享库 `shared/auth`，有状态认证面(登录端点+身份表+密钥)折叠进 Edge Gateway，授权留各服务；退役全部旧 mock。三平面边界见 §9.1，职责归位见 §9.8 |
-| D9 | Edge Gateway 形态 | 轻量 FastAPI 反向代理/BFF，不引入重型网关产品 |
+| D1 | 架构形态 | **三端独立部署（运营端/企业端/用户端）**的「控制面 SaaS + 本地数据面」分层，库-per-tier；用户端内含 Agent Gateway。〔修订早期"三服务共址 + 中心 Edge"〕 |
+| D2 | 北向路径 | 统一 `/api/operation` `/api/manager` `/api/agent`，弃用旧 `/api/team` `/api/system` `/api/enterprise`，不留 alias；每端在自己 origin 下暴露，含各自 `/api/auth/*` |
+| D3 | 前端 | **三套独立前端工程，按端分离**（`web/operation` `web/manager` `web/agent` + `web/shared`），各端自托管。〔**推翻**早期"单一 SPA 不拆前端"——部署/受众/信任域已强制分离〕 |
+| D4 | 通信 | 跨端只有**自下而上单向 HTTPS pull**（Agent→Manager、Manager→Operator）+ 脱敏摘要逐级上报；端内（用户端）才有运行事件流；**无中心消息总线**。〔修订早期"内网三通道 + Redis Streams"〕 |
+| D5 | 员工/专家快照 | 用户端装载专家/提交 run 时从企业端拉取并冻结，落用户端本地库 |
+| D6 | Raw event 归档 | 保留，**仅用户端本地**脱敏受控归档、设保留期，仅调试，不跨端 |
+| D7 | Runtime Worker | 用户端 Local Worker 为默认主形态；Daemon 同步设计后置；Cloud 默认关闭（与"本地优先"相悖） |
+| D8 | 认证 | **三端联邦认证**：负责人初始凭据归运营端、成员凭据+负责人本地密码归企业端、用户端只持本会话 token；运营端不保留密码；用户端首次在线认证、之后本地验签；`user`+`auth_identity`+`Authenticator` 扩展点 + 单一 token 出口；验签/鉴权/签发为共享库 `shared/auth`。**无中心 Identity、无中心 Edge**。〔修订早期"折叠进 Edge"〕 |
+| D9 | 端入口形态 | **取消中心 Edge Gateway**；认证/限流/CORS 下沉为各端服务自带 `shared/auth` 中间件。〔**推翻**早期"轻量 Edge 反代/单 origin"〕 |
 | D10 | 后端框架 | FastAPI，弃用手写 router |
+| D11 | 工程落点 | 新架构在**项目根路径**按端建目录（`operation_service/`/`manager_service/`/`agent_service/`/`agent_gateway/`），`web/` 按端分子目录；**无 `edge_gateway/`**；`app/` 冻结只读，仅例外**读取** `app/.env`、绞杀期**调用**未迁移旧端点（§14.1） |
+| D12 | 配置下发与授权 | 企业端招募专家/配方案时指定**成员级授权**；用户端**主动 pull** 已授权条目本地装载；不靠上端推送 |
+| D13 | 本地优先与隐私 | 会话/群聊/run/usage **全本地、内容不上传**；跨端只流转认证、授权配置、**脱敏计量/审计摘要**逐级汇总 |
+| D14 | 跨端可用性 | 上端短暂离线只影响"拉新配置/新登录"；已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作 |
 
 ### 20.2 待详设裁决
 
-1. 认证已定：不设独立 Identity 服务（§9.8）。详设细化的是 Edge 认证面内部模块边界、refresh 轮换策略、HMAC→非对称切换时机。
-2. 库-per-service 在 prod 是独立实例还是同实例分库的具体边界。
-3. 业务事件总线最终选型确认（Redis Streams vs NATS JetStream）与各事件 schema。
-4. `runtime_session/raw_runtime_event` 归 Agent 库还是独立 Gateway 库。
-5. Operation 与 Manager 在行业方案"一键应用"上的应用包同步事件 schema 与幂等边界。
-6. 存量表 → 写服务 → 目标库的完整映射表（详设产出）。
+1. 认证已定：三端联邦、无中心 Identity（§9）。详设细化各端认证面内部模块边界、refresh 轮换策略、HMAC→非对称切换时机与企业级公钥分发。
+2. 库-per-tier 在 prod 的具体边界（运营端实例规格、企业端部署形态、用户端本地库选型——轻量嵌入式 vs 本机 Postgres）。
+3. 跨端 pull 接口的完整契约（认证、拉授权配置、摘要上报）与轮询节奏/增量协议。
+4. 脱敏计量/审计**摘要 schema** 与脱敏字段清单（哪些字段可上报、哪些必须留本地）。
+5. `runtime_session/raw_runtime_event` 在用户端本地库的归属与保留期。
+6. 运营端→企业端"招募专家/行业方案应用包"的拉取契约、版本与幂等边界。
+7. 存量表 → 写端 → 目标库（部署位置）的完整映射表（详设产出）；会话类表在用户端本地重新落地的口径。
