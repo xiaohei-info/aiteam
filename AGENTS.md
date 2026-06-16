@@ -122,7 +122,7 @@ runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 
 
 1. **Phase 0 架构冻结** —— 已完成（v1 概要设计定稿）
 2. **Phase 1**：三端 FastAPI 骨架 + 部署绑定入户链 + 联邦认证 + `shared` 底座（auth/service_client/错误模型/trace）+ Gateway skeleton + fake runtime
-3. **Phase 2**：企业端配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载 + `EmployeeExecutionSnapshot` 冻结 + streaming/timeline 主链路打通并对齐基线事件契约（对照桌面端接入 API 基线，不调用旧系统）
+3. **Phase 2**：企业端配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载 + `EmployeeExecutionSnapshot` 冻结 + streaming/timeline 主链路打通并对齐基线事件契约（对照冻结 `app/` 契约基线，不调用旧系统）
 4. **Phase 3**：Runtime 接入（`AcpExecutor`+`HermesAcpDriver` / `JsonRpcStdioExecutor`+`CodexJsonRpcDriver` / `JsonStreamCliExecutor`+ClaudeCode/OpenCode/OpenClaw driver）
 5. **Phase 4**：运营端 + 治理摘要逐级上报闭环
 
@@ -136,7 +136,6 @@ runtime（含 Hermes）一律经 Agent Gateway 的 Executor/Driver 接入；CLI 
 |------|------|
 | `README.md` | 仓库结构与边界 |
 | `docs/v1正式版本/技术设计/2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计.md` | **v1 架构地基，唯一裁决口径**（D1–D15 已冻结） |
-| `docs/v1正式版本/技术设计/2026-06-15-AI Team-桌面端接入API文档-基线版.md` | 桌面端接入北向 API 基线（已验证的业务契约参照，供 v1 重建对齐语义） |
 | `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
 
 ### 历史参照（不再作为开发口径）
