@@ -34,11 +34,11 @@ def post(path, body=None):
 # ── Default value ─────────────────────────────────────────────────────────
 
 def test_settings_default_bot_name():
-    """GET /api/settings should return bot_name defaulting to 'Hermes'."""
+    """GET /api/settings should return bot_name defaulting to 'AIFred'."""
     d, status = get("/api/settings")
     assert status == 200
     assert "bot_name" in d
-    assert d["bot_name"] == "Hermes"
+    assert d["bot_name"] == "AIFred"
 
 
 # ── Round-trip ────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ def test_settings_set_bot_name():
         d2, _ = get("/api/settings")
         assert d2.get("bot_name") == "TestBot"
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})
 
 
 def test_settings_bot_name_special_chars():
@@ -63,53 +63,53 @@ def test_settings_bot_name_special_chars():
         d2, _ = get("/api/settings")
         assert d2.get("bot_name") == "My Assistant 2.0"
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})
 
 
 # ── Server-side sanitization ──────────────────────────────────────────────
 
 def test_settings_empty_bot_name_defaults_to_hermes():
-    """Posting an empty bot_name should default to 'Hermes' server-side."""
+    """Posting an empty bot_name should default to 'AIFred' server-side."""
     try:
         d, status = post("/api/settings", {"bot_name": ""})
         assert status == 200
-        assert d.get("bot_name") == "Hermes"
+        assert d.get("bot_name") == "AIFred"
         d2, _ = get("/api/settings")
-        assert d2.get("bot_name") == "Hermes"
+        assert d2.get("bot_name") == "AIFred"
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})
 
 
-def test_settings_whitespace_bot_name_defaults_to_hermes():
-    """Posting a whitespace-only bot_name should default to 'Hermes'."""
+def test_settings_whitespace_bot_name_defaults_to_aifred():
+    """Posting a whitespace-only bot_name should default to 'AIFred'."""
     try:
         d, status = post("/api/settings", {"bot_name": "   "})
         assert status == 200
-        assert d.get("bot_name") == "Hermes"
+        assert d.get("bot_name") == "AIFred"
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})
 
 
 # ── Login page rendering ──────────────────────────────────────────────────
 
 def test_login_page_shows_default_bot_name():
-    """GET /login should contain 'Hermes' in title and h1 when default."""
+    """GET /login should show the default 'AIFred' brand in title and h1."""
     html, status = get_raw("/login")
     assert status == 200
-    assert "<title>Hermes" in html
-    assert "<h1>Hermes</h1>" in html
+    assert "<title>AIFred" in html
+    assert "<h1>AIFred Console</h1>" in html
 
 
 def test_login_page_shows_custom_bot_name():
-    """GET /login should reflect the configured bot_name."""
+    """GET /login title should reflect the configured bot_name (h1 stays the brand console)."""
     try:
         post("/api/settings", {"bot_name": "Aria"})
         html, status = get_raw("/login")
         assert status == 200
         assert "<title>Aria" in html
-        assert "<h1>Aria</h1>" in html
+        assert "<h1>AIFred Console</h1>" in html
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})
 
 
 def test_login_page_empty_name_does_not_crash():
@@ -133,4 +133,4 @@ def test_login_page_xss_escaped():
         # Escaped form should appear
         assert "&lt;script&gt;" in html
     finally:
-        post("/api/settings", {"bot_name": "Hermes"})
+        post("/api/settings", {"bot_name": "AIFred"})

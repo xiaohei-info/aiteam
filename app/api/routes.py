@@ -6331,7 +6331,7 @@ def handle_post(handler, parsed) -> bool:
         )
 
         if "bot_name" in body:
-            body["bot_name"] = (str(body["bot_name"]) or "").strip() or "Hermes"
+            body["bot_name"] = (str(body["bot_name"]) or "").strip() or "AIFred"
 
         auth_enabled_before = is_auth_enabled()
         current_cookie = parse_cookie(handler)

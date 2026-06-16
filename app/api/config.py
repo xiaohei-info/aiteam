@@ -4769,7 +4769,7 @@ _SETTINGS_DEFAULTS = {
     "hidden_tabs": [],  # sidebar tab panel names hidden by user (e.g. ["tasks","kanban"]); chat and settings are always visible
     "language": "en",  # UI locale code; must match a key in static/i18n.js LOCALES
     "bot_name": os.getenv(
-        "HERMES_WEBUI_BOT_NAME", "Hermes"
+        "HERMES_WEBUI_BOT_NAME", "AIFred"
     ),  # display name for the assistant
     "sound_enabled": False,  # play notification sound when assistant finishes
     "rtl": False,  # right-to-left chat layout (chat messages + composer only)

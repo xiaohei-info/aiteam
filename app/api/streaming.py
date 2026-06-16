@@ -449,7 +449,7 @@ def _preferred_agent_display_name() -> str:
     except Exception:
         logger.debug("Failed to load bot_name for cancellation copy", exc_info=True)
         name = ''
-    return name or 'Hermes'
+    return name or 'AIFred'
 
 
 def _preferred_agent_display_name_for_session(session) -> str:
@@ -460,7 +460,7 @@ def _preferred_agent_display_name_for_session(session) -> str:
 
 
 def _cancelled_turn_hint(agent_name: str | None = None) -> str:
-    name = str(agent_name or _preferred_agent_display_name()).strip() or 'Hermes'
+    name = str(agent_name or _preferred_agent_display_name()).strip() or 'AIFred'
     return f'The run was cancelled by the user before {name} finished. No provider failure occurred.'
 
 
