@@ -681,9 +681,9 @@ web/
 └── shared/      # 共享前端包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统
 ```
 
-> 旧 `app/static/aiteam/` 保留为只读参考；按端逐目录搬运（绞杀者），各端前端由各端服务自身静态托管，不再由中心 Edge 指向统一产物。
+> `web/`（前端）与 `server/`（后端）层优先对称，各端目录一一对应（详见 §14.1 工程目录目标态）；按端独立构建、按端产物精简（§14.2）。旧 `app/static/aiteam/` 保留为只读参考，按端逐目录搬运（绞杀者），各端前端由各端服务自身静态托管，不再由中心 Edge 指向统一产物。
 
-每端 `api-client` 基于 `shared` 的基类，只调用**本端服务**的 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口；用户端前端只绑定本地 Agent Service 的产品事件，不直接绑定 runtime 原始事件。
+每端 `api-client` 基于 `web/shared` 的基类，只调用**本端服务**的 `/api/<tier>/*`（同 origin）与必要的跨端 pull 接口；用户端前端只绑定本地 Agent Service 的产品事件，不直接绑定 runtime 原始事件。
 
 ### 12.3 各端前端托管（无中心 BFF）
 
@@ -721,37 +721,48 @@ web/
 - **生产**：三端各自独立交付与升级；运营端中心运维，企业端/用户端提供安装包/镜像由企业与用户自部署；跨端只暴露窄 pull 接口（TLS）。
 - **运行入口统一**：凡涉及 Python 解释器、Hermes CLI、Hermes Home、config，复用 `HERMES_WEBUI_PYTHON`、`HERMES_HOME`、`HERMES_CONFIG_PATH`、`HERMES_WEBUI_AGENT_DIR`。
 
-### 14.1 工程落点裁决：新架构在项目根路径开发，`app/` 降级为只读参考
+### 14.1 工程落点裁决：单仓「层优先（`server/` 后端 + `web/` 前端）→ 端」，`app/` 降级为只读参考
 
-**裁决**：微服务新架构代码不再往 `app/` 子目录塞，直接在**项目根路径**新建各服务目录;`app/` 整体冻结为旧架构（单体基座）只读参考实现——**只读不写**。
+**裁决**：**单仓库**，顶层按层分——`server/`（后端 Python）+ `web/`（前端 JS/TS），各自再按端分子目录；**不拆前端仓/后端仓双仓**。旧 `app/` 整体冻结为旧架构（单体基座）只读参考实现——**只读不写**，绞杀者迁移完成（parity 验证通过）后再删除。
 
 **理由**：
-1. `app/` 是单体外壳（`server.py` 手写 router + `_match_prefix` 分发 + 全局 `STREAMS`/`CANCEL_FLAGS`），把微服务塞进它的子目录会被它的进程模型/全局态反向污染,违背"对修改封闭"。
-2. 各服务要独立容器、独立伸缩、独立 DB、独立 CI——根路径平级目录才是这种部署形态的自然投影;埋在 `app/` 下会持续诱导对基座文件的平行维护。
-3. 旧实现不删除、不重写,留作契约对照（状态机、角色、cursor、timeline 等冻结口径以它为事实参照），用绞杀者模式逐模块切换（见 §17）。
+1. **不拆双仓**：一次端内改动常同时动该端前端 + 同端后端 + 跨端契约（认证/摘要 schema）；双仓会逼出两个 PR、版本对不齐、契约漂移。本团队 trunk-based（master 直推），多仓协调税远大于收益。前后端"各自独立构建/部署"靠目录分层 + 独立流水线即可拿到，**仓库边界 ≠ 部署边界**。
+2. **层优先（`server/`+`web/`）而非端优先**：因构建期已按端组装产物（见 §14.2），源码布局不必 1:1 镜像部署单元；层优先让前后端各用各的工具链（`server/` 一套 Python、`web/` 一套 JS），共享代码各归各层（`server/shared`、`web/shared`），更顺手。
+3. **不复用 `app/` 作新后端根**：`app/` 是冻结的旧单体契约对照基线（状态机/角色/cursor/timeline 以它为事实参照），迁移期新旧必须并存（§17）；新后端用 `server/`，待旧 `app/` 删除后若需要可再改名回 `app/`，届时无冲突、成本极低。
 
-> 工程目录目标态（项目根，按端分组）：
+> 工程目录目标态（单仓，层优先）：
 > ```text
 > <repo-root>/
-> ├── operation_service/ # 运营端：企业开通 / 目录治理 / 跨企业汇总（含运营端认证面）
-> ├── manager_service/   # 企业端：配置 / 授权 / 成员认证（含企业端认证面）
-> ├── agent_service/     # 用户端：本地会话与执行（含用户端本地登录）
-> ├── agent_gateway/     # 用户端运行时接入网关（Executor+Driver），随 agent_service 部署
-> ├── shared/            # 共享 Python 包：service_client / auth(验签·鉴权·签发) / 错误模型 / db / schema base
-> ├── web/
-> │   ├── operation/     # 运营端前端
-> │   ├── manager/       # 企业端前端
-> │   ├── agent/         # 用户端前端
-> │   └── shared/        # 共享前端包（见 §12）
-> ├── deploy/            # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
-> └── app/               # 🔒 旧架构单体基座——只读参考，不再新增/修改业务代码
+> ├── server/                # 后端（Python）
+> │   ├── operation_service/ # 运营端：企业开通 / 目录治理 / 跨企业汇总（含运营端认证面）
+> │   ├── manager_service/   # 企业端：配置 / 授权 / 成员认证（含企业端认证面）
+> │   ├── agent_service/     # 用户端：本地会话与执行（含用户端本地登录）
+> │   ├── agent_gateway/     # 用户端运行时接入网关（Executor+Driver），随 agent_service 部署
+> │   ├── shared/            # 共享后端包：service_client / auth(验签·鉴权·签发) / 错误模型 / db / schema base
+> │   └── run.py             # 统一启动器：--tier=operation|manager|agent（见 §14.2）
+> ├── web/                   # 前端（JS/TS）
+> │   ├── operation/         # 运营端前端
+> │   ├── manager/           # 企业端前端
+> │   ├── agent/             # 用户端前端
+> │   └── shared/            # 共享前端包：page-shell / api-client 基类 / timeline-client / i18n / 设计系统
+> ├── deploy/                # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
+> └── app/                   # 🔒 旧架构单体基座——只读参考，迁移完成后删除
 > ```
 >
-> **无 `edge_gateway/`**：早期目标态中的 `edge_gateway/` 随"取消中心 Edge"裁决删除；其认证职责下沉为 `shared/auth` + 各端服务自带入口中间件。
+> **无 `edge_gateway/`**：早期目标态中的 `edge_gateway/` 随"取消中心 Edge"裁决删除；其认证职责下沉为 `server/shared/auth` + 各端服务自带入口中间件。
 >
-> **命名口径**：根目录与 Python 包名统一用下划线（`agent_service`），保证可 `import agent_service` 并维持"后端模块 ↔ 前端目录 ↔ 接口前缀"三处同名对齐；口语里的 `agent-service` 即指此目录。
+> **命名口径**：后端 Python 包名统一用下划线（`agent_service`），维持"后端模块 ↔ 前端目录 ↔ 接口前缀"三处对齐：`server/agent_service` ↔ `web/agent` ↔ `/api/agent`；口语里的 `agent-service` 即指此目录。
 >
 > **`app/` 只读的两点例外**：① 运行口径 `app/.env`（`HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR`）继续被新服务**读取**复用，不在此处新增业务配置；② 绞杀者切换期间允许新服务以 HTTP 反代/适配方式**调用**尚未迁移的旧 `app/` 端点，但不得回写 `app/` 代码。
+
+### 14.2 统一启动器 + 构建期分端产物
+
+源码单仓共享，但**交付物按端精简**——既要 dev 便利，又要守住"用户端不含控制面代码"的隐私底线：
+
+- **统一启动器（dev 便利）**：后端一个入口 `server/run.py --tier=operation|manager|agent`（或 `APP_TIER` 环境变量），只挂载该端的 router / DB / migrations；本地一条命令起任意端。前端各端独立 dev server。
+- **构建期分端（生产/分发）**：CI 按端产出**三个精简产物**，各产物只含本端代码 + 对应 `shared`，互不含对方后端/前端。
+- **用户端是硬隔离线**：用户端交付物**绝不打包**运营端/企业端的后端代码与前端界面（隐私 + 最小攻击面）。
+- **禁止运行时胖产物**：不做"一个含三端全部代码的产物在运行时 `APP_TIER` 切端"——尤其前端不做"一个 bundle 运行时切端"（那会把控制面 UI 下发到用户浏览器）。`--tier` 只用于 dev 与按端构建入口选择，不等于把三端代码塞进同一交付物。
 
 ---
 
@@ -859,10 +870,11 @@ web/
 | D8 | 认证 | **三端联邦认证**：负责人初始凭据归运营端、成员凭据+负责人本地密码归企业端、用户端只持本会话 token；运营端不保留密码；用户端首次在线认证、之后本地验签；`user`+`auth_identity`+`Authenticator` 扩展点 + 单一 token 出口；验签/鉴权/签发为共享库 `shared/auth`。**无中心 Identity、无中心 Edge**。〔修订早期"折叠进 Edge"〕 |
 | D9 | 端入口形态 | **取消中心 Edge Gateway**；认证/限流/CORS 下沉为各端服务自带 `shared/auth` 中间件。〔**推翻**早期"轻量 Edge 反代/单 origin"〕 |
 | D10 | 后端框架 | FastAPI，弃用手写 router |
-| D11 | 工程落点 | 新架构在**项目根路径**按端建目录（`operation_service/`/`manager_service/`/`agent_service/`/`agent_gateway/`），`web/` 按端分子目录；**无 `edge_gateway/`**；`app/` 冻结只读，仅例外**读取** `app/.env`、绞杀期**调用**未迁移旧端点（§14.1） |
+| D11 | 工程落点 | **单仓，层优先**：`server/`（后端，按端分 `*_service/` + `agent_gateway/` + `shared/`）+ `web/`（前端，按端分 + `shared/`）；**无 `edge_gateway/`**；`app/` 冻结只读，迁移完成后删除，仅例外**读取** `app/.env`、绞杀期**调用**未迁移旧端点（§14.1） |
 | D12 | 配置下发与授权 | 企业端招募专家/配方案时指定**成员级授权**；用户端**主动 pull** 已授权条目本地装载；不靠上端推送 |
 | D13 | 本地优先与隐私 | 会话/群聊/run/usage **全本地、内容不上传**；跨端只流转认证、授权配置、**脱敏计量/审计摘要**逐级汇总 |
 | D14 | 跨端可用性 | 上端短暂离线只影响"拉新配置/新登录"；已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作 |
+| D15 | 仓库与构建 | **单仓不拆双仓**；后端统一启动器 `run.py --tier=...`（dev 便利）；**构建期按端产出三个精简产物**，用户端绝不含控制面代码；禁止运行时胖产物/前端运行时切端（§14.2） |
 
 ### 20.2 待详设裁决
 
