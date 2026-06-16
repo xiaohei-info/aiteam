@@ -344,13 +344,14 @@ class TestIndexHtmlIntegration:
 
     def test_index_route_url_encodes_asset_version(self):
         src = ROUTES.read_text(encoding="utf-8")
-        idx = src.find('parsed.path in ("/", "/index.html")')
-        if idx == -1:
-            idx = src.find('parsed.path.startswith("/session/")')
-        assert idx != -1, "routes.py must handle /, /index.html, and /session/<id>"
+        # The shell (index.html, with the cache-busting version token) is served
+        # from the AI Team page-path branch; "/" and "/session/*" now 302-redirect
+        # into it after the password-login gating landed.
+        idx = src.find('if _is_aiteam_page_path(parsed.path):')
+        assert idx != -1, "routes.py must serve the AI Team SPA shell"
         block = src[idx:idx + 800]
         assert "quote(WEBUI_VERSION, safe=\"\")" in block, (
-            "index route must URL-encode the cache-busting version token before "
+            "shell route must URL-encode the cache-busting version token before "
             "injecting it into script src attributes and service worker registration"
         )
 
