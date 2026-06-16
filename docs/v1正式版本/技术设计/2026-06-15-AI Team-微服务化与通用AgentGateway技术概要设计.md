@@ -244,7 +244,7 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 
 #### 4.2.2 Manager Service（企业端，企业自部署）
 
-主要职责：企业、成员账号、角色、组织结构；**成员认证**（成员登录凭据校验与 token 签发）；负责人首登后**本地保存重置密码**；员工/专家实例配置、模型配置、Prompt、能力开关；知识库、文档、索引、知识绑定；技能安装与绑定；连接器定义、凭据授权、可见性控制；记忆管理与治理视图；**从运营端招募专家/配置行业方案，并指定成员级授权（哪些专家/方案授权给哪些成员账号）**；企业账单、企业级计量/审计汇总与设置。
+主要职责：企业、成员账号、角色、组织结构；**成员认证**（成员登录凭据校验与 token 签发）；负责人首登后**本地保存重置密码**；员工/专家实例配置、模型配置、Prompt、能力开关；**模型供应商接入配置（AI Relay 端点/令牌，或直连 provider 凭据，见 §6.7）**；知识库、文档、索引、知识绑定；技能安装与绑定；连接器定义、凭据授权、可见性控制；记忆策略与治理视图；**从运营端招募专家/配置行业方案，并指定成员级授权（哪些专家/方案授权给哪些成员账号）**；企业账单、企业级计量/审计汇总与设置。
 
 禁止事项：不持有/不维护任何会话与 Run/Task 执行状态机；不提交 runtime 执行；不消费 runtime 原始事件；不接收上传的会话内容；不向用户机器发起入站连接。
 
@@ -337,8 +337,8 @@ AI Team 第一阶段目标是快速完成可演示闭环，现有实现已覆盖
 | 数据域 | 写端 | 库（部署位置） |
 |---|---|---|
 | system_user / system_role / **enterprise_registration** / **owner_credential**（初始/重置，不存可逆密码）/ platform_template / industry_solution / platform_finance / platform_audit / **cross_enterprise_usage_rollup** | 运营端 Operation | oper（中心） |
-| enterprise / member（成员账号 + 凭据）/ **owner_local_credential**（重置后本地）/ role / org / employee（专家/员工实例）/ prompt / knowledge（管理面+源文档，见 §6.6）/ skill_binding / connector / memory / **member_grant**（成员级授权）/ billing_setting / enterprise_audit / **enterprise_usage_rollup** | 企业端 Manager | mgr（企业自部署） |
-| conversation / message / run / task / loop / runtime_binding / run_event / orchestration / **loaded_expert_projection**（pull 的只读专家/方案投影）/ **local_capability_cache**（本地化的知识索引/技能/连接器配置，见 §6.6）/ runtime_worker / runtime_capability / runtime_session / raw_runtime_event / **local_session_token** | 用户端 Agent | agent（用户本机） |
+| enterprise / member（成员账号 + 凭据）/ **owner_local_credential**（重置后本地）/ role / org / employee（专家/员工实例）/ prompt / knowledge（管理面+源文档，见 §6.6）/ skill_binding / connector / **provider_credential**（AI Relay 令牌或直连 provider 凭据，见 §6.7）/ **memory_policy**（记忆策略/种子，见 §6.6）/ **member_grant**（成员级授权）/ billing_setting / enterprise_audit / **enterprise_usage_rollup** | 企业端 Manager | mgr（企业自部署） |
+| conversation / message / run / task / loop / runtime_binding / run_event / orchestration / **loaded_expert_projection**（pull 的只读专家/方案投影）/ **local_capability_cache**（本地化的知识索引/技能/连接器/provider 配置，见 §6.6/§6.7）/ **local_memory_store**（mem0 运行时记忆数据，见 §6.6）/ runtime_worker / runtime_capability / runtime_session / raw_runtime_event / **local_session_token** | 用户端 Agent | agent（用户本机） |
 
 跨端读取走 pull API 或本地投影，**禁止跨端/跨库直写**。
 
@@ -399,6 +399,21 @@ EmployeeExecutionSnapshot
 - **流向单一**：企业资产（知识索引、技能包、连接器凭据）**自上而下流到本机**（企业把自己的资产发给自己员工的机器，不违反隐私承诺）；用户的会话/查询内容**绝不上行**。
 - **连接器的对外调用是其本职**：连接器按定义调用外部 SaaS（数据出本机到该 SaaS），这是连接器语义本身，**不属于**"会话内容上传企业端/运营端"的禁止项；凭据按 §11.4 最小注入、用后不留痕。
 - **大语料权衡**：知识索引可能较大，本地化采用"按已授权知识集 + 增量"拉取，不整库复制；具体切分与缓存淘汰留详设（§20.2）。
+
+### 6.7 模型供应商凭据与 AI Relay（解决 provider 凭据归属）
+
+runtime CLI 跑起来必须能访问模型 provider（API key / endpoint）。旧架构把 providers 写进 Hermes profile `config.yaml`（`materialize_root_providers`），新架构废弃 profile 直写后，按下表归位：
+
+| 面 | 归属 | 内容 |
+|---|---|---|
+| 管理面 | 企业端 Manager（mgr 库） | provider 接入配置真相：**默认 AI Relay 端点 + 企业级令牌**；或（可选）直连 provider 凭据（API key）；可见性/成员级授权 |
+| 执行面 | 用户端 Agent（本地） | pull 已授权的 provider 配置到 `local_capability_cache`；run 时由 **Driver 最小权限注入**到 runtime 的 provider env/配置，用后不留痕（§11.4），**不写共享 profile** |
+
+**裁决**：
+- **默认走 AI Relay**（复用既有服务）：用户机器只持 **Relay 端点 + 受限令牌**，真实 provider key 留在 Relay 侧，降低 key 在每台用户机器上的扩散面，契合联邦凭据取向。
+- **可选直连 provider**：企业可为特定 runtime/场景配置直连 key（仍 Manager 管理、本地最小注入）。二者经同一 Driver 注入接缝，对上层中立。
+- **隐私边界澄清**：**LLM/Relay 调用（把 prompt 发给模型方或 AI Relay）是 agent 的固有行为，不属于"会话内容上传控制面（Manager/Operator）"的禁止项**——与 §6.6 连接器对外调用同理。"内容不出端"约束的是**对 AI Team 控制面的上传**，不是禁止调用模型 API。
+- `RunSpec` 以 `provider_ref` 引用该配置（见 §7.5.1），不内联明文凭据。
 
 ---
 
@@ -480,6 +495,7 @@ Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始�
 RunSpec
   system_prompt        # ← persona（中立文本，不写 SOUL.md）
   model                # ← 中立 model id（空=让该 runtime CLI 自解析默认）
+  provider_ref         # ← 模型供应商配置引用（AI Relay 或直连，见 §6.7；不内联明文凭据）
   thinking_level       # ← 中立 reasoning/effort 档位
   mcp_config           # ← 能力统一注入通道（见 7.5.2）
   resume_session_id    # ← 续接上次 session
@@ -518,6 +534,16 @@ RunSpec
 3. **能力声明 + 优雅降级**：Driver 声明支持的 materialization（原生技能?原生记忆?persona 注入方式?）；不支持的回落到 7.5.2 的 MCP 投影或明确标 unsupported，**绝不静默丢弃**。
 4. **安全**：`custom_args` 必须过 Driver 的参数 denylist（防止破坏协议/越权 flag）。
 5. **向后兼容 Hermes**：旧 `profile_capability.py` 的 SOUL/MEMORY/skills/config 写入逻辑**不再需要**（persona 走协议、记忆/知识走 MCP）；如个别能力仍需 Hermes profile 文件，封装在 `HermesAcpDriver` 内、run 作用域临时生成，**不手改 `.hermes/hermes-agent/`**。
+
+### 7.6 本地编排、Loop 与 runtime 选择（用户端 Agent Service 侧）
+
+run 的**触发与编排**是用户端 Agent Service 的职责，统一收敛为"构造 `RunSpec` → 提交 Agent Gateway"，runtime 无关：
+
+- **runtime 选择**：每个 employee 实例在配置中声明默认 runtime（`runtime_binding`）；Agent Service 提交 run 时按 `runtime_selection` 选 Driver，能力不匹配（如所选 runtime 无某协议）则按 §7.5.4 的能力声明降级或明确报错，**不静默切换**。用户可否手动切 runtime 留详设。
+- **本地多专家协作编排（群聊 @提及）**：群聊只是**单用户本机多专家协作**（§19 非目标已排除跨机器会话同步）。@提及路由由 Agent Service 解析，被提及的每个专家**各自以其快照构造独立 RunSpec、各起一个 run**，多 run 事件并入**同一会话时间线**（按 run_id 区分来源）；编排为串行/并行的调度策略与防回环（避免互相 @ 触发死循环）留详设。
+- **Loop/周期任务**：由用户端**本地调度器**（runtime 无关，**不依赖 `hermes cron`**）持有 cron/触发配置，到点构造 RunSpec 经 Gateway 执行；**仅在用户端运行期执行**（§16.2 取舍），关机即不跑，不做服务端常驻代跑。调度器实现与持久化留详设。
+
+> 以上三者都不引入新的 runtime 耦合：编排/Loop 只负责"何时、以哪个专家快照"发起 run，真正的 runtime 差异仍只活在 Driver（§7.5）。
 
 ---
 
@@ -964,6 +990,8 @@ v1 是**全新重建**：不与旧系统并跑、不切流、不桥接/反代旧
 | D15 | 仓库与构建 | **单仓不拆双仓**；后端统一启动器 `run.py --tier=...`（dev 便利）；**构建期按端产出三个精简产物**，用户端绝不含控制面代码；禁止运行时胖产物/前端运行时切端（§14.2） |
 | D16 | 能力适配 | **中立 `RunSpec` + 能力经 `mcp_config` 统一注入 + Driver 按 runtime 翻译（优先 flag/协议、弃用 profile 文件直写）**；借鉴 multica `server/pkg/agent` 设计（Python 重实现）。旧 `SOUL.md`/`MEMORY.md`/`skills/`/`config.yaml` 直写废弃（§7.5） |
 | D17 | 记忆组件 | 记忆复用 **mem0（OpenMemory 本地优先 MCP）**，与知识库 **LightRAG** 并列、均经 MCP 注入；二者职责互补（记忆 vs 文档检索），AI Team 只做封装与本地装配（§6.6/§7.5） |
+| D18 | 模型供应商凭据 | **默认走 AI Relay**（用户机器只持 Relay 端点+受限令牌，真实 key 留 Relay 侧）、可选直连 provider；Manager 管理、本地最小注入、不写共享 profile；`RunSpec.provider_ref` 引用。**LLM/Relay 调用不属于"会话内容上传控制面"的禁止项**（§6.7） |
+| D19 | 编排/Loop 归属 | 触发与编排是**用户端 Agent Service** 职责，统一收敛为"构造 RunSpec → Gateway"；Loop 由**本地调度器**驱动、不依赖 `hermes cron`、仅运行期执行；群聊=单机多专家、多 run 并入同一时间线（§7.6） |
 
 ### 20.2 待详设裁决
 
@@ -976,3 +1004,6 @@ v1 是**全新重建**：不与旧系统并跑、不切流、不桥接/反代旧
 7. 各端表 → 写端 → 目标库（部署位置）的 schema 设计（详设产出，全新建库、不迁旧数据）；会话类表在用户端本地全新落地的口径。
 8. 外部能力本地化（§6.6）：知识索引按授权集的切分/增量拉取/缓存淘汰策略；技能包与连接器凭据的本地分发与回收。
 9. 部署绑定（§14.3）：企业部署引导令牌的生成/时效/吊销、用户端 `MANAGER_URL` 下发载体（二维码/配置串）格式、服务身份密钥建立细节。
+10. 模型供应商（§6.7）：AI Relay 令牌的签发/作用域/轮换、直连 provider 凭据的本地注入与回收、provider 配置的成员级授权与 pull 契约。
+11. 记忆（§6.6/§7.5）：mem0/OpenMemory 本地部署形态、`memory_policy` 与种子记忆 schema、记忆作用域（员工/会话级）与保留期、跨 runtime 迁移口径。
+12. 本地编排与 Loop（§7.6）：本地调度器实现/持久化、群聊多专家串并行调度与防回环策略、runtime 手动切换口径。
