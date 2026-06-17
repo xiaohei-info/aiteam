@@ -100,6 +100,7 @@ def ensure_session(profile: str, model: str = "", model_provider: str = "") -> s
 
 def run_turn(
     *,
+    run_id: str = "",
     profile: str,
     message: str,
     model: str = "",
@@ -148,7 +149,15 @@ def run_turn(
         return TurnResult(False, error=f"chat/start returned no stream_id: {str(start)[:200]}",
                           session_id=sid)
 
-    return _consume_stream(stream_id, sid, on_event, timeout_seconds)
+    if run_id:
+        from agent_gateway.run_cancellation import register_stream
+        register_stream(run_id, stream_id)
+    try:
+        return _consume_stream(stream_id, sid, on_event, timeout_seconds)
+    finally:
+        if run_id:
+            from agent_gateway.run_cancellation import unregister_stream
+            unregister_stream(run_id, stream_id)
 
 
 def _consume_stream(stream_id: str, session_id: str,

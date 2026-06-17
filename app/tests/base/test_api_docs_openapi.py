@@ -1,10 +1,11 @@
-"""Tests for the auto-extracted API docs (Swagger UI + OpenAPI index).
+"""Tests for the hand-curated API docs (Swagger UI + OpenAPI index).
 
-The backend has no web framework, so the OpenAPI document is built by
-statically scanning the hand-written routers. These tests pin:
-- the extractor finds a healthy number of real routes,
-- known endpoints across every router family are present with correct methods,
-- no garbage literals leak into the path set,
+The backend has no web framework, so the OpenAPI document is built from a
+whitelist registry of endpoints actually consumed by the Team Panel frontend.
+These tests pin:
+- the registry produces a healthy number of real paths (~90),
+- known endpoints across every domain are present with correct methods,
+- all entries carry complete schemas (summary, responses, request bodies),
 - the two GET routes (/api/docs, /api/openapi.json) are wired into handle_get.
 """
 import io
@@ -45,29 +46,26 @@ class TestOpenApiSpec:
         assert spec["info"]["title"]
         assert isinstance(spec["paths"], dict)
 
-    def test_finds_a_healthy_number_of_routes(self):
+    def test_finds_frontend_api_count(self):
+        """The whitelist should contain ~90 endpoints actively used by the frontend."""
         paths = api_docs.build_openapi_spec()["paths"]
-        # ~270 paths today across all routers; guard against the extractor
-        # silently breaking and emitting almost nothing.
-        assert len(paths) > 150, f"only {len(paths)} paths extracted — extractor likely broke"
+        op_count = sum(len(methods) for methods in paths.values())
+        assert op_count >= 85, f"only {op_count} operations — registry may be incomplete"
+        # Sanity: should not explode past reasonable upper bound
+        assert op_count <= 120, f"{op_count} operations — too many, check for stale entries"
 
     def test_known_endpoints_present_with_methods(self):
         paths = api_docs.build_openapi_spec()["paths"]
         expected = {
-            ("/api/team/workbench", "get"),          # router_team exact match
-            ("/api/team/runs", "post"),              # router_team POST
-            ("/api/team/runs/{id}/stream", "get"),   # prefix + endswith reconstruction
-            ("/api/team/employees/{id}", "patch"),   # prefix match -> {id}
-            ("/api/auth/refresh", "post"),           # auth dispatch (absolute) in routes.py
-            ("/api/me", "get"),                      # auth GET dispatch
-            ("/api/insights", "get"),                # base handle_get route
-            ("/api/kanban/boards", "get"),           # kanban_bridge enclosing-function
-            ("/api/system-admin/", None),            # at least one system-admin route exists
+            ("/api/team/workbench", "get"),
+            ("/api/team/runs", "post"),
+            ("/api/team/runs/{id}/stream", "get"),
+            ("/api/team/employees/{id}", "patch"),
+            ("/api/me", "get"),
+            ("/api/team/knowledge-bases", "get"),
+            ("/api/system-admin/health", "get"),
         }
         for path, method in expected:
-            if method is None:
-                assert any(p.startswith(path) for p in paths), f"no path under {path}"
-                continue
             assert path in paths, f"missing path {path}"
             assert method in paths[path], f"{path} missing method {method}; has {sorted(paths[path])}"
 
@@ -76,14 +74,43 @@ class TestOpenApiSpec:
         for p in paths:
             assert p.startswith("/api/"), f"non-api path leaked: {p!r}"
             assert " " not in p and "%" not in p, f"garbage literal leaked: {p!r}"
-            # only {id} placeholders are emitted
             for ph in re.findall(r"\{(\w+)\}", p):
-                assert ph == "id", f"unexpected placeholder in {p!r}"
+                assert ph == "id" or ph == "mid", f"unexpected placeholder {ph!r} in {p!r}"
+
+    def test_all_entries_have_summary_and_response(self):
+        """Every whitelist entry must carry at least summary and 200 response."""
+        paths = api_docs.build_openapi_spec()["paths"]
+        for path, methods in paths.items():
+            for method, op in methods.items():
+                assert op.get("summary"), f"{method.upper()} {path} has no summary"
+                # Must have at least one success response (2xx)
+                has_2xx = any(str(code).startswith("2") for code in op.get("responses", {}))
+                assert has_2xx, f"{method.upper()} {path} has no 2xx response; responses={list(op.get('responses', {}).keys())}"
+                # Every summary should be readable (not an auto-generated method+path string)
+                summary = op["summary"]
+                assert not summary.startswith(f"{method.upper()} "), \
+                    f"{method.upper()} {path} summary looks auto-generated: {summary!r}"
+
+    def test_all_tags_covered(self):
+        """Key business domains must have entries."""
+        paths = api_docs.build_openapi_spec()["paths"]
+        all_tags = set()
+        for methods in paths.values():
+            for op in methods.values():
+                all_tags.update(op.get("tags", []))
+        required_tags = {
+            "auth", "onboarding", "workbench", "knowledge-base", "talent-market",
+            "conversation", "org", "run", "upload", "employee", "skill",
+            "billing", "connector", "llm", "collaboration", "solution",
+            "memory", "settings", "enterprise-admin", "system-admin",
+        }
+        missing = required_tags - all_tags
+        assert not missing, f"tags missing from registry: {missing}"
 
     def test_operations_carry_tag_and_responses(self):
         paths = api_docs.build_openapi_spec()["paths"]
         op = paths["/api/team/workbench"]["get"]
-        assert op["tags"] == ["team"]
+        assert op["tags"] == ["workbench"]
         assert "200" in op["responses"]
 
     def test_id_paths_declare_path_parameter(self):
@@ -91,7 +118,20 @@ class TestOpenApiSpec:
         op = paths["/api/team/employees/{id}"]["patch"]
         assert any(prm["name"] == "id" and prm["in"] == "path" for prm in op["parameters"])
 
-    def test_manual_contract_overlay_documents_team_run_request_and_response(self):
+    def test_id_param_auto_added(self):
+        """Paths containing {id} should automatically get an id path parameter."""
+        paths = api_docs.build_openapi_spec()["paths"]
+        for path, methods in paths.items():
+            if "{id}" not in path:
+                continue
+            for method, op in methods.items():
+                params = op.get("parameters", [])
+                assert any(p["name"] == "id" and p["in"] == "path" for p in params), \
+                    f"{method.upper()} {path} missing auto id path param"
+
+    # ── Domain-specific contract checks ──
+
+    def test_documents_team_run_request_and_response(self):
         paths = api_docs.build_openapi_spec()["paths"]
         op = paths["/api/team/runs"]["post"]
         assert "requestBody" in op
@@ -109,7 +149,7 @@ class TestOpenApiSpec:
         assert "runtime_handle" in body_201["required"]
         assert "402" in op["responses"]
 
-    def test_manual_contract_overlay_documents_knowledge_base_shapes(self):
+    def test_documents_knowledge_base_shapes(self):
         paths = api_docs.build_openapi_spec()["paths"]
         get_op = paths["/api/team/knowledge-bases"]["get"]
         list_200 = get_op["responses"]["200"]["content"]["application/json"]["schema"]
@@ -124,7 +164,7 @@ class TestOpenApiSpec:
         assert any(param["name"] == "q" and param["in"] == "query" for param in search_op["parameters"])
         assert "400" in search_op["responses"]
 
-    def test_manual_contract_overlay_documents_onboarding_and_sse(self):
+    def test_documents_onboarding_and_sse(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         onboarding = paths["/api/auth/onboarding/create-enterprise"]["post"]
@@ -139,7 +179,7 @@ class TestOpenApiSpec:
         sse_example = sse["responses"]["200"]["content"]["text/event-stream"]["example"]
         assert "event: timeline" in sse_example
 
-    def test_manual_contract_overlay_documents_workbench_group_and_settings(self):
+    def test_documents_workbench_group_and_settings(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         workbench = paths["/api/team/workbench"]["get"]
@@ -164,7 +204,7 @@ class TestOpenApiSpec:
         settings_patch_req = settings_patch["requestBody"]["content"]["application/json"]["schema"]
         assert "notification_policy" in settings_patch_req["properties"]
 
-    def test_manual_contract_overlay_documents_billing_connectors_and_memories(self):
+    def test_documents_billing_connectors_and_memories(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         balance = paths["/api/team/billing/balance"]["get"]
@@ -191,12 +231,18 @@ class TestOpenApiSpec:
         memories = paths["/api/team/memories"]["get"]
         mem_200 = memories["responses"]["200"]["content"]["application/json"]["schema"]
         assert "items" in mem_200["required"]
-        bulk_delete = paths["/api/team/memories/bulk-delete"]["post"]
-        bulk_req = bulk_delete["requestBody"]["content"]["application/json"]["schema"]
-        assert "employee_id" in bulk_req["required"]
-        assert "memory_ids" in bulk_req["required"]
 
-    def test_manual_contract_overlay_documents_enterprise_and_system_admin_surfaces(self):
+        # Memory CRUD: create and update
+        memory_create = paths["/api/team/memories"]["post"]
+        memory_create_req = memory_create["requestBody"]["content"]["application/json"]["schema"]
+        assert "employee_id" in memory_create_req["required"]
+        assert "content" in memory_create_req["required"]
+
+        memory_patch = paths["/api/team/memories/{id}"]["patch"]
+        memory_patch_req = memory_patch["requestBody"]["content"]["application/json"]["schema"]
+        assert "review" in memory_patch_req["properties"]
+
+    def test_documents_enterprise_and_system_admin_surfaces(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         invites = paths["/api/enterprise-admin/invites"]["post"]
@@ -219,7 +265,7 @@ class TestOpenApiSpec:
         action_200 = ent_actions["responses"]["200"]["content"]["application/json"]["schema"]
         assert "audit_event_id" in action_200["required"]
 
-    def test_manual_contract_overlay_documents_auth_employee_and_template_surfaces(self):
+    def test_documents_auth_employee_and_template_surfaces(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         phone_send = paths["/api/auth/login/phone/send-code"]["post"]
@@ -256,7 +302,7 @@ class TestOpenApiSpec:
         recruit_201 = recruit["responses"]["201"]["content"]["application/json"]["schema"]
         assert "employee_id" in recruit_201["required"]
 
-    def test_manual_contract_overlay_documents_group_detail_connector_detail_and_memory_mutations(self):
+    def test_documents_group_detail_connector_detail_and_memory_mutations(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         group_detail = paths["/api/team/group-conversations/{id}"]["get"]
@@ -289,7 +335,7 @@ class TestOpenApiSpec:
         memory_patch_req = memory_patch["requestBody"]["content"]["application/json"]["schema"]
         assert "review" in memory_patch_req["properties"]
 
-    def test_manual_contract_overlay_documents_frontend_long_tail_team_surfaces(self):
+    def test_documents_frontend_long_tail_team_surfaces(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         workbench_state = paths["/api/team/workbench/state"]["post"]
@@ -383,7 +429,7 @@ class TestOpenApiSpec:
         llm_provider_create_req = llm_provider_create["requestBody"]["content"]["application/json"]["schema"]
         assert "provider_key" in llm_provider_create_req["required"]
 
-    def test_manual_contract_overlay_documents_system_admin_content_and_enterprise_surfaces(self):
+    def test_documents_system_admin_content_and_enterprise_surfaces(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
         enterprises = paths["/api/system-admin/enterprises"]["get"]
@@ -420,9 +466,58 @@ class TestOpenApiSpec:
         assert "name" in sys_solutions_post_req["required"]
         assert "template_ids" in sys_solutions_post_req["required"]
 
+    def test_documents_join_enterprise(self):
+        paths = api_docs.build_openapi_spec()["paths"]
+        join_op = paths["/api/auth/onboarding/join-enterprise"]["post"]
+        join_req = join_op["requestBody"]["content"]["application/json"]["schema"]
+        assert "invite_code" in join_req["required"]
+        join_200 = join_op["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "enterprise_id" in join_200["required"]
+
+    def test_documents_auth_login_and_wechat_flow(self):
+        paths = api_docs.build_openapi_spec()["paths"]
+
+        # Password login
+        login = paths["/api/auth/login"]["post"]
+        login_req = login["requestBody"]["content"]["application/json"]["schema"]
+        assert "email" in login_req["required"]
+        assert "password" in login_req["required"]
+
+        # WeChat init
+        wx_init = paths["/api/auth/login/wechat/init"]["post"]
+        wx_init_200 = wx_init["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "qr_url" in wx_init_200["required"]
+        assert "expires_in" in wx_init_200["required"]
+
+        # WeChat poll
+        wx_poll = paths["/api/auth/login/wechat/poll"]["get"]
+        assert any(p["name"] == "state" and p["in"] == "query" for p in wx_poll["parameters"])
+
+        # WeChat callback
+        wx_cb = paths["/api/auth/login/wechat/callback"]["post"]
+        wx_cb_req = wx_cb["requestBody"]["content"]["application/json"]["schema"]
+        assert "state" in wx_cb_req["required"]
+        assert "code" in wx_cb_req["required"]
+        wx_cb_200 = wx_cb["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "access_token" in wx_cb_200["required"]
+
+    def test_documents_onboarding_flow(self):
+        paths = api_docs.build_openapi_spec()["paths"]
+
+        probe = paths["/api/onboarding/probe"]["post"]
+        probe_req = probe["requestBody"]["content"]["application/json"]["schema"]
+        assert "provider" in probe_req["required"]
+        assert "base_url" in probe_req["required"]
+
+        oauth_start = paths["/api/onboarding/oauth/start"]["post"]
+        oauth_start_req = oauth_start["requestBody"]["content"]["application/json"]["schema"]
+        assert "provider" in oauth_start_req["required"]
+        oauth_start_200 = oauth_start["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "flow_id" in oauth_start_200["required"]
+
 
 class TestSwaggerUiHtml:
-    def test_html_references_swagger_and_spec_url(self):
+    def test_html_references_spec_url(self):
         html = api_docs.swagger_ui_html()
         assert "接口目录" in html
         assert "/api/openapi.json" in html
@@ -430,6 +525,10 @@ class TestSwaggerUiHtml:
         assert "method-post" in html
         assert "unpkg.com" not in html
         assert "SwaggerUIBundle" not in html
+
+    def test_html_has_zh_CN_lang(self):
+        html = api_docs.swagger_ui_html()
+        assert 'lang="zh-CN"' in html
 
 
 class TestRouteWiring:

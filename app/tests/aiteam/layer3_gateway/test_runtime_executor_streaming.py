@@ -38,18 +38,10 @@ def test_webui_adapter_retries_with_internal_auth_when_password_enabled(monkeypa
 
     def fake_urlopen(req, timeout=0):
         cookie = req.headers.get("Cookie", "")
-        calls.append((req.full_url, req.method, cookie, timeout))
-        if req.full_url.endswith("/api/session/new") and not cookie:
-            raise HTTPError(
-                req.full_url,
-                401,
-                "Unauthorized",
-                hdrs={},
-                fp=io.BytesIO(b'{"error":"Authentication required"}'),
-            )
-        if req.full_url.endswith("/api/auth/login"):
-            return _Resp({"ok": True}, headers={"Set-Cookie": "hermes_session=test-cookie; Path=/; HttpOnly"})
+        internal_auth = any("hermes" in str(key).lower() and "auth" in str(key).lower() for key in req.headers)
+        calls.append((req.full_url, req.method, cookie, internal_auth, timeout))
         if req.full_url.endswith("/api/session/new"):
+            assert internal_auth is True
             return _Resp({"session": {"session_id": "sess-auth"}})
         raise AssertionError(f"unexpected request: {req.full_url}")
 
@@ -58,11 +50,10 @@ def test_webui_adapter_retries_with_internal_auth_when_password_enabled(monkeypa
     session_id = webui_runtime_adapter.ensure_session("profile-auth", "model-auth", "provider-auth")
 
     assert session_id == "sess-auth"
+    assert len(calls) == 1
     assert calls[0][0].endswith("/api/session/new")
     assert calls[0][2] == ""
-    assert calls[1][0].endswith("/api/auth/login")
-    assert calls[2][0].endswith("/api/session/new")
-    assert calls[2][2] == "hermes_session=test-cookie"
+    assert calls[0][3] is True
 
 
 def test_webui_adapter_does_not_login_when_auth_disabled(monkeypatch):
@@ -246,6 +237,39 @@ def test_run_turn_streaming_pushes_token_delta_to_live_sse(monkeypatch):
         assert events[-1][0] == "stream_end"
     finally:
         hydrator.remove_stream(run_id)
+
+
+def test_finalize_keeps_cancelled_run_cancelled(db_conn, seeded_enterprise):
+    from team_panel.domain.entities import TeamRun
+    from team_panel.transactions.uow import UnitOfWork
+
+    with UnitOfWork(db_conn) as uow:
+        conv = uow.conversations().get_by_id("conv_test")
+        assert conv is not None
+        uow.team_runs().create(
+            TeamRun(
+                id="run_cancel_keep",
+                enterprise_id="ent_test",
+                conversation_id=conv.id,
+                trigger_type="private_message",
+                execution_mode="single_agent",
+                status="cancelled",
+                entry_employee_id="emp_test",
+            )
+        )
+
+    runtime_executor._finalize(
+        "run_cancel_keep",
+        success=False,
+        output="later failure",
+        error="boom",
+        conn=db_conn,
+    )
+
+    with UnitOfWork(db_conn) as uow:
+        run = uow.team_runs().get_by_id("run_cancel_keep")
+        assert run is not None
+        assert run.status == "cancelled"
 
 
 def test_run_turn_streaming_pushes_reasoning_and_tool_completion(monkeypatch):

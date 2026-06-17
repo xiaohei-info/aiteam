@@ -288,6 +288,7 @@ def _run_turn_streaming(conn, run_id: str, employee_id: str, *,
 
     try:
         result = webui.run_turn(
+            run_id=run_id,
             profile=profile, message=prompt_text,
             model=model, model_provider=model_provider,
             session_id=webui_session_id or None,
@@ -464,6 +465,7 @@ def _finalize(run_id: str, *, success: bool, output: str,
             if run is None:
                 return
             employee_id = employee_id or run.entry_employee_id or ""
+            cancelled = run.status == "cancelled"
 
             # Persist token usage into the run summary so billing_view_service
             # materializes a non-zero usage_ledger (场景⑤ Token 消耗实时统计).
@@ -499,13 +501,17 @@ def _finalize(run_id: str, *, success: bool, output: str,
                 uow.conversations().update_latest_run(
                     run.conversation_id, run.id, message_id, output[:200])
 
-            terminal = "run_succeeded" if success else "run_failed"
+            if cancelled:
+                terminal = "run_cancelled"
+            else:
+                terminal = "run_succeeded" if success else "run_failed"
             _ingest(uow, run, terminal,
-                    preview=output[:200] if success else (error or output[:200] or "执行失败"),
+                    preview="协作已被用户中止" if cancelled else (output[:200] if success else (error or output[:200] or "执行失败")),
                     payload={"success": success, "error": error,
                              "citations": citations or []},
                     employee_id=employee_id)
-            run.status = "succeeded" if success else "failed"
+            if not cancelled:
+                run.status = "succeeded" if success else "failed"
             uow.team_runs().update_status(run)
     finally:
         if own_conn:

@@ -223,6 +223,13 @@ window.aiteam = window.aiteam || {};
       '</div>正在思考中...</div>';
   }
 
+  function isRunLive(state) {
+    if (!state || !state.conversation) return false;
+    if (state.isSyncing && state.runId) return true;
+    var status = String((state.conversation.latest_run && state.conversation.latest_run.status) || state.latestRunStatus || '').toLowerCase();
+    return status === 'queued' || status === 'routing' || status === 'submitting' || status === 'running' || status === 'waiting_human';
+  }
+
   function normalizeComparableText(text) {
     return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
   }
@@ -559,6 +566,18 @@ window.aiteam = window.aiteam || {};
       state.refs.summary.innerHTML = renderSummaryPanel(state.employeeSummary, state.conversation);
     }
 
+    function updatePrimaryActionButton() {
+      var btn = container.querySelector('[data-chat-primary]');
+      if (!btn) return;
+      var live = isRunLive(state);
+      btn.dataset.action = live ? 'stop' : 'send';
+      btn.textContent = live ? '⏹' : '➤';
+      btn.title = live ? '停止本轮回复' : '发送 (Enter)';
+      btn.setAttribute('aria-label', live ? '停止本轮回复' : '发送 (Enter)');
+      btn.classList.toggle('is-stop', live);
+      btn.disabled = false;
+    }
+
     function renderAll() {
       renderHistory();
       renderQuoteBanner();
@@ -566,6 +585,7 @@ window.aiteam = window.aiteam || {};
       renderTranscript();
       renderSummary();
       setStatus(state.statusText || '');
+      updatePrimaryActionButton();
     }
 
     function normalizeConversation(data) {
@@ -848,6 +868,7 @@ window.aiteam = window.aiteam || {};
 
     var form = container.querySelector('[data-chat-form]');
     var input = state.refs.input;
+    var primaryBtn = container.querySelector('[data-chat-primary]');
     var quoteBtn = container.querySelector('[data-chat-quote]');
     var retryBtn = container.querySelector('[data-chat-retry]');
     var abortBtn = container.querySelector('[data-chat-abort]');
@@ -869,6 +890,10 @@ window.aiteam = window.aiteam || {};
     if (form && input) {
       form.addEventListener('submit', function (event) {
         event.preventDefault();
+        if (isRunLive(state)) {
+          abortActiveRun();
+          return;
+        }
         var text = String(input.value || '').trim();
         if (!text) return;
         input.value = '';
@@ -878,10 +903,27 @@ window.aiteam = window.aiteam || {};
       if (typeof input.addEventListener === 'function') input.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
+          if (isRunLive(state)) {
+            abortActiveRun();
+            return;
+          }
           var text = String(input.value || '').trim();
           if (!text) return;
           input.value = '';
           createRun(text);
+        }
+      });
+    }
+
+    if (primaryBtn) {
+      primaryBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (isRunLive(state)) {
+          abortActiveRun();
+          return;
+        }
+        if (form && typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
         }
       });
     }
@@ -1324,10 +1366,10 @@ window.aiteam = window.aiteam || {};
       '<button class="aiteam-chatwin__tool" type="button" data-chat-attach title="附件">📎</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-quote title="引用最近一条消息">❝</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-retry title="重试上一轮">↻</button>' +
-      '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复">⏹</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复" hidden>⏹</button>' +
       '<span class="aiteam-chatwin__spacer"></span>' +
       (model.modelLine ? '<span class="aiteam-chatwin__model"><span class="aiteam-chatwin__model-dot"></span>' + escapeHtml(model.modelLine) + '</span>' : '') +
-      '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
+      '<button class="aiteam-chatwin__send" type="submit" data-chat-primary title="发送 (Enter)">➤</button>' +
       '</div></form></div>';
   }
 

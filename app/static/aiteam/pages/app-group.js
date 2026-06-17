@@ -209,6 +209,16 @@ window.aiteam = window.aiteam || {};
     }).join('') + '</div>';
   }
 
+  function isGroupRunLive(state) {
+    if (!state || !state.conversation) return false;
+    var latest = state.conversation.latest_run || {};
+    var status = String(latest.status || '').toLowerCase();
+    return !!(state.runId || latest.run_id) && (
+      status === 'queued' || status === 'routing' || status === 'submitting' ||
+      status === 'running' || status === 'waiting_human'
+    );
+  }
+
   function removableMemberOptions(members) {
     var removable = listValue(members).filter(function (member) {
       return stringValue(member.member_id, '') && !member.is_system_planner;
@@ -794,8 +804,7 @@ window.aiteam = window.aiteam || {};
       '<span class="aiteam-chatwin__model" data-group-mention-state hidden></span>' +
       '<span class="aiteam-chatwin__spacer"></span>' +
       '<button class="aiteam-chatwin__tool" type="button" data-group-retry title="重试上一轮">↻</button>' +
-      '<button class="aiteam-chatwin__tool" type="button" data-group-abort title="停止本轮">⏹</button>' +
-      '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
+      '<button class="aiteam-chatwin__send" type="submit" data-group-primary title="发送 (Enter)">➤</button>' +
       '</div>' +
       '<input type="hidden" data-group-sender value="">' +
       '</form>' +
@@ -1101,6 +1110,21 @@ window.aiteam = window.aiteam || {};
           state.refs.collabState.hidden = true;
         }
       }
+      if (state.refs.mentionState) {
+        var label = '提及选择 / 协作状态';
+        var mentionHandles = selectedMentionHandles();
+        state.refs.mentionState.textContent = mentionHandles.length ? (label + ' · ' + mentionHandles.join('、')) : label;
+        state.refs.mentionState.hidden = false;
+      }
+      var primaryBtn = container.querySelector('[data-group-primary]');
+      if (primaryBtn) {
+        var live = isGroupRunLive(state);
+        primaryBtn.dataset.action = live ? 'stop' : 'send';
+        primaryBtn.textContent = live ? '⏹' : '➤';
+        primaryBtn.title = live ? '停止本轮' : '发送 (Enter)';
+        primaryBtn.setAttribute('aria-label', live ? '停止本轮' : '发送 (Enter)');
+        primaryBtn.classList.toggle('is-stop', live);
+      }
     }
 
     function renderRuntimeHandle(runtimeHandle) {
@@ -1388,6 +1412,7 @@ window.aiteam = window.aiteam || {};
     }
 
     var form = container.querySelector('[data-group-form]');
+    var primaryBtn = container.querySelector('[data-group-primary]');
     function resolveSenderId() {
       var configured = stringValue(state.senderId, '')
         || (state.refs.senderInput ? stringValue(state.refs.senderInput.value, '') : '');
@@ -1423,6 +1448,10 @@ window.aiteam = window.aiteam || {};
       }
       form.addEventListener('submit', function (event) {
         event.preventDefault();
+        if (isGroupRunLive(state)) {
+          abortActiveGroupRun();
+          return;
+        }
         var text = stringValue(state.refs.input.value, '');
         var senderId = resolveSenderId();
         if (!text) return;
@@ -1479,6 +1508,19 @@ window.aiteam = window.aiteam || {};
           updateCollaborationState();
           syncTimeline(result.data && result.data.run_id, state.cursor, '消息已发送，正在同步协作进度...');
         });
+      });
+    }
+
+    if (primaryBtn) {
+      primaryBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (isGroupRunLive(state)) {
+          abortActiveGroupRun();
+          return;
+        }
+        if (form && typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
+        }
       });
     }
 

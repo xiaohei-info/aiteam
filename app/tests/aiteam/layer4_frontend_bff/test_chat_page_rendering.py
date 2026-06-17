@@ -27,6 +27,16 @@ const queue = (payload.responses || []).slice();
 
 function makeButton() {{
   return {{
+    innerHTML: '',
+    textContent: '',
+    title: '',
+    disabled: false,
+    dataset: {{}},
+    classList: {{
+      values: new Set(),
+      toggle(name, enabled) {{ if (enabled) this.values.add(name); else this.values.delete(name); }},
+      contains(name) {{ return this.values.has(name); }},
+    }},
     _handlers: {{}},
     addEventListener(name, handler) {{ this._handlers[name] = handler; }},
     dispatch(name) {{ if (this._handlers[name]) this._handlers[name]({{ preventDefault() {{}} }}); }},
@@ -34,6 +44,7 @@ function makeButton() {{
     querySelector() {{ return null; }},
     closest() {{ return null; }},
     getAttribute() {{ return null; }},
+    setAttribute(name, value) {{ this[name] = String(value); }},
   }};
 }}
 
@@ -98,9 +109,11 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
   const hero = {{ innerHTML: '' }};
   const input = {{ value: payload.inputValue || '', focus() {{ this.focused = true; }} }};
   const form = makeButton();
+  form.requestSubmit = function () {{ this.dispatch('submit'); }};
   const quoteBtn = makeButton();
   const retryBtn = makeButton();
   const abortBtn = makeButton();
+  const sendBtn = makeButton();
   const attachBtn = makeButton();
   const loadMoreBtn = makeButton();
   const container = {{
@@ -119,6 +132,7 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
         '[data-chat-quote]': quoteBtn,
         '[data-chat-retry]': retryBtn,
         '[data-chat-abort]': abortBtn,
+        '[data-chat-primary]': sendBtn,
         '[data-chat-attach]': attachBtn,
         '[data-chat-load-more]': loadMoreBtn,
       }};
@@ -155,6 +169,11 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
     abortBtn.dispatch('click');
     await flushPromises();
     await flushPromises();
+  }} else if (payload.action === 'primary') {{
+    sendBtn.dispatch('click');
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
   }} else if (payload.action === 'invoke_reconnect') {{
     if (window.aiteam.timeline.options && typeof window.aiteam.timeline.options.onReconnect === 'function') {{
       window.aiteam.timeline.options.onReconnect(payload.reconnectCursor || 8);
@@ -166,6 +185,10 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
     transcriptHtml: transcript.innerHTML,
     historyHtml: history.innerHTML,
     statusText: status.textContent,
+    primaryText: sendBtn.textContent,
+    primaryTitle: sendBtn.title,
+    primaryAction: sendBtn.dataset.action || '',
+    primaryIsStop: sendBtn.classList.contains('is-stop'),
     pendingAttachmentsHtml: pendingAttachments.innerHTML,
     calls,
     timeline: window.aiteam.timeline.last ? {{
@@ -269,7 +292,7 @@ def test_chat_page_source_mentions_retry_abort_and_attachment_contract_helpers()
 
 def test_chat_page_renders_quote_attachment_and_tool_card_html() -> None:
     payload = {
-        "conversation": _conversation_fixture(),
+        "conversation": {**_conversation_fixture(), "latest_run": {"run_id": "run_done", "status": "succeeded"}},
     }
     result = _run_chat_module(payload)
     assert "aiteam-message__avatar" in result["transcriptHtml"]
@@ -361,7 +384,7 @@ def test_chat_page_timeline_status_notices_cover_streaming_recovery_and_waiting_
 
 def test_chat_page_attach_then_send_posts_uploaded_asset_refs() -> None:
     payload = {
-        "conversation": _conversation_fixture(),
+        "conversation": {**_conversation_fixture(), "latest_run": {"run_id": "run_done", "status": "succeeded"}},
         "inputValue": "请分析附件",
         "responses": [
             {
@@ -395,7 +418,7 @@ def test_chat_page_attach_then_send_posts_uploaded_asset_refs() -> None:
     }
     result = _run_chat_module(payload)
     assert result["calls"][0]["url"] == "/api/team/uploads"
-    run_call = next(call for call in result["calls"] if call["url"] == "/api/team/runs")
+    run_call = next(call for call in result["calls"] if call["url"] == "/api/team/runs" and call["method"] == "POST")
     attachments = run_call["body"]["message"]["attachments"]
     assert attachments[0]["asset_id"] == "ast_new"
     assert attachments[0]["preview_url"] == "/api/team/uploads/ast_new/preview"
@@ -428,6 +451,22 @@ def test_chat_page_retry_and_abort_use_team_panel_run_routes() -> None:
     )
     assert any(call["url"] == "/api/team/runs/run_live/abort" for call in abort_result["calls"])
     assert abort_result["disconnected"] is True
+
+
+def test_chat_page_primary_button_switches_to_stop_while_run_is_live() -> None:
+    result = _run_chat_module(
+        {
+            "conversation": _conversation_fixture(),
+            "responses": [
+                {"ok": True, "status": 200, "body": {"status": "cancelled", "aborted": True}},
+                {"ok": True, "status": 200, "body": _conversation_fixture()},
+            ],
+            "action": "primary",
+        }
+    )
+    assert result["primaryAction"] == "stop"
+    assert result["primaryTitle"] == "停止本轮回复"
+    assert any(call["url"] == "/api/team/runs/run_live/abort" for call in result["calls"])
 
 
 def test_chat_page_reconnect_callbacks_surface_cursor_recovery_notice() -> None:

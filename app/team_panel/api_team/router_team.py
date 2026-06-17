@@ -4122,6 +4122,14 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
     finally:
         cur.close()
 
+    live_cancel = None
+    try:
+        from agent_gateway.run_cancellation import request_cancel as request_live_cancel
+
+        live_cancel = request_live_cancel(run_id)
+    except Exception:
+        live_cancel = None
+
     binding = None
     next_cursor = 0
     try:
@@ -4182,6 +4190,8 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
             "run_id": run.id,
             "status": run.status,
             "aborted": True,
+            "runtime_cancel_requested": bool(live_cancel and live_cancel.requested),
+            "runtime_cancel_target": live_cancel.target if live_cancel else "none",
             "event_cursor": binding.event_cursor if binding is not None else next_cursor,
         }
     except ValueError as exc:
