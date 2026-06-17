@@ -244,9 +244,16 @@ def _start_run(conn, run_id: str) -> dict | None:
         goal_value = str(input_payload.get("goal") or "").strip()
         goal_text = "" if goal_value == "__off__" else (goal_value or message_text).strip()
 
+        # 规则编排群：取会话预设的编排指令，注入 planner 拆解阶段。
+        orchestration_brief = ""
+        conv = uow.conversations().get_by_id(run.conversation_id) if run.conversation_id else None
+        if conv is not None and getattr(conv, "collaboration_mode", "free") == "orchestrated":
+            orchestration_brief = (getattr(conv, "orchestration_brief", "") or "").strip()
+
         return {
             "enterprise_id": run.enterprise_id,
             "conversation_id": run.conversation_id,
+            "orchestration_brief": orchestration_brief,
             "message_text": message_text,
             "goal_text": goal_text,
             "targets": targets,
@@ -292,6 +299,13 @@ def _plan_subtasks(ctx: dict) -> list[dict]:
                                roster=roster,
                                message_text=ctx["message_text"],
                                max_subtasks=MAX_SUBTASKS)
+    # 规则编排：把用户预设的编排指令置于 planner 提示词最前，作为必须遵守的硬约束。
+    brief = (ctx.get("orchestration_brief") or "").strip()
+    if brief:
+        plan_prompt = (
+            "【编排规则（必须严格遵守，优先级高于下方默认拆解策略）】\n"
+            f"{brief}\n\n" + plan_prompt
+        )
     text = _run_employee_turn(ctx, ctx["planner_id"], plan_prompt, inject_knowledge=False)[1]
     plan = parse_plan(text, ctx["targets"])
     if plan:
