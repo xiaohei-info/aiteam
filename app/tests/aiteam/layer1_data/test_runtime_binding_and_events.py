@@ -732,6 +732,23 @@ def test_runtime_binding_repo_get_by_owner(db_conn):
     assert repo.get_by_owner("scheduled_job", "nonexistent") is None
 
 
+def test_runtime_binding_repo_supports_conversation_session_owner(db_conn):
+    from team_panel.repositories.runtime_binding_repo import RuntimeBindingRepo
+    _seed_enterprise(db_conn.cursor())
+
+    repo = RuntimeBindingRepo(db_conn.cursor())
+    repo.create(RuntimeBinding(
+        id="rb_conv_001", enterprise_id="ent_001",
+        owner_type="conversation", owner_id="conv_001",
+        profile_name="worker-1", runtime_kind="session",
+        runtime_session_id="sess_shared_001",
+    ))
+
+    loaded = repo.get_by_owner("conversation", "conv_001")
+    assert loaded is not None
+    assert loaded.runtime_session_id == "sess_shared_001"
+
+
 def test_runtime_binding_repo_update_sync(db_conn):
     from team_panel.repositories.runtime_binding_repo import RuntimeBindingRepo
     _seed_enterprise(db_conn.cursor())

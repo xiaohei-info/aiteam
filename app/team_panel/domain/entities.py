@@ -633,7 +633,7 @@ class RuntimeBinding:
     """
     id: str
     enterprise_id: str
-    owner_type: str                      # employee|team_run|team_task|scheduled_job
+    owner_type: str                      # employee|team_run|team_task|scheduled_job|conversation
     owner_id: str
     profile_name: str
     runtime_kind: str                    # profile|session|kanban_task|cron_job
