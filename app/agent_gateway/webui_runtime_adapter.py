@@ -31,12 +31,16 @@ import json
 import logging
 import os
 import time
+from http.cookies import SimpleCookie
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+_SESSION_COOKIE_NAME = "hermes_session"
+_AUTH_COOKIE_CACHE: str | None = None
 
 _TERMINAL_ERROR_TYPES = {
     "error", "apperror", "rate_limit", "quota_exhausted", "no_response",
@@ -49,6 +53,71 @@ def _base_url() -> str:
     host = os.getenv("HERMES_WEBUI_HOST", "127.0.0.1")
     port = os.getenv("HERMES_WEBUI_PORT", "8787")
     return f"http://{host}:{port}"
+
+
+def _auth_password() -> str:
+    return str(os.getenv("HERMES_WEBUI_PASSWORD", "") or "").strip()
+
+
+def _auth_enabled() -> bool:
+    return bool(_auth_password())
+
+
+def _cookie_header() -> str:
+    global _AUTH_COOKIE_CACHE
+    if not _auth_enabled() or not _AUTH_COOKIE_CACHE:
+        return ""
+    return f"{_SESSION_COOKIE_NAME}={_AUTH_COOKIE_CACHE}"
+
+
+def _cache_session_cookie(resp) -> None:
+    global _AUTH_COOKIE_CACHE
+    raw = ""
+    if hasattr(resp, "headers") and resp.headers is not None:
+        try:
+            raw = resp.headers.get("Set-Cookie", "") or ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+    if not raw:
+        return
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw)
+    except Exception:  # noqa: BLE001
+        return
+    morsel = cookie.get(_SESSION_COOKIE_NAME)
+    if morsel is not None and morsel.value:
+        _AUTH_COOKIE_CACHE = morsel.value
+
+
+def _login_for_internal_session(timeout: int = 30) -> None:
+    password = _auth_password()
+    if not password:
+        return
+    req = urllib.request.Request(
+        _base_url() + "/api/auth/login",
+        data=json.dumps({"password": password}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        _cache_session_cookie(r)
+
+
+def _request_headers(*, json_body: bool = False) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    cookie = _cookie_header()
+    if cookie:
+        headers["Cookie"] = cookie
+    return headers
+
+
+def _open_json(req: urllib.request.Request, timeout: int) -> dict:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        _cache_session_cookie(r)
+        return json.load(r)
 
 
 @dataclass
@@ -65,11 +134,22 @@ def _post_json(path: str, body: dict, timeout: int = 30) -> dict:
     req = urllib.request.Request(
         _base_url() + path,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=_request_headers(json_body=True),
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+    try:
+        return _open_json(req, timeout)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401 or not _auth_enabled():
+            raise
+        _login_for_internal_session(timeout=timeout)
+        retry_req = urllib.request.Request(
+            _base_url() + path,
+            data=json.dumps(body).encode("utf-8"),
+            headers=_request_headers(json_body=True),
+            method="POST",
+        )
+        return _open_json(retry_req, timeout)
 
 
 def ensure_session(profile: str, model: str = "", model_provider: str = "") -> str:
@@ -123,9 +203,16 @@ def run_turn(
         detail = exc.read().decode("utf-8", "replace")[:200]
         logger.warning("[webui-adapter] chat/start %s: %s — recreating session",
                        exc.code, detail)
-        sid = ensure_session(profile, model, model_provider)
-        start_body["session_id"] = sid
-        start = _post_json("/api/chat/start", start_body)
+        if exc.code == 401:
+            sid = ensure_session(profile, model, model_provider)
+            start_body["session_id"] = sid
+            start = _post_json("/api/chat/start", start_body)
+        else:
+            return TurnResult(
+                False,
+                error=f"chat/start {exc.code}: {detail or exc.reason or 'request failed'}",
+                session_id=sid,
+            )
 
     stream_id = str(start.get("stream_id") or "")
     if not stream_id:
@@ -147,7 +234,11 @@ def _consume_stream(stream_id: str, session_id: str,
     done = False
 
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=timeout_seconds) as resp:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers=_request_headers()),
+            timeout=timeout_seconds,
+        ) as resp:
+            _cache_session_cookie(resp)
             for kind, payload in _iter_sse(resp, deadline):
                 if kind == "reasoning":
                     _emit(on_event, "reasoning", payload)
@@ -190,7 +281,6 @@ def _consume_stream(stream_id: str, session_id: str,
     except TimeoutError:
         error = error or f"stream timeout (> {timeout_seconds}s)"
     except OSError as exc:
-        # Stream socket closed by server; treat as end-of-stream.
         if not text_parts and not done:
             error = error or f"stream connection error: {exc}"
 
