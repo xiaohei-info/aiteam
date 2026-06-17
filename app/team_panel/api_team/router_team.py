@@ -2071,8 +2071,8 @@ def _resolve_employee_model(cur, enterprise_id: str, template,
     """Resolve (model_provider, model_id) for a new employee.
 
     Priority: explicit body selection (validated against the enterprise's
-    enabled models) -> template default_model -> empty (runtime falls back to
-    the root config default). Returns ("","") when nothing is configured.
+    enabled models) -> template default_model -> enterprise default enabled
+    model -> empty. Returns ("","") when nothing is configured.
     """
     body = body or {}
     sel_provider = (body.get("model_provider") or "").strip()
@@ -2095,6 +2095,24 @@ def _resolve_employee_model(cur, enterprise_id: str, template,
         mod = (ref.get("model") or ref.get("model_name") or ref.get("name") or "").strip()
         if prov or mod:
             return prov, mod
+    from ..repositories.enterprise_llm_provider_repo import (
+        EnterpriseLlmModelRepo,
+        EnterpriseLlmProviderRepo,
+    )
+    providers = {
+        p.id: p for p in EnterpriseLlmProviderRepo(cur).list_by_enterprise(enterprise_id)
+        if p.enabled and p.provider_key
+    }
+    models = [
+        m for m in EnterpriseLlmModelRepo(cur).list_by_enterprise(enterprise_id)
+        if m.enabled and m.provider_id in providers and m.model_id
+    ]
+    preferred = next((m for m in models if m.is_default), None)
+    chosen = preferred or (models[0] if models else None)
+    if chosen is not None:
+        provider = providers.get(chosen.provider_id)
+        if provider is not None:
+            return provider.provider_key, chosen.model_id
     return "", ""
 
 

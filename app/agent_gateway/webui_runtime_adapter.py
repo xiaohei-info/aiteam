@@ -132,9 +132,16 @@ def run_turn(
         detail = exc.read().decode("utf-8", "replace")[:200]
         logger.warning("[webui-adapter] chat/start %s: %s — recreating session",
                        exc.code, detail)
-        sid = ensure_session(profile, model, model_provider)
-        start_body["session_id"] = sid
-        start = _post_json("/api/chat/start", start_body)
+        if exc.code == 401:
+            sid = ensure_session(profile, model, model_provider)
+            start_body["session_id"] = sid
+            start = _post_json("/api/chat/start", start_body)
+        else:
+            return TurnResult(
+                False,
+                error=f"chat/start {exc.code}: {detail or exc.reason or 'request failed'}",
+                session_id=sid,
+            )
 
     stream_id = str(start.get("stream_id") or "")
     if not stream_id:
@@ -176,15 +183,11 @@ def _consume_stream(stream_id: str, session_id: str,
                 elif kind == "tool_complete":
                     _emit(on_event, "tool_complete", payload)
                 elif kind == "metering":
-                    # Carries running token usage; keep the latest snapshot so a
-                    # turn that ends without a usage-bearing 'done' still records.
                     u = payload.get("usage")
                     if isinstance(u, dict) and u:
                         usage = u
                 elif kind == "done":
                     done = True
-                    # Final usage lives on the done frame (top-level 'usage' or
-                    # nested under the closed 'session').
                     u = payload.get("usage")
                     if isinstance(u, dict) and u:
                         usage = u
@@ -196,7 +199,7 @@ def _consume_stream(stream_id: str, session_id: str,
                             "estimated_cost": sess.get("estimated_cost") or 0,
                         }
                     break
-                elif kind == "message":  # default/unnamed frames carry errors
+                elif kind == "message":
                     ptype = str(payload.get("type") or "")
                     if ptype in _TERMINAL_ERROR_TYPES:
                         error = str(payload.get("message") or payload.get("details") or ptype)
@@ -204,7 +207,6 @@ def _consume_stream(stream_id: str, session_id: str,
     except TimeoutError:
         error = error or f"stream timeout (> {timeout_seconds}s)"
     except OSError as exc:
-        # Stream socket closed by server; treat as end-of-stream.
         if not text_parts and not done:
             error = error or f"stream connection error: {exc}"
 
