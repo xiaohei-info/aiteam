@@ -1,6 +1,6 @@
 ---
 created: 2026-06-15
-updated: 2026-06-16
+updated: 2026-06-18
 status: draft-for-review
 tags: [project, aiteam, technical-design, overview-design, microservices, gateway, runtime]
 canonical_name: 2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计
@@ -919,6 +919,24 @@ auth_identity             # 一个 user 可挂 N 行
 - **每端各自发布自己的 OpenAPI 文档入口**（不做跨端聚合——三端不在同一 origin、且互不信任彼此内部接口）。跨系统服务调用与 Agent 主动访问接口单独成一份"跨端契约"文档。
 - 统一错误模型（见 §11.2），统一 numeric cursor 分页，禁止对外暴露 `{timestamp}-{sequence}` 内部游标。
 
+### 10.3 API 文档与接口格式规范（地基裁决）
+
+后端接口不是"实现完再补文档"。v1 三端所有 HTTP API 必须由 schema 驱动并自动产出现代化 API 文档，文档本身进入验收口径：
+
+1. **文档入口固定**：每端服务必须提供 `/openapi.json`、`/docs`（Swagger UI）、`/redoc`（ReDoc）三类入口；`/docs` 与 `/redoc` 是否在生产公网公开由部署配置控制，但 `/openapi.json` 必须能在 CI 与受控运维环境中获取。
+2. **OpenAPI 按端发布**：Operation、Manager、Agent 各自发布本端 OpenAPI，不做中心聚合；跨系统契约（Operator↔Manager、Agent→Manager）必须从对应服务的 Pydantic schema 生成或校验，单独导出为 `openapi.cross-system.json` / 契约文档，不能只靠自然语言表格。
+3. **schema first**：所有 public endpoint 必须声明 request model、response model、错误响应、鉴权需求、tags、summary 与 operation_id；禁止裸 `dict` / `Any` 作为对外响应边界，内部临时结构必须先收敛为 Pydantic schema。
+4. **成功响应统一 envelope**：
+   - 单对象：`{ "data": <object>, "meta": { ... }? }`
+   - 列表：`{ "data": [ ... ], "page": { "next_cursor": "...", "has_more": true }, "meta": { ... }? }`
+   - 空成功：`204 No Content`，或在需要 request trace 时返回 `{ "data": null, "meta": { ... }? }`，不得每个接口自造 `{ ok: true }` / `{ success: true }`。
+5. **入参规范**：path 参数只放资源身份，query 参数只放过滤/分页/排序，复杂写入放 JSON body；时间统一 ISO 8601 UTC；ID 统一 UUID 字符串；枚举统一 snake_case；金额、成本、token 用整数最小单位或 decimal string，禁止 float；写接口需要幂等时统一 `Idempotency-Key` header。
+6. **出参规范**：字段命名统一 snake_case；nullable 与 optional 必须在 schema 中明确；对外只返回业务必要字段，禁止返回 password hash、provider key、内部 RLS 字段、runtime raw payload、未脱敏内容；版本化资源必须返回 `version` / `etag` / `updated_at` 中至少一种可用于增量同步或并发控制的字段。
+7. **分页与排序**：统一 numeric cursor / opaque cursor 语义，对外字段为 `next_cursor` 与 `has_more`；禁止暴露内部 `{timestamp}-{sequence}` 游标；排序字段必须白名单化，默认排序在 OpenAPI description 中声明。
+8. **HTTP 语义**：认证失败 401，鉴权失败 403，资源不存在 404，冲突 409，幂等重放按原结果返回，入参校验失败 422，限流 429；所有错误使用 §11.2 的统一 problem+json 模型。
+9. **OpenAPI 质量门禁**：CI 必须能生成三端 OpenAPI 与跨系统契约，执行 schema 校验、operation_id 唯一性校验、无裸 `Any`/空 schema 检查、错误响应覆盖检查；接口变更必须能产出 OpenAPI diff，破坏性变更需要显式评审。
+10. **版本策略**：v1 首版路径不加 `/v1` 前缀，版本归 OpenAPI 文档版本与资源 schema version 管理；若未来出现外部第三方稳定 API，再单独引入 `/api/public/v1/*`，不污染三端内部产品 API。
+
 ---
 
 ## 11. 横切关注点（新增）
@@ -931,8 +949,27 @@ auth_identity             # 一个 user 可挂 N 行
 
 ### 11.2 统一错误模型
 
-- 所有端服务返回统一错误结构（problem+json 风格）：`{ code, message, request_id, details? }`。
-- 各端入口中间件与共享 `service_client` 统一解码错误，不让各端自定义错误形态。
+所有端服务返回 `application/problem+json` 风格错误，结构统一为：
+
+```json
+{
+  "type": "https://docs.aiteam.local/problems/validation_error",
+  "title": "Validation error",
+  "status": 422,
+  "code": "validation_error",
+  "detail": "Request body is invalid.",
+  "instance": "/api/manager/employees",
+  "request_id": "req_...",
+  "errors": [
+    { "loc": ["body", "display_name"], "message": "Field required", "type": "missing" }
+  ]
+}
+```
+
+- `type/title/status/code/detail/instance/request_id` 为标准字段；`errors` 用于字段级校验错误；`meta` 可用于非敏感诊断信息。
+- `message` 不再作为顶层标准字段，避免与 RFC 7807 的 `detail` 并行；前端统一展示 `detail`，调试看 `request_id`。
+- 各端入口中间件、FastAPI exception handler 与共享 `service_client` 统一生成/解码该结构，不让各端自定义错误形态。
+- 错误响应不得包含密码、token、provider key、会话内容、runtime raw event、工具输入输出明细等敏感信息；详细堆栈只进入受控日志。
 
 ### 11.3 配置与健康检查
 
@@ -1120,12 +1157,12 @@ v1 是**全新重建**：不与旧系统并跑、不切流、不桥接/反代旧
 ## 18. 阶段实施建议
 
 ### Phase 0：架构冻结
-冻结 Operator/Manager/Agent 三系统边界与部署形态、Manager 多租户隔离底座、用户端 Agent Gateway executor/driver 抽象、事件双层模型、数据所有权、跨系统通信面、Manager 租户身份模型、成员级授权、外部能力归属（§6.6）、入户链（§14.3）、治理摘要上报、路径收口。
-产物：本概要设计定稿、三系统边界 ADR、Manager 多租户隔离 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨系统契约草案、各系统表所有权与 schema 草案（全新建库，非旧表搬迁）、脱敏摘要 schema 草案、入户流程草案。
+冻结 Operator/Manager/Agent 三系统边界与部署形态、Manager 多租户隔离底座、用户端 Agent Gateway executor/driver 抽象、事件双层模型、数据所有权、跨系统通信面、Manager 租户身份模型、成员级授权、外部能力归属（§6.6）、入户链（§14.3）、治理摘要上报、路径收口、API 文档与接口格式规范（§10.3）。
+产物：本概要设计定稿、三系统边界 ADR、Manager 多租户隔离 ADR、Gateway runtime contract 草案、各端 OpenAPI + 跨系统契约草案、统一响应 envelope 与 problem+json 错误模型草案、各系统表所有权与 schema 草案（全新建库，非旧表搬迁）、脱敏摘要 schema 草案、入户流程草案。
 
 ### Phase 1：三系统骨架 + Manager 多租户底座 + 入户认证
 建立 Operation/Manager/Agent 三端 FastAPI 服务骨架（各自前端壳）；统一错误模型、`shared/auth` 验签中间件、request-id/trace、共享 `service_client`、各端 OpenAPI；**Manager 多租户底座打通**（tenant_registry、TenantContext、TenantDataSession、PostgreSQL RLS、TenantRagClient workspace 路由）；**入户链打通**（Operator 开通企业并创建 Manager tenant → 负责人登录 Manager → Manager 创建成员 → Agent 首次在线登录+本地 token）；用户端 Agent Gateway skeleton + fake runtime。
-验收：三端各自 `/healthz` `/readyz` `/docs` 可访问；Operator 能创建企业并在 Manager 生成 tenant；负责人/成员两类登录全链路可走通；RLS 测试证明跨 tenant 查询被拒；LightRAG workspace 路由测试证明 tenant A/B 检索隔离；Agent 访问 Manager 鉴权成功；fake runtime 产生 text/reasoning/tool/usage/completed 事件并映射为本地 timeline。
+验收：三端各自 `/healthz` `/readyz` `/openapi.json` `/docs` `/redoc` 可访问；CI 可生成三端 OpenAPI 与跨系统契约并通过 schema/operation_id/错误响应/envelope 质量门禁；Operator 能创建企业并在 Manager 生成 tenant；负责人/成员两类登录全链路可走通；RLS 测试证明跨 tenant 查询被拒；LightRAG workspace 路由测试证明 tenant A/B 检索隔离；Agent 访问 Manager 鉴权成功；fake runtime 产生 text/reasoning/tool/usage/completed 事件并映射为本地 timeline。
 
 ### Phase 2：Manager 租户配置授权 + 用户端本地主链
 Manager 承接租户内员工/专家配置、知识、技能、连接器、招募专家、应用方案、**部门/成员级授权**；用户端承接本地 conversation/run/task/event/loop；Agent pull 已授权专家/方案 → 本地装载 → EmployeeExecutionSnapshot 冻结。
@@ -1191,7 +1228,7 @@ Operator 承接企业开通、负责人 bootstrap/重置、平台模板/行业�
 1. 认证已定：Manager 多租户身份源、Agent 本地验签、无中心 Edge、非对称签名（§9）。详设细化 Operator/Manager/Agent 认证面内部模块边界、refresh 轮换策略、tenant JWKS 分发与 key rotation。
 2. Manager PostgreSQL 多租户 DDL/RLS 细节：哪些表 L1 共享表、哪些租户可升级 L2/L3、连接池如何强制 `SET LOCAL app.tenant_id`、RLS 回归测试矩阵。
 3. Manager LightRAG workspace 细节：workspace 命名、实例池、PGKV/PGVector/PGDocStatus 表 RLS、知识空间升级/删除/重建策略。
-4. 跨系统接口的完整契约（Operator↔Manager 企业/目录/模板包/汇总；Agent→Manager 认证、拉授权配置、摘要上报）与轮询/通知节奏、增量协议。
+4. 跨系统接口的完整契约（Operator↔Manager 企业/目录/模板包/汇总；Agent→Manager 认证、拉授权配置、摘要上报）与轮询/通知节奏、增量协议；契约必须由 OpenAPI/Pydantic schema 生成或校验，遵守 §10.3 的 envelope、错误模型、分页、幂等与版本规则。
 5. 脱敏计量/审计**摘要 schema** 与脱敏字段清单（哪些字段可上报、哪些必须留本地），以及软配额告警、冻结新增招募、禁止新快照下发等治理动作的触发规则。
 6. `runtime_session/raw_runtime_event` 在用户端本地库的归属与保留期。
 7. Operator→Manager "招募专家/行业方案应用包"的拉取契约、版本与幂等边界。
