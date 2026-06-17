@@ -471,12 +471,16 @@ window.aiteam = window.aiteam || {};
       title: '新建群聊',
       employeeItems: [],
       selectedEmployeeIds: [],
+      collaborationMode: 'free',
+      orchestrationBrief: '',
       limitMessage: '',
     };
 
     function renderLauncher() {
       var isAtLimit = launcherState.selectedEmployeeIds.length >= 10;
-      var canCreate = launcherState.selectedEmployeeIds.length >= 2 && !!stringValue(launcherState.title, '');
+      var isOrchestrated = launcherState.collaborationMode === 'orchestrated';
+      var briefMissing = isOrchestrated && !stringValue(launcherState.orchestrationBrief, '');
+      var canCreate = launcherState.selectedEmployeeIds.length >= 2 && !!stringValue(launcherState.title, '') && !briefMissing;
       var selectedLabels = launcherState.employeeItems.filter(function (employee) {
         return launcherState.selectedEmployeeIds.indexOf(stringValue(employee && employee.employee_id, '')) !== -1;
       }).map(function (employee) {
@@ -510,6 +514,21 @@ window.aiteam = window.aiteam || {};
       '<div class="aiteam-shell__meta-card"><span class="aiteam-shell__meta-label">可选成员</span><span class="aiteam-shell__meta-value">最多 10 人，当前已选 ' + escapeHtml(String(launcherState.selectedEmployeeIds.length)) + ' 人</span><br><span class="aiteam-inline-note">已选成员：' + escapeHtml(selectedLabels.join('、') || '未选择') + '</span></div>' +
       '</div>' +
       '<div class="aiteam-stack" data-group-create-members>' + memberCards + '</div>' +
+      '<div class="aiteam-group-create-mode">' +
+      '<span class="aiteam-shell__meta-label">协作方式</span>' +
+      '<label class="aiteam-card aiteam-card--flat"><div class="aiteam-action-row">' +
+      '<input type="radio" name="group-collab-mode" value="free" data-group-create-mode="free"' + (isOrchestrated ? '' : ' checked') + '> ' +
+      '<span><strong>自由讨论</strong><br>由群内 planner 根据各成员能力自行决定如何协作完成指令。</span>' +
+      '</div></label>' +
+      '<label class="aiteam-card aiteam-card--flat"><div class="aiteam-action-row">' +
+      '<input type="radio" name="group-collab-mode" value="orchestrated" data-group-create-mode="orchestrated"' + (isOrchestrated ? ' checked' : '') + '> ' +
+      '<span><strong>规则编排</strong><br>预先描述 planner 应如何组织成员协作，作为编排预设指令。</span>' +
+      '</div></label>' +
+      (isOrchestrated
+        ? '<label class="aiteam-group-field"><span>编排指令</span>' +
+          '<textarea class="aiteam-input" rows="4" data-group-create-brief placeholder="例如：先让市场分析员调研竞品，再由文案撰写初稿，最后由主管审校汇总。">' + escapeHtml(launcherState.orchestrationBrief) + '</textarea></label>'
+        : '') +
+      '</div>' +
       '<div class="aiteam-action-row">' +
       '<button class="aiteam-button" type="button" data-group-create-launch' + (canCreate ? '' : ' disabled') + '>立即创建</button>' +
       '</div>' +
@@ -609,9 +628,31 @@ window.aiteam = window.aiteam || {};
           bindLauncherInteractions();
         });
       }
+      var modeInputs = container.querySelectorAll ? container.querySelectorAll('[data-group-create-mode]') : [];
+      for (var m = 0; m < modeInputs.length; m += 1) {
+        modeInputs[m].addEventListener('change', function () {
+          if (!this.checked) return;
+          launcherState.collaborationMode = this.getAttribute('data-group-create-mode') === 'orchestrated' ? 'orchestrated' : 'free';
+          if (launcherState.collaborationMode !== 'orchestrated') launcherState.orchestrationBrief = '';
+          launcherState.limitMessage = (launcherState.collaborationMode === 'orchestrated' && !stringValue(launcherState.orchestrationBrief, '')) ? '请填写编排指令' : '';
+          renderLauncher();
+          bindLauncherInteractions();
+        });
+      }
+      var briefInput = container.querySelector('[data-group-create-brief]');
+      if (briefInput && typeof briefInput.addEventListener === 'function') {
+        briefInput.addEventListener('input', function () {
+          launcherState.orchestrationBrief = this.value || '';
+          launcherState.limitMessage = !stringValue(launcherState.orchestrationBrief, '') ? '请填写编排指令' : '';
+          var btn = container.querySelector('[data-group-create-launch]');
+          if (btn) btn.disabled = launcherState.selectedEmployeeIds.length < 2 || !stringValue(launcherState.title, '') || !stringValue(launcherState.orchestrationBrief, '');
+          if (statusEl) statusEl.textContent = launcherState.limitMessage || '填写标题与成员后创建';
+        });
+      }
       var createButton = container.querySelector('[data-group-create-launch]');
       if (createButton && typeof createButton.addEventListener === 'function') {
-        createButton.disabled = launcherState.selectedEmployeeIds.length < 2 || !stringValue(launcherState.title, '');
+        createButton.disabled = launcherState.selectedEmployeeIds.length < 2 || !stringValue(launcherState.title, '') ||
+          (launcherState.collaborationMode === 'orchestrated' && !stringValue(launcherState.orchestrationBrief, ''));
         createButton.addEventListener('click', function () {
           if (!stringValue(launcherState.title, '')) {
             launcherState.limitMessage = '请输入群聊标题';
@@ -625,10 +666,22 @@ window.aiteam = window.aiteam || {};
             bindLauncherInteractions();
             return;
           }
-          container.lastCreateGroupHandler({
+          if (launcherState.collaborationMode === 'orchestrated' && !stringValue(launcherState.orchestrationBrief, '')) {
+            launcherState.limitMessage = '请填写编排指令';
+            renderLauncher();
+            bindLauncherInteractions();
+            return;
+          }
+          var createPayload = {
             title: launcherState.title || '新建群聊',
             member_employee_ids: launcherState.selectedEmployeeIds.slice(),
-          });
+          };
+          // 仅规则编排时附加协作模式字段；自由讨论保持与原有契约一致（不传则后端默认 free）。
+          if (launcherState.collaborationMode === 'orchestrated') {
+            createPayload.collaboration_mode = 'orchestrated';
+            createPayload.orchestration_brief = launcherState.orchestrationBrief;
+          }
+          container.lastCreateGroupHandler(createPayload);
         });
       }
     }

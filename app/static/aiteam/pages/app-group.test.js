@@ -150,3 +150,43 @@ test('system Planner is labeled and excluded from removable members', function (
   assert.strictEqual(options.indexOf('mem_planner'), -1, 'system Planner should not appear in remove select');
   assert.ok(options.indexOf('mem_worker') !== -1, 'normal members should remain removable');
 });
+
+test('group launcher renders the collaboration mode selector (free default)', async function () {
+  const testState = { getCalls: [], updateCalls: [], loadingCalls: [], createCalls: [] };
+  const context = buildContext(testState);
+  context.window.location.pathname = '/app/group';
+  context.window.aiteam.api.getEmployees = function () {
+    return Promise.resolve({ ok: true, data: { items: [
+      { employee_id: 'emp_a', display_name: '员工A', role_name: '研究员' },
+      { employee_id: 'emp_b', display_name: '员工B', role_name: '文案' },
+    ] } });
+  };
+  context.window.aiteam.api.createGroupConversation = function (payload) {
+    testState.createCalls.push(payload);
+    return Promise.resolve({ ok: true, data: { conversation_id: 'conv_new' } });
+  };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const page = context.window.aiteam.pages.appGroup;
+  const container = makeNode();
+  page.init(container, { pathname: '/app/group' });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+  assert.ok(container.innerHTML.indexOf('自由讨论') !== -1, 'launcher should offer 自由讨论 option');
+  assert.ok(container.innerHTML.indexOf('规则编排') !== -1, 'launcher should offer 规则编排 option');
+  assert.ok(container.innerHTML.indexOf('data-group-create-mode="free"') !== -1, 'launcher should render the free-mode radio');
+  assert.ok(container.innerHTML.indexOf('data-group-create-mode="orchestrated"') !== -1, 'launcher should render the orchestrated-mode radio');
+
+  // The create handler forwards mode + brief untouched to the API client.
+  await container.lastCreateGroupHandler({
+    title: '编排群',
+    member_employee_ids: ['emp_a', 'emp_b'],
+    collaboration_mode: 'orchestrated',
+    orchestration_brief: '先调研再撰写',
+  });
+  assert.strictEqual(testState.createCalls.length, 1, 'create handler should call createGroupConversation once');
+  assert.strictEqual(testState.createCalls[0].collaboration_mode, 'orchestrated', 'payload should carry collaboration_mode');
+  assert.strictEqual(testState.createCalls[0].orchestration_brief, '先调研再撰写', 'payload should carry orchestration_brief');
+});
