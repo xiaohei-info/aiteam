@@ -6,7 +6,8 @@ window.aiteam = window.aiteam || {};
   // 工作台(/app/workbench)与群聊(/app/group/*)路由保留为深链入口，群聊统一从消息中心列表进入。
   var FULL_SECTION_PAGES = {
     app: [
-      { label: '消息中心',  href: '/app/chat',        note: 'Chat' },
+      { label: '单聊',      href: '/app/chat',        note: 'Direct Chat' },
+      { label: '群聊',      href: '/app/group',       note: 'Group Chat' },
       { label: '人才市场',  href: '/app/marketplace', note: 'Talent Market' },
       { label: '组织架构',  href: '/app/org',         note: 'Org' },
       { label: '知识库',    href: '/app/knowledge',   note: 'Knowledge' },
@@ -168,9 +169,9 @@ window.aiteam = window.aiteam || {};
       }
 
       var currentPath = window.location.pathname;
-      // 群聊与工作台深链在导航上归属消息中心高亮。
+      // 群聊有独立 tab（/app/group），自身高亮；工作台深链仍归属单聊高亮。
       var navPath = currentPath;
-      if (navPath === '/app/group' || navPath.indexOf('/app/group/') === 0 || navPath === '/app/workbench') {
+      if (navPath === '/app/workbench') {
         navPath = '/app/chat';
       }
       var nav = document.getElementById('aiteam-nav');

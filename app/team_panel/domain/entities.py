@@ -330,6 +330,10 @@ class Conversation:
     status: str = "draft"            # draft|active|paused|muted|archived
     title: str = ""
     entry_employee_id: Optional[str] = None
+    # 群聊协作模式：free（自由讨论，planner 自行决定）| orchestrated（规则编排，
+    # 使用 orchestration_brief 作为 planner 预设编排指令）。私聊恒为 free。
+    collaboration_mode: str = "free"
+    orchestration_brief: str = ""
     latest_run_id: Optional[str] = None
     latest_message_id: Optional[str] = None
     last_message_preview: Optional[str] = None

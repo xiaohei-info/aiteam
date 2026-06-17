@@ -3697,7 +3697,10 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
             "title": conv.title or "",
             "status": conv.status,
             "display_state": display_state,
-            "default_route_hint": "auto",
+            # 规则编排群默认进入多员工协作（orchestration），自由讨论群保持自动路由。
+            "default_route_hint": "orchestration" if conv.collaboration_mode == "orchestrated" else "auto",
+            "collaboration_mode": conv.collaboration_mode,
+            "orchestration_brief": conv.orchestration_brief or "",
             "member_count": len(members),
             "members": members,
             "latest_run": latest_run_payload,
@@ -3731,10 +3734,15 @@ def _handle_group_conversation_create(conn, path: str, body: dict | None) -> tup
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
     title = str(body.get("title") or "").strip()
     member_employee_ids = [str(item).strip() for item in (body.get("member_employee_ids") or []) if str(item).strip()]
+    collaboration_mode = "orchestrated" if str(body.get("collaboration_mode") or "free") == "orchestrated" else "free"
+    orchestration_brief = str(body.get("orchestration_brief") or "").strip()
     if not title:
         return 400, {"error": "MISSING_TITLE", "message": "title is required"}
     if not member_employee_ids:
         return 400, {"error": "MISSING_MEMBERS", "message": "member_employee_ids is required"}
+    if collaboration_mode == "orchestrated" and not orchestration_brief:
+        return 400, {"error": "MISSING_ORCHESTRATION_BRIEF",
+                     "message": "orchestration_brief is required when collaboration_mode is orchestrated"}
     with UnitOfWork(conn) as uow:
         enterprises = EnterpriseRepo(uow.cur).list_all()
         enterprise = enterprises[0] if enterprises else None
@@ -3746,12 +3754,15 @@ def _handle_group_conversation_create(conn, path: str, body: dict | None) -> tup
             title,
             member_employee_ids,
             created_by=str(body.get("created_by") or "team_panel"),
+            collaboration_mode=collaboration_mode,
+            orchestration_brief=orchestration_brief,
         )
         return 201, {
             "conversation_id": conv_id,
             "title": title,
             "member_count": len(member_employee_ids),
             "status": "active",
+            "collaboration_mode": collaboration_mode,
             "navigation": {"conversation": f"/app/group/{conv_id}"},
         }
 
