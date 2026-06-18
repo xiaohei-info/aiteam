@@ -225,6 +225,10 @@ window.aiteam = window.aiteam || {};
 
   function isRunLive(state) {
     if (!state || !state.conversation) return false;
+    // A received stream_end is the authoritative "live execution finished"
+    // signal. Trust it over a possibly-stale reloaded run status (the control
+    // plane lags the runtime), so the button reverts the instant the run ends.
+    if (state.liveRunEnded) return false;
     if (state.isSyncing && state.runId) return true;
     var status = String((state.conversation.latest_run && state.conversation.latest_run.status) || state.latestRunStatus || '').toLowerCase();
     return status === 'queued' || status === 'routing' || status === 'submitting' || status === 'running' || status === 'waiting_human';
@@ -696,6 +700,7 @@ window.aiteam = window.aiteam || {};
       }
       state.runId = runId;
       state.isSyncing = true;
+      state.liveRunEnded = false;
       state.cursor = Number(initialCursor) || state.cursor || 0;
       state.liveItems = [];
       state.streamingAssistantText = '';
@@ -706,6 +711,19 @@ window.aiteam = window.aiteam || {};
       ns.timeline.connect(runId, state.cursor, function (event) {
         applyTimelineEvent(event || {});
       }, {
+        onStreamEnd: function () {
+          // Live stream finished. The terminal timeline event is never pushed
+          // over the live connection, so reconcile here: mark the run ended
+          // (reverts the primary button) and reload authoritative history.
+          if (!state.runId) {
+            return;
+          }
+          state.isSyncing = false;
+          state.liveRunEnded = true;
+          state.statusText = '回复完成，正在同步历史记录。';
+          renderAll();
+          reloadConversation(0, 100);
+        },
         onReconnect: function (resumeCursor) {
           state.statusText = '连接中断，正在自动恢复...';
           state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });

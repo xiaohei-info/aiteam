@@ -179,6 +179,13 @@ vm.runInThisContext(moduleSource, {{ filename: 'app-chat.js' }});
       window.aiteam.timeline.options.onReconnect(payload.reconnectCursor || 8);
       await flushPromises();
     }}
+  }} else if (payload.action === 'invoke_stream_end') {{
+    if (window.aiteam.timeline.options && typeof window.aiteam.timeline.options.onStreamEnd === 'function') {{
+      window.aiteam.timeline.options.onStreamEnd(payload.streamEndReason || {{}});
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+    }}
   }}
 
   console.log(JSON.stringify({{
@@ -467,6 +474,28 @@ def test_chat_page_primary_button_switches_to_stop_while_run_is_live() -> None:
     assert result["primaryAction"] == "stop"
     assert result["primaryTitle"] == "停止本轮回复"
     assert any(call["url"] == "/api/team/runs/run_live/abort" for call in result["calls"])
+
+
+def test_chat_page_primary_button_reverts_to_send_on_stream_end() -> None:
+    # Live streaming completion only emits `stream_end` (never a terminal
+    # timeline event), so the primary button must revert on that signal even
+    # when the reload still reports a stale `running` status (control-plane lag).
+    conversation = _conversation_fixture()
+    conversation["display_state"] = "streaming"
+    payload = {
+        "conversation": conversation,
+        "responses": [
+            # syncRun's initial getRunEvents fallback on mount
+            {"ok": True, "status": 200, "body": {"items": []}},
+            # reloadConversation triggered by onStreamEnd — deliberately stale 'running'
+            {"ok": True, "status": 200, "body": _conversation_fixture()},
+        ],
+        "action": "invoke_stream_end",
+    }
+    result = _run_chat_module(payload)
+    assert result["primaryAction"] == "send"
+    assert result["primaryText"] == "➤"
+    assert result["primaryIsStop"] is False
 
 
 def test_chat_page_reconnect_callbacks_surface_cursor_recovery_notice() -> None:

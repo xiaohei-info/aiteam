@@ -9,6 +9,7 @@
     _onEvent: null,
     _onOpen: null,
     _onReconnect: null,
+    _onStreamEnd: null,
     _reconnectTimer: null,
     _runId: null,
 
@@ -51,6 +52,16 @@
       return parsed;
     },
 
+    _handleStreamEnd() {
+      const onStreamEnd = this._onStreamEnd;
+      // disconnect() clears callbacks and prevents the onerror→reconnect loop,
+      // so capture the handler first and invoke it after teardown.
+      this.disconnect();
+      if (onStreamEnd) {
+        onStreamEnd();
+      }
+    },
+
     _scheduleReconnect(generation) {
       if (this._manualClose || !this._runId || this._reconnectTimer) {
         return;
@@ -90,6 +101,15 @@
         }
         this._handleTimelineEvent(event);
       });
+      // The live stream signals completion with a named `stream_end` frame
+      // (it never emits a terminal timeline event). Treat it as the authoritative
+      // "live execution finished" signal: surface it, then stop reconnecting.
+      source.addEventListener('stream_end', () => {
+        if (generation !== this._generation) {
+          return;
+        }
+        this._handleStreamEnd();
+      });
       source.onerror = () => {
         if (generation !== this._generation) {
           return;
@@ -112,6 +132,7 @@
       this._onEvent = typeof onEvent === 'function' ? onEvent : null;
       this._onOpen = options && typeof options.onOpen === 'function' ? options.onOpen : null;
       this._onReconnect = options && typeof options.onReconnect === 'function' ? options.onReconnect : null;
+      this._onStreamEnd = options && typeof options.onStreamEnd === 'function' ? options.onStreamEnd : null;
       if (!this._runId) {
         return;
       }
@@ -133,6 +154,7 @@
       this._onEvent = null;
       this._onOpen = null;
       this._onReconnect = null;
+      this._onStreamEnd = null;
       this._runId = null;
     },
 

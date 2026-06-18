@@ -211,6 +211,9 @@ window.aiteam = window.aiteam || {};
 
   function isGroupRunLive(state) {
     if (!state || !state.conversation) return false;
+    // stream_end is the authoritative "live execution finished" signal; trust
+    // it over a possibly-stale reloaded run status so the button reverts at once.
+    if (state.liveRunEnded) return false;
     var latest = state.conversation.latest_run || {};
     var status = String(latest.status || '').toLowerCase();
     return !!(state.runId || latest.run_id) && (
@@ -1370,6 +1373,7 @@ window.aiteam = window.aiteam || {};
     function syncTimeline(runId, cursor, reason) {
       if (!runId) return Promise.resolve();
       state.runId = runId;
+      state.liveRunEnded = false;
       state.reconnectCount += 1;
       ns.timeline.disconnect();
       state.cursor = Math.max(state.cursor, Number(cursor) || 0);
@@ -1382,6 +1386,15 @@ window.aiteam = window.aiteam || {};
         ns.timeline.connect(runId, state.cursor, function (event) {
           handleTimelineEvent(event || {});
         }, {
+          onStreamEnd: function () {
+            // Live stream finished; the terminal timeline event is never pushed
+            // over the live connection. Mark the run ended (reverts the primary
+            // button) and pull authoritative history to settle the final status.
+            state.liveRunEnded = true;
+            setStatus('本轮协作已结束，正在同步结果。');
+            updateCollaborationState();
+            hydrateHistory(runId, state.cursor, '正在同步协作结果…').catch(function () {});
+          },
           onOpen: function () {
             handleTimelineStatus({ phase: 'live' });
           },
