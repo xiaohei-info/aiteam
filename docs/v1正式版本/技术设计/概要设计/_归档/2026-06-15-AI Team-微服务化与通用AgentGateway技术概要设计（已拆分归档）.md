@@ -1,12 +1,19 @@
 ---
 created: 2026-06-15
 updated: 2026-06-18
-status: draft-for-review
-tags: [project, aiteam, technical-design, overview-design, microservices, gateway, runtime]
+status: superseded-archived
+canonical: false
+superseded_by: docs/v1正式版本/技术设计/概要设计/（00–10 拆分集，以 00-架构总纲与裁决索引.md 为入口）
+tags: [project, aiteam, technical-design, overview-design, microservices, gateway, runtime, archived]
 canonical_name: 2026-06-15-AI Team-微服务化与通用AgentGateway技术概要设计
 supersedes:
   - docs/mvp版本/技术设计/2026-05-26-AI Team-技术概要设计.md
 ---
+
+> ⚠️ **本文档已归档，不再是裁决口径。**
+> 本单篇概要设计已于 2026-06-18 按「总纲 / 通用约束 / 模块设计」拆分为 **`docs/v1正式版本/技术设计/概要设计/` 下的 00–10 共 11 篇**，拆分集为 v1 唯一裁决口径。
+> 入口：[概要设计/00-架构总纲与裁决索引.md](../00-架构总纲与裁决索引.md)（含「原 § → 新文档」映射表与 D1–D24 裁决表）。
+> 本文仅留存历史原貌，**任何冲突一律以拆分集为准**；请勿再在本文上修改或据此开发。
 
 # AI Team 微服务化与通用 Agent Gateway 技术概要设计
 
