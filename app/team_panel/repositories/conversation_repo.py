@@ -13,10 +13,12 @@ class ConversationRepo:
     def create(self, conv: Conversation) -> Conversation:
         self._cur.execute(
             "INSERT INTO conversation (id, enterprise_id, type, status, title, "
-            "entry_employee_id, latest_run_id, latest_message_id, last_message_preview, created_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "entry_employee_id, collaboration_mode, orchestration_brief, "
+            "latest_run_id, latest_message_id, last_message_preview, created_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (conv.id, conv.enterprise_id, conv.type, conv.status, conv.title,
-             conv.entry_employee_id, conv.latest_run_id,
+             conv.entry_employee_id, conv.collaboration_mode, conv.orchestration_brief,
+             conv.latest_run_id,
              conv.latest_message_id, conv.last_message_preview, conv.created_by),
         )
         return conv
@@ -25,7 +27,8 @@ class ConversationRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, type, status, title, entry_employee_id, "
             "latest_run_id, latest_message_id, last_message_preview, last_message_at, "
-            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at "
+            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at, "
+            "collaboration_mode, orchestration_brief "
             "FROM conversation WHERE id = %s",
             (conversation_id,),
         )
@@ -38,7 +41,8 @@ class ConversationRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, type, status, title, entry_employee_id, "
             "latest_run_id, latest_message_id, last_message_preview, last_message_at, "
-            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at "
+            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at, "
+            "collaboration_mode, orchestration_brief "
             "FROM conversation WHERE enterprise_id = %s AND deleted_at IS NULL "
             "ORDER BY created_at DESC",
             (enterprise_id,),
@@ -58,7 +62,8 @@ class ConversationRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, type, status, title, entry_employee_id, "
             "latest_run_id, latest_message_id, last_message_preview, last_message_at, "
-            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at "
+            "created_by, archived_at, created_at, updated_at, updated_by, deleted_at, "
+            "collaboration_mode, orchestration_brief "
             "FROM conversation "
             "WHERE enterprise_id = %s AND entry_employee_id = %s "
             "AND type = 'private' AND deleted_at IS NULL "
@@ -74,6 +79,15 @@ class ConversationRepo:
             "last_message_preview=%s, updated_at=now() "
             "WHERE id=%s",
             (conv.status, conv.title, conv.last_message_preview, conv.id),
+        )
+        return conv
+
+    def update_group_settings(self, conv: Conversation) -> Conversation:
+        """Update group-editable fields: title + collaboration mode + brief."""
+        self._cur.execute(
+            "UPDATE conversation SET title=%s, collaboration_mode=%s, "
+            "orchestration_brief=%s, updated_at=now() WHERE id=%s",
+            (conv.title, conv.collaboration_mode, conv.orchestration_brief, conv.id),
         )
         return conv
 
@@ -106,4 +120,6 @@ class ConversationRepo:
             created_at=str(row[12]), updated_at=str(row[13]),
             updated_by=row[14] or "",
             deleted_at=str(row[15]) if row[15] else None,
+            collaboration_mode=row[16] or "free",
+            orchestration_brief=row[17] or "",
         )

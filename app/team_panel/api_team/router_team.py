@@ -92,6 +92,7 @@ from ..application.commands.conversation_service import (
     create_group_conversation,
     remove_group_member,
     submit_group_message,
+    update_group_conversation,
 )
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
 from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
@@ -3402,10 +3403,34 @@ def _serialize_private_history(
         item["cursor"] = index
         item.pop("__sort_cursor", None)
 
+    total = len(envelopes)
+    if total == 0:
+        return [], 0, 0, False
+
+    # Compatibility:
+    # - cursor=0: newest page for chat landing
+    # - cursor<0: continue loading older history from newest end
+    # - cursor>0: preserve legacy forward-pagination semantics
+    if cursor == 0:
+        end = total
+        start = max(0, end - limit)
+        page = envelopes[start:end]
+        next_cursor = -page[0]["cursor"] if page and start > 0 else 0
+        has_more = start > 0
+        return page, total, next_cursor, has_more
+
+    if cursor < 0:
+        end = min((-cursor) - 1, total)
+        start = max(0, end - limit)
+        page = envelopes[start:end]
+        next_cursor = -page[0]["cursor"] if page and start > 0 else 0
+        has_more = start > 0
+        return page, total, next_cursor, has_more
+
     page = [item for item in envelopes if item["cursor"] > cursor][:limit]
     next_cursor = page[-1]["cursor"] if page else cursor
     has_more = any(item["cursor"] > next_cursor for item in envelopes)
-    return page, len(envelopes), next_cursor, has_more
+    return page, total, next_cursor, has_more
 
 
 def _run_summary_text(run: TeamRun, payload: dict) -> str:
@@ -3529,7 +3554,7 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
     cur = conn.cursor()
     try:
         qs = parse_qs(urlparse(path).query)
-        cursor_val = max(0, int(qs.get("cursor", ["0"])[0]))
+        cursor_val = int(qs.get("cursor", ["0"])[0])
         limit_val = max(1, min(100, int(qs.get("limit", ["20"])[0])))
         repo = ConversationRepo(cur)
         conv = repo.get_by_id(conv_id)
@@ -3697,7 +3722,10 @@ def _handle_group_conversation_detail(conn, path: str, conv_id: str) -> tuple[in
             "title": conv.title or "",
             "status": conv.status,
             "display_state": display_state,
-            "default_route_hint": "auto",
+            # 规则编排群默认进入多员工协作（orchestration），自由讨论群保持自动路由。
+            "default_route_hint": "orchestration" if conv.collaboration_mode == "orchestrated" else "auto",
+            "collaboration_mode": conv.collaboration_mode,
+            "orchestration_brief": conv.orchestration_brief or "",
             "member_count": len(members),
             "members": members,
             "latest_run": latest_run_payload,
@@ -3731,10 +3759,15 @@ def _handle_group_conversation_create(conn, path: str, body: dict | None) -> tup
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
     title = str(body.get("title") or "").strip()
     member_employee_ids = [str(item).strip() for item in (body.get("member_employee_ids") or []) if str(item).strip()]
+    collaboration_mode = "orchestrated" if str(body.get("collaboration_mode") or "free") == "orchestrated" else "free"
+    orchestration_brief = str(body.get("orchestration_brief") or "").strip()
     if not title:
         return 400, {"error": "MISSING_TITLE", "message": "title is required"}
     if not member_employee_ids:
         return 400, {"error": "MISSING_MEMBERS", "message": "member_employee_ids is required"}
+    if collaboration_mode == "orchestrated" and not orchestration_brief:
+        return 400, {"error": "MISSING_ORCHESTRATION_BRIEF",
+                     "message": "orchestration_brief is required when collaboration_mode is orchestrated"}
     with UnitOfWork(conn) as uow:
         enterprises = EnterpriseRepo(uow.cur).list_all()
         enterprise = enterprises[0] if enterprises else None
@@ -3746,12 +3779,15 @@ def _handle_group_conversation_create(conn, path: str, body: dict | None) -> tup
             title,
             member_employee_ids,
             created_by=str(body.get("created_by") or "team_panel"),
+            collaboration_mode=collaboration_mode,
+            orchestration_brief=orchestration_brief,
         )
         return 201, {
             "conversation_id": conv_id,
             "title": title,
             "member_count": len(member_employee_ids),
             "status": "active",
+            "collaboration_mode": collaboration_mode,
             "navigation": {"conversation": f"/app/group/{conv_id}"},
         }
 
@@ -3801,6 +3837,36 @@ def _handle_group_conversation_archive(conn, path: str, conv_id: str) -> tuple[i
         if "not found" in message:
             return 404, {"error": "CONVERSATION_NOT_FOUND", "message": message}
         return 409, {"error": "GROUP_CONVERSATION_ARCHIVE_FAILED", "message": message}
+
+
+def _handle_group_conversation_update(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    # 仅接受群名 / 协作方式 / 编排指令；未携带的字段保持不变。成员不在此接口范围内。
+    title = body.get("title")
+    collaboration_mode = body.get("collaboration_mode")
+    orchestration_brief = body.get("orchestration_brief")
+    if title is None and collaboration_mode is None and orchestration_brief is None:
+        return 400, {"error": "EMPTY_PATCH", "message": "At least one of title / collaboration_mode / orchestration_brief is required"}
+    try:
+        with UnitOfWork(conn) as uow:
+            result = update_group_conversation(
+                uow,
+                conv_id,
+                title=title,
+                collaboration_mode=collaboration_mode,
+                orchestration_brief=orchestration_brief,
+            )
+            return 200, result
+    except ValueError as exc:
+        message = str(exc)
+        if "not a group conversation" in message:
+            return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
+        if "not found" in message:
+            return 404, {"error": "CONVERSATION_NOT_FOUND", "message": message}
+        if "title" in message or "orchestration_brief" in message:
+            return 400, {"error": "INVALID_GROUP_SETTINGS", "message": message}
+        return 409, {"error": "GROUP_CONVERSATION_UPDATE_FAILED", "message": message}
 
 
 def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
@@ -4111,6 +4177,14 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
     finally:
         cur.close()
 
+    live_cancel = None
+    try:
+        from agent_gateway.run_cancellation import request_cancel as request_live_cancel
+
+        live_cancel = request_live_cancel(run_id)
+    except Exception:
+        live_cancel = None
+
     binding = None
     next_cursor = 0
     try:
@@ -4171,6 +4245,8 @@ def _handle_run_abort_post(conn, path: str, run_id: str, body: dict | None) -> t
             "run_id": run.id,
             "status": run.status,
             "aborted": True,
+            "runtime_cancel_requested": bool(live_cancel and live_cancel.requested),
+            "runtime_cancel_target": live_cancel.target if live_cancel else "none",
             "event_cursor": binding.event_cursor if binding is not None else next_cursor,
         }
     except ValueError as exc:
@@ -5926,6 +6002,8 @@ def handle_team_route(
         group_detail = _match_prefix(sub, "/group-conversations/")
         if method == "DELETE" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_archive(conn, sub, conversation_id)
+        if method == "PATCH" and group_detail is not None and "/" not in group_detail:
+            route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_update(conn, sub, conversation_id, body)
         if method == "GET" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_detail(conn, sub, conversation_id)
 

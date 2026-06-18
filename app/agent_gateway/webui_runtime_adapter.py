@@ -31,16 +31,12 @@ import json
 import logging
 import os
 import time
-from http.cookies import SimpleCookie
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
-
-_SESSION_COOKIE_NAME = "hermes_session"
-_AUTH_COOKIE_CACHE: str | None = None
 
 _TERMINAL_ERROR_TYPES = {
     "error", "apperror", "rate_limit", "quota_exhausted", "no_response",
@@ -55,69 +51,13 @@ def _base_url() -> str:
     return f"http://{host}:{port}"
 
 
-def _auth_password() -> str:
-    return str(os.getenv("HERMES_WEBUI_PASSWORD", "") or "").strip()
+def _internal_headers(path: str) -> dict[str, str]:
+    from api.auth import INTERNAL_AUTH_HEADER_NAME, build_internal_auth_token
 
-
-def _auth_enabled() -> bool:
-    return bool(_auth_password())
-
-
-def _cookie_header() -> str:
-    global _AUTH_COOKIE_CACHE
-    if not _auth_enabled() or not _AUTH_COOKIE_CACHE:
-        return ""
-    return f"{_SESSION_COOKIE_NAME}={_AUTH_COOKIE_CACHE}"
-
-
-def _cache_session_cookie(resp) -> None:
-    global _AUTH_COOKIE_CACHE
-    raw = ""
-    if hasattr(resp, "headers") and resp.headers is not None:
-        try:
-            raw = resp.headers.get("Set-Cookie", "") or ""
-        except Exception:  # noqa: BLE001
-            raw = ""
-    if not raw:
-        return
-    cookie = SimpleCookie()
-    try:
-        cookie.load(raw)
-    except Exception:  # noqa: BLE001
-        return
-    morsel = cookie.get(_SESSION_COOKIE_NAME)
-    if morsel is not None and morsel.value:
-        _AUTH_COOKIE_CACHE = morsel.value
-
-
-def _login_for_internal_session(timeout: int = 30) -> None:
-    password = _auth_password()
-    if not password:
-        return
-    req = urllib.request.Request(
-        _base_url() + "/api/auth/login",
-        data=json.dumps({"password": password}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        _cache_session_cookie(r)
-
-
-def _request_headers(*, json_body: bool = False) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    if json_body:
-        headers["Content-Type"] = "application/json"
-    cookie = _cookie_header()
-    if cookie:
-        headers["Cookie"] = cookie
-    return headers
-
-
-def _open_json(req: urllib.request.Request, timeout: int) -> dict:
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        _cache_session_cookie(r)
-        return json.load(r)
+    return {
+        "Content-Type": "application/json",
+        INTERNAL_AUTH_HEADER_NAME: build_internal_auth_token(path),
+    }
 
 
 @dataclass
@@ -134,22 +74,11 @@ def _post_json(path: str, body: dict, timeout: int = 30) -> dict:
     req = urllib.request.Request(
         _base_url() + path,
         data=json.dumps(body).encode("utf-8"),
-        headers=_request_headers(json_body=True),
+        headers=_internal_headers(path),
         method="POST",
     )
-    try:
-        return _open_json(req, timeout)
-    except urllib.error.HTTPError as exc:
-        if exc.code != 401 or not _auth_enabled():
-            raise
-        _login_for_internal_session(timeout=timeout)
-        retry_req = urllib.request.Request(
-            _base_url() + path,
-            data=json.dumps(body).encode("utf-8"),
-            headers=_request_headers(json_body=True),
-            method="POST",
-        )
-        return _open_json(retry_req, timeout)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
 
 
 def ensure_session(profile: str, model: str = "", model_provider: str = "") -> str:
@@ -171,6 +100,7 @@ def ensure_session(profile: str, model: str = "", model_provider: str = "") -> s
 
 def run_turn(
     *,
+    run_id: str = "",
     profile: str,
     message: str,
     model: str = "",
@@ -219,7 +149,15 @@ def run_turn(
         return TurnResult(False, error=f"chat/start returned no stream_id: {str(start)[:200]}",
                           session_id=sid)
 
-    return _consume_stream(stream_id, sid, on_event, timeout_seconds)
+    if run_id:
+        from agent_gateway.run_cancellation import register_stream
+        register_stream(run_id, stream_id)
+    try:
+        return _consume_stream(stream_id, sid, on_event, timeout_seconds)
+    finally:
+        if run_id:
+            from agent_gateway.run_cancellation import unregister_stream
+            unregister_stream(run_id, stream_id)
 
 
 def _consume_stream(stream_id: str, session_id: str,
@@ -234,11 +172,12 @@ def _consume_stream(stream_id: str, session_id: str,
     done = False
 
     try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, headers=_request_headers()),
-            timeout=timeout_seconds,
-        ) as resp:
-            _cache_session_cookie(resp)
+        req = urllib.request.Request(
+            url,
+            headers=_internal_headers("/api/chat/stream"),
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
             for kind, payload in _iter_sse(resp, deadline):
                 if kind == "reasoning":
                     _emit(on_event, "reasoning", payload)
@@ -253,15 +192,11 @@ def _consume_stream(stream_id: str, session_id: str,
                 elif kind == "tool_complete":
                     _emit(on_event, "tool_complete", payload)
                 elif kind == "metering":
-                    # Carries running token usage; keep the latest snapshot so a
-                    # turn that ends without a usage-bearing 'done' still records.
                     u = payload.get("usage")
                     if isinstance(u, dict) and u:
                         usage = u
                 elif kind == "done":
                     done = True
-                    # Final usage lives on the done frame (top-level 'usage' or
-                    # nested under the closed 'session').
                     u = payload.get("usage")
                     if isinstance(u, dict) and u:
                         usage = u
@@ -273,7 +208,7 @@ def _consume_stream(stream_id: str, session_id: str,
                             "estimated_cost": sess.get("estimated_cost") or 0,
                         }
                     break
-                elif kind == "message":  # default/unnamed frames carry errors
+                elif kind == "message":
                     ptype = str(payload.get("type") or "")
                     if ptype in _TERMINAL_ERROR_TYPES:
                         error = str(payload.get("message") or payload.get("details") or ptype)

@@ -98,6 +98,18 @@ def test_group_page_uses_shared_timeline_client_contract() -> None:
         assert snippet in source, f"Group page missing timeline/group contract snippet: {snippet}"
 
 
+def test_group_page_exposes_primary_stop_button_and_abort_route() -> None:
+    source = _read(PAGES_DIR / "app-group.js")
+    for snippet in [
+        "data-group-abort",
+        "abortActiveGroupRun",
+        "ns.api.abortRun",
+        "已提交中止请求",
+        "当前没有可中止的运行",
+    ]:
+        assert snippet in source, f"Group page missing stop/abort wiring snippet: {snippet}"
+
+
 
 def test_group_page_exposes_single_and_multi_agent_routing_feedback() -> None:
     source = _read(PAGES_DIR / "app-group.js")

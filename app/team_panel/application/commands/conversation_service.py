@@ -62,7 +62,12 @@ def create_private_conversation(uow, enterprise_id: str, employee_id: str,
 
 def create_group_conversation(uow, enterprise_id: str, title: str,
                               member_employee_ids: list[str],
-                              created_by: str) -> str:
+                              created_by: str,
+                              collaboration_mode: str = "free",
+                              orchestration_brief: str = "") -> str:
+    # 规范化协作模式：仅 'orchestrated' 携带 brief，其余一律按 'free' 处理且清空 brief。
+    mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
+    brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
     conv_id = f"conv_{uuid.uuid4().hex[:12]}"
     conv = Conversation(
         id=conv_id,
@@ -71,6 +76,8 @@ def create_group_conversation(uow, enterprise_id: str, title: str,
         status="draft",
         title=title,
         created_by=created_by,
+        collaboration_mode=mode,
+        orchestration_brief=brief,
     )
     conv.activate()
     uow.conversations().create(conv)
@@ -190,6 +197,49 @@ def archive_group_conversation(uow, conversation_id: str) -> dict:
     conv.archive()
     uow.conversations().update_status(conv)
     return {"conversation_id": conv.id, "status": conv.status}
+
+
+def update_group_conversation(uow, conversation_id: str, *,
+                              title: str | None = None,
+                              collaboration_mode: str | None = None,
+                              orchestration_brief: str | None = None) -> dict:
+    """Update group name and/or collaboration mode for an existing group.
+
+    Members are intentionally out of scope here (managed via add/remove member).
+    Passing None for a field leaves it unchanged; free mode always clears brief.
+    """
+    conv = uow.conversations().get_by_id(conversation_id)
+    if conv is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    if conv.type != "group":
+        raise ValueError(f"Conversation {conversation_id} is not a group conversation")
+
+    if title is not None:
+        new_title = str(title).strip()
+        if not new_title:
+            raise ValueError("title cannot be empty")
+        conv.title = new_title
+
+    if collaboration_mode is not None:
+        mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
+        conv.collaboration_mode = mode
+
+    # brief 跟随最终模式：orchestrated 时取传入(或保留原值)，free 时恒为空。
+    if conv.collaboration_mode == "orchestrated":
+        if orchestration_brief is not None:
+            conv.orchestration_brief = str(orchestration_brief).strip()
+        if not str(conv.orchestration_brief or "").strip():
+            raise ValueError("orchestration_brief is required when collaboration_mode is orchestrated")
+    else:
+        conv.orchestration_brief = ""
+
+    uow.conversations().update_group_settings(conv)
+    return {
+        "conversation_id": conv.id,
+        "title": conv.title,
+        "collaboration_mode": conv.collaboration_mode,
+        "orchestration_brief": conv.orchestration_brief,
+    }
 
 
 def submit_group_message(uow, conversation_id: str, message_text: str,

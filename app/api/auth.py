@@ -6,6 +6,7 @@ password in Settings, or registering passkeys and then going passwordless.
 import hashlib
 import hmac
 import http.cookies
+import ipaddress
 import json
 import logging
 import os
@@ -56,6 +57,12 @@ PUBLIC_PATHS = frozenset({
 
 COOKIE_NAME = 'hermes_session'
 CSRF_HEADER_NAME = 'X-Hermes-CSRF-Token'
+INTERNAL_AUTH_HEADER_NAME = 'X-Hermes-Internal-Auth'
+_INTERNAL_AUTH_ALLOWED_PATHS = frozenset({
+    '/api/session/new',
+    '/api/chat/start',
+    '/api/chat/stream',
+})
 
 _SESSIONS_FILE = STATE_DIR / '.sessions.json'
 
@@ -472,6 +479,41 @@ def parse_cookie(handler) -> str | None:
     return morsel.value if morsel else None
 
 
+def _is_loopback_client(handler) -> bool:
+    """Return True when the direct peer is a loopback address."""
+    address = getattr(handler, 'client_address', None)
+    if not isinstance(address, (list, tuple)) or not address:
+        return False
+    try:
+        return ipaddress.ip_address(str(address[0])).is_loopback
+    except ValueError:
+        return False
+
+
+def build_internal_auth_token(path: str) -> str:
+    """Build the HMAC token for a loopback-only internal API path."""
+    normalized = str(path or '').strip()
+    return hmac.new(
+        _signing_key(),
+        f'internal:{normalized}'.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _has_valid_internal_auth(handler, path: str) -> bool:
+    """Allow a tiny path allow-list for in-process loopback callers only."""
+    normalized = str(path or '').strip()
+    if normalized not in _INTERNAL_AUTH_ALLOWED_PATHS:
+        return False
+    if not _is_loopback_client(handler):
+        return False
+    provided = str(handler.headers.get(INTERNAL_AUTH_HEADER_NAME, '') or '').strip()
+    if not provided:
+        return False
+    expected = build_internal_auth_token(normalized)
+    return hmac.compare_digest(provided, expected)
+
+
 def check_auth(handler, parsed) -> bool:
     """Check if request is authorized. Returns True if OK.
     If not authorized, sends 401 (API) or 302 redirect (page) and returns False."""
@@ -490,6 +532,8 @@ def check_auth(handler, parsed) -> bool:
     # Check session cookie
     cookie_val = parse_cookie(handler)
     if cookie_val and verify_session(cookie_val):
+        return True
+    if _has_valid_internal_auth(handler, parsed.path):
         return True
     # Not authorized
     if parsed.path.startswith('/api/'):

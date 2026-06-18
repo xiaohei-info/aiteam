@@ -223,6 +223,17 @@ window.aiteam = window.aiteam || {};
       '</div>正在思考中...</div>';
   }
 
+  function isRunLive(state) {
+    if (!state || !state.conversation) return false;
+    // A received stream_end is the authoritative "live execution finished"
+    // signal. Trust it over a possibly-stale reloaded run status (the control
+    // plane lags the runtime), so the button reverts the instant the run ends.
+    if (state.liveRunEnded) return false;
+    if (state.isSyncing && state.runId) return true;
+    var status = String((state.conversation.latest_run && state.conversation.latest_run.status) || state.latestRunStatus || '').toLowerCase();
+    return status === 'queued' || status === 'routing' || status === 'submitting' || status === 'running' || status === 'waiting_human';
+  }
+
   function normalizeComparableText(text) {
     return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
   }
@@ -559,6 +570,18 @@ window.aiteam = window.aiteam || {};
       state.refs.summary.innerHTML = renderSummaryPanel(state.employeeSummary, state.conversation);
     }
 
+    function updatePrimaryActionButton() {
+      var btn = container.querySelector('[data-chat-primary]');
+      if (!btn) return;
+      var live = isRunLive(state);
+      btn.dataset.action = live ? 'stop' : 'send';
+      btn.textContent = live ? '⏹' : '➤';
+      btn.title = live ? '停止本轮回复' : '发送 (Enter)';
+      btn.setAttribute('aria-label', live ? '停止本轮回复' : '发送 (Enter)');
+      btn.classList.toggle('is-stop', live);
+      btn.disabled = false;
+    }
+
     function renderAll() {
       renderHistory();
       renderQuoteBanner();
@@ -566,14 +589,41 @@ window.aiteam = window.aiteam || {};
       renderTranscript();
       renderSummary();
       setStatus(state.statusText || '');
+      updatePrimaryActionButton();
     }
 
-    function normalizeConversation(data) {
+    function mergeOlderMessages(existing, incoming) {
+      var current = Array.isArray(existing) ? existing : [];
+      var older = Array.isArray(incoming) ? incoming : [];
+      if (!older.length) {
+        return current.slice();
+      }
+      if (!current.length) {
+        return older.slice();
+      }
+      var seen = {};
+      var merged = [];
+      older.concat(current).forEach(function (item) {
+        var key = item && item.message_id ? item.message_id : '';
+        if (key && seen[key]) {
+          return;
+        }
+        if (key) {
+          seen[key] = true;
+        }
+        merged.push(item);
+      });
+      return merged;
+    }
+
+    function normalizeConversation(data, options) {
+      options = options || {};
       var conversation = data || {};
       state.conversation = conversation;
       state.employeeSummary = conversation.employee_summary || null;
       state.employeeId = (state.employeeSummary && state.employeeSummary.employee_id) || (conversation.employee_ref && conversation.employee_ref.employee_id) || state.employeeId;
-      state.messages = Array.isArray(conversation.messages && conversation.messages.items) ? conversation.messages.items.slice() : [];
+      var items = Array.isArray(conversation.messages && conversation.messages.items) ? conversation.messages.items.slice() : [];
+      state.messages = options.prependOlder ? mergeOlderMessages(state.messages, items) : items;
       state.nextCursor = conversation.messages && conversation.messages.next_cursor || 0;
       state.hasMore = !!(conversation.messages && conversation.messages.has_more);
       state.cursor = Math.max(state.cursor || 0, conversation.last_message_preview && conversation.last_message_preview.event_cursor || 0);
@@ -588,16 +638,19 @@ window.aiteam = window.aiteam || {};
       state.lastMessagePreview = conversation.last_message_preview && conversation.last_message_preview.preview || (state.messages.length ? state.messages[state.messages.length - 1].text : '');
     }
 
-    function reloadConversation(cursor, limit) {
+    function reloadConversation(cursor, limit, options) {
       ns.api.get(buildConversationRequestPath(state.conversationId, cursor || 0, limit || 100)).then(function (result) {
         if (!result.ok) {
           setStatus(result.error || '刷新会话失败');
           return;
         }
-        state.liveItems = [];
-        state.streamingAssistantText = '';
-        normalizeConversation(result.data || {});
-        state.statusText = '已同步最新历史与员工摘要。';
+        options = options || {};
+        if (!options.preserveLiveState) {
+          state.liveItems = [];
+          state.streamingAssistantText = '';
+        }
+        normalizeConversation(result.data || {}, options);
+        state.statusText = options.prependOlder ? '已加载更早历史。' : '已同步最新历史与员工摘要。';
         renderAll();
       });
     }
@@ -676,6 +729,7 @@ window.aiteam = window.aiteam || {};
       }
       state.runId = runId;
       state.isSyncing = true;
+      state.liveRunEnded = false;
       state.cursor = Number(initialCursor) || state.cursor || 0;
       state.liveItems = [];
       state.streamingAssistantText = '';
@@ -686,6 +740,19 @@ window.aiteam = window.aiteam || {};
       ns.timeline.connect(runId, state.cursor, function (event) {
         applyTimelineEvent(event || {});
       }, {
+        onStreamEnd: function () {
+          // Live stream finished. The terminal timeline event is never pushed
+          // over the live connection, so reconcile here: mark the run ended
+          // (reverts the primary button) and reload authoritative history.
+          if (!state.runId) {
+            return;
+          }
+          state.isSyncing = false;
+          state.liveRunEnded = true;
+          state.statusText = '回复完成，正在同步历史记录。';
+          renderAll();
+          reloadConversation(0, 100);
+        },
         onReconnect: function (resumeCursor) {
           state.statusText = '连接中断，正在自动恢复...';
           state.liveItems = state.liveItems.filter(function (item) { return item.kind !== 'recovery'; });
@@ -848,6 +915,7 @@ window.aiteam = window.aiteam || {};
 
     var form = container.querySelector('[data-chat-form]');
     var input = state.refs.input;
+    var primaryBtn = container.querySelector('[data-chat-primary]');
     var quoteBtn = container.querySelector('[data-chat-quote]');
     var retryBtn = container.querySelector('[data-chat-retry]');
     var abortBtn = container.querySelector('[data-chat-abort]');
@@ -869,6 +937,10 @@ window.aiteam = window.aiteam || {};
     if (form && input) {
       form.addEventListener('submit', function (event) {
         event.preventDefault();
+        if (isRunLive(state)) {
+          abortActiveRun();
+          return;
+        }
         var text = String(input.value || '').trim();
         if (!text) return;
         input.value = '';
@@ -878,10 +950,27 @@ window.aiteam = window.aiteam || {};
       if (typeof input.addEventListener === 'function') input.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
+          if (isRunLive(state)) {
+            abortActiveRun();
+            return;
+          }
           var text = String(input.value || '').trim();
           if (!text) return;
           input.value = '';
           createRun(text);
+        }
+      });
+    }
+
+    if (primaryBtn) {
+      primaryBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (isRunLive(state)) {
+          abortActiveRun();
+          return;
+        }
+        if (form && typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
         }
       });
     }
@@ -1005,7 +1094,7 @@ window.aiteam = window.aiteam || {};
           setStatus('没有更多历史记录了。');
           return;
         }
-        reloadConversation(state.nextCursor, 100);
+        reloadConversation(state.nextCursor, 100, { prependOlder: true, preserveLiveState: true });
       });
     }
 
@@ -1324,10 +1413,10 @@ window.aiteam = window.aiteam || {};
       '<button class="aiteam-chatwin__tool" type="button" data-chat-attach title="附件">📎</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-quote title="引用最近一条消息">❝</button>' +
       '<button class="aiteam-chatwin__tool" type="button" data-chat-retry title="重试上一轮">↻</button>' +
-      '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复">⏹</button>' +
+      '<button class="aiteam-chatwin__tool" type="button" data-chat-abort title="停止本轮回复" hidden>⏹</button>' +
       '<span class="aiteam-chatwin__spacer"></span>' +
       (model.modelLine ? '<span class="aiteam-chatwin__model"><span class="aiteam-chatwin__model-dot"></span>' + escapeHtml(model.modelLine) + '</span>' : '') +
-      '<button class="aiteam-chatwin__send" type="submit" title="发送 (Enter)">➤</button>' +
+      '<button class="aiteam-chatwin__send" type="submit" data-chat-primary title="发送 (Enter)">➤</button>' +
       '</div></form></div>';
   }
 

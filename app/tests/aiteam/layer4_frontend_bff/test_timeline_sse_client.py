@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -101,3 +102,79 @@ def test_timeline_client_no_raw_event_names():
     source = _read(_TIMELINE_CLIENT_PATH)
     for raw_event_name in _RAW_RUNTIME_EVENT_NAMES:
         assert raw_event_name not in source
+
+
+def _run_timeline_client_js(script_body: str) -> dict:
+    script = f"""
+const fs = require('fs');
+const vm = require('vm');
+const source = fs.readFileSync({json.dumps(str(_TIMELINE_CLIENT_PATH))}, 'utf8');
+
+const sources = [];
+global.EventSource = class EventSource {{
+  constructor(url) {{
+    this.url = url;
+    this.listeners = {{}};
+    this.onopen = null;
+    this.onerror = null;
+    this.closed = false;
+    sources.push(this);
+  }}
+  addEventListener(name, handler) {{ this.listeners[name] = handler; }}
+  emit(name, data) {{ if (this.listeners[name]) this.listeners[name]({{ data }}); }}
+  close() {{ this.closed = true; }}
+}};
+global.window = {{ location: {{ href: 'http://localhost/app/chat/x' }} }};
+global.document = {{ baseURI: 'http://localhost/app/chat/x' }};
+global.setTimeout = (fn) => 0;   // never auto-reconnect during the test
+global.clearTimeout = () => {{}};
+
+vm.runInThisContext(source, {{ filename: 'timeline-client.js' }});
+const timeline = global.window.aiteam.timeline;
+
+const result = {{}};
+{script_body}
+console.log(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_timeline_client_dispatches_stream_end_to_callback():
+    # The live SSE stream signals completion with a named `stream_end` frame
+    # (it never emits a terminal timeline event), so the client must surface it
+    # via an onStreamEnd callback and stop reconnecting.
+    result = _run_timeline_client_js(
+        """
+let streamEndCalls = 0;
+timeline.connect('run_x', 0, function () {}, {
+  onStreamEnd: function () { streamEndCalls += 1; },
+});
+sources[0].emit('stream_end', '{}');
+result.streamEndCalls = streamEndCalls;
+result.sourceClosed = sources[0].closed;
+result.runIdCleared = timeline._runId === null;
+"""
+    )
+    assert result["streamEndCalls"] == 1
+    assert result["sourceClosed"] is True
+    assert result["runIdCleared"] is True
+
+
+def test_timeline_client_stream_end_is_safe_without_callback():
+    # Older callers connect without onStreamEnd; a stream_end frame must not throw.
+    result = _run_timeline_client_js(
+        """
+timeline.connect('run_y', 0, function () {}, {});
+sources[0].emit('stream_end', '{}');
+result.ok = true;
+result.sourceClosed = sources[0].closed;
+"""
+    )
+    assert result["ok"] is True
+    assert result["sourceClosed"] is True

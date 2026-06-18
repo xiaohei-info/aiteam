@@ -1406,7 +1406,9 @@ class TestRunControls:
         assert retry["retry_of_run_id"] == first["run_id"]
         assert retry["runtime_handle"]["kind"] == "session"
 
-    def test_post_run_abort_marks_run_cancelled_and_advances_numeric_cursor(self, seeded_enterprise):
+    def test_post_run_abort_marks_run_cancelled_and_advances_numeric_cursor(self, seeded_enterprise, monkeypatch):
+        from agent_gateway import runtime_executor
+        monkeypatch.setattr(runtime_executor, "execute_run_async", lambda *args, **kwargs: None)
         status, created = _post(
             "/api/team/runs",
             {
@@ -1432,6 +1434,40 @@ class TestRunControls:
         assert events["run_status"] == "cancelled"
         assert events["items"][-1]["event_type"] == "run_cancelled"
         assert events["items"][-1]["event_cursor"] == aborted["event_cursor"]
+
+    def test_post_run_abort_requests_live_runtime_cancel(self, seeded_enterprise, monkeypatch):
+        from agent_gateway.run_cancellation import CancelResult
+        from agent_gateway import runtime_executor
+
+        calls = []
+
+        def fake_request_cancel(run_id):
+            calls.append(run_id)
+            return CancelResult(True, "stream", "stream_test")
+
+        monkeypatch.setattr("agent_gateway.run_cancellation.request_cancel", fake_request_cancel)
+        monkeypatch.setattr(runtime_executor, "execute_run_async", lambda *args, **kwargs: None)
+
+        status, created = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": "Abort live runtime"},
+                "idempotency_key": f"run-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert status == 201, created
+
+        status, aborted = _post(
+            f"/api/team/runs/{created['run_id']}/abort",
+            {"reason": "User stopped this run"},
+        )
+
+        assert status == 200, aborted
+        assert calls == [created["run_id"]]
+        assert aborted["runtime_cancel_requested"] is True
+        assert aborted["runtime_cancel_target"] == "stream"
 
 
 class TestUploadsPost:

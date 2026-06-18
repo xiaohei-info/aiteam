@@ -150,3 +150,101 @@ test('system Planner is labeled and excluded from removable members', function (
   assert.strictEqual(options.indexOf('mem_planner'), -1, 'system Planner should not appear in remove select');
   assert.ok(options.indexOf('mem_worker') !== -1, 'normal members should remain removable');
 });
+
+test('bare /app/group renders the group list landing (not a full-page create form)', async function () {
+  const testState = { getCalls: [], updateCalls: [], loadingCalls: [] };
+  const context = buildContext(testState);
+  context.window.location.pathname = '/app/group';
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const page = context.window.aiteam.pages.appGroup;
+  const container = makeNode();
+  page.init(container, { pathname: '/app/group' });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+  // Landing = left list + empty main, with a "+" that opens the create modal.
+  assert.ok(container.innerHTML.indexOf('data-group-create-open') !== -1, 'landing should expose the create-modal "+" trigger');
+  assert.ok(container.innerHTML.indexOf('增长突击队') !== -1, 'landing should render the group conversation list from workbench');
+  // It must NOT be the old full-page launcher form.
+  assert.strictEqual(container.innerHTML.indexOf('data-group-create-launch'), -1, 'landing should not embed the full create form');
+  assert.strictEqual(testState.getCalls.length, 0, 'landing should not fetch any group conversation detail');
+});
+
+test('create-group modal renders the collaboration mode selector and forwards payload', async function () {
+  const testState = { getCalls: [], updateCalls: [], loadingCalls: [], createCalls: [], createdWith: [] };
+  const context = buildContext(testState);
+  context.window.aiteam.api.getEmployees = function () {
+    return Promise.resolve({ ok: true, data: { items: [
+      { employee_id: 'emp_a', display_name: '员工A', role_name: '研究员' },
+      { employee_id: 'emp_b', display_name: '员工B', role_name: '文案' },
+    ] } });
+  };
+  context.window.aiteam.api.createGroupConversation = function (payload) {
+    testState.createCalls.push(payload);
+    return Promise.resolve({ ok: true, data: { conversation_id: 'conv_new' } });
+  };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const page = context.window.aiteam.pages.appGroup;
+  assert.ok(typeof page._renderGroupCreateModal === 'function', 'appGroup should expose the create-modal renderer');
+
+  const host = makeNode();
+  page._renderGroupCreateModal(host, { onCreated: function (id) { testState.createdWith.push(id); } });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+  await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+  assert.ok(host.innerHTML.indexOf('aiteam-modal') !== -1, 'create flow should render as a modal, not a page');
+  assert.ok(host.innerHTML.indexOf('自由讨论') !== -1, 'modal should offer 自由讨论 option');
+  assert.ok(host.innerHTML.indexOf('规则编排') !== -1, 'modal should offer 规则编排 option');
+  assert.ok(host.innerHTML.indexOf('data-group-create-mode="free"') !== -1, 'modal should render the free-mode radio');
+  assert.ok(host.innerHTML.indexOf('data-group-create-mode="orchestrated"') !== -1, 'modal should render the orchestrated-mode radio');
+
+  await host.lastCreateGroupHandler({
+    title: '编排群',
+    member_employee_ids: ['emp_a', 'emp_b'],
+    collaboration_mode: 'orchestrated',
+    orchestration_brief: '先调研再撰写',
+  });
+  assert.strictEqual(testState.createCalls.length, 1, 'create handler should call createGroupConversation once');
+  assert.strictEqual(testState.createCalls[0].collaboration_mode, 'orchestrated', 'payload should carry collaboration_mode');
+  assert.strictEqual(testState.createCalls[0].orchestration_brief, '先调研再撰写', 'payload should carry orchestration_brief');
+  assert.deepStrictEqual(testState.createdWith, ['conv_new'], 'onCreated should receive the new conversation id');
+});
+
+test('group settings inline edit forwards rename + collaboration mode to updateGroupConversation', function () {
+  const testState = { getCalls: [], updateCalls: [], loadingCalls: [], patchCalls: [] };
+  const context = buildContext(testState);
+  context.window.aiteam.api.updateGroupConversation = function (conversationId, body) {
+    testState.patchCalls.push({ conversationId: conversationId, body: body });
+    return Promise.resolve({ ok: true, data: Object.assign({ conversation_id: conversationId }, body) });
+  };
+  vm.createContext(context);
+  vm.runInContext(code, context);
+
+  const page = context.window.aiteam.pages.appGroup;
+  const container = makeNode();
+  page.render(container, {
+    conversation_id: 'conv_team',
+    title: '旧名',
+    members: [],
+    member_count: 2,
+    collaboration_mode: 'free',
+    orchestration_brief: '',
+  });
+
+  assert.ok(typeof container.lastUpdateGroupHandler === 'function', 'detail view should expose the settings update handler');
+  container.lastUpdateGroupHandler({
+    title: '新名',
+    collaboration_mode: 'orchestrated',
+    orchestration_brief: '先A后B',
+  });
+
+  assert.strictEqual(testState.patchCalls.length, 1, 'save should call updateGroupConversation once');
+  assert.strictEqual(testState.patchCalls[0].conversationId, 'conv_team', 'should target the open conversation');
+  assert.strictEqual(testState.patchCalls[0].body.title, '新名', 'should forward the new title');
+  assert.strictEqual(testState.patchCalls[0].body.collaboration_mode, 'orchestrated', 'should forward the new mode');
+  assert.strictEqual(testState.patchCalls[0].body.orchestration_brief, '先A后B', 'should forward the brief');
+});

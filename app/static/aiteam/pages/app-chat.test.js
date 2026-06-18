@@ -416,8 +416,10 @@ function makeCapturingContainer() {
   // and we can inspect what renderTranscript wrote.
   const els = {};
   function stub() {
-    return { innerHTML: '', textContent: '', scrollTop: 0, scrollHeight: 0,
-      addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
+    return { innerHTML: '', textContent: '', scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+      dataset: {}, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+      addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+      setAttribute() {}, getAttribute() { return null; } };
   }
   const c = {
     innerHTML: '', addEventListener() {}, querySelectorAll() { return []; },
@@ -604,6 +606,122 @@ test('opening a concrete conversation marks its unread count as read in workbenc
   assert.strictEqual(updateCalls.length, 1, 'chat init should mark the opened conversation as read once');
   assert.strictEqual(updateCalls[0].conversation_id, 'conv_luna', 'chat init should mark the opened conversation id as read');
   assert.strictEqual(updateCalls[0].mark_read, true, 'chat init should set mark_read=true');
+});
+
+test('load more prepends older history instead of replacing the latest page', async function () {
+  var getCalls = [];
+  var pages = {
+    '/conversations/conv_hist?cursor=0&limit=100': {
+      conversation_id: 'conv_hist',
+      display_state: 'idle',
+      employee_summary: { employee_id: 'emp_hist', display_name: '小析', role_name: '顾问' },
+      messages: {
+        items: [
+          { message_id: 'm3', role: 'user', text: '第三条', created_at: '2026-06-18T10:03:00Z' },
+          { message_id: 'm4', role: 'assistant', text: '第四条', created_at: '2026-06-18T10:04:00Z' },
+        ],
+        next_cursor: -2,
+        has_more: true,
+      },
+      last_message_preview: { event_cursor: 4, preview: '第四条' },
+      latest_run: null,
+    },
+    '/conversations/conv_hist?cursor=-2&limit=100': {
+      conversation_id: 'conv_hist',
+      display_state: 'idle',
+      employee_summary: { employee_id: 'emp_hist', display_name: '小析', role_name: '顾问' },
+      messages: {
+        items: [
+          { message_id: 'm1', role: 'user', text: '第一条', created_at: '2026-06-18T10:01:00Z' },
+          { message_id: 'm2', role: 'assistant', text: '第二条', created_at: '2026-06-18T10:02:00Z' },
+        ],
+        next_cursor: 4,
+        has_more: false,
+      },
+      last_message_preview: { event_cursor: 4, preview: '第四条' },
+      latest_run: null,
+    },
+  };
+  var testContext = {
+    window: {
+      location: { pathname: '/app/chat/conv_hist', search: '' },
+      history: { replaceState() {}, pushState() {} },
+      addEventListener() {},
+      aiteam: {
+        util: context.window.aiteam.util,
+        states: { renderLoading() {}, handleApiResult() {} },
+        timeline: { disconnect() {}, connect() {} },
+        api: {
+          get(path) {
+            getCalls.push(path);
+            return Promise.resolve({ ok: true, data: pages[path] });
+          },
+          getWorkbench() {
+            return Promise.resolve({ ok: true, data: { employees: [], groups: [] } });
+          },
+          updateWorkbenchState() {
+            return Promise.resolve({ ok: true, data: {} });
+          },
+        },
+      },
+    },
+    document: { getElementById() { return null; }, addEventListener() {} },
+    console, setTimeout, clearTimeout,
+  };
+  testContext.global = testContext;
+  testContext.globalThis = testContext;
+  testContext.window.document = testContext.document;
+  vm.createContext(testContext);
+  vm.runInContext(code, testContext);
+
+  function makeNode() {
+    const cache = {};
+    const node = {
+      innerHTML: '',
+      textContent: '',
+      value: '',
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+      hidden: false,
+      style: {},
+      dataset: {},
+      _handlers: {},
+      addEventListener(name, handler) { this._handlers[name] = handler; },
+      removeEventListener() {},
+      querySelector(sel) { if (!cache[sel]) cache[sel] = makeNode(); return cache[sel]; },
+      querySelectorAll() { return []; },
+      classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
+      setAttribute() {},
+      getAttribute() { return null; },
+      focus() {},
+      scrollIntoView() {},
+      closest() { return null; },
+      appendChild() {},
+      removeChild() {},
+    };
+    return node;
+  }
+
+  var testPage = testContext.window.aiteam.pages.appChat;
+  var container = makeNode();
+  container.__activeChatKey = 'conv_hist';
+
+  testPage.render(container, pages['/conversations/conv_hist?cursor=0&limit=100']);
+  var transcript = container.querySelector('[data-chat-transcript]');
+  assert.ok(transcript.innerHTML.includes('第三条'), 'latest page should render newest visible user message');
+  assert.ok(transcript.innerHTML.includes('第四条'), 'latest page should render newest visible assistant message');
+  assert.ok(!transcript.innerHTML.includes('第一条'), 'older history should not be loaded before clicking load more');
+
+  var loadMoreBtn = container.querySelector('[data-chat-load-more]');
+  await loadMoreBtn._handlers.click();
+
+  assert.deepStrictEqual(getCalls, ['/conversations/conv_hist?cursor=-2&limit=100'], 'load more should request the older page by next_cursor');
+  assert.ok(transcript.innerHTML.includes('第一条'), 'older page should be prepended into transcript');
+  assert.ok(transcript.innerHTML.includes('第二条'), 'older assistant reply should also be rendered');
+  assert.ok(transcript.innerHTML.includes('第三条'), 'newer messages must remain after loading older history');
+  assert.ok(transcript.innerHTML.includes('第四条'), 'latest page must not be replaced by older history');
+  assert.ok(transcript.innerHTML.indexOf('第一条') < transcript.innerHTML.indexOf('第三条'), 'older history should appear before the existing latest page');
 });
 
 // ---------------------------------------------------------------------------

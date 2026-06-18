@@ -193,7 +193,7 @@ global.window = {{
 global.document = {{ baseURI: 'http://example.test/app/group' }};
 global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
-aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+aiteam.pages.appGroup._renderGroupCreateModal(container, {{ onCreated(id, data) {{ aiteam.pages.appGroup.render(container, data); }} }});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const launcherHtml = container.innerHTML;
   titleInput.value = '预算评审群';
@@ -290,7 +290,7 @@ global.window = {{
 global.document = {{ baseURI: 'http://example.test/app/group' }};
 global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
-aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+aiteam.pages.appGroup._renderGroupCreateModal(container, {{}});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const launcherHtml = container.innerHTML;
   titleInput.value = '真实成员ID群';
@@ -387,7 +387,7 @@ global.window = {{
 global.document = {{ baseURI: 'http://example.test/app/group' }};
 global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
-aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+aiteam.pages.appGroup._renderGroupCreateModal(container, {{}});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const initialHtml = container.innerHTML;
   for (let i = 3; i <= 10; i += 1) {{
@@ -910,7 +910,7 @@ global.window = {{
 global.document = {{ baseURI: 'http://example.test/app/group' }};
 global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
-aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+aiteam.pages.appGroup._renderGroupCreateModal(container, {{}});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const initialHtml = container.innerHTML;
   memberInputs.emp_member.checked = false;
@@ -1007,7 +1007,7 @@ global.window = {{
 global.document = {{ baseURI: 'http://example.test/app/group' }};
 global.aiteam = global.window.aiteam;
 vm.runInThisContext(pageSource, {{ filename: 'app-group.js' }});
-aiteam.pages.appGroup.init(container, {{ pathname: '/app/group' }});
+aiteam.pages.appGroup._renderGroupCreateModal(container, {{}});
 Promise.resolve().then(() => new Promise((resolve) => setTimeout(resolve, 0))).then(async () => {{
   const initialHtml = container.innerHTML;
   titleInput.value = '';
