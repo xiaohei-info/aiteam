@@ -135,19 +135,88 @@ _r(
 )
 
 _r(
+    "/api/auth/status", "get", "auth",
+    "获取登录鉴权状态",
+    "返回当前 WebUI 是否启用了鉴权、当前浏览器是否已登录，以及 passkey 相关状态。",
+    responses={
+        "200": _ok_response("当前鉴权状态", _obj(
+            ["auth_enabled", "logged_in", "password_auth_enabled", "passwordless_enabled", "passkeys_enabled", "passkeys_count", "passkey_feature_flag"],
+            {
+                "auth_enabled": _bool_("是否启用登录鉴权"),
+                "logged_in": _bool_("当前浏览器是否已登录"),
+                "password_auth_enabled": _bool_("是否启用密码登录"),
+                "passwordless_enabled": _bool_("是否处于仅 passkey 登录模式"),
+                "passkeys_enabled": _bool_("是否已注册 passkey"),
+                "passkeys_count": _int_("已注册 passkey 数量"),
+                "passkey_feature_flag": _bool_("服务端是否打开了 passkey 功能"),
+            },
+        ), example={
+            "auth_enabled": True,
+            "logged_in": False,
+            "password_auth_enabled": True,
+            "passwordless_enabled": False,
+            "passkeys_enabled": False,
+            "passkeys_count": 0,
+            "passkey_feature_flag": False,
+        }),
+    },
+)
+
+_r(
     "/api/auth/login", "post", "auth",
     "密码登录",
-    "使用邮箱+密码登录。成功返回 ok。",
+    "使用站点访问密码登录。成功后通过 Set-Cookie 写入会话，无需额外邮箱字段。",
     requestBody={
         "required": True,
         "content": _json_content(
-            _obj(["email", "password"], {"email": _str_("登录邮箱"), "password": _str_("密码")}),
-            example={"email": "admin@acme.ai", "password": "••••••••"},
+            _obj(["password"], {"password": _str_("站点访问密码")}),
+            example={"password": "your-password"},
         ),
     },
     responses={
-        "200": {"description": "登录成功，设置 auth cookie"},
-        "401": _err("INVALID_CREDENTIALS", "邮箱或密码错误", example={"error": "INVALID_CREDENTIALS", "message": "邮箱或密码错误"}),
+        "200": _ok_response("登录成功，返回 ok 并设置 auth cookie", _obj(["ok"], {"ok": _bool_("是否登录成功")}), example={"ok": True}),
+        "401": {
+            "description": "密码错误",
+            "content": _json_content(
+                _obj(["error"], {"error": _str_("错误信息")}),
+                example={"error": "Invalid password"},
+            ),
+        },
+    },
+)
+
+_r(
+    "/api/auth/refresh", "post", "auth",
+    "刷新访问令牌",
+    "使用 `refresh_token` Cookie 刷新登录态。成功后会返回新的 access token，并轮换 refresh token Cookie。",
+    responses={
+        "200": _ok_response("刷新成功", _obj(
+            ["access_token", "expires_in"],
+            {
+                "access_token": _str_("新的访问令牌"),
+                "expires_in": _int_("访问令牌有效期（秒）"),
+            },
+        ), example={"access_token": "at_new_token", "expires_in": 900}),
+        "401": {
+            "description": "refresh_token 无效、已过期或触发 replay 保护",
+            "content": _json_content(_obj(["error"], {"error": _str_("错误信息")}), example={"error": "Refresh token replay detected; please login again"}),
+        },
+    },
+)
+
+_r(
+    "/api/auth/logout", "post", "auth",
+    "退出登录",
+    "注销当前登录态。默认仅当前设备退出；`all_devices=true` 会同时注销该用户全部设备。",
+    requestBody={
+        "required": False,
+        "content": _json_content(
+            _obj([], {"all_devices": _bool_("是否同时注销全部设备")}),
+            example={"all_devices": False},
+        ),
+    },
+    responses={
+        "200": _ok_response("退出成功", _obj(["ok"], {"ok": _bool_("是否退出成功")}), example={"ok": True}),
     },
 )
 
@@ -181,13 +250,14 @@ _r(
     },
     responses={
         "200": _ok_response("登录成功", _obj(
-            ["access_token", "expires_in"],
+            ["phone", "access_token", "expires_in", "is_new_user"],
             {
+                "phone": _str_("登录手机号"),
                 "access_token": _str_("访问令牌"),
                 "expires_in": _int_("有效期（秒）"),
                 "is_new_user": _bool_("是否新注册用户"),
             },
-        ), example={"access_token": "eyJ...", "expires_in": 86400, "is_new_user": False}),
+        ), example={"phone": "13800138000", "access_token": "at_token", "expires_in": 900, "is_new_user": True}),
         "401": _err("INVALID_CODE", "验证码错误或已过期", example={"error": "INVALID_CODE", "message": "验证码错误或已过期"}),
     },
 )
@@ -197,7 +267,13 @@ _r(
     "获取 Passkey 配置",
     description="返回 WebAuthn 配置项，用于浏览器 passkey 注册/登录流程。",
     responses={
-        "200": _ok_response("WebAuthn 配置", _obj([], {"publicKey": {"type": "object", "description": "WebAuthn PublicKeyCredentialRequestOptions"}})),
+        "200": _ok_response("WebAuthn 配置", _obj(
+            ["ok", "publicKey"],
+            {
+                "ok": _bool_("是否成功"),
+                "publicKey": {"type": "object", "description": "WebAuthn PublicKeyCredentialRequestOptions"},
+            },
+        ), example={"ok": True, "publicKey": {}}),
     },
 )
 
@@ -212,8 +288,11 @@ _r(
         ),
     },
     responses={
-        "200": {"description": "登录成功，设置 auth cookie"},
-        "401": _err("INVALID_CREDENTIAL", "Passkey 校验失败"),
+        "200": _ok_response("登录成功，返回 ok 并设置 auth cookie", _obj(["ok"], {"ok": _bool_("是否登录成功")}), example={"ok": True}),
+        "401": {
+            "description": "Passkey 校验失败",
+            "content": _json_content(_obj(["error"], {"error": _str_("错误信息")}), example={"error": "Credential verification failed"}),
+        },
     },
 )
 
@@ -259,19 +338,30 @@ _r(
     },
     responses={
         "200": _ok_response("登录成功", _obj(
-            ["access_token", "expires_in"],
+            ["wechat_union_id", "wechat_open_id", "nickname", "avatar_url", "is_new_user", "access_token", "expires_in"],
             {
+                "wechat_union_id": _str_("微信 Union ID"),
+                "wechat_open_id": _str_("微信 Open ID"),
+                "avatar_url": {"type": ["string", "null"], "description": "微信头像 URL"},
                 "access_token": _str_("访问令牌"),
                 "expires_in": _int_("有效期（秒）"),
                 "is_new_user": _bool_("是否新用户"),
                 "nickname": _str_("微信昵称"),
             },
-        ), example={"access_token": "eyJ...", "expires_in": 86400, "is_new_user": True, "nickname": "WeChat昵称"}),
+        ), example={
+            "wechat_union_id": "mock_union_abc",
+            "wechat_open_id": "mock_open_abc",
+            "nickname": "测试用户",
+            "avatar_url": None,
+            "is_new_user": True,
+            "access_token": "at_token",
+            "expires_in": 900,
+        }),
     },
 )
 
 _r(
-    "/api/health", "get", "auth",
+    "/health", "get", "auth",
     "健康检查",
     "返回服务健康状态、运行中会话数、活跃流数等信息。支持深度检查。",
     parameters=[_param("deep", "query", False, _str_(), "设为 1/true/yes/on 启用深度检查")],
@@ -283,6 +373,26 @@ _r(
             "active_runs": _int_("活跃运行数"),
             "uptime_seconds": {"type": "number", "description": "服务运行秒数"},
         }), example={"status": "ok", "sessions": 3, "active_streams": 1, "active_runs": 2, "uptime_seconds": 12345.67}),
+    },
+)
+
+_r(
+    "/api/enterprises/current", "get", "auth",
+    "获取当前企业",
+    "返回当前登录用户已选中的企业信息。",
+    responses={
+        "200": _ok_response("当前企业", _obj(
+            ["enterprise_id", "name", "role"],
+            {
+                "enterprise_id": _str_("企业 ID"),
+                "name": _str_("企业名称"),
+                "role": _str_("当前用户在该企业下的角色"),
+            },
+        ), example={"enterprise_id": "ent_existing_acme", "name": "Acme AI Lab", "role": "member"}),
+        "404": {
+            "description": "当前用户尚未加入任何企业",
+            "content": _json_content(_obj(["error"], {"error": _str_("错误信息")}), example={"error": "Current enterprise not found"}),
+        },
     },
 )
 
@@ -1940,9 +2050,9 @@ _r(
     ],
     responses={
         "200": _ok_response("企业账号分页列表", _obj(
-            ["items"],
-            {"items": _arr({"type": "object"}), "total": _int_(), "page": _int_(), "limit": _int_(), "has_more": _bool_()},
-        ), example={"items": [], "total": 0, "page": 1, "limit": 20, "has_more": False}),
+            ["enterprises", "total", "page", "limit", "has_more"],
+            {"enterprises": _arr({"type": "object"}), "total": _int_(), "page": _int_(), "limit": _int_(), "has_more": _bool_()},
+        ), example={"enterprises": [], "total": 0, "page": 1, "limit": 20, "has_more": False}),
     },
 )
 
@@ -1969,17 +2079,22 @@ _r(
     description="返回企业的员工配额、存储配额和 API 速率限制。",
     parameters=[_id_param(), _param("role", "query", True, _str_(), "角色参数")],
     responses={
-        "200": _ok_response("企业配额详情", _obj([], {
-            "enterprise_id": _str_(),
-            "quota": {"type": "object", "description": "配额详情 {employee_quota, storage_quota_mb, api_rate_limit}"},
-        }), example={"enterprise_id": "ent_001", "quota": {"employee_quota": 50, "storage_quota_mb": 1024, "api_rate_limit": 100}}),
+        "200": _ok_response("企业配额详情", _obj(
+            ["id", "employee_quota", "storage_quota_mb", "api_rate_limit"],
+            {
+                "id": _str_("企业 ID"),
+                "employee_quota": _int_("员工配额"),
+                "storage_quota_mb": _int_("存储配额（MB）"),
+                "api_rate_limit": _int_("API 速率限制"),
+            },
+        ), example={"id": "ent_001", "employee_quota": 50, "storage_quota_mb": 1024, "api_rate_limit": 100}),
     },
 )
 
 _r(
     "/api/system-admin/enterprises/export", "get", "system-admin",
     "导出企业账号列表",
-    description="以 CSV 格式导出企业数据。",
+    description="返回符合筛选条件的企业列表 JSON 快照。当前真实实现不是 CSV 下载。",
     parameters=[
         _param("role", "query", True, _str_(), "角色参数"),
         _param("name", "query", False, _str_(), "按名称筛选"),
@@ -1987,7 +2102,15 @@ _r(
         _param("created_from", "query", False, _str_(), "创建时间起"),
         _param("created_to", "query", False, _str_(), "创建时间止"),
     ],
-    responses={"200": {"description": "CSV 导出", "content": {"text/csv": {"schema": {"type": "string"}}}}},
+    responses={
+        "200": _ok_response("企业导出数据", _obj(
+            ["items", "total"],
+            {
+                "items": _arr({"type": "object"}, "导出的企业列表"),
+                "total": _int_("企业总数"),
+            },
+        ), example={"items": [], "total": 0}),
+    },
 )
 
 _r(
@@ -2219,7 +2342,7 @@ def build_openapi_spec() -> dict:
             "version": _version(),
             "description": (
                 "AI Team 前端实际调用的后端 API 接口文档。"
-                "只收录 Team Panel 前端（`app/static/aiteam/`）正在使用的接口，"
+                "收录 Team Panel 前端（`app/static/aiteam/`）及登录/鉴权页面正在使用的接口，"
                 "每个接口均包含完整出入参、查询参数和示例。"
             ),
         },
@@ -2251,8 +2374,335 @@ _TAG_DESCRIPTIONS = {
     "system-admin": "系统后台 — 企业治理、平台财务、模板与方案管理",
 }
 
+_PUBLIC_AUTH_PATHS = frozenset({
+    "/health",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/login/phone/send-code",
+    "/api/auth/login/phone/verify",
+    "/api/auth/login/wechat/init",
+    "/api/auth/login/wechat/poll",
+    "/api/auth/login/wechat/callback",
+    "/api/auth/passkey/options",
+    "/api/auth/passkey/login",
+})
 
-# ── HTML rendering (unchanged from original) ──────────────────────────────────
+_BEARER_OR_COOKIE_PATHS = frozenset({
+    "/api/me",
+    "/api/enterprises/current",
+    "/api/auth/onboarding/create-enterprise",
+    "/api/auth/onboarding/join-enterprise",
+    "/api/auth/logout",
+})
+
+_CSRF_EXEMPT_PATHS = frozenset({
+    "/api/auth/login",
+    "/api/auth/login/wechat/init",
+    "/api/auth/login/wechat/callback",
+    "/api/auth/login/phone/send-code",
+    "/api/auth/login/phone/verify",
+    "/api/auth/passkey/options",
+    "/api/auth/passkey/login",
+})
+
+
+# ── HTML rendering ─────────────────────────────────────────────────────────────
+
+
+def _pretty(value: object) -> str:
+    import json
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _op_id(method: str, path: str) -> str:
+    return f"{method}-{path}".replace("/", "-").replace("{", "").replace("}", "")
+
+
+def _schema_type(schema: dict | None) -> str:
+    if not isinstance(schema, dict):
+        return "-"
+    raw_type = schema.get("type")
+    if isinstance(raw_type, list):
+        return " | ".join(str(item) for item in raw_type)
+    if isinstance(raw_type, str):
+        if raw_type == "array":
+            items = schema.get("items")
+            return f"array<{_schema_type(items if isinstance(items, dict) else {})}>"
+        return raw_type
+    if "properties" in schema:
+        return "object"
+    return "-"
+
+
+def _flatten_schema_fields(schema: dict | None, *, prefix: str = "", required: bool = False) -> list[dict[str, str]]:
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+
+    rows: list[dict[str, str]] = []
+    required_names = set(schema.get("required") or [])
+    for name, child in properties.items():
+        if not isinstance(child, dict):
+            child = {}
+        field_name = f"{prefix}.{name}" if prefix else name
+        rows.append({
+            "name": field_name,
+            "type": _schema_type(child),
+            "required": "是" if (name in required_names if not prefix else required) else "否",
+            "description": str(child.get("description") or "-"),
+        })
+        child_type = child.get("type")
+        if child_type == "object" or isinstance(child.get("properties"), dict):
+            rows.extend(
+                _flatten_schema_fields(
+                    child,
+                    prefix=field_name,
+                    required=name in required_names,
+                )
+            )
+        elif child_type == "array" and isinstance(child.get("items"), dict):
+            item_schema = child["items"]
+            if item_schema.get("type") == "object" or isinstance(item_schema.get("properties"), dict):
+                rows.extend(
+                    _flatten_schema_fields(
+                        item_schema,
+                        prefix=f"{field_name}[]",
+                        required=name in required_names,
+                    )
+                )
+    return rows
+
+
+def _table_html(title: str, rows: list[dict[str, str]]) -> str:
+    if not rows:
+        return ""
+    cells = []
+    for row in rows:
+        cells.append(
+            "<tr>"
+            f"<td><code>{html.escape(row['name'])}</code></td>"
+            f"<td>{html.escape(row['type'])}</td>"
+            f"<td>{html.escape(row['required'])}</td>"
+            f"<td>{html.escape(row['description'])}</td>"
+            "</tr>"
+        )
+    return (
+        f'<section class="doc-section"><h4>{html.escape(title)}</h4>'
+        '<div class="table-wrap"><table class="doc-table">'
+        '<thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>'
+        f"<tbody>{''.join(cells)}</tbody></table></div></section>"
+    )
+
+
+def _parameter_rows(parameters: list[dict] | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for prm in parameters or []:
+        schema = prm.get("schema") if isinstance(prm, dict) else {}
+        rows.append({
+            "name": f"{prm.get('name', '-')} ({prm.get('in', '-')})",
+            "type": _schema_type(schema if isinstance(schema, dict) else {}),
+            "required": "是" if prm.get("required") else "否",
+            "description": str(prm.get("description") or "-"),
+        })
+    return rows
+
+
+def _example_from_schema(schema: dict | None) -> object:
+    if not isinstance(schema, dict):
+        return {}
+    raw_type = schema.get("type")
+    if isinstance(raw_type, list):
+        raw_type = next((item for item in raw_type if item != "null"), raw_type[0] if raw_type else None)
+    if raw_type == "object" or isinstance(schema.get("properties"), dict):
+        result = {}
+        for key, child in (schema.get("properties") or {}).items():
+            if isinstance(child, dict):
+                result[key] = _example_from_schema(child)
+        return result
+    if raw_type == "array":
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            return [_example_from_schema(item_schema)]
+        return []
+    if raw_type == "integer":
+        return 0
+    if raw_type == "boolean":
+        return False
+    return ""
+
+
+def _request_example(operation: dict) -> object | None:
+    request_body = operation.get("requestBody") or {}
+    content = request_body.get("content") if isinstance(request_body, dict) else {}
+    json_content = content.get("application/json") if isinstance(content, dict) else {}
+    if isinstance(json_content, dict) and json_content.get("example") is not None:
+        return json_content["example"]
+    schema = json_content.get("schema") if isinstance(json_content, dict) else {}
+    if isinstance(schema, dict):
+        return _example_from_schema(schema)
+    return None
+
+
+def _response_samples(operation: dict) -> list[dict[str, object]]:
+    samples: list[dict[str, object]] = []
+    for status, response in (operation.get("responses") or {}).items():
+        if not isinstance(response, dict):
+            continue
+        content = response.get("content") or {}
+        json_content = content.get("application/json") if isinstance(content, dict) else None
+        example = None
+        schema = {}
+        if isinstance(json_content, dict):
+            example = json_content.get("example")
+            schema = json_content.get("schema") if isinstance(json_content.get("schema"), dict) else {}
+        if example is None and schema:
+            example = _example_from_schema(schema)
+        samples.append({
+            "status": str(status),
+            "description": str(response.get("description") or ""),
+            "example": example,
+            "schema": schema,
+        })
+    return samples
+
+
+def _best_success_sample(operation: dict) -> dict[str, object] | None:
+    for sample in _response_samples(operation):
+        if str(sample["status"]).startswith("2"):
+            return sample
+    return None
+
+
+def _request_headers(method: str, operation: dict) -> list[str]:
+    headers = ["Accept: application/json"]
+    if method.lower() != "get" and operation.get("requestBody"):
+        headers.append("Content-Type: application/json")
+    return headers
+
+
+def _auth_mode(path: str, method: str) -> tuple[str, list[str]]:
+    if path in _PUBLIC_AUTH_PATHS:
+        return "公开接口", ["无需登录态或额外鉴权头。"]
+    if path == "/api/auth/refresh":
+        return "Refresh Token Cookie", [
+            "必须携带 `refresh_token` Cookie。",
+            "浏览器直接调用时请带上 `credentials: 'include'`。",
+        ]
+    if path in _BEARER_OR_COOKIE_PATHS:
+        return "Access Token / Cookie", [
+            "优先支持 `Authorization: Bearer <access_token>`，也兼容同域 `access_token` Cookie。",
+            "前端若直接复用登录态 Cookie，请带上 `credentials: 'include'`。",
+        ]
+    notes = ["默认走同域 WebUI 会话，请带上 `credentials: 'include'`。"]
+    if method.lower() in {"post", "patch", "put", "delete"} and path not in _CSRF_EXEMPT_PATHS:
+        notes.append("若浏览器通过 `hermes_session` Cookie 调用该接口，还需要携带 `X-Hermes-CSRF-Token`。")
+    return "WebUI Session Cookie", notes
+
+
+def _response_content_types(operation: dict) -> list[str]:
+    values: list[str] = []
+    for response in (operation.get("responses") or {}).values():
+        if not isinstance(response, dict):
+            continue
+        content = response.get("content") or {}
+        if not isinstance(content, dict):
+            continue
+        for content_type in content:
+            if content_type not in values:
+                values.append(content_type)
+    return values or ["application/json"]
+
+
+def _code_block_html(title: str, payload: object, *, language: str = "json", note: str = "") -> str:
+    if payload is None:
+        return ""
+    note_html = f'<p class="section-note">{html.escape(note)}</p>' if note else ""
+    return (
+        f'<section class="doc-section"><h4>{html.escape(title)}</h4>{note_html}'
+        f'<pre><code class="language-{html.escape(language)}">{html.escape(_pretty(payload) if language == "json" else str(payload))}</code></pre>'
+        "</section>"
+    )
+
+
+def _curl_example(method: str, path: str, operation: dict) -> str:
+    lines = [f"curl -X {method.upper()} http://localhost:8787{path} \\"]
+    headers = _request_headers(method, operation)
+    for idx, header in enumerate(headers):
+        suffix = " \\" if idx < len(headers) - 1 or _request_example(operation) is not None else ""
+        lines.append(f"  -H '{header}'{suffix}")
+    payload = _request_example(operation)
+    if payload is not None and method.lower() != "get":
+        lines.append(f"  -d '{_pretty(payload)}'")
+    return "\n".join(lines)
+
+
+def _fetch_example(method: str, path: str, operation: dict) -> str:
+    options: list[str] = [f"  method: '{method.upper()}'"]
+    auth_mode, auth_notes = _auth_mode(path, method)
+    header_lines = []
+    if method.lower() != "get" and operation.get("requestBody"):
+        header_lines.append("    'Content-Type': 'application/json'")
+    if path in _BEARER_OR_COOKIE_PATHS:
+        header_lines.append("    Authorization: 'Bearer <access_token>'")
+    if method.lower() in {"post", "patch", "put", "delete"} and path not in _CSRF_EXEMPT_PATHS and auth_mode == "WebUI Session Cookie":
+        header_lines.append("    'X-Hermes-CSRF-Token': '<csrf_token>'")
+    if header_lines:
+        options.append("  headers: {\n" + ",\n".join(header_lines) + "\n  }")
+    if auth_mode != "公开接口":
+        options.append("  credentials: 'include'")
+    payload = _request_example(operation)
+    if payload is not None and method.lower() != "get":
+        options.append(f"  body: JSON.stringify({_pretty(payload)})")
+    return "fetch('{path}', {{\n{opts}\n}});".format(path=path, opts=",\n".join(options))
+
+
+def _response_section_html(operation: dict) -> str:
+    success = _best_success_sample(operation)
+    parts: list[str] = []
+    content_types = _response_content_types(operation)
+    parts.append(
+        _table_html(
+            "响应格式",
+            [{"name": item, "type": "content-type", "required": "-", "description": "接口返回的响应类型"} for item in content_types],
+        )
+    )
+    if success:
+        parts.append(
+            _table_html(
+                "响应字段说明",
+                _flatten_schema_fields(success.get("schema") if isinstance(success.get("schema"), dict) else {}),
+            )
+        )
+        parts.append(
+            _code_block_html(
+                "响应 JSON 示例",
+                success.get("example"),
+                note=f"HTTP {success['status']} {success['description']}".strip(),
+            )
+        )
+
+    error_rows = []
+    for sample in _response_samples(operation):
+        if str(sample["status"]).startswith("2"):
+            continue
+        error_rows.append({
+            "name": sample["status"],
+            "type": "error",
+            "required": "-",
+            "description": sample["description"] or "-",
+        })
+        if sample.get("example") is not None:
+            parts.append(
+                _code_block_html(
+                    f"错误响应示例 HTTP {sample['status']}",
+                    sample["example"],
+                )
+            )
+    if error_rows:
+        parts.insert(0, _table_html("错误响应", error_rows))
+    return "".join(part for part in parts if part)
 
 
 def _operation_detail_html(method: str, path: str, operation: dict) -> str:
@@ -2260,34 +2710,55 @@ def _operation_detail_html(method: str, path: str, operation: dict) -> str:
     description = html.escape(str(operation.get("description") or ""))
     tags = ", ".join(operation.get("tags") or [])
     tag = html.escape(tags or "other")
-    op_id = html.escape(f"{method}-{path}".replace("/", "-").replace("{", "").replace("}", ""))
+    op_id = html.escape(_op_id(method, path))
 
-    parts = [
+    request_body = operation.get("requestBody") or {}
+    request_content = request_body.get("content") if isinstance(request_body, dict) else {}
+    request_json = request_content.get("application/json") if isinstance(request_content, dict) else {}
+    request_schema = request_json.get("schema") if isinstance(request_json, dict) else {}
+    auth_mode, auth_notes = _auth_mode(path, method)
+
+    sections = [
         f'<section class="operation" id="{op_id}">',
         '<div class="operation-heading">',
         f'<span class="method method-{html.escape(method)}">{html.escape(method.upper())}</span>',
-        f'<code>{html.escape(path)}</code>',
+        f'<code class="path">{html.escape(path)}</code>',
         f'<span class="tag">{tag}</span>',
         '</div>',
         f"<h3>{summary}</h3>",
+        '<section class="doc-section"><h4>接口地址</h4>'
+        f'<p><code>http://localhost:8787{html.escape(path)}</code></p></section>',
+        '<section class="doc-section"><h4>接口用途</h4>'
+        f'<p>{description or "用于完成该业务动作。"}</p></section>',
+        '<section class="doc-section"><h4>认证方式</h4>'
+        f'<p><strong>{html.escape(auth_mode)}</strong></p>'
+        + "".join(f'<p>{html.escape(note)}</p>' for note in auth_notes)
+        + '</section>',
+        _table_html(
+            "请求头",
+            [{"name": item, "type": "header", "required": "是", "description": "调用时建议携带"} for item in _request_headers(method, operation)],
+        ),
+        _table_html("Path / Query 参数", _parameter_rows(operation.get("parameters") or [])),
+        _table_html("请求体字段说明", _flatten_schema_fields(request_schema if isinstance(request_schema, dict) else {})),
+        _code_block_html(
+            "请求 JSON 示例",
+            _request_example(operation),
+            note="复制后可直接修改字段值发起调用。",
+        ),
+        _code_block_html(
+            "curl 示例",
+            _curl_example(method, path, operation),
+            language="bash",
+        ),
+        _code_block_html(
+            "前端 fetch 示例",
+            _fetch_example(method, path, operation),
+            language="javascript",
+        ),
+        _response_section_html(operation),
+        '</section>',
     ]
-    if description:
-        parts.append(f"<p>{description}</p>")
-
-    for title, key in (("Path / Query 参数", "parameters"), ("请求体", "requestBody"), ("响应", "responses")):
-        value = operation.get(key)
-        if not value:
-            continue
-        rendered = html.escape(_pretty(value))
-        parts.extend([f"<h4>{title}</h4>", f"<pre>{rendered}</pre>"])
-
-    parts.append("</section>")
-    return "\n".join(parts)
-
-
-def _pretty(value: object) -> str:
-    import json
-    return json.dumps(value, ensure_ascii=False, indent=2)
+    return "\n".join(part for part in sections if part)
 
 
 def _docs_body_html(spec: dict) -> str:
@@ -2472,6 +2943,39 @@ _DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
       padding: 2px 8px;
       font-size: 12px;
     }
+    .doc-section + .doc-section { margin-top: 16px; }
+    .doc-section p {
+      margin: 8px 0 0;
+      color: var(--ink);
+    }
+    .section-note {
+      margin: 8px 0 10px;
+      color: var(--muted);
+    }
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, .72);
+    }
+    .doc-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .doc-table th,
+    .doc-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    .doc-table th {
+      background: rgba(15, 118, 110, .08);
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .doc-table tr:last-child td { border-bottom: none; }
     .method {
       display: inline-flex;
       justify-content: center;
@@ -2498,6 +3002,7 @@ _DOCS_HTML_TEMPLATE = """<!DOCTYPE html>
       color: #f8fafc;
       font-size: 12px;
       line-height: 1.45;
+      white-space: pre-wrap;
     }
     @media (max-width: 900px) {
       header { padding: 24px 18px 18px; }

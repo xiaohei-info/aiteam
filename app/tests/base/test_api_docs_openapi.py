@@ -62,17 +62,63 @@ class TestOpenApiSpec:
             ("/api/team/runs/{id}/stream", "get"),
             ("/api/team/employees/{id}", "patch"),
             ("/api/me", "get"),
+            ("/api/auth/status", "get"),
+            ("/api/auth/logout", "post"),
+            ("/api/auth/refresh", "post"),
+            ("/api/enterprises/current", "get"),
             ("/api/team/knowledge-bases", "get"),
             ("/api/system-admin/health", "get"),
+            ("/health", "get"),
         }
         for path, method in expected:
             assert path in paths, f"missing path {path}"
             assert method in paths[path], f"{path} missing method {method}; has {sorted(paths[path])}"
 
+    def test_docs_cover_current_frontend_northbound_paths(self):
+        paths = api_docs.build_openapi_spec()["paths"]
+        expected_paths = {
+            "/health",
+            "/api/auth/status",
+            "/api/auth/login",
+            "/api/auth/logout",
+            "/api/auth/refresh",
+            "/api/auth/login/wechat/init",
+            "/api/auth/login/wechat/poll",
+            "/api/auth/login/wechat/callback",
+            "/api/auth/login/phone/send-code",
+            "/api/auth/login/phone/verify",
+            "/api/me",
+            "/api/enterprises/current",
+            "/api/auth/onboarding/create-enterprise",
+            "/api/auth/onboarding/join-enterprise",
+            "/api/enterprise-admin/invites",
+            "/api/system-admin/health",
+            "/api/system-admin/enterprises",
+            "/api/system-admin/enterprises/export",
+            "/api/system-admin/finance/overview",
+            "/api/system-admin/finance/reports",
+            "/api/system-admin/templates",
+            "/api/system-admin/solutions",
+            "/api/team/audit-events",
+            "/api/team/billing/balance",
+            "/api/team/billing/recharges",
+            "/api/team/billing/usage/overview",
+            "/api/team/billing/usage/records",
+            "/api/team/billing/usage/records/export",
+            "/api/team/employees",
+            "/api/team/employees/export",
+            "/api/team/office/feed",
+            "/api/team/office/scene",
+            "/api/team/runs/{id}/stream",
+            "/api/team/settings",
+        }
+        missing = sorted(path for path in expected_paths if path not in paths)
+        assert not missing, f"frontend-used northbound paths missing from docs: {missing}"
+
     def test_paths_are_clean(self):
         paths = api_docs.build_openapi_spec()["paths"]
         for p in paths:
-            assert p.startswith("/api/"), f"non-api path leaked: {p!r}"
+            assert p.startswith("/api/") or p == "/health", f"non-api path leaked: {p!r}"
             assert " " not in p and "%" not in p, f"garbage literal leaked: {p!r}"
             for ph in re.findall(r"\{(\w+)\}", p):
                 assert ph == "id" or ph == "mid", f"unexpected placeholder {ph!r} in {p!r}"
@@ -259,6 +305,10 @@ class TestOpenApiSpec:
         assert "summary" in finance_200["required"]
         assert "trend" in finance_200["required"]
 
+        enterprises = paths["/api/system-admin/enterprises"]["get"]
+        enterprises_200 = enterprises["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "enterprises" in enterprises_200["required"]
+
         ent_actions = paths["/api/system-admin/enterprises/{id}/actions"]["post"]
         action_req = ent_actions["requestBody"]["content"]["application/json"]["schema"]
         assert "action" in action_req["required"]
@@ -277,6 +327,9 @@ class TestOpenApiSpec:
         verify_req = phone_verify["requestBody"]["content"]["application/json"]["schema"]
         assert "phone" in verify_req["required"]
         assert "code" in verify_req["required"]
+        verify_200 = phone_verify["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "phone" in verify_200["required"]
+        assert "access_token" in verify_200["required"]
 
         employees = paths["/api/team/employees"]["get"]
         employees_200 = employees["responses"]["200"]["content"]["application/json"]["schema"]
@@ -434,7 +487,7 @@ class TestOpenApiSpec:
 
         enterprises = paths["/api/system-admin/enterprises"]["get"]
         enterprises_200 = enterprises["responses"]["200"]["content"]["application/json"]["schema"]
-        assert "items" in enterprises_200["required"]
+        assert "enterprises" in enterprises_200["required"]
 
         enterprise_detail = paths["/api/system-admin/enterprises/{id}"]["get"]
         enterprise_detail_200 = enterprise_detail["responses"]["200"]["content"]["application/json"]["schema"]
@@ -443,10 +496,13 @@ class TestOpenApiSpec:
 
         enterprise_quota = paths["/api/system-admin/enterprises/{id}/quota"]["get"]
         enterprise_quota_200 = enterprise_quota["responses"]["200"]["content"]["application/json"]["schema"]
-        assert "quota" in enterprise_quota_200["properties"]
+        assert "employee_quota" in enterprise_quota_200["required"]
+        assert "storage_quota_mb" in enterprise_quota_200["required"]
 
         enterprise_export = paths["/api/system-admin/enterprises/export"]["get"]
-        assert "text/csv" in enterprise_export["responses"]["200"]["content"]
+        export_200 = enterprise_export["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "items" in export_200["required"]
+        assert "total" in export_200["required"]
 
         sys_templates_get = paths["/api/system-admin/templates"]["get"]
         sys_templates_get_200 = sys_templates_get["responses"]["200"]["content"]["application/json"]["schema"]
@@ -477,11 +533,27 @@ class TestOpenApiSpec:
     def test_documents_auth_login_and_wechat_flow(self):
         paths = api_docs.build_openapi_spec()["paths"]
 
+        auth_status = paths["/api/auth/status"]["get"]
+        auth_status_200 = auth_status["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "auth_enabled" in auth_status_200["required"]
+        assert "logged_in" in auth_status_200["required"]
+
         # Password login
         login = paths["/api/auth/login"]["post"]
         login_req = login["requestBody"]["content"]["application/json"]["schema"]
-        assert "email" in login_req["required"]
-        assert "password" in login_req["required"]
+        assert login_req["required"] == ["password"]
+        assert "email" not in login_req["properties"]
+        login_example = login["requestBody"]["content"]["application/json"]["example"]
+        assert list(login_example) == ["password"]
+
+        refresh = paths["/api/auth/refresh"]["post"]
+        refresh_200 = refresh["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "access_token" in refresh_200["required"]
+        assert "expires_in" in refresh_200["required"]
+
+        logout = paths["/api/auth/logout"]["post"]
+        logout_req = logout["requestBody"]["content"]["application/json"]["schema"]
+        assert "all_devices" in logout_req["properties"]
 
         # WeChat init
         wx_init = paths["/api/auth/login/wechat/init"]["post"]
@@ -500,6 +572,33 @@ class TestOpenApiSpec:
         assert "code" in wx_cb_req["required"]
         wx_cb_200 = wx_cb["responses"]["200"]["content"]["application/json"]["schema"]
         assert "access_token" in wx_cb_200["required"]
+        assert "wechat_union_id" in wx_cb_200["required"]
+        assert "wechat_open_id" in wx_cb_200["required"]
+
+        current_enterprise = paths["/api/enterprises/current"]["get"]
+        current_enterprise_200 = current_enterprise["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "enterprise_id" in current_enterprise_200["required"]
+        assert "role" in current_enterprise_200["required"]
+
+        passkey_options = paths["/api/auth/passkey/options"]["post"]
+        passkey_options_200 = passkey_options["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "ok" in passkey_options_200["required"]
+        assert "publicKey" in passkey_options_200["required"]
+
+        passkey_login = paths["/api/auth/passkey/login"]["post"]
+        passkey_login_200 = passkey_login["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "ok" in passkey_login_200["required"]
+
+    def test_documents_real_health_and_system_export_shape(self):
+        paths = api_docs.build_openapi_spec()["paths"]
+
+        health = paths["/health"]["get"]
+        assert any(param["name"] == "deep" and param["in"] == "query" for param in health["parameters"])
+
+        export_enterprises = paths["/api/system-admin/enterprises/export"]["get"]
+        export_200 = export_enterprises["responses"]["200"]["content"]["application/json"]["schema"]
+        assert "items" in export_200["required"]
+        assert "total" in export_200["required"]
 
     def test_documents_onboarding_flow(self):
         paths = api_docs.build_openapi_spec()["paths"]
@@ -529,6 +628,33 @@ class TestSwaggerUiHtml:
     def test_html_has_zh_CN_lang(self):
         html = api_docs.swagger_ui_html()
         assert 'lang="zh-CN"' in html
+
+    def test_html_renders_human_readable_sections(self):
+        html = api_docs.swagger_ui_html()
+        assert "接口用途" in html
+        assert "认证方式" in html
+        assert "响应格式" in html
+        assert "请求 JSON 示例" in html
+        assert "前端 fetch 示例" in html
+        assert "响应 JSON 示例" in html
+        assert "字段说明" in html
+        assert "复制后可直接修改字段值发起调用" in html
+
+    def test_html_shows_login_request_example_without_email(self):
+        html = api_docs.swagger_ui_html()
+        start = html.index('id="post--api-auth-login"')
+        end = html.index('id="post--api-auth-login-phone-send-code"', start)
+        login_html = html[start:end]
+        assert "&quot;password&quot;" in login_html
+        assert "&quot;email&quot;" not in login_html
+        assert "curl" in html
+
+    def test_html_documents_auth_and_special_response_types(self):
+        html = api_docs.swagger_ui_html()
+        assert "credentials: &#x27;include&#x27;" in html
+        assert "X-Hermes-CSRF-Token" in html
+        assert "text/event-stream" in html
+        assert "text/csv" in html
 
 
 class TestRouteWiring:
