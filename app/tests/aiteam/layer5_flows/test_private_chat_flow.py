@@ -181,6 +181,36 @@ def test_private_chat_detail_defaults_to_latest_history_page(seeded_enterprise):
     assert conv["messages"]["has_more"] is True
 
 
+def test_private_chat_detail_negative_cursor_loads_older_history_page(seeded_enterprise):
+    for idx in range(4):
+        status, body = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": f"第{idx + 1}条消息"},
+                "idempotency_key": f"idem_l5_negative_cursor_{idx}",
+            },
+        )
+        assert status == 201, body
+
+    latest_status, latest_page = _get(
+        f"/api/team/conversations/{seeded_enterprise['conversation_id']}?cursor=0&limit=2"
+    )
+    assert latest_status == 200, latest_page
+    assert [item["text"] for item in latest_page["messages"]["items"]] == ["第3条消息", "第4条消息"]
+    assert latest_page["messages"]["next_cursor"] == -3
+    assert latest_page["messages"]["has_more"] is True
+
+    older_status, older_page = _get(
+        f"/api/team/conversations/{seeded_enterprise['conversation_id']}?cursor=-3&limit=2"
+    )
+    assert older_status == 200, older_page
+    assert [item["text"] for item in older_page["messages"]["items"]] == ["第1条消息", "第2条消息"]
+    assert older_page["messages"]["next_cursor"] == 0
+    assert older_page["messages"]["has_more"] is False
+
+
 def test_private_chat_retry_and_abort_contract(seeded_enterprise):
     first_status, first = _post(
         "/api/team/runs",

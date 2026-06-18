@@ -3554,7 +3554,7 @@ def _handle_conversation_detail(conn, path: str, conv_id: str) -> tuple[int, dic
     cur = conn.cursor()
     try:
         qs = parse_qs(urlparse(path).query)
-        cursor_val = max(0, int(qs.get("cursor", ["0"])[0]))
+        cursor_val = int(qs.get("cursor", ["0"])[0])
         limit_val = max(1, min(100, int(qs.get("limit", ["20"])[0])))
         repo = ConversationRepo(cur)
         conv = repo.get_by_id(conv_id)

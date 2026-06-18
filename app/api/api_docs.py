@@ -843,10 +843,12 @@ _r(
 _r(
     "/api/team/conversations/{id}", "get", "conversation",
     "获取会话详情",
-    "返回私聊/群聊会话详情，含消息分页列表。",
+    "返回私聊/群聊会话详情，含消息分页列表。\n\n"
+    "消息分页语义：`cursor=0` 返回最新一页；`cursor<0` 按上一页返回的负数 `next_cursor` 继续加载更早历史；"
+    "`cursor>0` 保留旧的正向分页兼容语义。每页 `items` 内部仍按时间从旧到新排列。",
     parameters=[
         _id_param(),
-        _param("cursor", "query", False, _int_(), "分页游标（numeric），默认 0"),
+        _param("cursor", "query", False, _int_(), "分页游标（numeric）。0=最新页，负数=更早历史页，正数=兼容旧正向分页；默认 0"),
         _param("limit", "query", False, _int_(), "每页条数，默认 20，最大 100"),
     ],
     responses={
