@@ -158,6 +158,29 @@ def test_private_chat_quote_round_trip(seeded_enterprise):
     assert conv["messages"]["items"][0]["metadata"]["quote_message_id"].startswith("msg_")
 
 
+def test_private_chat_detail_defaults_to_latest_history_page(seeded_enterprise):
+    for idx in range(3):
+        status, body = _post(
+            "/api/team/runs",
+            {
+                "employee_id": seeded_enterprise["employee_id"],
+                "conversation_id": seeded_enterprise["conversation_id"],
+                "message": {"text": f"第{idx + 1}条消息"},
+                "idempotency_key": f"idem_l5_latest_page_{idx}",
+            },
+        )
+        assert status == 201, body
+
+    status, conv = _get(f"/api/team/conversations/{seeded_enterprise['conversation_id']}?cursor=0&limit=2")
+    assert status == 200, conv
+    assert len(conv["messages"]["items"]) == 2
+    latest_page_texts = [item["text"] for item in conv["messages"]["items"]]
+    assert latest_page_texts[-1] == "第3条消息"
+    assert "第1条消息" not in latest_page_texts
+    assert conv["messages"]["items"][1]["role"] == "user"
+    assert conv["messages"]["has_more"] is True
+
+
 def test_private_chat_retry_and_abort_contract(seeded_enterprise):
     first_status, first = _post(
         "/api/team/runs",

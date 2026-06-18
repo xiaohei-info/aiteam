@@ -3403,10 +3403,34 @@ def _serialize_private_history(
         item["cursor"] = index
         item.pop("__sort_cursor", None)
 
+    total = len(envelopes)
+    if total == 0:
+        return [], 0, 0, False
+
+    # Compatibility:
+    # - cursor=0: newest page for chat landing
+    # - cursor<0: continue loading older history from newest end
+    # - cursor>0: preserve legacy forward-pagination semantics
+    if cursor == 0:
+        end = total
+        start = max(0, end - limit)
+        page = envelopes[start:end]
+        next_cursor = -page[0]["cursor"] if page and start > 0 else 0
+        has_more = start > 0
+        return page, total, next_cursor, has_more
+
+    if cursor < 0:
+        end = min((-cursor) - 1, total)
+        start = max(0, end - limit)
+        page = envelopes[start:end]
+        next_cursor = -page[0]["cursor"] if page and start > 0 else 0
+        has_more = start > 0
+        return page, total, next_cursor, has_more
+
     page = [item for item in envelopes if item["cursor"] > cursor][:limit]
     next_cursor = page[-1]["cursor"] if page else cursor
     has_more = any(item["cursor"] > next_cursor for item in envelopes)
-    return page, len(envelopes), next_cursor, has_more
+    return page, total, next_cursor, has_more
 
 
 def _run_summary_text(run: TeamRun, payload: dict) -> str:

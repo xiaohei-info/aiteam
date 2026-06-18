@@ -592,12 +592,38 @@ window.aiteam = window.aiteam || {};
       updatePrimaryActionButton();
     }
 
-    function normalizeConversation(data) {
+    function mergeOlderMessages(existing, incoming) {
+      var current = Array.isArray(existing) ? existing : [];
+      var older = Array.isArray(incoming) ? incoming : [];
+      if (!older.length) {
+        return current.slice();
+      }
+      if (!current.length) {
+        return older.slice();
+      }
+      var seen = {};
+      var merged = [];
+      older.concat(current).forEach(function (item) {
+        var key = item && item.message_id ? item.message_id : '';
+        if (key && seen[key]) {
+          return;
+        }
+        if (key) {
+          seen[key] = true;
+        }
+        merged.push(item);
+      });
+      return merged;
+    }
+
+    function normalizeConversation(data, options) {
+      options = options || {};
       var conversation = data || {};
       state.conversation = conversation;
       state.employeeSummary = conversation.employee_summary || null;
       state.employeeId = (state.employeeSummary && state.employeeSummary.employee_id) || (conversation.employee_ref && conversation.employee_ref.employee_id) || state.employeeId;
-      state.messages = Array.isArray(conversation.messages && conversation.messages.items) ? conversation.messages.items.slice() : [];
+      var items = Array.isArray(conversation.messages && conversation.messages.items) ? conversation.messages.items.slice() : [];
+      state.messages = options.prependOlder ? mergeOlderMessages(state.messages, items) : items;
       state.nextCursor = conversation.messages && conversation.messages.next_cursor || 0;
       state.hasMore = !!(conversation.messages && conversation.messages.has_more);
       state.cursor = Math.max(state.cursor || 0, conversation.last_message_preview && conversation.last_message_preview.event_cursor || 0);
@@ -612,16 +638,19 @@ window.aiteam = window.aiteam || {};
       state.lastMessagePreview = conversation.last_message_preview && conversation.last_message_preview.preview || (state.messages.length ? state.messages[state.messages.length - 1].text : '');
     }
 
-    function reloadConversation(cursor, limit) {
+    function reloadConversation(cursor, limit, options) {
       ns.api.get(buildConversationRequestPath(state.conversationId, cursor || 0, limit || 100)).then(function (result) {
         if (!result.ok) {
           setStatus(result.error || '刷新会话失败');
           return;
         }
-        state.liveItems = [];
-        state.streamingAssistantText = '';
-        normalizeConversation(result.data || {});
-        state.statusText = '已同步最新历史与员工摘要。';
+        options = options || {};
+        if (!options.preserveLiveState) {
+          state.liveItems = [];
+          state.streamingAssistantText = '';
+        }
+        normalizeConversation(result.data || {}, options);
+        state.statusText = options.prependOlder ? '已加载更早历史。' : '已同步最新历史与员工摘要。';
         renderAll();
       });
     }
@@ -1065,7 +1094,7 @@ window.aiteam = window.aiteam || {};
           setStatus('没有更多历史记录了。');
           return;
         }
-        reloadConversation(state.nextCursor, 100);
+        reloadConversation(state.nextCursor, 100, { prependOlder: true, preserveLiveState: true });
       });
     }
 
