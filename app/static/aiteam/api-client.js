@@ -225,6 +225,10 @@ window.aiteam = window.aiteam || {};
       return this.delete(`/group-conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(memberId)}`, options);
     },
 
+    updateGroupConversation(conversationId, body, options) {
+      return this.patch(`/group-conversations/${encodeURIComponent(conversationId)}`, body, options);
+    },
+
     archiveGroupConversation(conversationId, options) {
       return this.delete(`/group-conversations/${encodeURIComponent(conversationId)}`, options);
     },

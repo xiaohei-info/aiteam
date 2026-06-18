@@ -92,6 +92,7 @@ from ..application.commands.conversation_service import (
     create_group_conversation,
     remove_group_member,
     submit_group_message,
+    update_group_conversation,
 )
 from ..application.commands.connector_grant_service import grant_connector, revoke_connector
 from ..application.commands.scheduled_job_service import create_scheduled_job, pause_job, resume_job
@@ -3814,6 +3815,36 @@ def _handle_group_conversation_archive(conn, path: str, conv_id: str) -> tuple[i
         return 409, {"error": "GROUP_CONVERSATION_ARCHIVE_FAILED", "message": message}
 
 
+def _handle_group_conversation_update(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
+    if not body:
+        return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
+    # 仅接受群名 / 协作方式 / 编排指令；未携带的字段保持不变。成员不在此接口范围内。
+    title = body.get("title")
+    collaboration_mode = body.get("collaboration_mode")
+    orchestration_brief = body.get("orchestration_brief")
+    if title is None and collaboration_mode is None and orchestration_brief is None:
+        return 400, {"error": "EMPTY_PATCH", "message": "At least one of title / collaboration_mode / orchestration_brief is required"}
+    try:
+        with UnitOfWork(conn) as uow:
+            result = update_group_conversation(
+                uow,
+                conv_id,
+                title=title,
+                collaboration_mode=collaboration_mode,
+                orchestration_brief=orchestration_brief,
+            )
+            return 200, result
+    except ValueError as exc:
+        message = str(exc)
+        if "not a group conversation" in message:
+            return 400, {"error": "INVALID_CONVERSATION_TYPE", "message": message}
+        if "not found" in message:
+            return 404, {"error": "CONVERSATION_NOT_FOUND", "message": message}
+        if "title" in message or "orchestration_brief" in message:
+            return 400, {"error": "INVALID_GROUP_SETTINGS", "message": message}
+        return 409, {"error": "GROUP_CONVERSATION_UPDATE_FAILED", "message": message}
+
+
 def _handle_group_conversation_message_post(conn, path: str, conv_id: str, body: dict | None) -> tuple[int, dict]:
     if not body:
         return 400, {"error": "MISSING_BODY", "message": "Request body is required"}
@@ -5947,6 +5978,8 @@ def handle_team_route(
         group_detail = _match_prefix(sub, "/group-conversations/")
         if method == "DELETE" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_archive(conn, sub, conversation_id)
+        if method == "PATCH" and group_detail is not None and "/" not in group_detail:
+            route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_update(conn, sub, conversation_id, body)
         if method == "GET" and group_detail is not None and "/" not in group_detail:
             route_handler = lambda conn, conversation_id=group_detail: _handle_group_conversation_detail(conn, sub, conversation_id)
 

@@ -82,6 +82,15 @@ class ConversationRepo:
         )
         return conv
 
+    def update_group_settings(self, conv: Conversation) -> Conversation:
+        """Update group-editable fields: title + collaboration mode + brief."""
+        self._cur.execute(
+            "UPDATE conversation SET title=%s, collaboration_mode=%s, "
+            "orchestration_brief=%s, updated_at=now() WHERE id=%s",
+            (conv.title, conv.collaboration_mode, conv.orchestration_brief, conv.id),
+        )
+        return conv
+
     def update_latest_run(self, conversation_id: str,
                           run_id: str, message_id: str, preview: str) -> None:
         self._cur.execute(
