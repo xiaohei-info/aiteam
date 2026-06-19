@@ -1,32 +1,65 @@
-"""用户端 FastAPI 应用骨架。本地主链/群聊/Loop/pull 由 Track A 工单（11 §4）逐步填入。
+"""用户端 FastAPI 应用骨架（A0）。
 
-注意：默认仅 localhost 监听，不暴露非 localhost 入站（00 §4.2.3）。
+本地登录（03 §9.4C）已落地：公开 login 端点经 Manager 校验凭据（A0 对端用 fake/占位），
+缓存 token + 验签材料，此后本地无状态验签（whoami）。业务主链/群聊/Loop/pull 由后续
+Track A 工单（11 §4）填入。
+
+注意：默认仅 localhost 监听，不暴露非 localhost 入站（00 §4.2.3）；
+用户端只持验签材料，绝不持可签发 token 的密钥（03 §9.5/D23）。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, FastAPI
 
+from agent_service.auth.local_login import (
+    LocalLoginService,
+    LoginRequest,
+    LoginResult,
+    ManagerLoginClient,
+)
+from agent_service.auth.manager_client import UnconfiguredManagerClient
+from agent_service.auth.token_cache import InMemoryTokenCache
 from shared.app_factory import create_app
 from shared.auth import DevTokenService, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
-# ⚠️ 骨架期 DevTokenService；生产用户端只持公钥/JWKS 本地验签，绝不持签发密钥（03 §9.5/D23）。
+# ⚠️ 骨架期 DevTokenService 仅用于 /whoami 演示受保护端点；本地登录的验签材料由 Manager 下发、
+# 经 LocalLoginService 本地验签。生产用户端只持公钥/JWKS，绝不持签发密钥（03 §9.5/D23）。
 _verifier = DevTokenService()
 
-router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+def build_router(login_service: LocalLoginService) -> APIRouter:
+    router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+    @router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="agent_ping")
+    async def ping() -> Envelope[dict]:
+        return Envelope[dict](data={"pong": True})
+
+    @router.post("/login", summary="本地登录（首次在线取 token）", operation_id="agent_login")
+    async def login(req: LoginRequest) -> Envelope[LoginResult]:
+        # 公开端点（§9.6）：不挂 require_claims。校验在 Manager；用户端只缓存 + 本地验签。
+        session = login_service.login(req)
+        return Envelope[LoginResult](
+            data=LoginResult(token=session.token, claims=session.claims)
+        )
+
+    @router.get("/whoami", summary="解出当前身份（演示受保护端点 401/200）", operation_id="agent_whoami")
+    async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> Envelope[TokenClaims]:
+        return Envelope[TokenClaims](data=claims)
+
+    return router
 
 
-@router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="agent_ping")
-async def ping() -> Envelope[dict]:
-    return Envelope[dict](data={"pong": True})
+def build_app(*, manager_client: ManagerLoginClient | None = None) -> FastAPI:
+    """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。"""
+    login_service = LocalLoginService(
+        manager=manager_client or UnconfiguredManagerClient(),
+        cache=InMemoryTokenCache(),
+    )
+    return create_app(load_settings("agent"), build_router(login_service))
 
 
-@router.get("/whoami", summary="解出当前身份（演示受保护端点 401/200）", operation_id="agent_whoami")
-async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> Envelope[TokenClaims]:
-    return Envelope[TokenClaims](data=claims)
-
-
-app = create_app(load_settings("agent"), router)
+app = build_app()
