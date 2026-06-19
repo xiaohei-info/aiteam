@@ -34,8 +34,8 @@ _SKIP_DIRS = {
 }
 
 
-def _iter_production_py_files():
-    for root, dirs, files in os.walk(_SERVER_ROOT):
+def _iter_production_py_files(scan_root=_SERVER_ROOT):
+    for root, dirs, files in os.walk(scan_root):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
         for f in files:
             if f.endswith(".py"):
@@ -63,10 +63,10 @@ def _docstring_line_ranges(source: str) -> set[int]:
     return covered
 
 
-def _scan(pattern: str):
+def _scan(pattern: str, scan_root=_SERVER_ROOT):
     rx = re.compile(pattern)
     hits = []
-    for path in _iter_production_py_files():
+    for path in _iter_production_py_files(scan_root):
         with open(path, encoding="utf-8") as fh:
             source = fh.read()
         docstring_lines = _docstring_line_ranges(source)
@@ -109,6 +109,18 @@ def test_no_import_from_legacy_app():
     """server/ 不得 import 冻结的旧 app/（CLAUDE/AGENTS §8：不调用/不桥接旧 app）。"""
     hits = _scan(r"^\s*(from|import)\s+app(\.|\s|$)")
     assert not hits, "发现对旧 app/ 的 import:\n" + "\n".join(hits)
+
+
+def test_agent_service_no_token_signing():
+    """用户端绝不持签发能力（D23）。
+
+    agent_service 生产源码不得出现 `.sign(` 调用或 `TokenSigner` 引用——用户端只验签、
+    只持公钥/JWKS，签发私钥仅在控制面（Manager）。docstring 里写"不实现签发"是正当的，
+    已被 _scan 跳过。把 D23 从"靠评审把关"升级为"靠测试把关"。
+    """
+    agent_root = os.path.join(_SERVER_ROOT, "agent_service")
+    hits = _scan(r"\.sign\(|TokenSigner", scan_root=agent_root)
+    assert not hits, "agent_service 出现签发能力（违反 D23）:\n" + "\n".join(hits)
 
 
 def test_no_app_dotenv_read():
