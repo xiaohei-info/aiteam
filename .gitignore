@@ -10,3 +10,5 @@
 /docs/复盘/*.html
 /docs/复盘/*.json
 .DS_Store
+/.venv/
+__pycache__/

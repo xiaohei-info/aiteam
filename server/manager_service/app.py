@@ -1,0 +1,29 @@
+"""企业端 FastAPI 应用骨架。业务路由由 Track M 工单（11 §4）逐步填入。"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+
+from shared.app_factory import create_app
+from shared.auth import DevTokenService, require_claims
+from shared.config import load_settings
+from shared.contracts.auth import TokenClaims
+from shared.contracts.envelope import Envelope
+
+# ⚠️ 骨架期 DevTokenService；生产 Manager 按 tenant 持私钥签发、用公钥验签（03 §9.5/D23）。
+_verifier = DevTokenService()
+
+router = APIRouter(prefix="/api/manager", tags=["manager"])
+
+
+@router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="manager_ping")
+async def ping() -> Envelope[dict]:
+    return Envelope[dict](data={"pong": True})
+
+
+@router.get("/whoami", summary="解出当前身份（演示受保护端点 401/200）", operation_id="manager_whoami")
+async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> Envelope[TokenClaims]:
+    return Envelope[TokenClaims](data=claims)
+
+
+app = create_app(load_settings("manager"), router)
