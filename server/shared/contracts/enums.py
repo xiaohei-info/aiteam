@@ -59,6 +59,25 @@ class AuthProvider(str, Enum):
     WECHAT = "wechat"
 
 
+class CatalogType(str, Enum):
+    """运营端目录项类型（05 F03）。对齐 CatalogReleaseNotify.catalog_type 取值。"""
+
+    EXPERT_TEMPLATE = "expert_template"
+    SOLUTION_TEMPLATE = "solution_template"
+
+
+class CatalogStatus(str, Enum):
+    """运营端目录项生命周期（05 F03）。模板真相态归 Operator。
+
+    draft：注册未发布，不外溢 Manager；published：可见目录通知 Manager；
+    unpublished：下架，Manager 标记不可新增（F15 历史实例策略归 Manager 详设）。
+    """
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    UNPUBLISHED = "unpublished"
+
+
 class IsolationLevel(str, Enum):
     """Manager 租户隔离档位（04 §6.1.1，D20）。业务代码不感知差异，只经 TenantRouter。"""
 
