@@ -6,6 +6,8 @@ CLAUDE.md/AGENTS.md §8 风险边界、02 §10.1 路径收口、03 §9.7 角色�
 
 扫描范围与降噪（避免误报"反向说明"）：
 - 排除 tests/（测试本就需引用禁用词做断言）。
+- 排除虚拟环境/第三方依赖（.venv/venv/site-packages 等）——只扫本仓生产源码，
+  不扫安装到 server/ 下的依赖（否则 pygments 等会误报旧角色字面量）。
 - 跳过 docstring（模块/类/函数）与注释行——文档里写"不要用 X"是正当的，不算违规。
 - 仍扫描普通字符串字面量（真实违规多在此：路由前缀、env 名、角色字面量）。
 
@@ -17,8 +19,19 @@ import os
 import re
 
 _SERVER_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_SKIP_DIRS = {"__pycache__", ".git", "node_modules", "tests",
-              ".venv", "venv", "site-packages", ".tox", ".mypy_cache", ".pytest_cache"}
+_SKIP_DIRS = {
+    "__pycache__",
+    ".git",
+    "node_modules",
+    "tests",
+    ".venv",
+    "venv",
+    "env",
+    "site-packages",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+}
 
 
 def _iter_production_py_files():
