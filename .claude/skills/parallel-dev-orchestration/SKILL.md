@@ -95,6 +95,8 @@ loop:
 
 **派活铁律**（防跑偏）：派出的 coding agent 必须按下文「worker dispatch prompt」干活——只 import 共享契约、守红线/非目标、从集成分支切、PR base 指向集成分支、过 CI + 独立评审才允许关闭。**关闭前必须过闸**（这是不做"全自动无人闭环"的关键，保留验证兜底）。
 
+**合并/集成纪律（避免并发踩踏，首轮真实教训）**：orchestrator 的**试合并、解冲突、合入都在专用集成 worktree 做**（`git worktree add ../integ <集成分支>`），**绝不在共享主工作树留半成品 merge 态**——并发的 reviewer 会读到脏主树、甚至误 `git reset --hard` 冲掉你未提交的工作。reviewer 侧对应铁律见下「verifier dispatch」第 0 步：只读共享态、不动主树。两边一起守，并发才安全。
+
 ### worker dispatch prompt（派发时注入 worker，不进 issue body）
 
 orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** materialize 进 worker 的 prompt（worker 可能是别的 coding agent、没装本 skill，所以正文必须随 prompt 给到它），末尾附 issue 指针。**loop 正文只在本 skill 留一份，绝不复制进 issue body**；`<集成分支>`/`<N>`/测试命令由 orchestrator 从 issue body 与项目配置代入。
@@ -119,7 +121,25 @@ orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** m
 9 关闭：合并后关本卡 → 其下游自动解锁
 ```
 
-**基线 verifier gate（盲审，工具无关）**：全新 agent（非实现者），独立跑 build/lint/test + 对照 diff×唯一口径文档×CLAUDE.md，**不看实现理由**，不过或语义漂移即打回。
+**verifier / reviewer dispatch prompt（派发独立评审时注入，工具无关）**
+
+闸的语义层：全新 agent（**非实现者**）盲审——**不看实现者自述/理由**，只凭客观产出判断语义是否偏离设计。派发时给足入口，免得它空耗在勘探环境（首轮教训）：
+
+```
+你是独立 reviewer，盲审工单 #N 的分支 <工作分支>。不读实现者自述。
+0 只读共享态：用 `git diff <集成分支>...<工作分支>` / `git show <ref>:<path>` 审阅；
+  ⚠️**绝不在共享主工作树 reset/checkout/merge**——编排者可能正在那里集成，你一动就冲掉它；
+  要跑测试就进被审分支自己的 worktree(`git worktree list` 定位，或 `git worktree add` 新建)里跑。
+1 读工单 #N(目标/必消费契约/红线/范围边界/验收/唯一文档) + 唯一文档 + CLAUDE.md/AGENTS.md。
+2 审 diff 逐条核：契约只 import 未重定义？守红线/非目标？未触禁区？语义未漂移？分层规范？
+3 契约存在性核对：对「必消费契约」清单 grep 契约文件确认其**已冻结**——区分"该 import 却自造"(违规)
+  与"契约尚未定义的合理本地占位"(放行)。
+4 验收↔测试映射(**强制产出表格**)：每条「验收」锚定到具体 test 函数；无对应=覆盖缺口。
+5 独立复跑测试：探测 venv(`.venv/bin/python` 否则 fallback)，在被审分支 worktree 跑测试命令。
+输出：APPROVE / REQUEST_CHANGES + 具体问题(文件:行 + 为什么 + 建议)。只读不改代码。
+```
+
+有 Superpowers 时用 `requesting-code-review` + `code-reviewer` agent，把上面"只读共享态/入口/映射表"要求一并带上。
 
 > **共享 infra 由 orchestrator 集中改**：worker 若被共享 infra（契约 / 边界扫描 / CI / 事件协议等）的 bug 卡住，**报给 orchestrator 统一修，不在本卡分支擅改共享文件**——并行 worker 各改共享文件 = 合并冲突 + 口径分裂。
 
