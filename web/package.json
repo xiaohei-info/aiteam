@@ -1,0 +1,17 @@
+{
+  "name": "@aiteam/web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Team v1 前端单仓工作区（运营端 / 企业端 / 用户端 + 共享包）。",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "packageManager": "pnpm@11.4.0"
+}

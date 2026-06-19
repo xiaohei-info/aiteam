@@ -1,0 +1,8 @@
+packages:
+  - "shared"
+  - "operation"
+  - "manager"
+  - "agent"
+
+onlyBuiltDependencies:
+  - esbuild

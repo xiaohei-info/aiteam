@@ -1,0 +1,54 @@
+{
+  "name": "@aiteam/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Team v1 前端共享包：page-shell / api-client 基类 / timeline-client / role-state / i18n / 设计系统。各端 import 单一来源，禁止复制。",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./api-client": {
+      "types": "./dist/api-client/index.d.ts",
+      "import": "./dist/api-client/index.js"
+    },
+    "./timeline-client": {
+      "types": "./dist/timeline-client/index.d.ts",
+      "import": "./dist/timeline-client/index.js"
+    },
+    "./role-state": {
+      "types": "./dist/role-state/index.d.ts",
+      "import": "./dist/role-state/index.js"
+    },
+    "./i18n": {
+      "types": "./dist/i18n/index.d.ts",
+      "import": "./dist/i18n/index.js"
+    },
+    "./design-system": {
+      "types": "./dist/design-system/index.d.ts",
+      "import": "./dist/design-system/index.js"
+    },
+    "./page-shell": {
+      "types": "./dist/page-shell/index.d.ts",
+      "import": "./dist/page-shell/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}
