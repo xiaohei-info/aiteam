@@ -17,7 +17,8 @@ import os
 import re
 
 _SERVER_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_SKIP_DIRS = {"__pycache__", ".git", "node_modules", "tests"}
+_SKIP_DIRS = {"__pycache__", ".git", "node_modules", "tests",
+              ".venv", "venv", "site-packages", ".tox", ".mypy_cache", ".pytest_cache"}
 
 
 def _iter_production_py_files():

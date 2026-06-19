@@ -97,7 +97,9 @@ loop:
 
 ### worker dispatch prompt（派发时注入 worker，不进 issue body）
 
-orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** materialize 进 worker 的 prompt（worker 可能是别的 coding agent、没装本 skill，所以正文必须随 prompt 给到它），末尾附 issue 指针。**loop 正文只在本 skill 留一份，绝不复制进 25 张 issue body**；`<集成分支>`/`<N>`/测试命令由 orchestrator 从 issue body 与项目配置代入。
+orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** materialize 进 worker 的 prompt（worker 可能是别的 coding agent、没装本 skill，所以正文必须随 prompt 给到它），末尾附 issue 指针。**loop 正文只在本 skill 留一份，绝不复制进 issue body**；`<集成分支>`/`<N>`/测试命令由 orchestrator 从 issue body 与项目配置代入。
+
+> **集成分支是参数，不是常量**：orchestrator 启动时确定它 = 自己当前所在分支（`git rev-parse --abbrev-ref HEAD`）或显式配置，派发时代入 `<集成分支>`。**本 skill 绝不写死任何分支名**，对 master / main / develop / feature-x 等任何命名通用。
 
 **第一步永远是能力检测**：worker 先判断自己有没有 Superpowers——
 - **有** → 直接用对应 Superpowers skill（见映射表，battle-tested、更省事）；
@@ -107,10 +109,10 @@ orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** m
 ```
 目标：把本 issue 的「验收」全部做到绿；做不到就如实报告，禁止假装完成。
 1 认领+读全：读 issue body(目标/契约/红线/验收) + 它指向的唯一口径文档全文 + 仓库 CLAUDE.md/AGENTS.md；冲突一律以设计文档为准
-2 隔离：从 <集成分支> 切工作分支/worktree（⚠️不是默认主干）
+2 隔离：**显式**从集成分支切——`git fetch origin && git switch -c <工作分支> origin/<集成分支>`。⚠️**别信任 worktree 的默认 base**(可能是仓库默认分支/旧 commit，不含你要改的内容)；切完先核验预期内容存在(如关键目录/契约)，缺失即说明集成分支参数错→停下报告
 3 拆解(按需)：偏大则 `gh issue create --parent <n>` 拆 2–5 个 sub-issue，再逐个做
 4 测试先行：按「验收」写/补测试，再最小实现；只 import 共享契约，守红线与非目标
-5 反馈闸(每轮之间跑)：本 issue「测试落点」里的命令 → 红则修、循环；退出条件=绿；迭代上限=<N>；到顶仍红→停下报告，不强推
+5 反馈闸(每轮之间跑)：跑本 issue「测试落点」里的命令(如需建 venv，放在被扫描代码树之外，免得边界扫描误扫依赖包) → 红则修、循环；退出条件=绿；迭代上限=<N>；到顶仍红→停下报告，不强推
 6 PR：`gh pr create --base <集成分支>`（⚠️绝不主干）
 7 CI 绿：轮询 CI(`gh run ...`)，修到绿或到上限
 8 独立评审：交给"非实现者"的全新 agent 盲审(只看 diff×口径文档×红线，不看实现理由)；改到过
@@ -118,6 +120,8 @@ orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** m
 ```
 
 **基线 verifier gate（盲审，工具无关）**：全新 agent（非实现者），独立跑 build/lint/test + 对照 diff×唯一口径文档×CLAUDE.md，**不看实现理由**，不过或语义漂移即打回。
+
+> **共享 infra 由 orchestrator 集中改**：worker 若被共享 infra（契约 / 边界扫描 / CI / 事件协议等）的 bug 卡住，**报给 orchestrator 统一修，不在本卡分支擅改共享文件**——并行 worker 各改共享文件 = 合并冲突 + 口径分裂。
 
 **Superpowers 映射（检测到才用，意图等价，不重复）**
 
