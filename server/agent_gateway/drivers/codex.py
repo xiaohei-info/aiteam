@@ -20,6 +20,22 @@ from .base import _BaseDriver
 class CodexJsonRpcDriver(_BaseDriver):
     runtime_name = "codex"
     cli_path = "codex"
+    # Codex 特有越权 flag：`-c` 可任意覆盖配置（含 sandbox/审批策略），
+    # `--sandbox`/`--full-auto`/`--dangerously-bypass-approvals-and-sandbox` 直接破隔离/审批。
+    # 这些只禁 custom_args 透传；Driver 自身受控使用 `-c` 注入 thinking_level 不受影响
+    # （build_command 在 filter 之后追加）。
+    extra_arg_denylist = frozenset(
+        {
+            "-c",
+            "--config",
+            "--sandbox",
+            "-s",
+            "--full-auto",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--ask-for-approval",
+            "-a",
+        }
+    )
 
     def capabilities(self) -> RuntimeCapability:
         return RuntimeCapability(

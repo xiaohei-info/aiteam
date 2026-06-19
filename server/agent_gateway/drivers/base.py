@@ -24,13 +24,19 @@ from shared.contracts.runspec import McpServerConfig
 
 # 全 Driver 通用的 custom_args denylist：禁止透传足以破坏协议族/越权的 flag。
 # 个别 Driver 可在此基础上追加自己的危险 flag（见 `extra_arg_denylist`）。
+# 注意：匹配前 flag 一律 `.lower()` 归一，故此处统一用小写拼写；camelCase 变体
+# （如 `--allowedTools`）会被归一拦住，不会绕过。
 _COMMON_ARG_DENYLIST: frozenset[str] = frozenset(
     {
         "--mcp-config",  # 能力注入只能由 Driver 经 mcp_config 收口，不许 custom_args 旁路
         "--mcp-server",
+        "--add-dir",  # 突破工作目录隔离（§13 硬约束）：禁止经 custom_args 放开新目录
         "--dangerously-skip-permissions",  # 越权：绕过工具权限确认
-        "--allowedtools",
+        "--allowedtools",  # 归一后命中 --allowedTools / --allowed-tools 等变体
+        "--allowed-tools",
         "--disallowedtools",
+        "--disallowed-tools",
+        "--permission-mode",  # 越权：改写工具权限收口
         "--system-prompt",  # persona 只能经 system_prompt 字段，不许 custom_args 覆盖
         "--append-system-prompt",
         "--resume",  # 续接只能经 resume_session_id 字段
@@ -56,20 +62,29 @@ class _BaseDriver(Driver):
     # ---- custom_args 安全过滤（§7.5.4 规则 4）----
 
     def filter_custom_args(self, custom_args: Iterable[str]) -> list[str]:
-        """剔除 denylist 命中的危险 flag（含其紧随的取值），其余原样透传。"""
-        denied = _COMMON_ARG_DENYLIST | self.extra_arg_denylist
+        """剔除 denylist 命中的危险 flag（含其紧随的取值），其余原样透传。
+
+        匹配大小写不敏感（flag 先 `.lower()` 归一，挡 camelCase 绕过）。被拦的
+        boolean flag **不能无脑吞掉下一 token**：仅当下一 token 不以 `-` 开头时才视为
+        它的取值并一并吞掉；否则那是另一个独立 flag，必须保留（否则反而破坏协议）。
+        """
+        denied = _COMMON_ARG_DENYLIST | {a.lower() for a in self.extra_arg_denylist}
+        args = list(custom_args)
         out: list[str] = []
-        skip_value = False
-        for arg in custom_args:
-            if skip_value:
-                skip_value = False
-                continue
-            flag = arg.split("=", 1)[0]
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            flag = arg.split("=", 1)[0].lower()
             if flag in denied:
-                # `--flag value`（无 =）时一并吞掉其取值，避免取值漂成位置参数。
-                skip_value = "=" not in arg
+                # `--flag=value` 自带取值，丢 flag 即可。`--flag value`（无 =）才需看下一 token：
+                # 下一 token 不以 `-` 开头 → 是取值，连带吞掉；以 `-` 开头 → 是另一个 flag，保留。
+                if "=" not in arg and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                    i += 2
+                else:
+                    i += 1
                 continue
             out.append(arg)
+            i += 1
         return out
 
     # ---- 事件归一（统一包装，子类只给净荷）----

@@ -16,6 +16,8 @@ from .base import _BaseDriver, materialize_mcp_config
 class OpenClawJsonStreamDriver(_BaseDriver):
     runtime_name = "openclaw"
     cli_path = "openclaw"
+    # OpenClaw 特有越权/破隔离 flag：禁经 custom_args 透传。
+    extra_arg_denylist = frozenset({"--config", "--no-sandbox", "--yolo"})
 
     def capabilities(self) -> RuntimeCapability:
         return RuntimeCapability(

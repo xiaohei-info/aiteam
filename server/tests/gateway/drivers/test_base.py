@@ -54,6 +54,47 @@ def test_filter_custom_args_honors_extra_denylist():
     assert _D().filter_custom_args(["--brand-danger", "x", "--fine"]) == ["--fine"]
 
 
+# ---- 负面/越权用例（评审 C1/C2/I1 回归）----
+
+def test_denied_boolean_flag_does_not_swallow_following_flag():
+    """C1 回归：被拦的 boolean flag 后紧跟另一个 flag 时，不得吞掉它。"""
+    d = _Probe()
+    # --resume 是 boolean（取值经 resume_session_id 字段），后面 --model x 必须存活。
+    assert d.filter_custom_args(["--resume", "--model", "x"]) == ["--model", "x"]
+    # 多个被拦 flag 连排：逐个只丢自己。
+    assert d.filter_custom_args(["--resume", "--print", "--model", "y"]) == ["--model", "y"]
+
+
+def test_denied_flag_with_space_value_swallows_only_real_value():
+    """C1 边界：`--flag value`（value 不以 - 开头）才连带吞值。"""
+    d = _Probe()
+    assert d.filter_custom_args(["--mcp-config", "/evil.json", "--ok"]) == ["--ok"]
+
+
+def test_denylist_is_case_insensitive_blocks_camelcase():
+    """C2 回归：camelCase / 大小写变体不得绕过 denylist。"""
+    d = _Probe()
+    assert d.filter_custom_args(["--allowedTools", "Bash"]) == []
+    assert d.filter_custom_args(["--disallowedTools", "Read"]) == []
+    assert d.filter_custom_args(["--AllowedTools=Bash"]) == []
+    assert d.filter_custom_args(["--Permission-Mode", "acceptEdits"]) == []
+
+
+def test_add_dir_blocked_breaks_no_workdir_isolation():
+    """I1 回归：--add-dir 突破工作目录隔离（§13），一律拦。"""
+    d = _Probe()
+    assert d.filter_custom_args(["--add-dir", "/etc", "--keep"]) == ["--keep"]
+
+
+def test_extra_denylist_also_case_insensitive():
+    class _D(_Probe):
+        extra_arg_denylist = frozenset({"-c", "--no-sandbox"})
+
+    d = _D()
+    assert d.filter_custom_args(["-c", "sandbox=danger", "--keep"]) == ["--keep"]
+    assert d.filter_custom_args(["--No-Sandbox", "--keep"]) == ["--keep"]
+
+
 def test_parse_event_wraps_with_seq_and_source():
     d = _Probe()
     e1 = d.parse_event({"type": "say", "text": "a", "run_id": "r1"})

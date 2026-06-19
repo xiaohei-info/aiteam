@@ -56,6 +56,37 @@ def test_all_drivers_filter_capability_bypass_in_custom_args():
         assert "/evil.json" not in cmd, cls.runtime_name
 
 
+def test_all_drivers_block_workdir_escape_and_permission_bypass():
+    """红线（§13）：custom_args 不得突破工作目录隔离 / 绕过工具权限收口。"""
+    escalations = ["--add-dir", "/etc", "--dangerously-skip-permissions", "--allowedTools", "X"]
+    for cls in ALL_DRIVERS:
+        cmd = cls().build_command(RunSpec(custom_args=escalations))
+        for danger in ("--add-dir", "/etc", "--dangerously-skip-permissions", "--allowedTools"):
+            assert danger not in cmd, (cls.runtime_name, danger)
+
+
+def test_codex_blocks_arbitrary_config_override_via_custom_args():
+    """I1：Codex `-c` 任意配置覆盖（含 sandbox/审批）禁止经 custom_args 透传。"""
+    d = get_driver("codex")
+    cmd = d.build_command(RunSpec(custom_args=["-c", "sandbox_mode=danger-full-access", "--keep"]))
+    assert "sandbox_mode=danger-full-access" not in cmd
+    assert "--keep" in cmd
+
+
+def test_codex_driver_still_injects_thinking_level_via_dash_c():
+    """边界：denylist 只拦 custom_args；Driver 自身受控用 -c 注入 thinking_level 不受影响。"""
+    d = get_driver("codex")
+    cmd = d.build_command(RunSpec(thinking_level="high"))
+    assert "-c" in cmd and "model_reasoning_effort=high" in cmd
+
+
+def test_denied_boolean_flag_in_build_command_keeps_next_flag():
+    """C1 端到端：resume 不支持/受控的 Driver 透传 custom_args 时不吞掉紧随合法 flag。"""
+    d = get_driver("claude_code")
+    cmd = d.build_command(RunSpec(custom_args=["--resume", "--foo", "bar"]))
+    assert "--foo" in cmd and "bar" in cmd  # --resume 被拦，--foo bar 必须存活
+
+
 def test_runtime_event_type_is_contract_type():
     d = get_driver("claude_code")
     ev = d.parse_event({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}, "run_id": "r"})
