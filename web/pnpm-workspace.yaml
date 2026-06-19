@@ -4,5 +4,8 @@ packages:
   - "manager"
   - "agent"
 
-onlyBuiltDependencies:
-  - esbuild
+# esbuild 的 postinstall（装平台原生二进制）本仓用不到：build 走 tsc、测试走 vitest
+# （vitest 自带 esbuild 运行时）。显式标记不构建其脚本（false），避免 pnpm 因「未批准的
+# 依赖构建脚本」（ERR_PNPM_IGNORED_BUILDS）硬中断 install，并消除交互式 approve 提示。
+allowBuilds:
+  esbuild: false
