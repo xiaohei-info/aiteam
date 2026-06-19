@@ -12,6 +12,7 @@ from shared.contracts.envelope import Envelope
 
 from .routes_catalog import router as catalog_router
 from .routes_enterprise import router as enterprise_router
+from .routes_rollup import router as rollup_router
 
 # ⚠️ 骨架期用 DevTokenService（仅 dev/测试）；生产替换为非对称验签（公钥/JWKS，03 §9.5/D23）。
 _verifier = DevTokenService()
@@ -32,3 +33,4 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 app = create_app(load_settings("operation"), router)
 app.include_router(enterprise_router)
 app.include_router(catalog_router)
+app.include_router(rollup_router)

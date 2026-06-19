@@ -1,0 +1,68 @@
+"""运营端跨企业 rollup 北向 API 边界 schema（04 §6.5，D13）。
+
+只声明本端 HTTP 请求/响应形状。**聚合单元一律复用 shared.contracts.summary.UsageSummary**，
+禁在此重定义计量字段（task 红线 + contracts §1 防跑偏铁律）。
+
+红线（04 §6.5 / D13）：Operator 只消费**脱敏聚合摘要**——无会话内容、无 token 明细、
+不下钻租户内部明细。本 schema 的请求/响应只承载企业级与跨企业级聚合数字。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from shared.contracts.summary import UsageSummary
+
+
+class EnterpriseRollupUpload(BaseModel):
+    """Manager → Operator 企业级用量汇总上报（窄通信，云侧服务调用）。
+
+    Manager 已在企业端把成员级聚合（enterprise_usage_rollup）卷成企业级聚合后上报；
+    Operator 落 cross_enterprise_usage_rollup 并跨企业再聚合。按 summary_id 幂等去重。
+    payload 复用 UsageSummary：脱敏聚合单元，含 tenant_id，绝不含会话内容。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str = Field(description="上报企业（Operator 侧企业账号 id）")
+    tenant_id: str = Field(description="对应 tenant，与 UsageSummary.tenant_id 一致")
+    summaries: list[UsageSummary] = Field(
+        default_factory=list, description="企业级脱敏聚合摘要列表（按员工/时间聚合）"
+    )
+
+
+class EnterpriseUsageRollup(BaseModel):
+    """单企业聚合视图（平台看板的一行）。只含脱敏聚合数字，不下钻成员/会话明细。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str
+    tenant_id: str
+    run_count: int = 0
+    token_total: int = 0
+    cost_total: Decimal = Field(default=Decimal("0"))
+    error_count: int = 0
+    duration_seconds_total: int = 0
+    summary_count: int = Field(default=0, description="已聚合的脱敏摘要条数")
+    window_start: datetime | None = Field(default=None, description="覆盖窗口最早起点")
+    window_end: datetime | None = Field(default=None, description="覆盖窗口最晚终点")
+
+
+class CrossEnterpriseBoard(BaseModel):
+    """跨企业平台看板（cross_enterprise_usage_rollup 视图）。
+
+    顶部为全平台合计，下挂各企业聚合行。全程脱敏聚合，无租户内部明细下钻（D13 红线）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_count: int = 0
+    run_count: int = 0
+    token_total: int = 0
+    cost_total: Decimal = Field(default=Decimal("0"))
+    error_count: int = 0
+    duration_seconds_total: int = 0
+    enterprises: list[EnterpriseUsageRollup] = Field(default_factory=list)
