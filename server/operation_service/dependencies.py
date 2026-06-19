@@ -13,6 +13,8 @@ from shared.service_client import ServiceClient
 
 from .manager_gateway import HttpManagerGateway, ManagerGateway
 from .repository import EnterpriseRepository
+from .rollup_repository import CrossEnterpriseRollupRepository
+from .rollup_service import RollupService
 from .service import ProvisioningService
 
 
@@ -20,6 +22,12 @@ from .service import ProvisioningService
 def get_repository() -> EnterpriseRepository:
     """单例企业账号仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
     return EnterpriseRepository()
+
+
+@lru_cache(maxsize=1)
+def get_rollup_repository() -> CrossEnterpriseRollupRepository:
+    """单例跨企业 rollup 仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
+    return CrossEnterpriseRollupRepository()
 
 
 def get_manager_gateway() -> ManagerGateway:
@@ -34,3 +42,7 @@ def get_manager_gateway() -> ManagerGateway:
 
 def get_provisioning_service() -> ProvisioningService:
     return ProvisioningService(get_repository(), get_manager_gateway())
+
+
+def get_rollup_service() -> RollupService:
+    return RollupService(get_rollup_repository())
