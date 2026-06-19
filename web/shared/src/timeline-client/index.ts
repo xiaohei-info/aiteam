@@ -10,14 +10,22 @@ import type { BusinessTimelineEvent } from "../contracts/events.js";
 
 export type { BusinessTimelineEvent };
 
-/** 历史分页拉取器：给定 conversation_id 与起始 cursor，返回一页事件与下一个 cursor。 */
+/**
+ * 历史分页拉取器：按方向取一页归一事件。两个方向互斥：
+ * - `afterCursor`（catchUp / 向后拉新）：返回 cursor 严格大于该值的事件；
+ * - `beforeCursor`（loadOlder / 向前翻旧）：返回 cursor 严格小于该值的事件。
+ *
+ * 返回 `hasMore` 由数据源给出（该方向是否还有更多页），调用方据此翻页，
+ * **不靠「本页新增数」反推**——否则整页都是已见事件时会误判到底。
+ */
 export interface TimelineHistoryFetcher {
   (params: {
     conversationId: string;
-    afterCursor: number | null;
+    afterCursor?: number | null;
+    beforeCursor?: number | null;
     limit: number;
     signal?: AbortSignal;
-  }): Promise<{ events: BusinessTimelineEvent[]; nextCursor: number | null }>;
+  }): Promise<{ events: BusinessTimelineEvent[]; hasMore: boolean }>;
 }
 
 /** 实时订阅源（SSE/WebSocket 由各端封装）：推送已归一的业务事件。 */
@@ -96,13 +104,13 @@ export class TimelineStore {
     const oldest = this.events.length > 0 ? this.events[0]!.cursor : null;
     const result = await this.history({
       conversationId: this.conversationId,
-      afterCursor: null,
+      beforeCursor: oldest,
       limit: this.pageSize,
       ...(signal ? { signal } : {}),
     });
-    // 约定：history 返回 cursor 升序；oldest 之前没有更多则 nextCursor 为 null。
-    const added = this.ingestMany(result.events.filter((e) => oldest === null || e.cursor < oldest));
-    this.hasMoreHistory = result.nextCursor !== null && added > 0;
+    // 是否还有更早历史以数据源 hasMore 为准；ingest 自带 cursor 去重，无需再按 oldest 过滤。
+    const added = this.ingestMany(result.events);
+    this.hasMoreHistory = result.hasMore;
     return added;
   }
 

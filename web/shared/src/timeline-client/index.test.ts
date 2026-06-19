@@ -46,7 +46,7 @@ describe("TimelineStore ordering & dedup", () => {
   });
 
   it("catchUp pulls history after highWater", async () => {
-    const history = vi.fn(async () => ({ events: [evt(2), evt(3)], nextCursor: null }));
+    const history = vi.fn(async () => ({ events: [evt(2), evt(3)], hasMore: false }));
     const store = new TimelineStore({ conversationId: "c1", history });
     store.ingest(evt(1));
     const added = await store.catchUp();
@@ -55,6 +55,38 @@ describe("TimelineStore ordering & dedup", () => {
       expect.objectContaining({ conversationId: "c1", afterCursor: 1 }),
     );
     expect(store.snapshot.map((e) => e.cursor)).toEqual([1, 2, 3]);
+  });
+
+  it("loadOlder pages backward across multiple pages via beforeCursor + source hasMore", async () => {
+    // 数据源：cursor 1..5 的更早历史，pageSize=2，按 beforeCursor 向前翻。
+    const all = [evt(1), evt(2), evt(3), evt(4), evt(5)];
+    const history = vi.fn(
+      async (params: { beforeCursor?: number | null; limit: number }) => {
+        const before = params.beforeCursor ?? Infinity;
+        const older = all.filter((e) => e.cursor < before).sort((a, b) => b.cursor - a.cursor);
+        const page = older.slice(0, params.limit).sort((a, b) => a.cursor - b.cursor);
+        const hasMore = older.length > params.limit;
+        return { events: page, hasMore };
+      },
+    );
+    const store = new TimelineStore({ conversationId: "c1", history, pageSize: 2 });
+    // 先有最新一页（cursor 4,5）在场，向前回溯更早历史。
+    store.ingest(evt(5));
+    store.ingest(evt(4));
+
+    const first = await store.loadOlder(); // 取 <4 的最新两条 → 2,3
+    expect(first).toBe(2);
+    expect(history).toHaveBeenLastCalledWith(expect.objectContaining({ beforeCursor: 4 }));
+    expect(store.canLoadMore).toBe(true); // 源说还有更早（cursor 1）
+
+    const second = await store.loadOlder(); // 取 <2 的 → 1
+    expect(second).toBe(1);
+    expect(history).toHaveBeenLastCalledWith(expect.objectContaining({ beforeCursor: 2 }));
+    expect(store.canLoadMore).toBe(false); // 源说到底
+
+    expect(store.snapshot.map((e) => e.cursor)).toEqual([1, 2, 3, 4, 5]);
+    const third = await store.loadOlder(); // 已到底，不再请求
+    expect(third).toBe(0);
   });
 
   it("live subscription feeds ingest via store.start", () => {
