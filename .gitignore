@@ -12,3 +12,6 @@
 .DS_Store
 /.venv/
 __pycache__/
+/scripts/orchestrator/.tick-state.json
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock

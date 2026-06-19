@@ -1,0 +1,115 @@
+---
+name: parallel-dev-orchestration
+description: 把一份设计/plan 拆成"依赖相连的 GitHub issue DAG"，并用 orchestrate-tick 中轴命令驱动多 Agent 并行开发到收敛闭环。当需要把中大型多模块/多服务工程分解为可并行、可追踪、防跑偏的工单，并让多个 coding agent 协同推进时使用。
+---
+
+# 多 Agent 并行开发编排
+
+把"**契约先行方法论 + GitHub issue DAG + orchestrate-tick 命令 + 多 coding agent**"合成一套可复现、可复用的闭环机制：用结构（契约/CI/评审）而非"提醒"来防跑偏，用依赖驱动的 issue 图最大化并行，用一条中轴命令让编排 Agent 低成本掌控全局进度。
+
+> 完整"道"（为什么这么做）见 `docs/方法论/2026-06-19-契约先行的并行开发拆解方法论.md`。本 skill 是"术"——可直接照做的操作流程。
+
+## 何时用 / 不用
+
+- **用**：跨模块/跨服务、有清晰边界、有设计文档可依、需要多人或多 Agent 并行的中大型工程。
+- **不用**：单人单模块小改、契约未稳的探索原型（先用原型把契约探明再进本流程）。
+
+## 前提
+
+- `gh ≥ 2.94`（原生 issue 依赖命令 `--blocked-by`/`--add-sub-issue` 与 `blockedBy` json）；`gh auth status` 已登录、有 `repo` scope。
+- 一份冻结的设计/plan 作为**单一事实源**；散在多处的口径先收敛去重。
+
+## 三阶段流程
+
+### 阶段 A — 打地基（Wave 0，串行，冻结后才并行）
+
+按方法论 §3 产出"地基四件套"并用测试冻结：**共享契约（代码，下游只 import）+ 共享底座 + 可运行骨架 + CI 闸门/对端假件**。
+判据：能写出每张工单卡、且卡里"必消费契约"已是可 import 的代码、"验收"已有（哪怕 skip 的）测试位——做不到就别扇出。
+
+### 阶段 B — 把 plan 拆成 issue DAG（方法论 §6）
+
+**1. 两级拆解**
+- 第一级（你拆，扇出前）= **卡级 issue**：粒度 = 并行单元（track 内小地基 + 各业务模块），半天~两天可收口。数十张，别拆成数百微任务。
+- 第二级（领卡者拆，领取后）= **sub-issue**：卡偏大时由有上下文的执行者用 `--parent` 拆 2–5 个。微拆交给有上下文的人，否则猜错=漂移源。
+
+**2. 依赖三原则**
+- 只把"真前置"设为硬依赖 `blocked-by`（小地基→该 track 全部业务卡；有先后的业务卡之间；集成验收卡→全部）。
+- 软依赖只写进"参考锚点"作提示，**不设硬边**（每条假硬边都减少并行度）。
+- 卡内分解用父子（`--parent`），卡间先后用依赖（`--blocked-by`）；别混。
+
+**3. issue body 锚定结构**（body 是执行者唯一逐字读的东西，显著性决定遵守率）：
+
+```
+## 工单卡 · <KEY> <名>
+> 🎯 目标：<一句话交付物>
+| 波次/track | 唯一口径文档(+节号) | 必守裁决 | 落点目录 |   ← 指针，不复制正文
+### 🚧 范围边界(非目标)   ← 防 scope 蔓延，头号跑偏源，必写
+### 必消费契约(禁重定义)  ← 接口层防线
+### 📚 参考锚点           ← 契约源/假件/只读旧实现参考/API规范/横切/裁决原文 的位置
+### 依赖                 ← 指向原生 blocked-by
+### 🚫 红线              ← 该模块最易踩的硬边界
+### ✅ 验收(可验证)       ← 测试/接口/parity 证据，勾选项
+### 🧪 测试落点
+### 🤖 执行协议          ← 见下
+```
+
+**4. 执行协议**（把"怎么干"也钉进卡里，双通道：写进 body + 作为派发 prompt 模板）：
+
+```
+1 认领: gh issue edit <n> --add-assignee @me；先确认 blocked-by 全 closed
+2 读全: 打开唯一口径文档全文 + 全局约束(CLAUDE.md/AGENTS.md)；冲突以设计文档为准
+3 拆解(按需): 小则直接做；大则 gh issue create --parent <n> 拆 sub-issue
+4 分支: 从<集成分支>切(⚠️不是默认主分支)，建议 git worktree 隔离
+5 实现: 只 import 共享契约；守红线与非目标
+6 验证: 勾完验收；证据贴 issue 评论
+7 提交: gh pr create --base <集成分支>(⚠️绝不主干)；过 CI + 独立 reviewer agent
+8 关闭: 合并后关卡 → 下游自动解锁
+```
+
+建 issue 示例：
+```bash
+gh issue create -R <repo> -t "[M1] 成员/授权" -F body.md -l wave1,track:M --blocked-by <M0号>
+gh issue edit <n> --add-blocked-by <up>   # 后补硬依赖
+gh issue create -R <repo> -t "[M0.1] 子任务" --parent <M0号> -l wave1,track:M -F sub.md
+```
+
+### 阶段 C — 用 orchestrate-tick 驱动闭环
+
+命令在 `scripts/orchestrator/orchestrate.py`（详见其 README）。**机械观测/等待归命令，判断归编排 Agent。**
+
+编排 Agent 的主循环：
+
+```
+loop:
+  rc = orchestrate.py tick -R <repo> --timeout 600      # 阻塞，cheap，不烧 token
+  DISPATCH(25):       从 digest 挑 ready(无 open blocker) → 原子认领(assign+label)
+                      → 起 worktree 隔离的 coding agent，prompt = 该 issue 的执行协议 + issue 号
+  NEEDS_DECISION(20): 看 failures/deadlock → 重跑 / 编辑 issue body / --add-blocked-by 补依赖 / --parent 拆子卡
+  CHANGED(0):         看 transitions，按需调整优先级
+  TIMEOUT(10):        直接再 tick（可由极薄 wrapper 自动做，不惊动 Agent 推理）
+  ALL_DONE(30):       收尾退出
+```
+
+随时"看全局进度"：`orchestrate.py status -R <repo>`（分 track/wave 进度、frontier、失败、transitions、关键路径、死锁/完成判定）。
+
+**派活铁律**（防跑偏）：派出的 coding agent 必须按 issue 执行协议——只 import 共享契约、守红线/非目标、从集成分支切、PR base 指向集成分支、过 CI + 独立 reviewer 才允许关闭。**关闭前必须过闸**（这是不做"全自动无人闭环"的关键，保留验证兜底）。
+
+## 防跑偏三层（方法论 §2/§7）
+
+接口层=契约即代码（偏不了）；边界层=CI 闸门（偏了红灯）；语义层=独立 reviewer（兜底）。CI 抓接口/边界漂移，评审抓语义漂移。
+
+## 移植到新项目
+
+```
+[ ] 复制 docs/方法论/...契约先行...md（道）与 scripts/orchestrator/（术，命令 + 测试）
+[ ] 确认 gh ≥2.94；建 label：wave1/wave2 + track:<X> + failed
+[ ] 阶段 A 冻结地基四件套
+[ ] 阶段 B 按本 skill 把 plan 拆成卡级 issue + blocked-by DAG + 锚定 body + 执行协议
+[ ] 阶段 C 编排 Agent 跑 orchestrate-tick 主循环到 ALL_DONE
+```
+
+## 参考
+
+- 方法论：`docs/方法论/2026-06-19-契约先行的并行开发拆解方法论.md`
+- 命令与退出码/digest：`scripts/orchestrator/README.md`、`scripts/orchestrator/orchestrate.py`
+- 实例：本仓 GitHub issues（`[KEY]` + wave/track label + blocked-by DAG）
