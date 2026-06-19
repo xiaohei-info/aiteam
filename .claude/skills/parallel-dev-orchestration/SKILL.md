@@ -115,6 +115,7 @@ orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** m
 3 拆解(按需)：偏大则 `gh issue create --parent <n>` 拆 2–5 个 sub-issue，再逐个做
 4 测试先行：按「验收」写/补测试，再最小实现；只 import 共享契约，守红线与非目标
 5 反馈闸(每轮之间跑)：跑本 issue「测试落点」里的命令(如需建 venv，放在被扫描代码树之外，免得边界扫描误扫依赖包) → 红则修、循环；退出条件=绿；迭代上限=<N>；到顶仍红→停下报告，不强推
+  ⚠️**完成判定必须装全依赖 + 跑全量 not-integration 套件，绝不只跑本卡子集**(真实教训：worker 在新 worktree 只装本模块依赖、只跑本模块用例，缺 fastapi 致 7 个跨模块测试 collection error 被静默跳过，误判"61 passed 已完成")。子集绿只是中途信号；交活前必须 `装全 requirements → pytest -m 'not integration'` 全绿。
 6 PR：`gh pr create --base <集成分支>`（⚠️绝不主干）
 7 CI 绿：轮询 CI(`gh run ...`)，修到绿或到上限
 8 独立评审：交给"非实现者"的全新 agent 盲审(只看 diff×口径文档×红线，不看实现理由)；改到过
