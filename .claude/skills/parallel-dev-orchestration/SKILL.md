@@ -18,6 +18,7 @@ description: 把一份设计/plan 拆成"依赖相连的 GitHub issue DAG"，并
 
 - `gh ≥ 2.94`（原生 issue 依赖命令 `--blocked-by`/`--add-sub-issue` 与 `blockedBy` json）；`gh auth status` 已登录、有 `repo` scope。
 - 一份冻结的设计/plan 作为**单一事实源**；散在多处的口径先收敛去重。
+- **Superpowers 可选**：装了走捷径、没装按基线——本 skill 不强依赖任何插件（见「worker dispatch prompt」）。
 
 ## 三阶段流程
 
@@ -83,7 +84,7 @@ gh issue create -R <repo> -t "[M0.1] 子任务" --parent <M0号> -l wave1,track:
 loop:
   rc = orchestrate.py tick -R <repo> --timeout 600      # 阻塞，cheap，不烧 token
   DISPATCH(25):       从 digest 挑 ready(无 open blocker) → 原子认领(assign+label)
-                      → 起 worktree 隔离的 coding agent，prompt = 该 issue 的执行协议 + issue 号
+                      → 起 worktree 隔离的 coding agent，prompt = 下文「worker dispatch prompt」+ issue 号
   NEEDS_DECISION(20): 看 failures/deadlock → 重跑 / 编辑 issue body / --add-blocked-by 补依赖 / --parent 拆子卡
   CHANGED(0):         看 transitions，按需调整优先级
   TIMEOUT(10):        直接再 tick（可由极薄 wrapper 自动做，不惊动 Agent 推理）
@@ -92,7 +93,44 @@ loop:
 
 随时"看全局进度"：`orchestrate.py status -R <repo>`（分 track/wave 进度、frontier、失败、transitions、关键路径、死锁/完成判定）。
 
-**派活铁律**（防跑偏）：派出的 coding agent 必须按 issue 执行协议——只 import 共享契约、守红线/非目标、从集成分支切、PR base 指向集成分支、过 CI + 独立 reviewer 才允许关闭。**关闭前必须过闸**（这是不做"全自动无人闭环"的关键，保留验证兜底）。
+**派活铁律**（防跑偏）：派出的 coding agent 必须按下文「worker dispatch prompt」干活——只 import 共享契约、守红线/非目标、从集成分支切、PR base 指向集成分支、过 CI + 独立评审才允许关闭。**关闭前必须过闸**（这是不做"全自动无人闭环"的关键，保留验证兜底）。
+
+### worker dispatch prompt（派发时注入 worker，不进 issue body）
+
+orchestrator 收到 `DISPATCH` 起 worker 时，把下面这份**基线 loop** materialize 进 worker 的 prompt（worker 可能是别的 coding agent、没装本 skill，所以正文必须随 prompt 给到它），末尾附 issue 指针。**loop 正文只在本 skill 留一份，绝不复制进 25 张 issue body**；`<集成分支>`/`<N>`/测试命令由 orchestrator 从 issue body 与项目配置代入。
+
+**第一步永远是能力检测**：worker 先判断自己有没有 Superpowers——
+- **有** → 直接用对应 Superpowers skill（见映射表，battle-tested、更省事）；
+- **没有** → 严格照下面基线自然语言流程执行，**目标完全一致**。
+
+**基线 worker loop（工具无关，任何 coding agent 可独立执行）**
+```
+目标：把本 issue 的「验收」全部做到绿；做不到就如实报告，禁止假装完成。
+1 认领+读全：读 issue body(目标/契约/红线/验收) + 它指向的唯一口径文档全文 + 仓库 CLAUDE.md/AGENTS.md；冲突一律以设计文档为准
+2 隔离：从 <集成分支> 切工作分支/worktree（⚠️不是默认主干）
+3 拆解(按需)：偏大则 `gh issue create --parent <n>` 拆 2–5 个 sub-issue，再逐个做
+4 测试先行：按「验收」写/补测试，再最小实现；只 import 共享契约，守红线与非目标
+5 反馈闸(每轮之间跑)：本 issue「测试落点」里的命令 → 红则修、循环；退出条件=绿；迭代上限=<N>；到顶仍红→停下报告，不强推
+6 PR：`gh pr create --base <集成分支>`（⚠️绝不主干）
+7 CI 绿：轮询 CI(`gh run ...`)，修到绿或到上限
+8 独立评审：交给"非实现者"的全新 agent 盲审(只看 diff×口径文档×红线，不看实现理由)；改到过
+9 关闭：合并后关本卡 → 其下游自动解锁
+```
+
+**基线 verifier gate（盲审，工具无关）**：全新 agent（非实现者），独立跑 build/lint/test + 对照 diff×唯一口径文档×CLAUDE.md，**不看实现理由**，不过或语义漂移即打回。
+
+**Superpowers 映射（检测到才用，意图等价，不重复）**
+
+| 基线步骤 | 对应 Superpowers skill |
+|---|---|
+| 2 隔离 | `using-git-worktrees` |
+| 4 测试先行 | `test-driven-development` |
+| 5 反馈闸 / 完成判定 | `verification-before-completion` |
+| 6–7 PR / 合并 | `finishing-a-development-branch` |
+| 8 独立评审 | `requesting-code-review` + `code-reviewer` agent（worker 侧 `receiving-code-review`） |
+| 3 拆子卡 / 并行 | `subagent-driven-development` / `dispatching-parallel-agents` |
+
+> 基线是唯一源，映射只是"有 Superpowers 就替换对应步骤"。没装也能按基线达成原目标，装了走捷径——**两者不重复、不强依赖**。
 
 ## 防跑偏三层（方法论 §2/§7）
 
@@ -103,6 +141,7 @@ loop:
 ```
 [ ] 复制 docs/方法论/...契约先行...md（道）与 scripts/orchestrator/（术，命令 + 测试）
 [ ] 确认 gh ≥2.94；建 label：wave1/wave2 + track:<X> + failed
+[ ] Superpowers 可选：装了 worker 走捷径，没装按基线 loop——无需为此 skill 额外安装任何插件
 [ ] 阶段 A 冻结地基四件套
 [ ] 阶段 B 按本 skill 把 plan 拆成卡级 issue + blocked-by DAG + 锚定 body + 执行协议
 [ ] 阶段 C 编排 Agent 跑 orchestrate-tick 主循环到 ALL_DONE
