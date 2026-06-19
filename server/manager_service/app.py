@@ -10,7 +10,9 @@ from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
-# ⚠️ 骨架期 DevTokenService；生产 Manager 按 tenant 持私钥签发、用公钥验签（03 §9.5/D23）。
+from .routes_auth import router as auth_router
+
+# ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
 _verifier = DevTokenService()
 
 router = APIRouter(prefix="/api/manager", tags=["manager"])
@@ -27,3 +29,5 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 app = create_app(load_settings("manager"), router)
+# 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
+app.include_router(auth_router)

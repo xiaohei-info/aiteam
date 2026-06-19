@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -87,9 +88,111 @@ class InMemoryTenantRouter(TenantRouter):
         return InMemoryTenantSession(self._store, ctx.tenant_id)
 
 
-def apply_migrations(db_url: str | None) -> None:
-    """schema migration 首次连接自动应用的占位（04 §6.4：建表脚本，非数据迁移）。
+# ---- 真实 PostgreSQL + RLS 实现（04 §6.1.1，D20/D22）----
+#
+# 隔离铁律落地：
+#   - 应用连接用受约束角色 app_rw（非 superuser、非 BYPASSRLS、非表 owner），由迁移创建。
+#   - 每事务进入前 SET LOCAL ROLE app_rw + SET LOCAL app.tenant_id = ctx.tenant_id。
+#   - tenant_id 只从 TenantContext 取，session 不接受调用方手写 tenant 过滤（D22）。
+#   - SET LOCAL 是事务级，事务结束自动失效，连接池复用无残留上下文。
+#
+# psycopg 延迟导入：默认 `-m 'not integration'` 门不需要 PG，故 import 进函数/方法内，
+# 保证 `import shared.db` 在无 psycopg 环境（纯契约/单测）下仍可用。
 
-    真实实现按端读取各自 migrations 目录并幂等应用；骨架期 no-op。
+_APP_ROLE = "app_rw"
+
+
+class PgTenantSession(TenantDataSession):
+    """租户作用域的 PG 事务会话（04 §6.1.1）。
+
+    用法（上下文管理器，事务边界 = 隔离边界）：
+        with router.session(ctx) as s:
+            s.execute("SELECT ...", params)
+    进入即 BEGIN + SET LOCAL ROLE app_rw + SET LOCAL app.tenant_id；正常退出 COMMIT，异常 ROLLBACK。
     """
+
+    def __init__(self, dsn: str, tenant_id: str):
+        self._dsn = dsn
+        self._tenant_id = tenant_id
+        self._conn = None  # type: ignore[var-annotated]
+        self._cur = None  # type: ignore[var-annotated]
+
+    @property
+    def tenant_id(self) -> str:
+        return self._tenant_id
+
+    def __enter__(self) -> "PgTenantSession":
+        import psycopg
+
+        self._conn = psycopg.connect(self._dsn, autocommit=False)
+        self._cur = self._conn.cursor()
+        # 降权到受约束角色 + 绑定租户（均为事务级，配连接池安全）。
+        # set_config(..., is_local=true) ≡ SET LOCAL，但支持参数绑定（避免 SQL 注入 / 引号问题）。
+        self._cur.execute(f"SET LOCAL ROLE {_APP_ROLE}")
+        self._cur.execute("SELECT set_config('app.tenant_id', %s, true)", (self._tenant_id,))
+        return self
+
+    def execute(self, sql: str, params: tuple | list | None = None):
+        """在租户事务内执行 SQL，返回 cursor（可 .fetchone()/.fetchall()）。"""
+        self._cur.execute(sql, params)
+        return self._cur
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self._cur.close()
+            self._conn.close()
+
+
+class PgTenantRouter(TenantRouter):
+    """按隔离档位把 TenantContext 路由到 PG 会话（04 §6.1.1，D20）。
+
+    L1（默认）：共享库共享表 + RLS。L2/L3 演进时按 isolation_policy 路由到不同 schema/库，
+    业务代码不感知差异（只拿到一个 TenantDataSession）。
+    """
+
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def isolation_level(self, tenant_id: str) -> IsolationLevel:
+        # M0 默认 L1；L2/L3 路由按 tenant_registry.isolation_level 演进（留详设）。
+        return IsolationLevel.L1_SHARED_RLS
+
+    def session(self, ctx: TenantContext) -> PgTenantSession:
+        return PgTenantSession(self._dsn, ctx.tenant_id)
+
+
+def _migrations_dir() -> str:
+    # manager_service/migrations 与本文件同属 server/ 包根下。
+    here = os.path.dirname(os.path.abspath(__file__))
+    server_root = os.path.dirname(os.path.dirname(here))
+    return os.path.join(server_root, "manager_service", "migrations")
+
+
+def apply_migrations(db_url: str | None) -> None:
+    """首次连接自动应用迁移（04 §6.4：建表脚本，非数据迁移）。幂等。
+
+    无 db_url（骨架/纯契约场景）→ no-op，保持对外契约不破坏。
+    有 db_url → 以连接身份（superuser）按文件名顺序执行 manager_service/migrations/*.sql。
+    迁移负责创建受约束角色 app_rw、租户表与 RLS 策略。
+    """
+    if not db_url:
+        return None
+
+    import psycopg
+
+    mig_dir = _migrations_dir()
+    if not os.path.isdir(mig_dir):
+        return None
+    files = sorted(f for f in os.listdir(mig_dir) if f.endswith(".sql"))
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        for fname in files:
+            with open(os.path.join(mig_dir, fname), encoding="utf-8") as fh:
+                sql = fh.read()
+            with conn.cursor() as cur:
+                cur.execute(sql)
     return None

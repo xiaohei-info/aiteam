@@ -8,8 +8,12 @@
 生产口径（D23）：**非对称签名**——Manager 按 tenant 持私钥签发，Agent 只持公钥/JWKS 验签；
 禁止向用户端下发 HMAC 对称签名密钥。真实 RSA/JWKS + key rotation 留详设（03 §9.5）。
 
-本骨架提供：TokenSigner/TokenVerifier 抽象 + 仅供测试的 DevTokenService + FastAPI 依赖
-（解出 TokenClaims / 构造 TenantContext / authorize 角色校验）。
+本模块提供：
+- TokenSigner/TokenVerifier 抽象。
+- **生产口径** RS256TokenSigner / RS256TokenVerifier（RSA 非对称签名 + JWKS，D23）：
+  Manager 持私钥签发、用户端只持公钥/JWKS 本地无状态验签，含 exp 过期校验。
+- 仅供 dev/测试的 DevTokenService（对称自包含 token，**禁下发用户端**）。
+- FastAPI 依赖（解出 TokenClaims / 构造 TenantContext / authorize 角色校验）。
 """
 
 from __future__ import annotations
@@ -19,6 +23,9 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 
+import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, Request
 
 from shared.contracts.auth import TokenClaims
@@ -72,6 +79,132 @@ class DevTokenService(TokenSigner, TokenVerifier):
         except Exception as exc:  # noqa: BLE001
             raise Unauthorized("undecodable token") from exc
         return TokenClaims(**data)
+
+
+# ---- 生产口径：RS256 非对称签名（D23，03 §9.5）----
+
+_ALG = "RS256"
+
+
+def generate_rsa_keypair(bits: int = 2048) -> tuple[str, str]:
+    """生成 RSA 私钥/公钥（PEM 字符串）。私钥仅控制面持有，公钥/JWKS 下发用户端。
+
+    生产环境密钥应由控制面安全生成/托管并按 tenant 持有；本 helper 供初始化与测试。
+    """
+    key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return private_pem, public_pem
+
+
+def _b64url_uint(value: int) -> str:
+    raw = value.to_bytes((value.bit_length() + 7) // 8 or 1, "big")
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def jwks_from_public_pem(kid: str, public_pem: str) -> dict:
+    """把公钥 PEM 导成 JWKS（仅公开分量）。用户端首登领取后据此本地验签（03 §9.5）。"""
+    pub = serialization.load_pem_public_key(public_pem.encode())
+    numbers = pub.public_numbers()  # type: ignore[attr-defined]
+    return {
+        "keys": [
+            {
+                "kty": "RSA",
+                "use": "sig",
+                "alg": _ALG,
+                "kid": kid,
+                "n": _b64url_uint(numbers.n),
+                "e": _b64url_uint(numbers.e),
+            }
+        ]
+    }
+
+
+class RS256TokenSigner(TokenSigner):
+    """RSA 私钥签发（仅凭据持有端 Manager/Operator 实现，D23）。用户端绝不实例化。"""
+
+    def __init__(self, private_pem: str, *, kid: str):
+        self._private_pem = private_pem
+        self._kid = kid
+
+    @property
+    def kid(self) -> str:
+        return self._kid
+
+    def public_pem(self) -> str:
+        key = serialization.load_pem_private_key(self._private_pem.encode(), password=None)
+        return key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+
+    def jwks(self) -> dict:
+        return jwks_from_public_pem(self._kid, self.public_pem())
+
+    def sign(self, claims: TokenClaims) -> str:
+        return jwt.encode(
+            claims.model_dump(exclude_none=True),
+            self._private_pem,
+            algorithm=_ALG,
+            headers={"kid": self._kid},
+        )
+
+
+class RS256TokenVerifier(TokenVerifier):
+    """本地无状态公钥验签（用户端只持此能力，D23）。含 exp 过期校验。
+
+    多 kid（key rotation）：按 token header.kid 选公钥；未知 kid 一律拒。
+    """
+
+    def __init__(self, public_pems_by_kid: dict[str, str]):
+        if not public_pems_by_kid:
+            raise ValueError("at least one public key required")
+        self._keys = dict(public_pems_by_kid)
+
+    @classmethod
+    def from_public_pems(cls, public_pems_by_kid: dict[str, str]) -> "RS256TokenVerifier":
+        return cls(public_pems_by_kid)
+
+    @classmethod
+    def from_jwks(cls, jwks: dict) -> "RS256TokenVerifier":
+        """从 JWKS 构造验签器（用户端首登领取 JWKS 后用此）。"""
+        pems: dict[str, str] = {}
+        for key in jwks.get("keys", []):
+            algo = jwt.algorithms.RSAAlgorithm  # type: ignore[attr-defined]
+            pub = algo.from_jwk(json.dumps(key))
+            pem = pub.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode()
+            pems[key["kid"]] = pem
+        return cls(pems)
+
+    def verify(self, token: str) -> TokenClaims:
+        try:
+            header = jwt.get_unverified_header(token)
+        except jwt.PyJWTError as exc:
+            raise Unauthorized("malformed token") from exc
+        kid = header.get("kid")
+        public_pem = self._keys.get(kid) if kid else None
+        if public_pem is None:
+            raise Unauthorized("unknown signing key")
+        try:
+            payload = jwt.decode(token, public_pem, algorithms=[_ALG])
+        except jwt.ExpiredSignatureError as exc:
+            raise Unauthorized("token expired") from exc
+        except jwt.PyJWTError as exc:
+            raise Unauthorized("bad signature") from exc
+        try:
+            return TokenClaims(**payload)
+        except Exception as exc:  # noqa: BLE001
+            raise Unauthorized("undecodable token") from exc
 
 
 def _bearer_token(request: Request) -> str:
