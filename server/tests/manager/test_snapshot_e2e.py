@@ -106,6 +106,7 @@ def _member_services(dsn: str, admin_dsn: str):
 def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url, two_tenants):
     from shared.contracts.enums import EnterpriseRole
     from shared.contracts.tenancy import TenantContext
+    from shared.db import PgTenantRouter
     from manager_service.schemas import MemberCreate, MemberGrantCreate
 
     tid_a, tid_b = two_tenants
@@ -179,6 +180,18 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     )
     assert r.status_code == 403
     assert r.headers["content-type"].startswith("application/problem+json")
+
+    # 越权 403 → 落一条 enterprise_audit（05 F16）：actor=越权 member，resource=该专家，不含配置内容。
+    from manager_service.enterprise_audit_repository import build_enterprise_audit_repository
+    audit_repo = build_enterprise_audit_repository(PgTenantRouter(migrated_db))
+    audits = audit_repo.list_all(TenantContext(tenant_id=tid_a, user_id=ungranted.id, roles=["member"]))
+    denied = [a for a in audits if a.action == "snapshot_pull_denied" and a.actor == ungranted.id]
+    assert len(denied) == 1, f"越权应记一条审计，实际 {len(denied)}"
+    assert denied[0].resource_type == "expert"
+    assert denied[0].resource_id == eid
+    # 红线：审计行不含执行配置内容（D13）。
+    assert "专家A" not in (denied[0].detail or "")
+    assert "claude-opus" not in (denied[0].detail or "")
 
     # 跨租户：t-b owner 拉 t-a 的 employee 快照 → RLS 不可见 → 404
     ctx_b = TenantContext(tenant_id=tid_b, user_id=str(uuid.uuid4()), roles=["owner"])

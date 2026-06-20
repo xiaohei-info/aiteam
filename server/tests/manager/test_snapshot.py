@@ -68,6 +68,19 @@ class _FakeMemberService:
         return row
 
 
+class _FakeAuditRecorder:
+    """伪 enterprise_audit 写入口：记录 record() 调用入参，供越权审计断言。"""
+
+    def __init__(self):
+        self.records: list[dict] = []
+
+    def record(self, ctx, *, actor, action, resource_type=None, resource_id=None, detail=None):
+        self.records.append({
+            "tenant_id": ctx.tenant_id, "actor": actor, "action": action,
+            "resource_type": resource_type, "resource_id": resource_id, "detail": detail,
+        })
+
+
 def _ctx(tid: str, roles=None, user_id="u-1") -> TenantContext:
     return TenantContext(tenant_id=tid, user_id=user_id, roles=roles or ["member"])
 
@@ -110,6 +123,114 @@ def test_unauthorized_member_is_forbidden():
 
     with pytest.raises(Forbidden):
         snap_svc.generate(ctx, member_id="m-1", employee_id=created.employee_id)
+
+
+# ---- 越权审计（05 F16）：越权 403 时记 enterprise_audit ----
+
+
+def test_unauthorized_pull_records_audit():
+    """越权拉取被 403 拦截时记一条 enterprise_audit（actor/resource/拒因，不含配置内容）。"""
+    config_svc = EmployeeConfigService(_FakeRepo())
+    grant_svc = _FakeGrantService()
+    member_svc = _FakeMemberService()
+    audit = _FakeAuditRecorder()
+    snap_svc = SnapshotService(
+        config_service=config_svc, grant_service=grant_svc,
+        member_service=member_svc, audit_recorder=audit,
+    )
+    created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    member_svc.set_member("t-a", "m-1")  # 成员存在但无 grant
+
+    with pytest.raises(Forbidden):
+        snap_svc.generate(_ctx("t-a", roles=["member"], user_id="m-1"),
+                          member_id="m-1", employee_id=created.employee_id)
+
+    assert len(audit.records) == 1
+    rec = audit.records[0]
+    assert rec["tenant_id"] == "t-a"
+    assert rec["actor"] == "m-1"
+    assert rec["action"] == "snapshot_pull_denied"
+    assert rec["resource_type"] == "expert"
+    assert rec["resource_id"] == created.employee_id
+    # 红线：审计记录不得含任何执行配置内容（persona/model/skills 等，D13）。
+    blob = repr(rec).lower()
+    for leak in ("资深测试专家", "claude-opus", "code-review", "relay-default", "记住用户偏好"):
+        assert leak.lower() not in blob
+
+
+def test_audit_failure_does_not_mask_forbidden():
+    """审计写失败（best-effort）不得淹没原始 403：record 抛异常时仍 raises(Forbidden)。"""
+    config_svc = EmployeeConfigService(_FakeRepo())
+    grant_svc = _FakeGrantService()
+    member_svc = _FakeMemberService()
+
+    class _BoomRecorder:
+        def record(self, *a, **k):
+            raise RuntimeError("audit DB down")
+
+    snap_svc = SnapshotService(
+        config_service=config_svc, grant_service=grant_svc,
+        member_service=member_svc, audit_recorder=_BoomRecorder(),
+    )
+    created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    member_svc.set_member("t-a", "m-1")  # 成员存在但无 grant
+
+    with pytest.raises(Forbidden):
+        snap_svc.generate(_ctx("t-a", roles=["member"], user_id="m-1"),
+                          member_id="m-1", employee_id=created.employee_id)
+
+
+def test_missing_member_404_records_no_audit():
+    """member 不存在 → 404（NotFound，非越权）且不写审计（审计只记真正的 403 越权）。"""
+    config_svc = EmployeeConfigService(_FakeRepo())
+    grant_svc = _FakeGrantService()
+    member_svc = _FakeMemberService()
+    audit = _FakeAuditRecorder()
+    snap_svc = SnapshotService(
+        config_service=config_svc, grant_service=grant_svc,
+        member_service=member_svc, audit_recorder=audit,
+    )
+    created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    # 该专家有 grant（指向别的 member），但请求的 member 在 member 表不存在 → get_member 抛 404
+    grant_svc.set_grant("t-a", created.employee_id, member_ids=["someone"])
+
+    with pytest.raises(NotFound):
+        snap_svc.generate(_ctx("t-a", roles=["member"], user_id="ghost"),
+                          member_id="ghost", employee_id=created.employee_id)
+    assert audit.records == []
+
+
+def test_authorized_pull_records_no_audit():
+    """正常授权拉取（200）不产生越权审计。"""
+    config_svc = EmployeeConfigService(_FakeRepo())
+    grant_svc = _FakeGrantService()
+    member_svc = _FakeMemberService()
+    audit = _FakeAuditRecorder()
+    snap_svc = SnapshotService(
+        config_service=config_svc, grant_service=grant_svc,
+        member_service=member_svc, audit_recorder=audit,
+    )
+    created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    member_svc.set_member("t-a", "m-1")
+    grant_svc.set_grant("t-a", created.employee_id, member_ids=["m-1"])
+
+    snap_svc.generate(_ctx("t-a", roles=["member"], user_id="m-1"),
+                      member_id="m-1", employee_id=created.employee_id)
+    assert audit.records == []
+
+
+def test_admin_exempt_pull_records_no_audit():
+    """owner/enterprise_admin 豁免授权（200），不产生越权审计。"""
+    config_svc = EmployeeConfigService(_FakeRepo())
+    audit = _FakeAuditRecorder()
+    snap_svc = SnapshotService(
+        config_service=config_svc, grant_service=_FakeGrantService(),
+        member_service=_FakeMemberService(), audit_recorder=audit,
+    )
+    created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    snap_svc.generate(_ctx("t-a", roles=["owner"], user_id="admin-1"),
+                      member_id="admin-1", employee_id=created.employee_id)
+    assert audit.records == []
 
 
 def test_directly_granted_member_can_generate():

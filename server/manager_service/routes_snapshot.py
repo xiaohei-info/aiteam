@@ -20,6 +20,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden
 
 from .employee_config_service import build_employee_config_service
+from .enterprise_audit_repository import build_enterprise_audit_repository
 from .member_service import GrantService, MemberDeptService
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import SnapshotService, build_snapshot_service
@@ -30,10 +31,11 @@ class _ManagerNotConfigured(AppError):
 
 
 def _service(request: Request) -> SnapshotService:
-    """构造 SnapshotService（复用 employee 配置 + 成员/授权只读服务）；未配置业务 DB → 503。
+    """构造 SnapshotService（复用 employee 配置 + 成员/授权只读服务 + 越权审计写入口）；
+    未配置业务 DB → 503。
 
-    快照授权只做只读（get_member / list_grants），全部走业务连接 app_rw（db_url）；
-    不构造 AuthService、不耦合签名私钥库（admin DSN）——读路径无需 auth（D22）。
+    快照授权读路径（get_member / list_grants）+ 越权审计写（enterprise_audit）全部走业务连接
+    app_rw（db_url）；不构造 AuthService、不耦合签名私钥库（admin DSN）——授权/审计均无需 auth（D22）。
     """
     dsn = request.app.state.settings.db_url
     if not dsn:
@@ -47,6 +49,7 @@ def _service(request: Request) -> SnapshotService:
             config_service=build_employee_config_service(router),
             grant_service=GrantService(repo=grant_repo, members=member_repo),
             member_service=MemberDeptService(repo=member_repo),
+            audit_recorder=build_enterprise_audit_repository(router),
         )
         request.app.state._snapshot_service = cache
     return cache

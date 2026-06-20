@@ -4,6 +4,8 @@
 - 成员级授权权威（04 §6.2 / 05 F16）：取配置**前**先按 member_grant 校验该 member（或其部门）
   对该专家是否有有效授权；无授权 → Forbidden(403)。owner/enterprise_admin 豁免（03 §9.7）。
   enforcement 在 Manager 侧落地，不下放到不可信用户端。
+- 越权审计（05 F16）：越权拉取被 403 拦截时，记一条 enterprise_audit（actor/resource/拒因，
+  不含会话或执行配置内容，D13）。审计写入发生在读取专家配置**之前**，结构上无配置内容可泄。
 - 只读执行配置投影：绝不提供修改 employee/专家主数据的能力（D5 红线）。
 - 不负责用户端冻结：Manager 只生成快照；冻结/落本地库在用户端 Agent Service（D5/F11）。
 - 租户隔离：经 EmployeeConfigService / GrantService / MemberDeptService（TenantContext / RLS），
@@ -15,6 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
@@ -24,6 +28,26 @@ from shared.errors import Forbidden, NotFound
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
+
+logger = logging.getLogger(__name__)
+
+# 越权拦截审计动作名（05 F16）。
+_SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
+
+
+class AuditRecorder(Protocol):
+    """本端审计写入口（由 EnterpriseAuditRepository 实现）。只接中立元数据，不接会话/配置内容。"""
+
+    def record(
+        self,
+        ctx: TenantContext,
+        *,
+        actor: str,
+        action: str,
+        resource_type: str | None = ...,
+        resource_id: str | None = ...,
+        detail: str | None = ...,
+    ): ...
 
 # 豁免成员级 grant 的管理角色（03 §9.7：管理角色可见全部专家，不受 member_grant 约束）。
 _GRANT_EXEMPT_ROLES = frozenset({
@@ -41,10 +65,13 @@ class SnapshotService:
         config_service: EmployeeConfigService,
         grant_service: GrantService,
         member_service: MemberDeptService,
+        audit_recorder: AuditRecorder | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
         self._members = member_service
+        # 可选：None → 不写审计（骨架/单测降级）；真实路由注入 EnterpriseAuditRepository。
+        self._audit = audit_recorder
 
     def generate(
         self,
@@ -78,14 +105,34 @@ class SnapshotService:
         """成员级授权 enforcement（04 §6.2 / 05 F16）。
 
         管理角色（owner/enterprise_admin）豁免；其余成员须命中该专家的 member_grant
-        （直接 member_ids 命中，或其部门 ∈ grant.department_ids）。无授权 → 403。
-        TODO(audit): 越权拦截应记 enterprise_audit（05 F16）；审计基础设施尚未落地，
-        跟进 issue 补 hook，此处 403 拦截已生效。
+        （直接 member_ids 命中，或其部门 ∈ grant.department_ids）。无授权 → 403，并记 enterprise_audit。
+        审计写在抛 403 之前、读取专家配置之前——结构上不含任何执行配置内容（05 F16，D13）。
         """
         if set(ctx.roles) & _GRANT_EXEMPT_ROLES:
             return
         if not self._member_has_expert_grant(ctx, member_id=member_id, employee_id=employee_id):
+            self._record_denial(ctx, member_id=member_id, employee_id=employee_id)
             raise Forbidden("member is not authorized for this expert")
+
+    def _record_denial(self, ctx: TenantContext, *, member_id: str, employee_id: str) -> None:
+        """记一条越权拉取审计（05 F16）。审计失败不得淹没原始 403（best-effort，吞异常只告警）。"""
+        if self._audit is None:
+            return
+        try:
+            self._audit.record(
+                ctx,
+                actor=member_id,
+                action=_SNAPSHOT_PULL_DENIED,
+                resource_type="expert",
+                resource_id=employee_id,
+                detail="member is not authorized for this expert",
+            )
+        except Exception:  # noqa: BLE001 — best-effort：审计写失败不得把 403 变成 500
+            logger.warning(
+                "enterprise_audit record failed for snapshot denial "
+                "(member=%s employee=%s); original 403 preserved",
+                member_id, employee_id, exc_info=True,
+            )
 
     def _member_has_expert_grant(
         self, ctx: TenantContext, *, member_id: str, employee_id: str
@@ -151,9 +198,11 @@ def build_snapshot_service(
     config_service: EmployeeConfigService,
     grant_service: GrantService,
     member_service: MemberDeptService,
+    audit_recorder: AuditRecorder | None = None,
 ) -> SnapshotService:
     return SnapshotService(
         config_service=config_service,
         grant_service=grant_service,
         member_service=member_service,
+        audit_recorder=audit_recorder,
     )
