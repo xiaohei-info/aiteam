@@ -25,6 +25,9 @@ from agent_service.loop.routes import build_loop_router
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.routes import build_mainline_router
 from agent_service.mainline.service import MainlineService
+from agent_service.usage.client import ManagerUsageClient
+from agent_service.usage.factory import build_usage_service
+from agent_service.usage.routes import build_usage_router
 from shared.app_factory import create_app
 from shared.auth import DevTokenService, require_claims
 from shared.config import load_settings
@@ -62,12 +65,14 @@ def build_app(
     *,
     manager_client: ManagerLoginClient | None = None,
     mainline_service: MainlineService | None = None,
+    usage_client: ManagerUsageClient | None = None,
 ) -> FastAPI:
     """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。
 
     mainline_service 默认用 fake runtime 装配的本地主链（A1）；测试可注入自定义编排器。
     Loop 调度器复用同一 mainline_service（A3，06 §7.6），默认不 start 后台循环——
     dev/测试用手动触发端点或 scheduler.fire_ready 驱动；生产由进程启动期决定是否 start。
+    usage_client 默认占位（A5 对端 M8/#42 未联调）；上报失败留 pending 重试，不阻塞本地。
     """
     login_service = LocalLoginService(
         manager=manager_client or UnconfiguredManagerClient(),
@@ -78,6 +83,8 @@ def build_app(
     app.include_router(build_mainline_router(mainline))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
+    usage_service = build_usage_service(client=usage_client)
+    app.include_router(build_usage_router(usage_service))
     return app
 
 
