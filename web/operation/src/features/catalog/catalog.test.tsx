@@ -1,0 +1,610 @@
+/**
+ * 目录治理页面测试（W-O.3 F03）。
+ *
+ * 覆盖：role-state 门控、列表渲染、cursor 翻页、写操作 disabled/启用、
+ * API 调用与错误展示。
+ */
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+} from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { PlatformRole, ApiError } from "@aiteam/shared";
+import { createI18n } from "@aiteam/shared";
+import { SessionContext } from "../../auth/session";
+import { I18nContext } from "../../i18n/context";
+import { operationMessages } from "../../i18n/messages";
+import { CatalogPage } from "./CatalogPage";
+import { CatalogDetailPage } from "./CatalogDetailPage";
+import type { SessionContextValue } from "../../auth/session";
+
+// ---- helpers ----
+
+const mockFetch = vi.fn();
+
+function makeSystemAdminSession(): SessionContextValue {
+  return {
+    session: {
+      principal: {
+        id: "u1",
+        display_name: "admin",
+        status: "active",
+        roles: [PlatformRole.SYSTEM_ADMIN],
+      },
+      claims: {
+        user_id: "u1",
+        roles: [PlatformRole.SYSTEM_ADMIN],
+        exp: 9999999999,
+      },
+    },
+    token: "stub-token",
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+    onUnauthorized: vi.fn(),
+  };
+}
+
+function makeSystemOperatorSession(): SessionContextValue {
+  return {
+    session: {
+      principal: {
+        id: "u2",
+        display_name: "operator",
+        status: "active",
+        roles: [PlatformRole.SYSTEM_OPERATOR],
+      },
+      claims: {
+        user_id: "u2",
+        roles: [PlatformRole.SYSTEM_OPERATOR],
+        exp: 9999999999,
+      },
+    },
+    token: "stub-token",
+    signIn: vi.fn(),
+    signOut: vi.fn(),
+    onUnauthorized: vi.fn(),
+  };
+}
+
+function envOk() {
+  return new Response(
+    JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function listPage(
+  items: unknown[],
+  cursor: string | null = null,
+  hasMore = false,
+) {
+  return new Response(
+    JSON.stringify({
+      data: items,
+      page: { next_cursor: cursor, has_more: hasMore },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+function singleResponse(data: unknown) {
+  return new Response(JSON.stringify({ data }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function problemResponse(status: number, code: string, detail: string) {
+  return new Response(
+    JSON.stringify({
+      type: "about:blank",
+      title: "error",
+      status,
+      code,
+      detail,
+    }),
+    { status, headers: { "content-type": "application/problem+json" } },
+  );
+}
+
+function makeI18n() {
+  const i18n = createI18n({ locale: "zh-CN", catalog: {} });
+  i18n.extend("zh-CN", operationMessages["zh-CN"]!);
+  return i18n;
+}
+
+function renderCatalogPage(sessionCtx: SessionContextValue) {
+  const i18n = makeI18n();
+  return render(
+    <I18nContext.Provider value={i18n}>
+      <SessionContext.Provider value={sessionCtx}>
+        <MemoryRouter initialEntries={["/catalog"]}>
+          <Routes>
+            <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/catalog/:id" element={<CatalogDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </SessionContext.Provider>
+    </I18nContext.Provider>,
+  );
+}
+
+function renderCatalogDetail(sessionCtx: SessionContextValue, id: string) {
+  const i18n = makeI18n();
+  return render(
+    <I18nContext.Provider value={i18n}>
+      <SessionContext.Provider value={sessionCtx}>
+        <MemoryRouter initialEntries={[`/catalog/${id}`]}>
+          <Routes>
+            <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/catalog/:id" element={<CatalogDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </SessionContext.Provider>
+    </I18nContext.Provider>,
+  );
+}
+
+function makeCatalogItem(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "a",
+    type: "expert_template",
+    name: "test",
+    description: "",
+    status: "draft",
+    visibility: "hidden",
+    tags: [],
+    version: "1",
+    author: "",
+    created_at: "",
+    updated_at: "",
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  mockFetch.mockReset();
+  mockFetch.mockResolvedValue(envOk());
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = mockFetch;
+});
+
+afterEach(() => {
+  delete (globalThis as unknown as { fetch?: typeof fetch }).fetch;
+});
+
+// ---- 1. role-state 门控 ----
+
+describe("role-state 门控", () => {
+  it("无平台角色时显示无权限提示", async () => {
+    const sess = makeSystemAdminSession();
+    sess.session = null;
+    renderCatalogPage(sess);
+    await waitFor(() => {
+      expect(screen.getByText("无权限访问目录治理。")).toBeInTheDocument();
+    });
+  });
+
+  it("system_admin 可见列表", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("目录治理")).toBeInTheDocument();
+    });
+  });
+
+  it("system_operator 可见列表", async () => {
+    renderCatalogPage(makeSystemOperatorSession());
+    await waitFor(() => {
+      expect(screen.getByText("目录治理")).toBeInTheDocument();
+    });
+  });
+});
+
+// ---- 2. 列表渲染 ----
+
+describe("列表渲染", () => {
+  it("无数据时显示暂无目录项", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("暂无目录项。")).toBeInTheDocument();
+    });
+  });
+
+  it("显示目录项列表", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([
+        makeCatalogItem({
+          id: "a",
+          type: "expert_template",
+          name: "客服专家",
+          status: "published",
+          visibility: "public",
+          version: "1.0",
+        }),
+      ]),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("客服专家")).toBeInTheDocument();
+    });
+    expect(screen.getByText("已发布")).toBeInTheDocument();
+    // "公开" appears in visibility td + select option
+    expect(screen.getAllByText("公开").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---- 3. cursor 翻页 ----
+
+describe("cursor 翻页", () => {
+  it("有 more 时显示加载更多按钮", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([makeCatalogItem()], "next-abc", true),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("加载更多")).toBeInTheDocument();
+    });
+  });
+
+  it("点击加载更多追加数据", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([makeCatalogItem({ id: "a", name: "first" })], "cursor-1", true),
+      )
+      .mockResolvedValueOnce(
+        listPage(
+          [
+            makeCatalogItem({
+              id: "b",
+              type: "solution_template",
+              name: "second",
+              status: "published",
+              visibility: "public",
+            }),
+          ],
+          null,
+          false,
+        ),
+      );
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("first")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("加载更多"));
+
+    await waitFor(() => {
+      expect(screen.getByText("second")).toBeInTheDocument();
+    });
+  });
+
+  it("没有 more 时不显示加载更多", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([makeCatalogItem()], null, false),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("test")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("加载更多")).not.toBeInTheDocument();
+  });
+});
+
+// ---- 4. 管理员可写操作 ----
+
+describe("管理员写操作", () => {
+  it("管理员可见注册按钮", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    });
+  });
+
+  it("operator 看不到注册按钮", async () => {
+    renderCatalogPage(makeSystemOperatorSession());
+    await waitFor(() => {
+      expect(screen.getByText("目录治理")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("注册模板/方案")).not.toBeInTheDocument();
+  });
+
+  it("管理员点击发布后调 POST publish", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([makeCatalogItem({ status: "draft" })]),
+      )
+      .mockResolvedValueOnce(singleResponse(null))
+      .mockResolvedValueOnce(listPage([]));
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("发布")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("发布"));
+
+    await waitFor(() => {
+      const publishCall = mockFetch.mock.calls.find((c: unknown[]) =>
+        (c[0] as string).includes("/publish"),
+      );
+      expect(publishCall).toBeDefined();
+    });
+  });
+
+  it("管理员点击下架后调 POST unpublish", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([
+          makeCatalogItem({ status: "published", visibility: "public" }),
+        ]),
+      )
+      .mockResolvedValueOnce(singleResponse(null))
+      .mockResolvedValueOnce(listPage([]));
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("下架")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("下架"));
+
+    await waitFor(() => {
+      const unpublishCall = mockFetch.mock.calls.find((c: unknown[]) =>
+        (c[0] as string).includes("/unpublish"),
+      );
+      expect(unpublishCall).toBeDefined();
+    });
+  });
+
+  it("已发布项不显示发布按钮（只显下架）", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([
+        makeCatalogItem({ status: "published", visibility: "public" }),
+      ]),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.queryByText("发布")).not.toBeInTheDocument();
+      expect(screen.getByText("下架")).toBeInTheDocument();
+    });
+  });
+
+  it("下架状态项显示发布按钮（不显下架）", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([
+        makeCatalogItem({ status: "unpublished", visibility: "public" }),
+      ]),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("发布")).toBeInTheDocument();
+      expect(screen.queryByText("下架")).not.toBeInTheDocument();
+    });
+  });
+
+  it("operator 看不到发布/下架按钮", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([makeCatalogItem({ status: "draft" })]),
+    );
+    renderCatalogPage(makeSystemOperatorSession());
+    await waitFor(() => {
+      expect(screen.getByText("test")).toBeInTheDocument();
+    });
+    // operator table should have status but no action buttons
+    expect(screen.queryByText("发布")).not.toBeInTheDocument();
+    expect(screen.queryByText("下架")).not.toBeInTheDocument();
+  });
+});
+
+// ---- 5. API 错误展示 ----
+
+describe("API 错误展示", () => {
+  it("列表加载失败展示错误 detail", async () => {
+    mockFetch.mockResolvedValue(
+      problemResponse(500, "internal_error", "服务内部错误"),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("服务内部错误")).toBeInTheDocument();
+    });
+  });
+
+  it("publish 失败展示错误", async () => {
+    mockFetch
+      .mockResolvedValueOnce(listPage([makeCatalogItem({ status: "draft" })]))
+      .mockResolvedValueOnce(
+        problemResponse(409, "conflict", "该模板已发布"),
+      );
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("发布")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("发布"));
+
+    await waitFor(() => {
+      expect(screen.getByText("该模板已发布")).toBeInTheDocument();
+    });
+  });
+});
+
+// ---- 6. 注册表单 ----
+
+describe("注册表单", () => {
+  it("点击注册按钮展示表单", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("注册模板/方案"));
+
+    await waitFor(() => {
+      expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "注册" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "取消" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("名称为空时前端校验（不发请求）", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("注册模板/方案"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "注册" }),
+      ).toBeInTheDocument();
+    });
+
+    // Submit form to trigger React synthetic onSubmit in jsdom
+    const registerBtn = screen.getByRole("button", { name: "注册" });
+    fireEvent.submit(registerBtn.closest("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("名称不能为空")).toBeInTheDocument();
+    });
+
+    const postCalls = mockFetch.mock.calls.filter((c: unknown[]) => {
+      const url = c[0] as string;
+      return url.includes("register");
+    });
+    expect(postCalls).toHaveLength(0);
+  });
+
+  it("取消按钮关闭表单", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("注册模板/方案"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "取消" }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("注册新模板/方案"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("注册专家模板成功关闭表单", async () => {
+    mockFetch
+      .mockResolvedValueOnce(envOk())
+      .mockResolvedValueOnce(
+        singleResponse(makeCatalogItem({ id: "new-id", name: "新专家" })),
+      )
+      .mockResolvedValueOnce(envOk());
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("注册模板/方案"));
+
+    await waitFor(() => {
+      expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
+    });
+
+    // Fill name input (first textbox in the form)
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "新专家" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    await waitFor(() => {
+      const registerCall = mockFetch.mock.calls.find((c: unknown[]) => {
+        const url = c[0] as string;
+        return url.includes("register-expert-template");
+      });
+      expect(registerCall).toBeDefined();
+    });
+  });
+});
+
+// ---- 7. 详情页 ----
+
+describe("详情页", () => {
+  it("显示目录项详情", async () => {
+    mockFetch.mockResolvedValue(
+      singleResponse(
+        makeCatalogItem({
+          id: "abc",
+          type: "solution_template",
+          name: "电商方案",
+          description: "全渠道电商解决方案",
+          status: "published",
+          visibility: "public",
+          tags: ["电商", "零售"],
+          version: "2.0",
+          author: "方案团队",
+          created_at: "2026-06-01",
+          updated_at: "2026-06-15",
+        }),
+      ),
+    );
+
+    renderCatalogDetail(makeSystemAdminSession(), "abc");
+
+    await waitFor(() => {
+      expect(screen.getByText("电商方案")).toBeInTheDocument();
+      expect(screen.getByText("全渠道电商解决方案")).toBeInTheDocument();
+      expect(screen.getByText("行业方案")).toBeInTheDocument();
+      expect(screen.getByText("电商、零售")).toBeInTheDocument();
+    });
+  });
+
+  it("详情加载失败展示错误", async () => {
+    mockFetch.mockResolvedValue(
+      problemResponse(404, "not_found", "目录项不存在"),
+    );
+
+    renderCatalogDetail(makeSystemAdminSession(), "nonexistent");
+
+    await waitFor(() => {
+      expect(screen.getByText("目录项不存在")).toBeInTheDocument();
+    });
+  });
+
+  it("详情返回 null 时显示未找到", async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    renderCatalogDetail(makeSystemAdminSession(), "missing");
+
+    await waitFor(() => {
+      expect(screen.getByText("未找到该目录项。")).toBeInTheDocument();
+    });
+  });
+});

@@ -9,10 +9,10 @@ import { AppShell } from "./shell";
 import { RequireAuth } from "./auth/RequireAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
-import { CatalogPlaceholder } from "./pages/CatalogPlaceholder";
 import { BoardPage, EnterpriseDetailPage } from "./features/board";
 import { EnterprisePage } from "./features/enterprise";
 import { EnterprisePageWired } from "./EnterprisePageWired";
+import { CatalogPage, CatalogDetailPage } from "./features/catalog";
 
 export function App(): React.ReactNode {
   return (
@@ -27,7 +27,8 @@ export function App(): React.ReactNode {
       >
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePageWired />} />
-        <Route path="/catalog" element={<CatalogPlaceholder />} />
+        <Route path="/catalog" element={<CatalogPage />} />
+        <Route path="/catalog/:id" element={<CatalogDetailPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/board/:enterprise_id" element={<EnterpriseDetailPage />} />
       </Route>
