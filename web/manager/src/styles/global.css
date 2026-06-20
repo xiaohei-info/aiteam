@@ -1,0 +1,191 @@
+/*
+ * 企业端全局样式（08 §12.2 设计系统）。
+ * CSS 变量取值与 @aiteam/shared design tokens 对齐（单一来源在 shared，此处仅镜像注入）。
+ * token 取值变更须先改 shared/src/design-system/tokens.ts，再同步本文件。
+ */
+
+:root {
+  /* color */
+  --ai-color-brand-primary: #2563eb;
+  --ai-color-brand-primary-hover: #1d4ed8;
+  --ai-color-text-primary: #0f172a;
+  --ai-color-text-secondary: #475569;
+  --ai-color-text-muted: #94a3b8;
+  --ai-color-bg-canvas: #ffffff;
+  --ai-color-bg-subtle: #f8fafc;
+  --ai-color-border: #e2e8f0;
+  --ai-color-success: #16a34a;
+  --ai-color-warning: #d97706;
+  --ai-color-danger: #dc2626;
+  --ai-color-info: #0891b2;
+
+  /* space */
+  --ai-space-xs: 4px;
+  --ai-space-sm: 8px;
+  --ai-space-md: 16px;
+  --ai-space-lg: 24px;
+  --ai-space-xl: 32px;
+  --ai-space-xxl: 48px;
+
+  /* radius */
+  --ai-radius-sm: 4px;
+  --ai-radius-md: 8px;
+  --ai-radius-lg: 12px;
+  --ai-radius-pill: 999px;
+
+  /* font-size */
+  --ai-font-size-xs: 12px;
+  --ai-font-size-sm: 14px;
+  --ai-font-size-md: 16px;
+  --ai-font-size-lg: 20px;
+  --ai-font-size-xl: 24px;
+
+  /* z-index */
+  --ai-z-base: 0;
+  --ai-z-dropdown: 1000;
+  --ai-z-sticky: 1100;
+  --ai-z-overlay: 1200;
+  --ai-z-modal: 1300;
+  --ai-z-toast: 1400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: var(--ai-color-text-primary);
+  background: var(--ai-color-bg-canvas);
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-shell__sidebar {
+  width: 220px;
+  background: var(--ai-color-bg-subtle);
+  border-right: 1px solid var(--ai-color-border);
+  padding: var(--ai-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-md);
+}
+
+.app-shell__brand {
+  font-size: var(--ai-font-size-lg);
+  font-weight: 600;
+  color: var(--ai-color-text-primary);
+}
+
+.app-shell__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-xs);
+}
+
+.app-shell__nav-item {
+  display: block;
+  padding: var(--ai-space-sm) var(--ai-space-md);
+  border-radius: var(--ai-radius-sm);
+  text-decoration: none;
+  color: var(--ai-color-text-secondary);
+  font-size: var(--ai-font-size-sm);
+}
+
+.app-shell__nav-item:hover {
+  background: var(--ai-color-bg-canvas);
+  color: var(--ai-color-text-primary);
+}
+
+.app-shell__nav-item.is-active {
+  background: var(--ai-color-brand-primary);
+  color: #fff;
+}
+
+.app-shell__main {
+  flex: 1;
+  padding: var(--ai-space-lg);
+}
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--ai-color-bg-subtle);
+}
+
+.login-page__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-md);
+  background: var(--ai-color-bg-canvas);
+  padding: var(--ai-space-xl);
+  border-radius: var(--ai-radius-lg);
+  border: 1px solid var(--ai-color-border);
+  width: 360px;
+}
+
+.login-page__title {
+  margin: 0;
+  font-size: var(--ai-font-size-xl);
+}
+
+.login-page__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-xs);
+  font-size: var(--ai-font-size-sm);
+}
+
+.login-page__field input {
+  padding: var(--ai-space-sm);
+  border: 1px solid var(--ai-color-border);
+  border-radius: var(--ai-radius-sm);
+  font-size: var(--ai-font-size-md);
+}
+
+.login-page__error {
+  color: var(--ai-color-danger);
+  font-size: var(--ai-font-size-sm);
+  margin: 0;
+}
+
+.login-page__submit {
+  padding: var(--ai-space-sm) var(--ai-space-md);
+  background: var(--ai-color-brand-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--ai-radius-sm);
+  font-size: var(--ai-font-size-md);
+  cursor: pointer;
+}
+
+.login-page__submit:hover {
+  background: var(--ai-color-brand-primary-hover);
+}
+
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-sm);
+}
+
+.placeholder-page h1 {
+  margin: 0;
+  font-size: var(--ai-font-size-xl);
+}
+
+.placeholder-page p {
+  color: var(--ai-color-text-muted);
+  font-size: var(--ai-font-size-sm);
+}
