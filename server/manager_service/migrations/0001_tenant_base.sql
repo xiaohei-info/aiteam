@@ -4,17 +4,27 @@
 -- 隔离硬约束（04 §6.1.1）：
 --   3. 租户表 ENABLE + FORCE ROW LEVEL SECURITY（表 owner 也受策略约束）。
 --   4. 每请求事务内 SET LOCAL app.tenant_id。
---   5. 应用 DB 角色非 superuser、非 BYPASSRLS（这里用 app_rw，应用连接 SET LOCAL ROLE app_rw）。
+--   5. 应用 DB 角色非 superuser、非 BYPASSRLS（业务连接**直接以 app_rw 身份建连**，
+--      不再运行时 SET LOCAL ROLE 降权——从连接身份层根除超管旁路面，#60）。
 --   2. 业务唯一性带 tenant_id（unique(tenant_id, ...)）。
 
 -- ---- 应用角色：非 superuser、非 BYPASSRLS、非表 owner（否则绕过 RLS）----
+-- 业务连接以本角色直接登录（#60），故需 LOGIN；NOINHERIT 防经组继承超管。
+-- LOGIN 口令不硬编码进迁移脚本：由迁移执行器（apply_migrations）从配置/env 取口令，
+-- 在管理连接内幂等 `ALTER ROLE app_rw WITH LOGIN PASSWORD ...` 下发。
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rw') THEN
-        CREATE ROLE app_rw NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+        CREATE ROLE app_rw LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+    ELSE
+        ALTER ROLE app_rw LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
     END IF;
 END
 $$;
+
+-- 业务连接以 app_rw 身份建连后需要 connect 到本库 + 用 public schema。
+GRANT CONNECT ON DATABASE manager_control_db TO app_rw;
+GRANT USAGE ON SCHEMA public TO app_rw;
 
 -- 扩展：gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

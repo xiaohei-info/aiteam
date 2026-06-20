@@ -20,8 +20,10 @@ def test_rls_cross_tenant_isolation():
     详细分层用例见 tests/manager/test_rls_isolation.py 与 test_rag_workspace.py。
     """
     db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        pytest.skip("DATABASE_URL 未设置；RLS 回归需真实 PG（M0）")
+    admin_url = os.getenv("ADMIN_DATABASE_URL")
+    app_rw_password = os.getenv("APP_RW_PASSWORD")
+    if not db_url or not admin_url:
+        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL 未设置；RLS 回归需真实 PG（M0/#60）")
 
     import psycopg
 
@@ -29,8 +31,9 @@ def test_rls_cross_tenant_isolation():
     from shared.db import ManagerRagService, PgTenantRouter, apply_migrations
     from manager_service.rag import PgManagerRagService
 
-    apply_migrations(db_url)
-    with psycopg.connect(db_url, autocommit=True) as conn:
+    # 迁移走管理连接（超管/DDL owner，#60）；业务连接（db_url）以 app_rw 身份跑 RLS SQL。
+    apply_migrations(admin_url, app_rw_password=app_rw_password)
+    with psycopg.connect(admin_url, autocommit=True) as conn:
         tid_a = str(conn.execute(
             "INSERT INTO tenant_registry (enterprise_slug) VALUES (%s) RETURNING tenant_id",
             (f"vm_a_{uuid.uuid4().hex[:8]}",),

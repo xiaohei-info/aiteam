@@ -56,6 +56,7 @@ class AuthService:
     """编排凭据校验 + token 签发。tenant_id 全程经 TenantContext / 显式入参，不手写过滤。"""
 
     def __init__(self, *, dsn: str, repo: TenantAuthRepository, keys: TenantKeyStore):
+        # dsn：业务连接串（app_rw 身份，跑租户 RLS SQL）。管理连接（签名私钥读写）在 keys 内。
         self.dsn = dsn
         self._repo = repo
         self._keys = keys
@@ -120,6 +121,14 @@ class AuthService:
         return self._keys.jwks(tenant_id)
 
 
-def build_auth_service(dsn: str) -> AuthService:
+def build_auth_service(dsn: str, admin_dsn: str | None = None) -> AuthService:
+    """组装 AuthService（#60：业务连接与管理连接分离）。
+
+    - `dsn`：业务连接串（app_rw 身份）。租户 RLS 数据访问（auth_identity/app_user）走它。
+    - `admin_dsn`：管理连接串（超管/DDL owner）。**签名私钥库 tenant_signing_key 对 app_rw 零授权**，
+      故 TenantKeyStore 必须用管理连接直读直写（误降为 app_rw 会读不到/破坏隔离边界）。
+      省略时回退到 `dsn`（仅兼容 admin 单 DSN 的老调用；生产应显式传两个）。
+    """
     router = PgTenantRouter(dsn)
-    return AuthService(dsn=dsn, repo=TenantAuthRepository(router), keys=TenantKeyStore(dsn))
+    keys = TenantKeyStore(admin_dsn or dsn)
+    return AuthService(dsn=dsn, repo=TenantAuthRepository(router), keys=keys)

@@ -23,7 +23,18 @@ class Settings(BaseModel):
     tier: Tier
     service_name: str
     log_level: str = "INFO"
-    db_url: str | None = Field(default=None, description="本端库连接串；骨架期可空")
+    db_url: str | None = Field(
+        default=None,
+        description="业务连接串：以受约束角色 app_rw（非 superuser/非 BYPASSRLS）身份建连，跑租户 RLS SQL；骨架期可空",
+    )
+    admin_db_url: str | None = Field(
+        default=None,
+        description="管理连接串：超管/DDL owner 身份，仅供迁移/建角色/DDL 与控制面表（如签名私钥）直读直写；不跑租户业务 SQL",
+    )
+    app_rw_password: str | None = Field(
+        default=None,
+        description="迁移时为 app_rw 设置的 LOGIN 口令（来源 env，禁止硬编码）；业务 DSN 已内含该口令，本项仅供管理连接在迁移中下发",
+    )
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
@@ -40,6 +51,8 @@ def load_settings(tier: Tier | None = None) -> Settings:
         service_name=f"aiteam-{resolved}-service",
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         db_url=os.getenv("DB_URL"),
+        admin_db_url=os.getenv("ADMIN_DB_URL"),
+        app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),

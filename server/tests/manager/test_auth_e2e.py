@@ -24,9 +24,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def svc(migrated_db, two_tenants):
+def svc(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    service = build_auth_service(migrated_db)
+    # 业务连接 app_rw（migrated_db）+ 管理连接 admin_url（签名私钥库，#60）。
+    service = build_auth_service(migrated_db, admin_dsn=admin_url)
     return service, tid_a, tid_b
 
 
@@ -91,15 +92,19 @@ def test_same_phone_different_tenants_no_crosswire(svc):
         service.login(LoginInput(tenant_id=tid_b, account=phone, password="pass-A-111"))
 
 
-def test_password_hash_is_not_reversible(svc):
-    """凭据落库为 hash，不存明文（03 §9.3 / 04 §6.1 owner_credential 不存可逆密码）。"""
+def test_password_hash_is_not_reversible(svc, admin_url):
+    """凭据落库为 hash，不存明文（03 §9.3 / 04 §6.1 owner_credential 不存可逆密码）。
+
+    直读 auth_identity 走管理连接（superuser 绕 RLS）以拿到落库密文（#60：业务连接 app_rw
+    在未设 tenant 时受 RLS 约束读不到行）。
+    """
     service, tid_a, _ = svc
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     service.create_member(tid_a, phone=phone, initial_password="secret-Pass-9", display_name="X")
 
     import psycopg
 
-    with psycopg.connect(service.dsn, autocommit=True) as conn:
+    with psycopg.connect(admin_url, autocommit=True) as conn:
         secret = conn.execute(
             "SELECT secret FROM auth_identity WHERE external_id = %s", (phone,)
         ).fetchone()[0]

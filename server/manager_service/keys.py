@@ -14,9 +14,13 @@ from shared.auth import RS256TokenSigner, RS256TokenVerifier, generate_rsa_keypa
 
 
 class TenantKeyStore:
-    """控制面密钥库。用连接身份（管理连接）直读直写，不经租户 RLS 会话。"""
+    """控制面密钥库。**必须用管理连接（admin DSN：超管/DDL owner）直读直写**，不经租户 RLS 会话。
+
+    tenant_signing_key 对 app_rw 零授权（#60）；若误传业务连接（app_rw DSN），将无权读写私钥。
+    """
 
     def __init__(self, dsn: str):
+        # dsn 必须是管理连接（admin DSN）；业务连接（app_rw）对 tenant_signing_key 无授权。
         self._dsn = dsn
 
     def _row(self, tenant_id: str):

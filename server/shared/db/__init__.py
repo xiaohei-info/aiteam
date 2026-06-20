@@ -90,11 +90,14 @@ class InMemoryTenantRouter(TenantRouter):
 
 # ---- 真实 PostgreSQL + RLS 实现（04 §6.1.1，D20/D22）----
 #
-# 隔离铁律落地：
-#   - 应用连接用受约束角色 app_rw（非 superuser、非 BYPASSRLS、非表 owner），由迁移创建。
-#   - 每事务进入前 SET LOCAL ROLE app_rw + SET LOCAL app.tenant_id = ctx.tenant_id。
+# 隔离铁律落地（#60：从连接身份层根除超管旁路面）：
+#   - 业务连接**直接以受约束角色 app_rw（非 superuser、非 BYPASSRLS、非表 owner）身份建连**，
+#     业务 DSN 即 `postgresql://app_rw:...@.../...`；不再运行时 SET LOCAL ROLE 降权。
+#     连接身份本身受 RLS 约束，故即使后续误写 RESET ROLE 也无超管可回退。
+#   - 每事务进入前只 SET LOCAL app.tenant_id = ctx.tenant_id（绑定租户，事务级）。
 #   - tenant_id 只从 TenantContext 取，session 不接受调用方手写 tenant 过滤（D22）。
 #   - SET LOCAL 是事务级，事务结束自动失效，连接池复用无残留上下文。
+#   - 迁移/建角色/DDL 与控制面表（如签名私钥）走独立的**管理连接**（admin DSN，超管/DDL owner）。
 #
 # psycopg 延迟导入：默认 `-m 'not integration'` 门不需要 PG，故 import 进函数/方法内，
 # 保证 `import shared.db` 在无 psycopg 环境（纯契约/单测）下仍可用。
@@ -108,7 +111,8 @@ class PgTenantSession(TenantDataSession):
     用法（上下文管理器，事务边界 = 隔离边界）：
         with router.session(ctx) as s:
             s.execute("SELECT ...", params)
-    进入即 BEGIN + SET LOCAL ROLE app_rw + SET LOCAL app.tenant_id；正常退出 COMMIT，异常 ROLLBACK。
+    连接身份即受约束角色 app_rw（业务 DSN）。进入即 BEGIN + SET LOCAL app.tenant_id；
+    正常退出 COMMIT，异常 ROLLBACK。
     """
 
     def __init__(self, dsn: str, tenant_id: str):
@@ -124,11 +128,11 @@ class PgTenantSession(TenantDataSession):
     def __enter__(self) -> "PgTenantSession":
         import psycopg
 
+        # 连接身份已是 app_rw（业务 DSN），无需 SET LOCAL ROLE 降权（#60）。
         self._conn = psycopg.connect(self._dsn, autocommit=False)
         self._cur = self._conn.cursor()
-        # 降权到受约束角色 + 绑定租户（均为事务级，配连接池安全）。
+        # 绑定租户（事务级，配连接池安全）。
         # set_config(..., is_local=true) ≡ SET LOCAL，但支持参数绑定（避免 SQL 注入 / 引号问题）。
-        self._cur.execute(f"SET LOCAL ROLE {_APP_ROLE}")
         self._cur.execute("SELECT set_config('app.tenant_id', %s, true)", (self._tenant_id,))
         return self
 
@@ -173,12 +177,17 @@ def _migrations_dir() -> str:
     return os.path.join(server_root, "manager_service", "migrations")
 
 
-def apply_migrations(db_url: str | None) -> None:
+def apply_migrations(db_url: str | None, app_rw_password: str | None = None) -> None:
     """首次连接自动应用迁移（04 §6.4：建表脚本，非数据迁移）。幂等。
 
+    `db_url` 必须是**管理连接**（admin DSN：超管/DDL owner），用于建角色/DDL/RLS（#60）；
+    业务连接（app_rw 身份）不得用于迁移。
+
     无 db_url（骨架/纯契约场景）→ no-op，保持对外契约不破坏。
-    有 db_url → 以连接身份（superuser）按文件名顺序执行 manager_service/migrations/*.sql。
+    有 db_url → 以管理连接身份按文件名顺序执行 manager_service/migrations/*.sql，
     迁移负责创建受约束角色 app_rw、租户表与 RLS 策略。
+    `app_rw_password`（来源配置/env，禁止硬编码）非空时，额外幂等下发 app_rw 的 LOGIN 口令，
+    使业务连接可直接以 app_rw 身份建连——口令只在管理连接内 ALTER ROLE，不入迁移脚本。
     """
     if not db_url:
         return None
@@ -195,4 +204,16 @@ def apply_migrations(db_url: str | None) -> None:
                 sql = fh.read()
             with conn.cursor() as cur:
                 cur.execute(sql)
+        if app_rw_password:
+            # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
+            # 用 psycopg.sql 安全拼接（ALTER ROLE 的 PASSWORD 不支持参数占位符）。
+            from psycopg import sql as _sql
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                        _sql.Identifier(_APP_ROLE),
+                        _sql.Literal(app_rw_password),
+                    )
+                )
     return None

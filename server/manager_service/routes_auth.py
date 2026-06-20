@@ -19,14 +19,20 @@ class _ManagerNotConfigured(AppError):
 
 
 def _auth_service(request: Request) -> AuthService:
-    """从端配置取 DB 连接串构造 AuthService；未配置则 503（不静默）。"""
+    """从端配置取 DB 连接串构造 AuthService；未配置则 503（不静默）。
+
+    业务连接走 db_url（app_rw 身份）；签名私钥库走 admin_db_url（管理连接，#60）。
+    """
     settings = request.app.state.settings
     dsn = settings.db_url
     if not dsn:
-        raise _ManagerNotConfigured("Manager DB 未配置（设置 DB_URL）")
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    admin_dsn = settings.admin_db_url
+    if not admin_dsn:
+        raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
     cache = getattr(request.app.state, "_auth_service", None)
     if cache is None:
-        cache = build_auth_service(dsn)
+        cache = build_auth_service(dsn, admin_dsn=admin_dsn)
         request.app.state._auth_service = cache
     return cache
 
