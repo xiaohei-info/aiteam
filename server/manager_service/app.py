@@ -45,3 +45,6 @@ app.include_router(member_router)
 app.include_router(grants_router)
 # 知识空间/RAG 管理面（/api/manager/knowledge-spaces/*，M3）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_space_router(_verifier))
+# 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
+from .routes_capability import build_capability_router  # noqa: E402
+app.include_router(build_capability_router(_verifier))

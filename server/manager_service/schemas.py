@@ -232,3 +232,81 @@ class KnowledgeSpaceBindingOut(BaseModel):
     resource_type: str
     resource_id: str
     created_at: datetime | None = None
+# ---- 技能/连接器/记忆策略 目录（issue #38；04 §6.6，D17，D16/D22）----
+# 三者均 tenant 作用域、runtime 中立（D16）：只存管理面真相（目录/可见性/安装绑定策略/凭据授权元数据），
+# 执行态（技能本地执行、连接器对外调用、mem0 记忆读写）归用户端（04 §6.6）。凭据本体归 M5（D18）。
+
+# 枚举取值与迁移 0004 CHECK 约束严格对齐（禁止漂移）。
+SkillInstallPolicy = Literal["on_demand", "pre_install", "pinned"]
+SkillBindingPolicy = Literal["opt_in", "auto_bind", "disabled"]
+CatalogVisibility = Literal["private", "tenant", "public"]
+ConnectorGrantScope = Literal["tenant_wide", "department_scoped", "member_scoped", "disabled"]
+
+
+class SkillCatalogIn(BaseModel):
+    """技能目录写入请求体（runtime 无关，D16）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str = Field(description="租户内技能标识（中立引用，供 employee.skills 指向）")
+    display_name: str = ""
+    version: str = Field(default="1", description="技能版本（语义版本或自定标识，runtime 无关）")
+    install_policy: SkillInstallPolicy = Field(default="on_demand", description="安装策略")
+    binding_policy: SkillBindingPolicy = Field(default="opt_in", description="绑定策略")
+    visibility: CatalogVisibility = Field(default="private")
+    config: dict = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）")
+
+
+class SkillCatalogOut(SkillCatalogIn):
+    """技能目录读取响应体（带 catalog 身份与版本）。"""
+
+    catalog_id: str
+    catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
+
+
+class ConnectorCatalogIn(BaseModel):
+    """连接器定义写入请求体（runtime 无关，D16）。
+
+    grant_scope 是凭据授权范围元数据（谁能用——仅元数据）；凭据本体（API key/令牌）归 M5（D18），
+    本卡不落库也不发起对外调用（红线①③）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    connector_id: str = Field(description="租户内连接器标识（中立引用，供 employee.connector_refs 指向）")
+    display_name: str = ""
+    visibility: CatalogVisibility = Field(default="private")
+    grant_scope: ConnectorGrantScope = Field(default="tenant_wide", description="凭据授权范围元数据（D18）")
+    config: dict = Field(default_factory=dict, description="中立配置（不含凭据本体，D18）")
+
+
+class ConnectorCatalogOut(ConnectorCatalogIn):
+    """连接器目录读取响应体（带 catalog 身份与版本）。"""
+
+    catalog_id: str
+    catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
+
+
+class MemoryPolicyCatalogIn(BaseModel):
+    """记忆策略目录写入请求体（runtime 无关，D17）。
+
+    记忆复用 mem0（OpenMemory 本地优先 MCP，D17）。本卡只落策略真相（策略/种子/保留期/可见性），
+    记忆数据本体在用户端 local_memory_store（04 §6.6），本卡不持有运行时记忆。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str = Field(description="租户内记忆策略标识（中立引用，供 employee.memory_policy 指向）")
+    display_name: str = ""
+    policy: dict = Field(default_factory=dict, description="记忆策略（mem0 可消费的中立配置，D17）")
+    seed_memories: list[dict] = Field(default_factory=list, description="种子记忆（策略级，非运行时记忆数据）")
+    retention_days: int | None = Field(default=None, ge=0, description="保留期（天）；None 表示不限")
+    visibility: CatalogVisibility = Field(default="private")
+    config: dict = Field(default_factory=dict, description="中立配置")
+
+
+class MemoryPolicyCatalogOut(MemoryPolicyCatalogIn):
+    """记忆策略目录读取响应体（带 catalog 身份与版本）。"""
+
+    catalog_id: str
+    catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
