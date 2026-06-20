@@ -20,6 +20,9 @@ from agent_service.auth.local_login import (
 )
 from agent_service.auth.manager_client import UnconfiguredManagerClient
 from agent_service.auth.token_cache import InMemoryTokenCache
+from agent_service.grants.client import ManagerGrantsClient
+from agent_service.grants.factory import build_grants_service
+from agent_service.grants.routes import build_grants_router
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
 from agent_service.mainline.factory import build_mainline_service
@@ -66,6 +69,7 @@ def build_app(
     manager_client: ManagerLoginClient | None = None,
     mainline_service: MainlineService | None = None,
     usage_client: ManagerUsageClient | None = None,
+    grants_client: ManagerGrantsClient | None = None,
 ) -> FastAPI:
     """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。
 
@@ -73,6 +77,8 @@ def build_app(
     Loop 调度器复用同一 mainline_service（A3，06 §7.6），默认不 start 后台循环——
     dev/测试用手动触发端点或 scheduler.fire_ready 驱动；生产由进程启动期决定是否 start。
     usage_client 默认占位（A5 对端 M8/#42 未联调）；上报失败留 pending 重试，不阻塞本地。
+    grants_client 默认占位（A4 对端 M7/#41 未联调）；sync 失败按离线降级处理，本地凭既有
+    投影 + 已冻结快照继续工作，不致本端 not-ready（D14）。
     """
     login_service = LocalLoginService(
         manager=manager_client or UnconfiguredManagerClient(),
@@ -85,6 +91,8 @@ def build_app(
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
     usage_service = build_usage_service(client=usage_client)
     app.include_router(build_usage_router(usage_service))
+    grants_service = build_grants_service(client=grants_client)
+    app.include_router(build_grants_router(grants_service))
     return app
 
 
