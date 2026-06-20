@@ -20,6 +20,7 @@ from shared.contracts.enums import ConversationState
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.events import BusinessTimelineEvent
 
+from .group import DispatchResult, GroupChatService, GroupExpert
 from .models import Conversation, Message, MessageRole, Run, Task
 from .service import MainlineService
 from .stream import StreamBroker, StreamFrame
@@ -50,6 +51,18 @@ class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1)
     run_id: str | None = None
+
+
+class GroupDispatchRequest(BaseModel):
+    """群聊一轮编排请求（06 §7.6 / D19）：用户发言 + 本会话专家 roster。
+
+    experts 为本会话已装载专家的最小投影（handle/persona/model）；真实来源是 pull 装载的
+    employee 快照（留详设），本卡按请求携带即可端到端验证 @提及编排与多 run 并入。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1)
+    experts: list[GroupExpert] = Field(default_factory=list)
 
 
 def frame_to_dict(frame: StreamFrame) -> dict:
@@ -131,6 +144,17 @@ def build_mainline_router(service: MainlineService) -> APIRouter:
     async def cancel_run(run_id: str) -> Envelope[dict]:
         await service.cancel_run(run_id)
         return Envelope[dict](data={"cancelled": True})
+
+    # ---- 群聊（单机多专家 @提及编排，多 run 并入同一 timeline）----
+
+    @router.post("/conversations/{conversation_id}/group-dispatch",
+                 summary="群聊一轮编排（@提及触发多专家、多 run 并入同一时间线）",
+                 operation_id="agent_group_dispatch")
+    async def group_dispatch(conversation_id: str, req: GroupDispatchRequest) -> Envelope[DispatchResult]:
+        service.get_conversation(conversation_id)  # 存在性校验 -> 404
+        group = GroupChatService(service, experts=req.experts)
+        result = await group.post_and_dispatch(conversation_id, req.text)
+        return Envelope[DispatchResult](data=result)
 
     # ---- task ----
 
