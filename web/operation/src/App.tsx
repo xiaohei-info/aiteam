@@ -11,7 +11,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { EnterprisePlaceholder } from "./pages/EnterprisePlaceholder";
 import { CatalogPlaceholder } from "./pages/CatalogPlaceholder";
-import { BoardPlaceholder } from "./pages/BoardPlaceholder";
+import { BoardPage, EnterpriseDetailPage } from "./features/board";
 
 export function App(): React.ReactNode {
   return (
@@ -27,7 +27,8 @@ export function App(): React.ReactNode {
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePlaceholder />} />
         <Route path="/catalog" element={<CatalogPlaceholder />} />
-        <Route path="/board" element={<BoardPlaceholder />} />
+        <Route path="/board" element={<BoardPage />} />
+        <Route path="/board/:enterprise_id" element={<EnterpriseDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
