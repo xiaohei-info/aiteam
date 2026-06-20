@@ -98,17 +98,18 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     assert len(r.json()["data"]) == 1
     assert _PLAINTEXT_SECRET not in r.text
 
-    # update -> version 自增
-    config.update({
+    # update -> version 自增。PUT body 用 ProviderCredentialUpdate 口径：provider_ref 不可改、
+    # 不入改写体（Update schema extra=forbid，带 provider_ref 会 422）。
+    update_body = {
         "display_name": "改名",
         "mode": "direct",
         "endpoint": "https://api.openai.example/v1",
         "visibility": "tenant",
         "secret": "sk-new-plain-int-777",
-    })
+    }
     r = client.put(
         f"/api/manager/provider-credentials/{cid}",
-        json=config, headers={"Authorization": f"Bearer {owner_a}"},
+        json=update_body, headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200
     assert r.json()["data"]["display_name"] == "改名"
@@ -126,7 +127,7 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     assert r.status_code == 200
     r = client.put(
         f"/api/manager/provider-credentials/{cid}",
-        json=config, headers={"Authorization": f"Bearer {member_a}"},
+        json=update_body, headers={"Authorization": f"Bearer {member_a}"},
     )
     assert r.status_code == 403
     assert r.headers["content-type"].startswith("application/problem+json")

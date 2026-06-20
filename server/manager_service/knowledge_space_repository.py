@@ -259,8 +259,10 @@ class ExpertKnowledgeBinding:
     ) -> list[str]:
         """列出本 tenant 内 knowledge_refs 包含某 knowledge_space_id 的 employee_id（RLS 裁剪）。"""
         with self._router.session(ctx) as s:
+            # knowledge_refs 是 jsonb 字符串数组（非 PG text[]），用 jsonb 包含算子 @> 判成员，
+            # 避免非法的 jsonb→text[] 强转（cannot cast type jsonb to text[]）。
             rows = s.execute(
-                "SELECT id FROM employee WHERE %s = ANY(COALESCE(knowledge_refs, '{}'::jsonb)::text[])",
+                "SELECT id FROM employee WHERE knowledge_refs @> to_jsonb(%s::text)",
                 (knowledge_space_id,),
             ).fetchall()
         return [_s(r[0]) for r in rows]
