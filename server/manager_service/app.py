@@ -12,6 +12,8 @@ from shared.contracts.envelope import Envelope
 
 from .routes_auth import router as auth_router
 from .routes_employee import build_employee_router
+from .routes_member import router as member_router
+from .routes_grants import router as grants_router
 
 # ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
 _verifier = DevTokenService()
@@ -30,7 +32,13 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 app = create_app(load_settings("manager"), router)
+# 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
+app.state._token_verifier = _verifier
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。
 app.include_router(build_employee_router(_verifier))
+# 成员/部门/角色（/api/manager/members/* 等，M1）。
+app.include_router(member_router)
+# member_grant 授权（/api/manager/grants/*，M1）。
+app.include_router(grants_router)
