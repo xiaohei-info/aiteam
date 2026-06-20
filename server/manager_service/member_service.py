@@ -67,7 +67,9 @@ def _grant_out(row: GrantRow, tenant_id: str) -> MemberGrantOut:
 class MemberDeptService:
     """部门 + 成员（角色经 EnterpriseRole 枚举）编排。tenant_id 全程取自 TenantContext。"""
 
-    def __init__(self, *, repo: MemberDeptRepository, auth: AuthService):
+    def __init__(self, *, repo: MemberDeptRepository, auth: AuthService | None = None):
+        # auth 仅账号开通/口令等**写路径**需要（create_member）；只读消费者（如 M7 快照授权）
+        # 只用 get_member 等读方法，可不注入 auth，避免无谓耦合到签名私钥库（admin DSN）。
         self._repo = repo
         self._auth = auth
 

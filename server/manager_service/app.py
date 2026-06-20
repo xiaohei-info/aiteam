@@ -16,6 +16,7 @@ from .routes_member import router as member_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_provider import build_provider_credential_router
+from .routes_snapshot import build_snapshot_router
 
 # ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
 _verifier = DevTokenService()
@@ -51,3 +52,5 @@ from .routes_capability import build_capability_router  # noqa: E402
 app.include_router(build_capability_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
+# 执行快照生成（/api/manager/snapshots，M7，05 F11 / D5）。Agent 主动拉取，用户端本地冻结。
+app.include_router(build_snapshot_router(_verifier))
