@@ -20,6 +20,9 @@ from agent_service.auth.local_login import (
 )
 from agent_service.auth.manager_client import UnconfiguredManagerClient
 from agent_service.auth.token_cache import InMemoryTokenCache
+from agent_service.mainline.factory import build_mainline_service
+from agent_service.mainline.routes import build_mainline_router
+from agent_service.mainline.service import MainlineService
 from shared.app_factory import create_app
 from shared.auth import DevTokenService, require_claims
 from shared.config import load_settings
@@ -53,13 +56,22 @@ def build_router(login_service: LocalLoginService) -> APIRouter:
     return router
 
 
-def build_app(*, manager_client: ManagerLoginClient | None = None) -> FastAPI:
-    """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。"""
+def build_app(
+    *,
+    manager_client: ManagerLoginClient | None = None,
+    mainline_service: MainlineService | None = None,
+) -> FastAPI:
+    """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。
+
+    mainline_service 默认用 fake runtime 装配的本地主链（A1）；测试可注入自定义编排器。
+    """
     login_service = LocalLoginService(
         manager=manager_client or UnconfiguredManagerClient(),
         cache=InMemoryTokenCache(),
     )
-    return create_app(load_settings("agent"), build_router(login_service))
+    app = create_app(load_settings("agent"), build_router(login_service))
+    app.include_router(build_mainline_router(mainline_service or build_mainline_service()))
+    return app
 
 
 app = build_app()
