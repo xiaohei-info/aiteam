@@ -172,3 +172,63 @@ class MemberGrantOut(BaseModel):
     department_ids: list[str] = Field(default_factory=list)
     member_ids: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
+
+
+# ---- 知识空间/RAG 管理面（M3，04 §6.1.2/§6.6；05 F08；D21）----
+# workspace 只由 ManagerRagService.derive_workspace(tenant_id, knowledge_space_id) 推导（D21），
+# 禁前端/Agent 直传。出参 workspace 仅展示派生结果（审计/调试），**不接受** workspace 入参。
+
+
+class KnowledgeSpaceCreate(BaseModel):
+    """建知识空间请求体（复用 rag_workspace 表）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_space_id: str = Field(
+        description="租户内知识空间 id；workspace = derive(tenant_id, knowledge_space_id)（D21）"
+    )
+    display_name: str = ""
+
+
+class KnowledgeSpaceUpdate(BaseModel):
+    """改知识空间展示名。workspace 派生后不可改（D21：身份由 tenant+space 决定）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+
+
+class KnowledgeSpaceOut(BaseModel):
+    """知识空间出参。workspace 为派生结果（仅供审计/调试展示，不回灌入参，D21）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_space_id: str
+    workspace: str = Field(description="派生 workspace（ManagerRagService 从 ctx 推导，D21）")
+    display_name: str
+    created_at: datetime | None = None
+
+
+class KnowledgeSpaceBindingCreate(BaseModel):
+    """绑定知识空间到 专家 / 部门 / 成员（仅绑定元数据，不做检索执行，D21）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_space_id: str
+    resource_type: Literal["expert", "department", "member"] = Field(
+        description="expert 真相态走 employee.knowledge_refs；department/member 走 knowledge_space_binding 表"
+    )
+    resource_id: str
+
+
+class KnowledgeSpaceBindingOut(BaseModel):
+    """知识空间绑定出参。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    knowledge_space_id: str
+    resource_type: str
+    resource_id: str
+    created_at: datetime | None = None

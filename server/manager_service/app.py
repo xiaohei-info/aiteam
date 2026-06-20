@@ -14,6 +14,7 @@ from .routes_auth import router as auth_router
 from .routes_employee import build_employee_router
 from .routes_member import router as member_router
 from .routes_grants import router as grants_router
+from .routes_knowledge_space import build_knowledge_space_router
 
 # ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
 _verifier = DevTokenService()
@@ -42,3 +43,5 @@ app.include_router(build_employee_router(_verifier))
 app.include_router(member_router)
 # member_grant 授权（/api/manager/grants/*，M1）。
 app.include_router(grants_router)
+# 知识空间/RAG 管理面（/api/manager/knowledge-spaces/*，M3）。verifier 由本端持有闭包注入。
+app.include_router(build_knowledge_space_router(_verifier))
