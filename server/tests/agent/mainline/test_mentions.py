@@ -32,6 +32,18 @@ def test_parse_no_mentions_returns_empty():
     assert parse_mentions("邮箱 foo@bar.com 不是提及") == []  # @ 前有字符不算 handle
 
 
+def test_parse_cjk_adjacent_mentions():
+    """中文紧贴 @ 的提及必须生效（守卫只挡 ASCII 单词字符，不挡 CJK）。
+
+    评审实测缺口：用 \\w 守卫时「请@alice和@bob协作」会解析为空（CJK 也算 \\w）。
+    本项目面向中文用户，CJK 直接挨着 @ 是常态。
+    """
+    assert parse_mentions("请@alice和@bob协作") == ["alice", "bob"]
+    assert parse_mentions("麻烦@carol看一下") == ["carol"]
+    # 仍须排除 email 局部：中文里的邮箱不误判。
+    assert parse_mentions("联系foo@bar.com谢谢") == []
+
+
 def test_parse_handle_charset():
     # 仅允许 字母/数字/下划线/连字符 的 handle；标点终止 handle。
     assert parse_mentions("@alice, @bob! @carol。") == ["alice", "bob", "carol"]

@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import re
 
-# (?<![\w@]) 守卫：@ 前不能紧跟单词字符或 @（排除 email 局部、@@ 等）。
-_MENTION_RE = re.compile(r"(?<![\w@])@([A-Za-z0-9_-]+)")
+# 守卫：@ 前不能紧跟 ASCII 单词字符或 @（排除 email 局部 foo@bar、@@ 等）。
+# 刻意只挡 ASCII（[A-Za-z0-9_]）而非 \w——\w 在 Unicode 下涵盖 CJK，会让中文紧贴的
+# @提及（如「请@alice协作」）失效；本项目面向中文用户，须允许 CJK 直接挨着 @。
+_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_@])@([A-Za-z0-9_-]+)")
 
 
 def parse_mentions(text: str) -> list[str]:
