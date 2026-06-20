@@ -43,7 +43,9 @@ from .store import (
 from .stream import StreamBroker
 from .timeline import RawEventArchive, TimelineStore
 
-# 产品终态事件类型 -> Run 持久终态。
+# 产品终态事件类型 -> Run 持久终态（#64 终态单一真相源：timeline 终态事件 -> Run 终态）。
+# 与 event_mapper.TERMINAL_TYPES / timeline._TERMINAL_TYPES 同集合，是终态类型集合的唯一业务
+# 映射点。Run 终态据此反查派生，不再靠 RunResult.error 字符串硬匹配。
 _TERMINAL_RUN_STATUS: dict[str, RunStatus] = {
     "run_succeeded": RunStatus.COMPLETED,
     "run_cancelled": RunStatus.CANCELLED,
@@ -164,7 +166,7 @@ class MainlineService:
             await self._handle_runtime_event(conversation_id, rt)
 
         result = await self._runner.run(request, on_event)
-        final_run = self._finalize_run(run.id, result)
+        final_run = self._finalize_run(run.id, conversation_id, result)
         if task_id is not None:
             self._tasks.set_status(task_id, _task_status_for(final_run.status))
         await self._broker.publish_display(conversation_id, DisplayState.RESOLVED, run_id=run.id)
@@ -184,18 +186,23 @@ class MainlineService:
         # 3) 推业务事件给订阅者（只推产品事件，绝不推 runtime 原生事件）。
         await self._broker.publish_timeline(stored)
 
-    def _finalize_run(self, run_id: str, result: RunResult) -> Run:
-        """据 Executor 终态收尾 Run 持久态。
+    def _finalize_run(self, run_id: str, conversation_id: str, result: RunResult) -> Run:
+        """据 timeline 终态事件收敛 Run 持久终态（#64 单一真相源）。
 
-        Executor 的 RunResult 是权威终态来源（本地 Runtime 执行口径，07 §8）；事件流里的
-        run_succeeded/failed/cancelled 已落 timeline，这里把 Run 主记录收敛到对应终态。
+        Run 终态由**已落 timeline 的终态业务事件**反查派生（run_succeeded->COMPLETED /
+        run_cancelled->CANCELLED / run_failed->FAILED），与 timeline 终态同一来源——消除旧的
+        `result.error == 'cancelled'` 字符串硬匹配双源（runtime 回非标准 error 串会导致
+        Run=FAILED 而 timeline=run_cancelled 的撕裂）。
+
+        兜底：timeline 无终态事件时（契约异常：正常 runtime 必发 completed/cancelled/error），
+        按 RunResult.success 收尾（success->COMPLETED / 否则 FAILED），避免卡死。RunResult 的
+        session_id/error/usage 始终作为元数据落库（error 是诊断串，不参与终态判定）。
         """
-        if result.success:
-            status = RunStatus.COMPLETED
-        elif result.error == "cancelled":
-            status = RunStatus.CANCELLED
+        terminal = self._timeline.terminal_for_run(conversation_id, run_id)
+        if terminal is not None:
+            status = _TERMINAL_RUN_STATUS[terminal.type]
         else:
-            status = RunStatus.FAILED
+            status = RunStatus.COMPLETED if result.success else RunStatus.FAILED
         return self._runs.finalize(
             run_id, status,
             session_id=result.session_id, error=result.error, usage=result.usage,

@@ -3,6 +3,11 @@
 TimelineStore：每个 conversation 一条时间线，**单调 numeric cursor**（从 1 递增）。
 - append(business_event)：分配下一个 cursor，落本地、返回带 cursor 的事件。
 - read_after(conversation_id, after_cursor)：增量拉取 cursor > after_cursor 的事件。
+- terminal_for_run(conversation_id, run_id)：取该 run 在时间线上的**终态业务事件**
+  （run_succeeded/run_cancelled/run_failed）；无则 None。
+
+终态单一真相源（#64）：Run 持久终态由本接口反查已落 timeline 的终态事件类型派生，
+不再靠 RunResult.error 字符串硬匹配——消除「Run=FAILED 而 timeline=run_cancelled」的撕裂。
 
 cursor 口径（parity MVP run_journal）：MVP 用 per-run `seq`（event_id=run_id:seq，after_seq
 增量）。v1 把游标提升到 **per-conversation**，使一个会话内多次 run 的事件能在同一条时间线上
@@ -20,6 +25,11 @@ from abc import ABC, abstractmethod
 
 from shared.contracts.events import AgentRuntimeEvent, BusinessTimelineEvent
 
+# 产品级终态事件类型（07 §8 / event_mapper.TERMINAL_TYPES 同集合）。timeline 侧自持一份，
+# 避免反向依赖 event_mapper（event_mapper 是 runtime->business 的纯映射，timeline 是存储，
+# 两者关注点不同；终态类型集合属共享口径，由本模块 + event_mapper 各持一份同义定义）。
+_TERMINAL_TYPES: frozenset[str] = frozenset({"run_succeeded", "run_cancelled", "run_failed"})
+
 
 class TimelineStore(ABC):
     @abstractmethod
@@ -33,6 +43,14 @@ class TimelineStore(ABC):
     @abstractmethod
     def latest_cursor(self, conversation_id: str) -> int:
         """该会话当前最大 cursor（无事件返回 0）。"""
+
+    @abstractmethod
+    def terminal_for_run(self, conversation_id: str, run_id: str) -> BusinessTimelineEvent | None:
+        """取该 run 在时间线上**最后一条终态业务事件**；无终态事件返回 None。
+
+        终态单一真相源（#64）：Run 持久终态据此反查派生（run_succeeded->COMPLETED /
+        run_cancelled->CANCELLED / run_failed->FAILED），不再靠 RunResult.error 硬匹配。
+        """
 
 
 class InMemoryTimelineStore(TimelineStore):
@@ -59,6 +77,14 @@ class InMemoryTimelineStore(TimelineStore):
     def latest_cursor(self, conversation_id: str) -> int:
         with self._lock:
             return self._cursor.get(conversation_id, 0)
+
+    def terminal_for_run(self, conversation_id: str, run_id: str) -> BusinessTimelineEvent | None:
+        # 逆序找该 run 的最后一条终态事件（按 cursor 升序落库，逆序即最新）。
+        with self._lock:
+            for ev in reversed(self._events.get(conversation_id, [])):
+                if ev.run_id == run_id and ev.type in _TERMINAL_TYPES:
+                    return ev
+        return None
 
 
 class RawEventArchive(ABC):
