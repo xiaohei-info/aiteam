@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -310,3 +311,212 @@ class MemoryPolicyCatalogOut(MemoryPolicyCatalogIn):
 
     catalog_id: str
     catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
+
+
+
+# ---- 招募专家 / 应用方案（M6，05 F06/F07；04 §6.1，D12）----
+#
+# F06：Manager 租户内招募 → 向 Operator 拉专家模板详情（只读）→ 写本 tenant 的 employee 实例，
+#      可绑定部门/成员授权（复用 member_grant，D12）。
+# F07：Manager 向 Operator 拉方案包（只读）→ 在本 tenant 创建 solution instance，
+#      展开为 employee 实例 + 知识/技能引用 + 默认授权。
+#
+
+class RecruitExpertRequest(BaseModel):
+    """F06 招募专家请求：指定 Operator 侧模板标识 + 本 tenant 落地参数 + 可选授权绑定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str = Field(description="Operator 侧专家模板 id（只读拉取来源）")
+    template_version: str | None = Field(
+        default=None, description="模板版本；空=取 Operator 侧最新"
+    )
+    employee_slug: str = Field(description="本 tenant 内 employee 实例 slug，unique(tenant_id, slug)")
+    display_name_override: str | None = Field(
+        default=None, description="覆盖模板 display_name；空=用模板 display_name"
+    )
+    persona_override: str | None = Field(
+        default=None, description="覆盖 persona；空=用模板 persona"
+    )
+    department_ids: list[str] = Field(
+        default_factory=list, description="招募即绑定授权部门（D12，落 member_grant）"
+    )
+    member_ids: list[str] = Field(
+        default_factory=list, description="招募即绑定授权成员（D12，落 member_grant）"
+    )
+
+
+class ApplySolutionRequest(BaseModel):
+    """F07 应用方案请求：指定 Operator 侧方案标识 + 本 tenant 落地参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    solution_id: str = Field(description="Operator 侧方案 id（只读拉取来源）")
+    solution_version: str | None = Field(
+        default=None, description="方案版本；空=取 Operator 侧最新"
+    )
+    display_name_override: str | None = Field(
+        default=None, description="覆盖方案 display_name；空=用方案包 display_name"
+    )
+    department_ids: list[str] = Field(
+        default_factory=list, description="方案默认授权部门（D12，展开为各专家的 member_grant）"
+    )
+    member_ids: list[str] = Field(
+        default_factory=list, description="方案默认授权成员（D12，展开为各专家的 member_grant）"
+    )
+
+
+class SolutionInstanceOut(BaseModel):
+    """本 tenant 的方案实例真相（F07 展开结果）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    solution_id: str
+    solution_version: str
+    display_name: str
+    status: str
+    expert_employee_ids: list[str] = Field(default_factory=list)
+    knowledge_refs: list[str] = Field(default_factory=list)
+    skill_refs: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class RecruitExpertResult(BaseModel):
+    """F06 招募结果：落地的 employee 实例 + 来源模板标识 + 是否落了授权。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str
+    employee_slug: str
+    display_name: str
+    persona: str | None = None
+    source_template_id: str
+    source_template_version: str
+    grants_applied: bool = Field(
+        default=False, description="是否在本 tenant 落了 member_grant 授权（D12）"
+    )
+
+
+class ApplySolutionResult(BaseModel):
+    """F07 应用方案结果：方案实例 + 展开的专家 employee 列表 + 授权落点。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    solution_instance: SolutionInstanceOut
+    experts: list[RecruitExpertResult] = Field(
+        default_factory=list, description="方案包内每个专家展开后的 employee 实例结果"
+    )
+    grants_applied: bool = Field(default=False, description="是否落了默认授权（D12）")
+
+# ---- 企业级 usage/audit rollup + 软配额治理（M8，04 §6.5/§6.5.1，D13/D24）----
+#
+# 红线（D13）：本节 schema 只承载**脱敏聚合摘要**——不含会话文本/prompt/token 明文/工具输入输出
+# 明细。上报体对齐 shared.contracts.crosstier.UsageSummaryUpload（A5 上报、本端消费，只 import），
+# 落库与出参均无会话内容字段。配额策略 dimensions 为中立维度（cap/threshold），亦不含会话内容。
+
+
+class UsageRollupOut(BaseModel):
+    """计量聚合出参（对齐 shared.contracts.summary.UsageSummary）。无会话内容字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rollup_id: str
+    summary_id: str
+    employee_id: str | None = None
+    window_start: datetime
+    window_end: datetime
+    run_count: int = 0
+    token_total: int = 0
+    cost_total: Decimal = Decimal("0")
+    error_count: int = 0
+    duration_seconds_total: int = 0
+
+
+class UsageAggregateOut(BaseModel):
+    """按 tenant + 窗口的 usage 聚合（不跨企业汇总，跨企业归 O3）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rollup_count: int
+    run_count: int
+    token_total: int
+    cost_total: Decimal
+    error_count: int
+    duration_seconds_total: int
+
+
+class AuditSummaryOut(BaseModel):
+    """审计事件摘要出参（对齐 shared.contracts.summary.AuditSummaryEvent）。无会话内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    summary_id: str
+    actor: str
+    action: str
+    resource_type: str | None = None
+    resource_id: str | None = None
+    occurred_at: datetime
+
+
+class QuotaPolicyIn(BaseModel):
+    """软配额策略写入体（D24：默认 soft）。dimensions 为中立维度，不含会话内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_slug: str = Field(description="租户内策略 slug，唯一约束 (tenant_id, policy_slug)")
+    display_name: str = ""
+    scope: Literal["tenant", "employee", "member"] = "tenant"
+    target_ref: str | None = Field(
+        default=None, description="scope=employee/member 时的目标 id；scope=tenant 时为空"
+    )
+    window_start: datetime
+    window_end: datetime
+    dimensions: dict = Field(
+        default_factory=dict,
+        description="中立策略维度（如 cost_cap_usd/token_cap/run_cap/threshold），不含会话内容",
+    )
+    enforcement: Literal["soft", "hard"] = Field(
+        default="soft",
+        description="soft=告警/建议不阻断（默认，D24）；hard=可选硬配额须显式牺牲离线可用性",
+    )
+    status: Literal["active", "paused"] = "active"
+
+
+class QuotaPolicyOut(BaseModel):
+    """软配额策略出参。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str
+    policy_slug: str
+    display_name: str
+    scope: str
+    target_ref: str | None = None
+    window_start: datetime
+    window_end: datetime
+    dimensions: dict = Field(default_factory=dict)
+    enforcement: str
+    status: str
+    version: int = Field(description="策略版本；每次配置变更单调递增")
+
+
+class QuotaEnforcementActionOut(BaseModel):
+    """软配额治理动作结果（D24：默认 soft，只产出建议/告警，不阻断 run）。
+
+    红线：不返回 quota lease，不强制阻断——离线时本地继续执行（D14）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: str
+    policy_slug: str
+    enforcement: str
+    actions: list[str] = Field(
+        default_factory=list,
+        description="触达/告警/限流建议等软动作标签（如 notify_owner / alert_threshold / suggest_throttle）",
+    )
+    severity: str = Field(default="info", description="info | warn | alert")
+    detail: str | None = None

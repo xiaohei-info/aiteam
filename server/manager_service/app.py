@@ -16,6 +16,9 @@ from .routes_member import router as member_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_provider import build_provider_credential_router
+from .routes_recruit import build_recruit_router
+from .operator_catalog import FakeOperatorCatalogClient
+from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_snapshot import build_snapshot_router
 
 # ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
@@ -37,6 +40,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 app = create_app(load_settings("manager"), router)
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
+# Operator 目录拉取端口（05 F06/F07，本卡 Operator 侧先 mock；生产注入真实 OperatorCatalogClient）。
+app.state._operator_catalog = FakeOperatorCatalogClient()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。
@@ -52,5 +57,9 @@ from .routes_capability import build_capability_router  # noqa: E402
 app.include_router(build_capability_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
+# 招募专家/应用方案（/api/manager/recruit/*，M6，F06/F07，D12）。Operator 目录拉取先 mock。
+app.include_router(build_recruit_router(_verifier))
+# usage/audit rollup + 软配额治理（/api/manager/usage/*、/audits、/quota-policies/*，M8）。
+app.include_router(build_usage_audit_quota_router(_verifier))
 # 执行快照生成（/api/manager/snapshots，M7，05 F11 / D5）。Agent 主动拉取，用户端本地冻结。
 app.include_router(build_snapshot_router(_verifier))

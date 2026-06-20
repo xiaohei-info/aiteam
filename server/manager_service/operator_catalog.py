@@ -1,0 +1,118 @@
+"""Operator 目录拉取客户端抽象（M6，05 F06/F07 + §5.3，D4/D14）。
+
+职责：封装 Manager → Operator 的「单向只读拉取」——拉专家模板详情（ExpertTemplateDetail）
+与行业方案包（SolutionPackage）。Manager 拉下来**只读用、不改模板真相**（05 F06/F07 红线：
+Operator 持模板真相，Manager 不写、不改）。
+
+抽象边界（本卡 Operator 侧先 mock/fake，不真连）：
+- 真实实现 `OperatorCatalogClient`（生产）经 `shared.service_client.ServiceClient` 走云侧受控
+  服务间调用（05 §5.3）；本卡未落地 Operator 端点，故真实实现为占位（调用即 NotImplemented）。
+- 测试/骨架期注入 `FakeOperatorCatalogClient`（内存预置模板/方案包），使 F06/F07 流程可在
+  不依赖 Operator 服务的前提下端到端验证。
+- 调用方（RecruitService）只依赖 `OperatorCatalogPort` 抽象，便于后续无侵入替换真实实现。
+
+红线：本接口**绝不反向写 Operator**——Manager 单向拉（05 §5 通信面方向铁律）。
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+
+
+class OperatorCatalogPort(ABC):
+    """Manager 拉取 Operator 目录的只读端口（05 F06/F07，D4）。
+
+    所有方法只读返回模板/方案包真相；Manager 不通过本端口回写 Operator（红线）。
+    """
+
+    @abstractmethod
+    def pull_expert_template(
+        self, *, template_id: str, version: str | None = None
+    ) -> ExpertTemplateDetail:
+        """F06 拉专家模板详情（05 F06）。template_id/version 为 Operator 侧只读标识。"""
+
+    @abstractmethod
+    def pull_solution_package(
+        self, *, solution_id: str, version: str | None = None
+    ) -> SolutionPackage:
+        """F07 拉行业方案包（05 F07）。solution_id/version 为 Operator 侧只读标识。"""
+
+
+class OperatorCatalogClient(OperatorCatalogPort):
+    """生产实现占位：真实经 shared.service_client 走 Operator 云侧端点（05 §5.3）。
+
+    本卡未落地 Operator 目录服务端点，调用即抛 NotImplementedError（编排者注入真实实现前，
+    app 层默认注入 FakeOperatorCatalogClient，使流程可跑可测）。
+    """
+
+    def __init__(self, base_url: str | None = None):
+        self._base_url = base_url
+
+    def pull_expert_template(
+        self, *, template_id: str, version: str | None = None
+    ) -> ExpertTemplateDetail:
+        raise NotImplementedError(
+            "Operator 目录拉取尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
+        )
+
+    def pull_solution_package(
+        self, *, solution_id: str, version: str | None = None
+    ) -> SolutionPackage:
+        raise NotImplementedError(
+            "Operator 目录拉取尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
+        )
+
+
+class FakeOperatorCatalogClient(OperatorCatalogPort):
+    """测试/骨架期内存 fake：预置模板/方案包真相，模拟 Operator 目录拉取。
+
+    用法：
+        fake = FakeOperatorCatalogClient()
+        fake.seed_expert(ExpertTemplateDetail(template_id="...", ...))
+        fake.seed_solution(SolutionPackage(solution_id="...", ...))
+    本实现**只读返回**预置数据，绝不反向写——守 Manager 单向拉红线。
+    """
+
+    def __init__(self) -> None:
+        self._experts: dict[tuple[str, str], ExpertTemplateDetail] = {}
+        self._experts_latest: dict[str, ExpertTemplateDetail] = {}
+        self._solutions: dict[tuple[str, str], SolutionPackage] = {}
+        self._solutions_latest: dict[str, SolutionPackage] = {}
+
+    # ---- 预置（测试/骨架用，生产不调）----
+    def seed_expert(self, detail: ExpertTemplateDetail) -> None:
+        self._experts[(detail.template_id, detail.version)] = detail
+        self._experts_latest[detail.template_id] = detail
+
+    def seed_solution(self, package: SolutionPackage) -> None:
+        self._solutions[(package.solution_id, package.version)] = package
+        self._solutions_latest[package.solution_id] = package
+
+    # ---- 只读拉取（红线：不改预置真相）----
+    def pull_expert_template(
+        self, *, template_id: str, version: str | None = None
+    ) -> ExpertTemplateDetail:
+        if version is not None:
+            detail = self._experts.get((template_id, version))
+        else:
+            detail = self._experts_latest.get(template_id)
+        if detail is None:
+            from shared.errors import NotFound
+
+            raise NotFound(f"expert template not found in operator catalog: {template_id}@{version}")
+        return detail.model_copy(deep=True)  # 返回副本，防止调用方改模板真相
+
+    def pull_solution_package(
+        self, *, solution_id: str, version: str | None = None
+    ) -> SolutionPackage:
+        if version is not None:
+            package = self._solutions.get((solution_id, version))
+        else:
+            package = self._solutions_latest.get(solution_id)
+        if package is None:
+            from shared.errors import NotFound
+
+            raise NotFound(f"solution package not found in operator catalog: {solution_id}@{version}")
+        return package.model_copy(deep=True)  # 返回副本，防止调用方改模板真相
