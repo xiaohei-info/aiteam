@@ -1,8 +1,11 @@
 name: v1-server-ci
 
 # v1 三端微服务的 CI 质量闸门（防跑偏的客观防线）。
-# 当前覆盖：共享契约校验 + 边界约束扫描（旧路径/HERMES_WEBUI_*/旧角色/import app）。
-# 待服务建成后逐步打开：OpenAPI 质量门禁、RLS 跨租户、timeline parity、隐私 e2e、分端产物隔离
+# 当前覆盖：
+#   1) 共享契约校验 + 边界约束扫描（旧路径/HERMES_WEBUI_*/旧角色/import app）——无需 PG。
+#   2) 集成测试（真 PostgreSQL + RLS）——堵住「集成测试在无 PG 机器上被 deselect、门是绿的
+#      但集成路径从没真跑过」的假绿漏洞（该漏洞曾让 M3/M5 的 jsonb→text[] 等真 bug 漏到合并后）。
+# 待服务建成后逐步打开：OpenAPI 质量门禁、timeline parity、入户链、分端产物隔离
 # （见 server/tests/integration/test_verification_matrix.py 占位）。
 #
 # 注：仅作用于 v1 新代码 server/；不触碰冻结的 app/（旧单体有自己的测试）。
@@ -38,8 +41,51 @@ jobs:
 
       - name: Run contract + boundary tests
         working-directory: server
-        # 不跑 integration 占位（其依赖未建成，标了 skip）；契约与边界测试必须全绿。
+        # 本 job 不跑 integration（无 PG）；集成测试由下方 integration job 在真 PG 上跑。
         run: python -m pytest -q -m "not integration"
+
+  integration:
+    name: 集成测试（真 PostgreSQL + RLS）
+    runs-on: ubuntu-latest
+    # 真 PG service：库名须为 manager_control_db（0001 迁移硬编码
+    # `GRANT CONNECT ON DATABASE manager_control_db`，库不存在该 GRANT 会失败）。
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: manager_control_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d manager_control_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # 两类连接分离（#60）：管理连接（postgres 超管，跑迁移/建角色/DDL）+ 业务连接（app_rw，受 RLS）。
+    # app_rw 的 LOGIN 口令由 apply_migrations 用 APP_RW_PASSWORD 幂等下发（不入迁移脚本）。
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/manager_control_db
+      DATABASE_URL: postgresql://app_rw:apprwpass@localhost:5432/manager_control_db
+      APP_RW_PASSWORD: apprwpass
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt pytest
+
+      - name: Run integration tests (真 PG + RLS)
+        working-directory: server
+        # 显式 -m integration；迁移在首次连接自动应用（apply_migrations），无需手动建表。
+        run: python -m pytest -q -m integration
 
   # ---- 待服务建成后启用（占位，当前不执行）----
   # openapi-gate:
