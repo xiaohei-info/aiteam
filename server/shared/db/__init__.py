@@ -129,6 +129,10 @@ class PgTenantSession(TenantDataSession):
         import psycopg
 
         # 连接身份已是 app_rw（业务 DSN），无需 SET LOCAL ROLE 降权（#60）。
+        # M1 注意（连接池）：app.tenant_id 是事务级 GUC，COMMIT/ROLLBACK 自动失效、复用无残留，
+        # 此处隔离正确性与池无关。但若 M1 引入 pgbouncer transaction pooling 复用后端连接，
+        # 须确保 app_rw 的口令/角色在池层正确透传认证——后端连接身份不得被池错配成其它角色，
+        # 否则「连接以 app_rw 直连」的身份层收口会被池层绕过（#60 反馈）。
         self._conn = psycopg.connect(self._dsn, autocommit=False)
         self._cur = self._conn.cursor()
         # 绑定租户（事务级，配连接池安全）。
