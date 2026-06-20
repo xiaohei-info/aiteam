@@ -1,0 +1,51 @@
+/**
+ * 应用路由（08 §12.2）。/login 公开；其余需登录，由 PageShell 包裹。
+ * 路由表对齐 shell-config 的 nav path（三处同名对齐，02 §10.1）。
+ */
+
+import { Navigate, Route, Routes } from "react-router-dom";
+
+import { PageShell } from "../components/PageShell";
+import { RequireAuth } from "../components/RequireAuth";
+import { LoginPage } from "../pages/LoginPage";
+import { PlaceholderPage } from "../pages/PlaceholderPage";
+
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/workspace"
+        element={
+          <RequireAuth>
+            <PageShell>
+              <PlaceholderPage messageKey="agent.workspace.placeholder" />
+            </PageShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/chat"
+        element={
+          <RequireAuth>
+            <PageShell>
+              <PlaceholderPage messageKey="agent.chat.placeholder" />
+            </PageShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/group"
+        element={
+          <RequireAuth>
+            <PageShell>
+              <PlaceholderPage messageKey="agent.chat.placeholder" />
+            </PageShell>
+          </RequireAuth>
+        }
+      />
+      <Route path="/" element={<Navigate to="/workspace" replace />} />
+      <Route path="*" element={<Navigate to="/workspace" replace />} />
+    </Routes>
+  );
+}

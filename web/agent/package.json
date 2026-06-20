@@ -1,0 +1,32 @@
+{
+  "name": "@aiteam/agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Team v1 用户端前端（agent）—— 工作台 / 私聊 / 群聊 / 对话页（本地）。只调本端 /api/agent/* + /api/auth/*（08 §12.2）。",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b --noEmit && vite build",
+    "typecheck": "tsc -b --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aiteam/shared": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8",
+    "vitest": "^2.0.5"
+  }
+}
