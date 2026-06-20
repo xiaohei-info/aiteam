@@ -95,6 +95,8 @@ loop:
 
 **派活铁律**（防跑偏）：派出的 coding agent 必须按下文「worker dispatch prompt」干活——只 import 共享契约、守红线/非目标、从集成分支切、PR base 指向集成分支、过 CI + 独立评审才允许关闭。**关闭前必须过闸**（这是不做"全自动无人闭环"的关键，保留验证兜底）。
 
+**收活铁律（worker 回报不可全信，真实教训）**：orchestrator 拿到 worker 回报、决定"过闸还是打回"前，**先 `git diff <集成分支>...<工作分支>` 看真实改动 + 跑测试**，绝不只凭 worker 那段 prose 总结判断。两类双向偏差都真实发生过：①worker 把"docs-only/零行为改动"写进总结，实际分支上一条 commit 已含完整修复（差点错误打回 / 重做好工作）；②worker 宣称"全绿完成"，实际只跑了本卡子集、缺依赖致跨模块用例静默跳过（差点放进坏代码）。回报只是线索，**diff 与测试才是事实**。
+
 **合并/集成纪律（避免并发踩踏，首轮真实教训）**：orchestrator 的**试合并、解冲突、合入都在专用集成 worktree 做**（`git worktree add ../integ <集成分支>`），**绝不在共享主工作树留半成品 merge 态**——并发的 reviewer 会读到脏主树、甚至误 `git reset --hard` 冲掉你未提交的工作。reviewer 侧对应铁律见下「verifier dispatch」第 0 步：只读共享态、不动主树。两边一起守，并发才安全。
 
 ### worker dispatch prompt（派发时注入 worker，不进 issue body）
