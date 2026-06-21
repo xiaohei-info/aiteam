@@ -18,6 +18,8 @@ export interface ConversationListProps {
   onSelect: (conversation: Conversation) => void;
   /** 列表刷新信号（发送消息后可让父组件 +1 触发重载）。 */
   refreshSignal?: number;
+  /** 列表头部文案（默认"私聊"，群聊页传"群聊"复用同一组件）。 */
+  headerLabel?: string;
 }
 
 export function ConversationList({
@@ -25,6 +27,7 @@ export function ConversationList({
   selectedId,
   onSelect,
   refreshSignal = 0,
+  headerLabel = "私聊",
 }: ConversationListProps) {
   const [items, setItems] = useState<Conversation[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -69,7 +72,7 @@ export function ConversationList({
 
   return (
     <div className="chat-list" role="list" aria-label="会话列表">
-      <div className="chat-list__header">私聊</div>
+      <div className="chat-list__header">{headerLabel}</div>
       {loading && items.length === 0 && <div className="chat-list__loading">加载中…</div>}
       {error && <div className="chat-list__error">{error}</div>}
       <ul className="chat-list__items">

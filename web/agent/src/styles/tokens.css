@@ -423,3 +423,87 @@ body {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* W-A.3 群聊页（复用 chat-* 类，仅补 roster / triggered / mentions 专属样式） */
+
+.group-panel__roster-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ai-space-md);
+  padding: var(--ai-space-sm) var(--ai-space-md);
+  border-bottom: 1px solid var(--ai-color-border);
+  background: var(--ai-color-bg-subtle);
+  flex-wrap: wrap;
+}
+
+.group-roster {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-sm);
+}
+
+.group-roster__header {
+  font-size: var(--ai-font-size-xs);
+  color: var(--ai-color-text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.group-roster__hint {
+  margin-left: var(--ai-space-xs);
+  color: var(--ai-color-text-muted);
+  font-weight: 400;
+}
+
+.group-roster__empty {
+  font-size: var(--ai-font-size-xs);
+  color: var(--ai-color-text-muted);
+}
+
+.group-roster__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: var(--ai-space-xs);
+  flex-wrap: wrap;
+}
+
+.group-roster__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ai-space-xs);
+}
+
+.group-roster__handle {
+  padding: 2px var(--ai-space-sm);
+  background: var(--ai-color-bg-canvas);
+  border: 1px solid var(--ai-color-border);
+  border-radius: var(--ai-radius-sm);
+  font-size: var(--ai-font-size-xs);
+  color: var(--ai-color-brand-primary);
+  cursor: pointer;
+}
+
+.group-roster__handle:hover {
+  background: var(--ai-color-bg-subtle);
+}
+
+.group-roster__model {
+  font-size: 10px;
+  color: var(--ai-color-text-muted);
+}
+
+.group-panel__triggered {
+  font-size: var(--ai-font-size-xs);
+  color: var(--ai-color-success, #16a34a);
+  font-weight: 600;
+}
+
+.group-composer__mentions {
+  font-size: var(--ai-font-size-xs);
+  color: var(--ai-color-text-secondary);
+  padding: 0 var(--ai-space-xs);
+}
+
