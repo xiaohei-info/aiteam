@@ -22,6 +22,7 @@
 import { useCallback, useState } from "react";
 
 import { useApp } from "../../lib/app-context";
+import { GlassPanel } from "@aiteam/shared/ui";
 import { ConversationList } from "../chat/ConversationList";
 import { TimelineView } from "../chat/TimelineView";
 import type { Conversation } from "../chat/useChatApi";
@@ -58,7 +59,7 @@ export function GroupPage() {
   }, []);
 
   return (
-    <div className="chat-page group-page">
+    <div className="flex h-full min-h-0 gap-md">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -66,13 +67,13 @@ export function GroupPage() {
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
       />
-      <div className="chat-panel group-panel">
+      <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
         {selected ? (
           <>
-            <div className="group-panel__roster-bar">
+            <div className="flex flex-wrap items-center justify-between gap-md border-b border-gold/15 px-md py-sm">
               <GroupExpertRoster experts={roster} onPickHandle={handlePickHandle} />
               {lastTriggered && lastTriggered.length > 0 && (
-                <div className="group-panel__triggered" aria-live="polite">
+                <div className="text-xs font-semibold text-success" aria-live="polite">
                   本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
                 </div>
               )}
@@ -89,9 +90,11 @@ export function GroupPage() {
             />
           </>
         ) : (
-          <div className="chat-panel__empty">选择一个群聊会话开始多专家协作</div>
+          <div className="flex flex-1 items-center justify-center text-text-muted">
+            选择一个群聊会话开始多专家协作
+          </div>
         )}
-      </div>
+      </GlassPanel>
     </div>
   );
 }

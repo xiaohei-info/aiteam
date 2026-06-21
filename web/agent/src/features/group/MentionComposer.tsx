@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Button } from "@aiteam/shared/ui";
 
 import { useApiError, useApp } from "../../lib/app-context";
 import type { DispatchResult, GroupExpert } from "./useGroupApi";
@@ -80,9 +81,9 @@ export function MentionComposer({ conversationId, experts, onDispatched }: Menti
   }
 
   return (
-    <form className="chat-composer group-composer" onSubmit={handleSubmit}>
+    <form className="flex flex-col gap-xs border-t border-gold/15 p-md" onSubmit={handleSubmit}>
       <textarea
-        className="chat-composer__input"
+        className="resize-y rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none focus:ring-2 focus:ring-gold"
         value={content}
         onChange={(e) => setContent(e.target.value)}
         placeholder="输入消息，@专家 触发协作…"
@@ -91,18 +92,14 @@ export function MentionComposer({ conversationId, experts, onDispatched }: Menti
         aria-label="群聊消息内容"
       />
       {mentioned.length > 0 && (
-        <div className="group-composer__mentions" aria-live="polite">
+        <div className="px-xs text-xs text-text-secondary" aria-live="polite">
           将触发：{mentioned.map((h) => `@${h}`).join(" ")}
         </div>
       )}
-      {error && <div className="chat-composer__error">{error}</div>}
-      <button
-        type="submit"
-        className="chat-composer__send"
-        disabled={sending || content.trim().length === 0}
-      >
+      {error && <div className="text-xs text-danger">{error}</div>}
+      <Button type="submit" className="self-end" disabled={sending || content.trim().length === 0}>
         {sending ? "发送中…" : "发送"}
-      </button>
+      </Button>
     </form>
   );
 }
