@@ -1,17 +1,4 @@
-/** 设计系统导出（08 §12.2）。tokens 单一来源 + CSS 变量注入。 */
+/** 设计系统导出。黑金 token 单一来源 + Tailwind v4 @theme CSS 生成。 */
 
-export {
-  tokens,
-  colorTokens,
-  spaceTokens,
-  radiusTokens,
-  fontSizeTokens,
-  zIndexTokens,
-  tokensToCssVars,
-} from "./tokens.js";
-export type {
-  ColorToken,
-  SpaceToken,
-  RadiusToken,
-  FontSizeToken,
-} from "./tokens.js";
+export * from "./tokens.js";
+export * from "./css.js";

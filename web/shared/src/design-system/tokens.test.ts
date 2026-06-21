@@ -1,17 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { tokens, tokensToCssVars, colorTokens } from "./tokens.js";
+import { tokens } from "./tokens.js";
 
-describe("design-system tokens", () => {
-  it("exposes grouped tokens", () => {
-    expect(tokens.color.brandPrimary).toBe(colorTokens.brandPrimary);
-    expect(tokens.space.md).toBe("16px");
+describe("黑金 design tokens", () => {
+  it("画布为暖黑、品牌为金", () => {
+    expect(tokens.color.bgCanvas).toBe("#0c0a07");
+    expect(tokens.color.gold).toBe("#cda349");
   });
 
-  it("renders CSS custom properties with kebab names", () => {
-    const vars = tokensToCssVars();
-    expect(vars["--ai-color-brand-primary"]).toBe("#2563eb");
-    expect(vars["--ai-space-md"]).toBe("16px");
-    expect(vars["--ai-radius-pill"]).toBe("999px");
-    expect(vars["--ai-z-modal"]).toBe("1300");
+  it("含玻璃材质参数（模糊度/实色降级背景）", () => {
+    expect(tokens.glass.blurPanel).toBe("30px");
+    expect(tokens.glass.bgSolid).toBe("#16120d");
+  });
+
+  it("半径含窗体大圆角", () => {
+    expect(tokens.radius.window).toBe("16px");
   });
 });
