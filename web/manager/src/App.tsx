@@ -11,7 +11,7 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
-import { ExpertsPlaceholder } from "./pages/ExpertsPlaceholder";
+import { ExpertsPage } from "./features/experts";
 import { GrantsPlaceholder } from "./pages/GrantsPlaceholder";
 import { GovernancePlaceholder } from "./pages/GovernancePlaceholder";
 
@@ -28,7 +28,7 @@ export function App(): React.ReactNode {
       >
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/members" element={<MembersPage />} />
-        <Route path="/experts" element={<ExpertsPlaceholder />} />
+        <Route path="/experts" element={<ExpertsPage />} />
         <Route path="/grants" element={<GrantsPlaceholder />} />
         <Route path="/governance" element={<GovernancePlaceholder />} />
       </Route>

@@ -1,0 +1,149 @@
+/**
+ * 招募专家页测试（W-M.3）：
+ * - 浏览：渲染可招募模板/方案 + 已招募实例
+ * - 招募：填 slug → recruitExpert(template_id, slug)
+ * - 应用方案：applySolution(solution_id)
+ * - 编辑实例：改 persona → updateEmployee 收到全量配置 + 改后 persona（保全其余字段）
+ * - 只读角色（member）不显示招募/应用/编辑入口
+ */
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { I18nContext } from "../../../i18n/context";
+import { managerMessages } from "../../../i18n/messages";
+import { SessionContext, type SessionContextValue } from "../../../auth/session";
+import { ExpertsPage } from "../ExpertsPage";
+import * as apiModule from "../useExpertsApi";
+import type { EmployeeConfig } from "../types";
+
+function makeI18n() {
+  const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
+  i18n.extend("zh-CN", managerMessages["zh-CN"]!);
+  return i18n;
+}
+
+function sessionValue(roles: string[]): SessionContextValue {
+  const session = {
+    principal: { id: "u1", tenant_id: "t1", display_name: "U", status: "active", roles },
+    claims: { user_id: "u1", tenant_id: "t1", roles, exp: Math.floor(Date.now() / 1000) + 3600 },
+  } as AuthSession;
+  return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
+}
+
+const employee: EmployeeConfig = {
+  employee_id: "e1",
+  employee_slug: "exp-a",
+  version: 1,
+  display_name: "专家A",
+  persona: "原人设",
+  model_policy: { model: "claude-opus-4-8", provider_ref: "relay", thinking_level: "high" },
+  runtime_policy: { runtime_binding: "hermes_acp", timeout_seconds: 120 },
+  tools: ["search"],
+  skills: ["code-review"],
+  knowledge_refs: ["ks1"],
+  connector_refs: ["slack"],
+  memory_policy: { seed: "x" },
+};
+
+function mockApi(overrides: Partial<apiModule.ExpertsApi> = {}) {
+  const api: apiModule.ExpertsApi = {
+    listTemplates: vi.fn().mockResolvedValue([
+      { template_id: "tpl-1", version: "1", display_name: "测试专家" },
+    ]),
+    listSolutions: vi.fn().mockResolvedValue([
+      { solution_id: "sol-1", version: "1", display_name: "测试方案" },
+    ]),
+    recruitExpert: vi.fn().mockResolvedValue({}),
+    applySolution: vi.fn().mockResolvedValue({}),
+    listEmployees: vi.fn().mockResolvedValue([employee]),
+    updateEmployee: vi.fn().mockResolvedValue(employee),
+    ...overrides,
+  };
+  vi.spyOn(apiModule, "useExpertsApi").mockReturnValue(api);
+  return api;
+}
+
+function renderPage(roles: string[]) {
+  return render(
+    <I18nContext.Provider value={makeI18n()}>
+      <SessionContext.Provider value={sessionValue(roles)}>
+        <MemoryRouter>
+          <ExpertsPage />
+        </MemoryRouter>
+      </SessionContext.Provider>
+    </I18nContext.Provider>,
+  );
+}
+
+describe("ExpertsPage 招募专家", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("浏览：渲染可招募模板/方案 + 已招募实例", async () => {
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    expect(screen.getByText("测试方案")).toBeInTheDocument();
+    expect(screen.getByTestId("instance-row")).toBeInTheDocument();
+  });
+
+  it("招募：填 slug → recruitExpert(template_id + slug)", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("实例标识（slug）"), { target: { value: "exp-new" } });
+    fireEvent.click(screen.getByText("招募"));
+    await waitFor(() =>
+      expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", employee_slug: "exp-new" }),
+    );
+  });
+
+  it("应用方案：applySolution(solution_id)", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("应用方案"));
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1" }));
+  });
+
+  it("编辑实例：改 persona → updateEmployee 收全量配置 + 新 persona，保全其余字段", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("编辑配置"));
+    fireEvent.change(screen.getByLabelText("人设（persona）"), { target: { value: "新人设" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => expect(api.updateEmployee).toHaveBeenCalledTimes(1));
+    // 全量回传：改后 persona + 保全【全部】其余字段（坐实 PUT 全量不丢任何字段）。
+    expect(api.updateEmployee).toHaveBeenCalledWith(
+      "e1",
+      expect.objectContaining({
+        display_name: "专家A",
+        persona: "新人设",
+        model_policy: employee.model_policy,
+        runtime_policy: employee.runtime_policy,
+        tools: employee.tools,
+        skills: employee.skills,
+        knowledge_refs: employee.knowledge_refs,
+        connector_refs: employee.connector_refs,
+        memory_policy: employee.memory_policy,
+      }),
+    );
+  });
+
+  it("普通成员（member）只读：无招募/应用/编辑入口", async () => {
+    mockApi();
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    expect(screen.queryByText("招募")).not.toBeInTheDocument();
+    expect(screen.queryByText("应用方案")).not.toBeInTheDocument();
+    expect(screen.queryByText("编辑配置")).not.toBeInTheDocument();
+  });
+});
