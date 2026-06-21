@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "@aiteam/shared/api-client";
+import { GlassPanel, Button } from "@aiteam/shared/ui";
 
 import { useApp } from "../../lib/app-context";
 import {
@@ -62,59 +63,93 @@ export function WorkspacePage() {
   const enabledCount = loops.filter((l) => l.status === "enabled").length;
 
   return (
-    <div className="workspace-page">
-      <h1>{i18n.t("agent.nav.workspace")}</h1>
-      <p className="workspace-summary">
-        {i18n.t("agent.workspace.summary")}: {conversations.length} · Loop {loops.length}（
-        {enabledCount} {i18n.t("agent.workspace.enabled")}）
-      </p>
-      {actionError && <p className="workspace-error">{actionError}</p>}
-      {error && <p className="workspace-error">{error}</p>}
-      {loading && <p>{i18n.t("agent.workspace.loading")}</p>}
+    <div className="flex flex-col gap-lg">
+      <header className="flex flex-col gap-xs">
+        <h1 className="m-0 text-xl font-bold text-text-primary">
+          {i18n.t("agent.nav.workspace")}
+        </h1>
+        <p className="m-0 text-sm text-text-secondary">
+          {i18n.t("agent.workspace.summary")}: {conversations.length} · Loop {loops.length}（
+          {enabledCount} {i18n.t("agent.workspace.enabled")}）
+        </p>
+        {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+        {error && <p className="m-0 text-sm text-danger">{error}</p>}
+        {loading && <p className="m-0 text-sm text-text-muted">{i18n.t("agent.workspace.loading")}</p>}
+      </header>
 
-      <section>
-        <h2>{i18n.t("agent.workspace.conversations_title")}</h2>
+      <GlassPanel className="flex flex-col gap-sm rounded-window p-lg">
+        <h2 className="m-0 text-base font-semibold text-gold">
+          {i18n.t("agent.workspace.conversations_title")}
+        </h2>
         {conversations.length === 0 ? (
-          <p>{i18n.t("agent.workspace.conversations_empty")}</p>
+          <p className="m-0 text-sm text-text-muted">
+            {i18n.t("agent.workspace.conversations_empty")}
+          </p>
         ) : (
-          <ul className="workspace-conversations">
+          <ul className="m-0 flex list-none flex-col gap-xs p-0">
             {conversations.map((c) => (
-              <li key={c.id} data-testid="ws-conversation">
-                <Link to="/chat">{c.title || c.id}</Link> · {c.state}
+              <li
+                key={c.id}
+                data-testid="ws-conversation"
+                className="flex items-center gap-sm border-b border-gold/10 py-xs text-sm last:border-b-0"
+              >
+                <Link to="/chat" className="text-gold no-underline hover:underline">
+                  {c.title || c.id}
+                </Link>
+                <span className="text-text-muted">· {c.state}</span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </GlassPanel>
 
-      <section>
-        <h2>{i18n.t("agent.workspace.loops_title")}</h2>
+      <GlassPanel className="flex flex-col gap-sm rounded-window p-lg">
+        <h2 className="m-0 text-base font-semibold text-gold">
+          {i18n.t("agent.workspace.loops_title")}
+        </h2>
         {loops.length === 0 ? (
-          <p>{i18n.t("agent.workspace.loops_empty")}</p>
+          <p className="m-0 text-sm text-text-muted">{i18n.t("agent.workspace.loops_empty")}</p>
         ) : (
-          <ul className="workspace-loops">
+          <ul className="m-0 flex list-none flex-col gap-sm p-0">
             {loops.map((l) => (
-              <li key={l.id} data-testid="ws-loop">
-                <span>
-                  <strong>{l.title || l.id}</strong> · <code>{l.cron}</code> · {l.status}
+              <li
+                key={l.id}
+                data-testid="ws-loop"
+                className="flex flex-wrap items-center gap-sm border-b border-gold/10 py-sm last:border-b-0"
+              >
+                <span className="flex-1 text-sm text-text-secondary">
+                  <strong className="text-text-primary">{l.title || l.id}</strong> ·{" "}
+                  <code className="rounded-sm bg-surface px-xs text-xs text-text-muted">{l.cron}</code> ·{" "}
+                  {l.status}
                 </span>
                 {l.status === "enabled" ? (
-                  <button type="button" onClick={() => void runLoopAction(() => disableLoop(client, l.id))}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void runLoopAction(() => disableLoop(client, l.id))}
+                  >
                     {i18n.t("agent.workspace.disable")}
-                  </button>
+                  </Button>
                 ) : (
-                  <button type="button" onClick={() => void runLoopAction(() => enableLoop(client, l.id))}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void runLoopAction(() => enableLoop(client, l.id))}
+                  >
                     {i18n.t("agent.workspace.enable")}
-                  </button>
+                  </Button>
                 )}
-                <button type="button" onClick={() => void runLoopAction(() => fireLoop(client, l.id))}>
+                <Button
+                  size="sm"
+                  onClick={() => void runLoopAction(() => fireLoop(client, l.id))}
+                >
                   {i18n.t("agent.workspace.fire")}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </GlassPanel>
     </div>
   );
 }
