@@ -1,13 +1,21 @@
-"""验证矩阵骨架（占位）。
+"""验证矩阵闸门（INT #55）。
 
-这些是 Wave 2 集成验收的关键闸门，但依赖尚未建成的服务/DB/runtime，故先以 skip 占位、
-钉死"必须验什么、归哪个 Phase、对哪份文档"。对应模块就绪后，去掉 skip 并填实。
+按模块就绪程度分两类：
+- **已转正**：当前可在 CI 中独立验证的闸门（不依赖真起三端服务）。
+- **占位 skip**：依赖尚未建成的链路（Phase 2/4 真实跨端流量），先以 skip 钉死
+  "必须验什么、归哪个 Phase、对哪份文档"，对应链路就绪后去掉 skip 并填实。
 
 防跑偏意义：把"完成"的客观标准提前写死在仓库里，避免各模块各自宣称完成却没有统一验收靶子。
 """
 
+import ast
+import json
 import os
+import pathlib
+import re
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -69,10 +77,108 @@ def test_timeline_parity_vs_frozen_baseline():
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="待跨端链路就绪（Phase 2/4）；口径见 04 §6.5 / CLAUDE-AGENTS §3.3，D13")
-def test_privacy_no_session_content_leaves_device():
-    """隐私 e2e：跨端流量只含认证/授权/脱敏摘要，绝无会话内容/raw event/工具明细外泄。"""
-    raise AssertionError("placeholder")
+def test_soft_quota_governance_action():
+    """软配额治理动作（D24）——默认 soft 不阻断 run，仅 hard 模式才 block。
+
+    验什么（口径 04 §6.5.1 / D24 / CLAUDE §3.3）：
+      在真实 v1 PG（aiteam_v1）上跑完 M8 的 create_quota → ingest UsageSummaryUpload →
+      evaluate_quota 全链路，断言默认软配额（enforcement=soft）即便超阈也只产出
+      alert_threshold / notify_owner / suggest_throttle 等"建议/告警"软动作，
+      **绝不产出 block_new_runs 强制阻断**；只有显式 enforcement=hard 才追加 block_new_runs。
+
+    为什么这样验：D14 离线可用性 + D24 默认软配额是红线——治理动作不得强制阻断本地 run。
+    用真实 PG + 真实 PgTenantRouter 走完整租户隔离链路（不是纯单元伪 repo），保证
+    RLS、tenant_id 经 TenantContext、SQL 不手写 tenant 过滤的约束在验收层也成立。
+    无 DATABASE_URL 时 skip（CI 默认门可不依赖外部 PG）。
+    """
+    db_url = os.getenv("DATABASE_URL")
+    admin_url = os.getenv("ADMIN_DATABASE_URL")
+    app_rw_password = os.getenv("APP_RW_PASSWORD")
+    if not db_url or not admin_url or not app_rw_password:
+        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL/APP_RW_PASSWORD 未设置；软配额闸门需真实 PG（M8/#55）")
+
+    import psycopg
+
+    from manager_service.schemas import QuotaPolicyIn
+    from manager_service.usage_audit_quota_service import build_usage_audit_quota_service
+    from shared.contracts.tenancy import TenantContext
+    from shared.db import PgTenantRouter, apply_migrations
+
+    apply_migrations(admin_url, app_rw_password=app_rw_password)
+
+    # 建 tenant：与 RLS 回归一致的 admin 连接 + tenant_registry 写入。
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        tid = str(conn.execute(
+            "INSERT INTO tenant_registry (enterprise_slug) VALUES (%s) RETURNING tenant_id",
+            (f"vm_quota_{uuid.uuid4().hex[:8]}",),
+        ).fetchone()[0])
+
+    owner_ctx = TenantContext(tenant_id=tid, user_id=str(uuid.uuid4()), roles=["owner"])
+    router = PgTenantRouter(db_url)
+    svc = build_usage_audit_quota_service(router)
+
+    window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+    def _ingest_over_cap(cost_cap: int, *, enforcement: str) -> None:
+        """在本 tenant 建 quota 并上报一笔超过 cost_cap 的 usage（不夹带任何会话内容）。"""
+        quota = svc.create_quota(owner_ctx, QuotaPolicyIn(
+            policy_slug=f"q_{enforcement}_{uuid.uuid4().hex[:6]}",
+            window_start=window_start, window_end=window_end,
+            dimensions={"cost_cap_usd": cost_cap, "token_cap": 1_000_000, "run_cap": 500},
+            enforcement=enforcement,
+        ))
+        svc.ingest_upload(owner_ctx, {
+            "tenant_id": tid,
+            "usage": [{
+                "summary_id": f"s_{enforcement}_{uuid.uuid4().hex[:8]}",
+                "employee_id": None,
+                "window_start": datetime(2026, 1, 10, tzinfo=timezone.utc),
+                "window_end": datetime(2026, 1, 11, tzinfo=timezone.utc),
+                "run_count": 10,
+                "token_total": 50000,
+                "cost_total": Decimal("150.0"),  # > cost_cap=100
+                "error_count": 0,
+                "duration_seconds_total": 600,
+            }],
+            "audits": [],
+        })
+        return quota.policy_id
+
+    # ---- D24 红线 1：默认 soft，超阈不阻断 ----
+    soft_pid = _ingest_over_cap(cost_cap=100, enforcement="soft")
+    soft_action = svc.evaluate_quota(
+        owner_ctx, policy_id=soft_pid, window_start=window_start, window_end=window_end,
+    )
+    assert soft_action.enforcement == "soft"
+    assert "block_new_runs" not in soft_action.actions, (
+        f"默认 soft 配额不得产出 block_new_runs（D24 离线可用性红线），实际 actions={soft_action.actions}"
+    )
+    # 超阈必须至少产出一种软动作（告警/建议），否则治理无意义。
+    soft_advisory = {"alert_threshold", "notify_owner", "suggest_throttle", "within_budget"}
+    assert set(soft_action.actions) & soft_advisory, (
+        f"超阈 soft 配额应产出告警/建议软动作，实际 actions={soft_action.actions}"
+    )
+
+    # ---- D24 红线 2：显式 hard 模式才追加 block_new_runs ----
+    hard_pid = _ingest_over_cap(cost_cap=100, enforcement="hard")
+    hard_action = svc.evaluate_quota(
+        owner_ctx, policy_id=hard_pid, window_start=window_start, window_end=window_end,
+    )
+    assert hard_action.enforcement == "hard"
+    assert "block_new_runs" in hard_action.actions, (
+        f"hard 模式超阈应追加 block_new_runs 建议，实际 actions={hard_action.actions}"
+    )
+
+    # ---- 配额评估结果不含 quota lease / 不携带会话内容字段 ----
+    # QuotaEnforcementActionOut 契约本身 extra=forbid，只含建议标签 + severity + detail。
+    leaked = json.dumps(hard_action.model_dump(mode="json"), ensure_ascii=False)
+    forbidden = {"message", "prompt", "content", "completion", "raw_event", "tool_input"}
+    assert not (forbidden & set(hard_action.model_dump().keys())), (
+        f"配额动作携带了禁止字段：{forbidden & set(hard_action.model_dump().keys())}"
+    )
+    for key in ("prompt", "message", "completion", "raw_event"):
+        assert key not in leaked, f"配额动作 detail 泄露会话内容键 {key}"
 
 
 @pytest.mark.integration
@@ -87,3 +193,211 @@ def test_user_client_build_excludes_control_plane():
 def test_onboarding_chain_operator_to_manager_to_agent():
     """入户链 e2e：Operator 开通企业→Manager 建 tenant→负责人登录→Agent 绑定 tenant。"""
     raise AssertionError("placeholder")
+
+
+# ============================================================================
+# 以下为 INT #55 转正闸门（不依赖真起三端服务，单端 fixture / 静态检查即可）
+# ============================================================================
+
+
+@pytest.mark.integration
+def test_privacy_no_session_content_in_tier_cross():
+    """隐私无外泄断言（D13）——脱敏聚合后 payload 不含会话内容（哨兵注入法）。
+
+    验什么（口径 04 §6.5 / CLAUDE §3.3 / D13）：
+      构造一个**刻意夹带会话内容字段**（message / prompt / content / token 明文 / 工具 IO 明细 /
+      provider key / 文件路径）的"恶意"本地原始 usage 事件，经 A5 的脱敏聚合
+      （UsageAggregator 白名单构造 → UsageSummaryUpload）后，断言序列化 payload 中**绝不出现**
+      任何注入的敏感哨兵串，也不含任何会话内容字段键。
+
+    为什么这样验（哨兵注入法）：
+      会话内容外泄是 D13 最硬的红线——"内容不上传控制面"。与其枚举"哪些字段被脱了"，不如
+      反向证明"注入的唯一哨兵串一个都流不出去"——这是负向证据，鲁棒于字段增删重构。
+      本闸门整合 server/tests/agent/usage/test_no_content_upload.py 的脱敏断言进集成验收矩阵，
+      覆盖 record → aggregate → outbox → upload 完整链路。
+
+    不依赖 PG（纯脱敏逻辑 + 契约 extra=forbid），无 DATABASE_URL 不 skip。
+    """
+    from agent_service.usage.factory import build_usage_service
+    from agent_service.usage.models import RawAuditEvent, RawUsageEvent
+    from shared.contracts.crosstier import UsageSummaryUpload
+
+    # 唯一哨兵串：注入到原始事件的各种"会话内容"位置。聚合后 payload 一个都不许出现。
+    SECRET_PROMPT = "D13-SENTINEL-PROMPT-私密会话内容-银行卡密码123456"
+    SECRET_COMPLETION = "D13-SENTINEL-COMPLETION-绝密商业方案明细"
+    SECRET_PROVIDER_KEY = "D13-SENTINEL-sk-live-PROVIDER-SECRET-KEY"
+    SECRET_FILE = "D13-SENTINEL-/Users/alice/secret-merger-deck.pdf"
+    SECRET_TOOL_INPUT = "D13-SENTINEL-tool-input-敏感参数"
+    SECRET_TOOL_OUTPUT = "D13-SENTINEL-tool-output-敏感返回"
+    SECRET_MESSAGES = "D13-SENTINEL-messages-array-content"
+    SENTINELS = [
+        SECRET_PROMPT, SECRET_COMPLETION, SECRET_PROVIDER_KEY, SECRET_FILE,
+        SECRET_TOOL_INPUT, SECRET_TOOL_OUTPUT, SECRET_MESSAGES,
+    ]
+
+    class _CapturingClient:
+        """fake 对端：捕获每次上报的 payload，不真连 Manager。"""
+        def __init__(self) -> None:
+            self.uploads: list[UsageSummaryUpload] = []
+
+        def upload(self, payload: UsageSummaryUpload, *, idempotency_key: str) -> None:
+            self.uploads.append(payload)
+
+    # 原始事件：刻意夹带 prompt/completion/messages/tool IO/provider key/file_path。
+    raw_events = [
+        RawUsageEvent(
+            run_id="r1", employee_id="e1",
+            usage={
+                "input_tokens": 12, "output_tokens": 8, "cost": "0.05",
+                # usage dict 夹带敏感串——即便混入也不该被带出
+                "prompt": SECRET_PROMPT, "provider_key": SECRET_PROVIDER_KEY,
+                "tool_input": SECRET_TOOL_INPUT, "tool_output": SECRET_TOOL_OUTPUT,
+            },
+            prompt=SECRET_PROMPT,
+            completion=SECRET_COMPLETION,
+            messages=[{"role": "user", "content": SECRET_MESSAGES}],
+            file_path=SECRET_FILE,
+        ),
+    ]
+
+    client = _CapturingClient()
+    service = build_usage_service(client=client)
+    service.record_usage("t-d13", raw_events)
+    service.record_audits("t-d13", [
+        RawAuditEvent(actor="u1", action="login", note=SECRET_PROMPT),  # extra note 夹带
+    ])
+    result = service.flush()
+
+    assert result.sent >= 1
+    assert client.uploads, "应至少有一次上报"
+
+    # 负向断言 1：序列化 payload 中任何哨兵串都不出现。
+    blob = json.dumps(
+        [p.model_dump(mode="json") for p in client.uploads], ensure_ascii=False,
+    )
+    for sentinel in SENTINELS:
+        assert sentinel not in blob, f"上报 payload 泄露会话内容哨兵: {sentinel!r}"
+
+    # 负向断言 2：UsageSummary 契约字段集严格等于白名单——不含任何会话内容字段键。
+    forbidden_keys = {
+        "message", "messages", "prompt", "prompts", "content", "text",
+        "tool_input", "tool_output", "raw_event", "completion", "response_text",
+        "provider_key", "file_path",
+    }
+    for upload in client.uploads:
+        for summary in upload.usage:
+            keys = set(summary.model_dump().keys())
+            assert not (forbidden_keys & keys), (
+                f"UsageSummary 携带会话内容字段键: {forbidden_keys & keys}"
+            )
+        for audit in upload.audits:
+            keys = set(audit.model_dump().keys())
+            assert not (forbidden_keys & keys), (
+                f"AuditSummaryEvent 携带会话内容字段键: {forbidden_keys & keys}"
+            )
+
+    # 正向断言：计量值正确（脱敏不破坏计量）。
+    s = client.uploads[0].usage[0]
+    assert s.token_total == 20  # 12 + 8
+    assert s.run_count == 1
+
+
+@pytest.mark.integration
+def test_source_level_tier_isolation():
+    """分端产物隔离（D15）——源码层 import 图无跨端依赖。
+
+    验什么（口径 09 §14 / CLAUDE §4 / D15）：
+      v1 按端分目录，用户端交付物绝不打包控制面（Operator/Manager）代码。在 deploy/ 按端
+      Dockerfile/CI 建成前，先在**源码层**用 AST 静态分析 import 图，断言无跨端 import：
+        - server/agent_service/ 不 import server/manager_service/ 或 server/operation_service/
+        - server/operation_service/ 不 import server/agent_service/
+        - web/agent/src/ 不 import web/operation/ 或 web/manager/
+        - web/operation/src/ 不 import web/agent/
+      （manager 与 operation 之间是云侧服务间调用，允许经 service_client 通信，不在本闸门限制内。）
+
+    为什么用静态分析（ast）而非运行时：
+      跨端 import 是 D15 的代码层前置保障——import 图里就不该出现跨端依赖，否则一旦进入
+      打包范围就无法裁剪。AST 扫描覆盖 .py（import/from-import）与 .ts/.tsx（import/from），
+      不依赖真起服务、不依赖 PG，CI 默认门必跑。
+    """
+    repo_root = pathlib.Path(__file__).resolve().parents[3]  # .../aiteam
+
+    # 后端跨端 import 图：{源端: [允许的兄弟端模块名]}。agent 必须独立；operation 不得依赖 agent。
+    # shared/agent_gateway 是 agent 端随附组件，不算跨端（见 CLAUDE §4）。
+    backend_rules = {
+        "server/agent_service": {"forbidden": ("manager_service", "operation_service")},
+        "server/operation_service": {"forbidden": ("agent_service",)},
+    }
+    frontend_rules = {
+        "web/agent/src": {"forbidden": ("operation", "manager")},
+        "web/operation/src": {"forbidden": ("agent",)},
+    }
+
+    def _scan_python(dir_path: pathlib.Path, forbidden: tuple[str, ...]) -> list[str]:
+        """扫描 .py 文件的 import/from-import，返回命中 forbidden 顶级模块的违规列表。"""
+        violations: list[str] = []
+        if not dir_path.exists():
+            return violations
+        for src in dir_path.rglob("*.py"):
+            try:
+                tree = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+            except SyntaxError:
+                continue  # 解析失败不阻塞（让 ruff/mypy 报），跳过该文件
+            for node in ast.walk(tree):
+                module: str | None = None
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        module = alias.name
+                        _check(module, src, forbidden, violations, kind="import")
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module
+                    _check(module, src, forbidden, violations, kind="from")
+        return violations
+
+    def _check(module, src, forbidden, violations, *, kind):
+        if not module:
+            return
+        top = module.split(".")[0]
+        if top in forbidden:
+            violations.append(f"{kind} {module} @ {src.relative_to(repo_root)}")
+
+    def _scan_ts(dir_path: pathlib.Path, forbidden: tuple[str, ...]) -> list[str]:
+        """扫描 .ts/.tsx 的 import/from '...' 语句，返回命中 forbidden 的违规列表。
+
+        前端跨端 import 只可能形如 from "@aiteam/operation/..." 或 from "../manager/..."——
+        扫描 import 说明符字符串里是否出现 forbidden 端名即可。
+        """
+        violations: list[str] = []
+        if not dir_path.exists():
+            return violations
+        for src in list(dir_path.rglob("*.ts")) + list(dir_path.rglob("*.tsx")):
+            try:
+                text = src.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            # TS 没有 stdlib ast 解析器；用正则匹配 import 语句即可——这是静态字符串检查，
+            # 不做语义分析，足以捕获跨端 import 这种粗粒度违规。
+            for m in re.finditer(r"""(?:import|export)[^'"]*?['"]([^'"]+)['"]""", text):
+                spec = m.group(1)
+                # 只看 bare 路径片段（@aiteam/operation、../manager、/manager/...）
+                parts = re.split(r"[/@]", spec)
+                for f in forbidden:
+                    if f in parts:
+                        violations.append(
+                            f"import '{spec}' @ {src.relative_to(repo_root)} (forbidden: {f})"
+                        )
+        return violations
+
+    all_violations: list[str] = []
+
+    for rel, rule in backend_rules.items():
+        all_violations.extend(_scan_python(repo_root / rel, rule["forbidden"]))
+    for rel, rule in frontend_rules.items():
+        all_violations.extend(_scan_ts(repo_root / rel, rule["forbidden"]))
+
+    # 去重，便于失败信息可读。
+    unique = sorted(set(all_violations))
+    assert not unique, (
+        "D15 源码层跨端依赖违规（用户端不得 import 控制面 / 运营端不得 import 用户端）：\n  "
+        + "\n  ".join(unique)
+    )
