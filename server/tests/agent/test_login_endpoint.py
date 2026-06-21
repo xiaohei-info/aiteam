@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from agent_service.auth.local_login import LoginRequest, ManagerUnreachable
 from agent_service.app import build_app
-from shared.auth import DevTokenService
+from shared.auth import RS256TokenSigner, generate_rsa_keypair
 from shared.contracts.auth import TokenClaims
 from shared.errors import Unauthorized
 
@@ -20,17 +20,21 @@ class _StubManager:
     online = True
     calls = 0
 
+    def __init__(self) -> None:
+        private_pem, _public_pem = generate_rsa_keypair()
+        self._signer = RS256TokenSigner(private_pem, kid="t-1:1")
+        self._jwks = self._signer.jwks()
+
     def login(self, req: LoginRequest):
         type(self).calls += 1
         if not self.online:
             raise ManagerUnreachable("offline")
         if req.password != "ok":
             raise Unauthorized("bad credentials")
-        signer = DevTokenService("stub-key")
         claims = TokenClaims(
             user_id="u-1", tenant_id="t-1", roles=["member"], exp=int(time.time()) + 3600
         )
-        return signer.sign(claims), "stub-key"
+        return self._signer.sign(claims), self._jwks
 
 
 @pytest.fixture

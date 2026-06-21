@@ -14,17 +14,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class CachedToken:
-    """缓存条目：一段 access token + 配套验签材料。"""
+    """缓存条目：一段 access token + 配套验签材料（JWKS dict，D23）。"""
 
     token: str
-    verify_material: str
+    verify_material: dict
 
 
 class TokenCache(ABC):
     """本地 token 缓存抽象。单写者为用户端本进程；不跨端。"""
 
     @abstractmethod
-    def store(self, token: str, verify_material: str) -> None:
+    def store(self, token: str, jwks: dict) -> None:
         ...
 
     @abstractmethod
@@ -42,8 +42,8 @@ class InMemoryTokenCache(TokenCache):
     def __init__(self) -> None:
         self._entry: CachedToken | None = None
 
-    def store(self, token: str, verify_material: str) -> None:
-        self._entry = CachedToken(token=token, verify_material=verify_material)
+    def store(self, token: str, jwks: dict) -> None:
+        self._entry = CachedToken(token=token, verify_material=jwks)
 
     def load(self) -> CachedToken | None:
         return self._entry

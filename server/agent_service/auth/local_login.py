@@ -19,7 +19,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.auth import DevTokenService
+from shared.auth import RS256TokenVerifier
 from shared.contracts.auth import TokenClaims
 from shared.errors import AppError
 
@@ -45,11 +45,12 @@ class LoginRequest(BaseModel):
 class ManagerLoginClient(Protocol):
     """跨端 Manager 登录端的窄客户端协议（A0：对端用 fake/mock）。
 
-    实现负责经 service_client 调 Manager 校验凭据，返回 (token, verify_material)。
+    实现负责经 service_client 调 Manager 校验凭据，返回 (token, jwks)。
+    jwks 即 Manager `/api/auth/{tenant_id}/jwks.json` 下发的验签公钥（D23）。
     校验失败应抛 Unauthorized；不可达应抛 ManagerUnreachable。
     """
 
-    def login(self, req: LoginRequest) -> tuple[str, str]:
+    def login(self, req: LoginRequest) -> tuple[str, dict]:
         ...
 
 
@@ -78,8 +79,8 @@ def _now() -> int:
 class LocalLoginService:
     """编排本地登录三段：在线取 token → 缓存 → 本地验签复用 / 离线降级。
 
-    本地验签用 shared/auth 的验签实现（A0 dev：DevTokenService(verify_material)；
-    生产替换为公钥/JWKS 验签，接口不变）。
+    本地验签用 RS256TokenVerifier.from_jwks(jwks)（D23，03 §9.5）：
+    Manager 私钥签发，Agent 只持公钥/JWKS 本地无状态验签。
     """
 
     def __init__(self, *, manager: ManagerLoginClient, cache: TokenCache):
@@ -88,13 +89,13 @@ class LocalLoginService:
 
     # --- 首次在线 ---
     def login(self, req: LoginRequest) -> LocalSession:
-        """首次/重新登录：联网经 Manager 校验，缓存 token + 验签材料，返回本地会话。"""
-        token, verify_material = self._manager.login(req)
-        claims = self._verify(token, verify_material)
+        """首次/重新登录：联网经 Manager 校验，缓存 token + JWKS，返回本地会话。"""
+        token, jwks = self._manager.login(req)
+        claims = self._verify(token, jwks)
         if claims is None:
-            # Manager 返回的 token 本地验不过 = 验签材料不匹配，属契约异常，不静默吞。
+            # Manager 返回的 token 本地验不过 = JWKS 与签发私钥不匹配，属契约异常，不静默吞。
             raise ManagerUnreachable("token from manager failed local verification")
-        self._cache.store(token, verify_material)
+        self._cache.store(token, jwks)
         return LocalSession(token=token, claims=claims)
 
     # --- 本地验签复用 / 离线降级 ---
@@ -113,8 +114,8 @@ class LocalLoginService:
 
     # --- 本地无状态验签（含过期检查） ---
     @staticmethod
-    def _verify(token: str, verify_material: str) -> TokenClaims | None:
-        verifier = DevTokenService(verify_material)
+    def _verify(token: str, jwks: dict) -> TokenClaims | None:
+        verifier = RS256TokenVerifier.from_jwks(jwks)
         try:
             claims = verifier.verify(token)
         except AppError:
