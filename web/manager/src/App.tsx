@@ -13,7 +13,7 @@ import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
 import { ExpertsPage } from "./features/experts";
 import { GrantsPage } from "./features/grants";
-import { GovernancePlaceholder } from "./pages/GovernancePlaceholder";
+import { GovernancePage } from "./features/governance";
 
 export function App(): React.ReactNode {
   return (
@@ -30,7 +30,7 @@ export function App(): React.ReactNode {
         <Route path="/members" element={<MembersPage />} />
         <Route path="/experts" element={<ExpertsPage />} />
         <Route path="/grants" element={<GrantsPage />} />
-        <Route path="/governance" element={<GovernancePlaceholder />} />
+        <Route path="/governance" element={<GovernancePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
