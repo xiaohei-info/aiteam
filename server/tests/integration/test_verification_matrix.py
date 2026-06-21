@@ -20,33 +20,20 @@ from decimal import Decimal
 import pytest
 
 
-def _pg_dsn(*names: str) -> str | None:
-    """读 PG 连接串，兼容两套历史命名。
-
-    历史遗留：server/shared/config.py 用 DB_URL/ADMIN_DB_URL（Settings 字段口径），
-    而本测试与 server/tests/manager/conftest.py 早期用 DATABASE_URL/ADMIN_DATABASE_URL。
-    两套并存以免按任一口径配 env 的 CI 让验收空转（INT #55 闸门不会被误 skip）。
-    统一口径为 follow-up；此处先兼容。
-    """
-    for name in names:
-        val = os.getenv(name)
-        if val:
-            return val
-    return None
-
-
 @pytest.mark.integration
 def test_rls_cross_tenant_isolation():
     """RLS 跨租户串线回归：tenant A 上下文不得读到 tenant B 数据（DB + RAG workspace 双测）。
 
-    M0 已落地（04 §6.1.1/§6.1.3，D20/D22）。无 DATABASE_URL 时 skip（默认门不依赖外部 PG）。
+    M0 已落地（04 §6.1.1/§6.1.3，D20/D22）。无 DB_URL 时 skip（默认门不依赖外部 PG）。
     详细分层用例见 tests/manager/test_rls_isolation.py 与 test_rag_workspace.py。
+
+    env 命名对齐 shared/config.py + deploy/（#103）：业务连接 DB_URL、管理连接 ADMIN_DB_URL。
     """
-    db_url = _pg_dsn("DATABASE_URL", "DB_URL")
-    admin_url = _pg_dsn("ADMIN_DATABASE_URL", "ADMIN_DB_URL")
+    db_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL")
     app_rw_password = os.getenv("APP_RW_PASSWORD")
     if not db_url or not admin_url:
-        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL 未设置；RLS 回归需真实 PG（M0/#60）")
+        pytest.skip("DB_URL/ADMIN_DB_URL 未设置；RLS 回归需真实 PG（M0/#60）")
 
     import psycopg
 
@@ -213,13 +200,13 @@ def test_soft_quota_governance_action():
     为什么这样验：D14 离线可用性 + D24 默认软配额是红线——治理动作不得强制阻断本地 run。
     用真实 PG + 真实 PgTenantRouter 走完整租户隔离链路（不是纯单元伪 repo），保证
     RLS、tenant_id 经 TenantContext、SQL 不手写 tenant 过滤的约束在验收层也成立。
-    无 DATABASE_URL 时 skip（CI 默认门可不依赖外部 PG）。
+    无 DB_URL 时 skip（CI 默认门可不依赖外部 PG）。
     """
-    db_url = _pg_dsn("DATABASE_URL", "DB_URL")
-    admin_url = _pg_dsn("ADMIN_DATABASE_URL", "ADMIN_DB_URL")
+    db_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL")
     app_rw_password = os.getenv("APP_RW_PASSWORD")
     if not db_url or not admin_url or not app_rw_password:
-        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL/APP_RW_PASSWORD 未设置；软配额闸门需真实 PG（M8/#55）")
+        pytest.skip("DB_URL/ADMIN_DB_URL/APP_RW_PASSWORD 未设置；软配额闸门需真实 PG（M8/#55）")
 
     import psycopg
 
@@ -436,11 +423,11 @@ def test_onboarding_chain_operator_to_manager_to_agent():
       缺口已记录且有测试覆盖，不是"造假通过"。
     无 DB 时 skip（需真实 PG aiteam_v1）。
     """
-    db_url = _pg_dsn("DATABASE_URL", "DB_URL")
-    admin_url = _pg_dsn("ADMIN_DATABASE_URL", "ADMIN_DB_URL")
+    db_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL")
     app_rw_password = os.getenv("APP_RW_PASSWORD")
     if not db_url or not admin_url:
-        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL 未设置；入户链闸门需真实 PG")
+        pytest.skip("DB_URL/ADMIN_DB_URL 未设置；入户链闸门需真实 PG")
 
     import psycopg
     from fastapi.testclient import TestClient
@@ -642,7 +629,7 @@ def test_privacy_no_session_content_in_tier_cross():
       本闸门整合 server/tests/agent/usage/test_no_content_upload.py 的脱敏断言进集成验收矩阵，
       覆盖 record → aggregate → outbox → upload 完整链路。
 
-    不依赖 PG（纯脱敏逻辑 + 契约 extra=forbid），无 DATABASE_URL 不 skip。
+    不依赖 PG（纯脱敏逻辑 + 契约 extra=forbid），无 DB_URL 不 skip。
     """
     from agent_service.usage.factory import build_usage_service
     from agent_service.usage.models import RawAuditEvent, RawUsageEvent

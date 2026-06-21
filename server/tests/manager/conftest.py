@@ -1,11 +1,11 @@
 """Manager integration 测试夹具：真实 PG，业务连接与管理连接分离（#60）。
 
 两类连接（04 §6.1.1 第 5 条；#60 从连接身份层根除超管旁路）：
-- 管理连接 `ADMIN_DATABASE_URL`（超管/DDL owner）：跑迁移/建角色/DDL、控制面表（tenant_registry、
+- 管理连接 `ADMIN_DB_URL`（超管/DDL owner）：跑迁移/建角色/DDL、控制面表（tenant_registry、
   签名私钥）直读直写、以及"超管绕过 RLS"的反证。
-- 业务连接 `DATABASE_URL`（app_rw 身份）：跑租户 RLS 业务 SQL。
+- 业务连接 `DB_URL`（app_rw 身份）：跑租户 RLS 业务 SQL。
 
-无 ADMIN_DATABASE_URL/DATABASE_URL 时整组 integration 测试 skip——保证默认门
+无 ADMIN_DB_URL/DB_URL 时整组 integration 测试 skip——保证默认门
 `-m 'not integration'` 不依赖外部 PG，而 integration 跑须显式提供两类库（04 §6.1.1 RLS 须真库验）。
 """
 
@@ -16,25 +16,25 @@ import uuid
 
 import pytest
 
-ADMIN_DATABASE_URL = os.getenv("ADMIN_DATABASE_URL")
-DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_DB_URL = os.getenv("ADMIN_DB_URL")
+DB_URL = os.getenv("DB_URL")
 APP_RW_PASSWORD = os.getenv("APP_RW_PASSWORD")
 
 
 @pytest.fixture(scope="session")
 def admin_url() -> str:
     """管理连接串（超管/DDL owner）。"""
-    if not ADMIN_DATABASE_URL:
-        pytest.skip("ADMIN_DATABASE_URL 未设置；integration 测试需真实管理连接（#60）")
-    return ADMIN_DATABASE_URL
+    if not ADMIN_DB_URL:
+        pytest.skip("ADMIN_DB_URL 未设置；integration 测试需真实管理连接（#60）")
+    return ADMIN_DB_URL
 
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
     """业务连接串（app_rw 身份）。"""
-    if not DATABASE_URL:
-        pytest.skip("DATABASE_URL 未设置；integration 测试需真实业务连接（app_rw 身份，#60）")
-    return DATABASE_URL
+    if not DB_URL:
+        pytest.skip("DB_URL 未设置；integration 测试需真实业务连接（app_rw 身份，#60）")
+    return DB_URL
 
 
 @pytest.fixture(scope="session")

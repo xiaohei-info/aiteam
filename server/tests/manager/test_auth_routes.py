@@ -40,11 +40,11 @@ def test_login_without_db_returns_503_problem_json():
 
 @pytest.mark.integration
 def test_owner_reset_login_jwks_over_http():
-    db_url = os.getenv("DATABASE_URL")
-    admin_url = os.getenv("ADMIN_DATABASE_URL")
+    db_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL")
     app_rw_password = os.getenv("APP_RW_PASSWORD")
     if not db_url or not admin_url:
-        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL 未设置")
+        pytest.skip("DB_URL/ADMIN_DB_URL 未设置")
     from shared.auth import RS256TokenVerifier
     from shared.db import apply_migrations
     import psycopg
