@@ -9,8 +9,8 @@ import { PageShell } from "../components/PageShell";
 import { RequireAuth } from "../components/RequireAuth";
 import { ChatPage } from "../features/chat";
 import { GroupPage } from "../features/group";
+import { WorkspacePage } from "../features/workspace";
 import { LoginPage } from "../pages/LoginPage";
-import { PlaceholderPage } from "../pages/PlaceholderPage";
 
 export function AppRoutes() {
   return (
@@ -21,7 +21,7 @@ export function AppRoutes() {
         element={
           <RequireAuth>
             <PageShell>
-              <PlaceholderPage messageKey="agent.workspace.placeholder" />
+              <WorkspacePage />
             </PageShell>
           </RequireAuth>
         }
