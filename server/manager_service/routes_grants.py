@@ -11,14 +11,42 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from shared.auth import tenant_context_from
+from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
+from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
 from shared.contracts.envelope import Envelope, ListEnvelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError, Forbidden
 
+from .authorized_config_service import AuthorizedConfigService
+from .employee_config_service import build_employee_config_service
 from .routes_member import _services, _token_claims
 from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate
 
 router = APIRouter(prefix="/api/manager", tags=["grant"])
+
+
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+def _authorized_config_service(request: Request) -> AuthorizedConfigService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    cache = getattr(request.app.state, "_authorized_config_service", None)
+    if cache is None:
+        router_pg = PgTenantRouter(dsn)
+        _, grant_svc = _services(request)
+        from .member_service import MemberDeptService
+        from .repository_member import MemberDeptRepository
+        cache = AuthorizedConfigService(
+            config_service=build_employee_config_service(router_pg),
+            grant_service=grant_svc,
+            member_service=MemberDeptService(repo=MemberDeptRepository(router_pg)),
+        )
+        request.app.state._authorized_config_service = cache
+    return cache
 
 
 @router.post("/grants", summary="创建/替换资源授权（D12）", operation_id="manager_create_grant")
@@ -81,3 +109,24 @@ async def delete_grant(
     _, grant_svc = _services(request)
     grant_svc.delete_grant(ctx, grant_id)
     return Envelope[dict](data={"revoked": grant_id})
+
+
+@router.post(
+    "/grants/authorized-config",
+    summary="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）",
+    operation_id="manager_grants_authorized_config_pull",
+)
+async def pull_authorized_config(
+    body: AuthorizedConfigPullRequest,
+    request: Request,
+    claims: TokenClaims = Depends(_token_claims),
+) -> Envelope[AuthorizedConfigPullResponse]:
+    # F10：member_id 须与 token 主体一致，禁止代他人 pull。
+    if body.member_id != claims.user_id:
+        raise Forbidden("member_id must match the authenticated subject")
+    # 契约自洽（03 §9.7）：body.tenant_id 须与 token 中的 tenant_id 一致。
+    if body.tenant_id != claims.tenant_id:
+        raise Forbidden("tenant_id mismatch: body does not match token claims")
+    ctx = tenant_context_from(claims)
+    svc = _authorized_config_service(request)
+    return Envelope[AuthorizedConfigPullResponse](data=svc.pull(ctx, body))

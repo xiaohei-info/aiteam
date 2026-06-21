@@ -27,7 +27,7 @@ from shared.errors import AppError
 from shared.service_client import ServiceClient
 
 _CONFIG_PATH = "/api/manager/grants/authorized-config"
-_SNAPSHOT_PATH = "/api/manager/grants/snapshot"
+_SNAPSHOT_PATH = "/api/manager/snapshots"  # 复用 M7 路由（#102 F11，与 routes_snapshot.py 对齐）
 
 
 class ManagerGrantsClient(Protocol):
@@ -57,17 +57,25 @@ class UnconfiguredGrantsClient:
 
 
 class ServiceClientGrantsClient:
-    """经 shared.service_client 主动 pull。只读 GET 可幂等重试（service_client 内置）。"""
+    """经 shared.service_client 主动 pull。只读 GET 可幂等重试（service_client 内置）。
+
+    响应解包：Manager 统一 envelope（02 §10.3.4），data 字段为契约本体。
+    """
 
     def __init__(self, client: ServiceClient) -> None:
         self._client = client
+
+    @staticmethod
+    def _unwrap(body: dict) -> dict:
+        # Manager 北向响应统一 envelope（02 §10.3.4）：{ "data": <payload> }。
+        return body.get("data", body) if isinstance(body, dict) else body
 
     def pull_authorized_config(
         self, request: AuthorizedConfigPullRequest
     ) -> AuthorizedConfigPullResponse:
         body = self._client.post(_CONFIG_PATH, json=request.model_dump(mode="json"))
-        return AuthorizedConfigPullResponse.model_validate(body)
+        return AuthorizedConfigPullResponse.model_validate(self._unwrap(body))
 
     def pull_snapshot(self, request: SnapshotPullRequest) -> SnapshotPullResponse:
         body = self._client.post(_SNAPSHOT_PATH, json=request.model_dump(mode="json"))
-        return SnapshotPullResponse.model_validate(body)
+        return SnapshotPullResponse.model_validate(self._unwrap(body))

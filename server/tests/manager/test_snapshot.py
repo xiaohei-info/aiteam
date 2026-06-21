@@ -48,6 +48,9 @@ class _FakeGrantService:
         row = self._store.get(ctx.tenant_id, {}).get(resource_id)
         return [row] if row is not None else []
 
+    def list_grants(self, ctx: TenantContext):
+        return list(self._store.get(ctx.tenant_id, {}).values())
+
 
 class _FakeMemberService:
     """伪 MemberDeptService：暴露 get_member，按 tenant_id 分桶。"""
