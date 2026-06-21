@@ -129,9 +129,9 @@ describe("GroupPage — 渲染", () => {
       expect(screen.getByText("群聊A")).toBeInTheDocument();
       expect(screen.getByText("群聊B")).toBeInTheDocument();
     });
-    // 列表头部文案是「群聊」（区别于私聊页的「私聊」）——用 class 精确定位 header，
+    // 列表头部文案是「群聊」（区别于私聊页的「私聊」）——用 testid 精确定位 header，
     // 避免与 PageShell 侧边栏 NavLink 的"群聊"导航项撞文本。
-    const headers = document.querySelectorAll(".chat-list__header");
+    const headers = screen.getAllByTestId("conv-list-header");
     expect(headers.length).toBeGreaterThan(0);
     expect(headers[0]!.textContent).toBe("群聊");
   });

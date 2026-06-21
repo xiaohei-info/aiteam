@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { GlassPanel } from "@aiteam/shared/ui";
 
 import { useApp } from "../../lib/app-context";
 import type { Conversation } from "./useChatApi";
@@ -23,14 +24,14 @@ export function ChatPage() {
   const handleSent = useCallback(() => setSentSignal((n) => n + 1), []);
 
   return (
-    <div className="chat-page">
+    <div className="flex h-full min-h-0 gap-md">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
         onSelect={handleSelect}
         refreshSignal={sentSignal}
       />
-      <div className="chat-panel">
+      <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
         {selected ? (
           <>
             <TimelineView
@@ -41,9 +42,11 @@ export function ChatPage() {
             <MessageComposer conversationId={selected.id} onSent={handleSent} />
           </>
         ) : (
-          <div className="chat-panel__empty">选择一个会话开始对话</div>
+          <div className="flex flex-1 items-center justify-center text-text-muted">
+            选择一个会话开始对话
+          </div>
         )}
-      </div>
+      </GlassPanel>
     </div>
   );
 }

@@ -58,13 +58,18 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
   };
 
   return (
-    <div className="chat-timeline" role="log" aria-live="polite" aria-label="对话时间线">
-      <div className="chat-timeline__header">
-        <span className="chat-timeline__title">时间线 · {conversationId}</span>
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      role="log"
+      aria-live="polite"
+      aria-label="对话时间线"
+    >
+      <div className="flex items-center justify-between border-b border-gold/15 px-md py-sm">
+        <span className="truncate text-xs text-text-secondary">时间线 · {conversationId}</span>
         {store.canLoadMore && (
           <button
             type="button"
-            className="chat-timeline__older"
+            className="rounded-sm border border-gold/20 px-sm py-xs text-xs text-text-secondary hover:text-text-primary disabled:opacity-60"
             onClick={() => void handleLoadOlder()}
             disabled={loadingOlder}
           >
@@ -72,17 +77,21 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
           </button>
         )}
       </div>
-      <ol className="chat-timeline__events">
+      <ol className="flex min-h-0 flex-1 list-none flex-col gap-sm overflow-auto p-md">
         {events.length === 0 && !loadingOlder && (
-          <li className="chat-timeline__empty">暂无事件</li>
+          <li className="text-center text-sm text-text-muted">暂无事件</li>
         )}
         {events.map((event) => (
-          <li key={event.cursor} className="chat-timeline__event" data-type={event.type}>
-            <div className="chat-timeline__event-meta">
-              <span className="chat-timeline__event-type">{event.type}</span>
-              <span className="chat-timeline__event-time">{event.created_at}</span>
+          <li
+            key={event.cursor}
+            className="flex flex-col gap-xs rounded-md bg-surface-raised px-md py-sm"
+            data-type={event.type}
+          >
+            <div className="flex justify-between text-xs text-text-muted">
+              <span className="font-semibold text-gold">{event.type}</span>
+              <span>{event.created_at}</span>
             </div>
-            <div className="chat-timeline__event-payload">
+            <div className="whitespace-pre-wrap break-words text-sm text-text-primary">
               {renderPayload(event)}
             </div>
           </li>
