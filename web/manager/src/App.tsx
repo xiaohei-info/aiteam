@@ -10,7 +10,7 @@ import { AppShell } from "./shell";
 import { RequireAuth } from "./auth/RequireAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
-import { MembersPlaceholder } from "./pages/MembersPlaceholder";
+import { MembersPage } from "./features/members";
 import { ExpertsPlaceholder } from "./pages/ExpertsPlaceholder";
 import { GrantsPlaceholder } from "./pages/GrantsPlaceholder";
 import { GovernancePlaceholder } from "./pages/GovernancePlaceholder";
@@ -27,7 +27,7 @@ export function App(): React.ReactNode {
         }
       >
         <Route path="/" element={<DashboardPlaceholder />} />
-        <Route path="/members" element={<MembersPlaceholder />} />
+        <Route path="/members" element={<MembersPage />} />
         <Route path="/experts" element={<ExpertsPlaceholder />} />
         <Route path="/grants" element={<GrantsPlaceholder />} />
         <Route path="/governance" element={<GovernancePlaceholder />} />
