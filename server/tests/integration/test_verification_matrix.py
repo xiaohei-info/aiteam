@@ -541,21 +541,23 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     # Manager → token 链路正确 ✅
 
     # ── F09 Agent 侧：本地登录 + grants sync ────────────────────────────────────────
-    # GAP-2 workaround：LocalLoginService._verify 暂用 DevTokenService，与 Manager RS256 不兼容。
-    # 注入 DevToken 兼容 stub 验证 Agent login 链路装配正确，而非绕过真实路径。
+    # GAP-2 已转正（#101）：LocalLoginService._verify 用 RS256TokenVerifier.from_jwks 验签，
+    # 与 Manager RS256 签发的 token 兼容；本测试用真实 RS256 signer + JWKS 走完整链路。
+    # 用真实 RS256 链路验证 Agent login：ManagerLoginClient 返回 (rs256_token, jwks_dict)，
+    # Agent local_login._verify 经 RS256TokenVerifier.from_jwks 验签（D23，#101 已转正）。
     from agent_service.app import build_app
     from agent_service.auth.local_login import LoginRequest, ManagerLoginClient
     from agent_service.grants.client import ManagerGrantsClient, UnconfiguredGrantsClient
+    from shared.auth import generate_rsa_keypair, RS256TokenSigner
     from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
 
-    _dev_svc = DevTokenService("agent-chain-test-secret")
-    _dev_member_token = _dev_svc.sign(TokenClaims(
-        tenant_id=tid, user_id="member-1", roles=["member"], exp=9999999999,
-    ))
+    _priv_pem, _ = generate_rsa_keypair()
+    _rs256_signer = RS256TokenSigner(_priv_pem, kid="onboarding-test-kid")
+    _jwks = _rs256_signer.jwks()
 
-    class _DevManagerLoginClient:
-        """GAP-2 workaround：用 DevToken 验证 Agent login 链路装配；真实 RS256 路径留 follow-up。"""
-        def login(self, req: LoginRequest) -> tuple[str, str]:
+    class _Rs256ManagerLoginClient:
+        """真实 RS256 路径：返回 RS256 签发的 token + JWKS（对齐 #101 ManagerLoginClient.login 协议）。"""
+        def login(self, req: LoginRequest) -> tuple[str, dict]:
             # 校验凭据：真实调用 Manager 服务层（不 mock 业务逻辑）。
             from manager_service.auth_service import LoginInput
             try:
@@ -565,9 +567,9 @@ def test_onboarding_chain_operator_to_manager_to_agent():
             except Exception as exc:
                 from shared.errors import AppError
                 raise AppError(str(exc)) from exc
-            # 签 DevToken（GAP-2：生产应返回 RS256 token + JWKS verify_material）。
-            dev_token = _dev_svc.sign(result.claims)
-            return dev_token, "agent-chain-test-secret"
+            # RS256 签发（对齐生产：Manager 持私钥签，Agent 持公钥/JWKS 验）。
+            rs256_token = _rs256_signer.sign(result.claims)
+            return rs256_token, _jwks
 
     class _EmptyGrantsClient:
         """GAP-3 workaround：Manager grants receiver 未就绪，返回空集模拟真实降级语义。"""
@@ -577,7 +579,7 @@ def test_onboarding_chain_operator_to_manager_to_agent():
             raise Exception("snapshot not available")
 
     agent_app = build_app(
-        manager_client=_DevManagerLoginClient(),
+        manager_client=_Rs256ManagerLoginClient(),
         grants_client=_EmptyGrantsClient(),
     )
     agent_client = TestClient(agent_app)
