@@ -12,7 +12,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
 import { ExpertsPage } from "./features/experts";
-import { GrantsPlaceholder } from "./pages/GrantsPlaceholder";
+import { GrantsPage } from "./features/grants";
 import { GovernancePlaceholder } from "./pages/GovernancePlaceholder";
 
 export function App(): React.ReactNode {
@@ -29,7 +29,7 @@ export function App(): React.ReactNode {
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/experts" element={<ExpertsPage />} />
-        <Route path="/grants" element={<GrantsPlaceholder />} />
+        <Route path="/grants" element={<GrantsPage />} />
         <Route path="/governance" element={<GovernancePlaceholder />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
