@@ -1,0 +1,58 @@
+# 运营端构建产物（D15 / 09 §14.2）。
+# 按端精简：只装 server/{operation_service,shared} + server/run.py + server/requirements.txt，
+#           前端只装 web/operation 构建产物（web/shared 作为 @aiteam/shared 依赖一并构建进 dist）。
+# 红线：绝不打包 server/agent_service、server/manager_service、web/agent、web/manager（控制面不含用户端业务）。
+
+# ---------------------------------------------------------------------------
+# Stage 1: 前端构建（node 构建 web/operation + web/shared → dist）
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS web-builder
+WORKDIR /build
+
+# 先装工作区骨架（pnpm-workspace.yaml + 根 package.json + lock），利用 docker 层缓存。
+COPY web/package.json web/pnpm-workspace.yaml web/pnpm-lock.yaml ./
+COPY web/shared/package.json web/shared/
+COPY web/operation/package.json web/operation/
+
+# 官方 pnpm（与 engines 字段对齐：pnpm>=11）。
+RUN corepack enable && corepack prepare pnpm@11.4.0 --activate \
+    && pnpm install --frozen-lockfile --filter @aiteam/operation-web... --filter @aiteam/shared
+
+# 仅 COPY 本端 + 共享源码（绝不 COPY 其他端的源码进构建上下文）。
+COPY web/shared/ web/shared/
+COPY web/operation/ web/operation/
+
+# 构建顺序：先 shared（@aiteam/shared → dist），再本端消费它。
+RUN pnpm --filter @aiteam/shared build && pnpm --filter @aiteam/operation-web build
+
+# ---------------------------------------------------------------------------
+# Stage 2: 后端运行时（python slim）
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# 后端依赖（shared + operation_service 共用一份 requirements）。
+COPY server/requirements.txt /app/server/requirements.txt
+RUN pip install --no-cache-dir -r /app/server/requirements.txt
+
+# 仅 COPY 本端后端代码 + shared + 统一启动器（严格限定，绝不 COPY agent_service/manager_service）。
+COPY server/run.py /app/server/run.py
+COPY server/shared/ /app/server/shared/
+COPY server/operation_service/ /app/server/operation_service/
+
+# 前端静态产物（同 origin 自托管，09 §14.2；实际挂载/路由由 operation_service 处理）。
+COPY --from=web-builder /build/web/operation/dist /app/web/operation/dist
+
+ENV PYTHONPATH=/app/server \
+    APP_TIER=operation
+
+EXPOSE 8000
+
+# 统一启动器按 APP_TIER 挂载本端 app（09 §14.2 dev 便利入口；生产为单端产物，不做运行时切端）。
+ENTRYPOINT ["python", "server/run.py", "--tier=operation", "--host", "0.0.0.0", "--port", "8000"]

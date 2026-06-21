@@ -182,10 +182,102 @@ def test_soft_quota_governance_action():
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="待分端构建产物就绪（Phase 1+）；口径见 09 §14.2，D15")
 def test_user_client_build_excludes_control_plane():
-    """分端产物隔离：用户端交付物不含 operation/manager 后端与前端代码。"""
-    raise AssertionError("placeholder")
+    """分端产物隔离（D15 产物层）——按端 Dockerfile 的 COPY 不含其他端后端/前端路径。
+
+    验什么（口径 09 §14.2 / CLAUDE §9 / D15）：
+      v1 按端产出**三个精简产物**，各镜像只含本端代码 + shared：
+        - Dockerfile.agent 绝不 COPY operation_service/manager_service/web/operation/web/manager
+        - Dockerfile.operation 绝不 COPY agent_service/manager_service/web/agent/web/manager
+        - Dockerfile.manager 绝不 COPY agent_service/operation_service/web/agent/web/operation
+      这是 D15 的**构建配置层**前置保障——与已有的源码层 import 图闸门
+      (test_source_level_tier_isolation) 互补：import 图保证源码不跨端依赖，
+      本闸门保证打包配置不把跨端代码塞进镜像。
+
+    为什么纯静态（读 Dockerfile 文本）：
+      构建产物隔离是配置层问题——一旦 COPY 指令把控制面代码带进用户端镜像上下文，
+      镜像内就有了控制面代码，无法靠运行时裁剪。静态解析 COPY 指令可在 CI 默认门跑，
+      不依赖真起 docker build、不依赖 PG。覆盖 .dockerignore 不够（那是 opt-in 裁剪，
+      不能替代"COPY 指令本就不该出现跨端路径"的显式约束）。
+
+    为什么每个 Dockerfile 互相验证（不只验 agent）：
+      D15 的精简是**各端互不含对方**，不是只约束用户端。运营端镜像也不该带用户端业务代码
+      （用户端业务是用户本机的事，控制面镜像不需要）。三端两两校验，钉死"镜像内只见本端"。
+    """
+    repo_root = pathlib.Path(__file__).resolve().parents[3]  # .../aiteam
+    deploy_dir = repo_root / "deploy"
+
+    # 各端 Dockerfile 允许的 COPY 目标路径白名单（顶级目录）：
+    #   - server/{本端模块} + server/shared + server/run.py + server/requirements.txt
+    #   - web/{本端}（经 web-builder 阶段产出 dist，runtime 阶段 COPY --from=web-builder）
+    #   - 构建中间产物（web-builder stage）从本工作目录 COPY 本端源码 + web/shared（workspace 依赖）
+    # forbidden 是各端镜像**绝不该打包**的兄弟端路径（src 路径片段，不含前缀 server/ 或 web/）。
+    tier_specs = {
+        "operation": {
+            "dockerfile": deploy_dir / "Dockerfile.operation",
+            "forbidden": ("agent_service", "manager_service", "web/agent", "web/manager"),
+        },
+        "manager": {
+            "dockerfile": deploy_dir / "Dockerfile.manager",
+            "forbidden": ("agent_service", "operation_service", "web/agent", "web/operation"),
+        },
+        "agent": {
+            "dockerfile": deploy_dir / "Dockerfile.agent",
+            # 🔴 D15 硬隔离线：用户端镜像绝不打包控制面后端 + 控制面前端。
+            "forbidden": ("operation_service", "manager_service", "web/operation", "web/manager"),
+        },
+    }
+
+    all_violations: list[str] = []
+
+    for tier, spec in tier_specs.items():
+        dockerfile = spec["dockerfile"]
+        if not dockerfile.exists():
+            all_violations.append(f"{tier}: 缺失 Dockerfile {dockerfile.relative_to(repo_root)}")
+            continue
+
+        text = dockerfile.read_text(encoding="utf-8")
+        # 解析每一条 COPY 指令的目标路径（含 COPY --from=<stage> 与 COPY --chown=... 等变体）。
+        # Dockerfile COPY 语法：COPY [OPTIONS] <src>... <dst>。只取 <src> 段做 forbidden 匹配
+        # （<dst> 是镜像内挂载点，与跨端隔离无关）。
+        copy_lines = []
+        for raw in text.splitlines():
+            stripped = raw.strip()
+            # 跳过注释与续行外的非 COPY 行（本闸门只关心 COPY，不关心 RUN/ENV 等）。
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.upper().startswith("COPY "):
+                copy_lines.append(stripped)
+
+        for line in copy_lines:
+            # 去掉 `COPY` 与 OPTIONS（--from= / --chown= / --link 等），剩下的是 src...dst。
+            tokens = line.split()
+            # tokens[0] == 'COPY'
+            idx = 1
+            while idx < len(tokens) and tokens[idx].startswith("--"):
+                idx += 1
+            args = tokens[idx:]
+            if len(args) < 2:
+                # 至少 <src> <dst>；COPY --link 形式已在上面跳过 OPTIONS。少于 2 视为可疑，单独记录。
+                all_violations.append(
+                    f"{tier}: 无法解析 COPY 指令参数 {line!r} @ {dockerfile.relative_to(repo_root)}"
+                )
+                continue
+            # 末位是 <dst>，其余是 <src>...。跨端隔离只看 src 是否引入了 forbidden 端。
+            srcs = args[:-1]
+            for src in srcs:
+                for bad in spec["forbidden"]:
+                    if bad in src:
+                        all_violations.append(
+                            f"{tier}: COPY 源 {src!r} 命中 forbidden {bad!r} "
+                            f"@ {dockerfile.relative_to(repo_root)} (D15)"
+                        )
+
+    unique = sorted(set(all_violations))
+    assert not unique, (
+        "D15 构建配置层跨端违规（各端 Dockerfile 的 COPY 不得引入兄弟端后端/前端）：\n  "
+        + "\n  ".join(unique)
+    )
 
 
 @pytest.mark.integration

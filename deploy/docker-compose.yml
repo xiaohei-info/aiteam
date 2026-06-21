@@ -1,0 +1,94 @@
+# 单机模拟三端（dev / test / 单机联调，09 §14 / D15）。
+#
+# 三个 service：operation（:8001）manager（:8002）agent（:8003）+ postgres（:5433，对齐 SOP）。
+# 每个 service 用各自 Dockerfile.<tier> 构建——产物在镜像层即按端精简，互不含对方后端/前端。
+#
+# 红线（D15）：agent 服务镜像构建上下文虽是整个仓库，但 Dockerfile.agent 的 COPY 严格限定，
+# 镜像内绝不出现 operation_service/manager_service/web/operation/web/manager（由
+# server/tests/integration/test_verification_matrix.py::test_user_client_build_excludes_control_plane
+# 静态断言 Dockerfile COPY 指令钉死）。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiteam-pg
+    environment:
+      POSTGRES_USER: aiteam
+      POSTGRES_PASSWORD: aiteam_test
+      POSTGRES_DB: aiteam_v1
+    ports:
+      - "5433:5432"  # 对齐 SOP 的 5433 配置（docs/部署运维/...SOP.md）
+    volumes:
+      - aiteam_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiteam -d aiteam_v1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  operation:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.operation
+    image: aiteam-operation:dev
+    container_name: aiteam-operation
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    environment:
+      APP_TIER: operation
+      # 控制面表（签名私钥、enterprise、跨企业 rollup 等）走管理连接。
+      ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      APP_RW_PASSWORD: aiteam_test
+      # 云侧服务间调用：运营端调企业端开通 tenant。
+      MANAGER_URL: http://manager:8000
+      LOG_LEVEL: INFO
+      EXPOSE_PUBLIC_DOCS: "1"
+
+  manager:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.manager
+    image: aiteam-manager:dev
+    container_name: aiteam-manager
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    environment:
+      APP_TIER: manager
+      # 业务连接（受约束 app_rw 角色 + RLS）。
+      DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      # 迁移走管理连接（超管/DDL owner，#60）。
+      ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      APP_RW_PASSWORD: aiteam_test
+      OPERATOR_URL: http://operation:8000
+      LOG_LEVEL: INFO
+      EXPOSE_PUBLIC_DOCS: "1"
+
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    image: aiteam-agent:dev
+    container_name: aiteam-agent
+    ports:
+      - "8003:8000"
+    environment:
+      APP_TIER: agent
+      # 用户端本地库（dev 单机时复用同一 PG，生产为每用户本机独立库）。
+      DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      # 用户端主动访问企业端（05 §5.5 窄通信面；Operator/Manager 绝不向用户机器入站）。
+      MANAGER_URL: http://manager:8000
+      LOG_LEVEL: INFO
+      EXPOSE_PUBLIC_DOCS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  aiteam_pg_data:
+    name: aiteam_pg_data
