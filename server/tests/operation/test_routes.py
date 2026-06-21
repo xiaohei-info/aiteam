@@ -88,8 +88,8 @@ def test_provision_success_envelope(client, manager, role):
     assert data["must_reset"] is True
     assert data["enterprise_id"] and data["tenant_id"]
     assert data["owner_bootstrap_secret"]
-    # 跨端只收到了 hash，没有明文外泄到 Manager 调用。
-    assert manager.bootstraps[0].bootstrap_secret_hash != data["owner_bootstrap_secret"]
+    # 跨端传明文 bootstrap（Manager 单一 hash 真相源）；与 Operator 返回的一致。
+    assert manager.bootstraps[0].bootstrap_secret == data["owner_bootstrap_secret"]
 
 
 def test_provision_validation_error_422(client):

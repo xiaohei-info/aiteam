@@ -37,14 +37,15 @@ class TenantProvisionRequest(BaseModel):
 class OwnerBootstrapSync(BaseModel):
     """F02 负责人 bootstrap：Operator 同步负责人初始/重置凭据给 Manager tenant。
 
-    仅同步校验/同步所需材料（hash 或一次性），Operator 不持企业长期密码（03 §9.2）。
+    通过 TLS 服务间通道传输一次性明文；Manager 是 hash 单一真相源（单次 scrypt）。
+    Operator 自身只持 sha256 用于本端校验，不持企业长期密码（03 §9.2）。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tenant_id: str
     owner_phone: str
-    bootstrap_secret_hash: str = Field(description="bootstrap 凭据 hash 或一次性材料，禁明文/可逆")
+    bootstrap_secret: str = Field(description="bootstrap 一次性明文材料（TLS 服务间）；Manager 单次 scrypt hash 落库")
     must_reset: bool = Field(default=True, description="负责人首登强制重置")
 
 

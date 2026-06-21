@@ -54,7 +54,7 @@ def test_provision_calls_manager_then_stores(service, manager):
     assert prov_req.enterprise_name == "Acme"
     assert prov_key == f"provision:{result.enterprise_id}"
 
-    # F02：同步 bootstrap（只传 hash），首登强制重置。
+    # F02：同步 bootstrap（跨端传明文，首登强制重置）。
     assert len(manager.bootstraps) == 1
     bs_req, bs_key = manager.bootstraps[0]
     assert bs_req.tenant_id == result.tenant_id
@@ -64,14 +64,17 @@ def test_provision_calls_manager_then_stores(service, manager):
 
 
 def test_operator_never_holds_plaintext(service, manager):
-    """红线：Operator 只持 hash；同步给 Manager 的也是 hash，绝不出现明文。"""
+    """红线：Operator 只持本端 sha256 校验材料；同步给 Manager 的是明文（TLS 服务间），Manager 单次 scrypt hash 落库。"""
     result = service.provision_enterprise(_req())
     secret = result.owner_bootstrap_secret
-    expected_hash = hashlib.sha256(secret.encode()).hexdigest()
+    expected_local_hash = hashlib.sha256(secret.encode()).hexdigest()
 
     bs_req, _ = manager.bootstraps[0]
-    assert bs_req.bootstrap_secret_hash == expected_hash
-    assert bs_req.bootstrap_secret_hash != secret  # 不是明文
+    # 跨端传明文（Manager 单一 hash 真相源）
+    assert bs_req.bootstrap_secret == secret
+    # Operator 本端仍存 sha256（不持长期密码）
+    account = service._repo.get(result.enterprise_id)
+    assert account.owner_bootstrap_hash == expected_local_hash
 
 
 def test_bootstrap_secret_is_one_time_and_random(service):
@@ -82,16 +85,16 @@ def test_bootstrap_secret_is_one_time_and_random(service):
 
 def test_reset_resyncs_and_rotates_hash(service, manager):
     created = service.provision_enterprise(_req())
-    first_hash = manager.bootstraps[0][0].bootstrap_secret_hash
+    first_secret = manager.bootstraps[0][0].bootstrap_secret
 
     reset = service.reset_owner_bootstrap(created.enterprise_id)
 
     assert reset.tenant_id == created.tenant_id
     assert reset.owner_phone == created.owner_phone
     assert len(manager.bootstraps) == 2  # 重置再同步一次
-    new_hash = manager.bootstraps[1][0].bootstrap_secret_hash
-    assert new_hash == hashlib.sha256(reset.owner_bootstrap_secret.encode()).hexdigest()
-    assert new_hash != first_hash  # 凭据轮换
+    new_secret = manager.bootstraps[1][0].bootstrap_secret
+    assert new_secret == reset.owner_bootstrap_secret  # 跨端传明文，和返回值一致
+    assert new_secret != first_secret  # 凭据轮换
     # 重置幂等键与开通键不同（每次重置是新写）。
     assert manager.bootstraps[1][1] != manager.bootstraps[0][1]
 

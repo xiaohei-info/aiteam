@@ -11,15 +11,18 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
 from .routes_auth import router as auth_router
+from .routes_bootstrap import router as bootstrap_router
+from .routes_capability import build_capability_router
 from .routes_employee import build_employee_router
-from .routes_member import router as member_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
+from .routes_member import router as member_router
 from .routes_provider import build_provider_credential_router
 from .routes_recruit import build_recruit_router
-from .operator_catalog import FakeOperatorCatalogClient
-from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_snapshot import build_snapshot_router
+from .routes_tenant import router as tenant_router
+from .routes_usage_audit_quota import build_usage_audit_quota_router
+from .operator_catalog import FakeOperatorCatalogClient
 
 # ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
 _verifier = DevTokenService()
@@ -53,7 +56,6 @@ app.include_router(grants_router)
 # 知识空间/RAG 管理面（/api/manager/knowledge-spaces/*，M3）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_space_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
-from .routes_capability import build_capability_router  # noqa: E402
 app.include_router(build_capability_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
@@ -63,3 +65,6 @@ app.include_router(build_recruit_router(_verifier))
 app.include_router(build_usage_audit_quota_router(_verifier))
 # 执行快照生成（/api/manager/snapshots，M7，05 F11 / D5）。Agent 主动拉取，用户端本地冻结。
 app.include_router(build_snapshot_router(_verifier))
+# F01/F02 控制面收端（Operator→Manager 云侧调用，05 §5.1 D4）。无 token 校验（服务间调用）。
+app.include_router(tenant_router)
+app.include_router(bootstrap_router)

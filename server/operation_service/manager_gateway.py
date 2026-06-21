@@ -6,7 +6,7 @@
 设计要点：
 - Operator **不写 Manager 租户库**——这里只是 service-to-service 调用，Manager 自行落库。
 - 抽象出 ManagerGateway 协议，业务层依赖协议；测试注入 fake，无需真实 Manager（对端先 mock）。
-- 不在本端持企业长期密码：只传 OwnerBootstrapSync（hash/一次性材料）。
+- 不在本端持企业长期密码：只传 OwnerBootstrapSync（明文（TLS 服务间），Manager 单次 scrypt 落库）。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class ManagerGateway(Protocol):
         ...
 
     def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> None:
-        """F02：把负责人初始/重置 bootstrap（hash/一次性材料）同步给 Manager tenant。"""
+        """F02：把负责人初始/重置 bootstrap（明文（TLS 服务间），Manager 单次 scrypt 落库）同步给 Manager tenant。"""
         ...
 
 

@@ -489,9 +489,9 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     assert op_data["tenant_id"] and op_data["enterprise_id"]
     assert op_data["owner_bootstrap_secret"]  # 一次性明文
     assert op_data["must_reset"] is True
-    # Gateway 收到了 hash，未收到明文（F02 口径）。
+    # Gateway 收到了明文 bootstrap_secret，传给 Manager 单次 scrypt（F02 口径，#100 修复）。
     assert len(fake_gw.bootstraps) == 1
-    assert fake_gw.bootstraps[0].bootstrap_secret_hash != op_data["owner_bootstrap_secret"]
+    assert fake_gw.bootstraps[0].bootstrap_secret == op_data["owner_bootstrap_secret"]
     bootstrap_secret = op_data["owner_bootstrap_secret"]
     # F01/F02 断言：Operator 侧逻辑正确 ✅；Manager 接收端 GAP-1（见上）。
 
