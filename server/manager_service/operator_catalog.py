@@ -39,6 +39,14 @@ class OperatorCatalogPort(ABC):
     ) -> SolutionPackage:
         """F07 拉行业方案包（05 F07）。solution_id/version 为 Operator 侧只读标识。"""
 
+    @abstractmethod
+    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
+        """F06 浏览：列可招募专家模板（各 template 取最新版本）。只读，不写 Operator。"""
+
+    @abstractmethod
+    def list_solution_packages(self) -> list[SolutionPackage]:
+        """F07 浏览：列可应用行业方案包（各 solution 取最新版本）。只读，不写 Operator。"""
+
 
 class OperatorCatalogClient(OperatorCatalogPort):
     """生产实现占位：真实经 shared.service_client 走 Operator 云侧端点（05 §5.3）。
@@ -62,6 +70,16 @@ class OperatorCatalogClient(OperatorCatalogPort):
     ) -> SolutionPackage:
         raise NotImplementedError(
             "Operator 目录拉取尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
+        )
+
+    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
+        raise NotImplementedError(
+            "Operator 目录列举尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
+        )
+
+    def list_solution_packages(self) -> list[SolutionPackage]:
+        raise NotImplementedError(
+            "Operator 目录列举尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
         )
 
 
@@ -116,3 +134,10 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
 
             raise NotFound(f"solution package not found in operator catalog: {solution_id}@{version}")
         return package.model_copy(deep=True)  # 返回副本，防止调用方改模板真相
+
+    # ---- 只读列举（浏览；各标识取最新版本，返回副本防改真相）----
+    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
+        return [d.model_copy(deep=True) for d in self._experts_latest.values()]
+
+    def list_solution_packages(self) -> list[SolutionPackage]:
+        return [p.model_copy(deep=True) for p in self._solutions_latest.values()]

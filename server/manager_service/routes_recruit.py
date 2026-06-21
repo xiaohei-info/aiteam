@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Request, status
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
+from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
@@ -52,6 +53,29 @@ def build_recruit_router(verifier) -> APIRouter:
     """构造招募/应用方案路由；verifier 由 app 持有并闭包注入受保护端点。"""
     router = APIRouter(prefix="/api/manager/recruit", tags=["manager", "recruit-solution"])
     require = require_claims(verifier)
+
+    @router.get(
+        "/catalog/experts", summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
+        operation_id="manager_list_recruitable_experts",
+    )
+    async def list_recruitable_experts(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[ExpertTemplateDetail]:
+        # 浏览是纯 Operator 目录只读（不碰租户 DB）；catalog 端口由 app.state 注入。
+        catalog: OperatorCatalogPort = request.app.state._operator_catalog
+        return ListEnvelope[ExpertTemplateDetail](data=catalog.list_expert_templates())
+
+    @router.get(
+        "/catalog/solutions", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
+        operation_id="manager_list_recruitable_solutions",
+    )
+    async def list_recruitable_solutions(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[SolutionPackage]:
+        catalog: OperatorCatalogPort = request.app.state._operator_catalog
+        return ListEnvelope[SolutionPackage](data=catalog.list_solution_packages())
 
     @router.post(
         "/experts", summary="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）",

@@ -383,10 +383,18 @@ def test_get_solution_instance_not_found_cross_tenant():
 
 
 def test_operator_catalog_is_read_only_port():
-    """红线①：Operator 端口只读拉取，无反向写方法（05 §5 通信面方向铁律）。"""
-    # OperatorCatalogPort 抽象只有 pull_* 方法（只读），无 seed/write 反向接口
+    """红线①：Operator 端口只读（pull 详情 + list 浏览），无反向写方法（05 §5 通信面方向铁律）。"""
+    # OperatorCatalogPort 抽象只有只读 pull_*/list_* 方法，无 seed/write/push 等反向接口。
     methods = {m for m in dir(OperatorCatalogPort) if not m.startswith("_")}
-    assert methods == {"pull_expert_template", "pull_solution_package"}, methods
+    assert methods == {
+        "pull_expert_template",
+        "pull_solution_package",
+        "list_expert_templates",
+        "list_solution_packages",
+    }, methods
+    # 红线兜底：端口不得出现任何反向写语义方法名。
+    write_like = {"seed", "write", "push", "create", "update", "delete", "put", "post"}
+    assert not any(any(w in m for w in write_like) for m in methods), methods
 
 
 def test_recruit_does_not_mutate_pulled_template():

@@ -82,3 +82,67 @@ def test_list_solution_instances_without_token_returns_401():
     client = _client(None)
     resp = client.get("/api/manager/recruit/solutions")
     assert resp.status_code == 401
+
+
+# ---- 目录浏览（F06/F07 browse，#118）：纯 Operator 目录只读，不依赖 DB ----
+
+
+def _auth_header():
+    from shared.auth import DevTokenService
+    from shared.contracts.auth import TokenClaims
+    import uuid
+
+    token = DevTokenService().sign(
+        TokenClaims(tenant_id=str(uuid.uuid4()), user_id="u", roles=["owner"], exp=9999999999)
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_browse_experts_without_token_returns_401():
+    client = _client(None)
+    resp = client.get("/api/manager/recruit/catalog/experts")
+    assert resp.status_code == 401
+
+
+def test_browse_solutions_without_token_returns_401():
+    client = _client(None)
+    resp = client.get("/api/manager/recruit/catalog/solutions")
+    assert resp.status_code == 401
+
+
+def test_browse_experts_returns_seeded_templates():
+    """seed Operator 目录 → GET 列出可招募专家模板（不依赖 DB）。"""
+    from shared.contracts.crosstier import ExpertTemplateDetail
+
+    client = _client(None)  # browse 不碰租户 DB，无需配置 DB
+    client.app.state._operator_catalog.seed_expert(
+        ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家")
+    )
+    resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["data"]
+    assert len(items) == 1
+    assert items[0]["template_id"] == "tpl-1"
+    assert items[0]["display_name"] == "测试专家"
+
+
+def test_browse_solutions_returns_seeded_packages():
+    from shared.contracts.crosstier import SolutionPackage
+
+    client = _client(None)
+    client.app.state._operator_catalog.seed_solution(
+        SolutionPackage(solution_id="sol-1", version="1", display_name="测试方案")
+    )
+    resp = client.get("/api/manager/recruit/catalog/solutions", headers=_auth_header())
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["data"]
+    assert len(items) == 1
+    assert items[0]["solution_id"] == "sol-1"
+
+
+def test_browse_experts_empty_when_unseeded():
+    """未 seed → 空列表（不报错）。"""
+    client = _client(None)
+    resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
