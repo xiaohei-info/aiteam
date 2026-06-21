@@ -7,7 +7,6 @@ POST /api/manager/owner-bootstrap 落 owner 凭据；幂等重放不报错。
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -109,18 +108,12 @@ def test_hash_single_source_of_truth_no_double_hash():
 # ---- integration：真 PG 端到端 ----
 
 @pytest.mark.integration
-def test_provision_tenant_and_owner_bootstrap_e2e():
-    db_url = os.getenv("DATABASE_URL")
-    admin_url = os.getenv("ADMIN_DATABASE_URL")
-    app_rw_password = os.getenv("APP_RW_PASSWORD")
-    if not db_url or not admin_url:
-        pytest.skip("DATABASE_URL/ADMIN_DATABASE_URL 未设置")
-
+def test_provision_tenant_and_owner_bootstrap_e2e(migrated_db, admin_url):
+    # 复用 conftest 夹具（migrated_db 已 apply_migrations 并返回业务 DSN；admin_url 为管理 DSN）。
+    # 统一经夹具读 DB_URL/ADMIN_DB_URL（#103），不再自取旧名 env——杜绝变量名漂移导致 CI 静默 skip。
     import psycopg
-    from shared.db import apply_migrations
 
-    apply_migrations(admin_url, app_rw_password=app_rw_password)
-
+    db_url = migrated_db
     client = _client(db_url, admin_db_url=admin_url)
 
     tenant_id = str(uuid.uuid4())
