@@ -12,7 +12,7 @@ from __future__ import annotations
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import NotFound
+from shared.errors import Forbidden, NotFound
 
 from .auth_service import AuthService
 from .repository_member import (
@@ -34,6 +34,24 @@ from .schemas import (
     MemberOut,
     MemberUpdate,
 )
+
+
+# 成员/部门/授权写操作允许的企业角色（03 §9.7；与兄弟服务 _*_WRITE_ROLES 一致）。
+# member 与 finance_admin 不可写成员/部门/授权（治理类写归管理角色）。读操作不限角色。
+_MEMBER_WRITE_ROLES = [
+    EnterpriseRole.OWNER.value,
+    EnterpriseRole.ENTERPRISE_ADMIN.value,
+]
+
+
+def _ensure_can_write(ctx: TenantContext) -> None:
+    """成员/部门/授权写鉴权（03 §9.7）。非 owner/enterprise_admin → 403。
+
+    后端权威：前端 UI 门控只是体验，真正 enforcement 在此（#117：补齐 member/dept/grant
+    写端点角色校验，杜绝普通成员持 token 越权写）。
+    """
+    if not set(ctx.roles) & set(_MEMBER_WRITE_ROLES):
+        raise Forbidden("requires owner or enterprise_admin")
 
 
 def _department_out(row: DepartmentRow) -> DepartmentOut:
@@ -75,6 +93,7 @@ class MemberDeptService:
 
     # ---- 部门 ----
     def create_department(self, ctx: TenantContext, req: DepartmentCreate) -> DepartmentOut:
+        _ensure_can_write(ctx)
         row = self._repo.create_department(
             ctx, department_slug=req.department_slug, display_name=req.display_name
         )
@@ -92,6 +111,7 @@ class MemberDeptService:
     def update_department(
         self, ctx: TenantContext, department_id: str, req: DepartmentUpdate
     ) -> DepartmentOut:
+        _ensure_can_write(ctx)
         row = self._repo.update_department(
             ctx, department_id=department_id, display_name=req.display_name
         )
@@ -100,11 +120,13 @@ class MemberDeptService:
         return _department_out(row)
 
     def delete_department(self, ctx: TenantContext, department_id: str) -> None:
+        _ensure_can_write(ctx)
         if not self._repo.delete_department(ctx, department_id=department_id):
             raise NotFound("department not found")
 
     # ---- 成员（角色）----
     def create_member(self, ctx: TenantContext, req: MemberCreate) -> MemberOut:
+        _ensure_can_write(ctx)
         roles = self._normalize_roles(req.roles)
         # 账号开通复用 AuthService（app_user + auth_identity；tenant_id 经 ctx）。
         # member 首登不强制重置（留详设）。
@@ -132,6 +154,7 @@ class MemberDeptService:
         return _member_out(row)
 
     def update_member(self, ctx: TenantContext, member_id: str, req: MemberUpdate) -> MemberOut:
+        _ensure_can_write(ctx)
         roles = (
             [r.value for r in self._normalize_roles(req.roles)] if req.roles is not None else None
         )
@@ -144,6 +167,7 @@ class MemberDeptService:
         return _member_out(row)
 
     def delete_member(self, ctx: TenantContext, member_id: str) -> None:
+        _ensure_can_write(ctx)
         if not self._repo.delete_member(ctx, member_id=member_id):
             raise NotFound("member not found")
 
@@ -184,6 +208,7 @@ class GrantService:
                 raise NotFound(f"member not found: {mem_id}")
 
     def create_grant(self, ctx: TenantContext, req: MemberGrantCreate) -> MemberGrantOut:
+        _ensure_can_write(ctx)
         validate_resource_type(req.resource_type)
         self._validate_subjects(ctx, req.department_ids, req.member_ids)
         row = self._repo.upsert(
@@ -216,6 +241,7 @@ class GrantService:
     def update_grant(
         self, ctx: TenantContext, grant_id: str, req: MemberGrantUpdate
     ) -> MemberGrantOut:
+        _ensure_can_write(ctx)
         existing = self._repo.get(ctx, grant_id=grant_id)
         if existing is None:
             raise NotFound("grant not found")
@@ -228,6 +254,7 @@ class GrantService:
         return _grant_out(row, tenant_id=ctx.tenant_id)
 
     def delete_grant(self, ctx: TenantContext, grant_id: str) -> None:
+        _ensure_can_write(ctx)
         if not self._repo.delete(ctx, grant_id=grant_id):
             raise NotFound("grant not found")
 

@@ -3,8 +3,8 @@
 受保护端点：挂 require_claims 解身份 → TenantContext（D22）。tenant_id 全程取自
 TenantContext，不接受手写过滤（D12：授权按 tenant 裁剪，跨租户串线由 RLS 强制拒绝）。
 
-注：写操作的角色级授权（owner/enterprise_admin）尚未实现，handler 当前仅 require_claims；
-落地后在此处补角色校验。
+写操作的角色级授权（owner/enterprise_admin）在 service 层 enforce（member_service
+._ensure_can_write，#117）；route 仅 require_claims 解身份，鉴权权威在 service。
 """
 
 from __future__ import annotations
