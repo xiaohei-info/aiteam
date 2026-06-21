@@ -1,0 +1,63 @@
+name: v1-web-ci
+
+# v1 三端前端（web/）的 CI 质量闸门（防跑偏的客观防线）。
+# 与 server 的 ci.yml 解耦：各自按 paths 独立触发，互不误触——
+# server-only 改动不跑前端、web-only 改动不跑 server。
+#
+# 覆盖：typecheck（tsc）+ 单测（vitest）+ 构建（vite build）三者全绿才算过。
+# 堵住「web/** 任何改动都不触发任何 CI、前端校验从没在 CI 上真跑过」的假绿漏洞
+# （本轮 W-O/W-M/W-A 前端 PR 此前仅靠本地 + 人工盲审把关）。
+#
+# 注：仅作用于 v1 新前端 web/；不引入 lint（各包当前无 lint script，不在范围）。
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "web/**"
+      - ".github/workflows/web-ci.yml"
+  pull_request:
+    branches: ["master"]
+    paths:
+      - "web/**"
+      - ".github/workflows/web-ci.yml"
+
+jobs:
+  typecheck-test-build:
+    name: typecheck + 单测 + 构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # pnpm 版本固定为 web/package.json 的 packageManager（11.4.0），经 corepack 激活，
+      # 与本地/锁文件一致，避免版本漂移导致的 install 差异。
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Install deps (frozen lockfile)
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # 消费端（operation/manager/agent）经 package.json exports 把 @aiteam/shared/*
+      # 解析到 shared/dist（无 TS project references），故 typecheck/test/build 前必须先
+      # 产出 shared 的 dist；否则干净检出下 @aiteam/shared/* 子路径全部解析失败。
+      - name: Build shared (prereq for consumers)
+        working-directory: web
+        run: pnpm --filter @aiteam/shared run build
+
+      - name: Typecheck
+        working-directory: web
+        run: pnpm -r typecheck
+
+      - name: Test
+        working-directory: web
+        run: pnpm -r test
+
+      - name: Build
+        working-directory: web
+        run: pnpm -r build
