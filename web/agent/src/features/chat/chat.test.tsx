@@ -22,7 +22,7 @@ import { AppRoutes } from "../../app/routes";
 import { AgentApiClient } from "../../lib/api-client";
 import { TimelineStore } from "@aiteam/shared/timeline-client";
 import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
-import { listConversations, sendMessage, createTimelineFetcher } from "./useChatApi";
+import { listConversations, sendMessage, startRun, createTimelineFetcher } from "./useChatApi";
 import { TimelineView } from "./TimelineView";
 
 // ---- 通用 helper ----
@@ -63,6 +63,9 @@ function makeFetch(
 ) {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
+    if (path.includes("/runs") && init?.method === "POST") {
+      return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
     if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
       return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -189,10 +192,10 @@ describe("MessageComposer — 发送消息", () => {
 
     await waitFor(() => {
       const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
-      const postCall = calls.find(
-        ([u, i]) => u.includes("/messages") && i?.method === "POST",
-      );
-      expect(postCall).toBeTruthy();
+      const postMsg = calls.find(([u, i]) => u.includes("/messages") && i?.method === "POST");
+      expect(postMsg).toBeTruthy();
+      const postRun = calls.find(([u, i]) => u.includes("/runs") && i?.method === "POST");
+      expect(postRun).toBeTruthy();
     });
   });
 });

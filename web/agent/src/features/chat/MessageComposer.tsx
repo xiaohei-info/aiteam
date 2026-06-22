@@ -1,15 +1,10 @@
 /**
- * W-A.2 消息输入器（底部）—— 发送消息 POST /api/agent/conversations/{id}/messages。
- *
- * 黑金玻璃质感；单行 textarea + 金属发送按钮。发送中禁用，错误内联展示。
- * 发送后清空输入并 onSent 回调（父组件据此触发 timeline catchUp）。
+ * W-A.2 消息输入器（底部）—— 发消息后起 run（POST /conversations/{id}/runs）触发 AI 处理。
  */
-
 import { useState, type FormEvent } from "react";
 import { Button } from "@aiteam/shared/ui";
-
 import { useApiError, useApp } from "../../lib/app-context";
-import { sendMessage } from "./useChatApi";
+import { sendMessage, startRun } from "./useChatApi";
 
 export interface MessageComposerProps {
   conversationId: string;
@@ -31,6 +26,8 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     setError(null);
     try {
       await sendMessage(client, conversationId, { content: text });
+      // 起 run 触发 AI 处理，时间线产出 BusinessTimelineEvent。
+      await startRun(client, conversationId);
       setContent("");
       onSent();
     } catch (err) {

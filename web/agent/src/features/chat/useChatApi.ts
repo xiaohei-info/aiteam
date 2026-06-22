@@ -110,3 +110,30 @@ export function createTimelineFetcher(client: AgentApiClient): TimelineHistoryFe
       limit,
     });
 }
+
+/** Run 结果（对齐 server mainline/models.py:Run）。 */
+export interface Run {
+  id: string;
+  conversation_id: string;
+  status: string;
+  session_id?: string | null;
+  error?: string | null;
+  usage?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 起 run（POST /api/agent/conversations/{id}/runs）。
+ * 发消息后调此接口触发 AI 处理，时间线会产出 BusinessTimelineEvent。
+ */
+export async function startRun(
+  client: AgentApiClient,
+  conversationId: string,
+  taskId?: string | null,
+): Promise<Run | null> {
+  return client.post<Run>(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}/runs`,
+    { body: taskId ? { task_id: taskId } : {} },
+  );
+}

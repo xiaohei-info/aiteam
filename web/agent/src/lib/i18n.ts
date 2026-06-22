@@ -19,7 +19,6 @@ const agentMessages = {
     "agent.login.submit": "登录",
     "agent.login.loading": "登录中…",
     "agent.login.failed": "登录失败：{detail}",
-    "agent.chat.placeholder": "对话页（建设中）",
     "agent.workspace.loading": "加载中…",
     "agent.workspace.load_error": "加载失败",
     "agent.workspace.action_error": "操作失败，请重试",
