@@ -10,6 +10,5 @@ export { useBoardApi } from "./useBoardApi.js";
 export type {
   RollupBoard,
   EnterpriseRollup,
-  AuditSummary,
   BoardApi,
 } from "./useBoardApi.js";

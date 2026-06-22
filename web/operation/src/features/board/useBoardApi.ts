@@ -1,7 +1,7 @@
 /**
  * 跨企业治理看板 API hook（W-O.4）。
  *
- * 只调本端 /api/operation/rollup/*。
+ * 只调本端 /api/operation/rollups/*。
  * 契约不可重定义：脱敏聚合摘要类型本地声明，不可自定义平行 DTO。
  * D13 红线：绝对不返回/展示会话内容、执行明细、raw event 字段。
  */
@@ -11,36 +11,29 @@ import { useSession } from "../../auth/session.js";
 
 // ---- 脱敏聚合摘要类型（本地声明，待后端契约稳定后移入 @aiteam/shared）----
 
-/** 跨企业总览聚合（04 §6.5 脱敏聚合指标）。 */
-export interface RollupBoard {
-  enterprise_count: number;
-  total_runs: number;
-  total_cost_cents: number;
-  total_tokens: number;
-  active_window_start: string;
-  active_window_end: string;
-}
-
-/** 单企业 rollup 详情（04 §6.5 按窗口 usage 聚合 + audit 摘要）。 */
+/** 单企业 rollup 详情（EnterpriseUsageRollup）。 */
 export interface EnterpriseRollup {
   enterprise_id: string;
-  enterprise_name: string;
+  tenant_id: string;
+  run_count: number;
+  token_total: number;
+  cost_total: number | string;
+  error_count: number;
+  duration_seconds_total: number;
+  summary_count: number;
   window_start: string;
   window_end: string;
-  run_count: number;
-  cost_cents: number;
-  total_tokens: number;
-  /** 审计摘要（脱敏：不含执行内容/明细）。 */
-  audit_summary: AuditSummary | null;
 }
 
-/** 脱敏审计摘要（D13：绝不包含 message/prompt/token/raw event 详细字段）。 */
-export interface AuditSummary {
-  total_runs: number;
-  success_runs: number;
-  failed_runs: number;
-  avg_duration_seconds: number;
-  top_error_codes: string[];
+/** 跨企业总览聚合（CrossEnterpriseBoard）。 */
+export interface RollupBoard {
+  enterprise_count: number;
+  run_count: number;
+  token_total: number;
+  cost_total: number | string;
+  error_count: number;
+  duration_seconds_total: number;
+  enterprises: EnterpriseRollup[];
 }
 
 /** 本 feature 暴露的 API 表面。 */
@@ -52,12 +45,10 @@ export interface BoardApi {
 function createBoardApi(client: ApiClient): BoardApi {
   return {
     async getBoard(): Promise<RollupBoard | null> {
-      return client.get<RollupBoard>("/api/operation/rollup/board");
+      return client.get<RollupBoard>("/api/operation/rollups/board");
     },
     async getEnterpriseRollup(enterpriseId: string): Promise<EnterpriseRollup | null> {
-      return client.get<EnterpriseRollup>(
-        `/api/operation/rollup/enterprises/${enterpriseId}`,
-      );
+      return client.get<EnterpriseRollup>(`/api/operation/rollups/${enterpriseId}`);
     },
   };
 }

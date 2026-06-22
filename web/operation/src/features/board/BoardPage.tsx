@@ -1,7 +1,7 @@
 /**
  * 跨企业总览看板页（W-O.4）。
  *
- * GET /api/operation/rollup/board → 渲染总览面板。
+ * GET /api/operation/rollups/board → 渲染总览面板。
  * D13：只展示脱敏聚合摘要，绝不渲染会话内容/执行明细/raw event。
  * 黑金玻璃质感，复用 shared 组件（Button/GlassPanel）。
  */
