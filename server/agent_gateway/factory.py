@@ -12,9 +12,9 @@ from __future__ import annotations
 from shared.contracts.gateway import Executor
 
 from .acp_executor import AcpClientExecutor
+from .codex_executor import CodexAppServerExecutor
 from .drivers import get_driver
 from .executors import (
-    JsonRpcStdioExecutor,
     JsonStreamCliExecutor,
     PlainCliExecutor,
 )
@@ -22,10 +22,11 @@ from .runner import GatewayRunner
 from .sandbox import SandboxPolicy
 
 # 协议族 → Executor 类（06 §7.2）。Driver.executor_family 据此配对。
-# acp → AcpClientExecutor（真 ACP 客户端驱动，#184）；其余为子进程流式执行器。
+# acp → AcpClientExecutor（真 ACP 客户端，#184）；json_rpc_stdio → CodexAppServerExecutor
+# （真 codex app-server 客户端，#185）；其余为一次性子进程流式执行器。
 EXECUTOR_FAMILIES: dict[str, type[Executor]] = {
     "acp": AcpClientExecutor,
-    "json_rpc_stdio": JsonRpcStdioExecutor,
+    "json_rpc_stdio": CodexAppServerExecutor,
     "json_stream_cli": JsonStreamCliExecutor,
     "plain_cli": PlainCliExecutor,
 }

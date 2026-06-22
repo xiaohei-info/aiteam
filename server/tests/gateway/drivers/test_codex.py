@@ -1,63 +1,48 @@
-"""Codex JSON-RPC Driver 验收：golden codex/event→AgentRuntimeEvent + RunSpec 翻译（06 §7.5.3）。"""
+"""Codex Driver 验收：build_command 只拉协议端点 + parse_event 委托单一事实源（06 §7.5.3，#185）。
+
+归一映射的 golden 在 test_codex_executor.py（`map_codex_notification` 单一事实源）；本文件验证
+Driver 层：B 类能力**不进 cmdline**（走 turn/start 协议字段）+ parse_event 委托 + 能力声明。
+"""
 
 from agent_gateway.drivers.codex import CodexJsonRpcDriver
 from shared.contracts.runspec import RunSpec
 
 
-def _ev(msg):
-    return {"method": "codex/event", "params": {"msg": msg}}
+def _notif(method, **params):
+    return {"method": method, "params": params}
 
 
-GOLDEN = [
-    (_ev({"type": "task_started"}), "status", {"state": "running"}),
-    (_ev({"type": "agent_message_delta", "delta": "hi"}), "text_delta", {"text": "hi"}),
-    (_ev({"type": "agent_reasoning_delta", "delta": "think"}), "reasoning_delta", {"text": "think"}),
-    (
-        _ev({"type": "exec_command_begin", "call_id": "c1", "command": ["ls", "-l"]}),
-        "command_started",
-        {"call_id": "c1", "command": ["ls", "-l"]},
-    ),
-    (
-        _ev({"type": "exec_command_end", "call_id": "c1", "stdout": "out", "exit_code": 0}),
-        "command_output",
-        {"call_id": "c1", "stdout": "out", "exit_code": 0},
-    ),
-    (
-        _ev({"type": "token_count", "info": {"input_tokens": 5, "output_tokens": 9}}),
-        "usage",
-        {"input_tokens": 5, "output_tokens": 9},
-    ),
-    (_ev({"type": "task_complete", "last_agent_message": "done"}), "completed", {"final_text": "done"}),
-    (_ev({"type": "error", "message": "boom"}), "error", {"message": "boom"}),
-]
-
-
-def test_golden_event_mapping():
+def test_parse_event_delegates_to_map_codex_notification():
     d = CodexJsonRpcDriver()
-    for raw, exp_type, exp_payload in GOLDEN:
-        ev = d.parse_event(raw)
-        assert ev is not None, raw
-        assert ev.type == exp_type, raw
-        assert ev.payload == exp_payload, raw
-        assert ev.source == "codex"
+    ev = d.parse_event(_notif("item/agentMessage/delta", delta="hi"))
+    assert ev is not None and ev.type == "text_delta" and ev.payload == {"text": "hi"}
+    assert ev.source == "codex"
 
 
-def test_ignores_non_codex_event():
-    assert CodexJsonRpcDriver().parse_event({"method": "initialize"}) is None
+def test_ignores_non_mappable_methods():
+    assert CodexJsonRpcDriver().parse_event({"method": "thread/status/changed", "params": {}}) is None
+    assert CodexJsonRpcDriver().parse_event({"result": {"thread": {"id": "x"}}}) is None
 
 
-def test_build_command_translates_fields():
+def test_build_command_only_starts_app_server_no_b_class_flags():
+    """B 类（model/effort/system_prompt/resume）走 turn/start 协议字段，不进 cmdline。"""
     d = CodexJsonRpcDriver()
-    cmd = d.build_command(RunSpec(model="gpt-5", thinking_level="high", resume_session_id="sid"))
-    assert cmd[:2] == ["codex", "app-server"]
-    assert cmd[cmd.index("--model") + 1] == "gpt-5"
-    assert "model_reasoning_effort=high" in cmd
-    assert cmd[cmd.index("resume") + 1] == "sid"
+    cmd = d.build_command(
+        RunSpec(model="gpt-5-codex", thinking_level="high", system_prompt="p", resume_session_id="sid")
+    )
+    assert cmd == ["codex", "app-server"]
+
+
+def test_capabilities_declare_protocol_injection():
+    cap = CodexJsonRpcDriver().capabilities()
+    assert cap.system_prompt_injection == "protocol"
+    assert cap.thinking_level_injection == "protocol"  # turn/start effort
+    assert cap.model_catalog_mode == "dynamic"
 
 
 def test_extract_session_and_usage():
     d = CodexJsonRpcDriver()
-    assert d.extract_session_id(_ev({"type": "session_configured", "session_id": "abc"})) == "abc"
-    info = {"input_tokens": 5, "output_tokens": 9}
-    assert d.extract_usage(_ev({"type": "token_count", "info": info})) == info
-    assert d.extract_usage(_ev({"type": "agent_message_delta"})) is None
+    assert d.extract_session_id(_notif("thread/started", thread={"id": "abc"})) == "abc"
+    total = {"totalTokens": 100, "inputTokens": 80, "outputTokens": 20}
+    assert d.extract_usage(_notif("thread/tokenUsage/updated", tokenUsage={"total": total})) == total
+    assert d.extract_usage(_notif("item/agentMessage/delta", delta="x")) is None

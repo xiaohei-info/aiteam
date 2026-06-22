@@ -14,7 +14,6 @@ import asyncio
 import sys
 
 from agent_gateway.executors import (
-    JsonRpcStdioExecutor,
     JsonStreamCliExecutor,
     PlainCliExecutor,
 )
@@ -176,9 +175,9 @@ def _execute(executor, request, driver):
     return events, result
 
 
-# Acp / JsonRpcStdio / JsonStreamCli 三族 framing 相同（line-delimited JSON），
-# 用参数化共享行为测试；Plain 单独测。
-_JSON_EXECUTORS = [JsonRpcStdioExecutor, JsonStreamCliExecutor]
+# 一次性吐流的子进程执行器只剩 JsonStreamCli（line-delimited JSON）；ACP / codex app-server
+# 为常驻 RPC 服务端，由各自真客户端执行器测试（test_acp_executor / test_codex_executor）。
+_JSON_EXECUTORS = [JsonStreamCliExecutor]
 
 
 def _ids(cls):

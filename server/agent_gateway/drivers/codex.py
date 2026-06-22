@@ -1,11 +1,15 @@
-"""Codex Driver（自定义 JSON-RPC over stdio，06 §7.3 / §7.5.3）。
+"""Codex Driver（codex app-server JSON-RPC over stdio，06 §7.3 / §7.5.3）。
 
-绑定 `JsonRpcStdioExecutor`（Codex app-server）。B 类能力按 §7.5.3 翻译：
-- model        → `--model <id>`（空则 CLI 默认）
-- thinking_level→ `-c model_reasoning_effort=<level>`（Codex 用 -c 覆盖配置）
-- mcp_config   → 经 Codex MCP 入口（不写共享 profile）
-- resume       → `resume <sid>`
-原始事件取 `codex/event` 通知的 `msg.type` 判别字。
+绑定 `CodexAppServerExecutor`（经 JSON-RPC 客户端双向驱动 `codex app-server`）。
+B 类能力经 **turn/start 协议字段**注入（非 flag、非文件，D16），故 build_command 只拉起
+协议端点，不带 model/effort/resume flag：
+- model         → turn/start `model`
+- thinking_level→ turn/start `effort`（codex ReasoningEffort：none|minimal|low|medium|high|xhigh）
+- system_prompt → thread/start `developerInstructions`
+- resume        → thread/resume（执行器侧，非 cmdline）
+
+生产归一在 `codex_executor.map_codex_notification`（单一事实源）；本 Driver 的 parse_event
+直接委托该纯函数，供契约/诊断与非客户端路径校验。
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from shared.contracts.events import RuntimeEventType
 from shared.contracts.gateway import RuntimeCapability
 from shared.contracts.runspec import RunSpec
 
+from ..codex_executor import map_codex_notification
 from .base import _BaseDriver
 
 
@@ -23,8 +28,7 @@ class CodexJsonRpcDriver(_BaseDriver):
     cli_path = "codex"
     # Codex 特有越权 flag：`-c` 可任意覆盖配置（含 sandbox/审批策略），
     # `--sandbox`/`--full-auto`/`--dangerously-bypass-approvals-and-sandbox` 直接破隔离/审批。
-    # 这些只禁 custom_args 透传；Driver 自身受控使用 `-c` 注入 thinking_level 不受影响
-    # （build_command 在 filter 之后追加）。
+    # 仅禁 custom_args 透传；B 类配置由执行器经 turn/start 协议字段注入，不走 cmdline。
     extra_arg_denylist = frozenset(
         {
             "-c",
@@ -43,67 +47,40 @@ class CodexJsonRpcDriver(_BaseDriver):
             runtime=self.runtime_name,
             supports_native_skills=False,  # 技能降级走 MCP（§7.5.2）
             supports_native_memory=False,
-            supports_resume=True,
+            supports_resume=True,  # codex 原生支持 thread/resume；执行器侧装载待接（resume_session_id 尚未注入）
+
             supports_mcp=True,
-            system_prompt_injection="protocol",  # 经 app-server 入参注入
-            model_catalog_mode="dynamic",
+            system_prompt_injection="protocol",  # thread/start developerInstructions
+            model_catalog_mode="dynamic",  # turn/start model 覆盖 + model/list RPC
+            thinking_level_injection="protocol",  # turn/start effort（ReasoningEffort 枚举）
         )
 
     def build_command(self, run_spec: RunSpec) -> list[str]:
+        # app-server 只拉起 JSON-RPC 端点；B 类（model/effort/system_prompt/resume）走协议注入。
         cmd = [self.cli_path, "app-server"]
-        if run_spec.model:
-            cmd += ["--model", run_spec.model]
-        if run_spec.thinking_level:
-            cmd += ["-c", f"model_reasoning_effort={run_spec.thinking_level}"]
-        if run_spec.resume_session_id:
-            cmd += ["resume", run_spec.resume_session_id]
         cmd += self.filter_custom_args(run_spec.custom_args)
         return cmd
 
     def _map_raw(self, raw: dict) -> tuple[RuntimeEventType, dict] | None:
-        if raw.get("method") != "codex/event":
+        method = raw.get("method")
+        if not method:
             return None
-        msg = raw.get("params", {}).get("msg", {})
-        mtype = msg.get("type")
-        if mtype == "task_started":
-            return "status", {"state": "running"}
-        if mtype == "agent_message_delta":
-            return "text_delta", {"text": msg.get("delta", "")}
-        if mtype == "agent_reasoning_delta":
-            return "reasoning_delta", {"text": msg.get("delta", "")}
-        if mtype == "exec_command_begin":
-            return "command_started", {
-                "call_id": msg.get("call_id"),
-                "command": msg.get("command", []),
-            }
-        if mtype == "exec_command_end":
-            return "command_output", {
-                "call_id": msg.get("call_id"),
-                "stdout": msg.get("stdout", ""),
-                "exit_code": msg.get("exit_code"),
-            }
-        if mtype == "token_count":
-            return "usage", msg.get("info", {}) or {}
-        if mtype == "task_complete":
-            return "completed", {"final_text": msg.get("last_agent_message", "")}
-        if mtype == "error":
-            return "error", {"message": msg.get("message", "")}
-        return None
+        return map_codex_notification(method, raw.get("params") or {})
 
     def extract_session_id(self, raw: object) -> str | None:
         if isinstance(raw, dict):
             params = raw.get("params", {})
             if isinstance(params, dict):
-                msg = params.get("msg", {})
-                if isinstance(msg, dict) and msg.get("session_id"):
-                    return msg["session_id"]
-                if params.get("session_id"):
-                    return params["session_id"]
+                thread = params.get("thread")
+                if isinstance(thread, dict) and thread.get("id"):
+                    return thread["id"]
+                if params.get("threadId"):
+                    return params["threadId"]
         return None
 
     def extract_usage(self, raw: object) -> dict | None:
-        if isinstance(raw, dict):
-            msg = raw.get("params", {}).get("msg", {})
-            if isinstance(msg, dict) and msg.get("type") == "token_count":
-                return msg.get("info", {}) or {}
+        if isinstance(raw, dict) and raw.get("method") == "thread/tokenUsage/updated":
+            total = (raw.get("params", {}).get("tokenUsage") or {}).get("total")
+            if isinstance(total, dict):
+                return dict(total)
         return None

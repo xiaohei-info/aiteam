@@ -44,11 +44,28 @@ def test_claude_code_live_smoke():
     assert "completed" in types
 
 
-@pytest.mark.xfail(reason="codex app-server 是 JSON-RPC 服务端，需客户端握手；flag 亦不符真实 CLI（#185）", strict=False)
 @pytest.mark.skipif(not shutil.which("codex"), reason="codex CLI 未安装")
 def test_codex_live_smoke():
-    result, _ = _smoke("codex", "gpt-5-codex")
+    """#185：经真实 CodexAppServerExecutor 驱动 codex app-server，断言流式文本 + 终态。"""
+    result, events = _smoke("codex", None)
+    types = [e.type for e in events]
     assert result.success, result.error
+    assert "text_delta" in types
+    assert "completed" in types
+
+
+@pytest.mark.skipif(not shutil.which("codex"), reason="codex CLI 未安装")
+def test_codex_live_thinking_depth():
+    """#185：切换思考深度（effort=high）经 turn/start 注入，断言跑通（reasoning 视模型/配置而定）。"""
+    runner = build_runner("codex")
+    req = AgentRunRequest(
+        run_id="smoke_codex_effort", tenant_id="t1",
+        run_spec=RunSpec(model=None, thinking_level="high", timeout_seconds=180),
+        input_messages=[{"role": "user", "content": "What is 17 * 23? Think, then answer."}],
+    )
+    result, events = asyncio.run(runner.run_and_collect(req))
+    assert result.success, result.error
+    assert "completed" in [e.type for e in events]
 
 
 @pytest.mark.skipif(not shutil.which("hermes"), reason="hermes CLI 未安装")

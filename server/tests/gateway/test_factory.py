@@ -10,8 +10,8 @@ from agent_gateway.drivers import (
     OpenCodeJsonStreamDriver,
 )
 from agent_gateway.acp_executor import AcpClientExecutor
+from agent_gateway.codex_executor import CodexAppServerExecutor
 from agent_gateway.executors import (
-    JsonRpcStdioExecutor,
     JsonStreamCliExecutor,
     PlainCliExecutor,
 )
@@ -20,7 +20,7 @@ from agent_gateway.sandbox import SandboxPolicy
 
 _CASES = [
     ("hermes", AcpClientExecutor, HermesAcpDriver),
-    ("codex", JsonRpcStdioExecutor, CodexJsonRpcDriver),
+    ("codex", CodexAppServerExecutor, CodexJsonRpcDriver),
     ("claude_code", JsonStreamCliExecutor, ClaudeCodeJsonStreamDriver),
     ("opencode", JsonStreamCliExecutor, OpenCodeJsonStreamDriver),
     ("openclaw", JsonStreamCliExecutor, OpenClawJsonStreamDriver),

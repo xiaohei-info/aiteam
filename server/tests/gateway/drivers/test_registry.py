@@ -73,11 +73,12 @@ def test_codex_blocks_arbitrary_config_override_via_custom_args():
     assert "--keep" in cmd
 
 
-def test_codex_driver_still_injects_thinking_level_via_dash_c():
-    """边界：denylist 只拦 custom_args；Driver 自身受控用 -c 注入 thinking_level 不受影响。"""
+def test_codex_thinking_level_not_on_cmdline():
+    """#185：codex 思考深度走 turn/start effort 协议字段，**不进 cmdline**（D16 优先协议）。"""
     d = get_driver("codex")
     cmd = d.build_command(RunSpec(thinking_level="high"))
-    assert "-c" in cmd and "model_reasoning_effort=high" in cmd
+    assert cmd == ["codex", "app-server"]
+    assert "-c" not in cmd and "model_reasoning_effort=high" not in cmd
 
 
 def test_denied_boolean_flag_in_build_command_keeps_next_flag():

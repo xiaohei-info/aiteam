@@ -5,11 +5,12 @@
 | Executor | 协议形态 | 适用 runtime |
 |---|---|---|
 | `JsonStreamCliExecutor`| JSONL / stream-json stdout（一次性）| Claude Code / OpenCode / OpenClaw |
-| `JsonRpcStdioExecutor` | 自定义 JSON-RPC over stdio          | Codex app-server（#185 重写为真客户端） |
 | `PlainCliExecutor`     | 普通 stdout/stderr（降级，非首选） | 仅降级能力 |
 
-注：ACP 协议族（Hermes 等）由 `acp_executor.AcpClientExecutor` 经官方 ACP SDK 作**真客户端
-双向驱动**（非本模块的单向读流），见 06 §7.2 / #184。本模块只承载"一次性吐流"的子进程执行器。
+注：两类**常驻 RPC 服务端**由各自真客户端执行器双向驱动（非本模块的单向读流）：
+ACP（Hermes 等）→ `acp_executor.AcpClientExecutor`（官方 ACP SDK，#184）；
+codex app-server → `codex_executor.CodexAppServerExecutor`（JSON-RPC 客户端，#185）。
+本模块只承载"一次性吐流"的子进程执行器。
 
 Executor 负责**通用机制**：进程启动/退出、stdin/stdout/stderr 管理、超时、取消、
 idle watchdog、原始日志/事件读取、终态归类。**不懂 runtime 差异**——原始记录的语义
@@ -367,21 +368,6 @@ class JsonStreamCliExecutor(_SubprocessExecutor):
         return _parse_json_line(line)
 
 
-class JsonRpcStdioExecutor(_SubprocessExecutor):
-    """自定义 JSON-RPC over stdio（Codex app-server 等）。
-
-    line-delimited JSON-RPC envelope（method/params 或 result/error）→ dict 交给 Driver。
-    JSON-RPC 与 JSON stream 的传输 framing 一致；语义差异（method 路由 / 请求-响应匹配）
-    收口在 Driver，不在 Executor。
-    """
-
-    family = "json_rpc_stdio"
-    default_idle_seconds: float | None = 300.0
-
-    def _frame_line(self, line: str) -> object | None:
-        return _parse_json_line(line)
-
-
 class PlainCliExecutor(_SubprocessExecutor):
     """普通 stdout/stderr（降级能力，非生产首选）。
 
@@ -397,7 +383,6 @@ class PlainCliExecutor(_SubprocessExecutor):
 
 
 __all__ = [
-    "JsonRpcStdioExecutor",
     "JsonStreamCliExecutor",
     "PlainCliExecutor",
 ]
