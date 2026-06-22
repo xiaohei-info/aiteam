@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { Button, Field, GlassPanel, Input, Select, Table } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useGovernanceApi } from "./useGovernanceApi";
@@ -89,103 +90,140 @@ export function GovernancePage(): ReactNode {
   );
 
   return (
-    <section className="governance-page">
-      <h1>{i18n.t("manager.nav.governance")}</h1>
-      {actionError && <p className="gov-error">{actionError}</p>}
-      {error && <p className="gov-error">{error}</p>}
-      {loading && <p>{i18n.t("manager.gov.loading")}</p>}
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.governance")}</h1>
+      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+      {error && <p className="m-0 text-sm text-danger">{error}</p>}
+      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.gov.loading")}</p>}
 
-      <h2>{i18n.t("manager.gov.usage_title")}</h2>
-      <table className="gov-usage">
-        <thead>
-          <tr>
-            <th>{i18n.t("manager.gov.window")}</th>
-            <th>{i18n.t("manager.gov.runs")}</th>
-            <th>{i18n.t("manager.gov.tokens")}</th>
-            <th>{i18n.t("manager.gov.cost")}</th>
-            <th>{i18n.t("manager.gov.errors")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rollups.length === 0 ? (
+      <Panel title={i18n.t("manager.gov.usage_title")}>
+        <Table>
+          <thead>
             <tr>
-              <td colSpan={5}>{i18n.t("manager.gov.usage_empty")}</td>
+              <th>{i18n.t("manager.gov.window")}</th>
+              <th>{i18n.t("manager.gov.runs")}</th>
+              <th>{i18n.t("manager.gov.tokens")}</th>
+              <th>{i18n.t("manager.gov.cost")}</th>
+              <th>{i18n.t("manager.gov.errors")}</th>
             </tr>
-          ) : (
-            rollups.map((r) => (
-              <tr key={r.rollup_id} data-testid="rollup-row">
-                <td>
-                  {r.window_start} ~ {r.window_end}
+          </thead>
+          <tbody>
+            {rollups.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="text-text-muted">
+                  {i18n.t("manager.gov.usage_empty")}
                 </td>
-                <td>{r.run_count}</td>
-                <td>{r.token_total}</td>
-                <td>{String(r.cost_total)}</td>
-                <td>{r.error_count}</td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ) : (
+              rollups.map((r) => (
+                <tr key={r.rollup_id} data-testid="rollup-row">
+                  <td>
+                    {r.window_start} ~ {r.window_end}
+                  </td>
+                  <td>{r.run_count}</td>
+                  <td>{r.token_total}</td>
+                  <td>{String(r.cost_total)}</td>
+                  <td>{r.error_count}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </Panel>
 
-      <h2>{i18n.t("manager.gov.audit_title")}</h2>
-      <table className="gov-audit">
-        <thead>
-          <tr>
-            <th>{i18n.t("manager.gov.actor")}</th>
-            <th>{i18n.t("manager.gov.action")}</th>
-            <th>{i18n.t("manager.gov.resource")}</th>
-            <th>{i18n.t("manager.gov.time")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {audits.length === 0 ? (
+      <Panel title={i18n.t("manager.gov.audit_title")}>
+        <Table>
+          <thead>
             <tr>
-              <td colSpan={4}>{i18n.t("manager.gov.audit_empty")}</td>
+              <th>{i18n.t("manager.gov.actor")}</th>
+              <th>{i18n.t("manager.gov.action")}</th>
+              <th>{i18n.t("manager.gov.resource")}</th>
+              <th>{i18n.t("manager.gov.time")}</th>
             </tr>
-          ) : (
-            audits.map((a) => (
-              <tr key={a.event_id} data-testid="audit-row">
-                <td>{a.actor}</td>
-                <td>{a.action}</td>
-                <td>{a.resource_type ? `${a.resource_type}:${a.resource_id ?? ""}` : "-"}</td>
-                <td>{a.occurred_at}</td>
+          </thead>
+          <tbody>
+            {audits.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="text-text-muted">
+                  {i18n.t("manager.gov.audit_empty")}
+                </td>
               </tr>
+            ) : (
+              audits.map((a) => (
+                <tr key={a.event_id} data-testid="audit-row">
+                  <td>{a.actor}</td>
+                  <td>{a.action}</td>
+                  <td>{a.resource_type ? `${a.resource_type}:${a.resource_id ?? ""}` : "-"}</td>
+                  <td>{a.occurred_at}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </Panel>
+
+      <div className="flex flex-col gap-md">
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.gov.quota_title")}
+        </h2>
+        {canWrite && <QuotaForm onCreate={(input) => runAction(() => api.createQuota(input))} />}
+        {evaluation && (
+          <GlassPanel
+            role="status"
+            className="rounded-window border border-gold/30 p-md text-sm text-text-secondary"
+          >
+            <strong className="text-text-primary">{evaluation.policy_slug}</strong> ·{" "}
+            {evaluation.severity} · {evaluation.actions.join(", ")}
+            {evaluation.detail ? ` · ${evaluation.detail}` : ""}
+          </GlassPanel>
+        )}
+        <GlassPanel className="flex flex-col divide-y divide-gold/10 overflow-hidden rounded-window">
+          {quotas.length === 0 ? (
+            <div className="px-lg py-md text-sm text-text-muted">
+              {i18n.t("manager.gov.quota_empty")}
+            </div>
+          ) : (
+            quotas.map((q) => (
+              <div
+                key={q.policy_id}
+                data-testid="quota-row"
+                className="flex flex-wrap items-center gap-sm px-lg py-md"
+              >
+                <span className="text-sm text-text-secondary">
+                  <strong className="text-text-primary">{q.display_name || q.policy_slug}</strong> ·{" "}
+                  {q.enforcement} · {q.status}
+                </span>
+                <span className="ml-auto flex gap-sm">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => void handleEvaluate(q)}>
+                    {i18n.t("manager.gov.evaluate")}
+                  </Button>
+                  {canWrite && (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      onClick={() => void runAction(() => api.deleteQuota(q.policy_id))}
+                    >
+                      {i18n.t("manager.gov.delete")}
+                    </Button>
+                  )}
+                </span>
+              </div>
             ))
           )}
-        </tbody>
-      </table>
-
-      <h2>{i18n.t("manager.gov.quota_title")}</h2>
-      {canWrite && <QuotaForm onCreate={(input) => runAction(() => api.createQuota(input))} />}
-      {evaluation && (
-        <div className="gov-evaluation" role="status">
-          <strong>{evaluation.policy_slug}</strong> · {evaluation.severity} ·{" "}
-          {evaluation.actions.join(", ")}
-          {evaluation.detail ? ` · ${evaluation.detail}` : ""}
-        </div>
-      )}
-      <ul className="gov-quotas">
-        {quotas.length === 0 ? (
-          <li>{i18n.t("manager.gov.quota_empty")}</li>
-        ) : (
-          quotas.map((q) => (
-            <li key={q.policy_id} data-testid="quota-row">
-              <span>
-                <strong>{q.display_name || q.policy_slug}</strong> · {q.enforcement} · {q.status}
-              </span>
-              <button type="button" onClick={() => void handleEvaluate(q)}>
-                {i18n.t("manager.gov.evaluate")}
-              </button>
-              {canWrite && (
-                <button type="button" onClick={() => void runAction(() => api.deleteQuota(q.policy_id))}>
-                  {i18n.t("manager.gov.delete")}
-                </button>
-              )}
-            </li>
-          ))
-        )}
-      </ul>
+        </GlassPanel>
+      </div>
     </section>
+  );
+}
+
+/** 标题 + 玻璃面板（含表格）容器。 */
+function Panel({ title, children }: { title: string; children: ReactNode }): ReactNode {
+  return (
+    <div className="flex flex-col gap-md">
+      <h2 className="m-0 text-base font-semibold text-text-primary">{title}</h2>
+      <GlassPanel className="overflow-hidden rounded-window">{children}</GlassPanel>
+    </div>
   );
 }
 
@@ -223,32 +261,38 @@ function QuotaForm({ onCreate }: { onCreate: (input: CreateQuotaInput) => void |
   }
 
   return (
-    <form className="gov-quota-create" onSubmit={submit}>
-      <h3>{i18n.t("manager.gov.quota_create")}</h3>
-      <label>
-        {i18n.t("manager.gov.slug")}
-        <input value={slug} onChange={(e) => setSlug(e.target.value)} required />
-      </label>
-      <label>
-        {i18n.t("manager.gov.display_name")}
-        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-      </label>
-      <label>
-        {i18n.t("manager.gov.enforcement")}
-        <select value={enforcement} onChange={(e) => setEnforcement(e.target.value as "soft" | "hard")}>
-          <option value="soft">soft</option>
-          <option value="hard">hard</option>
-        </select>
-      </label>
-      <label>
-        {i18n.t("manager.gov.cost_cap")}
-        <input type="number" value={costCap} onChange={(e) => setCostCap(e.target.value)} />
-      </label>
-      <label>
-        {i18n.t("manager.gov.run_cap")}
-        <input type="number" value={runCap} onChange={(e) => setRunCap(e.target.value)} />
-      </label>
-      <button type="submit">{i18n.t("manager.gov.quota_submit")}</button>
-    </form>
+    <GlassPanel className="rounded-window p-lg">
+      <form className="flex flex-col gap-md" onSubmit={submit}>
+        <h3 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.gov.quota_create")}
+        </h3>
+        <div className="grid grid-cols-1 gap-md md:grid-cols-2">
+          <Field label={i18n.t("manager.gov.slug")}>
+            <Input value={slug} onChange={(e) => setSlug(e.target.value)} required />
+          </Field>
+          <Field label={i18n.t("manager.gov.display_name")}>
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </Field>
+          <Field label={i18n.t("manager.gov.enforcement")}>
+            <Select
+              value={enforcement}
+              onChange={(e) => setEnforcement(e.target.value as "soft" | "hard")}
+            >
+              <option value="soft">soft</option>
+              <option value="hard">hard</option>
+            </Select>
+          </Field>
+          <Field label={i18n.t("manager.gov.cost_cap")}>
+            <Input type="number" value={costCap} onChange={(e) => setCostCap(e.target.value)} />
+          </Field>
+          <Field label={i18n.t("manager.gov.run_cap")}>
+            <Input type="number" value={runCap} onChange={(e) => setRunCap(e.target.value)} />
+          </Field>
+        </div>
+        <Button type="submit" size="sm" className="self-start">
+          {i18n.t("manager.gov.quota_submit")}
+        </Button>
+      </form>
+    </GlassPanel>
   );
 }
