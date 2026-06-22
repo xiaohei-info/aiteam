@@ -53,6 +53,9 @@ class _BaseDriver(Driver):
     """
 
     runtime_name: str = "base"
+    # 绑定的 Executor 协议族（06 §7.2）：生产装配据此为本 Driver 配对 Executor。
+    # 取值 ∈ {"acp","json_rpc_stdio","json_stream_cli","plain_cli"}。
+    executor_family: str = "plain_cli"
     # 子类可追加自己 runtime 的危险 flag（如品牌特有的越权选项）。
     extra_arg_denylist: frozenset[str] = frozenset()
 

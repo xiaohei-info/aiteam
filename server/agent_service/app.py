@@ -90,11 +90,20 @@ def build_app(
     )
     settings = load_settings("agent")
     app = create_app(settings, build_router(login_service))
-    # 默认从配置的 AGENT_DB_PATH 落 SQLite 本地库（重启不丢，#158）；未配置则内存（dev/测试）。
-    mainline = mainline_service or build_mainline_service(db_path=settings.agent_db_path)
+    # AGENT_DB_PATH→SQLite 本地库（重启不丢，#158）；AGENT_RUNTIME→真实 runtime 装配（#173，
+    # 注入子进程沙箱隔离）；都未配则内存 + Fake runtime（dev/测试默认，行为不变）。
+    mainline = mainline_service or build_mainline_service(
+        db_path=settings.agent_db_path,
+        runtime_selection=settings.agent_runtime,
+        runs_root=settings.agent_runs_root,
+    )
     app.include_router(build_mainline_router(mainline))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
+    # 生产可配置自启动 loop 调度后台循环（#173）；默认否，dev/测试用手动触发端点。
+    if settings.agent_loop_autostart:
+        app.router.on_startup.append(_loop_scheduler.start)
+        app.router.on_shutdown.append(_loop_scheduler.stop)
     usage_service = build_usage_service(client=usage_client)
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(client=grants_client)

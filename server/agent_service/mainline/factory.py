@@ -1,7 +1,8 @@
 """主链组装（A1）。把仓储 + timeline + broker + GatewayRunner 装配成 MainlineService。
 
-骨架期默认用 fake runtime（C0.4）；真实 Driver/Executor 由 Track G 接入时只换 runner 的
-executor/driver，service 编排不变。
+runtime 装配（#173）：显式注入 executor/driver → 用之（测试）；否则 `runtime_selection`
+给定 → 经 Gateway 装配真实 Driver/Executor（注入子进程沙箱，§13 隔离）；都没有 → Fake
+runtime（dev/测试默认）。不静默切换：未知 runtime_selection 显式报错。
 
 持久化（#158）：`db_path` 给定 → SQLite 本地库（重启不丢，复用 local_db 底座 + 迁移）；
 未给 → 内存实现（dev/测试默认，不落文件）。raw_archive 仍为内存占位（真实归档见 #179）。
@@ -9,8 +10,12 @@ executor/driver，service 编排不变。
 
 from __future__ import annotations
 
+import tempfile
+
+from agent_gateway.factory import build_runner
 from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
 from agent_gateway.runner import GatewayRunner
+from agent_gateway.sandbox import SandboxPolicy
 from shared.contracts.gateway import Driver, Executor
 
 from ..local_db import apply_migrations, connect
@@ -34,11 +39,18 @@ def build_mainline_service(
     executor: Executor | None = None,
     driver: Driver | None = None,
     db_path: str | None = None,
+    runtime_selection: str | None = None,
+    runs_root: str | None = None,
 ) -> MainlineService:
-    runner = GatewayRunner(
-        executor=executor or FakeExecutor(),
-        driver=driver or FakeDriver(),
-    )
+    if executor is not None or driver is not None:
+        # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。
+        runner = GatewayRunner(executor=executor or FakeExecutor(), driver=driver or FakeDriver())
+    elif runtime_selection:
+        # 真实 runtime：经 Gateway 装配，注入子进程沙箱（§13：隔离工作目录 + 脱敏 env）。
+        sandbox = SandboxPolicy(runs_root=runs_root or tempfile.gettempdir())
+        runner = build_runner(runtime_selection, sandbox=sandbox)
+    else:
+        runner = GatewayRunner(executor=FakeExecutor(), driver=FakeDriver())
     if db_path:
         db = connect(db_path)
         apply_migrations(db)

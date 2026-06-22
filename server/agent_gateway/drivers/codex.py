@@ -19,6 +19,7 @@ from .base import _BaseDriver
 
 class CodexJsonRpcDriver(_BaseDriver):
     runtime_name = "codex"
+    executor_family = "json_rpc_stdio"
     cli_path = "codex"
     # Codex 特有越权 flag：`-c` 可任意覆盖配置（含 sandbox/审批策略），
     # `--sandbox`/`--full-auto`/`--dangerously-bypass-approvals-and-sandbox` 直接破隔离/审批。

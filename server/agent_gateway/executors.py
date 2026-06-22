@@ -32,6 +32,8 @@ from shared.contracts.events import AgentRuntimeEvent
 from shared.contracts.gateway import Driver, EventSink, Executor, RunResult
 from shared.contracts.runspec import AgentRunRequest
 
+from .sandbox import SandboxPolicy, build_env, prepare_run_dir
+
 # 进程优雅退出 → 强杀的等待窗口（取消/超时清理用）。
 _TERM_GRACE_SECONDS = 5.0
 
@@ -87,8 +89,10 @@ class _SubprocessExecutor(Executor):
     #: idle watchdog 默认窗口（秒）：防 runtime 卡死无输出。None=禁用。
     default_idle_seconds: float | None = None
 
-    def __init__(self) -> None:
+    def __init__(self, *, sandbox: SandboxPolicy | None = None) -> None:
         self._runs: dict[str, _RunHandle] = {}
+        # 沙箱为可选：生产装配注入（§13 隔离）；None=继承当前进程 cwd/env（dev/测试默认）。
+        self._sandbox = sandbox
 
     # ---- 子类钩子 ------------------------------------------------------
 
@@ -165,12 +169,20 @@ class _SubprocessExecutor(Executor):
     # ---- 生命周期分段 --------------------------------------------------
 
     async def _spawn(self, command, request, on_event, run_id, seq):
+        # §13 隔离：有沙箱则在 per-run 隔离工作目录 + 脱敏 env 下启动；否则继承当前进程。
+        cwd = None
+        env = None
+        if self._sandbox is not None:
+            cwd = prepare_run_dir(self._sandbox, run_id)
+            env = build_env(self._sandbox)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
             )
         except (OSError, ValueError) as exc:
             await self._emit(on_event, run_id, "error", {"message": f"spawn failed: {exc}"}, seq)

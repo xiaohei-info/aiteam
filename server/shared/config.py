@@ -44,6 +44,13 @@ class Settings(BaseModel):
     # Agent 用户端本地库文件路径（SQLite）。未配置→内存实现（dev/测试默认，不落文件）；
     # 配置后落 SQLite 本机库，重启不丢（04 用户端轻量本地库）。
     agent_db_path: str | None = Field(default=None)
+    # Agent 选定 runtime（06 §7.6）。未配置→Fake runtime（dev/测试默认）；配置后经 Gateway
+    # 装配真实 Driver/Executor（如 hermes/codex/claude_code/...），不静默切换。
+    agent_runtime: str | None = Field(default=None)
+    # Runtime Worker 子进程隔离工作目录根（§13）。每 run 在其下建独立 cwd。
+    agent_runs_root: str | None = Field(default=None)
+    # 进程启动期是否自启动 loop 调度后台循环（06 §7.6）。默认否（dev/测试用手动触发）。
+    agent_loop_autostart: bool = Field(default=False)
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
 
@@ -63,5 +70,8 @@ def load_settings(tier: Tier | None = None) -> Settings:
         operator_url=os.getenv("OPERATOR_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
         agent_db_path=os.getenv("AGENT_DB_PATH"),
+        agent_runtime=os.getenv("AGENT_RUNTIME"),
+        agent_runs_root=os.getenv("AGENT_RUNS_ROOT"),
+        agent_loop_autostart=os.getenv("AGENT_LOOP_AUTOSTART", "0") not in ("0", "false", "False"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )

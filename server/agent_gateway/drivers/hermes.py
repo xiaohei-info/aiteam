@@ -20,6 +20,7 @@ from .base import _BaseDriver
 
 class HermesAcpDriver(_BaseDriver):
     runtime_name = "hermes"
+    executor_family = "acp"
     cli_path = "hermes"
 
     def capabilities(self) -> RuntimeCapability:

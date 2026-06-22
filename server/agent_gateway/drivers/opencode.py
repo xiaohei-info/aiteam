@@ -15,6 +15,7 @@ from .base import _BaseDriver, materialize_mcp_config
 
 class OpenCodeJsonStreamDriver(_BaseDriver):
     runtime_name = "opencode"
+    executor_family = "json_stream_cli"
     cli_path = "opencode"
     # OpenCode 特有越权/破隔离 flag：禁经 custom_args 透传。
     extra_arg_denylist = frozenset({"--config", "--permission", "--agent-config"})

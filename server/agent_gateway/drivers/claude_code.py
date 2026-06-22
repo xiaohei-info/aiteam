@@ -20,6 +20,7 @@ from .base import _BaseDriver, materialize_mcp_config
 
 class ClaudeCodeJsonStreamDriver(_BaseDriver):
     runtime_name = "claude_code"
+    executor_family = "json_stream_cli"
     cli_path = "claude"
 
     def capabilities(self) -> RuntimeCapability:
