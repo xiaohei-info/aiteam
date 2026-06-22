@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { Button, Field, GlassPanel, Input, Select, Table } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useMembersApi } from "./useMembersApi";
@@ -85,70 +86,87 @@ export function MembersPage(): ReactNode {
   );
 
   return (
-    <section className="members-page">
-      <h1>{i18n.t("manager.nav.members")}</h1>
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.members")}</h1>
 
       {createdCredential && (
-        <div className="members-credential" role="status">
-          <p>{i18n.t("manager.members.credential_once")}</p>
-          <p>
-            <strong>{i18n.t("manager.members.account")}</strong>：{createdCredential.account}
+        <GlassPanel
+          role="status"
+          className="rounded-window border border-gold/30 p-lg text-sm text-text-secondary"
+        >
+          <p className="m-0 mb-sm text-text-primary">{i18n.t("manager.members.credential_once")}</p>
+          <p className="m-0">
+            <strong className="text-text-primary">{i18n.t("manager.members.account")}</strong>：
+            {createdCredential.account}
           </p>
-          <p>
-            <strong>{i18n.t("manager.members.initial_password")}</strong>：
-            <code>{createdCredential.password}</code>
+          <p className="m-0">
+            <strong className="text-text-primary">{i18n.t("manager.members.initial_password")}</strong>：
+            <code className="rounded bg-surface px-xs py-px text-gold-bright">{createdCredential.password}</code>
           </p>
-          <button type="button" onClick={() => setCreatedCredential(null)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-sm"
+            onClick={() => setCreatedCredential(null)}
+          >
             {i18n.t("manager.members.credential_dismiss")}
-          </button>
-        </div>
+          </Button>
+        </GlassPanel>
       )}
 
-      {canWrite && (
-        <CreateMemberForm departments={departments} onCreate={handleCreate} />
-      )}
+      {canWrite && <CreateMemberForm departments={departments} onCreate={handleCreate} />}
 
-      {actionError && <p className="members-error">{actionError}</p>}
-      {error && <p className="members-error">{error}</p>}
+      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+      {error && <p className="m-0 text-sm text-danger">{error}</p>}
       {loading ? (
-        <p>{i18n.t("manager.members.loading")}</p>
+        <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.members.loading")}</p>
       ) : (
-        <table className="members-table">
-          <thead>
-            <tr>
-              <th>{i18n.t("manager.members.col_name")}</th>
-              <th>{i18n.t("manager.members.col_status")}</th>
-              <th>{i18n.t("manager.members.col_roles")}</th>
-              <th>{i18n.t("manager.members.col_departments")}</th>
-              {canWrite && <th>{i18n.t("manager.members.col_actions")}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {members.length === 0 ? (
+        <GlassPanel className="overflow-hidden rounded-window">
+          <Table>
+            <thead>
               <tr>
-                <td colSpan={canWrite ? 5 : 4}>{i18n.t("manager.members.empty")}</td>
+                <th>{i18n.t("manager.members.col_name")}</th>
+                <th>{i18n.t("manager.members.col_status")}</th>
+                <th>{i18n.t("manager.members.col_roles")}</th>
+                <th>{i18n.t("manager.members.col_departments")}</th>
+                {canWrite && <th>{i18n.t("manager.members.col_actions")}</th>}
               </tr>
-            ) : (
-              members.map((m) => (
-                <tr key={m.id} data-testid="member-row">
-                  <td>{m.display_name || m.id}</td>
-                  <td>{m.status}</td>
-                  <td>{m.roles.join(", ")}</td>
-                  <td>{m.department_ids.map(deptName).join(", ")}</td>
-                  {canWrite && (
-                    <td>
-                      <button type="button" onClick={() => void handleToggleStatus(m)}>
-                        {m.status === "active"
-                          ? i18n.t("manager.members.disable")
-                          : i18n.t("manager.members.enable")}
-                      </button>
-                    </td>
-                  )}
+            </thead>
+            <tbody>
+              {members.length === 0 ? (
+                <tr>
+                  <td colSpan={canWrite ? 5 : 4} className="text-text-muted">
+                    {i18n.t("manager.members.empty")}
+                  </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                members.map((m) => (
+                  <tr key={m.id} data-testid="member-row">
+                    <td>{m.display_name || m.id}</td>
+                    <td>{m.status}</td>
+                    <td>{m.roles.join(", ")}</td>
+                    <td>{m.department_ids.map(deptName).join(", ")}</td>
+                    {canWrite && (
+                      <td>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handleToggleStatus(m)}
+                        >
+                          {m.status === "active"
+                            ? i18n.t("manager.members.disable")
+                            : i18n.t("manager.members.enable")}
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </Table>
+        </GlassPanel>
       )}
     </section>
   );
@@ -185,54 +203,55 @@ function CreateMemberForm({ departments, onCreate }: CreateFormProps): ReactNode
   }
 
   return (
-    <form className="members-create" onSubmit={submit}>
-      <h2>{i18n.t("manager.members.create_title")}</h2>
-      <label>
-        {i18n.t("manager.members.account")}
-        <input value={account} onChange={(e) => setAccount(e.target.value)} required />
-      </label>
-      <label>
-        {i18n.t("manager.members.initial_password")}
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-      </label>
-      <label>
-        {i18n.t("manager.members.display_name")}
-        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-      </label>
-      <label>
-        {i18n.t("manager.members.role")}
-        <select value={role} onChange={(e) => setRole(e.target.value)}>
-          {ASSIGNABLE_ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </label>
-      {departments.length > 0 && (
-        <label>
-          {i18n.t("manager.members.col_departments")}
-          <select
-            multiple
-            value={deptIds}
-            onChange={(e) =>
-              setDeptIds(Array.from(e.target.selectedOptions, (o) => o.value))
-            }
-          >
-            {departments.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <button type="submit">{i18n.t("manager.members.create_submit")}</button>
-    </form>
+    <GlassPanel className="rounded-window p-lg">
+      <form className="flex flex-col gap-md" onSubmit={submit}>
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.members.create_title")}
+        </h2>
+        <div className="grid grid-cols-1 gap-md md:grid-cols-2">
+          <Field label={i18n.t("manager.members.account")}>
+            <Input value={account} onChange={(e) => setAccount(e.target.value)} required />
+          </Field>
+          <Field label={i18n.t("manager.members.initial_password")}>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </Field>
+          <Field label={i18n.t("manager.members.display_name")}>
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </Field>
+          <Field label={i18n.t("manager.members.role")}>
+            <Select value={role} onChange={(e) => setRole(e.target.value)}>
+              {ASSIGNABLE_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {departments.length > 0 && (
+            <Field label={i18n.t("manager.members.col_departments")}>
+              <Select
+                multiple
+                value={deptIds}
+                onChange={(e) => setDeptIds(Array.from(e.target.selectedOptions, (o) => o.value))}
+              >
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.display_name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+        </div>
+        <Button type="submit" size="sm" className="self-start">
+          {i18n.t("manager.members.create_submit")}
+        </Button>
+      </form>
+    </GlassPanel>
   );
 }

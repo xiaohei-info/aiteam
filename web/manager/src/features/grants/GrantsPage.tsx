@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { Button, Field, GlassPanel, Select, Table } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useGrantsApi } from "./useGrantsApi";
@@ -83,11 +84,11 @@ export function GrantsPage(): ReactNode {
   );
 
   return (
-    <section className="grants-page">
-      <h1>{i18n.t("manager.nav.grants")}</h1>
-      {actionError && <p className="grants-error">{actionError}</p>}
-      {error && <p className="grants-error">{error}</p>}
-      {loading && <p>{i18n.t("manager.grants.loading")}</p>}
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.grants")}</h1>
+      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+      {error && <p className="m-0 text-sm text-danger">{error}</p>}
+      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.grants.loading")}</p>}
 
       {canWrite && (
         <GrantForm
@@ -99,43 +100,49 @@ export function GrantsPage(): ReactNode {
         />
       )}
 
-      <table className="grants-table">
-        <thead>
-          <tr>
-            <th>{i18n.t("manager.grants.col_resource")}</th>
-            <th>{i18n.t("manager.grants.col_members")}</th>
-            <th>{i18n.t("manager.grants.col_departments")}</th>
-            {canWrite && <th>{i18n.t("manager.grants.col_actions")}</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {grants.length === 0 ? (
+      <GlassPanel className="overflow-hidden rounded-window">
+        <Table>
+          <thead>
             <tr>
-              <td colSpan={canWrite ? 4 : 3}>{i18n.t("manager.grants.empty")}</td>
+              <th>{i18n.t("manager.grants.col_resource")}</th>
+              <th>{i18n.t("manager.grants.col_members")}</th>
+              <th>{i18n.t("manager.grants.col_departments")}</th>
+              {canWrite && <th>{i18n.t("manager.grants.col_actions")}</th>}
             </tr>
-          ) : (
-            grants.map((g) => (
-              <tr key={g.id} data-testid="grant-row">
-                <td>
-                  {g.resource_type} · <code>{g.resource_id}</code>
+          </thead>
+          <tbody>
+            {grants.length === 0 ? (
+              <tr>
+                <td colSpan={canWrite ? 4 : 3} className="text-text-muted">
+                  {i18n.t("manager.grants.empty")}
                 </td>
-                <td>{g.member_ids.map(nameOf.member).join(", ") || "-"}</td>
-                <td>{g.department_ids.map(nameOf.dept).join(", ") || "-"}</td>
-                {canWrite && (
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() => void runAction(() => api.deleteGrant(g.id))}
-                    >
-                      {i18n.t("manager.grants.revoke")}
-                    </button>
-                  </td>
-                )}
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ) : (
+              grants.map((g) => (
+                <tr key={g.id} data-testid="grant-row">
+                  <td>
+                    {g.resource_type} · <code className="text-gold-bright">{g.resource_id}</code>
+                  </td>
+                  <td>{g.member_ids.map(nameOf.member).join(", ") || "-"}</td>
+                  <td>{g.department_ids.map(nameOf.dept).join(", ") || "-"}</td>
+                  {canWrite && (
+                    <td>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void runAction(() => api.deleteGrant(g.id))}
+                      >
+                        {i18n.t("manager.grants.revoke")}
+                      </Button>
+                    </td>
+                  )}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </GlassPanel>
     </section>
   );
 }
@@ -184,53 +191,57 @@ function GrantForm({ experts, solutions, members, departments, onCreate }: FormP
   }
 
   return (
-    <form className="grants-create" onSubmit={submit}>
-      <h2>{i18n.t("manager.grants.create_title")}</h2>
-      <label>
-        {i18n.t("manager.grants.resource_type")}
-        <select
-          value={resourceType}
-          onChange={(e) => {
-            setResourceType(e.target.value as GrantResourceType);
-            setResourceId("");
-          }}
-        >
-          <option value="expert">{i18n.t("manager.grants.type_expert")}</option>
-          <option value="solution">{i18n.t("manager.grants.type_solution")}</option>
-        </select>
-      </label>
-      <label>
-        {i18n.t("manager.grants.resource")}
-        <select value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
-          <option value="">{i18n.t("manager.grants.resource_pick")}</option>
-          {resourceOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {i18n.t("manager.grants.col_members")}
-        <select multiple value={memberIds} onChange={(e) => setMemberIds(selected(e))}>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.display_name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {i18n.t("manager.grants.col_departments")}
-        <select multiple value={deptIds} onChange={(e) => setDeptIds(selected(e))}>
-          {departments.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.display_name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button type="submit">{i18n.t("manager.grants.create_submit")}</button>
-    </form>
+    <GlassPanel className="rounded-window p-lg">
+      <form className="flex flex-col gap-md" onSubmit={submit}>
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.grants.create_title")}
+        </h2>
+        <div className="grid grid-cols-1 gap-md md:grid-cols-2">
+          <Field label={i18n.t("manager.grants.resource_type")}>
+            <Select
+              value={resourceType}
+              onChange={(e) => {
+                setResourceType(e.target.value as GrantResourceType);
+                setResourceId("");
+              }}
+            >
+              <option value="expert">{i18n.t("manager.grants.type_expert")}</option>
+              <option value="solution">{i18n.t("manager.grants.type_solution")}</option>
+            </Select>
+          </Field>
+          <Field label={i18n.t("manager.grants.resource")}>
+            <Select value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
+              <option value="">{i18n.t("manager.grants.resource_pick")}</option>
+              {resourceOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={i18n.t("manager.grants.col_members")}>
+            <Select multiple value={memberIds} onChange={(e) => setMemberIds(selected(e))}>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={i18n.t("manager.grants.col_departments")}>
+            <Select multiple value={deptIds} onChange={(e) => setDeptIds(selected(e))}>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.display_name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <Button type="submit" size="sm" className="self-start">
+          {i18n.t("manager.grants.create_submit")}
+        </Button>
+      </form>
+    </GlassPanel>
   );
 }
