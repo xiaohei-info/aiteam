@@ -54,6 +54,11 @@ def test_build_command_keeps_b_class_out_of_cmdline():
     assert d.capabilities().system_prompt_injection == "protocol"
 
 
+def test_thinking_level_declared_unsupported():
+    """hermes acp 协议无思考深度通道：显式标 unsupported，不静默丢弃 RunSpec.thinking_level。"""
+    assert HermesAcpDriver().capabilities().thinking_level_injection == "unsupported"
+
+
 def test_custom_args_denylist_applied():
     d = HermesAcpDriver()
     cmd = d.build_command(RunSpec(custom_args=["--system-prompt", "x", "--ok"]))

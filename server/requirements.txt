@@ -9,3 +9,5 @@ pyjwt>=2.8
 cryptography>=42
 # Manager 多租户 PG/RLS 底座（shared/db, manager_service，D20/D22）。
 psycopg[binary]>=3.1
+# Agent Gateway 接 ACP 协议 runtime（Hermes 等）的官方客户端 SDK（06 §7.2，复用不自造）。
+agent-client-protocol>=0.10

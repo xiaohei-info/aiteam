@@ -37,6 +37,10 @@ class RuntimeCapability(BaseModel):
         default="flag", description="persona 注入方式：flag | protocol | file"
     )
     model_catalog_mode: str = Field(default="static", description="static | dynamic（shell 出 CLI 列模型）")
+    thinking_level_injection: str = Field(
+        default="unsupported",
+        description="思考深度注入方式：flag | protocol | unsupported（不支持须显式标注，不静默丢弃 RunSpec.thinking_level）",
+    )
 
 
 class RunResult(BaseModel):

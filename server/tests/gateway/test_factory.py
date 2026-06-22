@@ -9,8 +9,8 @@ from agent_gateway.drivers import (
     OpenClawJsonStreamDriver,
     OpenCodeJsonStreamDriver,
 )
+from agent_gateway.acp_executor import AcpClientExecutor
 from agent_gateway.executors import (
-    AcpExecutor,
     JsonRpcStdioExecutor,
     JsonStreamCliExecutor,
     PlainCliExecutor,
@@ -19,7 +19,7 @@ from agent_gateway.factory import build_executor, build_runner
 from agent_gateway.sandbox import SandboxPolicy
 
 _CASES = [
-    ("hermes", AcpExecutor, HermesAcpDriver),
+    ("hermes", AcpClientExecutor, HermesAcpDriver),
     ("codex", JsonRpcStdioExecutor, CodexJsonRpcDriver),
     ("claude_code", JsonStreamCliExecutor, ClaudeCodeJsonStreamDriver),
     ("opencode", JsonStreamCliExecutor, OpenCodeJsonStreamDriver),

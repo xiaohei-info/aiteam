@@ -3,7 +3,7 @@
 import pytest
 
 from agent_gateway.drivers.hermes import HermesAcpDriver
-from agent_gateway.executors import AcpExecutor
+from agent_gateway.acp_executor import AcpClientExecutor
 from agent_gateway.fake_runtime import FakeDriver
 from agent_service.mainline.factory import build_mainline_service
 
@@ -12,7 +12,7 @@ def test_runtime_selection_wires_real_driver_and_executor(tmp_path):
     svc = build_mainline_service(runtime_selection="hermes", runs_root=str(tmp_path))
     runner = svc._runner
     assert isinstance(runner._driver, HermesAcpDriver)
-    assert isinstance(runner._executor, AcpExecutor)
+    assert isinstance(runner._executor, AcpClientExecutor)
     # 沙箱已注入（隔离工作目录在 runs_root 下）。
     assert runner._executor._sandbox is not None
     assert runner._executor._sandbox.runs_root == str(tmp_path)

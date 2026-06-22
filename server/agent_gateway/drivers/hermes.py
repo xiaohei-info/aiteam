@@ -1,6 +1,7 @@
 """Hermes Driver（ACP / JSON-RPC over stdio，06 §7.3 / §7.5.3）。
 
-绑定 `AcpExecutor`，取代旧 WebUI loopback 执行链（§7.3：旧 HERMES_WEBUI_* / app/.env 一概不用）。
+绑定 `AcpClientExecutor`（经官方 ACP SDK 真客户端双向驱动），取代旧 WebUI loopback 执行链
+（§7.3：旧 HERMES_WEBUI_* / app/.env 一概不用）。
 B 类能力经 ACP **协议字段/RPC** 注入（非 flag、非文件）：
 - system_prompt → ACP session 参数（session/new 的 systemPrompt）
 - model        → ACP `session/set_model` RPC（build_command 不带 model flag）
@@ -31,7 +32,10 @@ class HermesAcpDriver(_BaseDriver):
             supports_resume=True,
             supports_mcp=True,
             system_prompt_injection="protocol",  # ACP session 参数，非 flag/文件
-            model_catalog_mode="dynamic",  # 经 ACP/CLI 列模型
+            model_catalog_mode="dynamic",  # 经 ACP/CLI 列模型（set_session_model RPC 切换）
+            # hermes acp 协议未暴露思考深度通道：`hermes acp` 无 reasoning flag，
+            # reasoning_effort 仅存于 config.yaml；D16 禁直写 runtime profile，故标 unsupported（不静默丢弃）。
+            thinking_level_injection="unsupported",
         )
 
     def build_command(self, run_spec: RunSpec) -> list[str]:
@@ -41,6 +45,9 @@ class HermesAcpDriver(_BaseDriver):
         return cmd
 
     def _map_raw(self, raw: dict) -> tuple[RuntimeEventType, dict] | None:
+        # 生产 ACP 路径由 `AcpClientExecutor` 经官方 SDK 在 typed 对象上归一
+        # （`acp_executor.map_acp_update`，单一事实源）。本 dict-shape 映射记录 ACP 线格式、
+        # 供契约/诊断与非 SDK 路径校验，不在 live run 触发。
         # ACP 用 JSON-RPC 通知：method=session/update，params.update 携 sessionUpdate 判别字。
         if raw.get("method") != "session/update":
             return None
