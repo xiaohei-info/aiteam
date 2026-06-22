@@ -10,7 +10,6 @@ import { BrowserRouter } from "react-router-dom";
 import { ErrorBoundary, QueryProvider } from "@aiteam/shared/app-kit";
 import { App } from "./App";
 import { AppProviders } from "./AppProviders";
-import "./styles/global.css";
 import "./styles/app.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
