@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"sess-tool","cwd":"/run","model":"claude-opus-4-8","permissionMode":"bypassPermissions"}
+{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"","signature":"EooDCmMI"}],"usage":{"input_tokens":8187,"output_tokens":2}},"session_id":"sess-tool"}
+{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_013RoYpsduF75D3jekf9Mk9U","name":"Bash","input":{"command":"echo hello-claude","description":"Print hello-claude"}}],"usage":{"input_tokens":8187,"output_tokens":2}},"session_id":"sess-tool"}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_013RoYpsduF75D3jekf9Mk9U","type":"tool_result","content":"hello-claude","is_error":false}]},"session_id":"sess-tool"}
+{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"命令输出为：`hello-claude`"}]},"session_id":"sess-tool"}
+{"type":"result","subtype":"success","is_error":false,"result":"命令输出为：`hello-claude`","session_id":"sess-tool","usage":{"input_tokens":8189,"output_tokens":163}}

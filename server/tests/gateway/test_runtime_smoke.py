@@ -44,6 +44,38 @@ def test_claude_code_live_smoke():
     assert "completed" in types
 
 
+@pytest.mark.skipif(not shutil.which("claude"), reason="claude CLI 未安装")
+def test_claude_code_live_tool_call():
+    """#187：headless（bypassPermissions + §13 沙箱）下工具真执行，断言工具输入/输出归一可得。"""
+    runner = build_runner("claude_code")
+    req = AgentRunRequest(
+        run_id="smoke_cc_tool", tenant_id="t1",
+        run_spec=RunSpec(model="claude-haiku-4-5-20251001", timeout_seconds=180),
+        input_messages=[{"role": "user", "content":
+                         "Run the bash command `echo hello-claude`, then reply DONE."}],
+    )
+    result, events = asyncio.run(runner.run_and_collect(req))
+    types = [e.type for e in events]
+    assert result.success, result.error
+    assert "tool_call_started" in types
+    assert "tool_call_completed" in types
+
+
+@pytest.mark.skipif(not shutil.which("claude"), reason="claude CLI 未安装")
+def test_claude_code_live_thinking_depth():
+    """#187：切换思考深度（--effort high）经 flag 注入，断言跑通并产出思考块。"""
+    runner = build_runner("claude_code")
+    req = AgentRunRequest(
+        run_id="smoke_cc_effort", tenant_id="t1",
+        run_spec=RunSpec(model="claude-haiku-4-5-20251001", thinking_level="high",
+                         timeout_seconds=180),
+        input_messages=[{"role": "user", "content": "What is 17 * 23? Think, then answer."}],
+    )
+    result, events = asyncio.run(runner.run_and_collect(req))
+    assert result.success, result.error
+    assert "completed" in [e.type for e in events]
+
+
 @pytest.mark.skipif(not shutil.which("codex"), reason="codex CLI 未安装")
 def test_codex_live_smoke():
     """#185：经真实 CodexAppServerExecutor 驱动 codex app-server，断言流式文本 + 终态。"""

@@ -10,10 +10,15 @@ import pathlib
 from agent_gateway.drivers.claude_code import ClaudeCodeJsonStreamDriver
 
 _FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "claude_code_stream.jsonl"
+_TOOL_FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "claude_code_tool_stream.jsonl"
 
 
 def _lines() -> list[dict]:
     return [json.loads(line) for line in _FIXTURE.read_text().splitlines() if line.strip()]
+
+
+def _tool_lines() -> list[dict]:
+    return [json.loads(line) for line in _TOOL_FIXTURE.read_text().splitlines() if line.strip()]
 
 
 def test_golden_real_stream_maps_core_events():
@@ -33,6 +38,23 @@ def test_golden_text_and_final_text():
     evs = [e for e in (d.parse_event(r) for r in _lines()) if e is not None]
     assert next(e for e in evs if e.type == "text_delta").payload["text"] == "OK"
     assert next(e for e in evs if e.type == "completed").payload["final_text"] == "OK"
+
+
+def test_golden_tool_call_started_and_completed():
+    """真实工具流（echo hello-claude）：tool_use→tool_call_started，tool_result→tool_call_completed。"""
+    d = ClaudeCodeJsonStreamDriver()
+    evs = [e for e in (d.parse_event(r) for r in _tool_lines()) if e is not None]
+    started = next(e for e in evs if e.type == "tool_call_started")
+    assert started.payload["tool_id"] == "toolu_013RoYpsduF75D3jekf9Mk9U"
+    assert started.payload["name"] == "Bash"
+    assert started.payload["input"]["command"] == "echo hello-claude"
+    completed = next(e for e in evs if e.type == "tool_call_completed")
+    assert completed.payload["tool_id"] == "toolu_013RoYpsduF75D3jekf9Mk9U"
+    assert completed.payload["output"] == "hello-claude"
+    assert completed.payload["is_error"] is False
+    # 工具调用前后仍能拿到思考与最终文本。
+    assert "reasoning_delta" in [e.type for e in evs]
+    assert next(e for e in evs if e.type == "completed").payload["final_text"] == "命令输出为：`hello-claude`"
 
 
 def test_golden_session_id_extraction():

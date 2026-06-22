@@ -32,10 +32,17 @@ class ClaudeCodeJsonStreamDriver(_BaseDriver):
             supports_mcp=True,
             system_prompt_injection="flag",  # --append-system-prompt
             model_catalog_mode="static",
+            thinking_level_injection="flag",  # --effort（low|medium|high|xhigh|max）
         )
 
     def build_command(self, run_spec: RunSpec) -> list[str]:
-        cmd = [self.cli_path, "--print", "--output-format", "stream-json", "--verbose"]
+        # --print 非交互模式下工具调用无从交互审批：headless 执行须显式放开权限，
+        # 安全由 §13 沙箱（隔离 cwd + 脱敏 env）兜底——与 codex approvalPolicy=never、
+        # hermes 自动批准同构。sandbox=None（dev 默认）时工具未隔离运行，仅限可信本机 dev。
+        cmd = [
+            self.cli_path, "--print", "--output-format", "stream-json", "--verbose",
+            "--permission-mode", "bypassPermissions",
+        ]
         if run_spec.system_prompt:
             cmd += ["--append-system-prompt", run_spec.system_prompt]
         if run_spec.model:
