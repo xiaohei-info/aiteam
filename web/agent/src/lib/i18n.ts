@@ -12,6 +12,7 @@ const agentMessages = {
     "agent.nav.workspace": "工作台",
     "agent.nav.private_chat": "私聊",
     "agent.nav.group_chat": "群聊",
+    "agent.nav.sync": "同步与用量",
     "agent.login.title": "登录",
     "agent.login.account": "账号（手机号 / 用户名）",
     "agent.login.password": "密码",

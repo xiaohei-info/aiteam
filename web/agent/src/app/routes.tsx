@@ -10,6 +10,7 @@ import { RequireAuth } from "../components/RequireAuth";
 import { ChatPage } from "../features/chat";
 import { GroupPage } from "../features/group";
 import { WorkspacePage } from "../features/workspace";
+import { SyncPage } from "../features/sync";
 import { LoginPage } from "../pages/LoginPage";
 
 export function AppRoutes() {
@@ -47,6 +48,7 @@ export function AppRoutes() {
         }
       />
       <Route path="/" element={<Navigate to="/workspace" replace />} />
+      <Route path="/sync" element={<RequireAuth><PageShell><SyncPage /></PageShell></RequireAuth>} />
       <Route path="*" element={<Navigate to="/workspace" replace />} />
     </Routes>
   );

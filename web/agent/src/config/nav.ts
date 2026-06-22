@@ -8,5 +8,6 @@ export const agentShellConfig: PageShellConfig = {
     { id: "workspace", labelKey: "agent.nav.workspace", path: "/workspace", icon: "grid" },
     { id: "private-chat", labelKey: "agent.nav.private_chat", path: "/chat", icon: "message" },
     { id: "group-chat", labelKey: "agent.nav.group_chat", path: "/group", icon: "users" },
+    { id: "sync", labelKey: "agent.nav.sync", path: "/sync", icon: "refresh" },
   ],
 };
