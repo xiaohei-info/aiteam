@@ -124,7 +124,7 @@ function renderCatalogPage(sessionCtx: SessionContextValue) {
         <MemoryRouter initialEntries={["/catalog"]}>
           <Routes>
             <Route path="/catalog" element={<CatalogPage />} />
-            <Route path="/catalog/:id" element={<CatalogDetailPage />} />
+            <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
           </Routes>
         </MemoryRouter>
       </SessionContext.Provider>
@@ -132,15 +132,15 @@ function renderCatalogPage(sessionCtx: SessionContextValue) {
   );
 }
 
-function renderCatalogDetail(sessionCtx: SessionContextValue, id: string) {
+function renderCatalogDetail(sessionCtx: SessionContextValue, id: string, catalogType = "expert_template") {
   const i18n = makeI18n();
   return render(
     <I18nContext.Provider value={i18n}>
       <SessionContext.Provider value={sessionCtx}>
-        <MemoryRouter initialEntries={[`/catalog/${id}`]}>
+        <MemoryRouter initialEntries={[`/catalog/${catalogType}/${id}`]}>
           <Routes>
             <Route path="/catalog" element={<CatalogPage />} />
-            <Route path="/catalog/:id" element={<CatalogDetailPage />} />
+            <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
           </Routes>
         </MemoryRouter>
       </SessionContext.Provider>
@@ -150,17 +150,12 @@ function renderCatalogDetail(sessionCtx: SessionContextValue, id: string) {
 
 function makeCatalogItem(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: "a",
-    type: "expert_template",
-    name: "test",
-    description: "",
+    catalog_type: "expert_template",
+    template_id: "a",
+    display_name: "test",
     status: "draft",
-    visibility: "hidden",
-    tags: [],
+    visible_scope: null,
     version: "1",
-    author: "",
-    created_at: "",
-    updated_at: "",
     ...overrides,
   };
 }
@@ -216,11 +211,11 @@ describe("列表渲染", () => {
     mockFetch.mockResolvedValue(
       listPage([
         makeCatalogItem({
-          id: "a",
-          type: "expert_template",
-          name: "客服专家",
+          catalog_type: "expert_template",
+          template_id: "a",
+          display_name: "客服专家",
           status: "published",
-          visibility: "public",
+          visible_scope: null,
           version: "1.0",
         }),
       ]),
@@ -251,17 +246,17 @@ describe("cursor 翻页", () => {
   it("点击加载更多追加数据", async () => {
     mockFetch
       .mockResolvedValueOnce(
-        listPage([makeCatalogItem({ id: "a", name: "first" })], "cursor-1", true),
+        listPage([makeCatalogItem({ template_id: "a", display_name: "first" })], "cursor-1", true),
       )
       .mockResolvedValueOnce(
         listPage(
           [
             makeCatalogItem({
-              id: "b",
-              type: "solution_template",
-              name: "second",
+              catalog_type: "solution_template",
+              template_id: "b",
+              display_name: "second",
               status: "published",
-              visibility: "public",
+              visible_scope: null,
             }),
           ],
           null,
@@ -340,7 +335,7 @@ describe("管理员写操作", () => {
     mockFetch
       .mockResolvedValueOnce(
         listPage([
-          makeCatalogItem({ status: "published", visibility: "public" }),
+          makeCatalogItem({ status: "published", visible_scope: null }),
         ]),
       )
       .mockResolvedValueOnce(singleResponse(null))
@@ -365,7 +360,7 @@ describe("管理员写操作", () => {
   it("已发布项不显示发布按钮（只显下架）", async () => {
     mockFetch.mockResolvedValue(
       listPage([
-        makeCatalogItem({ status: "published", visibility: "public" }),
+        makeCatalogItem({ status: "published", visible_scope: null }),
       ]),
     );
     renderCatalogPage(makeSystemAdminSession());
@@ -378,7 +373,7 @@ describe("管理员写操作", () => {
   it("下架状态项显示发布按钮（不显下架）", async () => {
     mockFetch.mockResolvedValue(
       listPage([
-        makeCatalogItem({ status: "unpublished", visibility: "public" }),
+        makeCatalogItem({ status: "unpublished", visible_scope: null }),
       ]),
     );
     renderCatalogPage(makeSystemAdminSession());
@@ -533,16 +528,17 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // Fill name input (first textbox in the form)
+    // Fill template_id (first text input) and display_name (second text input)
     const inputs = screen.getAllByRole("textbox");
-    fireEvent.change(inputs[0]!, { target: { value: "新专家" } });
+    fireEvent.change(inputs[0]!, { target: { value: "tpl-new" } });
+    fireEvent.change(inputs[1]!, { target: { value: "新专家" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     await waitFor(() => {
       const registerCall = mockFetch.mock.calls.find((c: unknown[]) => {
         const url = c[0] as string;
-        return url.includes("register-expert-template");
+        return url.includes("expert-templates");
       });
       expect(registerCall).toBeDefined();
     });
@@ -556,28 +552,21 @@ describe("详情页", () => {
     mockFetch.mockResolvedValue(
       singleResponse(
         makeCatalogItem({
-          id: "abc",
-          type: "solution_template",
-          name: "电商方案",
-          description: "全渠道电商解决方案",
+          catalog_type: "solution_template",
+          template_id: "abc",
+          display_name: "电商方案",
           status: "published",
-          visibility: "public",
-          tags: ["电商", "零售"],
+          visible_scope: null,
           version: "2.0",
-          author: "方案团队",
-          created_at: "2026-06-01",
-          updated_at: "2026-06-15",
         }),
       ),
     );
 
-    renderCatalogDetail(makeSystemAdminSession(), "abc");
+    renderCatalogDetail(makeSystemAdminSession(), "abc", "solution_template");
 
     await waitFor(() => {
-      expect(screen.getByText("电商方案")).toBeInTheDocument();
-      expect(screen.getByText("全渠道电商解决方案")).toBeInTheDocument();
+      expect(screen.getAllByText("电商方案").length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText("行业方案")).toBeInTheDocument();
-      expect(screen.getByText("电商、零售")).toBeInTheDocument();
     });
   });
 

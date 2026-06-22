@@ -1,8 +1,14 @@
 /**
  * 目录治理 API hook（F03）。
  *
- * 封装 createOperationApiClient → 本端 /api/operation/catalog/* 调用。
- * 调用方只消费包装好的函数，不直接触碰 ApiClient 实例或 token。
+ * 路径已对齐后端 routes_catalog.py（prefix /api/operation/catalog）：
+ *   GET ""                                          → 列表
+ *   GET /{catalog_type}/{template_id}               → 详情
+ *   POST /expert-templates                          → 注册专家模板
+ *   POST /solution-templates                        → 注册行业方案
+ *   POST /{catalog_type}/{template_id}/publish      → 发布
+ *   POST /{catalog_type}/{template_id}/unpublish    → 下架
+ *   PUT  /{catalog_type}/{template_id}/visibility   → 改可见范围
  */
 import { useState, useCallback, useMemo } from "react";
 import { ApiError } from "@aiteam/shared";
@@ -11,30 +17,21 @@ import { createOperationApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import type {
   CatalogItem,
+  CatalogItemType,
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
-  SetVisibilityInput,
 } from "./types";
 
 const BASE = "/api/operation/catalog";
 
 export interface CatalogApi {
-  /** 列表（cursor 分页：传 next_cursor 翻页，首次不传）。 */
   list: (cursor?: string) => Promise<ListResult<CatalogItem>>;
-  /** 详情。 */
-  get: (id: string) => Promise<CatalogItem | null>;
-  /** 注册专家模板。 */
+  get: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   registerExpert: (input: RegisterExpertTemplate) => Promise<CatalogItem | null>;
-  /** 注册行业方案。 */
-  registerSolution: (
-    input: RegisterSolutionTemplate,
-  ) => Promise<CatalogItem | null>;
-  /** 发布。 */
-  publish: (id: string) => Promise<CatalogItem | null>;
-  /** 下架。 */
-  unpublish: (id: string) => Promise<CatalogItem | null>;
-  /** 设可见范围。 */
-  setVisibility: (input: SetVisibilityInput) => Promise<CatalogItem | null>;
+  registerSolution: (input: RegisterSolutionTemplate) => Promise<CatalogItem | null>;
+  publish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
+  unpublish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
+  setVisibility: (catalog_type: CatalogItemType, template_id: string, visible_scope: Record<string, unknown>) => Promise<CatalogItem | null>;
 }
 
 export function useCatalogApi(): CatalogApi {
@@ -46,62 +43,50 @@ export function useCatalogApi(): CatalogApi {
 
   const list = useCallback(
     (cursor?: string): Promise<ListResult<CatalogItem>> =>
-      client.listGet<CatalogItem>(`${BASE}/list`, {
+      client.listGet<CatalogItem>(BASE, {
         query: cursor ? { cursor } : undefined,
       }),
     [client],
   );
 
   const get = useCallback(
-    (id: string): Promise<CatalogItem | null> =>
-      client.get<CatalogItem>(`${BASE}/${id}`),
+    (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
+      client.get<CatalogItem>(`${BASE}/${catalog_type}/${template_id}`),
     [client],
   );
 
   const registerExpert = useCallback(
     (input: RegisterExpertTemplate): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/register-expert-template`, {
-        body: input,
-      }),
+      client.post<CatalogItem>(`${BASE}/expert-templates`, { body: input }),
     [client],
   );
 
   const registerSolution = useCallback(
     (input: RegisterSolutionTemplate): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/register-solution-template`, {
-        body: input,
-      }),
+      client.post<CatalogItem>(`${BASE}/solution-templates`, { body: input }),
     [client],
   );
 
   const publish = useCallback(
-    (id: string): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/publish`, { body: { id } }),
+    (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
+      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, {}),
     [client],
   );
 
   const unpublish = useCallback(
-    (id: string): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/unpublish`, { body: { id } }),
+    (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
+      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/unpublish`, {}),
     [client],
   );
 
   const setVisibility = useCallback(
-    (input: SetVisibilityInput): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/set-visibility`, { body: input }),
+    (catalog_type: CatalogItemType, template_id: string, visible_scope: Record<string, unknown>): Promise<CatalogItem | null> =>
+      client.put<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/visibility`, { body: { visible_scope } }),
     [client],
   );
 
   return useMemo<CatalogApi>(
-    () => ({
-      list,
-      get,
-      registerExpert,
-      registerSolution,
-      publish,
-      unpublish,
-      setVisibility,
-    }),
+    () => ({ list, get, registerExpert, registerSolution, publish, unpublish, setVisibility }),
     [list, get, registerExpert, registerSolution, publish, unpublish, setVisibility],
   );
 }

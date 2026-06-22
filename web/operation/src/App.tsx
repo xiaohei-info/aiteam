@@ -28,7 +28,7 @@ export function App(): React.ReactNode {
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePageWired />} />
         <Route path="/catalog" element={<CatalogPage />} />
-        <Route path="/catalog/:id" element={<CatalogDetailPage />} />
+        <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/board/:enterprise_id" element={<EnterpriseDetailPage />} />
       </Route>
