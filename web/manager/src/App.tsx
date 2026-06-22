@@ -15,6 +15,7 @@ import { ExpertsPage } from "./features/experts";
 import { GrantsPage } from "./features/grants";
 import { GovernancePage } from "./features/governance";
 import { ProvidersPage } from "./features/providers";
+import { KnowledgePage } from "./features/knowledge";
 
 export function App(): React.ReactNode {
   return (
@@ -33,6 +34,7 @@ export function App(): React.ReactNode {
         <Route path="/grants" element={<GrantsPage />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/providers" element={<ProvidersPage />} />
+        <Route path="/knowledge" element={<KnowledgePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
