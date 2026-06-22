@@ -13,6 +13,7 @@ import type { Conversation } from "./useChatApi";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
+import { RunsPanel } from "../runs";
 
 export function ChatPage() {
   const { client } = useApp();
@@ -39,6 +40,9 @@ export function ChatPage() {
               conversationId={selected.id}
               refreshSignal={sentSignal}
             />
+            <div className="px-md pb-sm">
+              <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+            </div>
             <MessageComposer conversationId={selected.id} onSent={handleSent} />
           </>
         ) : (
