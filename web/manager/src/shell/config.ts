@@ -53,6 +53,13 @@ export const managerShellConfig: PageShellConfig = {
         EnterpriseRole.FINANCE_ADMIN,
       ],
     },
+    {
+      id: "providers",
+      labelKey: "manager.nav.providers",
+      path: "/providers",
+      icon: "key",
+      requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN],
+    },
   ],
 };
 

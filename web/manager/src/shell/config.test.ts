@@ -47,6 +47,7 @@ describe("manager shell config", () => {
       "experts",
       "grants",
       "governance",
+      "providers",
     ]);
     expect(vm.activeItemId).toBe("members");
   });
@@ -63,6 +64,7 @@ describe("manager shell config", () => {
       "experts",
       "grants",
       "governance",
+      "providers",
     ]);
     expect(vm.activeItemId).toBe("experts");
   });
