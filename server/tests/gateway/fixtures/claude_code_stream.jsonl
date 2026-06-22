@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"c17984be-d608-42fc-b8a0-a749033c4624","cwd":"/run","model":"claude-haiku-4-5-20251001"}
+{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"thinking","thinking":"The user wants OK."}],"usage":{"input_tokens":12,"output_tokens":1}},"session_id":"c17984be-d608-42fc-b8a0-a749033c4624"}
+{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":12,"output_tokens":2}},"session_id":"c17984be-d608-42fc-b8a0-a749033c4624"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","utilization":0.5}}
+{"type":"result","subtype":"success","is_error":false,"result":"OK","session_id":"c17984be-d608-42fc-b8a0-a749033c4624","usage":{"input_tokens":12,"output_tokens":2},"total_cost_usd":0.0001}

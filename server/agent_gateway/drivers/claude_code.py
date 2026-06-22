@@ -97,6 +97,12 @@ class ClaudeCodeJsonStreamDriver(_BaseDriver):
         return None
 
     def extract_usage(self, raw: object) -> dict | None:
-        if isinstance(raw, dict) and isinstance(raw.get("usage"), dict):
-            return raw["usage"]
+        # 真实 stream-json：result 事件 usage 在顶层（累计权威值）；assistant 事件 usage
+        # 嵌在 message.usage（逐轮）。两处都取，执行器按事件序最后一个为准 → 收敛到 result 累计值。
+        if isinstance(raw, dict):
+            if isinstance(raw.get("usage"), dict):
+                return raw["usage"]
+            msg = raw.get("message")
+            if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+                return msg["usage"]
         return None
