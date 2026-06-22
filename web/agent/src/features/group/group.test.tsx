@@ -74,6 +74,14 @@ function makeGroupFetch(
 ) {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
+    // 列本地可用专家（GET /api/agent/grants/experts）
+    if (path.includes("/api/agent/grants/experts")) {
+      const experts = [
+        { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        { employee_id: "e2", tenant_id: "t1", version: "v1", display_name: "专家B", runtime_binding: "claude-sonnet", synced_at: null, revoked: false },
+      ];
+      return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     // 列会话（GET /api/agent/conversations，排除 timeline/messages/group-dispatch 子路径）
     if (
       path.includes("/api/agent/conversations") &&

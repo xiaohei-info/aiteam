@@ -19,7 +19,7 @@
  * MentionComposer 内部 useEffect 监听，避免组件间 ref/状态提升耦合。
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useApp } from "../../lib/app-context";
 import { GlassPanel } from "@aiteam/shared/ui";
@@ -28,21 +28,43 @@ import { TimelineView } from "../chat/TimelineView";
 import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import { MentionComposer } from "./MentionComposer";
-import type { DispatchResult, GroupExpert } from "./useGroupApi";
+import { listLoadedExperts, type DispatchResult, type GroupExpert } from "./useGroupApi";
 
-// 演示用 mock roster（真实来源是 pull 装载的 employee 快照，留详设）。
-const DEMO_ROSTER: GroupExpert[] = [
-  { handle: "专家A", model: "gpt-5" },
-  { handle: "专家B", model: "claude-sonnet" },
-];
+/**
+ * 把 LoadedExpertProjection 投影成群聊编排所需的 GroupExpert。
+ * handle 用 display_name（@提及入口友好）；persona/model 留待 RunSpec 派生。
+ */
+function toGroupExpert(p: { display_name: string; runtime_binding?: string | null }): GroupExpert {
+  return {
+    handle: p.display_name,
+    ...(p.runtime_binding ? { model: p.runtime_binding } : {}),
+  };
+}
 
 export function GroupPage() {
   const { client } = useApp();
   const [selected, setSelected] = useState<Conversation | null>(null);
-  const [roster] = useState<GroupExpert[]>(DEMO_ROSTER);
+  const [roster, setRoster] = useState<GroupExpert[]>([]);
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const [lastTriggered, setLastTriggered] = useState<string[] | null>(null);
   // 一轮编排完成后 +1，触发列表刷新 + timeline catchUp（补拉 since highWater 的新事件）。
   const [dispatchSignal, setDispatchSignal] = useState(0);
+
+  // 拉取真实 roster（GET /api/agent/grants/experts），替代演示用 mock。
+  useEffect(() => {
+    let cancelled = false;
+    listLoadedExperts(client)
+      .then((items) => {
+        if (cancelled) return;
+        setRoster(items.filter((p) => !p.revoked).map(toGroupExpert));
+        setRosterError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setRosterError(err instanceof Error ? err.message : "加载专家失败");
+      });
+    return () => { cancelled = true; };
+  }, [client]);
 
   const handleSelect = useCallback((conv: Conversation) => {
     setSelected(conv);
@@ -72,6 +94,9 @@ export function GroupPage() {
           <>
             <div className="flex flex-wrap items-center justify-between gap-md border-b border-gold/15 px-md py-sm">
               <GroupExpertRoster experts={roster} onPickHandle={handlePickHandle} />
+              {rosterError && (
+                <div className="text-xs text-danger" aria-live="polite">{rosterError}</div>
+              )}
               {lastTriggered && lastTriggered.length > 0 && (
                 <div className="text-xs font-semibold text-success" aria-live="polite">
                   本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}

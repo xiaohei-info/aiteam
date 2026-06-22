@@ -16,6 +16,20 @@
 import type { AgentApiClient } from "../../lib/api-client";
 
 /**
+ * 本地可用专家投影（对齐 server shared/contracts/grants.py:LoadedExpertProjection）。
+ * 用于群聊 roster 数据源——替代演示用 mock。
+ */
+export interface LoadedExpertProjection {
+  employee_id: string;
+  tenant_id: string;
+  version: string;
+  display_name: string;
+  runtime_binding?: string | null;
+  synced_at?: string | null;
+  revoked: boolean;
+}
+
+/**
  * 群聊里的一个专家（对齐 server group.py:GroupExpert）。
  * handle 是 @提及里用的标识；persona/model 为派生 RunSpec 所需最小字段。
  */
@@ -49,6 +63,17 @@ export interface GroupDispatchInput {
   text: string;
   /** 本会话已装载专家 roster（演示用，由前端持有；后端按请求体携带编排）。 */
   experts: GroupExpert[];
+}
+
+/**
+ * 列本会话已装载/已授权专家（GET /api/agent/grants/experts）。
+ * 群聊 roster 真实数据源（替演示用 mock）。
+ */
+export async function listLoadedExperts(
+  client: AgentApiClient,
+): Promise<LoadedExpertProjection[]> {
+  const result = await client.listGet<LoadedExpertProjection>("/api/agent/grants/experts");
+  return result.items;
 }
 
 /**
