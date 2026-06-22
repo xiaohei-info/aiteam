@@ -9,6 +9,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.nav.experts": "招募专家",
     "manager.nav.grants": "成员级授权",
     "manager.nav.governance": "企业治理",
+    "manager.login.tenant_id": "企业标识（tenant_id）",
     "manager.login.account": "成员账号",
     "manager.login.password": "登录密码",
     "manager.login.submit": "登录",

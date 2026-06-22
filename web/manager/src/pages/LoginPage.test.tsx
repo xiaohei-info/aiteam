@@ -1,9 +1,5 @@
-/**
- * 登录页骨架测试（W-M）：表单渲染 + 空提交提示 + 已登录跳转。
- * 真实 /api/auth/login 联调由后续卡接入。
- */
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages } from "@aiteam/shared";
 import { I18nContext } from "../i18n/context";
@@ -37,10 +33,15 @@ function renderLogin(overrides: Partial<SessionContextValue> = {}) {
   );
 }
 
-describe("LoginPage 骨架", () => {
+describe("LoginPage", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("渲染标题与表单字段", () => {
     renderLogin();
     expect(screen.getByText("AI Team 企业端")).toBeInTheDocument();
+    expect(screen.getByText("企业标识（tenant_id）")).toBeInTheDocument();
     expect(screen.getByText("成员账号")).toBeInTheDocument();
     expect(screen.getByText("登录密码")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
@@ -64,7 +65,65 @@ describe("LoginPage 骨架", () => {
         },
       },
     });
-    // Navigate 不会渲染登录表单。
     expect(screen.queryByTestId("login-form")).toBeNull();
+  });
+
+  it("空字段不发请求", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => {
+      expect(screen.getByText("请填写账号与密码")).toBeInTheDocument();
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("登录成功 signIn + navigate", async () => {
+    const signIn = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { token: "t1", claims: {} } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    renderLogin({ signIn });
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "tenant1" } });
+    fireEvent.change(inputs[1]!, { target: { value: "user1" } });
+    const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: "pass123" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => {
+      expect(signIn).toHaveBeenCalledWith("t1");
+    });
+  });
+
+  it("登录失败 401 显示错误", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "about:blank",
+          title: "Unauthorized",
+          status: 401,
+          code: "auth_failed",
+          detail: "账号或密码错误",
+          instance: "/api/auth/login",
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/problem+json" },
+        },
+      ),
+    );
+    renderLogin();
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "tenant1" } });
+    fireEvent.change(inputs[1]!, { target: { value: "user1" } });
+    const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => {
+      expect(screen.getByText("账号或密码错误")).toBeInTheDocument();
+    });
   });
 });
