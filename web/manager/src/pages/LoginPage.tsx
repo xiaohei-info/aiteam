@@ -8,8 +8,13 @@
  */
 import { type FormEvent, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { GlassPanel, Button } from "@aiteam/shared/ui";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
+
+const fieldCls =
+  "rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
+  "outline-none focus:ring-2 focus:ring-gold";
 
 interface LocationState {
   from?: string;
@@ -43,32 +48,40 @@ export function LoginPage(): React.ReactNode {
   }
 
   return (
-    <div className="login-page">
-      <form className="login-page__form" onSubmit={handleSubmit}>
-        <h1 className="login-page__title">{i18n.t("manager.title")}</h1>
-        <label className="login-page__field">
-          <span>{i18n.t("manager.login.account")}</span>
-          <input
-            type="text"
-            value={account}
-            onChange={(e) => setAccount(e.target.value)}
-            autoComplete="username"
-          />
-        </label>
-        <label className="login-page__field">
-          <span>{i18n.t("manager.login.password")}</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        {error ? <p className="login-page__error">{error}</p> : null}
-        <button type="submit" className="login-page__submit">
-          {i18n.t("manager.login.submit")}
-        </button>
-      </form>
+    <div className="flex h-screen items-center justify-center bg-bg-canvas">
+      <GlassPanel className="w-[360px] rounded-window p-xl">
+        <form
+          className="flex flex-col gap-md"
+          data-testid="login-form"
+          onSubmit={handleSubmit}
+        >
+          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.title")}</h1>
+          <label className="flex flex-col gap-xs">
+            <span className="text-xs text-text-secondary">{i18n.t("manager.login.account")}</span>
+            <input
+              className={fieldCls}
+              type="text"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+              autoComplete="username"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="text-xs text-text-secondary">{i18n.t("manager.login.password")}</span>
+            <input
+              className={fieldCls}
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          {error ? <p className="m-0 text-xs text-danger">{error}</p> : null}
+          <Button type="submit" className="mt-sm">
+            {i18n.t("manager.login.submit")}
+          </Button>
+        </form>
+      </GlassPanel>
       {/* signIn / navigate 留在作用域内供后续联调使用，避免未使用告警。 */}
       <span hidden>
         {typeof signIn}

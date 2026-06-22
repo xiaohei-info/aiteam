@@ -47,7 +47,7 @@ describe("LoginPage 骨架", () => {
   });
 
   it("已登录时跳转（不渲染表单）", () => {
-    const { container } = renderLogin({
+    renderLogin({
       session: {
         principal: {
           id: "u1",
@@ -65,6 +65,6 @@ describe("LoginPage 骨架", () => {
       },
     });
     // Navigate 不会渲染登录表单。
-    expect(container.querySelector(".login-page__form")).toBeNull();
+    expect(screen.queryByTestId("login-form")).toBeNull();
   });
 });
