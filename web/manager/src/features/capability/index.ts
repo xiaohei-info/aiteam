@@ -1,0 +1,1 @@
+export { CapabilityPage } from "./CapabilityPage";

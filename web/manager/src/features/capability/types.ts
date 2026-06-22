@@ -1,0 +1,3 @@
+export interface SkillCatalog { catalog_id: string; skill_id: string; display_name: string; version: string; install_policy: string; binding_policy: string; visibility: string; config: Record<string,unknown>; catalog_version: number; }
+export interface ConnectorCatalog { catalog_id: string; connector_id: string; display_name: string; visibility: string; grant_scope: string; config: Record<string,unknown>; catalog_version: number; }
+export interface MemoryPolicyCatalog { catalog_id: string; policy_id: string; display_name: string; visibility: string; policy: Record<string,unknown>; seed_memories: unknown[]; retention_days?: number|null; config: Record<string,unknown>; catalog_version: number; }
