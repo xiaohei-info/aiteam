@@ -7,10 +7,15 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
 import type { EmployeeConfig, ExpertTemplate, SolutionPackage } from "./types";
+
+const textareaCls =
+  "min-h-[80px] rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
+  "outline-none transition placeholder:text-text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold";
 
 export function ExpertsPage(): ReactNode {
   const { session } = useSession();
@@ -65,22 +70,25 @@ export function ExpertsPage(): ReactNode {
   );
 
   return (
-    <section className="experts-page">
-      <h1>{i18n.t("manager.nav.experts")}</h1>
-      {notice && <p className="experts-notice" role="status">{notice}</p>}
-      {actionError && <p className="experts-error">{actionError}</p>}
-      {error && <p className="experts-error">{error}</p>}
-      {loading && <p>{i18n.t("manager.experts.loading")}</p>}
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.experts")}</h1>
+      {notice && (
+        <p className="m-0 text-sm text-success" role="status">
+          {notice}
+        </p>
+      )}
+      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+      {error && <p className="m-0 text-sm text-danger">{error}</p>}
+      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.experts.loading")}</p>}
 
-      <h2>{i18n.t("manager.experts.templates_title")}</h2>
-      <ul className="experts-templates">
+      <Catalog title={i18n.t("manager.experts.templates_title")}>
         {templates.length === 0 ? (
-          <li>{i18n.t("manager.experts.templates_empty")}</li>
+          <EmptyRow>{i18n.t("manager.experts.templates_empty")}</EmptyRow>
         ) : (
           templates.map((t) => (
-            <li key={`${t.template_id}@${t.version}`} data-testid="template-row">
-              <span>{t.display_name}</span>{" "}
-              <code>{t.template_id}</code>
+            <CatalogRow key={`${t.template_id}@${t.version}`} testId="template-row">
+              <span className="font-medium text-text-primary">{t.display_name}</span>
+              <code className="text-xs text-gold-bright">{t.template_id}</code>
               {canWrite && (
                 <RecruitInline
                   onRecruit={(slug) =>
@@ -91,23 +99,25 @@ export function ExpertsPage(): ReactNode {
                   }
                 />
               )}
-            </li>
+            </CatalogRow>
           ))
         )}
-      </ul>
+      </Catalog>
 
-      <h2>{i18n.t("manager.experts.solutions_title")}</h2>
-      <ul className="experts-solutions">
+      <Catalog title={i18n.t("manager.experts.solutions_title")}>
         {solutions.length === 0 ? (
-          <li>{i18n.t("manager.experts.solutions_empty")}</li>
+          <EmptyRow>{i18n.t("manager.experts.solutions_empty")}</EmptyRow>
         ) : (
           solutions.map((s) => (
-            <li key={`${s.solution_id}@${s.version}`} data-testid="solution-row">
-              <span>{s.display_name}</span>{" "}
-              <code>{s.solution_id}</code>
+            <CatalogRow key={`${s.solution_id}@${s.version}`} testId="solution-row">
+              <span className="font-medium text-text-primary">{s.display_name}</span>
+              <code className="text-xs text-gold-bright">{s.solution_id}</code>
               {canWrite && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
                   onClick={() =>
                     void runAction(
                       () => api.applySolution({ solution_id: s.solution_id }),
@@ -116,17 +126,21 @@ export function ExpertsPage(): ReactNode {
                   }
                 >
                   {i18n.t("manager.experts.apply")}
-                </button>
+                </Button>
               )}
-            </li>
+            </CatalogRow>
           ))
         )}
-      </ul>
+      </Catalog>
 
-      <h2>{i18n.t("manager.experts.instances_title")}</h2>
-      <ul className="experts-instances">
+      <div className="flex flex-col gap-md">
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.experts.instances_title")}
+        </h2>
         {employees.length === 0 ? (
-          <li>{i18n.t("manager.experts.instances_empty")}</li>
+          <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
+            {i18n.t("manager.experts.instances_empty")}
+          </GlassPanel>
         ) : (
           employees.map((emp) => (
             <EmployeeInstance
@@ -134,32 +148,55 @@ export function ExpertsPage(): ReactNode {
               employee={emp}
               canWrite={canWrite}
               onSave={(updated) =>
-                runAction(
-                  () => api.updateEmployee(emp.employee_id, updated),
-                  "manager.experts.save_ok",
-                )
+                runAction(() => api.updateEmployee(emp.employee_id, updated), "manager.experts.save_ok")
               }
             />
           ))
         )}
-      </ul>
+      </div>
     </section>
   );
+}
+
+/** 目录卡片：标题 + 行容器（模板/方案共用）。 */
+function Catalog({ title, children }: { title: string; children: ReactNode }): ReactNode {
+  return (
+    <div className="flex flex-col gap-md">
+      <h2 className="m-0 text-base font-semibold text-text-primary">{title}</h2>
+      <GlassPanel className="flex flex-col divide-y divide-gold/10 overflow-hidden rounded-window">
+        {children}
+      </GlassPanel>
+    </div>
+  );
+}
+
+function CatalogRow({ testId, children }: { testId: string; children: ReactNode }): ReactNode {
+  return (
+    <div data-testid={testId} className="flex flex-wrap items-center gap-sm px-lg py-md">
+      {children}
+    </div>
+  );
+}
+
+function EmptyRow({ children }: { children: ReactNode }): ReactNode {
+  return <div className="px-lg py-md text-sm text-text-muted">{children}</div>;
 }
 
 function RecruitInline({ onRecruit }: { onRecruit: (slug: string) => void }): ReactNode {
   const i18n = useI18n();
   const [slug, setSlug] = useState("");
   return (
-    <span className="recruit-inline">
-      <input
+    <span className="ml-auto flex items-center gap-sm">
+      <Input
+        className="h-8 py-1"
         aria-label={i18n.t("manager.experts.slug")}
         placeholder={i18n.t("manager.experts.slug")}
         value={slug}
         onChange={(e) => setSlug(e.target.value)}
       />
-      <button
+      <Button
         type="button"
+        size="sm"
         disabled={!slug.trim()}
         onClick={() => {
           onRecruit(slug.trim());
@@ -167,7 +204,7 @@ function RecruitInline({ onRecruit }: { onRecruit: (slug: string) => void }): Re
         }}
       >
         {i18n.t("manager.experts.recruit")}
-      </button>
+      </Button>
     </span>
   );
 }
@@ -185,57 +222,75 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
   const [persona, setPersona] = useState(employee.persona ?? "");
 
   return (
-    <li className="experts-instance" data-testid="instance-row">
-      <div>
-        <strong>{employee.display_name || employee.employee_slug}</strong>{" "}
-        <code>{employee.employee_slug}</code> · v{employee.version}
+    <GlassPanel data-testid="instance-row" className="flex flex-col gap-sm rounded-window p-lg">
+      <div className="flex flex-wrap items-baseline gap-sm">
+        <strong className="text-text-primary">{employee.display_name || employee.employee_slug}</strong>
+        <code className="text-xs text-gold-bright">{employee.employee_slug}</code>
+        <span className="text-xs text-text-muted">· v{employee.version}</span>
       </div>
       {!editing ? (
         <>
-          <p>{employee.persona || i18n.t("manager.experts.no_persona")}</p>
-          <dl className="experts-config-readonly">
-            <dt>{i18n.t("manager.experts.model")}</dt>
-            <dd>{employee.model_policy.model}</dd>
-            <dt>{i18n.t("manager.experts.runtime")}</dt>
-            <dd>{employee.runtime_policy.runtime_binding ?? "-"}</dd>
-            <dt>{i18n.t("manager.experts.skills")}</dt>
-            <dd>{employee.skills.join(", ") || "-"}</dd>
+          <p className="m-0 text-sm text-text-secondary">
+            {employee.persona || i18n.t("manager.experts.no_persona")}
+          </p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-sm">
+            <dt className="text-text-muted">{i18n.t("manager.experts.model")}</dt>
+            <dd className="m-0 text-text-primary">{employee.model_policy.model}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.runtime")}</dt>
+            <dd className="m-0 text-text-primary">{employee.runtime_policy.runtime_binding ?? "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.skills")}</dt>
+            <dd className="m-0 text-text-primary">{employee.skills.join(", ") || "-"}</dd>
           </dl>
           {canWrite && (
-            <button type="button" onClick={() => setEditing(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-start"
+              onClick={() => setEditing(true)}
+            >
               {i18n.t("manager.experts.edit")}
-            </button>
+            </Button>
           )}
         </>
       ) : (
         <form
+          className="flex flex-col gap-md"
           onSubmit={(e) => {
             e.preventDefault();
             onSave({ ...employee, display_name: displayName.trim(), persona });
             setEditing(false);
           }}
         >
-          <label>
-            {i18n.t("manager.experts.display_name")}
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </label>
-          <label>
-            {i18n.t("manager.experts.persona")}
-            <textarea value={persona} onChange={(e) => setPersona(e.target.value)} />
-          </label>
-          <button type="submit">{i18n.t("manager.experts.save")}</button>
-          <button
-            type="button"
-            onClick={() => {
-              setDisplayName(employee.display_name);
-              setPersona(employee.persona ?? "");
-              setEditing(false);
-            }}
-          >
-            {i18n.t("manager.experts.cancel")}
-          </button>
+          <Field label={i18n.t("manager.experts.display_name")}>
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </Field>
+          <Field label={i18n.t("manager.experts.persona")}>
+            <textarea
+              className={textareaCls}
+              value={persona}
+              onChange={(e) => setPersona(e.target.value)}
+            />
+          </Field>
+          <div className="flex gap-sm">
+            <Button type="submit" size="sm">
+              {i18n.t("manager.experts.save")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setDisplayName(employee.display_name);
+                setPersona(employee.persona ?? "");
+                setEditing(false);
+              }}
+            >
+              {i18n.t("manager.experts.cancel")}
+            </Button>
+          </div>
         </form>
       )}
-    </li>
+    </GlassPanel>
   );
 }
