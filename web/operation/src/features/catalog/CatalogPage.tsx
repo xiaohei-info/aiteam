@@ -3,14 +3,16 @@
  *
  * 列表 + cursor 翻页（listGet → page.next_cursor 触 loadMore）；
  * role-state 门控：system_admin 可写，system_operator 只读。
+ * 黑金玻璃质感，复用 shared 组件（GlassPanel/Button/Select/Table）。
  */
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { hasRole, ApiError, PlatformRole } from "@aiteam/shared";
+import { Button, GlassPanel, Select, Table } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useCatalogApi } from "./useCatalogApi";
-import type { CatalogItem } from "./types";
+import type { CatalogItem, Visibility } from "./types";
 import { RegisterForm } from "./RegisterForm";
 
 export function CatalogPage(): ReactNode {
@@ -19,9 +21,11 @@ export function CatalogPage(): ReactNode {
 
   if (!hasRole(session, PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR)) {
     return (
-      <div className="catalog-page">
-        <p>无权限访问目录治理。</p>
-      </div>
+      <section className="flex flex-col gap-md">
+        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
+          无权限访问目录治理。
+        </GlassPanel>
+      </section>
     );
   }
 
@@ -91,22 +95,22 @@ function CatalogList({ canWrite }: { canWrite: boolean }): ReactNode {
   );
 
   return (
-    <div className="catalog-page">
-      <h1>{i18n.t("operation.nav.catalog")}</h1>
-
-      {canWrite && (
-        <button
-          className="catalog-page__add-btn"
-          onClick={() => setShowRegister(true)}
-        >
-          注册模板/方案
-        </button>
-      )}
+    <section className="flex flex-col gap-lg">
+      <div className="flex flex-wrap items-center justify-between gap-md">
+        <h1 className="m-0 text-xl font-bold text-text-primary">
+          {i18n.t("operation.nav.catalog")}
+        </h1>
+        {canWrite && (
+          <Button type="button" size="sm" onClick={() => setShowRegister(true)}>
+            注册模板/方案
+          </Button>
+        )}
+      </div>
 
       {actionError && (
-        <div className="catalog-page__error" role="alert">
+        <p className="m-0 text-sm text-danger" role="alert">
           {actionError}
-        </div>
+        </p>
       )}
 
       {showRegister && (
@@ -119,21 +123,23 @@ function CatalogList({ canWrite }: { canWrite: boolean }): ReactNode {
         />
       )}
 
-      {loading && <p>加载中…</p>}
+      {loading && <p className="m-0 text-sm text-text-secondary">加载中…</p>}
 
       {error && (
-        <div className="catalog-page__error" role="alert">
+        <p className="m-0 text-sm text-danger" role="alert">
           {error}
-        </div>
+        </p>
       )}
 
       {!loading && !error && items.length === 0 && (
-        <p>暂无目录项。</p>
+        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
+          暂无目录项。
+        </GlassPanel>
       )}
 
       {items.length > 0 && (
-        <>
-          <table className="catalog-table">
+        <GlassPanel className="overflow-hidden rounded-window">
+          <Table>
             <thead>
               <tr>
                 <th>名称</th>
@@ -147,7 +153,12 @@ function CatalogList({ canWrite }: { canWrite: boolean }): ReactNode {
               {items.map((item) => (
                 <tr key={item.id}>
                   <td>
-                    <Link to={`/catalog/${item.id}`}>{item.name}</Link>
+                    <Link
+                      to={`/catalog/${item.id}`}
+                      className="text-text-primary hover:text-gold"
+                    >
+                      {item.name}
+                    </Link>
                   </td>
                   <td>
                     {item.type === "expert_template" ? "专家模板" : "行业方案"}
@@ -156,32 +167,35 @@ function CatalogList({ canWrite }: { canWrite: boolean }): ReactNode {
                     <StatusBadge status={item.status} />
                   </td>
                   <td>{visibilityLabel(item.visibility)}</td>
-                  <td className="catalog-table__actions">
+                  <td className="flex flex-wrap gap-sm">
                     {canWrite && item.status !== "published" && (
-                      <button
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => doAction(() => api.publish(item.id))}
                       >
                         发布
-                      </button>
+                      </Button>
                     )}
                     {canWrite && item.status === "published" && (
-                      <button
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => doAction(() => api.unpublish(item.id))}
                       >
                         下架
-                      </button>
+                      </Button>
                     )}
                     {canWrite && (
-                      <select
+                      <Select
                         value={item.visibility}
                         onChange={(e) =>
                           doAction(() =>
                             api.setVisibility({
                               id: item.id,
-                              visibility: e.target.value as
-                                | "public"
-                                | "enterprise"
-                                | "hidden",
+                              visibility: e.target.value as Visibility,
                             }),
                           )
                         }
@@ -189,32 +203,41 @@ function CatalogList({ canWrite }: { canWrite: boolean }): ReactNode {
                         <option value="public">公开</option>
                         <option value="enterprise">企业可见</option>
                         <option value="hidden">隐藏</option>
-                      </select>
+                      </Select>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
-
-          {hasMore && (
-            <button
-              className="catalog-page__load-more"
-              onClick={loadMore}
-              disabled={loadingMore}
-            >
-              {loadingMore ? "加载中…" : "加载更多"}
-            </button>
-          )}
-        </>
+          </Table>
+        </GlassPanel>
       )}
-    </div>
+
+      {hasMore && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          onClick={loadMore}
+          disabled={loadingMore}
+        >
+          {loadingMore ? "加载中…" : "加载更多"}
+        </Button>
+      )}
+    </section>
   );
 }
 
 function StatusBadge({ status }: { status: string }): ReactNode {
   const label = status === "published" ? "已发布" : status === "unpublished" ? "已下架" : "草稿";
-  return <span className={`status-badge status-badge--${status}`}>{label}</span>;
+  const cls =
+    status === "published"
+      ? "text-success"
+      : status === "unpublished"
+        ? "text-text-muted"
+        : "text-warning";
+  return <span className={`text-sm font-medium ${cls}`}>{label}</span>;
 }
 
 function visibilityLabel(v: string): string {

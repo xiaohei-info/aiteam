@@ -2,10 +2,12 @@
  * 目录详情页（F03）。
  *
  * GET /api/operation/catalog/{id}，展示模板/方案完整信息。
+ * 黑金玻璃质感，复用 shared 组件（GlassPanel/Table）。
  */
 import { useState, useEffect, type ReactNode } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ApiError } from "@aiteam/shared";
+import { GlassPanel, Table } from "@aiteam/shared/ui";
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem } from "./types";
 
@@ -39,56 +41,70 @@ export function CatalogDetailPage(): ReactNode {
     };
   }, [api, id]);
 
-  if (loading) return <p>加载中…</p>;
+  if (loading) {
+    return <p className="text-sm text-text-secondary">加载中…</p>;
+  }
 
   if (error) {
     return (
-      <div className="catalog-detail" role="alert">
-        <p>{error}</p>
-        <Link to="/catalog">返回目录</Link>
-      </div>
+      <GlassPanel className="flex flex-col gap-sm rounded-window border border-danger/30 p-lg" role="alert">
+        <p className="m-0 text-sm text-danger">{error}</p>
+        <Link to="/catalog" className="text-sm text-gold hover:text-gold-bright">
+          返回目录
+        </Link>
+      </GlassPanel>
     );
   }
 
   if (!item) {
     return (
-      <div className="catalog-detail">
-        <p>未找到该目录项。</p>
-        <Link to="/catalog">返回目录</Link>
-      </div>
+      <GlassPanel className="flex flex-col gap-sm rounded-window p-lg">
+        <p className="m-0 text-sm text-text-muted">未找到该目录项。</p>
+        <Link to="/catalog" className="text-sm text-gold hover:text-gold-bright">
+          返回目录
+        </Link>
+      </GlassPanel>
     );
   }
 
+  const fields: Array<[string, ReactNode]> = [
+    ["类型", item.type === "expert_template" ? "专家模板" : "行业方案"],
+    ["状态", item.status],
+    ["可见范围", item.visibility],
+    ["版本", item.version],
+    ["作者", item.author],
+    ["创建时间", item.created_at],
+    ["更新时间", item.updated_at],
+    ["标签", item.tags.length > 0 ? item.tags.join("、") : "无"],
+  ];
+
   return (
-    <div className="catalog-detail">
-      <Link to="/catalog" className="catalog-detail__back">
+    <section className="flex flex-col gap-lg">
+      <Link to="/catalog" className="text-sm text-gold hover:text-gold-bright">
         &larr; 返回目录
       </Link>
-      <h1>{item.name}</h1>
-      <dl className="catalog-detail__fields">
-        <dt>类型</dt>
-        <dd>
-          {item.type === "expert_template" ? "专家模板" : "行业方案"}
-        </dd>
-        <dt>状态</dt>
-        <dd>{item.status}</dd>
-        <dt>可见范围</dt>
-        <dd>{item.visibility}</dd>
-        <dt>版本</dt>
-        <dd>{item.version}</dd>
-        <dt>作者</dt>
-        <dd>{item.author}</dd>
-        <dt>创建时间</dt>
-        <dd>{item.created_at}</dd>
-        <dt>更新时间</dt>
-        <dd>{item.updated_at}</dd>
-        <dt>标签</dt>
-        <dd>{item.tags.length > 0 ? item.tags.join("、") : "无"}</dd>
-      </dl>
-      <section className="catalog-detail__description">
-        <h2>描述</h2>
-        <p>{item.description}</p>
-      </section>
-    </div>
+
+      <h1 className="m-0 text-xl font-bold text-text-primary">{item.name}</h1>
+
+      <GlassPanel className="overflow-hidden rounded-window">
+        <Table>
+          <tbody>
+            {fields.map(([k, v]) => (
+              <tr key={k}>
+                <td className="w-32 text-text-muted">{k}</td>
+                <td className="text-text-primary">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </GlassPanel>
+
+      <div className="flex flex-col gap-sm">
+        <h2 className="m-0 text-base font-semibold text-text-primary">描述</h2>
+        <GlassPanel className="rounded-window p-lg">
+          <p className="m-0 text-sm text-text-secondary">{item.description}</p>
+        </GlassPanel>
+      </div>
+    </section>
   );
 }

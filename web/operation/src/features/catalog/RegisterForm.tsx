@@ -3,10 +3,16 @@
  *
  * POST /api/operation/catalog/register-expert-template
  * POST /api/operation/catalog/register-solution-template
+ * 黑金玻璃质感，复用 shared 组件（GlassPanel/Button/Field/Input/Select）。
  */
 import { useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
+import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
 import { useCatalogApi } from "./useCatalogApi";
+
+const textareaCls =
+  "min-h-[80px] rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
+  "outline-none transition placeholder:text-text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold";
 
 interface Props {
   onSuccess: () => void;
@@ -51,59 +57,58 @@ export function RegisterForm({ onSuccess, onCancel }: Props): ReactNode {
   };
 
   return (
-    <form className="catalog-register-form" onSubmit={handleSubmit}>
-      <h2>注册新模板/方案</h2>
+    <form onSubmit={handleSubmit}>
+      <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
+        <h2 className="m-0 text-base font-semibold text-text-primary">注册新模板/方案</h2>
 
-      <label>
-        类型：
-        <select value={type} onChange={(e) => setType(e.target.value as typeof type)}>
-          <option value="expert_template">专家模板</option>
-          <option value="solution_template">行业方案</option>
-        </select>
-      </label>
+        <Field label="类型：">
+          <Select value={type} onChange={(e) => setType(e.target.value as typeof type)}>
+            <option value="expert_template">专家模板</option>
+            <option value="solution_template">行业方案</option>
+          </Select>
+        </Field>
 
-      <label>
-        名称：
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
-      </label>
+        <Field label="名称：">
+          <Input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </Field>
 
-      <label>
-        描述：
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-      </label>
+        <Field label="描述：">
+          <textarea
+            className={textareaCls}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
 
-      <label>
-        标签（逗号分隔）：
-        <input
-          type="text"
-          value={tagsText}
-          onChange={(e) => setTagsText(e.target.value)}
-          placeholder="如：客服, 金融, 零售"
-        />
-      </label>
+        <Field label="标签（逗号分隔）：">
+          <Input
+            type="text"
+            value={tagsText}
+            onChange={(e) => setTagsText(e.target.value)}
+            placeholder="如：客服, 金融, 零售"
+          />
+        </Field>
 
-      {error && (
-        <div className="catalog-register-form__error" role="alert">
-          {error}
+        {error && (
+          <p className="m-0 text-sm text-danger" role="alert">
+            {error}
+          </p>
+        )}
+
+        <div className="flex gap-sm">
+          <Button type="submit" size="sm" disabled={submitting}>
+            {submitting ? "提交中…" : "注册"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+            取消
+          </Button>
         </div>
-      )}
-
-      <div className="catalog-register-form__buttons">
-        <button type="submit" disabled={submitting}>
-          {submitting ? "提交中…" : "注册"}
-        </button>
-        <button type="button" onClick={onCancel}>
-          取消
-        </button>
-      </div>
+      </GlassPanel>
     </form>
   );
 }
