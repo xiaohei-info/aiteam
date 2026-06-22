@@ -57,6 +57,14 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+# 会话消息角色 -> 中立 runtime 角色（输入上下文用）。EMPLOYEE（专家回复）即 assistant 轮。
+_RUNTIME_ROLE: dict[MessageRole, str] = {
+    MessageRole.USER: "user",
+    MessageRole.EMPLOYEE: "assistant",
+    MessageRole.SYSTEM: "system",
+}
+
+
 class MainlineService:
     """用户端本地主链编排器。单租户本地，无 tenant 路由（用户端单用户本地库）。"""
 
@@ -160,6 +168,7 @@ class MainlineService:
             conversation_id=conversation_id,
             task_id=task_id,
             run_spec=run_spec or RunSpec(),
+            input_messages=self._conversation_input_messages(conversation_id),
         )
 
         async def on_event(rt: AgentRuntimeEvent) -> None:
@@ -171,6 +180,17 @@ class MainlineService:
             self._tasks.set_status(task_id, _task_status_for(final_run.status))
         await self._broker.publish_display(conversation_id, DisplayState.RESOLVED, run_id=run.id)
         return final_run
+
+    def _conversation_input_messages(self, conversation_id: str) -> list[dict]:
+        """把会话历史消息组装为中立 input_messages（喂给 runtime 的 prompt 上下文）。
+
+        角色归一到 {user, assistant, system}：USER→user、EMPLOYEE→assistant、SYSTEM→system。
+        runtime/Driver 据此取 prompt（多数取最后一条 user；支持多轮的 runtime 用完整序列）。
+        """
+        return [
+            {"role": _RUNTIME_ROLE[m.role], "content": m.content}
+            for m in self._messages.list(conversation_id)
+        ]
 
     async def cancel_run(self, run_id: str) -> None:
         """取消运行中的 run（透传 Gateway）。终态由事件流/收尾落库。"""

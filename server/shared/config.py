@@ -51,6 +51,10 @@ class Settings(BaseModel):
     agent_runs_root: str | None = Field(default=None)
     # 进程启动期是否自启动 loop 调度后台循环（06 §7.6）。默认否（dev/测试用手动触发）。
     agent_loop_autostart: bool = Field(default=False)
+    # 放行给 runtime 子进程的环境变量名（§13 凭据最小注入）：沙箱默认脱敏全部 env，
+    # provider 凭据（如 *_API_KEY）须经此显式 allowlist 从宿主 env 注入，否则 runtime 无法鉴权。
+    # 仅传变量名，值从宿主 os.environ 取，不内联明文（D18）。provider_ref 全量解析见后续。
+    agent_runtime_env_passthrough: tuple[str, ...] = Field(default=())
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
 
@@ -73,5 +77,13 @@ def load_settings(tier: Tier | None = None) -> Settings:
         agent_runtime=os.getenv("AGENT_RUNTIME"),
         agent_runs_root=os.getenv("AGENT_RUNS_ROOT"),
         agent_loop_autostart=os.getenv("AGENT_LOOP_AUTOSTART", "0") not in ("0", "false", "False"),
+        agent_runtime_env_passthrough=_csv(os.getenv("AGENT_RUNTIME_ENV_PASSTHROUGH")),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )
+
+
+def _csv(raw: str | None) -> tuple[str, ...]:
+    """逗号分隔环境变量值 → 去空白去空项的元组。"""
+    if not raw:
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())

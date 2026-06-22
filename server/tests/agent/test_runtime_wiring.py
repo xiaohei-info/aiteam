@@ -18,6 +18,18 @@ def test_runtime_selection_wires_real_driver_and_executor(tmp_path):
     assert runner._executor._sandbox.runs_root == str(tmp_path)
 
 
+def test_runtime_env_passthrough_injects_credentials_into_sandbox(tmp_path, monkeypatch):
+    """§13 凭据最小注入：放行的 env 变量名从宿主取值注入沙箱 extra_env；未放行的不泄漏。"""
+    monkeypatch.setenv("NEWAPI_API_KEY", "secret-xyz")
+    monkeypatch.setenv("UNRELATED_SECRET", "should-not-leak")
+    svc = build_mainline_service(
+        runtime_selection="codex", runs_root=str(tmp_path),
+        runtime_env_passthrough=("NEWAPI_API_KEY", "MISSING_KEY"),
+    )
+    sandbox = svc._runner._executor._sandbox
+    assert sandbox.extra_env == {"NEWAPI_API_KEY": "secret-xyz"}  # 缺失的不注入、无关的不泄漏
+
+
 def test_default_uses_fake_runtime():
     svc = build_mainline_service()
     assert isinstance(svc._runner._driver, FakeDriver)

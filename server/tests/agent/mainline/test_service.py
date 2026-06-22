@@ -20,6 +20,37 @@ def _svc():
     return build_mainline_service()
 
 
+def test_start_run_forwards_conversation_messages_to_runtime():
+    """端到端接线：start_run 必须把会话历史组装成 input_messages 喂给 runtime，
+    否则真实 runtime 收到空 prompt（此前的端到端缺口）。"""
+    from agent_gateway.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+
+    captured: dict = {}
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured["input_messages"] = request.input_messages
+            return RunResult(run_id=request.run_id, success=True)
+
+        async def cancel(self, run_id):
+            return None
+
+    svc = build_mainline_service(executor=_CapturingExecutor(), driver=FakeDriver())
+    conv = svc.create_conversation()
+    svc.add_message(conv.id, role=MessageRole.USER, content="第一句")
+    svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="专家回复")
+    svc.add_message(conv.id, role=MessageRole.USER, content="再问一句")
+
+    asyncio.run(svc.start_run(conv.id))
+
+    assert captured["input_messages"] == [
+        {"role": "user", "content": "第一句"},
+        {"role": "assistant", "content": "专家回复"},
+        {"role": "user", "content": "再问一句"},
+    ]
+
+
 def test_minimal_mainline_to_timeline_parity():
     svc = _svc()
     conv = svc.create_conversation(title="hello")

@@ -3,14 +3,15 @@
 默认 **不跑**（CI/普通 pytest 跳过）：需 `RUNTIME_SMOKE=1` 显式开启,且对应二进制在场。
 经真实 Gateway（build_runner → 真实 Driver+Executor）跑一条最小 run,断言产出归一事件。
 
-现状（2026-06-22 真实实测）：
-- claude_code ✅ 真跑通（一次性 stream-json）。
-- codex / hermes ❌ 标 xfail：`codex app-server` / `hermes acp` 是 JSON-RPC/ACP **服务端**,
-  需客户端握手驱动（initialize→session→prompt→stream→shutdown）,当前 fire-and-forget
-  executor 驱动不了；codex 命令 flag 亦不符真实 CLI。真实驱动见后续 issue。
+现状（2026-06-22 真实实测，全部真跑通）：
+- claude_code ✅ 一次性 stream-json（文本/工具/思考深度 live）。
+- codex ✅ CodexAppServerExecutor（真 app-server JSON-RPC 客户端；文本/思考深度 live）。
+- hermes ✅ AcpClientExecutor（真 ACP SDK 客户端；文本/工具/模型选择 live）。
+- 端到端：codex 经 MainlineService.start_run → 真实 SSE 生成器流出归一业务事件（test_codex_end_to_end_service_to_sse）。
 """
 
 import asyncio
+import json
 import os
 import shutil
 
@@ -158,3 +159,48 @@ def test_hermes_live_tool_call():
     types = [e.type for e in events]
     assert "tool_call_started" in types
     assert "tool_call_completed" in types
+
+
+# ---- 端到端：真实 runtime → MainlineService.start_run → SSE 流 -------------
+# 证明「真实 runtime 的回答/工具/终态」确实经 service 链路（on_event→mapper→timeline→broker）
+# 由真实 SSE 生成器序列化流出。用 codex（自带 provider key，不耗 Claude 配额）。
+
+@pytest.mark.skipif(not shutil.which("codex"), reason="codex CLI 未安装")
+def test_codex_end_to_end_service_to_sse(tmp_path):
+    from agent_service.mainline.factory import build_mainline_service
+    from agent_service.mainline.models import MessageRole, RunStatus
+    from agent_service.mainline.routes import sse_event_stream
+
+    # provider 凭据须经 §13 沙箱 extra_env 放行（否则脱敏后 runtime 无法鉴权）。
+    # 放行宿主 env 里的 *_API_KEY（codex newapi 等用之）；可经 SMOKE_ENV_PASSTHROUGH 覆盖。
+    passthrough = tuple(
+        os.getenv("SMOKE_ENV_PASSTHROUGH", "").split(",")
+    ) if os.getenv("SMOKE_ENV_PASSTHROUGH") else tuple(
+        k for k in os.environ if k.endswith("_API_KEY") or k.endswith("_KEY")
+    )
+    svc = build_mainline_service(
+        runtime_selection="codex", runs_root=str(tmp_path),
+        runtime_env_passthrough=passthrough,
+    )
+    conv = svc.create_conversation()
+    svc.add_message(conv.id, role=MessageRole.USER, content="Reply with exactly the word: OK")
+
+    async def scenario():
+        run = await svc.start_run(conv.id, run_spec=RunSpec(timeout_seconds=180))
+        # 历史段：经真实 SSE 生成器把已落 timeline 序列化成 text/event-stream 帧。
+        frames = []
+        gen = sse_event_stream(svc, conv.id, 0)
+        for _ in range(len(svc.read_timeline(conv.id, 0))):
+            frames.append(await gen.__anext__())
+        await gen.aclose()
+        return run, frames
+
+    run, frames = asyncio.run(scenario())
+    assert run.status is RunStatus.COMPLETED, run.error
+    assert all(f.startswith("event: timeline\ndata: ") for f in frames)
+    payloads = [json.loads(f.split("data: ", 1)[1].strip()) for f in frames]
+    types = [p["event"]["type"] for p in payloads if p["kind"] == "timeline"]
+    assert "message_delta" in types       # 回答经 SSE 流出
+    assert types[-1] == "run_succeeded"   # 终态经 SSE 流出
+    # runtime 原生归一名不外泄前端（D6）。
+    assert "text_delta" not in types and "completed" not in types

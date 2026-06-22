@@ -10,6 +10,7 @@ runtime（dev/测试默认）。不静默切换：未知 runtime_selection 显�
 
 from __future__ import annotations
 
+import os
 import tempfile
 
 from agent_gateway.factory import build_runner
@@ -41,13 +42,16 @@ def build_mainline_service(
     db_path: str | None = None,
     runtime_selection: str | None = None,
     runs_root: str | None = None,
+    runtime_env_passthrough: tuple[str, ...] = (),
 ) -> MainlineService:
     if executor is not None or driver is not None:
         # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。
         runner = GatewayRunner(executor=executor or FakeExecutor(), driver=driver or FakeDriver())
     elif runtime_selection:
         # 真实 runtime：经 Gateway 装配，注入子进程沙箱（§13：隔离工作目录 + 脱敏 env）。
-        sandbox = SandboxPolicy(runs_root=runs_root or tempfile.gettempdir())
+        # extra_env：把放行的凭据变量名从宿主 env 取值最小注入，否则沙箱脱敏后 runtime 无法鉴权。
+        extra_env = {k: os.environ[k] for k in runtime_env_passthrough if k in os.environ}
+        sandbox = SandboxPolicy(runs_root=runs_root or tempfile.gettempdir(), extra_env=extra_env)
         runner = build_runner(runtime_selection, sandbox=sandbox)
     else:
         runner = GatewayRunner(executor=FakeExecutor(), driver=FakeDriver())

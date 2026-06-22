@@ -96,6 +96,7 @@ def build_app(
         db_path=settings.agent_db_path,
         runtime_selection=settings.agent_runtime,
         runs_root=settings.agent_runs_root,
+        runtime_env_passthrough=settings.agent_runtime_env_passthrough,
     )
     app.include_router(build_mainline_router(mainline))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline)
