@@ -1,43 +1,38 @@
 /**
  * 企业开通表单（W-O.2）。
  *
- * 输入企业名称 + enterprise_slug，调 POST /api/operation/enterprises/provision。
- * 黑金玻璃质感，复用 shared 组件（GlassPanel/Field/Input/Button）。
+ * 输入企业名称 + 负责人手机号（必填）+ 企业代码（可选），
+ * 调 POST /api/operation/enterprises。
  */
 import { type FormEvent, useState, type ReactNode } from "react";
 import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useI18n } from "../../i18n/context";
 
 interface Props {
-  onSubmit: (name: string, slug: string) => Promise<void>;
+  onSubmit: (name: string, phone: string, code: string) => Promise<void>;
   loading: boolean;
   error: string | null;
 }
 
-export function ProvisionForm({
-  onSubmit,
-  loading,
-  error,
-}: Props): ReactNode {
+export function ProvisionForm({ onSubmit, loading, error }: Props): ReactNode {
   const i18n = useI18n();
   const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setValidationError(null);
-
     if (!name.trim()) {
       setValidationError(i18n.t("operation.enterprise.name_required"));
       return;
     }
-    if (!slug.trim()) {
-      setValidationError(i18n.t("operation.enterprise.slug_required"));
+    if (!phone.trim()) {
+      setValidationError(i18n.t("operation.enterprise.phone_required"));
       return;
     }
-
-    await onSubmit(name.trim(), slug.trim());
+    await onSubmit(name.trim(), phone.trim(), code.trim());
   }
 
   const displayError = validationError ?? error;
@@ -57,12 +52,21 @@ export function ProvisionForm({
             disabled={loading}
           />
         </Field>
-        <Field label={i18n.t("operation.enterprise.slug")}>
+        <Field label={i18n.t("operation.enterprise.phone")}>
           <Input
             type="text"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder="enterprise_slug"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="负责人手机号"
+            disabled={loading}
+          />
+        </Field>
+        <Field label={i18n.t("operation.enterprise.code")}>
+          <Input
+            type="text"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="enterprise_code（可选）"
             disabled={loading}
           />
         </Field>

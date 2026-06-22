@@ -1,12 +1,8 @@
 /**
  * 企业开通页主组件（W-O.2）。
  *
- * 承载两种操作：
- * - F01 开通企业：ProvisionForm → POST /api/operation/enterprises/provision → 展示 bootstrap_secret
- * - F02 负责人凭据重置：enterprise_id 输入 → POST /api/operation/enterprises/{id}/owner/bootstrap/reset → 展示新 secret
- *
- * 红线：bootstrap_secret 仅本次展示，不缓存不重发，不用 localStorage/sessionStorage。
- * 黑金玻璃质感，复用 shared 组件（GlassPanel/Field/Input/Button）。
+ * F01: ProvisionForm → POST /api/operation/enterprises → 展示 owner_bootstrap_secret
+ * F02: enterprise_id → POST /enterprises/{id}/owner-bootstrap/reset → 展示新凭据
  */
 import { useState, type ReactNode } from "react";
 import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
@@ -33,13 +29,14 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState(false);
 
-  async function handleProvision(name: string, slug: string): Promise<void> {
+  async function handleProvision(name: string, phone: string, code: string): Promise<void> {
     setProvisionError(null);
     setProvisionLoading(true);
     try {
       const result = await api.provision({
         enterprise_name: name,
-        enterprise_slug: slug,
+        owner_phone: phone,
+        ...(code ? { enterprise_code: code } : {}),
       });
       setProvisionResult(result);
     } catch {
@@ -81,7 +78,7 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
             {i18n.t("operation.enterprise.success")}
           </p>
           <BootstrapSecretDisplay
-            secret={provisionResult.bootstrap_secret}
+            secret={provisionResult.owner_bootstrap_secret}
             enterpriseId={provisionResult.enterprise_id}
           />
         </div>
@@ -122,7 +119,7 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
             {i18n.t("operation.enterprise.reset_success")}
           </p>
           <BootstrapSecretDisplay
-            secret={resetResult.bootstrap_secret}
+            secret={resetResult.owner_bootstrap_secret}
             enterpriseId={resetEnterpriseId.trim()}
           />
         </div>

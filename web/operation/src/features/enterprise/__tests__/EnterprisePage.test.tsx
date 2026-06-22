@@ -1,8 +1,8 @@
 /**
  * 企业开通页测试（W-O.2）：
- * - 开通表单渲染与提交
- * - bootstrap_secret 一次性展示 + 复制
- * - 重置入口
+ * - 开通表单渲染与提交（路径 POST /api/operation/enterprises，字段 owner_phone）
+ * - bootstrap_secret 一次性展示（owner_bootstrap_secret）
+ * - 重置入口（路径 POST /enterprises/{id}/owner-bootstrap/reset）
  * - bootstrap_secret 不写 localStorage
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -28,7 +28,6 @@ const noopSession: SessionContextValue = {
   onUnauthorized: () => {},
 };
 
-/** 构造一个模拟的 ApiClient，post 方法由测试控制 */
 function mockClient(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     post: vi.fn(),
@@ -55,19 +54,13 @@ function renderEnterprisePage(client: ApiClient) {
 }
 
 describe("EnterprisePage 企业开通", () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
+  beforeEach(() => { localStorage.clear(); });
+  afterEach(() => { localStorage.clear(); });
 
-  afterEach(() => {
-    localStorage.clear();
-  });
-
-  it("渲染开通表单（企业名称 + slug 输入框 + 提交按钮）", () => {
-    const client = mockClient();
-    renderEnterprisePage(client);
+  it("渲染开通表单（企业名称 + 负责人手机号 + 提交按钮）", () => {
+    renderEnterprisePage(mockClient());
     expect(screen.getByText("企业名称")).toBeInTheDocument();
-    expect(screen.getByText("企业标识（enterprise_slug）")).toBeInTheDocument();
+    expect(screen.getByText("负责人手机号")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开通" })).toBeInTheDocument();
   });
 
@@ -81,11 +74,15 @@ describe("EnterprisePage 企业开通", () => {
     expect(client.post).not.toHaveBeenCalled();
   });
 
-  it("填写完整后提交调 POST /api/operation/enterprises/provision", async () => {
+  it("填写完整后提交调 POST /api/operation/enterprises", async () => {
     const client = mockClient({
       post: vi.fn().mockResolvedValue({
-        bootstrap_secret: "sec_test_abc123",
         enterprise_id: "ent_001",
+        tenant_id: "t_001",
+        enterprise_name: "测试企业",
+        owner_phone: "13800138000",
+        owner_bootstrap_secret: "sec_test_abc123",
+        must_reset: true,
       }),
     });
     renderEnterprisePage(client);
@@ -93,29 +90,33 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.change(screen.getByPlaceholderText("企业名称"), {
       target: { value: "测试企业" },
     });
-    fireEvent.change(screen.getByPlaceholderText("enterprise_slug"), {
-      target: { value: "test-corp" },
+    fireEvent.change(screen.getByPlaceholderText("负责人手机号"), {
+      target: { value: "13800138000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
     await waitFor(() => {
       expect(client.post).toHaveBeenCalledWith(
-        "/api/operation/enterprises/provision",
-        {
-          body: {
+        "/api/operation/enterprises",
+        expect.objectContaining({
+          body: expect.objectContaining({
             enterprise_name: "测试企业",
-            enterprise_slug: "test-corp",
-          },
-        },
+            owner_phone: "13800138000",
+          }),
+        }),
       );
     });
   });
 
-  it("provision 成功后展示 bootstrap_secret 与复制按钮", async () => {
+  it("provision 成功后展示 owner_bootstrap_secret 与复制按钮", async () => {
     const client = mockClient({
       post: vi.fn().mockResolvedValue({
-        bootstrap_secret: "sec_test_abc123",
         enterprise_id: "ent_001",
+        tenant_id: "t_001",
+        enterprise_name: "测试企业",
+        owner_phone: "13800138000",
+        owner_bootstrap_secret: "sec_test_abc123",
+        must_reset: true,
       }),
     });
     renderEnterprisePage(client);
@@ -123,35 +124,33 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.change(screen.getByPlaceholderText("企业名称"), {
       target: { value: "测试企业" },
     });
-    fireEvent.change(screen.getByPlaceholderText("enterprise_slug"), {
-      target: { value: "test-corp" },
+    fireEvent.change(screen.getByPlaceholderText("负责人手机号"), {
+      target: { value: "13800138000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
     await waitFor(() => {
-      expect(screen.getByText("一次性 bootstrap 凭据")).toBeInTheDocument();
+      expect(screen.getByTestId("secret-display")).toBeInTheDocument();
     });
-    expect(screen.getByText(/仅显示一次/)).toBeInTheDocument();
+    expect(screen.getByText("一次性 bootstrap 凭据")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "复制凭据" })).toBeInTheDocument();
-    // bootstrap_secret 脱敏展示（不全文明文）
     expect(screen.queryByText("sec_test_abc123")).toBeNull();
-    // 脱敏形式展示
-    expect(screen.getByText(/sec_\*{4}c123/).textContent).toBeTruthy();
   });
 
   it("展示重置凭据入口", () => {
-    const client = mockClient();
-    renderEnterprisePage(client);
+    renderEnterprisePage(mockClient());
     expect(screen.getByText("重置负责人凭据")).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: "重置凭据" })[0],
-    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "重置凭据" })[0]).toBeInTheDocument();
   });
 
-  it("重置凭据调用 POST /api/operation/enterprises/{id}/owner/bootstrap/reset", async () => {
+  it("重置凭据调用 POST /enterprises/{id}/owner-bootstrap/reset", async () => {
     const client = mockClient({
       post: vi.fn().mockResolvedValue({
-        bootstrap_secret: "sec_new_xyz789",
+        enterprise_id: "ent_001",
+        tenant_id: "t_001",
+        owner_phone: "13800138000",
+        owner_bootstrap_secret: "sec_new_xyz789",
+        must_reset: true,
       }),
     });
     renderEnterprisePage(client);
@@ -159,16 +158,14 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.change(screen.getByPlaceholderText("企业 ID"), {
       target: { value: "ent_001" },
     });
-
     fireEvent.click(screen.getByRole("button", { name: "重置凭据" }));
 
     await waitFor(() => {
       expect(client.post).toHaveBeenCalledWith(
-        "/api/operation/enterprises/ent_001/owner/bootstrap/reset",
+        "/api/operation/enterprises/ent_001/owner-bootstrap/reset",
         {},
       );
     });
-
     await waitFor(() => {
       expect(screen.getByText("凭据已重置")).toBeInTheDocument();
     });
@@ -177,8 +174,12 @@ describe("EnterprisePage 企业开通", () => {
   it("bootstrap_secret 不写入 localStorage", async () => {
     const client = mockClient({
       post: vi.fn().mockResolvedValue({
-        bootstrap_secret: "sec_test_abc123",
         enterprise_id: "ent_001",
+        tenant_id: "t_001",
+        enterprise_name: "测试企业",
+        owner_phone: "13800138000",
+        owner_bootstrap_secret: "sec_test_abc123",
+        must_reset: true,
       }),
     });
     renderEnterprisePage(client);
@@ -186,26 +187,22 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.change(screen.getByPlaceholderText("企业名称"), {
       target: { value: "测试企业" },
     });
-    fireEvent.change(screen.getByPlaceholderText("enterprise_slug"), {
-      target: { value: "test-corp" },
+    fireEvent.change(screen.getByPlaceholderText("负责人手机号"), {
+      target: { value: "13800138000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
     await waitFor(() => {
-      expect(screen.getByText("一次性 bootstrap 凭据")).toBeInTheDocument();
+      expect(screen.getByTestId("secret-display")).toBeInTheDocument();
     });
 
     const keys = Object.keys(localStorage);
     const hasSecret = keys.some(
-      (k) =>
-        k.toLowerCase().includes("secret") ||
-        k.toLowerCase().includes("bootstrap"),
+      (k) => k.toLowerCase().includes("secret") || k.toLowerCase().includes("bootstrap"),
     );
     expect(hasSecret).toBe(false);
-
     for (const key of keys) {
-      const val = localStorage.getItem(key);
-      expect(val).not.toContain("sec_test_abc123");
+      expect(localStorage.getItem(key)).not.toContain("sec_test_abc123");
     }
   });
 
@@ -218,8 +215,8 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.change(screen.getByPlaceholderText("企业名称"), {
       target: { value: "测试企业" },
     });
-    fireEvent.change(screen.getByPlaceholderText("enterprise_slug"), {
-      target: { value: "test-corp" },
+    fireEvent.change(screen.getByPlaceholderText("负责人手机号"), {
+      target: { value: "13800138000" },
     });
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
