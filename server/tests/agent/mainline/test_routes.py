@@ -52,6 +52,31 @@ def test_message_endpoints(client):
     assert [m["content"] for m in r.json()["data"]] == ["hi"]
 
 
+def test_start_run_api_forwards_run_spec_model_and_thinking():
+    """北向 API 必须把 run_spec（指定模型/切换思考深度）下达到 runtime，否则 API 用户无从指定。"""
+    from agent_gateway.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+
+    captured: dict = {}
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured["model"] = request.run_spec.model
+            captured["thinking_level"] = request.run_spec.thinking_level
+            return RunResult(run_id=request.run_id, success=True)
+
+        async def cancel(self, run_id):
+            return None
+
+    svc = build_mainline_service(executor=_CapturingExecutor(), driver=FakeDriver())
+    client = TestClient(build_app(mainline_service=svc))
+    cid = _create_conv(client)
+    r = client.post(f"/api/agent/conversations/{cid}/runs",
+                    json={"run_spec": {"model": "gpt-5-codex", "thinking_level": "high"}})
+    assert r.status_code == 200
+    assert captured == {"model": "gpt-5-codex", "thinking_level": "high"}
+
+
 def test_run_then_timeline_increment(client):
     cid = _create_conv(client)
     r = client.post(f"/api/agent/conversations/{cid}/runs", json={})

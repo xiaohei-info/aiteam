@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.contracts.enums import ConversationState
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.events import BusinessTimelineEvent
+from shared.contracts.runspec import RunSpec
 
 from .group import DispatchResult, GroupChatService, GroupExpert
 from .models import Conversation, Message, MessageRole, Run, Task
@@ -45,6 +46,8 @@ class CreateMessageRequest(BaseModel):
 class StartRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task_id: str | None = None
+    # 中立 RunSpec：指定模型 / 切换思考深度 / persona / mcp 等经此下达；未给则用默认（runtime 自解析）。
+    run_spec: RunSpec | None = None
 
 
 class CreateTaskRequest(BaseModel):
@@ -128,7 +131,9 @@ def build_mainline_router(service: MainlineService) -> APIRouter:
     @router.post("/conversations/{conversation_id}/runs", summary="起 run（驱动 runtime）",
                  operation_id="agent_start_run")
     async def start_run(conversation_id: str, req: StartRunRequest) -> Envelope[Run]:
-        run = await service.start_run(conversation_id, task_id=req.task_id)
+        run = await service.start_run(
+            conversation_id, task_id=req.task_id, run_spec=req.run_spec
+        )
         return Envelope[Run](data=run)
 
     @router.get("/conversations/{conversation_id}/runs", summary="列 run",
