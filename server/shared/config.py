@@ -41,6 +41,9 @@ class Settings(BaseModel):
     # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
     # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
     service_token: str | None = Field(default=None)
+    # Agent 用户端本地库文件路径（SQLite）。未配置→内存实现（dev/测试默认，不落文件）；
+    # 配置后落 SQLite 本机库，重启不丢（04 用户端轻量本地库）。
+    agent_db_path: str | None = Field(default=None)
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
 
@@ -59,5 +62,6 @@ def load_settings(tier: Tier | None = None) -> Settings:
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
+        agent_db_path=os.getenv("AGENT_DB_PATH"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )

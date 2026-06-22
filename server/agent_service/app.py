@@ -88,8 +88,10 @@ def build_app(
         manager=manager_client or UnconfiguredManagerClient(),
         cache=InMemoryTokenCache(),
     )
-    app = create_app(load_settings("agent"), build_router(login_service))
-    mainline = mainline_service or build_mainline_service()
+    settings = load_settings("agent")
+    app = create_app(settings, build_router(login_service))
+    # 默认从配置的 AGENT_DB_PATH 落 SQLite 本地库（重启不丢，#158）；未配置则内存（dev/测试）。
+    mainline = mainline_service or build_mainline_service(db_path=settings.agent_db_path)
     app.include_router(build_mainline_router(mainline))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))

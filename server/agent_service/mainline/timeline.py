@@ -20,10 +20,13 @@ raw event 归档（D6）：保留 raw runtime event 本地脱敏归档接口，*
 
 from __future__ import annotations
 
+import json
 import threading
 from abc import ABC, abstractmethod
 
 from shared.contracts.events import AgentRuntimeEvent, BusinessTimelineEvent
+
+from ..local_db import LocalDb
 
 # 产品级终态事件类型（07 §8 / event_mapper.TERMINAL_TYPES 同集合）。timeline 侧自持一份，
 # 避免反向依赖 event_mapper（event_mapper 是 runtime->business 的纯映射，timeline 是存储，
@@ -85,6 +88,63 @@ class InMemoryTimelineStore(TimelineStore):
                 if ev.run_id == run_id and ev.type in _TERMINAL_TYPES:
                     return ev
         return None
+
+
+class SqliteTimelineStore(TimelineStore):
+    """SQLite 时间线（agent 本地库；与内存实现行为等价，重启不丢）。
+
+    cursor 分配在 LocalDb 写锁内的事务里完成（SELECT MAX+1 → INSERT 原子），保证同会话
+    游标单调连续，即便多 run 交错。
+    """
+
+    def __init__(self, db: LocalDb) -> None:
+        self._db = db
+
+    @staticmethod
+    def _row_to_event(row) -> BusinessTimelineEvent:
+        data = dict(row)
+        data["payload"] = json.loads(data["payload"])
+        return BusinessTimelineEvent(**data)
+
+    def append(self, event: BusinessTimelineEvent) -> BusinessTimelineEvent:
+        conv = event.conversation_id
+        with self._db.transaction() as conn:
+            nxt = conn.execute(
+                "SELECT COALESCE(MAX(cursor), 0) + 1 FROM timeline_events WHERE conversation_id = ?",
+                (conv,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO timeline_events "
+                "(conversation_id, cursor, run_id, type, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (conv, nxt, event.run_id, event.type,
+                 json.dumps(event.payload), event.created_at.isoformat()),
+            )
+        return event.model_copy(update={"cursor": nxt})
+
+    def read_after(self, conversation_id: str, after_cursor: int = 0) -> list[BusinessTimelineEvent]:
+        rows = self._db.query(
+            "SELECT * FROM timeline_events WHERE conversation_id = ? AND cursor > ? "
+            "ORDER BY cursor",
+            (conversation_id, after_cursor),
+        )
+        return [self._row_to_event(r) for r in rows]
+
+    def latest_cursor(self, conversation_id: str) -> int:
+        row = self._db.query_one(
+            "SELECT COALESCE(MAX(cursor), 0) AS c FROM timeline_events WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+        return int(row["c"]) if row is not None else 0
+
+    def terminal_for_run(self, conversation_id: str, run_id: str) -> BusinessTimelineEvent | None:
+        placeholders = ", ".join("?" for _ in _TERMINAL_TYPES)
+        row = self._db.query_one(
+            f"SELECT * FROM timeline_events WHERE conversation_id = ? AND run_id = ? "
+            f"AND type IN ({placeholders}) ORDER BY cursor DESC LIMIT 1",
+            (conversation_id, run_id, *sorted(_TERMINAL_TYPES)),
+        )
+        return self._row_to_event(row) if row is not None else None
 
 
 class RawEventArchive(ABC):
