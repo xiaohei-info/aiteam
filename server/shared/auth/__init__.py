@@ -195,16 +195,66 @@ class RS256TokenVerifier(TokenVerifier):
         public_pem = self._keys.get(kid) if kid else None
         if public_pem is None:
             raise Unauthorized("unknown signing key")
+        return _decode_rs256(token, public_pem)
+
+
+def _decode_rs256(token: str, public_pem: str) -> TokenClaims:
+    """RS256 解码尾（验签 + 解 claims + 过期检查）。各 RS256 验签器共用，行为一致。
+
+    异常 message 字面量与原 RS256TokenVerifier.verify 保持一致：
+    "token expired" / "bad signature" / "undecodable token"。
+    """
+    try:
+        payload = jwt.decode(token, public_pem, algorithms=[_ALG])
+    except jwt.ExpiredSignatureError as exc:
+        raise Unauthorized("token expired") from exc
+    except jwt.PyJWTError as exc:
+        raise Unauthorized("bad signature") from exc
+    try:
+        return TokenClaims(**payload)
+    except Exception as exc:  # noqa: BLE001
+        raise Unauthorized("undecodable token") from exc
+
+
+class DynamicRS256TokenVerifier(TokenVerifier):
+    """按 token header.kid 动态解析公钥的 RS256 验签器（多 tenant / 未知 tenant 场景）。
+
+    生产口径（D23）：Manager 作为多租户身份源，验签时还不知道 tenant_id——需先从 token
+    header 的 kid 解析（kid 形如 "{tenant_id}:1"），再按 tenant 查公钥。本类把"kid → 公钥"
+    的解析策略交给调用方（resolve_public_pem 回调），自身只负责"取到公钥后 RS256 验签"。
+
+    - resolve_public_pem(kid) -> public_pem(str) | None：kid 未知 / 格式错 / 无记录返回 None。
+    - kid 缺失 / resolver 返回 None → 一律 Unauthorized("unknown signing key")，不回退不放行。
+    - 不缓存（单一职责）；缓存由 resolver 内部决定。
+    """
+
+    def __init__(self, resolve_public_pem):
+        self._resolve = resolve_public_pem
+
+    def verify(self, token: str) -> TokenClaims:
         try:
-            payload = jwt.decode(token, public_pem, algorithms=[_ALG])
-        except jwt.ExpiredSignatureError as exc:
-            raise Unauthorized("token expired") from exc
+            header = jwt.get_unverified_header(token)
         except jwt.PyJWTError as exc:
-            raise Unauthorized("bad signature") from exc
-        try:
-            return TokenClaims(**payload)
-        except Exception as exc:  # noqa: BLE001
-            raise Unauthorized("undecodable token") from exc
+            raise Unauthorized("malformed token") from exc
+        kid = header.get("kid")
+        public_pem = self._resolve(kid) if kid else None
+        if public_pem is None:
+            raise Unauthorized("unknown signing key")
+        return _decode_rs256(token, public_pem)
+
+
+class RejectingTokenVerifier(TokenVerifier):
+    """恒拒绝验签器：verify 必抛 Unauthorized。
+
+    用于签发密钥源未配置时（如 Manager 无 admin DSN、Operation 未初始化密钥），
+    避免验签静默放行——宁可全 401 也不放过。调用方应在配置就绪后切换为真验签器。
+    """
+
+    def __init__(self, reason: str = "signing key store unconfigured"):
+        self._reason = reason
+
+    def verify(self, token: str) -> TokenClaims:  # noqa: ARG002
+        raise Unauthorized(self._reason)
 
 
 def _bearer_token(request: Request) -> str:

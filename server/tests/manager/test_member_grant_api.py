@@ -17,6 +17,10 @@ from fastapi.testclient import TestClient
 from shared.config import Settings
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.grants import MemberGrant
+from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+# 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
 def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
@@ -32,28 +36,15 @@ def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
         db_url=db_url, admin_db_url=admin_db_url,
     )
     app = create_app(settings, manager_router)
-    app.state._token_verifier = _dev_verifier()
+    app.state._token_verifier = _INMEM_VERIFIER
     app.include_router(auth_router)
     app.include_router(member_router)
     app.include_router(grants_router)
     return TestClient(app)
 
 
-def _dev_verifier():
-    # dev 自包含 token，仅供测试（生产 tenant 公钥/JWKS，D23）。
-    from shared.auth import DevTokenService, TokenClaims
-    import time
-
-    svc = DevTokenService()
-
-    def issue(tenant_id: str, user_id: str, roles: list[str]) -> str:
-        return svc.sign(TokenClaims(
-            tenant_id=tenant_id, user_id=user_id, roles=roles,
-            exp=int(time.time()) + 3600,
-        ))
-
-    svc.issue = issue  # type: ignore[attr-defined]
-    return svc
+def _token(tenant_id: str, user_id: str, roles: list[str]) -> str:
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=user_id)
 
 
 # ---- 契约：MemberGrant 形状不被重定义（只 import shared.contracts.grants）----
@@ -113,8 +104,7 @@ def test_create_grant_rejects_invalid_resource_type_via_http():
     schema 层 Literal 约束在请求反序列化阶段即拦截（reviewer 指出此前仅 service 层直调覆盖，
     HTTP 路径未覆盖）。"""
     client = _client(None)
-    verifier = _dev_verifier()
-    token = verifier.issue("t1", "u1", ["owner"])
+    token = _token("t1", "u1", ["owner"])
     resp = client.post(
         "/api/manager/grants",
         headers={"Authorization": f"Bearer {token}"},
@@ -144,8 +134,7 @@ def test_grants_without_token_returns_401():
 def test_departments_without_db_returns_503():
     """有 token 但 DB 未配置 → 503（不静默放行，对齐 routes_auth 口径）。"""
     client = _client(None)
-    verifier = _dev_verifier()
-    token = verifier.issue("t1", "u1", ["owner"])
+    token = _token("t1", "u1", ["owner"])
     resp = client.get("/api/manager/departments", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 503
     assert resp.json()["code"] == "manager_db_unconfigured"

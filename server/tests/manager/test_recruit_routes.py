@@ -9,15 +9,17 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
+from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+# 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑，
+# 仅密钥源不同：测试用内存固定 key，生产用 TenantKeyStore/admin 连接）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
 def _client(db_url: str | None) -> TestClient:
-    """重建 app（注入 settings），挂全部业务路由含 recruit。catalog 默认 Fake（app.state 注入）。"""
+    """重建 app（注入 settings + 测试 inmem verifier），挂全部业务路由含 recruit。"""
     from shared.app_factory import create_app
-    from manager_service.app import (
-        router as manager_router,
-        _verifier,
-    )
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_employee import build_employee_router
     from manager_service.routes_recruit import build_recruit_router
@@ -27,11 +29,11 @@ def _client(db_url: str | None) -> TestClient:
         tier="manager", service_name="aiteam-manager-service", db_url=db_url,
     )
     app = create_app(settings, manager_router)
-    app.state._token_verifier = _verifier
+    app.state._token_verifier = _INMEM_VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
     app.include_router(auth_router)
-    app.include_router(build_employee_router(_verifier))
-    app.include_router(build_recruit_router(_verifier))
+    app.include_router(build_employee_router(_INMEM_VERIFIER))
+    app.include_router(build_recruit_router(_INMEM_VERIFIER))
     return TestClient(app)
 
 
@@ -57,16 +59,10 @@ def test_apply_solution_without_token_returns_401():
 
 def test_recruit_expert_unconfigured_db_returns_503():
     """未配置业务 DB → 503 problem+json（不静默放行，与 employee/auth 路由一致）。"""
-    from shared.auth import DevTokenService
-    from shared.contracts.auth import TokenClaims
     import uuid
 
     client = _client(None)
-    token = DevTokenService().sign(
-        TokenClaims(
-            tenant_id=str(uuid.uuid4()), user_id="u", roles=["owner"], exp=9999999999,
-        )
-    )
+    token = sign_inmem_token(_INMEM_SIGNER, str(uuid.uuid4()), ["owner"])
     resp = client.post(
         "/api/manager/recruit/experts",
         json={"template_id": "tpl-1", "employee_slug": "exp-a"},
@@ -88,13 +84,9 @@ def test_list_solution_instances_without_token_returns_401():
 
 
 def _auth_header():
-    from shared.auth import DevTokenService
-    from shared.contracts.auth import TokenClaims
     import uuid
 
-    token = DevTokenService().sign(
-        TokenClaims(tenant_id=str(uuid.uuid4()), user_id="u", roles=["owner"], exp=9999999999)
-    )
+    token = sign_inmem_token(_INMEM_SIGNER, str(uuid.uuid4()), ["owner"])
     return {"Authorization": f"Bearer {token}"}
 
 

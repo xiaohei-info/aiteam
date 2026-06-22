@@ -14,39 +14,55 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from shared.auth import DevTokenService
 from shared.config import Settings
-from shared.contracts.auth import TokenClaims
+from tests.manager._auth_helper import (
+    make_inmem_verifier_and_signer,
+    make_verifier,
+    sign_inmem_token,
+    sign_token,
+)
 
 pytestmark = pytest.mark.integration
 
+# 无 admin_url（如 without_db 用例） fallback 用固定 RSA key 的 inmem verifier/signer。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
-def _client(db_url: str) -> TestClient:
+
+def _client(db_url: str, admin_url: str | None = None) -> TestClient:
     from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_employee import build_employee_router
     from manager_service.routes_knowledge_space import build_knowledge_space_router
 
+    verifier = make_verifier(admin_url) if admin_url else _INMEM_VERIFIER
+
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
-    app.include_router(build_employee_router(_verifier))
-    app.include_router(build_knowledge_space_router(_verifier))
+    app.include_router(build_employee_router(verifier))
+    app.include_router(build_knowledge_space_router(verifier))
     return TestClient(app)
 
 
-def _token(tenant_id: str, roles: list[str], user_id: str | None = None) -> str:
-    return DevTokenService().sign(
-        TokenClaims(tenant_id=tenant_id, user_id=user_id or str(uuid.uuid4()), roles=roles, exp=9999999999)
-    )
+def _token(
+    tenant_id: str,
+    roles: list[str],
+    user_id: str | None = None,
+    *,
+    admin_url: str | None = None,
+) -> str:
+    uid = user_id or str(uuid.uuid4())
+    if admin_url:
+        return sign_token(admin_url, tenant_id, roles, user_id=uid)
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=uid)
 
 
-def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, two_tenants):
+def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"], user_id="owner-a")
-    owner_b = _token(tid_b, ["owner"], user_id="owner-b")
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
+    owner_b = _token(tid_b, ["owner"], user_id="owner-b", admin_url=admin_url)
 
     # create
     r = client.post(
@@ -94,7 +110,7 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, two_tenants)
     assert r.json()["data"] == []
 
     # member 读可、写 403
-    member_a = _token(tid_a, ["member"], user_id="mem-a")
+    member_a = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     r = client.get(
         "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {member_a}"}
     )
@@ -118,10 +134,10 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, two_tenants)
     assert r.status_code == 404
 
 
-def test_knowledge_space_conflict_e2e(migrated_db, two_tenants):
+def test_knowledge_space_conflict_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"])
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
     body = {"knowledge_space_id": "ks_conflict"}
     r = client.post("/api/manager/knowledge-spaces", json=body, headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 201
@@ -130,10 +146,10 @@ def test_knowledge_space_conflict_e2e(migrated_db, two_tenants):
     assert r.json()["code"] == "conflict"
 
 
-def test_binding_department_member_and_expert_e2e(migrated_db, two_tenants):
+def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"], user_id="owner-a")
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
 
     # 建知识空间
     r = client.post(
@@ -144,8 +160,6 @@ def test_binding_department_member_and_expert_e2e(migrated_db, two_tenants):
     assert r.status_code == 201
 
     # 建一个 employee（M2）用于专家绑定
-    from manager_service.routes_employee import build_employee_router
-    from manager_service.app import _verifier
     # client 已挂 employee router；直接调
     emp_body = {
         "display_name": "专家X",
@@ -202,10 +216,10 @@ def test_binding_department_member_and_expert_e2e(migrated_db, two_tenants):
     assert "ks_bind" not in r.json()["data"]["knowledge_refs"]
 
 
-def test_delete_clears_residual_bindings_e2e(migrated_db, two_tenants):
+def test_delete_clears_residual_bindings_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"])
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
 
     client.post(
         "/api/manager/knowledge-spaces",
@@ -239,23 +253,14 @@ def test_delete_clears_residual_bindings_e2e(migrated_db, two_tenants):
 
 def test_knowledge_space_endpoints_unauth_503_without_db():
     """无 DB → 503（不静默）；无 token → 401 problem+json。"""
-    from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
-    from manager_service.routes_auth import router as auth_router
-    from manager_service.routes_knowledge_space import build_knowledge_space_router
-
-    settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=None)
-    app = create_app(settings, manager_router)
-    app.include_router(auth_router)
-    app.include_router(build_knowledge_space_router(_verifier))
-    client = TestClient(app)
+    client = _client(db_url=None)
 
     # 无 token
     r = client.get("/api/manager/knowledge-spaces")
     assert r.status_code == 401
     assert r.headers["content-type"].startswith("application/problem+json")
 
-    # 有 token 但无 DB
+    # 有 token 但无 DB（inmem 签，无 admin_url）
     tok = _token("t1", ["owner"])
     r = client.get("/api/manager/knowledge-spaces", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 503

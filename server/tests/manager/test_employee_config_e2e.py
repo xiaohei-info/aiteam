@@ -13,30 +13,47 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from shared.auth import DevTokenService
 from shared.config import Settings
-from shared.contracts.auth import TokenClaims
+from tests.manager._auth_helper import (
+    make_inmem_verifier_and_signer,
+    make_verifier,
+    sign_inmem_token,
+    sign_token,
+)
 
 pytestmark = pytest.mark.integration
 
+# 无 admin_url（如 without_db 用例） fallback 用固定 RSA key 的 inmem verifier/signer。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
-def _client(db_url: str) -> TestClient:
+
+def _client(db_url: str, admin_url: str | None = None) -> TestClient:
     from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_employee import build_employee_router
+
+    # integration（有 admin_url）→ 真 RS256 DynamicRS256；否则 inmem（without_db 用例）。
+    verifier = make_verifier(admin_url) if admin_url else _INMEM_VERIFIER
 
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
-    app.include_router(build_employee_router(_verifier))
+    app.include_router(build_employee_router(verifier))
     return TestClient(app)
 
 
-def _token(tenant_id: str, roles: list[str], user_id: str | None = None) -> str:
-    return DevTokenService().sign(
-        TokenClaims(tenant_id=tenant_id, user_id=user_id or str(uuid.uuid4()), roles=roles, exp=9999999999)
-    )
+def _token(
+    tenant_id: str,
+    roles: list[str],
+    user_id: str | None = None,
+    *,
+    admin_url: str | None = None,
+) -> str:
+    uid = user_id or str(uuid.uuid4())
+    if admin_url:
+        return sign_token(admin_url, tenant_id, roles, user_id=uid)
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=uid)
 
 
 def _provision_tenants(admin_url: str):
@@ -55,8 +72,8 @@ def _provision_tenants(admin_url: str):
 
 def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"], user_id="owner-a")
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
 
     config = {
         "display_name": "专家A",
@@ -102,7 +119,7 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert r.json()["data"]["version"] == 2
 
     # 跨租户：t-b owner 看不到 t-a 的配置（RLS 强制）
-    owner_b = _token(tid_b, ["owner"], user_id="owner-b")
+    owner_b = _token(tid_b, ["owner"], user_id="owner-b", admin_url=admin_url)
     r = client.get(f"/api/manager/employees/{eid}", headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 404
 
@@ -112,7 +129,7 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert r.json()["data"] == []
 
     # member 读可、写 403
-    member_a = _token(tid_a, ["member"], user_id="mem-a")
+    member_a = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     r = client.get(f"/api/manager/employees/{eid}", headers={"Authorization": f"Bearer {member_a}"})
     assert r.status_code == 200
     r = client.put(
@@ -130,23 +147,14 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
 
 def test_employee_config_endpoints_unauth_503_without_db():
     """无 DB → 503（不静默）；无 token → 401 problem+json。"""
-    from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
-    from manager_service.routes_auth import router as auth_router
-    from manager_service.routes_employee import build_employee_router
-
-    settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=None)
-    app = create_app(settings, manager_router)
-    app.include_router(auth_router)
-    app.include_router(build_employee_router(_verifier))
-    client = TestClient(app)
+    client = _client(db_url=None)
 
     # 无 token
     r = client.get("/api/manager/employees")
     assert r.status_code == 401
     assert r.headers["content-type"].startswith("application/problem+json")
 
-    # 有 token 但无 DB
+    # 有 token 但无 DB（inmem 签，无 admin_url）
     tok = _token("t1", ["owner"])
     r = client.get("/api/manager/employees", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 503

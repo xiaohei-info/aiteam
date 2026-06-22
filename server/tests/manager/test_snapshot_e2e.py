@@ -13,30 +13,48 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from shared.auth import DevTokenService
 from shared.config import Settings
-from shared.contracts.auth import TokenClaims
+from tests.manager._auth_helper import (
+    make_inmem_verifier_and_signer,
+    make_verifier,
+    sign_inmem_token,
+    sign_token,
+)
+
+# 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url: str | None) -> TestClient:
+def _client(db_url: str | None, admin_url: str | None = None) -> TestClient:
     from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_employee import build_employee_router
     from manager_service.routes_snapshot import build_snapshot_router
 
+    # 有 admin_url（integration）→ 真 RS256 DynamicRS256（TenantKeyStore 闭环）；
+    # 无 admin_url（非 integration）→ inmem 固定 key verifier。
+    verifier = make_verifier(admin_url) if admin_url else _INMEM_VERIFIER
+
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
-    app.include_router(build_employee_router(_verifier))
-    app.include_router(build_snapshot_router(_verifier))
+    app.include_router(build_employee_router(verifier))
+    app.include_router(build_snapshot_router(verifier))
     return TestClient(app)
 
 
-def _token(tenant_id: str, roles: list[str], user_id: str) -> str:
-    return DevTokenService().sign(
-        TokenClaims(tenant_id=tenant_id, user_id=user_id, roles=roles, exp=9999999999)
-    )
+def _token(
+    tenant_id: str,
+    roles: list[str],
+    user_id: str,
+    *,
+    admin_url: str | None = None,
+) -> str:
+    # integration（有 admin_url）→ TenantKeyStore 签真 RS256；否则 inmem 签。
+    if admin_url:
+        return sign_token(admin_url, tenant_id, roles, user_id=user_id)
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=user_id)
 
 
 # ---- 非 integration：401 / 503 / member_id 不匹配 403 ----
@@ -110,7 +128,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     from manager_service.schemas import MemberCreate, MemberGrantCreate
 
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db)
+    client = _client(migrated_db, admin_url=admin_url)
     member_svc, grant_svc = _member_services(migrated_db, admin_url)
 
     # owner 建配置（owner 用真 app_user id：先建一个 owner 成员，token 主体须 == member_id）
@@ -119,7 +137,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
         account=f"owner_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
         display_name="owner", roles=[EnterpriseRole.OWNER],
     ))
-    owner_tok = _token(tid_a, ["owner"], user_id=owner.id)
+    owner_tok = _token(tid_a, ["owner"], user_id=owner.id, admin_url=admin_url)
     created = _create_employee(client, owner_tok, "exp-a")
     eid = created["employee_id"]
 
@@ -162,7 +180,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     ))
 
     # 已 grant 的 member 拉 → 200
-    granted_tok = _token(tid_a, ["member"], user_id=granted.id)
+    granted_tok = _token(tid_a, ["member"], user_id=granted.id, admin_url=admin_url)
     r = client.post(
         "/api/manager/snapshots",
         json={"tenant_id": tid_a, "member_id": granted.id, "employee_id": eid},
@@ -172,7 +190,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     assert r.json()["data"]["snapshot"]["employee_id"] == eid
 
     # 未 grant 的 member 拉 → 403（problem+json）
-    ungranted_tok = _token(tid_a, ["member"], user_id=ungranted.id)
+    ungranted_tok = _token(tid_a, ["member"], user_id=ungranted.id, admin_url=admin_url)
     r = client.post(
         "/api/manager/snapshots",
         json={"tenant_id": tid_a, "member_id": ungranted.id, "employee_id": eid},
@@ -199,7 +217,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
         account=f"ownerb_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
         display_name="owner-b", roles=[EnterpriseRole.OWNER],
     ))
-    owner_b_tok = _token(tid_b, ["owner"], user_id=owner_b.id)
+    owner_b_tok = _token(tid_b, ["owner"], user_id=owner_b.id, admin_url=admin_url)
     r = client.post(
         "/api/manager/snapshots",
         json={"tenant_id": tid_b, "member_id": owner_b.id, "employee_id": eid},

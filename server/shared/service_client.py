@@ -41,11 +41,13 @@ class ServiceClient:
         base_url: str,
         *,
         service_identity: str | None = None,
+        service_token: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
     ):
         self._base_url = base_url.rstrip("/")
         self._service_identity = service_identity
+        self._service_token = service_token
         self._client = httpx.Client(
             base_url=self._base_url, timeout=timeout, transport=transport
         )
@@ -57,8 +59,11 @@ class ServiceClient:
         if (tid := get_trace_id()):
             headers["X-Trace-ID"] = tid
         if self._service_identity:
-            # 占位：真实为 TLS + 签名服务令牌（平面③，03 §9.1）。
+            # 服务身份标识（审计用）。完整服务间鉴权见 X-Service-Token + 被调端守卫（平面③ 代码层）。
             headers["X-Service-Identity"] = self._service_identity
+        if self._service_token:
+            # 服务间共享密钥（平面③ 代码层，03 §9.1）：被调端 verify_service_token 校验。mTLS 留部署层。
+            headers["X-Service-Token"] = self._service_token
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         return headers

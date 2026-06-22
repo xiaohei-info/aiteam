@@ -16,30 +16,46 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
-from shared.auth import DevTokenService
 from shared.config import Settings
-from shared.contracts.auth import TokenClaims
+from tests.manager._auth_helper import (
+    make_inmem_verifier_and_signer,
+    make_verifier,
+    sign_inmem_token,
+    sign_token,
+)
 
 pytestmark = pytest.mark.integration
 
+# 无 admin_url fallback 用固定 RSA key 的 inmem verifier/signer（本文件全部 integration，预留）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
-def _client(db_url: str) -> TestClient:
+
+def _client(db_url: str, admin_url: str | None = None) -> TestClient:
     from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_usage_audit_quota import build_usage_audit_quota_router
+
+    verifier = make_verifier(admin_url) if admin_url else _INMEM_VERIFIER
 
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
-    app.include_router(build_usage_audit_quota_router(_verifier))
+    app.include_router(build_usage_audit_quota_router(verifier))
     return TestClient(app)
 
 
-def _token(tenant_id: str, roles: list[str], user_id: str | None = None) -> str:
-    return DevTokenService().sign(TokenClaims(
-        tenant_id=tenant_id, user_id=user_id or str(uuid.uuid4()), roles=roles, exp=9999999999,
-    ))
+def _token(
+    tenant_id: str,
+    roles: list[str],
+    user_id: str | None = None,
+    *,
+    admin_url: str | None = None,
+) -> str:
+    uid = user_id or str(uuid.uuid4())
+    if admin_url:
+        return sign_token(admin_url, tenant_id, roles, user_id=uid)
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=uid)
 
 
 def _usage(summary_id: str, **overrides) -> dict:
@@ -57,10 +73,10 @@ def _usage(summary_id: str, **overrides) -> dict:
     return base
 
 
-def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, two_tenants):
+def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"], user_id="owner-a")
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
 
     upload = {
         "tenant_id": tid_a,
@@ -90,7 +106,7 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, two_tenants):
     assert r.json()["data"][0]["action"] == "expert_load"
 
     # 跨租户：t-b 看不到 t-a 的 usage/audit（RLS 强制）
-    owner_b = _token(tid_b, ["owner"], user_id="owner-b")
+    owner_b = _token(tid_b, ["owner"], user_id="owner-b", admin_url=admin_url)
     r = client.get(
         "/api/manager/usage/rollup/list", headers={"Authorization": f"Bearer {owner_b}"},
     )
@@ -110,10 +126,10 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, two_tenants):
     assert len(r.json()["data"]) == 2  # 幂等去重
 
 
-def test_usage_aggregate_by_window(migrated_db, two_tenants):
+def test_usage_aggregate_by_window(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"])
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
     client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [_usage("s1", run_count=5, token_total=1000)]},
@@ -130,10 +146,10 @@ def test_usage_aggregate_by_window(migrated_db, two_tenants):
     assert data["token_total"] == 1000
 
 
-def test_quota_policy_crud_e2e_and_member_403(migrated_db, two_tenants):
+def test_quota_policy_crud_e2e_and_member_403(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"], user_id="owner-a")
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
 
     body = {
         "policy_slug": "default",
@@ -169,7 +185,7 @@ def test_quota_policy_crud_e2e_and_member_403(migrated_db, two_tenants):
     assert r.json()["data"]["version"] == 2
 
     # member 写 → 403；读允许
-    member_a = _token(tid_a, ["member"], user_id="mem-a")
+    member_a = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     r = client.get(f"/api/manager/quota-policies/{pid}", headers={"Authorization": f"Bearer {member_a}"})
     assert r.status_code == 200
     r = client.put(
@@ -185,11 +201,11 @@ def test_quota_policy_crud_e2e_and_member_403(migrated_db, two_tenants):
     assert r.status_code == 404
 
 
-def test_quota_evaluate_soft_does_not_block(migrated_db, two_tenants):
+def test_quota_evaluate_soft_does_not_block(migrated_db, admin_url, two_tenants):
     """soft 模式超阈：产出告警/限流建议，但不产出 block_new_runs（D24）。"""
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"])
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
 
     r = client.post(
         "/api/manager/quota-policies",
@@ -224,11 +240,11 @@ def test_quota_evaluate_soft_does_not_block(migrated_db, two_tenants):
     assert any(a in action["actions"] for a in ("notify_owner", "suggest_throttle", "alert_threshold"))
 
 
-def test_ingest_rejects_conversation_content_at_http(migrated_db, two_tenants):
+def test_ingest_rejects_conversation_content_at_http(migrated_db, admin_url, two_tenants):
     """D13 红线（真库）：上报体含会话内容字段 → 422（service 层断言，经 HTTP 透传 problem+json）。"""
     tid_a, _ = two_tenants
-    client = _client(migrated_db)
-    owner_a = _token(tid_a, ["owner"])
+    client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
 
     bad_usage = _usage("s-bad")
     bad_usage["message"] = "敏感会话内容"

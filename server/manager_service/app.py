@@ -5,11 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from shared.app_factory import create_app
-from shared.auth import DevTokenService, require_claims
+from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
+from .keys import TenantKeyStore
 from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
 from .routes_capability import build_capability_router
@@ -24,8 +25,23 @@ from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .operator_catalog import FakeOperatorCatalogClient
 
-# ⚠️ 骨架期 DevTokenService（仅 /whoami 演示）；生产受保护端点用 tenant 公钥/JWKS 验签（D23）。
-_verifier = DevTokenService()
+
+def _build_verifier():
+    """构造受保护端点验签器（D23 RS256）。
+
+    有 admin_db_url → DynamicRS256TokenVerifier：从 token header kid 解析 tenant_id，
+    经 TenantKeyStore（admin 连接）查公钥验签。无 admin_db_url → RejectingTokenVerifier
+    恒 401（密钥库未配置不静默放行；dev 无 DB 时受保护端点本就需要 DB 才有意义）。
+    """
+    settings = load_settings("manager")
+    admin_dsn = settings.admin_db_url
+    if not admin_dsn:
+        return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
+    key_store = TenantKeyStore(admin_dsn)
+    return DynamicRS256TokenVerifier(key_store.public_pem_for_kid)
+
+
+_verifier = _build_verifier()
 
 router = APIRouter(prefix="/api/manager", tags=["manager"])
 

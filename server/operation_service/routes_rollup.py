@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from shared.auth import DevTokenService, authorize, require_claims
+from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope
@@ -22,17 +22,15 @@ from .dependencies import get_rollup_service
 from .rollup_schemas import CrossEnterpriseBoard, EnterpriseRollupUpload, EnterpriseUsageRollup
 from .rollup_service import RollupService
 
-# ⚠️ 骨架期用 DevTokenService（仅 dev/测试）；生产替换为非对称验签（公钥/JWKS，03 §9.5/D23）。
-_verifier = DevTokenService()
-
 _PLATFORM_ROLES = [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR.value]
 
 router = APIRouter(prefix="/api/operation", tags=["operation-rollup"])
 
 
-def _require_platform_operator(
-    claims: TokenClaims = Depends(require_claims(_verifier)),
-) -> TokenClaims:
+def _require_platform_operator(request: Request) -> TokenClaims:
+    # verifier 由 app 持有（系统级 RS256，app.py 构造挂 app.state._token_verifier）。
+    verifier = request.app.state._token_verifier
+    claims = require_claims(verifier)(request)
     authorize(claims, _PLATFORM_ROLES)
     return claims
 

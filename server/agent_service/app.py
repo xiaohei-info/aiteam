@@ -10,7 +10,7 @@ Track A 工单（11 §4）填入。
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, FastAPI
 
 from agent_service.auth.local_login import (
     LocalLoginService,
@@ -32,14 +32,14 @@ from agent_service.usage.client import ManagerUsageClient
 from agent_service.usage.factory import build_usage_service
 from agent_service.usage.routes import build_usage_router
 from shared.app_factory import create_app
-from shared.auth import DevTokenService, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
+from shared.errors import Unauthorized
 
-# ⚠️ 骨架期 DevTokenService 仅用于 /whoami 演示受保护端点；本地登录的验签材料由 Manager 下发、
-# 经 LocalLoginService 本地验签。生产用户端只持公钥/JWKS，绝不持签发密钥（03 §9.5/D23）。
-_verifier = DevTokenService()
+# 用户端只持 Manager 下发的公钥/JWKS 做本地无状态验签（03 §9.5/D23）；唯一验签入口是
+# LocalLoginService（经 token_cache 缓存的 JWKS）。whoami 复用 current_identity，
+# 无独立 verifier——本进程内验签口径一致（登录缓存 RS256 token，whoami 同源验签）。
 
 
 def build_router(login_service: LocalLoginService) -> APIRouter:
@@ -57,8 +57,12 @@ def build_router(login_service: LocalLoginService) -> APIRouter:
             data=LoginResult(token=session.token, claims=session.claims)
         )
 
-    @router.get("/whoami", summary="解出当前身份（演示受保护端点 401/200）", operation_id="agent_whoami")
-    async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> Envelope[TokenClaims]:
+    @router.get("/whoami", summary="解出当前身份（本地无状态验签）", operation_id="agent_whoami")
+    async def whoami() -> Envelope[TokenClaims]:
+        # 复用 LocalLoginService 的本地 RS256 验签（JWKS 缓存）；无有效会话 → 401。
+        claims = login_service.current_identity()
+        if claims is None:
+            raise Unauthorized("no valid local session")
         return Envelope[TokenClaims](data=claims)
 
     return router

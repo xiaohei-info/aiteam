@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
 from shared.contracts.crosstier import TenantProvisionRequest
 from shared.contracts.envelope import Envelope
+from shared.service_token import verify_service_token
 
 from .exceptions import ManagerAdminDbNotConfigured
 
@@ -22,7 +23,11 @@ router = APIRouter(tags=["manager", "control-plane"])
     operation_id="manager_provision_tenant",
     status_code=status.HTTP_201_CREATED,
 )
-def provision_tenant(body: TenantProvisionRequest, request: Request) -> Envelope[dict]:
+def provision_tenant(
+    body: TenantProvisionRequest,
+    request: Request,
+    _svc=Depends(verify_service_token),  # 服务间认证守卫（平面③ 代码层，03 §9.1）
+) -> Envelope[dict]:
     """同步路由（def）：psycopg 同步驱动，FastAPI 自动 run in threadpool，不阻塞事件循环。
 
     TODO(05 §5.1 D4)：initial_quota_policy / visible_catalog_policy 暂不处理，

@@ -41,7 +41,10 @@ def client(manager):
 
 
 def _token(role: str) -> str:
-    return DevTokenService().sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+    # 用 Operation app 的真实系统 RS256 key 签发（与 app._verifier 闭环，D23）。
+    from operation_service.app import _auth
+
+    return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
 
 
 def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:

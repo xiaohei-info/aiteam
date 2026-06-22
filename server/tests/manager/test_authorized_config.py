@@ -14,12 +14,16 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from shared.auth import DevTokenService
-from shared.contracts.auth import TokenClaims
+from shared.config import Settings
 from shared.contracts.crosstier import AuthorizedConfigPullRequest
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound
+
+from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+# 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 from manager_service.authorized_config_service import AuthorizedConfigService
 from manager_service.employee_config_service import EmployeeConfigService
@@ -169,20 +173,17 @@ def test_revoked_ids_for_no_longer_authorized():
 # ---- HTTP 端点（非 integration）----
 
 def _token(tenant_id: str, roles: list[str], user_id: str) -> str:
-    return DevTokenService().sign(
-        TokenClaims(tenant_id=tenant_id, user_id=user_id, roles=roles, exp=9999999999)
-    )
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=user_id)
 
 
 def _client(db_url: str | None) -> TestClient:
     from shared.app_factory import create_app
-    from shared.config import Settings
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_grants import router as grants_router
 
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
-    app.state._token_verifier = _verifier
+    app.state._token_verifier = _INMEM_VERIFIER
     app.include_router(grants_router)
     return TestClient(app)
 

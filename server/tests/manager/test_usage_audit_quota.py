@@ -24,6 +24,11 @@ from shared.config import Settings
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
+from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+# 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑）。
+_INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
+
 from manager_service.usage_audit_quota_repository import (
     AuditSummaryRow,
     QuotaPolicyRow,
@@ -502,23 +507,19 @@ def test_quota_evaluate_default_is_soft():
 
 def _client(db_url: str | None) -> TestClient:
     from shared.app_factory import create_app
-    from manager_service.app import router as manager_router, _verifier
+    from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_usage_audit_quota import build_usage_audit_quota_router
 
     settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
-    app.include_router(build_usage_audit_quota_router(_verifier))
+    app.include_router(build_usage_audit_quota_router(_INMEM_VERIFIER))
     return TestClient(app)
 
 
 def _token(tenant_id: str, roles: list[str]) -> str:
-    from shared.auth import DevTokenService
-    from shared.contracts.auth import TokenClaims
-    return DevTokenService().sign(TokenClaims(
-        tenant_id=tenant_id, user_id=str(uuid.uuid4()), roles=roles, exp=9999999999,
-    ))
+    return sign_inmem_token(_INMEM_SIGNER, tenant_id, roles, user_id=str(uuid.uuid4()))
 
 
 def test_usage_upload_without_token_returns_401():

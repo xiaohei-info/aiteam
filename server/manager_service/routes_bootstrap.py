@@ -7,11 +7,12 @@ must_reset=true 强制首登重置后切换正常凭据。响应体不含明文/
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
 from shared.contracts.crosstier import OwnerBootstrapSync
 from shared.contracts.envelope import Envelope
 from shared.errors import Conflict
+from shared.service_token import verify_service_token
 
 from .exceptions import ManagerAdminDbNotConfigured
 
@@ -24,7 +25,11 @@ router = APIRouter(tags=["manager", "control-plane"])
     operation_id="manager_owner_bootstrap",
     status_code=status.HTTP_201_CREATED,
 )
-def owner_bootstrap(body: OwnerBootstrapSync, request: Request) -> Envelope[dict]:
+def owner_bootstrap(
+    body: OwnerBootstrapSync,
+    request: Request,
+    _svc=Depends(verify_service_token),  # 服务间认证守卫（平面③ 代码层，03 §9.1）
+) -> Envelope[dict]:
     settings = request.app.state.settings
     db_url = settings.db_url
     admin_db_url = settings.admin_db_url

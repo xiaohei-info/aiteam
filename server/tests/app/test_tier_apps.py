@@ -61,9 +61,26 @@ def test_protected_endpoint_401_problem_json(client, tier):
 
 
 def test_protected_endpoint_200_with_dev_token(client, tier):
+    """骨架期验签口径迁移完成：三端已全切 RS256（operation 缺口2、agent 批次C、manager 批次D）。
+    whoami 200 由各端专门测试覆盖；此参数化测试只保留 401（无 token）语义。"""
+    pytest.skip(f"{tier} 已切 RS256，whoami 200 见各端专门测试")
     token = DevTokenService().sign(
         TokenClaims(user_id="u1", tenant_id="t1", roles=["member"], exp=9999999999)
     )
     r = client.get(f"/api/{tier}/whoami", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json()["data"]["user_id"] == "u1"
+
+
+def test_operation_whoami_with_system_token():
+    """operation whoami 200（缺口2）：用系统账号登录拿真实 RS256 token 打 whoami。"""
+    client = TestClient(get_app("operation"))
+    r = client.post(
+        "/api/operation/auth/login",
+        json={"username": "sysadmin", "password": "changeme-me"},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["data"]["token"]
+    r = client.get("/api/operation/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json()["data"]["user_id"] == "sysadmin"

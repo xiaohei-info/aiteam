@@ -38,6 +38,9 @@ class Settings(BaseModel):
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
+    # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
+    # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
+    service_token: str | None = Field(default=None)
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
 
@@ -55,5 +58,6 @@ def load_settings(tier: Tier | None = None) -> Settings:
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
+        service_token=os.getenv("SERVICE_TOKEN"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )

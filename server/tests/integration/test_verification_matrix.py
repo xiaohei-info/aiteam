@@ -475,10 +475,12 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     op_client = TestClient(op_app)
 
     def _op_token() -> dict:
-        t = DevTokenService().sign(TokenClaims(
-            user_id="sys1", roles=[PlatformRole.SYSTEM_ADMIN.value], exp=9999999999
-        ))
-        return {"Authorization": f"Bearer {t}"}
+        # Operation 已切 RS256（缺口2）：用系统账号登录拿真实 token（与 op_app._verifier 闭环）。
+        login = op_client.post("/api/operation/auth/login", json={
+            "username": "sysadmin", "password": "changeme-me",
+        })
+        assert login.status_code == 200, login.text
+        return {"Authorization": f"Bearer {login.json()['data']['token']}"}
 
     # F01 + F02：Operator 开通企业。
     r = op_client.post("/api/operation/enterprises", json={

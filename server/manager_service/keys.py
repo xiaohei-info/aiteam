@@ -59,3 +59,15 @@ class TenantKeyStore:
 
     def verifier(self, tenant_id: str) -> RS256TokenVerifier:
         return RS256TokenVerifier.from_jwks(self.jwks(tenant_id))
+
+    def public_pem_for_kid(self, kid: str) -> str | None:
+        """按 kid 解析 tenant_id 并取公钥（验签专用，缺口1/D23）。
+
+        kid 形如 "{tenant_id}:1"。验签时只有 token header 的 kid，需据此反查公钥。
+        **不调 ensure()**（验签只读，不应产生建密钥副作用）；kid 无 ":"/无记录返回 None。
+        """
+        if ":" not in kid:
+            return None
+        tenant_id = kid.split(":", 1)[0]
+        row = self._row(tenant_id)
+        return row[2] if row else None  # row = (kid, private_pem, public_pem)
