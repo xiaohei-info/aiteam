@@ -3,9 +3,11 @@
  *
  * GET /api/operation/rollup/enterprises/{enterprise_id} → 单企业 rollup 详情。
  * D13：只展示脱敏聚合摘要，绝不渲染会话内容/执行明细/raw event。
+ * 黑金玻璃质感，复用 shared 组件（Button/GlassPanel/Table）。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { Button, GlassPanel, Table } from "@aiteam/shared/ui";
 import { type EnterpriseRollup, useBoardApi } from "./useBoardApi.js";
 
 function fmt(val: number): string {
@@ -26,7 +28,21 @@ function fmtDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} 小时`;
 }
 
-export function EnterpriseDetailPage(): React.ReactNode {
+interface MetricProps {
+  label: string;
+  value: string;
+}
+
+function Metric({ label, value }: MetricProps): ReactNode {
+  return (
+    <GlassPanel className="flex flex-col gap-xs rounded-window p-md">
+      <span className="text-xs text-text-secondary">{label}</span>
+      <span className="text-xl font-bold text-text-primary">{value}</span>
+    </GlassPanel>
+  );
+}
+
+export function EnterpriseDetailPage(): ReactNode {
   const { enterprise_id } = useParams<{ enterprise_id: string }>();
   const api = useBoardApi();
   const navigate = useNavigate();
@@ -54,31 +70,29 @@ export function EnterpriseDetailPage(): React.ReactNode {
 
   if (loading) {
     return (
-      <section className="board-detail board-detail--loading">
-        <p className="board-detail__status">加载中…</p>
+      <section className="flex flex-col gap-md">
+        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
       </section>
     );
   }
 
   if (error) {
     return (
-      <section className="board-detail board-detail--error">
-        <p className="board-detail__status board-detail__status--error">{error}</p>
-        <button
-          className="board-detail__retry"
-          onClick={fetchDetail}
-          type="button"
-        >
-          重试
-        </button>
+      <section className="flex flex-col gap-md">
+        <GlassPanel className="flex flex-col gap-md rounded-window border border-danger/30 p-lg">
+          <p className="m-0 text-sm text-danger">{error}</p>
+          <Button type="button" variant="ghost" size="sm" className="self-start" onClick={fetchDetail}>
+            重试
+          </Button>
+        </GlassPanel>
       </section>
     );
   }
 
   if (!data) {
     return (
-      <section className="board-detail board-detail--empty">
-        <p className="board-detail__status">暂无数据</p>
+      <section className="flex flex-col gap-md">
+        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">暂无数据</GlassPanel>
       </section>
     );
   }
@@ -86,65 +100,66 @@ export function EnterpriseDetailPage(): React.ReactNode {
   const summary = data.audit_summary;
 
   return (
-    <section className="board-detail">
-      <button
-        className="board-detail__back"
-        onClick={() => navigate("/board")}
+    <section className="flex flex-col gap-lg">
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
+        className="self-start"
+        onClick={() => navigate("/board")}
       >
         &larr; 返回总览
-      </button>
+      </Button>
 
-      <h1 className="board-detail__title">{data.enterprise_name}</h1>
-      <p className="board-detail__window">
-        统计周期：{data.window_start} ~ {data.window_end}
-      </p>
+      <div className="flex flex-col gap-xs">
+        <h1 className="m-0 text-xl font-bold text-text-primary">{data.enterprise_name}</h1>
+        <p className="m-0 text-sm text-text-muted">
+          统计周期：{data.window_start} ~ {data.window_end}
+        </p>
+      </div>
 
-      <div className="board-detail__cards">
-        <div className="board-detail-card">
-          <span className="board-detail-card__label">执行次数</span>
-          <span className="board-detail-card__value">{fmt(data.run_count)}</span>
-        </div>
-        <div className="board-detail-card">
-          <span className="board-detail-card__label">消耗</span>
-          <span className="board-detail-card__value">{fmtCost(data.cost_cents)}</span>
-        </div>
-        <div className="board-detail-card">
-          <span className="board-detail-card__label">总 Token</span>
-          <span className="board-detail-card__value">{fmt(data.total_tokens)}</span>
-        </div>
+      <div className="grid grid-cols-1 gap-md sm:grid-cols-3">
+        <Metric label="执行次数" value={fmt(data.run_count)} />
+        <Metric label="消耗" value={fmtCost(data.cost_cents)} />
+        <Metric label="总 Token" value={fmt(data.total_tokens)} />
       </div>
 
       {summary && (
-        <div className="board-detail__audit">
-          <h2 className="board-detail__audit-title">审计摘要</h2>
-          <div className="board-detail__audit-grid">
-            <div className="board-detail-audit-item">
-              <span className="board-detail-audit-item__label">总执行</span>
-              <span className="board-detail-audit-item__value">{fmt(summary.total_runs)}</span>
-            </div>
-            <div className="board-detail-audit-item">
-              <span className="board-detail-audit-item__label">成功</span>
-              <span className="board-detail-audit-item__value">{fmt(summary.success_runs)}</span>
-            </div>
-            <div className="board-detail-audit-item">
-              <span className="board-detail-audit-item__label">失败</span>
-              <span className="board-detail-audit-item__value">{fmt(summary.failed_runs)}</span>
-            </div>
-            <div className="board-detail-audit-item">
-              <span className="board-detail-audit-item__label">平均耗时</span>
-              <span className="board-detail-audit-item__value">{fmtDuration(summary.avg_duration_seconds)}</span>
-            </div>
-          </div>
+        <div className="flex flex-col gap-md">
+          <h2 className="m-0 text-base font-semibold text-text-primary">审计摘要</h2>
+          <GlassPanel className="overflow-hidden rounded-window">
+            <Table>
+              <tbody>
+                <tr>
+                  <td>总执行</td>
+                  <td>{fmt(summary.total_runs)}</td>
+                </tr>
+                <tr>
+                  <td>成功</td>
+                  <td>{fmt(summary.success_runs)}</td>
+                </tr>
+                <tr>
+                  <td>失败</td>
+                  <td>{fmt(summary.failed_runs)}</td>
+                </tr>
+                <tr>
+                  <td>平均耗时</td>
+                  <td>{fmtDuration(summary.avg_duration_seconds)}</td>
+                </tr>
+              </tbody>
+            </Table>
+          </GlassPanel>
           {summary.top_error_codes.length > 0 && (
-            <div className="board-detail__audit-errors">
-              <h3>高频错误码</h3>
-              <ul>
+            <GlassPanel className="rounded-window p-lg">
+              <h3 className="m-0 mb-md text-sm font-semibold text-text-primary">高频错误码</h3>
+              <ul className="m-0 flex flex-col gap-xs">
                 {summary.top_error_codes.map((code) => (
-                  <li key={code}>{code}</li>
+                  <li key={code} className="text-sm text-text-secondary">
+                    <code className="text-gold-bright">{code}</code>
+                  </li>
                 ))}
               </ul>
-            </div>
+            </GlassPanel>
           )}
         </div>
       )}

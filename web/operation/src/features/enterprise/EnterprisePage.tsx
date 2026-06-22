@@ -6,8 +6,10 @@
  * - F02 负责人凭据重置：enterprise_id 输入 → POST /api/operation/enterprises/{id}/owner/bootstrap/reset → 展示新 secret
  *
  * 红线：bootstrap_secret 仅本次展示，不缓存不重发，不用 localStorage/sessionStorage。
+ * 黑金玻璃质感，复用 shared 组件（GlassPanel/Field/Input/Button）。
  */
 import { useState, type ReactNode } from "react";
+import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useI18n } from "../../i18n/context";
 import type { ApiClient } from "../../api";
 import { ProvisionForm } from "./ProvisionForm";
@@ -62,7 +64,11 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
   }
 
   return (
-    <div className="enterprise-page">
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">
+        {i18n.t("operation.nav.enterprises")}
+      </h1>
+
       <ProvisionForm
         onSubmit={handleProvision}
         loading={provisionLoading}
@@ -70,55 +76,57 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
       />
 
       {provisionResult ? (
-        <>
-          <p className="enterprise-page__success-msg">
+        <div className="flex flex-col gap-md">
+          <p className="m-0 text-sm text-success">
             {i18n.t("operation.enterprise.success")}
           </p>
           <BootstrapSecretDisplay
             secret={provisionResult.bootstrap_secret}
             enterpriseId={provisionResult.enterprise_id}
           />
-        </>
+        </div>
       ) : null}
 
-      <section className="enterprise-page__reset">
-        <h2>{i18n.t("operation.enterprise.reset_title")}</h2>
-        <label className="enterprise-page__field">
-          <span>enterprise_id</span>
-          <input
+      <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("operation.enterprise.reset_title")}
+        </h2>
+        <Field label="enterprise_id">
+          <Input
             type="text"
             value={resetEnterpriseId}
             onChange={(e) => setResetEnterpriseId(e.target.value)}
             placeholder="企业 ID"
             disabled={resetLoading}
           />
-        </label>
+        </Field>
         {resetError ? (
-          <p className="enterprise-page__error">{resetError}</p>
+          <p className="m-0 text-sm text-danger">{resetError}</p>
         ) : null}
-        <button
+        <Button
           type="button"
-          className="enterprise-page__submit"
+          variant="ghost"
           onClick={handleReset}
           disabled={resetLoading || !resetEnterpriseId.trim()}
+          className="self-start"
         >
           {resetLoading
             ? i18n.t("operation.enterprise.reset_submitting")
             : i18n.t("operation.enterprise.reset_button")}
-        </button>
-      </section>
+        </Button>
+      </GlassPanel>
 
       {resetResult ? (
-        <>
-          <p className="enterprise-page__success-msg">
+        <div className="flex flex-col gap-md">
+          <p className="m-0 text-sm text-success">
             {i18n.t("operation.enterprise.reset_success")}
           </p>
           <BootstrapSecretDisplay
             secret={resetResult.bootstrap_secret}
             enterpriseId={resetEnterpriseId.trim()}
           />
-        </>
+        </div>
       ) : null}
-    </div>
+    </section>
   );
 }

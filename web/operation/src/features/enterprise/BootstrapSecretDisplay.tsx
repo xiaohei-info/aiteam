@@ -3,8 +3,10 @@
  *
  * 红线：bootstrap_secret 仅本次展示，不缓存不重发，不用 localStorage/sessionStorage。
  * 展示时脱敏（只显示首尾各4位），提供复制按钮。
+ * 黑金玻璃质感，复用 shared 组件（GlassPanel/Button）。
  */
 import { useState, type ReactNode } from "react";
+import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useI18n } from "../../i18n/context";
 
 interface Props {
@@ -35,26 +37,29 @@ export function BootstrapSecretDisplay({
   }
 
   return (
-    <section className="enterprise-page__secret" data-testid="secret-display">
-      <h2>{i18n.t("operation.enterprise.bootstrap_secret")}</h2>
-      <p className="enterprise-page__secret-warning">
+    <GlassPanel
+      data-testid="secret-display"
+      className="flex flex-col gap-sm rounded-window border border-gold/30 p-lg"
+    >
+      <h2 className="m-0 text-base font-semibold text-text-primary">
+        {i18n.t("operation.enterprise.bootstrap_secret")}
+      </h2>
+      <p className="m-0 text-sm text-warning">
         {i18n.t("operation.enterprise.secret_warning")}
       </p>
-      <div className="enterprise-page__secret-value">
-        <code>{masked(secret)}</code>
+      <div className="rounded-md bg-surface px-md py-sm">
+        <code className="text-sm text-gold-bright">{masked(secret)}</code>
       </div>
-      <p className="enterprise-page__secret-meta">
-        enterprise_id: <code>{enterpriseId}</code>
+      <p className="m-0 text-sm text-text-muted">
+        enterprise_id: <code className="text-text-secondary">{enterpriseId}</code>
       </p>
-      <button
-        type="button"
-        className="enterprise-page__secret-copy"
-        onClick={handleCopy}
-      >
-        {copied
-          ? i18n.t("operation.enterprise.copied")
-          : i18n.t("operation.enterprise.copy")}
-      </button>
-    </section>
+      <div>
+        <Button type="button" variant="ghost" size="sm" onClick={handleCopy}>
+          {copied
+            ? i18n.t("operation.enterprise.copied")
+            : i18n.t("operation.enterprise.copy")}
+        </Button>
+      </div>
+    </GlassPanel>
   );
 }

@@ -3,15 +3,15 @@
  *
  * GET /api/operation/rollup/board → 渲染总览面板。
  * D13：只展示脱敏聚合摘要，绝不渲染会话内容/执行明细/raw event。
+ * 黑金玻璃质感，复用 shared 组件（Button/GlassPanel）。
  */
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { type RollupBoard, useBoardApi } from "./useBoardApi.js";
 import { OverviewCards } from "./OverviewCards.js";
 
-export function BoardPage(): React.ReactNode {
+export function BoardPage(): ReactNode {
   const api = useBoardApi();
-  const navigate = useNavigate();
   const [board, setBoard] = useState<RollupBoard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,34 +39,34 @@ export function BoardPage(): React.ReactNode {
 
   if (loading) {
     return (
-      <section className="board-page board-page--loading">
-        <p className="board-page__status">加载中…</p>
+      <section className="flex flex-col gap-md">
+        <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
+        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
       </section>
     );
   }
 
   if (error) {
     return (
-      <section className="board-page board-page--error">
-        <p className="board-page__status board-page__status--error">{error}</p>
-        <button
-          className="board-page__retry"
-          onClick={fetchBoard}
-          type="button"
-        >
-          重试
-        </button>
+      <section className="flex flex-col gap-md">
+        <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
+        <GlassPanel className="flex flex-col gap-md rounded-window border border-danger/30 p-lg">
+          <p className="m-0 text-sm text-danger">{error}</p>
+          <Button type="button" variant="ghost" size="sm" className="self-start" onClick={fetchBoard}>
+            重试
+          </Button>
+        </GlassPanel>
       </section>
     );
   }
 
   return (
-    <section className="board-page">
-      <h1 className="board-page__title">跨企业治理看板</h1>
+    <section className="flex flex-col gap-lg">
+      <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
       {board ? (
         <OverviewCards board={board} onEnterpriseClick={handleEnterpriseClick} />
       ) : (
-        <p className="board-page__status">暂无数据</p>
+        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">暂无数据</GlassPanel>
       )}
     </section>
   );
