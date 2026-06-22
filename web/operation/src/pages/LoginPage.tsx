@@ -3,11 +3,12 @@
  *
  * 真实登录表单与 /api/auth/login 联调由后续卡补全；脚手架阶段提供：
  * - 表单 UI（手机号 + bootstrap secret，对应 Manager 颁发）。
- * - 提交时 signIn(token) 注入会话（mock token，待后端联调）。
+ * - 提交时 signIn(token) 注入会话（token 必须来自后端验签，脚手架不造假 token）。
  * - 登录成功跳回来源页（RequireAuth 透传 state.from）。
  */
 import { type FormEvent, useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
+import { GlassPanel, Button, Field, Input } from "@aiteam/shared/ui";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
 
@@ -18,7 +19,6 @@ interface LocationState {
 export function LoginPage(): React.ReactNode {
   const { session, signIn } = useSession();
   const i18n = useI18n();
-  const navigate = useNavigate();
   const location = useLocation();
   const [phone, setPhone] = useState("");
   const [secret, setSecret] = useState("");
@@ -43,32 +43,32 @@ export function LoginPage(): React.ReactNode {
   }
 
   return (
-    <div className="login-page">
-      <form className="login-page__form" onSubmit={handleSubmit}>
-        <h1 className="login-page__title">{i18n.t("operation.title")}</h1>
-        <label className="login-page__field">
-          <span>{i18n.t("operation.login.phone")}</span>
-          <input
-            type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            autoComplete="username"
-          />
-        </label>
-        <label className="login-page__field">
-          <span>{i18n.t("operation.login.secret")}</span>
-          <input
-            type="password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            autoComplete="current-password"
-          />
-        </label>
-        {error ? <p className="login-page__error">{error}</p> : null}
-        <button type="submit" className="login-page__submit">
-          {i18n.t("operation.login.submit")}
-        </button>
-      </form>
+    <div className="flex h-screen items-center justify-center bg-bg-canvas">
+      <GlassPanel className="w-[360px] rounded-window p-xl">
+        <form className="flex flex-col gap-md" data-testid="login-form" onSubmit={handleSubmit}>
+          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("operation.title")}</h1>
+          <Field label={i18n.t("operation.login.phone")}>
+            <Input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="username"
+            />
+          </Field>
+          <Field label={i18n.t("operation.login.secret")}>
+            <Input
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              autoComplete="current-password"
+            />
+          </Field>
+          {error ? <p className="m-0 text-xs text-danger">{error}</p> : null}
+          <Button type="submit" className="mt-sm">
+            {i18n.t("operation.login.submit")}
+          </Button>
+        </form>
+      </GlassPanel>
       {/* signIn 留在作用域内供后续联调使用，避免未使用告警。 */}
       <span hidden>{typeof signIn}</span>
     </div>

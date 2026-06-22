@@ -1,11 +1,12 @@
 /**
- * 运营端壳组件：左侧导航 + 顶栏 + 内容区。
+ * 运营端壳组件：基于 page-shell 视图模型，用 shared AppShell（黑金玻璃）渲染。
  *
  * 渲染由 buildShellViewModel 产出的可见导航树；未登录只渲染登录入口（requiresLogin）。
  * 不做跨端聚合（08 §12.3 无中心 BFF）——导航全部指向本端路由。
  */
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { buildShellViewModel } from "@aiteam/shared";
+import { AppShell as SharedAppShell, type AppShellNavItem } from "@aiteam/shared/ui";
 import { operationShellConfig } from "./config";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
@@ -13,36 +14,32 @@ import { useI18n } from "../i18n/context";
 export function AppShell(): React.ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
-  const path = typeof window !== "undefined" ? window.location.pathname : "/";
-  const vm = buildShellViewModel(operationShellConfig, session, path);
+  const { pathname } = useLocation();
+  const vm = buildShellViewModel(operationShellConfig, session, pathname);
 
   if (vm.requiresLogin) {
     // 未登录：壳退化为仅登录入口，由路由层 <RequireAuth> 把页面切到 /login。
     return <Outlet />;
   }
 
+  const nav: AppShellNavItem[] = vm.nav.map((item) => ({
+    id: item.id,
+    label: i18n.t(item.labelKey),
+    path: item.path,
+    active: item.id === vm.activeItemId,
+  }));
+
   return (
-    <div className="app-shell">
-      <aside className="app-shell__sidebar">
-        <div className="app-shell__brand">{i18n.t(vm.titleKey)}</div>
-        <nav className="app-shell__nav">
-          {vm.nav.map((item) => (
-            <NavLink
-              key={item.id}
-              to={item.path}
-              end={item.path === "/"}
-              className={({ isActive }) =>
-                `app-shell__nav-item${isActive ? " is-active" : ""}`
-              }
-            >
-              {i18n.t(item.labelKey)}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
-      <main className="app-shell__main">
-        <Outlet />
-      </main>
-    </div>
+    <SharedAppShell
+      brand={i18n.t(vm.titleKey)}
+      nav={nav}
+      renderLink={(item, className) => (
+        <Link to={item.path} className={className}>
+          {item.label}
+        </Link>
+      )}
+    >
+      <Outlet />
+    </SharedAppShell>
   );
 }

@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "@aiteam/shared/design-system/tokens.css";
+
+/* 让 Tailwind v4 扫描 shared 组件源里的工具类（GlassPanel/AppShell/Button 等）。 */
+@source "../../../shared/src";
+
+/* 全局黑金基样（运营端整体深色画布，后台密度优先）。 */
+body {
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+}
