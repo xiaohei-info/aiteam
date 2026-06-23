@@ -1,0 +1,2 @@
+# Shared crypto module dependencies
+cryptography>=41.0.0
