@@ -1,0 +1,25 @@
+# tests/test_graph.py
+from graph import frontier, is_done, all_terminal
+
+def iss(key, status, blocked_by=None):
+    return {"key": key, "id": key, "status": status,
+            "blocked_by": blocked_by or [], "worker": "w", "reviewer": None,
+            "review_verdict": None}
+
+def test_frontier_root_ready_when_todo():
+    issues = {"M0": iss("M0", "todo")}
+    assert frontier(issues) == ["M0"]
+
+def test_frontier_blocked_until_dep_done():
+    issues = {"M0": iss("M0", "in_progress"), "M1": iss("M1", "todo", ["M0"])}
+    assert frontier(issues) == []           # M0 未 done，M1 不 ready；M0 在飞不算 frontier
+    issues["M0"]["status"] = "done"
+    assert frontier(issues) == ["M1"]       # M0 done → M1 解锁
+
+def test_inflight_and_done_excluded_from_frontier():
+    issues = {"A": iss("A", "in_review"), "B": iss("B", "done"), "C": iss("C", "todo")}
+    assert frontier(issues) == ["C"]
+
+def test_all_terminal_done_or_cancelled():
+    assert all_terminal({"A": iss("A", "done"), "B": iss("B", "cancelled")})
+    assert not all_terminal({"A": iss("A", "done"), "B": iss("B", "todo")})
