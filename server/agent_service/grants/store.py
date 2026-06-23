@@ -17,11 +17,14 @@ agent 本地库口径（与 usage/loop/mainline 一致）：接口 + 内存实�
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
 from shared.contracts.grants import LoadedExpertProjection
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
+
+from ..local_db import LocalDb
 
 
 def _now() -> datetime:
@@ -135,3 +138,152 @@ class InMemorySnapshotRepository(SnapshotRepository):
             self._items.values(),
             key=lambda s: (s.employee_id, s.snapshot_version),
         )
+
+
+# ---- SQLite 实现（agent 本地库；与内存实现行为等价，重启不丢）----
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+class SqliteProjectionRepository(ProjectionRepository):
+    """SQLite 投影仓储（本地库持久化，#159）。"""
+
+    def __init__(self, db: LocalDb) -> None:
+        self._db = db
+
+    @staticmethod
+    def _row_to_projection(row) -> LoadedExpertProjection:
+        data = dict(row)
+        data["revoked"] = bool(data["revoked"])
+        return LoadedExpertProjection(**data)
+
+    def upsert(self, projection: LoadedExpertProjection) -> LoadedExpertProjection:
+        existing_row = self._db.query_one(
+            "SELECT * FROM loaded_expert_projections WHERE employee_id = ?",
+            (projection.employee_id,),
+        )
+        if existing_row is not None:
+            # 更新既有投影
+            self._db.execute(
+                "UPDATE loaded_expert_projections SET tenant_id = ?, version = ?, display_name = ?, "
+                "runtime_binding = ?, synced_at = ?, revoked = ? WHERE employee_id = ?",
+                (projection.tenant_id, projection.version, projection.display_name,
+                 projection.runtime_binding,
+                 _iso(projection.synced_at) if projection.synced_at else None,
+                 int(projection.revoked), projection.employee_id),
+            )
+        else:
+            # 新建投影
+            self._db.execute(
+                "INSERT INTO loaded_expert_projections "
+                "(employee_id, tenant_id, version, display_name, runtime_binding, synced_at, revoked) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (projection.employee_id, projection.tenant_id, projection.version,
+                 projection.display_name, projection.runtime_binding,
+                 _iso(projection.synced_at) if projection.synced_at else None,
+                 int(projection.revoked)),
+            )
+        return projection
+
+    def revoke(self, employee_id: str) -> LoadedExpertProjection | None:
+        existing_row = self._db.query_one(
+            "SELECT * FROM loaded_expert_projections WHERE employee_id = ?", (employee_id,)
+        )
+        if existing_row is None:
+            return None
+        self._db.execute(
+            "UPDATE loaded_expert_projections SET revoked = 1, synced_at = ? WHERE employee_id = ?",
+            (_iso(_now()), employee_id),
+        )
+        row = self._db.query_one(
+            "SELECT * FROM loaded_expert_projections WHERE employee_id = ?", (employee_id,)
+        )
+        return self._row_to_projection(row)
+
+    def get(self, employee_id: str) -> LoadedExpertProjection | None:
+        row = self._db.query_one(
+            "SELECT * FROM loaded_expert_projections WHERE employee_id = ?", (employee_id,)
+        )
+        return self._row_to_projection(row) if row else None
+
+    def available(self) -> list[LoadedExpertProjection]:
+        rows = self._db.query(
+            "SELECT * FROM loaded_expert_projections WHERE revoked = 0 ORDER BY employee_id"
+        )
+        return [self._row_to_projection(r) for r in rows]
+
+    def list_all(self) -> list[LoadedExpertProjection]:
+        rows = self._db.query(
+            "SELECT * FROM loaded_expert_projections ORDER BY employee_id"
+        )
+        return [self._row_to_projection(r) for r in rows]
+
+
+class SqliteSnapshotRepository(SnapshotRepository):
+    """SQLite 快照仓储（本地库持久化，#159）。"""
+
+    def __init__(self, db: LocalDb) -> None:
+        self._db = db
+
+    @staticmethod
+    def _row_to_snapshot(row) -> EmployeeExecutionSnapshot:
+        data = dict(row)
+        # frozen_at 是数据库字段，不是 EmployeeExecutionSnapshot 模型的一部分
+        data.pop("frozen_at", None)
+        data["model_policy"] = json.loads(data["model_policy"])
+        data["runtime_policy"] = json.loads(data["runtime_policy"])
+        data["tools"] = json.loads(data["tools"])
+        data["skills"] = json.loads(data["skills"])
+        data["knowledge_refs"] = json.loads(data["knowledge_refs"])
+        data["connector_refs"] = json.loads(data["connector_refs"])
+        data["memory_policy"] = json.loads(data["memory_policy"]) if data["memory_policy"] else None
+        return EmployeeExecutionSnapshot(**data)
+
+    def freeze(self, snapshot: EmployeeExecutionSnapshot) -> EmployeeExecutionSnapshot:
+        existing_row = self._db.query_one(
+            "SELECT * FROM employee_execution_snapshots WHERE employee_id = ? AND snapshot_version = ?",
+            (snapshot.employee_id, snapshot.snapshot_version),
+        )
+        if existing_row is not None:
+            # 冻结语义：已取得即不可变，幂等返回既有，不覆盖。
+            return self._row_to_snapshot(existing_row)
+        # 新建快照（frozen_at 由本地生成，不是快照对象的一部分）
+        self._db.execute(
+            "INSERT INTO employee_execution_snapshots "
+            "(employee_id, version, snapshot_version, display_name, persona, model_policy, runtime_policy, "
+            "tools, skills, knowledge_refs, connector_refs, memory_policy, frozen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (snapshot.employee_id, snapshot.version, snapshot.snapshot_version, snapshot.display_name,
+             snapshot.persona,
+             json.dumps(snapshot.model_policy.model_dump()),
+             json.dumps(snapshot.runtime_policy.model_dump()),
+             json.dumps(snapshot.tools), json.dumps(snapshot.skills),
+             json.dumps(snapshot.knowledge_refs), json.dumps(snapshot.connector_refs),
+             json.dumps(snapshot.memory_policy) if snapshot.memory_policy else None,
+             _iso(_now())),  # frozen_at 由本地生成
+        )
+        return snapshot
+
+    def get(
+        self, employee_id: str, snapshot_version: str
+    ) -> EmployeeExecutionSnapshot | None:
+        row = self._db.query_one(
+            "SELECT * FROM employee_execution_snapshots WHERE employee_id = ? AND snapshot_version = ?",
+            (employee_id, snapshot_version),
+        )
+        return self._row_to_snapshot(row) if row else None
+
+    def latest(self, employee_id: str) -> EmployeeExecutionSnapshot | None:
+        row = self._db.query_one(
+            "SELECT * FROM employee_execution_snapshots WHERE employee_id = ? "
+            "ORDER BY frozen_at DESC LIMIT 1",
+            (employee_id,),
+        )
+        return self._row_to_snapshot(row) if row else None
+
+    def list_all(self) -> list[EmployeeExecutionSnapshot]:
+        rows = self._db.query(
+            "SELECT * FROM employee_execution_snapshots ORDER BY employee_id, snapshot_version"
+        )
+        return [self._row_to_snapshot(r) for r in rows]

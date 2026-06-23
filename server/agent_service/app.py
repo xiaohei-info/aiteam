@@ -84,14 +84,20 @@ def build_app(
     grants_client 默认占位（A4 对端 M7/#41 未联调）；sync 失败按离线降级处理，本地凭既有
     投影 + 已冻结快照继续工作，不致本端 not-ready（D14）。
     """
+    from agent_service.local_db import apply_migrations, connect
+
     login_service = LocalLoginService(
         manager=manager_client or UnconfiguredManagerClient(),
         cache=InMemoryTokenCache(),
     )
     settings = load_settings("agent")
     app = create_app(settings, build_router(login_service))
-    # AGENT_DB_PATH→SQLite 本地库（重启不丢，#158）；AGENT_RUNTIME→真实 runtime 装配（#173，
+    # AGENT_DB_PATH→SQLite 本地库（重启不丢，#158/#159）；AGENT_RUNTIME→真实 runtime 装配（#173，
     # 注入子进程沙箱隔离）；都未配则内存 + Fake runtime（dev/测试默认，行为不变）。
+    db = None
+    if settings.agent_db_path:
+        db = connect(settings.agent_db_path)
+        apply_migrations(db)
     mainline = mainline_service or build_mainline_service(
         db_path=settings.agent_db_path,
         runtime_selection=settings.agent_runtime,
@@ -99,15 +105,15 @@ def build_app(
         runtime_env_passthrough=settings.agent_runtime_env_passthrough,
     )
     app.include_router(build_mainline_router(mainline))
-    loop_service, _loop_scheduler = build_loop_service(mainline=mainline)
+    loop_service, _loop_scheduler = build_loop_service(mainline=mainline, db=db)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
     # 生产可配置自启动 loop 调度后台循环（#173）；默认否，dev/测试用手动触发端点。
     if settings.agent_loop_autostart:
         app.router.on_startup.append(_loop_scheduler.start)
         app.router.on_shutdown.append(_loop_scheduler.stop)
-    usage_service = build_usage_service(client=usage_client)
+    usage_service = build_usage_service(client=usage_client, db=db)
     app.include_router(build_usage_router(usage_service))
-    grants_service = build_grants_service(client=grants_client)
+    grants_service = build_grants_service(client=grants_client, db=db)
     app.include_router(build_grants_router(grants_service))
     return app
 

@@ -12,6 +12,7 @@ agent 本地库口径（与 loop/mainline 一致）：用户端单租户本地�
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -19,6 +20,8 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.summary import AuditSummaryEvent, UsageSummary
+
+from ..local_db import LocalDb
 
 
 def _now() -> datetime:
@@ -124,3 +127,98 @@ class InMemoryOutboxRepository(OutboxRepository):
         )
         self._items[summary_id] = updated
         return updated
+
+
+# ---- SQLite 实现（agent 本地库；与内存实现行为等价，重启不丢）----
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+class SqliteOutboxRepository(OutboxRepository):
+    """SQLite outbox 仓储（本地库持久化，#159）。"""
+
+    def __init__(self, db: LocalDb) -> None:
+        self._db = db
+
+    @staticmethod
+    def _row_to_item(row) -> OutboxItem:
+        data = dict(row)
+        data["usage"] = UsageSummary(**json.loads(data["usage"])) if data["usage"] else None
+        data["audit"] = AuditSummaryEvent(**json.loads(data["audit"])) if data["audit"] else None
+        return OutboxItem(**data)
+
+    def upsert(self, item: OutboxItem) -> OutboxItem:
+        existing_row = self._db.query_one(
+            "SELECT * FROM outbox_items WHERE summary_id = ?", (item.summary_id,)
+        )
+        if existing_row is not None:
+            existing = self._row_to_item(existing_row)
+            if existing.status is OutboxStatus.SENT:
+                # 已上报：幂等——不回退状态、不重复入队，保留既有条目。
+                return existing
+            # 更新既有条目内容
+            self._db.execute(
+                "UPDATE outbox_items SET kind = ?, usage = ?, audit = ?, tenant_id = ?, "
+                "updated_at = ? WHERE summary_id = ?",
+                (item.kind.value,
+                 json.dumps(item.usage.model_dump(mode='json')) if item.usage else None,
+                 json.dumps(item.audit.model_dump(mode='json')) if item.audit else None,
+                 item.tenant_id, _iso(_now()), item.summary_id),
+            )
+            return self._row_to_item(
+                self._db.query_one("SELECT * FROM outbox_items WHERE summary_id = ?",
+                                   (item.summary_id,))
+            )
+        # 新建条目
+        self._db.execute(
+            "INSERT INTO outbox_items (summary_id, tenant_id, kind, usage, audit, status, "
+            "attempts, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (item.summary_id, item.tenant_id, item.kind.value,
+             json.dumps(item.usage.model_dump(mode='json')) if item.usage else None,
+             json.dumps(item.audit.model_dump(mode='json')) if item.audit else None,
+             item.status.value, item.attempts, item.last_error,
+             _iso(item.created_at), _iso(item.updated_at)),
+        )
+        return item
+
+    def list_pending(self, tenant_id: str | None = None) -> list[OutboxItem]:
+        if tenant_id is not None:
+            rows = self._db.query(
+                "SELECT * FROM outbox_items WHERE status = ? AND tenant_id = ? "
+                "ORDER BY created_at, rowid",
+                (OutboxStatus.PENDING.value, tenant_id),
+            )
+        else:
+            rows = self._db.query(
+                "SELECT * FROM outbox_items WHERE status = ? ORDER BY created_at, rowid",
+                (OutboxStatus.PENDING.value,),
+            )
+        return [self._row_to_item(r) for r in rows]
+
+    def list_all(self) -> list[OutboxItem]:
+        rows = self._db.query("SELECT * FROM outbox_items ORDER BY created_at, rowid")
+        return [self._row_to_item(r) for r in rows]
+
+    def mark_sent(self, summary_id: str) -> OutboxItem:
+        self._db.execute(
+            "UPDATE outbox_items SET status = ?, last_error = NULL, updated_at = ? "
+            "WHERE summary_id = ?",
+            (OutboxStatus.SENT.value, _iso(_now()), summary_id),
+        )
+        row = self._db.query_one("SELECT * FROM outbox_items WHERE summary_id = ?", (summary_id,))
+        return self._row_to_item(row)
+
+    def mark_failed(self, summary_id: str, error: str) -> OutboxItem:
+        # 原子读-改-写：先读取当前 attempts，然后加 1
+        row = self._db.query_one(
+            "SELECT attempts FROM outbox_items WHERE summary_id = ?", (summary_id,)
+        )
+        current_attempts = row["attempts"] if row else 0
+        self._db.execute(
+            "UPDATE outbox_items SET attempts = ?, last_error = ?, updated_at = ? "
+            "WHERE summary_id = ?",
+            (current_attempts + 1, error, _iso(_now()), summary_id),
+        )
+        row = self._db.query_one("SELECT * FROM outbox_items WHERE summary_id = ?", (summary_id,))
+        return self._row_to_item(row)
