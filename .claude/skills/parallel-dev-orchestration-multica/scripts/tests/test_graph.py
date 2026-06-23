@@ -24,6 +24,10 @@ def test_all_terminal_done_or_cancelled():
     assert all_terminal({"A": iss("A", "done"), "B": iss("B", "cancelled")})
     assert not all_terminal({"A": iss("A", "done"), "B": iss("B", "todo")})
 
+def test_is_done():
+    assert is_done(iss("A", "done"))
+    assert not is_done(iss("B", "in_review"))
+
 def test_downstream_of_blocks_dependents_only():
     issues = {
         "A": iss("A", "blocked"),            # 失败

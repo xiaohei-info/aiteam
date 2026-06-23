@@ -27,3 +27,8 @@ def test_cycle_detected():
 def test_reviewer_equals_worker():
     m = mk([Node("M0", "agent-be", reviewer="agent-be")])
     assert any("reviewer" in e and "worker" in e for e in lint(m, POOL))
+
+def test_reviewer_not_in_pool():
+    m = mk([Node("M0", "agent-be", reviewer="ghost-reviewer")])
+    errs = lint(m, POOL)
+    assert any("ghost-reviewer" in e and "pool" in e for e in errs)

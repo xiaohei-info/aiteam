@@ -25,8 +25,11 @@ def lint(m: Manifest, pool: set) -> list:
         for b in n.blocked_by:
             if b not in m.nodes:
                 errs.append(f"node {n.id}: blocked_by references unknown node '{b}'")
-        if n.reviewer is not None and n.reviewer == n.worker:
-            errs.append(f"node {n.id}: reviewer must differ from worker")
+        if n.reviewer is not None:
+            if n.reviewer == n.worker:
+                errs.append(f"node {n.id}: reviewer must differ from worker")
+            if n.reviewer not in pool:
+                errs.append(f"node {n.id}: reviewer '{n.reviewer}' not in squad pool")
     if _has_cycle(m.nodes):
         errs.append("manifest DAG has a cycle")
     return errs

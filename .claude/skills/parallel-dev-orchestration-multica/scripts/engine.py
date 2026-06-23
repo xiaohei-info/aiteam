@@ -1,5 +1,5 @@
 # engine.py
-from graph import frontier, all_terminal, downstream_of
+from graph import frontier, downstream_of
 
 def run_dag(client, dispatch_worker, run_gate, max_parallel=4):
     """固定 driver：连续 frontier → 派 worker → gate → status；失败按分支隔离。

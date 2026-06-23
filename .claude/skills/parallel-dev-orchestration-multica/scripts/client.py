@@ -1,4 +1,5 @@
 # client.py
+import copy
 from abc import ABC, abstractmethod
 
 class MulticaClient(ABC):
@@ -21,7 +22,9 @@ class FakeMulticaClient(MulticaClient):
         self.members = members or []
         self.run_log = run_log or {}     # key -> list of run dicts
     def list_issues(self):
-        return {k: dict(v) for k, v in self.issues.items()}
+        # deepcopy so callers can't mutate internal state via the snapshot —
+        # matches the real CLI client which returns freshly-deserialized dicts.
+        return {k: copy.deepcopy(v) for k, v in self.issues.items()}
     def set_metadata(self, key, k, v):
         self.issues[key][k] = v
     def set_status(self, key, status):
