@@ -2,10 +2,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${REPO_ROOT}/.env.dev"
 
 # 默认值
-DEFAULT_ENV="local"
+DEFAULT_ENV="dev"
+DEFAULT_DEPLOY="local"
 DEFAULT_SERVER="all"
 
 usage() {
@@ -20,29 +20,41 @@ Commands:
   logs     Show service logs
 
 Options:
-  --env <local|docker>       Environment mode (default: local)
+  --env <dev|test|prod>      Environment config (default: dev)
+                             Loads .env.dev, .env.test, or .env.prod
+  --deploy <local|docker>    Deployment mode (default: local)
+                             local:  Run Python directly
+                             docker: Use docker-compose
   --server <all|manager|operation|agent|postgres>
                              Which server(s) to control (default: all)
+  --follow, -f               Follow logs in real-time (for logs command)
 
 Examples:
-  ./scripts/ctl.sh start                          # Start all services (local)
-  ./scripts/ctl.sh start --env docker             # Start all services (docker)
-  ./scripts/ctl.sh stop --server manager          # Stop only manager
-  ./scripts/ctl.sh status --env docker            # Check docker services status
-  ./scripts/ctl.sh logs --server operation        # Show operation logs
-  ./scripts/ctl.sh logs --server manager --follow # Follow manager logs
+  ./scripts/ctl.sh start                              # Start dev env, local mode
+  ./scripts/ctl.sh start --env prod                   # Start prod env, local mode
+  ./scripts/ctl.sh start --env prod --deploy docker   # Start prod env, docker mode
+  ./scripts/ctl.sh restart --server manager           # Restart only manager
+  ./scripts/ctl.sh status --env test                  # Check test env status
+  ./scripts/ctl.sh logs --server operation --follow   # Follow operation logs
+  ./scripts/ctl.sh stop --env prod                    # Stop prod env
 
-Environment:
-  Configuration is loaded from .env.dev (auto-created if missing).
-  You can override settings by editing .env.dev or setting env vars.
+Environment Files:
+  .env.dev   - Development environment (default)
+  .env.test  - Testing environment
+  .env.prod  - Production environment (⚠️  edit sensitive values first)
 EOF
 }
 
 # 加载环境配置
 load_env() {
+  ENV_FILE="${REPO_ROOT}/.env.${ENV_CONFIG}"
+
   if [[ ! -f "${ENV_FILE}" ]]; then
-    echo "[ctl] Creating default .env.dev file..."
-    cat > "${ENV_FILE}" <<'ENVEOF'
+    echo "[ctl] Creating default ${ENV_FILE} file..."
+
+    case "${ENV_CONFIG}" in
+      dev)
+        cat > "${ENV_FILE}" <<'ENVEOF'
 # AITeam 开发环境配置
 # 本文件由 scripts/ctl.sh 自动生成，可手动编辑
 
@@ -66,6 +78,68 @@ LOG_LEVEL=INFO
 # 公开文档（开发环境）
 EXPOSE_PUBLIC_DOCS=1
 ENVEOF
+        ;;
+      test)
+        cat > "${ENV_FILE}" <<'ENVEOF'
+# AITeam 测试环境配置
+# 本文件由 scripts/ctl.sh 自动生成，可手动编辑
+
+# 服务端口
+OPERATION_PORT=8781
+MANAGER_PORT=8782
+AGENT_PORT=8783
+POSTGRES_PORT=5433
+
+# 数据库配置
+POSTGRES_USER=aiteam
+POSTGRES_PASSWORD=aiteam_test_env
+POSTGRES_DB=aiteam_test
+
+# 服务间认证（测试环境应使用不同的密钥）
+SERVICE_TOKEN=test-service-token-placeholder
+
+# 日志级别
+LOG_LEVEL=DEBUG
+
+# 公开文档（测试环境）
+EXPOSE_PUBLIC_DOCS=1
+ENVEOF
+        ;;
+      prod)
+        cat > "${ENV_FILE}" <<'ENVEOF'
+# AITeam 生产环境配置
+# 本文件由 scripts/ctl.sh 自动生成，请手动编辑敏感信息
+
+# 服务端口
+OPERATION_PORT=8781
+MANAGER_PORT=8782
+AGENT_PORT=8783
+POSTGRES_PORT=5433
+
+# 数据库配置（生产环境必须修改）
+POSTGRES_USER=aiteam
+POSTGRES_PASSWORD=CHANGE_ME_PRODUCTION_PASSWORD
+POSTGRES_DB=aiteam_prod
+
+# 服务间认证（生产环境必须使用强密钥）
+# 生成方式：openssl rand -hex 32
+SERVICE_TOKEN=CHANGE_ME_USE_OPENSSL_RAND_HEX_32
+
+# 日志级别
+LOG_LEVEL=INFO
+
+# 公开文档（生产环境应关闭）
+EXPOSE_PUBLIC_DOCS=0
+ENVEOF
+        echo "[ctl] ⚠️  WARNING: Production config created. Please update sensitive values in ${ENV_FILE}"
+        ;;
+      *)
+        echo "[ctl] ERROR: Unknown environment: ${ENV_CONFIG}" >&2
+        echo "[ctl] Supported environments: dev, test, prod" >&2
+        exit 1
+        ;;
+    esac
+
     echo "[ctl] Created ${ENV_FILE}"
   fi
 
@@ -83,7 +157,8 @@ ENVEOF
 
 # 解析参数
 parse_args() {
-  ENV_MODE="${DEFAULT_ENV}"
+  ENV_CONFIG="${DEFAULT_ENV}"
+  DEPLOY_MODE="${DEFAULT_DEPLOY}"
   SERVER="${DEFAULT_SERVER}"
   FOLLOW_LOGS=0
 
@@ -91,7 +166,11 @@ parse_args() {
     case "$1" in
       --env)
         shift
-        ENV_MODE="$1"
+        ENV_CONFIG="$1"
+        ;;
+      --deploy)
+        shift
+        DEPLOY_MODE="$1"
         ;;
       --server)
         shift
@@ -110,8 +189,13 @@ parse_args() {
   done
 
   # 验证参数
-  if [[ ! "${ENV_MODE}" =~ ^(local|docker)$ ]]; then
-    echo "[ctl] Invalid --env: ${ENV_MODE} (must be 'local' or 'docker')" >&2
+  if [[ ! "${ENV_CONFIG}" =~ ^(dev|test|prod)$ ]]; then
+    echo "[ctl] Invalid --env: ${ENV_CONFIG} (must be 'dev', 'test', or 'prod')" >&2
+    exit 2
+  fi
+
+  if [[ ! "${DEPLOY_MODE}" =~ ^(local|docker)$ ]]; then
+    echo "[ctl] Invalid --deploy: ${DEPLOY_MODE} (must be 'local' or 'docker')" >&2
     exit 2
   fi
 
@@ -476,26 +560,26 @@ main() {
       ;;
   esac
 
-  load_env
   parse_args "$@"
+  load_env
 
   case "${cmd}" in
     start)
-      if [[ "${ENV_MODE}" == "docker" ]]; then
+      if [[ "${DEPLOY_MODE}" == "docker" ]]; then
         docker_compose_cmd start
       else
         start_local
       fi
       ;;
     stop)
-      if [[ "${ENV_MODE}" == "docker" ]]; then
+      if [[ "${DEPLOY_MODE}" == "docker" ]]; then
         docker_compose_cmd stop
       else
         stop_local
       fi
       ;;
     restart)
-      if [[ "${ENV_MODE}" == "docker" ]]; then
+      if [[ "${DEPLOY_MODE}" == "docker" ]]; then
         docker_compose_cmd stop
         sleep 1
         docker_compose_cmd start
@@ -506,14 +590,14 @@ main() {
       fi
       ;;
     status)
-      if [[ "${ENV_MODE}" == "docker" ]]; then
+      if [[ "${DEPLOY_MODE}" == "docker" ]]; then
         docker_compose_cmd status
       else
         status_local
       fi
       ;;
     logs)
-      if [[ "${ENV_MODE}" == "docker" ]]; then
+      if [[ "${DEPLOY_MODE}" == "docker" ]]; then
         docker_compose_cmd logs
       else
         if [[ "${SERVER}" == "all" ]]; then
