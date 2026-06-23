@@ -13,9 +13,12 @@ Core principles (aligned with v1 概要设计 §3.6 + D18):
 
 from .key_manager import KeyManager, KeyRotationError
 from .credential_encryptor import CredentialEncryptor
+from .service import CryptoService, build_crypto_service
 
 __all__ = [
     "KeyManager",
     "KeyRotationError",
     "CredentialEncryptor",
+    "CryptoService",
+    "build_crypto_service",
 ]

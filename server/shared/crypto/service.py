@@ -12,6 +12,10 @@ API key）在入库前以 Fernet 对称加密包裹。**密钥不入库、不日
 - 加密 key 绝不落库（DB 只存密文）。
 - 加密 key 绝不写日志/错误体/响应（02 §11.2）。
 - 解密只在受控面（Manager 内部编排 / 用户端 Driver 最小注入，04 §6.7）发生，本模块不负责调用面。
+
+> 说明：本模块原为 `shared/crypto.py`，因与 `shared/crypto/` 包同名遮蔽导致 Manager 端
+> ImportError（见 issue #214），迁入包内 `service.py` 并由包 `__init__` 重新导出，
+> 公共 API（CryptoService / build_crypto_service）保持不变。
 """
 
 from __future__ import annotations
