@@ -12,7 +12,7 @@ from shared.contracts.envelope import Envelope
 
 from .auth_service import build_operation_auth_service
 from .routes_auth import router as auth_router
-from .routes_catalog import router as catalog_router
+from .routes_catalog import router as catalog_router, router_pull as catalog_pull_router
 from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 
@@ -42,4 +42,6 @@ app.state._token_verifier = _verifier
 app.include_router(auth_router)
 app.include_router(enterprise_router)
 app.include_router(catalog_router)
+# Manager 拉取端点（服务间调用，05 F06/F07）。
+app.include_router(catalog_pull_router)
 app.include_router(rollup_router)

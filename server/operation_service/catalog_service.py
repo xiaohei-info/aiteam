@@ -131,6 +131,110 @@ class CatalogService:
     ) -> list[CatalogEntryResponse]:
         return [_to_response(e) for e in self._repo.list(catalog_type=catalog_type, status=status)]
 
+    # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
+
+    def pull_expert_template_detail(
+        self, *, template_id: str, version: str | None = None
+    ):
+        """F06：Manager 拉取专家模板详情（只读；Operator 持模板真相）。
+
+        version 为 None 时返回最新已发布版本。只返回 PUBLISHED 状态的模板。
+        """
+        from shared.contracts.crosstier import ExpertTemplateDetail
+        from shared.errors import NotFound
+
+        entry = self._repo.get(CatalogType.EXPERT_TEMPLATE, template_id)
+        if entry.status != CatalogStatus.PUBLISHED:
+            raise NotFound(f"expert template not published: {template_id}")
+        if version is not None and entry.version != version:
+            raise NotFound(f"expert template version mismatch: {template_id}@{version}")
+
+        payload = entry.payload or {}
+        return ExpertTemplateDetail(
+            template_id=entry.template_id,
+            version=entry.version,
+            display_name=entry.display_name,
+            persona=payload.get("persona"),
+            recommended_config=payload.get("recommended_config", {}),
+        )
+
+    def pull_solution_package(
+        self, *, solution_id: str, version: str | None = None
+    ):
+        """F07：Manager 拉取行业方案包（只读；Operator 持模板真相）。
+
+        version 为 None 时返回最新已发布版本。只返回 PUBLISHED 状态的方案。
+        """
+        from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+        from shared.errors import NotFound
+
+        entry = self._repo.get(CatalogType.SOLUTION_TEMPLATE, solution_id)
+        if entry.status != CatalogStatus.PUBLISHED:
+            raise NotFound(f"solution package not published: {solution_id}")
+        if version is not None and entry.version != version:
+            raise NotFound(f"solution package version mismatch: {solution_id}@{version}")
+
+        payload = entry.payload or {}
+
+        # 解析方案包中引用的专家模板
+        expert_template_ids = payload.get("expert_template_ids", [])
+        experts: list[ExpertTemplateDetail] = []
+        for expert_id in expert_template_ids:
+            try:
+                expert = self.pull_expert_template_detail(template_id=expert_id, version=None)
+                experts.append(expert)
+            except Exception:  # noqa: BLE001
+                # 跳过不存在或未发布的专家模板（方案可能引用了已下架的模板）
+                pass
+
+        return SolutionPackage(
+            solution_id=entry.template_id,
+            version=entry.version,
+            display_name=entry.display_name,
+            experts=experts,
+            knowledge_refs=payload.get("knowledge_refs", []),
+            skill_refs=payload.get("skill_refs", []),
+            default_grants=payload.get("default_grants"),
+        )
+
+    def list_published_expert_templates(self):
+        """F06：Manager 列举可招募专家模板（只读，只返回 PUBLISHED 状态）。"""
+        from shared.contracts.crosstier import ExpertTemplateDetail
+
+        entries = self._repo.list(
+            catalog_type=CatalogType.EXPERT_TEMPLATE, status=CatalogStatus.PUBLISHED
+        )
+        results: list[ExpertTemplateDetail] = []
+        for entry in entries:
+            payload = entry.payload or {}
+            results.append(
+                ExpertTemplateDetail(
+                    template_id=entry.template_id,
+                    version=entry.version,
+                    display_name=entry.display_name,
+                    persona=payload.get("persona"),
+                    recommended_config=payload.get("recommended_config", {}),
+                )
+            )
+        return results
+
+    def list_published_solution_packages(self):
+        """F07：Manager 列举可应用行业方案包（只读，只返回 PUBLISHED 状态）。"""
+        from shared.contracts.crosstier import SolutionPackage
+
+        entries = self._repo.list(
+            catalog_type=CatalogType.SOLUTION_TEMPLATE, status=CatalogStatus.PUBLISHED
+        )
+        results: list[SolutionPackage] = []
+        for entry in entries:
+            try:
+                package = self.pull_solution_package(solution_id=entry.template_id, version=None)
+                results.append(package)
+            except Exception:  # noqa: BLE001
+                # 跳过解析失败的方案包
+                pass
+        return results
+
     # ---- 内部：窄通道通知 Manager ----
 
     def _notify(self, entry: CatalogEntry, *, action: str) -> None:

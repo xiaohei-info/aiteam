@@ -49,38 +49,69 @@ class OperatorCatalogPort(ABC):
 
 
 class OperatorCatalogClient(OperatorCatalogPort):
-    """生产实现占位：真实经 shared.service_client 走 Operator 云侧端点（05 §5.3）。
+    """生产实现：经 shared.service_client 走 Operator 云侧端点（05 §5.3，#176）。
 
-    本卡未落地 Operator 目录服务端点，调用即抛 NotImplementedError（编排者注入真实实现前，
-    app 层默认注入 FakeOperatorCatalogClient，使流程可跑可测）。
+    通过 ServiceClient 调用 Operation 的拉取端点，使用服务身份认证（X-Service-Token）。
     """
 
-    def __init__(self, base_url: str | None = None):
-        self._base_url = base_url
+    def __init__(self, base_url: str, *, service_identity: str | None = None, service_token: str | None = None):
+        """构造 Operator 目录客户端。
+
+        Args:
+            base_url: Operator 服务地址（如 http://operator:8000）
+            service_identity: 服务身份标识（审计用）
+            service_token: 服务间共享密钥（平面③，03 §9.1）
+        """
+        from shared.service_client import ServiceClient
+
+        self._client = ServiceClient(
+            base_url=base_url,
+            service_identity=service_identity,
+            service_token=service_token,
+            timeout=10.0,
+        )
 
     def pull_expert_template(
         self, *, template_id: str, version: str | None = None
     ) -> ExpertTemplateDetail:
-        raise NotImplementedError(
-            "Operator 目录拉取尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
-        )
+        """F06：拉取专家模板详情。调用 GET /api/operation/catalog/pull/expert-templates/{template_id}"""
+        path = f"/api/operation/catalog/pull/expert-templates/{template_id}"
+        if version:
+            path += f"?version={version}"
+        resp = self._client.get(path)
+        # 响应为 Envelope[ExpertTemplateDetail]，取 data 字段
+        data = resp.get("data", {})
+        return ExpertTemplateDetail.model_validate(data)
 
     def pull_solution_package(
         self, *, solution_id: str, version: str | None = None
     ) -> SolutionPackage:
-        raise NotImplementedError(
-            "Operator 目录拉取尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
-        )
+        """F07：拉取行业方案包。调用 GET /api/operation/catalog/pull/solution-templates/{solution_id}"""
+        path = f"/api/operation/catalog/pull/solution-templates/{solution_id}"
+        if version:
+            path += f"?version={version}"
+        resp = self._client.get(path)
+        # 响应为 Envelope[SolutionPackage]，取 data 字段
+        data = resp.get("data", {})
+        return SolutionPackage.model_validate(data)
 
     def list_expert_templates(self) -> list[ExpertTemplateDetail]:
-        raise NotImplementedError(
-            "Operator 目录列举尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
-        )
+        """F06：列举可招募专家模板。调用 GET /api/operation/catalog/pull/expert-templates"""
+        resp = self._client.get("/api/operation/catalog/pull/expert-templates")
+        # 响应为 ListEnvelope[ExpertTemplateDetail]，取 data 字段
+        data_list = resp.get("data", [])
+        return [ExpertTemplateDetail.model_validate(item) for item in data_list]
 
     def list_solution_packages(self) -> list[SolutionPackage]:
-        raise NotImplementedError(
-            "Operator 目录列举尚未接入真实服务（本卡先 mock）；请在编排层注入 FakeOperatorCatalogClient"
-        )
+        """F07：列举可应用行业方案包。调用 GET /api/operation/catalog/pull/solution-templates"""
+        resp = self._client.get("/api/operation/catalog/pull/solution-templates")
+        # 响应为 ListEnvelope[SolutionPackage]，取 data 字段
+        data_list = resp.get("data", [])
+        return [SolutionPackage.model_validate(item) for item in data_list]
+
+    def close(self) -> None:
+        """关闭 HTTP 客户端连接。"""
+        self._client.close()
 
 
 class FakeOperatorCatalogClient(OperatorCatalogPort):

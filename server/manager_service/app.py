@@ -23,7 +23,26 @@ from .routes_recruit import build_recruit_router
 from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
-from .operator_catalog import FakeOperatorCatalogClient
+from .operator_catalog import FakeOperatorCatalogClient, OperatorCatalogClient
+
+
+def _build_operator_catalog():
+    """构造 Operator 目录拉取客户端（05 F06/F07，#176）。
+
+    有 operator_url → OperatorCatalogClient（真实 HTTP 客户端）；
+    无 operator_url → FakeOperatorCatalogClient（测试/骨架期内存 fake）。
+    """
+    settings = load_settings("manager")
+    operator_url = settings.operator_url
+    if not operator_url:
+        # dev/测试环境未配置 OPERATOR_URL，使用 Fake 客户端
+        return FakeOperatorCatalogClient()
+    # 生产环境，使用真实 HTTP 客户端
+    return OperatorCatalogClient(
+        base_url=operator_url,
+        service_identity=settings.service_name,
+        service_token=settings.service_token,
+    )
 
 
 def _build_verifier():
@@ -59,8 +78,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 app = create_app(load_settings("manager"), router)
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
-# Operator 目录拉取端口（05 F06/F07，本卡 Operator 侧先 mock；生产注入真实 OperatorCatalogClient）。
-app.state._operator_catalog = FakeOperatorCatalogClient()
+# Operator 目录拉取端口（05 F06/F07，#176）。有 OPERATOR_URL → 真实客户端；无 → Fake。
+app.state._operator_catalog = _build_operator_catalog()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。

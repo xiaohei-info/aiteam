@@ -142,3 +142,102 @@ async def get_catalog_entry(
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
     return Envelope[CatalogEntryResponse](data=service.get_entry(catalog_type, template_id))
+
+
+# ---- Manager 拉取端点（服务间调用，05 F06/F07 §5.4）----
+
+router_pull = APIRouter(prefix="/api/operation/catalog/pull", tags=["operation-catalog-pull"])
+
+
+def _require_service_token(request: Request) -> None:
+    """服务间调用守卫（平面③，03 §9.1）。Manager 拉取目录使用服务身份认证。"""
+    from shared.service_token import verify_service_token
+    verify_service_token(request)
+
+
+@router_pull.get(
+    "/expert-templates/{template_id}",
+    summary="F06 Manager 拉取专家模板详情（服务间调用）",
+    operation_id="operation_pull_expert_template",
+)
+async def pull_expert_template(
+    template_id: str,
+    request: Request,
+    version: str | None = None,
+    service: CatalogService = Depends(get_catalog_service),
+):
+    """F06：Manager 向 Operator 拉取专家模板详情（只读；Operator 持模板真相）。
+
+    鉴权：服务间调用（X-Service-Token）。version 为 None 时返回最新已发布版本。
+    """
+    _require_service_token(request)
+    from shared.contracts.crosstier import ExpertTemplateDetail
+    from shared.contracts.envelope import Envelope
+
+    return Envelope[ExpertTemplateDetail](
+        data=service.pull_expert_template_detail(template_id=template_id, version=version)
+    )
+
+
+@router_pull.get(
+    "/solution-templates/{solution_id}",
+    summary="F07 Manager 拉取行业方案包（服务间调用）",
+    operation_id="operation_pull_solution_package",
+)
+async def pull_solution_package(
+    solution_id: str,
+    request: Request,
+    version: str | None = None,
+    service: CatalogService = Depends(get_catalog_service),
+):
+    """F07：Manager 向 Operator 拉取行业方案包（只读；Operator 持模板真相）。
+
+    鉴权：服务间调用（X-Service-Token）。version 为 None 时返回最新已发布版本。
+    """
+    _require_service_token(request)
+    from shared.contracts.crosstier import SolutionPackage
+    from shared.contracts.envelope import Envelope
+
+    return Envelope[SolutionPackage](
+        data=service.pull_solution_package(solution_id=solution_id, version=version)
+    )
+
+
+@router_pull.get(
+    "/expert-templates",
+    summary="F06 Manager 列举可招募专家模板（服务间调用）",
+    operation_id="operation_list_expert_templates",
+)
+async def list_expert_templates(
+    request: Request,
+    service: CatalogService = Depends(get_catalog_service),
+):
+    """F06：Manager 浏览可招募专家模板（只读，只返回 PUBLISHED 状态）。
+
+    鉴权：服务间调用（X-Service-Token）。
+    """
+    _require_service_token(request)
+    from shared.contracts.crosstier import ExpertTemplateDetail
+    from shared.contracts.envelope import ListEnvelope
+
+    return ListEnvelope[ExpertTemplateDetail](data=service.list_published_expert_templates())
+
+
+@router_pull.get(
+    "/solution-templates",
+    summary="F07 Manager 列举可应用行业方案包（服务间调用）",
+    operation_id="operation_list_solution_packages",
+)
+async def list_solution_packages(
+    request: Request,
+    service: CatalogService = Depends(get_catalog_service),
+):
+    """F07：Manager 浏览可应用行业方案包（只读，只返回 PUBLISHED 状态）。
+
+    鉴权：服务间调用（X-Service-Token）。
+    """
+    _require_service_token(request)
+    from shared.contracts.crosstier import SolutionPackage
+    from shared.contracts.envelope import ListEnvelope
+
+    return ListEnvelope[SolutionPackage](data=service.list_published_solution_packages())
