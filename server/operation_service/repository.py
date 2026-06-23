@@ -1,14 +1,17 @@
-"""运营端企业账号仓储（oper 库的最小骨架）。
+"""运营端企业账号仓储（oper 库）。
 
 只持「企业账号 + 负责人 bootstrap 校验材料(hash/一次性)」——03 §9.2：Operator 永不持企业
-长期密码。骨架期用进程内存实现；详设接 PostgreSQL（oper 库），接口形状不变。
+长期密码。提供内存实现（dev/测试）与 PostgreSQL 实现（生产）。
 
 单写者：企业账号表唯一写端是 Operator（CLAUDE/AGENTS §3.2）。
 """
 
 from __future__ import annotations
 
+import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 
 from shared.errors import Conflict, NotFound
 
@@ -25,8 +28,27 @@ class EnterpriseAccount:
     owner_bootstrap_hash: str
 
 
-class EnterpriseRepository:
-    """企业账号的进程内仓储。线程隔离留详设；骨架满足单端测试与流程闭环。"""
+class EnterpriseRepository(ABC):
+    """企业账号仓储抽象接口。"""
+
+    @abstractmethod
+    def create(self, account: EnterpriseAccount) -> EnterpriseAccount:
+        """创建企业账号。enterprise_id 或 enterprise_code 冲突 -> Conflict。"""
+        ...
+
+    @abstractmethod
+    def get(self, enterprise_id: str) -> EnterpriseAccount:
+        """按 ID 查询。不存在 -> NotFound。"""
+        ...
+
+    @abstractmethod
+    def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
+        """更新负责人 bootstrap 校验材料。不存在 -> NotFound。"""
+        ...
+
+
+class InMemoryEnterpriseRepository(EnterpriseRepository):
+    """企业账号的进程内仓储（dev/测试用）。线程不安全；单端测试与流程闭环足够。"""
 
     def __init__(self) -> None:
         self._by_id: dict[str, EnterpriseAccount] = {}
@@ -60,3 +82,147 @@ class EnterpriseRepository:
         )
         self._by_id[enterprise_id] = updated
         return updated
+
+
+# ---- PostgreSQL 实现 ----
+#
+# oper 库是 Operation 专属单租户库，无 RLS（不同于 Manager 多租户 RLS）。
+# 但采用业界规范：应用角色非 superuser、迁移/DDL 用独立管理连接。
+# psycopg 延迟导入：保证 `import operation_service.repository` 在无 psycopg 环境下仍可用。
+
+_APP_ROLE = "app_rw"
+
+
+class PgEnterpriseRepository(EnterpriseRepository):
+    """企业账号 PostgreSQL 仓储（生产用）。
+
+    连接身份即受约束角色 app_rw（业务 DSN）。oper 库单租户，无 RLS，但保持规范。
+    每操作一个事务（自动提交/回滚），无状态持久化连接。
+    """
+
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def create(self, account: EnterpriseAccount) -> EnterpriseAccount:
+        import psycopg
+        from psycopg.errors import UniqueViolation
+
+        try:
+            with psycopg.connect(self._dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO enterprise_account
+                            (enterprise_id, tenant_id, enterprise_name, enterprise_code,
+                             owner_phone, owner_bootstrap_hash)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            account.enterprise_id,
+                            account.tenant_id,
+                            account.enterprise_name,
+                            account.enterprise_code,
+                            account.owner_phone,
+                            account.owner_bootstrap_hash,
+                        ),
+                    )
+            return account
+        except UniqueViolation as e:
+            # 区分是 enterprise_id 还是 enterprise_code 冲突。
+            if "enterprise_account_pkey" in str(e) or "enterprise_id" in str(e):
+                raise Conflict(f"enterprise already exists: {account.enterprise_id}") from e
+            if "enterprise_code" in str(e):
+                raise Conflict(f"enterprise_code already taken: {account.enterprise_code}") from e
+            raise Conflict(f"enterprise constraint violation: {e}") from e
+
+    def get(self, enterprise_id: str) -> EnterpriseAccount:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT enterprise_id, tenant_id, enterprise_name, enterprise_code,
+                           owner_phone, owner_bootstrap_hash
+                    FROM enterprise_account
+                    WHERE enterprise_id = %s
+                    """,
+                    (enterprise_id,),
+                )
+                row = cur.fetchone()
+
+        if row is None:
+            raise NotFound(f"enterprise not found: {enterprise_id}")
+
+        return EnterpriseAccount(
+            enterprise_id=str(row[0]),
+            tenant_id=str(row[1]),
+            enterprise_name=row[2],
+            enterprise_code=row[3],
+            owner_phone=row[4],
+            owner_bootstrap_hash=row[5],
+        )
+
+    def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE enterprise_account
+                    SET owner_bootstrap_hash = %s, updated_at = now()
+                    WHERE enterprise_id = %s
+                    """,
+                    (bootstrap_hash, enterprise_id),
+                )
+                if cur.rowcount == 0:
+                    raise NotFound(f"enterprise not found: {enterprise_id}")
+
+        return self.get(enterprise_id)
+
+
+def _migrations_dir() -> Path:
+    # operation_service/migrations 与本文件同目录。
+    here = Path(__file__).parent
+    return here / "migrations"
+
+
+def apply_migrations(db_url: str | None, app_rw_password: str | None = None) -> None:
+    """首次连接自动应用迁移（建表脚本）。幂等。
+
+    `db_url` 必须是**管理连接**（admin DSN：超管/DDL owner），用于建角色/DDL；
+    业务连接（app_rw 身份）不得用于迁移。
+
+    无 db_url（骨架/纯契约场景）→ no-op，保持对外契约不破坏。
+    有 db_url → 以管理连接身份按文件名顺序执行 operation_service/migrations/*.sql。
+    `app_rw_password`（来源配置/env，禁止硬编码）非空时，额外幂等下发 app_rw 的 LOGIN 口令。
+    """
+    if not db_url:
+        return None
+
+    import psycopg
+
+    mig_dir = _migrations_dir()
+    if not mig_dir.is_dir():
+        return None
+
+    files = sorted(f for f in mig_dir.glob("*.sql"))
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        for fpath in files:
+            sql = fpath.read_text(encoding="utf-8")
+            with conn.cursor() as cur:
+                cur.execute(sql)
+
+        if app_rw_password:
+            # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
+            from psycopg import sql as _sql
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                        _sql.Identifier(_APP_ROLE),
+                        _sql.Literal(app_rw_password),
+                    )
+                )
+    return None

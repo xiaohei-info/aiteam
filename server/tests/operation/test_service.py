@@ -8,7 +8,7 @@ import hashlib
 import pytest
 
 from operation_service.manager_gateway import ManagerGateway
-from operation_service.repository import EnterpriseRepository
+from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.schemas import ProvisionEnterpriseRequest
 from operation_service.service import ProvisioningService
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
@@ -36,7 +36,7 @@ def manager():
 
 @pytest.fixture
 def service(manager):
-    return ProvisioningService(EnterpriseRepository(), manager)
+    return ProvisioningService(InMemoryEnterpriseRepository(), manager)
 
 
 def _req():
@@ -105,7 +105,7 @@ def test_reset_unknown_enterprise_404(service):
 
 
 def test_duplicate_enterprise_code_conflict(manager):
-    repo = EnterpriseRepository()
+    repo = InMemoryEnterpriseRepository()
     svc = ProvisioningService(repo, manager)
     req = ProvisionEnterpriseRequest(
         enterprise_name="Acme", owner_phone="13800000000", enterprise_code="acme"

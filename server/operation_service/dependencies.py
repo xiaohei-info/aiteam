@@ -1,6 +1,6 @@
 """运营端依赖装配（DI）。
 
-集中提供 ProvisioningService 的构造：进程内仓储 + Manager 网关（经 service_client）。
+集中提供 ProvisioningService 的构造：仓储（内存/PostgreSQL）+ Manager 网关（经 service_client）。
 测试经 app.dependency_overrides 注入 fake 网关/仓储，无需真实 Manager（对端 mock）。
 """
 
@@ -12,7 +12,12 @@ from shared.config import load_settings
 from shared.service_client import ServiceClient
 
 from .manager_gateway import HttpManagerGateway, ManagerGateway
-from .repository import EnterpriseRepository
+from .repository import (
+    EnterpriseRepository,
+    InMemoryEnterpriseRepository,
+    PgEnterpriseRepository,
+    apply_migrations,
+)
 from .rollup_repository import CrossEnterpriseRollupRepository
 from .rollup_service import RollupService
 from .service import ProvisioningService
@@ -20,8 +25,19 @@ from .service import ProvisioningService
 
 @lru_cache(maxsize=1)
 def get_repository() -> EnterpriseRepository:
-    """单例企业账号仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
-    return EnterpriseRepository()
+    """单例企业账号仓储。有 oper_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    settings = load_settings("operation")
+    oper_db_url = settings.raw.get("oper_db_url")
+
+    if oper_db_url:
+        # PostgreSQL 实现：自动应用迁移，连业务 DSN（app_rw）。
+        admin_url = settings.raw.get("oper_admin_db_url") or oper_db_url
+        app_rw_password = settings.raw.get("oper_app_rw_password")
+        apply_migrations(admin_url, app_rw_password)
+        return PgEnterpriseRepository(oper_db_url)
+
+    # 内存实现（dev/测试）。
+    return InMemoryEnterpriseRepository()
 
 
 @lru_cache(maxsize=1)
