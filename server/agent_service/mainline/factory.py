@@ -4,8 +4,8 @@ runtime 装配（#173）：显式注入 executor/driver → 用之（测试）�
 给定 → 经 Gateway 装配真实 Driver/Executor（注入子进程沙箱，§13 隔离）；都没有 → Fake
 runtime（dev/测试默认）。不静默切换：未知 runtime_selection 显式报错。
 
-持久化（#158）：`db_path` 给定 → SQLite 本地库（重启不丢，复用 local_db 底座 + 迁移）；
-未给 → 内存实现（dev/测试默认，不落文件）。raw_archive 仍为内存占位（真实归档见 #179）。
+持久化（#158 + #179）：`db_path` 给定 → SQLite 本地库（重启不丢，复用 local_db 底座 + 迁移），
+raw_archive 经脱敏后落本地库 + 保留期清理；未给 → 内存实现（dev/测试默认，不落文件）。
 """
 
 from __future__ import annotations
@@ -32,7 +32,12 @@ from .store import (
     SqliteTaskRepository,
 )
 from .stream import StreamBroker
-from .timeline import InMemoryRawEventArchive, InMemoryTimelineStore, SqliteTimelineStore
+from .timeline import (
+    InMemoryRawEventArchive,
+    InMemoryTimelineStore,
+    SqliteRawEventArchive,
+    SqliteTimelineStore,
+)
 
 
 def build_mainline_service(
@@ -63,12 +68,16 @@ def build_mainline_service(
         runs = SqliteRunRepository(db)
         tasks = SqliteTaskRepository(db)
         timeline = SqliteTimelineStore(db)
+        raw_archive = SqliteRawEventArchive(db)
+        # 启动时清理过期归档（保留期默认 7 天）
+        raw_archive.cleanup_expired()
     else:
         conversations = InMemoryConversationRepository()
         messages = InMemoryMessageRepository()
         runs = InMemoryRunRepository()
         tasks = InMemoryTaskRepository()
         timeline = InMemoryTimelineStore()
+        raw_archive = InMemoryRawEventArchive()
     return MainlineService(
         conversations=conversations,
         messages=messages,
@@ -77,5 +86,5 @@ def build_mainline_service(
         timeline=timeline,
         broker=StreamBroker(),
         runner=runner,
-        raw_archive=InMemoryRawEventArchive(),
+        raw_archive=raw_archive,
     )

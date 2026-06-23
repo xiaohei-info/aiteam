@@ -173,3 +173,81 @@ class InMemoryRawEventArchive(RawEventArchive):
         """仅测试/本地调试用（下划线前缀，非对外接口）。"""
         with self._lock:
             return len(self._events)
+
+
+class SqliteRawEventArchive(RawEventArchive):
+    """SQLite raw event 归档（agent 本地库，#179 / D6）。
+
+    写入即脱敏：落库前过滤敏感字段（API key / token / credential / password 等）。
+    保留期清理：定期删除超过保留期的归档事件（默认 7 天）。
+    仅本地、受控：永不跨端、永不外泄前端——刻意只提供 archive 写入接口（无 read_*/list_*）。
+    """
+
+    # 脱敏黑名单：匹配这些 key 的字段在归档时置空或脱敏（大小写不敏感）。
+    _SENSITIVE_KEYS = frozenset({
+        "api_key", "apikey", "api-key",
+        "token", "access_token", "refresh_token", "bearer_token", "auth_token",
+        "secret", "client_secret",
+        "password", "passwd", "pwd",
+        "credential", "credentials",
+        "private_key", "privatekey",
+        "authorization",
+    })
+
+    def __init__(self, db: LocalDb, retention_days: int = 7) -> None:
+        self._db = db
+        self._retention_days = retention_days
+
+    @classmethod
+    def _sanitize_payload(cls, payload: dict) -> dict:
+        """递归脱敏 payload：移除敏感字段（API key / token / password 等）。
+
+        策略：黑名单匹配（大小写不敏感）直接移除；嵌套 dict/list 递归处理。
+        """
+        if not isinstance(payload, dict):
+            return payload
+
+        sanitized = {}
+        for k, v in payload.items():
+            # 黑名单匹配：敏感 key 直接跳过（不落库）
+            if k.lower().replace("_", "").replace("-", "") in {
+                s.replace("_", "").replace("-", "") for s in cls._SENSITIVE_KEYS
+            }:
+                continue
+            # 递归处理嵌套结构
+            if isinstance(v, dict):
+                sanitized[k] = cls._sanitize_payload(v)
+            elif isinstance(v, list):
+                sanitized[k] = [cls._sanitize_payload(i) if isinstance(i, dict) else i for i in v]
+            else:
+                sanitized[k] = v
+        return sanitized
+
+    def archive(self, event: AgentRuntimeEvent) -> None:
+        """写入即脱敏：payload 经脱敏后落 SQLite。"""
+        sanitized = self._sanitize_payload(event.payload)
+        self._db.execute(
+            "INSERT OR REPLACE INTO raw_events "
+            "(event_id, run_id, seq, type, source, timestamp, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (event.event_id, event.run_id, event.seq, event.type, event.source,
+             event.timestamp.isoformat(), json.dumps(sanitized)),
+        )
+
+    def cleanup_expired(self) -> int:
+        """删除超过保留期的归档事件，返回删除行数。
+
+        保留期从 archived_at 起算（非 event.timestamp）。本方法应定期调用（如启动时/定时任务），
+        不在 archive 路径中同步执行（避免影响归档写入性能）。
+        """
+        cutoff = f"datetime('now', '-{self._retention_days} days')"
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM raw_events WHERE archived_at < {cutoff}"
+            )
+            return cursor.rowcount
+
+    def _debug_count(self) -> int:
+        """仅测试/本地调试用（下划线前缀，非对外接口）。"""
+        row = self._db.query_one("SELECT COUNT(*) AS c FROM raw_events")
+        return int(row["c"]) if row is not None else 0
