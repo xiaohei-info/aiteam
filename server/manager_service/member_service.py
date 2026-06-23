@@ -129,11 +129,11 @@ class MemberDeptService:
         _ensure_can_write(ctx)
         roles = self._normalize_roles(req.roles)
         # 账号开通复用 AuthService（app_user + auth_identity；tenant_id 经 ctx）。
-        # member 首登不强制重置（留详设）。
+        # must_reset 由请求体决定（默认 True，§9.4B 定稿）。
         user_id = self._auth.create_member(
             ctx.tenant_id,
             phone=req.account, initial_password=req.initial_password,
-            display_name=req.display_name,
+            display_name=req.display_name, must_reset=req.must_reset,
         )
         # 入部门 + 角色（create_member 默认 member 角色，此处按 req 落真实角色与部门）。
         row = self._repo.update_member(

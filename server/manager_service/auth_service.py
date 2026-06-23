@@ -69,11 +69,17 @@ class AuthService:
             roles=[EnterpriseRole.OWNER.value], display_name="owner", must_reset=True,
         )
 
-    def create_member(self, tenant_id: str, *, phone: str, initial_password: str, display_name: str = "") -> str:
-        """负责人在租户内建成员账号（§9.4B）。M0 不强制 member 首登重置（留详设）。"""
+    def create_member(
+        self, tenant_id: str, *, phone: str, initial_password: str, display_name: str = "", must_reset: bool = True
+    ) -> str:
+        """负责人在租户内建成员账号（§9.4B）。
+
+        must_reset 默认 True：成员首登时需强制重置密码（对齐 owner 行为，增强安全性）。
+        负责人可选择 must_reset=False 允许成员直接使用初始密码登录（适用于信任场景）。
+        """
         return self._create(
             tenant_id, phone=phone, password=initial_password,
-            roles=[EnterpriseRole.MEMBER.value], display_name=display_name, must_reset=False,
+            roles=[EnterpriseRole.MEMBER.value], display_name=display_name, must_reset=must_reset,
         )
 
     def _create(self, tenant_id: str, *, phone: str, password: str, roles, display_name, must_reset) -> str:

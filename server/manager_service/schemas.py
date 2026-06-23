@@ -120,6 +120,10 @@ class MemberCreate(BaseModel):
         description="成员角色（EnterpriseRole 枚举；禁用旧 admin/manager/viewer）",
     )
     department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表")
+    must_reset: bool = Field(
+        default=True,
+        description="首登是否强制重置密码（默认 True，对齐 owner 行为；False 适用于信任场景）",
+    )
 
 
 class MemberUpdate(BaseModel):

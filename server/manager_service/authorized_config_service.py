@@ -16,6 +16,7 @@ from shared.errors import NotFound
 
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
+from .recruit_repository import RecruitRepository
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -32,43 +33,69 @@ class AuthorizedConfigService:
         config_service: EmployeeConfigService,
         grant_service: GrantService,
         member_service: MemberDeptService,
+        recruit_repository: RecruitRepository | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
         self._members = member_service
+        self._recruit_repo = recruit_repository
 
     def pull(
         self, ctx: TenantContext, req: AuthorizedConfigPullRequest
     ) -> AuthorizedConfigPullResponse:
         """返回增量授权配置。
 
-        1. 取 member 可见的 employee_id 集合（按 grant 裁剪，管理角色豁免）。
-        2. 对比 known_versions：版本不同或从未 known → 加入 experts 增量。
+        1. 取 member 可见的 employee_id / solution_id 集合（按 grant 裁剪，管理角色豁免）。
+        2. 对比 known_versions：版本不同或从未 known → 加入 experts/solutions 增量。
         3. known_versions 中已不可见的 id → revoked_ids。
         """
         all_configs = self._config.list_all(ctx)
-        all_ids = {c.employee_id for c in all_configs}
+        all_employee_ids = {c.employee_id for c in all_configs}
+
+        all_solution_instances = self._recruit_repo.list_solution_instances(ctx) if self._recruit_repo else []
+        all_solution_ids = {s.id for s in all_solution_instances}
 
         if set(ctx.roles) & _GRANT_EXEMPT_ROLES:
-            authorized_ids = all_ids
+            authorized_employee_ids = all_employee_ids
+            authorized_solution_ids = all_solution_ids
         else:
-            authorized_ids = self._authorized_employee_ids(ctx, req.member_id)
+            authorized_employee_ids = self._authorized_employee_ids(ctx, req.member_id)
+            authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id)
 
         experts: list[dict] = []
         for cfg in all_configs:
-            if cfg.employee_id not in authorized_ids:
+            if cfg.employee_id not in authorized_employee_ids:
                 continue
             known_ver = req.known_versions.get(cfg.employee_id)
             if known_ver != str(cfg.version):
                 experts.append(cfg.model_dump(mode="json"))
 
+        solutions: list[dict] = []
+        for sol_instance in all_solution_instances:
+            if sol_instance.id not in authorized_solution_ids:
+                continue
+            known_ver = req.known_versions.get(sol_instance.id)
+            # solution_instance 没有显式 version 字段，使用 solution_version 作为版本标识
+            current_ver = sol_instance.solution_version
+            if known_ver != current_ver:
+                solutions.append({
+                    "id": sol_instance.id,
+                    "solution_id": sol_instance.solution_id,
+                    "solution_version": sol_instance.solution_version,
+                    "display_name": sol_instance.display_name,
+                    "status": sol_instance.status,
+                    "expert_employee_ids": sol_instance.expert_employee_ids,
+                    "knowledge_refs": sol_instance.knowledge_refs,
+                    "skill_refs": sol_instance.skill_refs,
+                })
+
         revoked_ids = [
-            eid for eid in req.known_versions
-            if eid not in authorized_ids or eid not in all_ids
+            rid for rid in req.known_versions
+            if (rid not in authorized_employee_ids and rid not in authorized_solution_ids)
+            or (rid not in all_employee_ids and rid not in all_solution_ids)
         ]
 
-        # TODO(follow-up): solutions 裁剪逻辑暂未实现，F10 scope 只覆盖 expert。
-        return AuthorizedConfigPullResponse(experts=experts, solutions=[], revoked_ids=revoked_ids)
+        return AuthorizedConfigPullResponse(experts=experts, solutions=solutions, revoked_ids=revoked_ids)
 
     def _authorized_employee_ids(self, ctx: TenantContext, member_id: str) -> set[str]:
         """取该 member 通过 member_grant 可访问的 employee_id 集合。
@@ -87,5 +114,24 @@ class AuthorizedConfigService:
             g.resource_id
             for g in grants
             if g.resource_type == "expert"
+            and (member_id in g.member_ids or member_depts & set(g.department_ids))
+        }
+
+    def _authorized_solution_ids(self, ctx: TenantContext, member_id: str) -> set[str]:
+        """取该 member 通过 member_grant 可访问的 solution_id 集合。
+
+        与 _authorized_employee_ids 逻辑类似，但针对 solution 资源类型。
+        成员记录不存在（NotFound）视为无可见集合。
+        """
+        try:
+            member = self._members.get_member(ctx, member_id)
+        except NotFound:
+            return set()
+        member_depts = set(member.department_ids)
+        grants = self._grants.list_grants(ctx)
+        return {
+            g.resource_id
+            for g in grants
+            if g.resource_type == "solution"
             and (member_id in g.member_ids or member_depts & set(g.department_ids))
         }

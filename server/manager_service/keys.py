@@ -3,14 +3,22 @@
 Manager 作为企业身份源，按 tenant 持 RSA 私钥签发 token；用户端只领 JWKS（公钥）验签。
 私钥存控制面表 tenant_signing_key（不经 RLS 业务连接，app_rw 无权访问），绝不下发用户端。
 
-M0：首次需要时为 tenant 生成密钥并落库（lazy provision）。key rotation 留详设。
+key rotation 口径（D23，03 §9.5）：
+- rotate(tenant_id)：生成新密钥对 → 旧密钥 retired_at=now() → 新密钥 is_current=true。
+- signer(tenant_id)：取 is_current=true 的行签发新 token。
+- jwks(tenant_id)：返回 is_current=true + 宽限期内（retired_at > now() - GRACE）的所有公钥，
+  保证在用 token 平滑失效、不静默拒绝已登录会话（D23 红线：轮换期新旧公钥并存）。
+- public_pem_for_kid(kid)：按 kid 跨所有行（含 retired）反查公钥（宽限期内仍有效）。
 """
 
 from __future__ import annotations
 
 import psycopg
 
-from shared.auth import RS256TokenSigner, RS256TokenVerifier, generate_rsa_keypair
+from shared.auth import RS256TokenSigner, RS256TokenVerifier, generate_rsa_keypair, jwks_from_public_pem
+
+# 宽限期：轮换后旧公钥保留在 JWKS 的时长（秒）。旧 token exp 通常 1h，默认 24h 覆盖所有在用会话。
+ROTATION_GRACE_SECONDS = 86400
 
 
 class TenantKeyStore:
@@ -20,54 +28,125 @@ class TenantKeyStore:
     """
 
     def __init__(self, dsn: str):
-        # dsn 必须是管理连接（admin DSN）；业务连接（app_rw）对 tenant_signing_key 无授权。
         self._dsn = dsn
 
-    def _row(self, tenant_id: str):
+    def _current_row(self, tenant_id: str):
+        """取该 tenant is_current=true 的签发密钥行。"""
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             return conn.execute(
-                "SELECT kid, private_pem, public_pem FROM tenant_signing_key WHERE tenant_id = %s",
+                "SELECT kid, private_pem, public_pem, version FROM tenant_signing_key"
+                " WHERE tenant_id = %s AND is_current = true",
                 (tenant_id,),
             ).fetchone()
 
+    def _active_public_rows(self, tenant_id: str) -> list[tuple]:
+        """取该 tenant 所有验签有效的公钥行（当前 + 宽限期内的 retired）。
+
+        宽限期内旧公钥保留在 JWKS，保证在用 token 不被静默拒绝（D23 红线）。
+        """
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            return conn.execute(
+                "SELECT kid, public_pem FROM tenant_signing_key"
+                " WHERE tenant_id = %s"
+                "   AND (is_current = true"
+                "        OR (retired_at IS NOT NULL"
+                "            AND retired_at > now() - interval '%s seconds'))",
+                (tenant_id, ROTATION_GRACE_SECONDS),
+            ).fetchall()
+
     def ensure(self, tenant_id: str) -> None:
         """确保 tenant 有签名密钥；无则生成并落库（幂等）。"""
-        if self._row(tenant_id):
+        if self._current_row(tenant_id):
             return
         private_pem, public_pem = generate_rsa_keypair()
         kid = f"{tenant_id}:1"
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             conn.execute(
-                "INSERT INTO tenant_signing_key (tenant_id, kid, private_pem, public_pem) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT (tenant_id) DO NOTHING",
+                "INSERT INTO tenant_signing_key"
+                " (tenant_id, kid, private_pem, public_pem, is_current, version)"
+                " VALUES (%s, %s, %s, %s, true, 1)"
+                " ON CONFLICT (kid) DO NOTHING",
                 (tenant_id, kid, private_pem, public_pem),
             )
 
-    def signer(self, tenant_id: str) -> RS256TokenSigner:
-        """取 tenant 的签发器（私钥）。仅 Manager 内部调用，结果不外泄。"""
+    def rotate(self, tenant_id: str) -> str:
+        """轮换密钥：生成新密钥对，旧密钥 retired_at=now()，新密钥成为 is_current。
+
+        返回新密钥的 kid。
+
+        轮换红线（D23）：
+        - 旧密钥不删除，retired_at=now() 后宽限期（ROTATION_GRACE_SECONDS）内仍在 JWKS，
+          保证在用 token 平滑失效、不静默拒绝已登录会话。
+        - 新密钥 is_current=true，此后所有新签发 token 使用新私钥。
+        """
         self.ensure(tenant_id)
-        kid, private_pem, _ = self._row(tenant_id)
+        current = self._current_row(tenant_id)
+        # 版本号：从当前 kid 解析版本并 +1
+        try:
+            current_version = int(current[0].split(":")[-1])
+        except (ValueError, IndexError):
+            current_version = int(current[3]) if current[3] else 1
+        new_version = current_version + 1
+        new_kid = f"{tenant_id}:{new_version}"
+
+        private_pem, public_pem = generate_rsa_keypair()
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            # 先插入新密钥
+            conn.execute(
+                "INSERT INTO tenant_signing_key"
+                " (tenant_id, kid, private_pem, public_pem, is_current, version)"
+                " VALUES (%s, %s, %s, %s, true, %s)",
+                (tenant_id, new_kid, private_pem, public_pem, new_version),
+            )
+            # 旧密钥退役：is_current=false + retired_at=now()
+            conn.execute(
+                "UPDATE tenant_signing_key"
+                " SET is_current = false, retired_at = now()"
+                " WHERE tenant_id = %s AND kid = %s",
+                (tenant_id, current[0]),
+            )
+        return new_kid
+
+    def signer(self, tenant_id: str) -> RS256TokenSigner:
+        """取 tenant 当前签发器（is_current=true 的私钥）。仅 Manager 内部调用，结果不外泄。"""
+        self.ensure(tenant_id)
+        row = self._current_row(tenant_id)
+        kid, private_pem, _, _ = row
         return RS256TokenSigner(private_pem, kid=kid)
 
     def jwks(self, tenant_id: str) -> dict:
-        """取 tenant 的 JWKS（公钥）。可下发用户端本地验签。"""
-        self.ensure(tenant_id)
-        kid, _, public_pem = self._row(tenant_id)
-        from shared.auth import jwks_from_public_pem
+        """取 tenant 的 JWKS（含宽限期内所有公钥）。可下发用户端本地验签。
 
-        return jwks_from_public_pem(kid, public_pem)
+        返回多 kid 的 JWKS：用户端 RS256TokenVerifier.from_jwks 可同时持多个公钥，
+        按 token header.kid 选择，支持平滑验签轮换（D23 red line）。
+        """
+        self.ensure(tenant_id)
+        rows = self._active_public_rows(tenant_id)
+        keys = []
+        for kid, public_pem in rows:
+            jwk = jwks_from_public_pem(kid, public_pem)["keys"][0]
+            keys.append(jwk)
+        return {"keys": keys}
 
     def verifier(self, tenant_id: str) -> RS256TokenVerifier:
         return RS256TokenVerifier.from_jwks(self.jwks(tenant_id))
 
     def public_pem_for_kid(self, kid: str) -> str | None:
-        """按 kid 解析 tenant_id 并取公钥（验签专用，缺口1/D23）。
+        """按 kid 跨所有行反查公钥（宽限期内仍有效，含 retired）。
 
-        kid 形如 "{tenant_id}:1"。验签时只有 token header 的 kid，需据此反查公钥。
-        **不调 ensure()**（验签只读，不应产生建密钥副作用）；kid 无 ":"/无记录返回 None。
+        kid 形如 "{tenant_id}:{version}"。验签时只有 token header.kid，据此反查公钥。
+        不调 ensure()（验签只读，不应产生建密钥副作用）；kid 格式错/无记录返回 None。
         """
         if ":" not in kid:
             return None
         tenant_id = kid.split(":", 1)[0]
-        row = self._row(tenant_id)
-        return row[2] if row else None  # row = (kid, private_pem, public_pem)
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT public_pem FROM tenant_signing_key"
+                " WHERE tenant_id = %s AND kid = %s"
+                "   AND (is_current = true"
+                "        OR (retired_at IS NOT NULL"
+                "            AND retired_at > now() - interval '%s seconds'))",
+                (tenant_id, kid, ROTATION_GRACE_SECONDS),
+            ).fetchone()
+        return row[0] if row else None
