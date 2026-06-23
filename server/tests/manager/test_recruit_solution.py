@@ -444,15 +444,9 @@ def test_cross_tenant_solution_instances_isolated():
     assert result_b.solution_instance.solution_id == "sol-1"
 
 
-def test_operator_catalog_real_client_not_implemented_until_wired():
-    """生产实现占位未接入真实 Operator → 调用即 NotImplementedError（编排者须注入 fake/真实实现）。"""
-    from manager_service.operator_catalog import OperatorCatalogClient
-
-    client = OperatorCatalogClient(base_url="http://op.example")
-    with pytest.raises(NotImplementedError):
-        client.pull_expert_template(template_id="x")
-    with pytest.raises(NotImplementedError):
-        client.pull_solution_package(solution_id="y")
+# 注：原 test_operator_catalog_real_client_not_implemented_until_wired 已删除——
+# OperatorCatalogClient 自 #176/#213 起为真实 HTTP 客户端（不再抛 NotImplementedError）；
+# 真实客户端覆盖见 tests/manager/test_operator_catalog_client.py（mock transport）。
 
 
 # ---- FakeOperatorCatalogClient 行为（mock 契约：版本/缺失/只读）----

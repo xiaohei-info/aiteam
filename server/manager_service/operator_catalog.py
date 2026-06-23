@@ -4,9 +4,9 @@
 与行业方案包（SolutionPackage）。Manager 拉下来**只读用、不改模板真相**（05 F06/F07 红线：
 Operator 持模板真相，Manager 不写、不改）。
 
-抽象边界（本卡 Operator 侧先 mock/fake，不真连）：
+抽象边界：
 - 真实实现 `OperatorCatalogClient`（生产）经 `shared.service_client.ServiceClient` 走云侧受控
-  服务间调用（05 §5.3）；本卡未落地 Operator 端点，故真实实现为占位（调用即 NotImplemented）。
+  服务间调用（05 §5.3，#176/#213 已落地：调 Operator `/api/operation/catalog/pull/*`，服务身份认证）。
 - 测试/骨架期注入 `FakeOperatorCatalogClient`（内存预置模板/方案包），使 F06/F07 流程可在
   不依赖 Operator 服务的前提下端到端验证。
 - 调用方（RecruitService）只依赖 `OperatorCatalogPort` 抽象，便于后续无侵入替换真实实现。

@@ -41,7 +41,9 @@ app.state._token_verifier = _verifier
 # 认证面（/api/operation/auth/*）：系统账号登录。
 app.include_router(auth_router)
 app.include_router(enterprise_router)
-app.include_router(catalog_router)
-# Manager 拉取端点（服务间调用，05 F06/F07）。
+# Manager 拉取端点（服务间调用，05 F06/F07）必须先于管理路由注册：
+# 管理路由含贪婪 `GET /{catalog_type}/{template_id}`，会吞掉 `/catalog/pull/expert-templates`
+# 等列举端点（catalog_type="pull"），导致服务间调用错命中用户鉴权 → 401。
 app.include_router(catalog_pull_router)
+app.include_router(catalog_router)
 app.include_router(rollup_router)
