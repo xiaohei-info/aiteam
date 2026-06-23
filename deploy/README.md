@@ -62,6 +62,16 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 
 端口映射对齐 `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` 的 5433 配置。
 
+### 前端访问
+
+各端后端服务自托管对应前端静态资源（08 §12.3 各端自托管）：
+
+- **运营端前端**：http://localhost:8001 （后端 API：`/api/operation/*`）
+- **企业端前端**：http://localhost:8002 （后端 API：`/api/manager/*`）
+- **用户端前端**：http://localhost:8003 （后端 API：`/api/agent/*`）
+
+前端 SPA 路由（如 `/chat`、`/workspace` 等）会自动 fallback 到 `index.html`，由前端路由处理。API 请求仍走各自的 `/api/<tier>/*` 路径。
+
 ### 快速命令
 
 ```bash

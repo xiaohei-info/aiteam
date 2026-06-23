@@ -6,11 +6,18 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
 from shared.errors import install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings, router: APIRouter) -> FastAPI:
@@ -37,4 +44,53 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
         return {"status": "ready", "service": settings.service_name}
 
     app.include_router(router)
+
+    # 托管本端前端静态资源（08 §12.3 各端自托管，D15 用户端产物不含控制面前端）
+    _mount_frontend(app, settings.tier)
+
     return app
+
+
+def _mount_frontend(app: FastAPI, tier: str) -> None:
+    """挂载本端前端静态产物到根路径。
+
+    Args:
+        app: FastAPI 应用实例
+        tier: 端标识（operation / manager / agent）
+
+    前端访问：
+    - / → index.html（SPA 入口）
+    - /assets/* → 静态资源（JS/CSS/图片等）
+    - API 调用仍走 /api/<tier>/* 不受影响
+    """
+    # 计算前端构建产物路径：server/../web/<tier>/dist
+    server_dir = Path(__file__).parent.parent  # server/
+    frontend_dist = server_dir.parent / "web" / tier / "dist"
+
+    if not frontend_dist.exists():
+        logger.warning(
+            f"前端构建产物不存在，跳过静态托管: {frontend_dist} "
+            f"(运行 'cd web && pnpm build' 构建前端)"
+        )
+        return
+
+    # 挂载静态资源目录（/assets/*, /favicon.ico 等）
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(frontend_dist / "assets")),
+        name="static_assets",
+    )
+
+    # 根路径返回 index.html（SPA 入口）
+    @app.get("/", include_in_schema=False)
+    async def serve_spa_root() -> FileResponse:
+        return FileResponse(frontend_dist / "index.html")
+
+    # SPA 路由回退：非 API/healthz/readyz/docs 路径都返回 index.html，由前端路由处理
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa_fallback(full_path: str) -> FileResponse:
+        # 所有其他路径（前端路由）返回 index.html
+        # API 路径、健康检查、文档已由更具体的路由处理，不会走到这里
+        return FileResponse(frontend_dist / "index.html")
+
+    logger.info(f"前端静态托管已启用: {frontend_dist} -> / (tier={tier})")
