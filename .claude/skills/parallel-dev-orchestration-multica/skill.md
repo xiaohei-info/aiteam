@@ -42,7 +42,7 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 m
 ## 你的职责
 
 1. **拆解任务** → 从设计文档产出 manifest.yaml (声明式 DAG)
-2. **执行编排** → 跑 `python orchestration/scripts/run_dag.py manifest.yaml`
+2. **执行编排** → 调用本 skill 附带的 `scripts/run_dag.py` 脚本
 3. **监督到底** → 引擎自动派发、轮询、失败隔离
 4. **记录进度** → 每次关键进度更新（包括失败）都 comment 到相关 issue
 5. **处理失败** → 调整 manifest、重跑引擎
@@ -290,16 +290,18 @@ nodes:
 
 ### 阶段 C — 执行编排(跑引擎)
 
-保存 manifest 后,执行:
+保存 manifest 后,执行本 skill 附带的引擎脚本:
 
 ```bash
-# 在当前项目根目录下的 orchestration 目录
-cd <项目根目录>/orchestration
+# 本 skill 包含完整的引擎实现（作为附件文件）
+# 执行方式：调用 scripts/run_dag.py
 python scripts/run_dag.py <manifest-path>
 
-# 或者从项目根目录直接指定完整路径
-python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
+# 示例
+python scripts/run_dag.py /tmp/my-feature.yaml
 ```
+
+**注意**：scripts 目录及其所有 Python 文件已作为本 skill 的附件上传，当你加载此 skill 时可直接访问。
 
 **引擎会自动**:
 1. **Lint 校验**(无环、worker∈池、reviewer≠worker)
@@ -389,15 +391,19 @@ nodes:
 
 ---
 
-## 脚本清单(已上传)
+## 脚本清单(作为 skill 附件)
 
-- `orchestration/scripts/manifest.py`: 数据模型 + YAML 加载
-- `orchestration/scripts/lint.py`: 校验(无环/无孤儿/worker∈池)
-- `orchestration/scripts/graph.py`: frontier 算法 + 失败隔离
-- `orchestration/scripts/compile.py`: manifest → metadata 编译
-- `orchestration/scripts/engine.py`: 循环逻辑核心
-- `orchestration/scripts/client.py`: 测试用抽象(真实执行不用)
-- `orchestration/scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
+本 skill 包含以下 Python 脚本（已作为附件上传）：
+
+- `scripts/manifest.py`: 数据模型 + YAML 加载
+- `scripts/lint.py`: 校验(无环/无孤儿/worker∈池)
+- `scripts/graph.py`: frontier 算法 + 失败隔离
+- `scripts/compile.py`: manifest → metadata 编译
+- `scripts/engine.py`: 循环逻辑核心
+- `scripts/client.py`: 测试用抽象(真实执行不用)
+- `scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
+
+这些脚本在你加载本 skill 时可直接访问和执行。
 
 ---
 
@@ -488,7 +494,7 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
+python scripts/run_dag.py /tmp/my-feature.yaml
 ```
 
 **4. 监督 + 失败决策**
@@ -754,7 +760,7 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
+python scripts/run_dag.py /tmp/my-feature.yaml
 ```
 
 **4. 监督 + 失败决策**
