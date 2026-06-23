@@ -38,10 +38,14 @@ Examples:
   ./scripts/ctl.sh logs --server operation --follow   # Follow operation logs
   ./scripts/ctl.sh stop --env prod                    # Stop prod env
 
-Environment Files:
-  .env.dev   - Development environment (default)
-  .env.test  - Testing environment
-  .env.prod  - Production environment (⚠️  edit sensitive values first)
+Environment Setup:
+  Before first use, create environment config from example:
+    cp .env.example .env.dev
+    vim .env.dev  # Edit configuration as needed
+
+  For other environments:
+    cp .env.example .env.test
+    cp .env.example .env.prod
 EOF
 }
 
@@ -50,97 +54,13 @@ load_env() {
   ENV_FILE="${REPO_ROOT}/.env.${ENV_CONFIG}"
 
   if [[ ! -f "${ENV_FILE}" ]]; then
-    echo "[ctl] Creating default ${ENV_FILE} file..."
-
-    case "${ENV_CONFIG}" in
-      dev)
-        cat > "${ENV_FILE}" <<'ENVEOF'
-# AITeam 开发环境配置
-# 本文件由 scripts/ctl.sh 自动生成，可手动编辑
-
-# 服务端口（local 和 docker 统一使用）
-OPERATION_PORT=8781
-MANAGER_PORT=8782
-AGENT_PORT=8783
-POSTGRES_PORT=5433
-
-# 数据库配置
-POSTGRES_USER=aiteam
-POSTGRES_PASSWORD=aiteam_test
-POSTGRES_DB=aiteam_v1
-
-# 服务间认证
-SERVICE_TOKEN=dev-service-token-placeholder
-
-# 日志级别
-LOG_LEVEL=INFO
-
-# 公开文档（开发环境）
-EXPOSE_PUBLIC_DOCS=1
-ENVEOF
-        ;;
-      test)
-        cat > "${ENV_FILE}" <<'ENVEOF'
-# AITeam 测试环境配置
-# 本文件由 scripts/ctl.sh 自动生成，可手动编辑
-
-# 服务端口
-OPERATION_PORT=8781
-MANAGER_PORT=8782
-AGENT_PORT=8783
-POSTGRES_PORT=5433
-
-# 数据库配置
-POSTGRES_USER=aiteam
-POSTGRES_PASSWORD=aiteam_test_env
-POSTGRES_DB=aiteam_test
-
-# 服务间认证（测试环境应使用不同的密钥）
-SERVICE_TOKEN=test-service-token-placeholder
-
-# 日志级别
-LOG_LEVEL=DEBUG
-
-# 公开文档（测试环境）
-EXPOSE_PUBLIC_DOCS=1
-ENVEOF
-        ;;
-      prod)
-        cat > "${ENV_FILE}" <<'ENVEOF'
-# AITeam 生产环境配置
-# 本文件由 scripts/ctl.sh 自动生成，请手动编辑敏感信息
-
-# 服务端口
-OPERATION_PORT=8781
-MANAGER_PORT=8782
-AGENT_PORT=8783
-POSTGRES_PORT=5433
-
-# 数据库配置（生产环境必须修改）
-POSTGRES_USER=aiteam
-POSTGRES_PASSWORD=CHANGE_ME_PRODUCTION_PASSWORD
-POSTGRES_DB=aiteam_prod
-
-# 服务间认证（生产环境必须使用强密钥）
-# 生成方式：openssl rand -hex 32
-SERVICE_TOKEN=CHANGE_ME_USE_OPENSSL_RAND_HEX_32
-
-# 日志级别
-LOG_LEVEL=INFO
-
-# 公开文档（生产环境应关闭）
-EXPOSE_PUBLIC_DOCS=0
-ENVEOF
-        echo "[ctl] ⚠️  WARNING: Production config created. Please update sensitive values in ${ENV_FILE}"
-        ;;
-      *)
-        echo "[ctl] ERROR: Unknown environment: ${ENV_CONFIG}" >&2
-        echo "[ctl] Supported environments: dev, test, prod" >&2
-        exit 1
-        ;;
-    esac
-
-    echo "[ctl] Created ${ENV_FILE}"
+    echo "[ctl] ERROR: ${ENV_FILE} not found" >&2
+    echo "" >&2
+    echo "[ctl] Please create it from the example file:" >&2
+    echo "[ctl]   cp ${REPO_ROOT}/.env.example ${ENV_FILE}" >&2
+    echo "[ctl]   vim ${ENV_FILE}  # Edit configuration as needed" >&2
+    echo "" >&2
+    exit 1
   fi
 
   # 加载配置

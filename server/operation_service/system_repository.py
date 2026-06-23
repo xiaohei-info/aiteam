@@ -1,8 +1,8 @@
 """运营端系统账号内存仓储（§9.2 系统账号→运营端本地校验）。
 
 Operation 是纯内存端（无 PG/无 migrations），系统账号（system_admin/system_operator）用进程内
-dict 持有。构造时按 env（OPERATION_SYSTEM_USERNAME/OPERATION_SYSTEM_PASSWORD，默认 sysadmin/
-changeme-me）seed 一个 system_admin；启动时若用默认密码则日志告警一次（提示修改）。
+dict 持有。构造时按 env（OPERATION_SYSTEM_USERNAME/OPERATION_SYSTEM_PASSWORD，无默认值）
+seed 一个 system_admin；未配置则启动失败。
 
 生产可演进为 oper 库持久化，接口形状不变。密码用 shared.security scrypt hash（D15：operation
 禁 import manager，hash 工具已下沉 shared）。
@@ -18,9 +18,6 @@ from shared.contracts.enums import PlatformRole
 from shared.security import hash_password
 
 _logger = logging.getLogger(__name__)
-
-_DEFAULT_USERNAME = "sysadmin"
-_DEFAULT_PASSWORD = "changeme-me"  # 仅 dev 占位；启动日志告警，生产必须用 env 覆盖
 
 
 @dataclass(frozen=True)
@@ -47,19 +44,28 @@ class SystemAccountRepository:
 
 
 def build_system_account_repository() -> SystemAccountRepository:
-    """构造并 seed 默认 system_admin（env 覆盖优先）。
+    """构造并 seed system_admin（从 env 读取，无默认值）。
 
-    env：OPERATION_SYSTEM_USERNAME / OPERATION_SYSTEM_PASSWORD。
-    用默认密码时日志告警一次（生产必须覆盖）。
+    必需 env：
+    - OPERATION_SYSTEM_USERNAME：系统管理员用户名
+    - OPERATION_SYSTEM_PASSWORD：系统管理员密码
+
+    未配置则启动失败（确保开发者明确感知需要设置账号）。
     """
     repo = SystemAccountRepository()
-    username = os.getenv("OPERATION_SYSTEM_USERNAME", _DEFAULT_USERNAME)
-    password = os.getenv("OPERATION_SYSTEM_PASSWORD", _DEFAULT_PASSWORD)
-    if password == _DEFAULT_PASSWORD:
-        _logger.warning(
-            "OPERATION_SYSTEM_PASSWORD 未设置，使用默认占位密码（仅 dev）；"
-            "生产必须用 env 覆盖。默认账号=%s", username,
+    username = os.getenv("OPERATION_SYSTEM_USERNAME")
+    password = os.getenv("OPERATION_SYSTEM_PASSWORD")
+
+    if not username:
+        raise ValueError(
+            "OPERATION_SYSTEM_USERNAME 未设置。请在 .env.* 文件中配置运营端系统管理员用户名。"
         )
+    if not password:
+        raise ValueError(
+            "OPERATION_SYSTEM_PASSWORD 未设置。请在 .env.* 文件中配置运营端系统管理员密码。"
+        )
+
+    _logger.info("初始化运营端系统账号：username=%s", username)
     repo.seed(SystemAccount(
         username=username,
         password_hash=hash_password(password),
