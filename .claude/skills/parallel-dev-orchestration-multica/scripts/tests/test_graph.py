@@ -1,5 +1,5 @@
 # tests/test_graph.py
-from graph import frontier, is_done, all_terminal
+from graph import frontier, is_done, all_terminal, downstream_of
 
 def iss(key, status, blocked_by=None):
     return {"key": key, "id": key, "status": status,
@@ -23,3 +23,15 @@ def test_inflight_and_done_excluded_from_frontier():
 def test_all_terminal_done_or_cancelled():
     assert all_terminal({"A": iss("A", "done"), "B": iss("B", "cancelled")})
     assert not all_terminal({"A": iss("A", "done"), "B": iss("B", "todo")})
+
+def test_downstream_of_blocks_dependents_only():
+    issues = {
+        "A": iss("A", "blocked"),            # 失败
+        "B": iss("B", "todo", ["A"]),        # 依赖失败 → 下游
+        "C": iss("C", "todo", ["B"]),        # 传递下游
+        "D": iss("D", "done"),               # 无关健康
+        "E": iss("E", "todo", ["D"]),        # 健康分支，应仍 ready
+    }
+    assert downstream_of(issues, {"A"}) == {"B", "C"}
+    # 健康分支 E 不受影响，仍在 frontier
+    assert "E" in frontier(issues)
