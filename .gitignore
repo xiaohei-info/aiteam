@@ -19,3 +19,8 @@ __pycache__/
 /.claude/worktrees/
 *.pyc
 .superpowers/
+
+# 本地开发环境（scripts/ctl.sh 生成）
+.env.dev
+.state/
+logs/
