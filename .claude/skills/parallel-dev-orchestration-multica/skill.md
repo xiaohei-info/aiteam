@@ -42,7 +42,7 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 m
 ## 你的职责
 
 1. **拆解任务** → 从设计文档产出 manifest.yaml (声明式 DAG)
-2. **执行编排** → 跑 `python scripts/run_dag.py manifest.yaml`
+2. **执行编排** → 跑 `python orchestration/scripts/run_dag.py manifest.yaml`
 3. **监督到底** → 引擎自动派发、轮询、失败隔离
 4. **记录进度** → 每次关键进度更新（包括失败）都 comment 到相关 issue
 5. **处理失败** → 调整 manifest、重跑引擎
@@ -226,14 +226,14 @@ multica agent list --workspace-id <workspace-id> --output json | jq '.[] | {name
 ```
 
 **Role 定义**：
-- `role: "dev"`: 开发 agent，适合后端实现、数据处理、复杂逻辑、前端开发
+- `role: "worker"`: 工作 agent，负责实现任务（后端/前端/数据处理/复杂逻辑）
 - `role: "reviewer"`: 评审 agent，专职独立验证执行
 - `role: "architect"`: 架构师 agent，负责架构设计审查与整体架构评审
 - `role: "leader"`: 编排 agent（你自己），负责拆解与编排
 
 **选择策略**：
 - 查询后让用户确认使用哪个 agent
-- 或根据 role 自动匹配（如所有 `role: "dev"` 的 agent）
+- 或根据 role 自动匹配（如所有 `role: "worker"` 的 agent）
 - manifest 中填写 agent 的 `name` 字段（不是 role）
 
 #### Reviewer 可选
@@ -293,12 +293,12 @@ nodes:
 保存 manifest 后,执行:
 
 ```bash
-# 在当前项目下的 orchestration 目录（如 .claude/skills/parallel-dev-orchestration-multica/）
-cd <项目根目录>/.claude/skills/parallel-dev-orchestration-multica
+# 在当前项目根目录下的 orchestration 目录
+cd <项目根目录>/orchestration
 python scripts/run_dag.py <manifest-path>
 
 # 或者从项目根目录直接指定完整路径
-python .claude/skills/parallel-dev-orchestration-multica/scripts/run_dag.py /tmp/my-feature.yaml
+python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
 ```
 
 **引擎会自动**:
@@ -391,13 +391,13 @@ nodes:
 
 ## 脚本清单(已上传)
 
-- `scripts/manifest.py`: 数据模型 + YAML 加载
-- `scripts/lint.py`: 校验(无环/无孤儿/worker∈池)
-- `scripts/graph.py`: frontier 算法 + 失败隔离
-- `scripts/compile.py`: manifest → metadata 编译
-- `scripts/engine.py`: 循环逻辑核心
-- `scripts/client.py`: 测试用抽象(真实执行不用)
-- `scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
+- `orchestration/scripts/manifest.py`: 数据模型 + YAML 加载
+- `orchestration/scripts/lint.py`: 校验(无环/无孤儿/worker∈池)
+- `orchestration/scripts/graph.py`: frontier 算法 + 失败隔离
+- `orchestration/scripts/compile.py`: manifest → metadata 编译
+- `orchestration/scripts/engine.py`: 循环逻辑核心
+- `orchestration/scripts/client.py`: 测试用抽象(真实执行不用)
+- `orchestration/scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
 
 ---
 
@@ -488,7 +488,7 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python scripts/run_dag.py /tmp/my-feature.yaml
+python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
 ```
 
 **4. 监督 + 失败决策**
@@ -754,7 +754,7 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python scripts/run_dag.py /tmp/my-feature.yaml
+python orchestration/scripts/run_dag.py /tmp/my-feature.yaml
 ```
 
 **4. 监督 + 失败决策**
