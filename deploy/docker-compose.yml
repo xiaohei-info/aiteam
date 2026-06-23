@@ -44,6 +44,8 @@ services:
       APP_RW_PASSWORD: aiteam_test
       # 云侧服务间调用：运营端调企业端开通 tenant。
       MANAGER_URL: http://manager:8000
+      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
+      SERVICE_TOKEN: dev-service-token-placeholder
       LOG_LEVEL: INFO
       EXPOSE_PUBLIC_DOCS: "1"
 
@@ -66,6 +68,8 @@ services:
       ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       APP_RW_PASSWORD: aiteam_test
       OPERATOR_URL: http://operation:8000
+      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
+      SERVICE_TOKEN: dev-service-token-placeholder
       LOG_LEVEL: INFO
       EXPOSE_PUBLIC_DOCS: "1"
 
@@ -83,6 +87,8 @@ services:
       DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       # 用户端主动访问企业端（05 §5.5 窄通信面；Operator/Manager 绝不向用户机器入站）。
       MANAGER_URL: http://manager:8000
+      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
+      SERVICE_TOKEN: dev-service-token-placeholder
       LOG_LEVEL: INFO
       EXPOSE_PUBLIC_DOCS: "1"
     depends_on:
