@@ -41,19 +41,31 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 m
 
 ## 你的职责
 
-1. **拆解任务** → 从设计文档产出 manifest.yaml (声明式 DAG)
-2. **执行编排** → 调用本 skill 附带的 `scripts/run_dag.py` 脚本
-3. **监督到底** → 引擎自动派发、轮询、失败隔离
-4. **记录进度** → 每次关键进度更新（包括失败）都 comment 到相关 issue
-5. **处理失败** → 调整 manifest、重跑引擎
-6. **汇总收尾** → 输出 digest、决策日志
+1. **拆解任务** → 从设计文档产出 manifest.yaml（创造性工作：理解需求、识别模块边界、设计依赖图）
+2. **启动编排** → 调用引擎脚本：
+   - 新启动：`python scripts/run_dag.py <manifest.yaml> [--orchestrator-issue <issue-id>] [--storage multica]`
+   - 续跑：`python scripts/run_dag.py --resume <run-id> [--orchestrator-issue <issue-id>] [--storage multica]`
+   - 查看状态：`python scripts/run_dag.py --list`
+3. **处理失败** → 当引擎报告节点失败时，分析原因、调整 manifest、决定策略（重跑/降范围/换 agent）
+4. **汇总收尾** → 引擎完成后，输出决策日志与交付总结
 
-**核心原则**: 你只拆、只派、只盯、只收,不抢 worker 的活。引擎是固定脚本,你不需要推理循环逻辑。
+**核心原则**: 你只拆、只策、只收。引擎自动执行：
+- ✅ 派发与轮询（自动 assign + 监控 runs）
+- ✅ 进度报告（自动 comment + ASCII 进度条）
+- ✅ 失败隔离（自动阻塞下游）
+- ✅ 状态持久化（支持断点续跑）
 
-**进度记录规范**：
-- 如果你自己有 orchestrator issue 作为载体，comment 到该 issue
-- 如果没有专门的 orchestrator issue，comment 到对应的节点 issue
-- 记录内容：节点状态变更、失败原因、调整决策、阶段性总结
+**引擎已自动化的内容**（你不需要手动做）：
+- ❌ 不需要手动 comment 进度（引擎每个节点状态变更自动 comment）
+- ❌ 不需要手动轮询状态（引擎自动轮询并更新）
+- ❌ 不需要手动计算 frontier（引擎自动计算）
+- ❌ 不需要手动隔离失败（引擎自动阻塞下游）
+
+**断点续跑支持**：
+- 引擎状态自动保存（本地文件或 multica issue metadata）
+- Manifest 自动保存（本地文件或 multica issue 附件）
+- 任何时候都可以用 `--resume <run-id>` 续跑
+- 换机器也能续跑（使用 `--storage multica` 模式）
 
 ---
 
@@ -292,13 +304,67 @@ nodes:
 
 保存 manifest 后,执行本 skill 附带的引擎脚本:
 
+#### 新启动 run
+
 ```bash
-# 本 skill 包含完整的引擎实现（作为附件文件）
-# 执行方式：调用 scripts/run_dag.py
 python scripts/run_dag.py <manifest-path>
 
 # 示例
 python scripts/run_dag.py /tmp/my-feature.yaml
+
+# 如果有 orchestrator issue（推荐），可以指定以获得自动进度报告
+python scripts/run_dag.py /tmp/my-feature.yaml --orchestrator-issue <issue-id>
+
+# 使用 multica 存储（支持跨机器续跑）
+python scripts/run_dag.py /tmp/my-feature.yaml --orchestrator-issue <issue-id> --storage multica
+```
+
+引擎会自动：
+- ✅ Lint manifest（校验依赖/agent 池/无环）
+- ✅ 创建/查找 issues（每个节点对应一个 issue）
+- ✅ 编译 metadata（blocked_by/worker/reviewer）
+- ✅ 计算 frontier 并派发
+- ✅ 轮询 runs 直到完成
+- ✅ 自动 comment 进度（带 ASCII 进度条）
+- ✅ 失败隔离（阻塞下游）
+- ✅ 保存状态快照（支持断点续跑）
+
+#### 进度报告示例
+
+引擎会自动生成类似这样的进度报告：
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 整体进度 [████████████░░░░░░░░] 12/15 (80.0%)
+⏱️  已用时间: 2h 34m | 预计剩余: 38m
+✅ 完成: 12 | 🔄 进行中: 1 | ⏸️  待开始: 2 | ❌ 失败: 0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+#### 断点续跑
+
+引擎支持随时中断和续跑：
+
+```bash
+# 列出所有 run
+python scripts/run_dag.py --list
+
+# 输出示例：
+# 找到 2 个 run:
+#
+#   dag-20260624-143052-a3f9
+#     进度: 12/15 (80.0%)
+#     失败: 0 | 耗时: 2h 34m
+#
+#   dag-20260624-120030-b7e2
+#     进度: 15/15 (100.0%)
+#     失败: 1 | 耗时: 3h 12m
+
+# 续跑指定 run
+python scripts/run_dag.py --resume dag-20260624-143052-a3f9
+
+# 换机器续跑（需要使用 multica 存储）
+python scripts/run_dag.py --resume dag-20260624-143052-a3f9 --orchestrator-issue <issue-id> --storage multica
 ```
 
 **注意**：scripts 目录及其所有 Python 文件已作为本 skill 的附件上传，当你加载此 skill 时可直接访问。

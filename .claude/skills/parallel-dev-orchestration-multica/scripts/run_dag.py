@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-固定引擎入口:manifest → lint → compile → run_dag
-直接调 multica CLI (subprocess),不经过抽象层
+固定引擎入口: manifest → lint → compile → run_dag
+支持断点续跑和进度可视化
 """
 import sys
 import json
 import subprocess
 import time
+import argparse
 from pathlib import Path
 
 # 添加当前目录到 path 以便 import 其他模块
@@ -15,6 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from manifest import load_manifest, Manifest
 from lint import lint
 from graph import frontier, downstream_of
+from storage import StorageBackend, MulticaIssueStorage, LocalFileStorage
+from state import EngineState
+from progress import ProgressReporter
+from utils import generate_run_id, format_duration
 
 
 def run_multica(args, capture=True):
@@ -47,8 +52,6 @@ def create_issues_from_manifest(manifest: Manifest):
     if not workspace_id:
         raise ValueError("manifest.meta 缺少 'squad' (workspace_id)")
 
-    # 简化实现:假设 issue 已存在,通过 title 匹配 key
-    # 真实实现需要 issue create 或检查已有
     result = run_multica(["issue", "list", "--workspace-id", workspace_id, "--output", "json"])
 
     # 处理返回值：可能是 list 或 dict with 'issues' key
@@ -63,7 +66,6 @@ def create_issues_from_manifest(manifest: Manifest):
 
     # 为每个 manifest 节点创建或查找对应 issue
     for key, node in manifest.nodes.items():
-        # 从 node 提取 title 和 description
         node_title = getattr(node, 'title', None) or key
         node_desc = getattr(node, 'description', None) or f"Task {key}"
 
@@ -154,84 +156,77 @@ def list_issues_snapshot(key_to_id: dict):
 
 
 def resolve_agent_id(agent_name, workspace_id):
-    """从 agent 名解析到 agent id(用于 assign)
-
-    跨查询逻辑:
-    1. multica agent list --workspace-id <id> 获取所有 agent (name + id)
-    2. 按 name 匹配找到对应 agent id
-    """
-    # 获取 workspace 所有 agent
+    """从 agent 名解析到 agent id(用于 assign)"""
     agents = run_multica(["agent", "list", "--workspace-id", workspace_id, "--output", "json"])
 
     if isinstance(agents, list):
-        # 按名字匹配
         for agent in agents:
             if agent.get("name") == agent_name:
                 return agent.get("id")
 
-    # 未找到，报错
     raise ValueError(f"agent '{agent_name}' not found in workspace {workspace_id}")
 
 
-def dispatch_worker(key, issue_id, worker_name, workspace_id):
-    """派发 worker:assign → 轮询 runs 到终态 → 检查产物
-    返回 'ok' 或 'failed'
-    """
+def dispatch_worker(key, issue_id, worker_name, workspace_id, progress: ProgressReporter):
+    """派发 worker:assign → 轮询 runs 到终态 → 检查产物"""
     # assign
     agent_id = resolve_agent_id(worker_name, workspace_id)
     run_multica(["issue", "assign", issue_id, "--to", agent_id], capture=False)
 
+    # 报告节点开始
+    progress.update_progress("node_started", node_key=key, worker=worker_name)
+
     # 轮询 runs 到终态
-    print(f"[{key}] 等待 worker {worker_name} 完成...")
     while True:
         time.sleep(10)
         runs = run_multica(["issue", "runs", issue_id, "--output", "json"])
         if isinstance(runs, list) and runs:
             status = runs[0].get("status")
             if status in ["succeeded", "completed", "failed"]:
-                print(f"[{key}] worker run {status}")
-                # 检查 metadata.artifacts(简化:只看是否有内容)
+                # 检查 metadata.artifacts
                 issue = run_multica(["issue", "get", issue_id, "--output", "json"])
                 artifacts = issue.get("metadata", {}).get("artifacts", "")
-                if artifacts and ("PR:" in artifacts or "pr" in artifacts.lower()):
-                    return "ok"
-                else:
-                    print(f"[{key}] 缺少 PR 产物")
+
+                if status == "failed" or not (artifacts and ("PR:" in artifacts or "pr" in artifacts.lower())):
+                    reason = "Worker run failed" if status == "failed" else "缺少 PR 产物"
+                    progress.update_progress("node_failed", node_key=key, reason=reason)
                     return "failed"
+                else:
+                    progress.update_progress("node_completed", node_key=key, artifacts=artifacts)
+                    return "ok"
     return "failed"
 
 
-def run_gate(key, issue_id, reviewer_name, workspace_id):
-    """派发 reviewer:assign → 轮询 run → 读 verdict
-    返回 'approve' 或 'reject'
-    """
+def run_gate(key, issue_id, reviewer_name, workspace_id, progress: ProgressReporter):
+    """派发 reviewer:assign → 轮询 run → 读 verdict"""
     if not reviewer_name:
         return "approve"  # 无 reviewer = 自动通过
 
     agent_id = resolve_agent_id(reviewer_name, workspace_id)
     run_multica(["issue", "assign", issue_id, "--to", agent_id], capture=False)
 
-    print(f"[{key}] 等待 reviewer {reviewer_name}...")
     while True:
         time.sleep(10)
         runs = run_multica(["issue", "runs", issue_id, "--output", "json"])
         if isinstance(runs, list) and runs:
             status = runs[0].get("status")
             if status in ["succeeded", "completed", "failed"]:
-                # 读 review_verdict
                 issue = run_multica(["issue", "get", issue_id, "--output", "json"])
                 verdict = issue.get("metadata", {}).get("review_verdict", "blocked")
+
                 if verdict == "pass" or verdict == "pass-with-nits":
                     return "approve"
                 else:
-                    print(f"[{key}] reviewer blocked")
+                    progress.update_progress("node_failed", node_key=key, reason=f"Reviewer blocked: {verdict}")
                     return "reject"
     return "reject"
 
 
-def run_dag_loop(manifest: Manifest, key_to_id: dict, workspace_id: str):
+def run_dag_loop(manifest: Manifest, state: EngineState, storage: StorageBackend, progress: ProgressReporter):
     """引擎循环:frontier → dispatch → gate → 下一轮"""
-    failed = set()
+    workspace_id = state.workspace_id
+    key_to_id = state.key_to_id
+    failed = state.failed.copy()
     max_parallel = 1  # 简化实现:顺序执行
 
     while True:
@@ -243,64 +238,64 @@ def run_dag_loop(manifest: Manifest, key_to_id: dict, workspace_id: str):
         ready = [k for k in frontier(issues_snapshot) if k not in blocked and k not in failed]
 
         if not ready:
-            print("=== 无 ready 节点,引擎终止 ===")
             break
-
-        print(f"=== Frontier: {ready} ===")
 
         for key in ready[:max_parallel]:
             issue_id = key_to_id[key]
             worker = issues_snapshot[key].get("worker")
             reviewer = issues_snapshot[key].get("reviewer")
 
-            print(f"\n[{key}] 开始派发 worker={worker}")
-
             # 派发 worker
             run_multica(["issue", "update", issue_id, "--status", "in_progress"], capture=False)
-            result = dispatch_worker(key, issue_id, worker, workspace_id)
+            result = dispatch_worker(key, issue_id, worker, workspace_id, progress)
 
             if result != "ok":
                 run_multica(["issue", "update", issue_id, "--status", "blocked"], capture=False)
                 failed.add(key)
-                print(f"[{key}] worker 失败,标记为 failed")
+                state.mark_failed(key)
                 continue
 
             # 派发 reviewer(如果有)
             run_multica(["issue", "update", issue_id, "--status", "in_review"], capture=False)
-            gate_result = run_gate(key, issue_id, reviewer, workspace_id)
+            gate_result = run_gate(key, issue_id, reviewer, workspace_id, progress)
 
             if gate_result == "approve":
                 run_multica(["issue", "update", issue_id, "--status", "done"], capture=False)
-                print(f"[{key}] 完成 ✓")
+                state.mark_completed(key)
             else:
                 run_multica(["issue", "update", issue_id, "--status", "blocked"], capture=False)
                 failed.add(key)
-                print(f"[{key}] gate 失败,标记为 failed")
+                state.mark_failed(key)
 
     # 最终汇总
     final_snapshot = list_issues_snapshot(key_to_id)
     done = [k for k, it in final_snapshot.items() if it["status"] == "done"]
-    return {"done": done, "failed": sorted(failed)}
+
+    summary = {
+        "done": done,
+        "failed": sorted(failed),
+        "total": len(key_to_id),
+        "success_rate": len(done) / len(key_to_id) * 100 if key_to_id else 0
+    }
+
+    progress.update_progress("engine_completed", summary=summary)
+
+    return summary
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("用法: run_dag.py <manifest.yaml>")
-        sys.exit(1)
-
-    manifest_path = sys.argv[1]
-
+def start_new_run(manifest_path: str, orchestrator_issue_id: str = None,
+                  storage_backend: str = "local"):
+    """启动新的 run"""
     # 1. 加载 manifest
     print(f"=== 加载 manifest: {manifest_path} ===")
     manifest = load_manifest(manifest_path)
 
-    # 获取 workspace_id
     workspace_id = manifest.meta.get("squad")
     if not workspace_id:
         print("错误: manifest.meta 缺少 'squad' (workspace_id)")
         sys.exit(1)
 
-    # 2. lint(需要 squad members)
+    # 2. Lint
     print("=== Lint manifest ===")
     members = get_squad_members(workspace_id)
     errors = lint(manifest, members)
@@ -311,25 +306,163 @@ def main():
         sys.exit(1)
     print("Lint 通过 ✓")
 
-    # 3. 创建/查找 issues
+    # 3. 初始化存储
+    if storage_backend == "multica" and orchestrator_issue_id:
+        storage = MulticaIssueStorage(orchestrator_issue_id)
+    else:
+        storage = LocalFileStorage()
+
+    # 4. 生成 run_id 并保存 manifest
+    run_id = generate_run_id()
+    with open(manifest_path) as f:
+        manifest_content = f.read()
+    manifest_ref = storage.save_manifest(manifest_content, run_id)
+
+    print(f"\n🚀 新启动 run {run_id}")
+
+    # 5. 创建/查找 issues
     print("=== 创建/查找 issues ===")
     key_to_id = create_issues_from_manifest(manifest)
-    print(f"映射: {key_to_id}")
 
-    # 4. 编译 metadata
+    # 6. 编译 metadata
     print("=== 编译 metadata ===")
     compile_metadata(manifest, key_to_id)
 
-    # 5. 运行引擎
-    print("\n=== 启动引擎 ===")
-    result = run_dag_loop(manifest, key_to_id, workspace_id)
+    # 7. 初始化引擎状态
+    state = EngineState(
+        run_id=run_id,
+        manifest_ref=manifest_ref,
+        workspace_id=workspace_id,
+        orchestrator_issue_id=orchestrator_issue_id,
+        key_to_id=key_to_id
+    )
 
-    # 6. 输出 digest
+    # 8. 初始化进度报告器
+    progress = ProgressReporter(state, storage, manifest)
+    progress.update_progress("engine_started")
+
+    # 9. 运行引擎
+    print("\n=== 启动引擎 ===")
+    result = run_dag_loop(manifest, state, storage, progress)
+
+    # 10. 输出 digest
     print("\n=== Digest ===")
     print(f"Done: {len(result['done'])} {result['done']}")
     print(f"Failed: {len(result['failed'])} {result['failed']}")
+    print(f"Success Rate: {result['success_rate']:.1f}%")
 
-    sys.exit(0 if not result['failed'] else 1)
+    return 0 if not result['failed'] else 1
+
+
+def resume_run(run_id: str, orchestrator_issue_id: str = None,
+               storage_backend: str = "local"):
+    """续跑已有的 run"""
+    # 初始化存储
+    if storage_backend == "multica" and orchestrator_issue_id:
+        storage = MulticaIssueStorage(orchestrator_issue_id)
+    else:
+        storage = LocalFileStorage()
+
+    # 加载状态
+    state_dict = storage.load_state(run_id)
+    if not state_dict:
+        print(f"错误: 找不到 run {run_id} 的状态")
+        sys.exit(1)
+
+    state = EngineState.from_dict(state_dict)
+
+    # 加载 manifest
+    manifest_content = storage.load_manifest(run_id)
+    if not manifest_content:
+        print(f"错误: 找不到 run {run_id} 的 manifest")
+        sys.exit(1)
+
+    # 临时保存并加载 manifest
+    temp_path = f"/tmp/manifest_{run_id}.yaml"
+    with open(temp_path, 'w') as f:
+        f.write(manifest_content)
+    manifest = load_manifest(temp_path)
+    Path(temp_path).unlink(missing_ok=True)
+
+    # 显示续跑信息
+    stats = state.get_progress_stats()
+    print(f"\n🔄 续跑 run {run_id}")
+    print(f"   已完成: {stats['completed']} 个节点")
+    print(f"   已失败: {stats['failed']} 个节点")
+    print(f"   进行中: {stats['in_progress']} 个节点")
+    print(f"   已用时间: {format_duration(state.get_elapsed_time())}")
+
+    # 初始化进度报告器
+    progress = ProgressReporter(state, storage, manifest)
+
+    # 继续运行引擎
+    print("\n=== 继续引擎 ===")
+    result = run_dag_loop(manifest, state, storage, progress)
+
+    # 输出 digest
+    print("\n=== Digest ===")
+    print(f"Done: {len(result['done'])} {result['done']}")
+    print(f"Failed: {len(result['failed'])} {result['failed']}")
+    print(f"Success Rate: {result['success_rate']:.1f}%")
+
+    return 0 if not result['failed'] else 1
+
+
+def list_runs_command(storage_backend: str = "local", orchestrator_issue_id: str = None):
+    """列出所有 run"""
+    if storage_backend == "multica" and orchestrator_issue_id:
+        storage = MulticaIssueStorage(orchestrator_issue_id)
+    else:
+        storage = LocalFileStorage()
+
+    runs = storage.list_runs()
+
+    if not runs:
+        print("没有找到任何 run")
+        return 0
+
+    print(f"\n找到 {len(runs)} 个 run:\n")
+    for run_id in runs:
+        state_dict = storage.load_state(run_id)
+        if state_dict:
+            state = EngineState.from_dict(state_dict)
+            stats = state.get_progress_stats()
+            elapsed = format_duration(state.get_elapsed_time())
+            print(f"  {run_id}")
+            print(f"    进度: {stats['completed']}/{stats['total']} ({stats['progress_pct']:.1f}%)")
+            print(f"    失败: {stats['failed']} | 耗时: {elapsed}")
+            print()
+        else:
+            print(f"  {run_id} (无状态信息)")
+
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Multica DAG 编排引擎")
+    parser.add_argument("manifest", nargs="?", help="Manifest YAML 文件路径")
+    parser.add_argument("--resume", metavar="RUN_ID", help="续跑指定的 run")
+    parser.add_argument("--list", action="store_true", help="列出所有 run")
+    parser.add_argument("--orchestrator-issue", help="Orchestrator issue ID（用于进度报告）")
+    parser.add_argument("--storage", choices=["local", "multica"], default="local",
+                       help="存储后端（默认: local）")
+
+    args = parser.parse_args()
+
+    # 列出 runs
+    if args.list:
+        sys.exit(list_runs_command(args.storage, args.orchestrator_issue))
+
+    # 续跑
+    if args.resume:
+        sys.exit(resume_run(args.resume, args.orchestrator_issue, args.storage))
+
+    # 新启动
+    if not args.manifest:
+        parser.print_help()
+        sys.exit(1)
+
+    sys.exit(start_new_run(args.manifest, args.orchestrator_issue, args.storage))
 
 
 if __name__ == "__main__":
