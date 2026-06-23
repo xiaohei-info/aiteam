@@ -437,7 +437,7 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     from manager_service.routes_auth import router as auth_router
     from operation_service.dependencies import get_provisioning_service
     from operation_service.manager_gateway import ManagerGateway
-    from operation_service.repository import EnterpriseRepository
+    from operation_service.repository import InMemoryEnterpriseRepository
     from operation_service.service import ProvisioningService
     from run import get_app
     from shared.auth import DevTokenService, RS256TokenVerifier
@@ -470,7 +470,7 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     fake_gw = _FakeManagerGateway()
     op_app = get_app("operation")
     op_app.dependency_overrides[get_provisioning_service] = lambda: ProvisioningService(
-        EnterpriseRepository(), fake_gw
+        InMemoryEnterpriseRepository(), fake_gw
     )
     op_client = TestClient(op_app)
 

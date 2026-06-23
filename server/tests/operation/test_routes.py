@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from operation_service.dependencies import get_provisioning_service
 from operation_service.manager_gateway import ManagerGateway
-from operation_service.repository import EnterpriseRepository
+from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.service import ProvisioningService
 from run import get_app
 from shared.auth import DevTokenService
@@ -37,7 +37,7 @@ def manager():
 
 @pytest.fixture
 def repo():
-    return EnterpriseRepository()
+    return InMemoryEnterpriseRepository()
 
 
 @pytest.fixture
