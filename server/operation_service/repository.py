@@ -214,6 +214,20 @@ def apply_migrations(db_url: str | None, app_rw_password: str | None = None) -> 
             with conn.cursor() as cur:
                 cur.execute(sql)
 
+        # 动态授予 CONNECT 权限（问题2修复：迁移脚本无法硬编码数据库名）
+        with conn.cursor() as cur:
+            # 获取当前数据库名
+            cur.execute("SELECT current_database()")
+            db_name = cur.fetchone()[0]
+            # 幂等授权：GRANT 可重复执行
+            from psycopg import sql as _sql
+
+            cur.execute(
+                _sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    _sql.Identifier(db_name), _sql.Identifier(_APP_ROLE)
+                )
+            )
+
         if app_rw_password:
             # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
             from psycopg import sql as _sql

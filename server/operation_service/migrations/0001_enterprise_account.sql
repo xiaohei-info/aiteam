@@ -25,7 +25,10 @@ END
 $$;
 
 -- 业务连接以 app_rw 身份建连后需要 connect 到本库 + 用 public schema。
-GRANT CONNECT ON DATABASE oper TO app_rw;
+-- Dev 环境复用 aiteam_v1 库，生产应独立 oper 库（CLAUDE §3.2）。
+-- GRANT CONNECT 需要数据库名，但迁移脚本内无法动态获取当前库名，
+-- 故由外层迁移执行器单独处理（或手动授权）。此处注释保留口径。
+-- GRANT CONNECT ON DATABASE oper TO app_rw;
 GRANT USAGE ON SCHEMA public TO app_rw;
 
 -- 扩展：gen_random_uuid()

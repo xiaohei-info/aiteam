@@ -25,16 +25,17 @@ from .service import ProvisioningService
 
 @lru_cache(maxsize=1)
 def get_repository() -> EnterpriseRepository:
-    """单例企业账号仓储。有 oper_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例企业账号仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    oper_db_url = settings.raw.get("oper_db_url")
+    # 运营端使用 admin_db_url 作为数据库连接（运营端表是控制面表，直连管理库）
+    db_url = settings.admin_db_url
 
-    if oper_db_url:
-        # PostgreSQL 实现：自动应用迁移，连业务 DSN（app_rw）。
-        admin_url = settings.raw.get("oper_admin_db_url") or oper_db_url
-        app_rw_password = settings.raw.get("oper_app_rw_password")
+    if db_url:
+        # PostgreSQL 实现：自动应用迁移，连管理 DSN。
+        admin_url = settings.admin_db_url
+        app_rw_password = settings.app_rw_password
         apply_migrations(admin_url, app_rw_password)
-        return PgEnterpriseRepository(oper_db_url)
+        return PgEnterpriseRepository(db_url)
 
     # 内存实现（dev/测试）。
     return InMemoryEnterpriseRepository()
