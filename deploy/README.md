@@ -74,31 +74,48 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 
 ### 快速命令
 
+**日常开发（启停服务）**：
+```bash
+# 推荐使用统一管理脚本（支持 local 和 docker 模式）
+./scripts/ctl.sh start --env dev --deploy docker   # 启动三端 + postgres
+./scripts/ctl.sh status --env dev                   # 查看服务状态
+./scripts/ctl.sh logs --server agent --follow       # 跟随 agent 日志
+./scripts/ctl.sh stop --env dev                     # 停止服务
+```
+
+**Docker 构建与清理**：
 ```bash
 cd deploy
-./ctl.sh up          # 构建并起三端 + postgres（后台），等待 /healthz
-./ctl.sh ps          # 查看容器状态
-./ctl.sh check       # curl 三端 /healthz
-./ctl.sh logs agent  # 跟随某端日志
-./ctl.sh migrate     # 触发 Manager 迁移（manager_service apply_migrations，#60）
-./ctl.sh down        # 停并删容器（保留数据卷）
-./ctl.sh clean       # down + 删数据卷（清空 DB，谨慎）
+./docker-utils.sh build         # 构建三端镜像
+./docker-utils.sh build agent   # 只构建用户端（验证按端精简）
+./docker-utils.sh clean         # 清理容器 + 数据卷（谨慎！）
 ```
 
-或直接用 docker compose：
-
+**直接使用 docker compose**（高级用户）：
 ```bash
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml up -d --build   # 构建并启动
+docker compose -f deploy/docker-compose.yml ps              # 查看状态
+docker compose -f deploy/docker-compose.yml logs -f agent   # 查看日志
+docker compose -f deploy/docker-compose.yml down            # 停止（保留数据）
 ```
 
-### 单独构建某端镜像（验证按端精简）
+### 验证按端精简产物（D15 红线）
 
 ```bash
-./ctl.sh build agent   # 只建用户端镜像
-# 验证镜像内不含控制面：
+cd deploy
+./docker-utils.sh build agent   # 构建用户端镜像
+
+# 验证镜像内不含控制面代码：
 docker run --rm aiteam-agent:dev sh -c \
-  'ls /app/server && ls /app/web'
-# 应只见 agent_service agent_gateway shared；只见 web/agent。
+  'ls /app/server && echo --- && ls /app/web'
+
+# 预期输出：
+#   agent_service  agent_gateway  shared
+#   ---
+#   agent
+# 
+# ✓ 应只见 agent_service、agent_gateway、shared（无 operation_service、manager_service）
+# ✓ web 目录应只见 agent（无 operation、manager）
 ```
 
 ---
@@ -126,9 +143,13 @@ deploy/
 ├── Dockerfile.manager     # 企业端产物（只含 manager_service + shared + web/manager）
 ├── Dockerfile.agent       # 用户端产物（只含 agent_service + agent_gateway + shared + web/agent）
 ├── docker-compose.yml     # 单机模拟三端 + postgres
-├── ctl.sh                 # 启停便利脚本
+├── docker-utils.sh        # Docker 构建与清理工具（build/clean）
 └── README.md              # 本文件
 ```
+
+**脚本职责划分**：
+- `scripts/ctl.sh` - 日常开发启停（支持 local 和 docker 模式）
+- `deploy/docker-utils.sh` - Docker 专用（镜像构建、彻底清理）
 
 后端启动入口：`server/run.py`（统一启动器，09 §14.2）；前端各端独立 `vite build` → `dist`，由本端服务同 origin 自托管。
 
