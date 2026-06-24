@@ -258,9 +258,10 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
     print(f"=== 加载 manifest: {manifest_path} ===")
     manifest = load_manifest(manifest_path)
 
-    workspace_id = manifest.meta.get("squad")
-    if not workspace_id:
-        print("❌ 错误: manifest.meta 缺少 'squad' (workspace_id)")
+    # manifest 的 squad = 小队（派发与成员池作用域）；workspace 走引擎 env/配置
+    squad_id = manifest.meta.get("squad")
+    if not squad_id:
+        print("❌ 错误: manifest.meta 缺少 'squad'（派发小队）")
         sys.exit(1)
 
     # 2. 创建或获取引擎
@@ -268,12 +269,16 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
         print("=== 初始化引擎 ===")
         engine = create_engine_from_env()
         print(f"  引擎类型: {engine.__class__.__name__}")
-        print(f"  工作空间: {workspace_id}")
+        print(f"  工作空间: {engine.config.workspace_id}")
+        print(f"  小队: {squad_id}")
         print(f"  轮询间隔: {engine.config.polling_interval}s")
+
+    # manifest 的 squad 注入 config，供引擎限定派发与成员池
+    engine.config.squad_id = squad_id
 
     # 3. Lint
     print("=== Lint manifest ===")
-    members = engine.list_members(workspace_id)
+    members = engine.list_members(squad_id)
     errors = lint(manifest, members)
     if errors:
         print("❌ Lint 失败:")
@@ -284,7 +289,7 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
 
     # 4. 创建 Run（引擎内部自动创建工作单元、保存 manifest 和状态）
     print(f"\n=== 创建 Run ===")
-    run = engine.create_run(workspace_id, manifest)
+    run = engine.create_run(squad_id, manifest)
 
     print(f"🚀 启动 run {run.id}")
     print(f"  总任务: {run.total_tasks}")

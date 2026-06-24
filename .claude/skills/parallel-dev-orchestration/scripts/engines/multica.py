@@ -19,7 +19,11 @@ class MulticaEngine(CollaborationEngine):
 
     @classmethod
     def get_required_env_vars(cls) -> List[Dict[str, str]]:
-        """Multica 引擎需要的环境变量"""
+        """Multica 引擎需要的环境变量
+
+        workspace 走 env（顶层空间，定位在哪建 issue/找成员）；
+        小队 squad 由 manifest 的 squad 字段提供，不在此配置。
+        """
         return [
             {
                 'name': 'MULTICA_WORKSPACE_ID',
@@ -44,8 +48,15 @@ class MulticaEngine(CollaborationEngine):
     # ==================== 内部工具方法 ====================
 
     def _run_multica(self, args: List[str], capture=True) -> Any:
-        """调用 multica CLI"""
-        cmd = ["multica"] + args
+        """调用 multica CLI
+
+        workspace 通过全局 flag `--workspace-id` 注入（位于 multica 与子命令之间），
+        与 multica CLI 约定一致——子命令本身不接受 --workspace-id。
+        """
+        cmd = ["multica"]
+        if self.config.workspace_id:
+            cmd += ["--workspace-id", self.config.workspace_id]
+        cmd += args
         result = subprocess.run(cmd, capture_output=capture, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"multica 调用失败: {' '.join(cmd)}\n{result.stderr}")
@@ -124,11 +135,10 @@ class MulticaEngine(CollaborationEngine):
             review_comment=metadata.get('review_comment')
         )
 
-    def _resolve_agent_id(self, agent_name: str, workspace_id: str) -> str:
-        """从 agent 名解析到 agent id"""
+    def _resolve_agent_id(self, agent_name: str) -> str:
+        """从 agent 名解析到 agent id（workspace 由全局 flag 注入）"""
         agents = self._run_multica([
             "agent", "list",
-            "--workspace-id", workspace_id,
             "--output", "json"
         ])
 
@@ -137,22 +147,52 @@ class MulticaEngine(CollaborationEngine):
                 if agent.get("name") == agent_name:
                     return agent.get("id")
 
-        raise ValueError(f"agent '{agent_name}' not found in workspace {workspace_id}")
+        raise ValueError(f"agent '{agent_name}' not found in workspace {self.config.workspace_id}")
 
-    # ==================== 第一组：工作空间 ====================
+    # ==================== 第一组：成员池 ====================
 
     def list_members(self, workspace_id: str) -> List[str]:
-        """列出工作空间成员"""
+        """列出成员池
+
+        派发作用域是 manifest 的 squad（小队）：
+        - 配了 squad_id → 列该小队成员（`multica squad member list <squad-id>`）
+        - 未配 squad_id → 退化为整个 workspace 的全部 agent（`multica agent list`）
+
+        注：参数 workspace_id 是接口历史命名（实为「作用域 id」），squad 优先取 config.squad_id。
+        """
+        squad_id = self.config.squad_id or workspace_id
+
+        if squad_id:
+            members = self._run_multica([
+                "squad", "member", "list", squad_id,
+                "--output", "json"
+            ])
+            names = self._extract_member_names(members)
+            if names:
+                return names
+            # 小队取不到成员时回退到 workspace 全员，避免 lint 误杀
+
         agents = self._run_multica([
             "agent", "list",
-            "--workspace-id", workspace_id,
             "--output", "json"
         ])
+        return self._extract_member_names(agents)
 
-        if isinstance(agents, list):
-            return [agent.get("name") for agent in agents if agent.get("name")]
-        elif isinstance(agents, dict) and 'agents' in agents:
-            return [agent.get("name") for agent in agents['agents'] if agent.get("name")]
+    @staticmethod
+    def _extract_member_names(data: Any) -> List[str]:
+        """从 squad member list / agent list 的 JSON 中提取成员名"""
+        if isinstance(data, dict):
+            data = data.get("members") or data.get("agents") or []
+        if isinstance(data, list):
+            names = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                # squad member 可能是 {name} 或嵌套 {agent: {name}}
+                name = item.get("name") or (item.get("agent") or {}).get("name")
+                if name:
+                    names.append(name)
+            return names
         return []
 
     # ==================== 第二组：工作单元 CRUD ====================
@@ -174,7 +214,6 @@ class MulticaEngine(CollaborationEngine):
         multica_status = self._status_to_multica(initial_status)
         result = self._run_multica([
             "issue", "create",
-            "--workspace-id", workspace_id,
             "--title", f"[DAG:{dag_key}] {title}",
             "--description", description,
             "--status", multica_status,
@@ -300,7 +339,7 @@ class MulticaEngine(CollaborationEngine):
         """列出工作单元"""
         result = self._run_multica([
             "issue", "list",
-            "--workspace-id", workspace_id,
+            "--limit", "1000",
             "--output", "json"
         ])
 
@@ -348,7 +387,7 @@ class MulticaEngine(CollaborationEngine):
     ):
         """分配任务给协作者"""
         # 1. Multica assign
-        agent_id = self._resolve_agent_id(assignee, self.config.workspace_id)
+        agent_id = self._resolve_agent_id(assignee)
         self._run_multica([
             "issue", "assign", item_id,
             "--to", agent_id

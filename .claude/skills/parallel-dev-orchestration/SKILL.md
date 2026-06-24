@@ -212,7 +212,7 @@ Agent/人都会被稀释注意力；**一卡一口径**。
 
 **manifest 示例**(Wave 0):
 ```yaml
-squad: <workspace-id>
+squad: <squad-id>   # 派发小队：成员池与派发都限定在该小队内（workspace 走引擎 env，不写在 manifest）
 nodes:
   shared-contracts:
     description: "定义跨模块 DTO/事件/错误契约(TypeScript/Python types)"
@@ -320,8 +320,8 @@ user-api
 ```
 
 **关键字段**:
-- `squad`: workspace ID（manifest 的 workspace 标识，具体取值由所选引擎决定）
-- `nodes.<key>.worker`: worker agent 名(必须∈workspace agents)
+- `squad`: 派发小队 id —— 成员池与派发限定在该小队内。**workspace 不写在 manifest**，由引擎 env/配置提供（multica: `MULTICA_WORKSPACE_ID`）。multica 下层级为 workspace > squad > member；GitHub 等无小队概念的引擎，此字段填仓库标识（如 `owner/repo`）。
+- `nodes.<key>.worker`: worker agent 名(必须∈小队成员池)
 - `nodes.<key>.reviewer`: reviewer agent 名(可选,非空时必须≠worker)
 - `nodes.<key>.depends_on`: 依赖节点 key 列表(空 = Wave 0 可立即开始)
 - `nodes.<key>.gate`: 自定义验收条件(可选,默认="测试全绿")
