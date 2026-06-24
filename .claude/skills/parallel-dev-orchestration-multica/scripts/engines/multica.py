@@ -3,9 +3,10 @@ Multica 引擎实现
 """
 import json
 import subprocess
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .base import CollaborationEngine
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
 
 
 class MulticaEngine(CollaborationEngine):
@@ -377,3 +378,50 @@ class MulticaEngine(CollaborationEngine):
                 return item
 
         return None
+
+    # ==================== Run 生命周期管理 ====================
+
+    def create_run(
+        self,
+        workspace_id: str,
+        manifest: Any,
+        orchestrator_issue_id: Optional[str] = None
+    ) -> Run:
+        """创建新的编排运行
+
+        Multica 实现：保存到 orchestrator issue 的 metadata + 附件
+        """
+        # TODO: 完整实现
+        # 1. 生成 run_id
+        # 2. 上传 manifest 为 orchestrator issue 附件
+        # 3. 创建工作单元
+        # 4. 保存 run metadata 到 orchestrator issue
+        raise NotImplementedError("Multica create_run 待实现")
+
+    def get_run(self, run_id: str) -> Optional[Run]:
+        """获取编排运行的当前状态
+
+        Multica 实现：从 orchestrator issue metadata 加载
+        """
+        # TODO: 完整实现
+        raise NotImplementedError("Multica get_run 待实现")
+
+    def list_runs(
+        self,
+        workspace_id: Optional[str] = None,
+        status: Optional[RunStatus] = None
+    ) -> List[Run]:
+        """列出编排运行历史
+
+        Multica 实现：从 orchestrator issue metadata 提取所有 run
+        """
+        # TODO: 完整实现
+        return []
+
+    def delete_run(self, run_id: str):
+        """删除编排运行记录
+
+        Multica 实现：从 orchestrator issue metadata 删除
+        """
+        # TODO: 完整实现
+        raise NotImplementedError("Multica delete_run 待实现")

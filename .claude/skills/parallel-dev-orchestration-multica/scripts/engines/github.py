@@ -4,9 +4,10 @@ GitHub 引擎实现
 import json
 import subprocess
 import yaml
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .base import CollaborationEngine
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
 
 
 class GithubEngine(CollaborationEngine):
@@ -427,3 +428,49 @@ class GithubEngine(CollaborationEngine):
                 return item
 
         return None
+
+    # ==================== Run 生命周期管理 ====================
+
+    def create_run(
+        self,
+        workspace_id: str,
+        manifest: Any,
+        orchestrator_issue_id: Optional[str] = None
+    ) -> Run:
+        """创建新的编排运行
+
+        GitHub 实现：保存到本地文件或 tracking issue
+        """
+        # TODO: 完整实现
+        # 可以选择：
+        # 1. 保存到本地 .multica_state/（类似 Mock）
+        # 2. 创建一个 tracking issue 保存 manifest 和状态
+        raise NotImplementedError("GitHub create_run 待实现")
+
+    def get_run(self, run_id: str) -> Optional[Run]:
+        """获取编排运行的当前状态
+
+        GitHub 实现：从本地文件或 tracking issue 加载
+        """
+        # TODO: 完整实现
+        raise NotImplementedError("GitHub get_run 待实现")
+
+    def list_runs(
+        self,
+        workspace_id: Optional[str] = None,
+        status: Optional[RunStatus] = None
+    ) -> List[Run]:
+        """列出编排运行历史
+
+        GitHub 实现：从本地目录扫描或查询 tracking issues
+        """
+        # TODO: 完整实现
+        return []
+
+    def delete_run(self, run_id: str):
+        """删除编排运行记录
+
+        GitHub 实现：删除本地文件或关闭 tracking issue
+        """
+        # TODO: 完整实现
+        raise NotImplementedError("GitHub delete_run 待实现")

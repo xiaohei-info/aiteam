@@ -4,7 +4,7 @@
 from typing import Dict, Type, Optional
 from pathlib import Path
 from .base import CollaborationEngine
-from .models import EngineConfig, WorkspaceInfo, WorkItem, WorkItemStatus
+from .models import EngineConfig, WorkspaceInfo, WorkItem, WorkItemStatus, Run, RunStatus
 
 
 class EngineFactory:
@@ -145,6 +145,8 @@ __all__ = [
     'WorkspaceInfo',
     'WorkItem',
     'WorkItemStatus',
+    'Run',
+    'RunStatus',
 
     # 工厂
     'EngineFactory',

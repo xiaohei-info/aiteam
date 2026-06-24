@@ -3,7 +3,7 @@ CollaborationEngine 抽象接口 - 纯业务语义
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
 
 
 class CollaborationEngine(ABC):
@@ -262,3 +262,104 @@ class CollaborationEngine(ABC):
     def mark_in_review(self, item_id: str):
         """标记为审核中（便捷方法）"""
         self.update_status(item_id, WorkItemStatus.IN_REVIEW)
+
+    # ==================== Run 生命周期管理（4 个核心接口）====================
+
+    @abstractmethod
+    def create_run(
+        self,
+        workspace_id: str,
+        manifest: Any,  # Manifest 对象
+        orchestrator_issue_id: Optional[str] = None
+    ) -> Run:
+        """创建新的编排运行
+
+        业务语义：启动一个新的 DAG 编排
+
+        引擎内部职责：
+        - 生成 run_id
+        - 保存 manifest（如何保存由引擎决定）
+        - 初始化内部状态（如何保存由引擎决定）
+        - 为所有 DAG 节点创建工作单元
+
+        实现方式：
+        - multica: 保存到 orchestrator issue 的 metadata + 附件
+        - github: 保存到本地文件或 tracking issue
+        - mock: 保存到本地 .multica_state/
+
+        返回：Run 对象（包含 id/status/progress 等业务信息）
+        """
+        pass
+
+    @abstractmethod
+    def get_run(self, run_id: str) -> Optional[Run]:
+        """获取编排运行的当前状态
+
+        业务语义：查询某个编排的实时状态和进度
+
+        引擎内部职责：
+        - 从存储加载基本信息（如何加载由引擎决定）
+        - 查询关联的工作单元状态
+        - 计算实时进度
+
+        返回：Run 对象（包含最新的进度信息），不存在返回 None
+        """
+        pass
+
+    @abstractmethod
+    def list_runs(
+        self,
+        workspace_id: Optional[str] = None,
+        status: Optional[RunStatus] = None
+    ) -> List[Run]:
+        """列出编排运行历史
+
+        业务语义：查看历史编排记录，可按工作空间和状态过滤
+
+        实现方式：
+        - multica: 从 orchestrator issue metadata 提取
+        - github: 从本地目录扫描
+        - mock: 从本地目录扫描
+
+        返回：Run 对象列表（按创建时间倒序）
+        """
+        pass
+
+    @abstractmethod
+    def delete_run(self, run_id: str):
+        """删除编排运行记录
+
+        业务语义：清理历史编排数据
+
+        引擎内部职责：
+        - 删除保存的 manifest
+        - 删除保存的状态
+        - 删除事件日志
+        - 不删除创建的工作单元（用户可能还需要）
+
+        注意：如果引擎不支持删除，可以抛出 NotImplementedError
+        """
+        pass
+
+    # ==================== 内部辅助方法（供子类使用，不是抽象接口）====================
+
+    def _save_checkpoint(self, run_id: str, key_to_id: Dict[str, str], completed: List[str], failed: List[str]):
+        """内部方法：保存检查点（子类可选实现）
+
+        业务层不调用此方法，由引擎在关键节点自动调用
+        """
+        pass
+
+    def _load_checkpoint(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """内部方法：加载检查点（子类可选实现）
+
+        返回：{"key_to_id": {...}, "completed": [...], "failed": [...]}
+        """
+        return None
+
+    def _log_event(self, run_id: str, event_type: str, data: Dict[str, Any]):
+        """内部方法：记录事件（子类可选实现）
+
+        业务层不调用此方法，由引擎在关键节点自动调用
+        """
+        pass
