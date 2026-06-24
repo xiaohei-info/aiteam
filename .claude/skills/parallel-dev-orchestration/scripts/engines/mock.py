@@ -35,13 +35,6 @@ class MockEngine(CollaborationEngine):
         self._auto_complete_delay = int(config.extra.get('MOCK_AUTO_COMPLETE_DELAY', '2'))  # 秒
         self._assigned_items: Dict[str, float] = {}  # item_id -> assign_time
 
-        # 故障模拟（测试改派挂起链路用）：
-        # MOCK_FAILING_WORKERS="alice,bob" → 这些 worker 接到任务即失败
-        # MOCK_FAILURE_REASON="quota exhausted" → 失败原因（命中关键词则判不可恢复）
-        failing = config.extra.get('MOCK_FAILING_WORKERS', '')
-        self._failing_workers = {w.strip() for w in failing.split(',') if w.strip()}
-        self._failure_reason = config.extra.get('MOCK_FAILURE_REASON', 'quota exhausted')
-
         # 本地存储目录（用于持久化）
         self._state_dir = Path(config.extra.get('MOCK_STATE_DIR', '.multica_state'))
         self._state_dir.mkdir(exist_ok=True)
@@ -79,13 +72,6 @@ class MockEngine(CollaborationEngine):
         if elapsed >= self._auto_complete_delay:
             # 自动完成
             if item.status == WorkItemStatus.IN_PROGRESS:
-                # 故障模拟：当前 worker 在失败名单 → 标 FAILED 并带 failure_reason
-                if item.worker in self._failing_workers:
-                    print(f"[Mock] 💥 worker '{item.worker}' 故障：{self._failure_reason}")
-                    item.status = WorkItemStatus.FAILED
-                    item.failure_reason = self._failure_reason
-                    del self._assigned_items[item_id]
-                    return
                 print(f"[Mock] 🤖 自动完成任务 {item_id}")
                 item.status = WorkItemStatus.DONE
                 # 模拟产物
@@ -303,24 +289,51 @@ class MockEngine(CollaborationEngine):
                 import yaml
                 yaml.dump(manifest.__dict__, f)
 
-        # 创建工作单元
+        # 创建工作单元（幂等：按 dag_key 去重，已 DONE 的复用其产物不重派，非 DONE 的重置后重派）
         key_to_id = {}
+        precompleted = []  # 复用的 DONE 节点（execute_dag 直接计入 completed，不重派）
+        reused_done = 0
+        reset_for_rerun = 0
+        created_new = 0
         for key, node in manifest.nodes.items():
+            existing = self.find_work_item_by_dag_key(workspace_id, key)
+            if existing and existing.status == WorkItemStatus.DONE:
+                # 已成功执行过的节点：复用其 item_id 与产物，跳过派发
+                key_to_id[key] = existing.id
+                precompleted.append(key)
+                reused_done += 1
+                print(f"[Mock] 复用已完成任务 {existing.id}（dag_key={key}），跳过派发")
+                continue
+
             node_title = getattr(node, 'title', None) or key
             node_desc = getattr(node, 'description', None) or f"Task {key}"
 
-            work_item = self.create_work_item(
-                workspace_id=workspace_id,
-                title=node_title,
-                description=node_desc,
-                dag_key=key,
-                worker=node.worker,
-                reviewer=getattr(node, 'reviewer', None),
-                blocked_by=node.blocked_by,
-                wave=getattr(node, 'wave', None),
-                initial_status=WorkItemStatus.TODO
-            )
-            key_to_id[key] = work_item.id
+            if existing:
+                # 非 DONE（BLOCKED/FAILED/INFLIGHT/TODO）：复用 item_id，重置为 TODO 以便重派
+                existing.status = WorkItemStatus.TODO
+                existing.artifacts = None
+                existing.review_verdict = None
+                existing.review_comment = None
+                key_to_id[key] = existing.id
+                reset_for_rerun += 1
+                print(f"[Mock] 重置未完成任务 {existing.id}（dag_key={key}）为 TODO 重派")
+            else:
+                work_item = self.create_work_item(
+                    workspace_id=workspace_id,
+                    title=node_title,
+                    description=node_desc,
+                    dag_key=key,
+                    worker=node.worker,
+                    reviewer=getattr(node, 'reviewer', None),
+                    blocked_by=node.blocked_by,
+                    wave=getattr(node, 'wave', None),
+                    initial_status=WorkItemStatus.TODO
+                )
+                key_to_id[key] = work_item.id
+                created_new += 1
+
+        if reused_done or reset_for_rerun:
+            print(f"[Mock] 幂等去重: 复用 DONE {reused_done} / 重置重派 {reset_for_rerun} / 新建 {created_new}")
 
         # 创建 Run 对象
         now = datetime.now()
@@ -332,7 +345,7 @@ class MockEngine(CollaborationEngine):
             created_at=now,
             updated_at=now,
             total_tasks=len(manifest.nodes),
-            completed_tasks=0,
+            completed_tasks=len(precompleted),
             failed_tasks=0,
             orchestrator_issue_id=orchestrator_issue_id
         )
@@ -340,8 +353,8 @@ class MockEngine(CollaborationEngine):
         # 保存 Run
         self._runs[run_id] = run
 
-        # 保存初始检查点
-        self._save_checkpoint(run_id, key_to_id, [], [])
+        # 保存初始检查点（含已复用的 DONE 节点，作为 execute_dag 的 completed 种子）
+        self._save_checkpoint(run_id, key_to_id, precompleted, [])
 
         # 保存 Run 元数据到本地
         run_meta_path = run_dir / "run.json"

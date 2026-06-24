@@ -6,7 +6,6 @@ from .compile import compile_manifest
 from .graph import frontier, downstream_of, is_done, all_terminal
 from .lint import lint
 from .models import EngineState
-from .failure import is_unrecoverable, UNRECOVERABLE_KEYWORDS
 
 __all__ = [
     'load_manifest', 'Manifest', 'Node',
@@ -14,5 +13,4 @@ __all__ = [
     'frontier', 'downstream_of', 'is_done', 'all_terminal',
     'lint',
     'EngineState',
-    'is_unrecoverable', 'UNRECOVERABLE_KEYWORDS',
 ]
