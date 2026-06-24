@@ -507,19 +507,33 @@ python scripts/run_dag.py --help
 
 ---
 
-## 处理失败与重试
+引擎把失败分成**两类**，分别走不同链路——这是「可恢复 vs 不可恢复」的确定性判定，无需你临场判断：
 
-如果某节点 failed:
-- **失败隔离**: 引擎自动标记该节点的下游为 blocked(不再派发)
-- **其它分支继续**: 独立 track 不受影响
-- **你的决策**:
-  1. 分析失败原因(从 issue comment / PR / run messages 读)
-  2. 调整 manifest:
-     - 换 worker(换个擅长的 agent)
-     - 拆小(一个节点拆成 2-3 个小节点)
-     - 降范围(砍非核心需求)
-  3. 重跑 `run_dag.py`(status 持久,已 done 不重做)
-  4. 或接受部分失败,汇总给用户
+### A. 任务逻辑失败（可恢复）→ 引擎隔离下游、计入 failed
+
+worker 跑完但产物不达标、测试不过、reviewer 打回等——是任务本身的问题，换 worker 也未必好。引擎自动：
+- 标该节点 `blocked`、计入 `failed`、**隔离其下游**（不再派发）
+- 独立 track 不受影响，继续跑
+
+**你的决策**（leader）：
+1. 分析失败原因(从 issue comment / PR / run messages 读)
+2. 调整 manifest：换 worker / 拆小 / 降范围
+3. 重跑 `run_dag.py`(status 持久,已 done 不重做)；或接受部分失败汇总给用户
+
+### B. worker 不可恢复故障 → 引擎挂起节点、等你改派（不自动换人）
+
+worker 自己挂了——额度用完、余额不足、进程崩溃、连续失败超阈值。换个 worker 就能继续，不该让下游一起阵亡。引擎自动判定并处理：
+
+- **判定信号**（确定性，固化在引擎）：失败原因命中关键词（配额/余额/insufficient/credit/rate limit/崩溃/鉴权失效…），**或** 同一节点连续失败 ≥ `max_consecutive_failures`（默认 3，env `MAX_CONSECUTIVE_FAILURES` 可配）
+- **引擎做什么**：把该 worker 标为本 run 内不可用（不再派活）、节点置为 `needs_reassign`（**不计 failed、不隔离下游**——下游只是暂等）、写 `node_needs_reassign` 事件，然后**挂起该节点继续跑其他分支**
+- **引擎不做什么**：不自作主张换 worker（换成谁需要全局上下文——哪个 agent 还有额度、谁擅长后端，只有你知道）
+
+**你的决策**（leader）：
+1. 看引擎结束时打印的「待改派清单」或 `node_needs_reassign` 事件
+2. 改 manifest：把该节点 worker 换成一个**真正可用**的 agent（避开已被标不可用的）
+3. 重跑——待改派节点用新 worker 重新派发，下游随之解锁（status 持久，已 done 不重做）
+
+> 一句话：**引擎判定+隔离+挂起（确定性），你决策改派+续跑（带全局上下文）**。和「失败隔离引擎自动 / 失败决策 leader 调 manifest」一脉相承。
 
 **失败示例与调整**:
 ```yaml

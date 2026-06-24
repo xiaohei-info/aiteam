@@ -13,8 +13,9 @@ class WorkItemStatus(Enum):
     IN_PROGRESS = "in_progress"
     IN_REVIEW = "in_review"
     DONE = "done"
-    FAILED = "failed"
+    FAILED = "failed"          # 任务逻辑失败（隔离下游，计入 failed）
     BLOCKED = "blocked"
+    NEEDS_REASSIGN = "needs_reassign"  # worker 不可恢复故障，待 leader 改派（不隔离下游、不计 failed）
 
 
 @dataclass
@@ -50,6 +51,9 @@ class WorkItem:
     review_verdict: Optional[str] = None
     # 可能的值: "pass" | "pass-with-nits" | "blocked" | "needs-changes"
     review_comment: Optional[str] = None
+
+    # worker run 失败的 runtime 原因文本（用于判定可恢复 vs 不可恢复）
+    failure_reason: Optional[str] = None
 
     def is_completed(self) -> bool:
         """是否已完成"""
@@ -157,6 +161,9 @@ class EngineConfig:
     polling_interval_min: int = 10
     polling_interval_max: int = 300
 
+    # 同一节点连续失败达此次数即判 worker 不可用、挂起待改派
+    max_consecutive_failures: int = 3
+
     # 引擎特定配置（可选）
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -186,5 +193,6 @@ class EngineConfig:
             polling_interval=polling_interval,
             polling_interval_min=polling_interval_min,
             polling_interval_max=polling_interval_max,
+            max_consecutive_failures=int(env_dict.get('MAX_CONSECUTIVE_FAILURES', '3')),
             extra=env_dict
         )

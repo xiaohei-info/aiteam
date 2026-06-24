@@ -16,7 +16,7 @@ from typing import Dict, Set, Optional
 # 添加当前目录到 path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core import load_manifest, Manifest, lint, frontier, downstream_of
+from core import load_manifest, Manifest, lint, frontier, downstream_of, is_unrecoverable
 from utils import format_duration
 
 # 引入引擎
@@ -31,10 +31,12 @@ def dispatch_worker(
     item_id: str,
     worker_name: str,
     run: Run
-) -> str:
+) -> tuple[str, Optional[str]]:
     """派发 worker：assign → 轮询到完成 → 检查产物
 
-    返回: "ok" | "failed"
+    返回: (result, reason)
+      - ("ok", None)
+      - ("failed", <失败原因文本>) —— reason 供上层判定可恢复 vs 不可恢复
     """
     # 分配任务给 worker
     engine.assign_work_item(item_id, worker_name, "worker")
@@ -68,7 +70,7 @@ def dispatch_worker(
                     "node_key": key,
                     "artifacts": work_item.artifacts
                 })
-                return "ok"
+                return "ok", None
             else:
                 reason = "缺少 PR 产物"
                 print(f"  ❌ 任务 {key} 失败: {reason}")
@@ -76,24 +78,26 @@ def dispatch_worker(
                     "node_key": key,
                     "reason": reason
                 })
-                return "failed"
+                return "failed", reason
 
         elif work_item.status == WorkItemStatus.FAILED:
-            reason = "Worker run failed"
+            # 失败原因优先取 work_item.failure_reason（runtime 原因），供可恢复性判定
+            reason = work_item.failure_reason or "Worker run failed"
             print(f"  ❌ 任务 {key} 失败: {reason}")
             engine._log_event(run.id, "node_failed", {
                 "node_key": key,
                 "reason": reason
             })
-            return "failed"
+            return "failed", reason
 
     # 超时
+    reason = "执行超时"
     print(f"  ⏰ 任务 {key} 超时")
     engine._log_event(run.id, "node_failed", {
         "node_key": key,
-        "reason": "执行超时"
+        "reason": reason
     })
-    return "failed"
+    return "failed", reason
 
 
 def run_gate(
@@ -166,9 +170,25 @@ def execute_dag(
     workspace_id = run.workspace_id
     completed = set()
     failed = set()
+    needs_reassign = set()              # worker 不可恢复故障、挂起待 leader 改派的节点
+    unavailable_workers = set()         # 本 run 内被判不可用的 worker，不再派活
+    node_fail_count: Dict[str, int] = {}  # 每节点连续失败次数（计数兜底）
+    max_fails = engine.config.max_consecutive_failures
 
     print(f"\n=== 开始执行 DAG ===")
     print(f"  总任务数: {run.total_tasks}")
+
+    def _suspend_for_reassign(key, item_id, worker, reason):
+        """判 worker 不可用：隔离该 worker、挂起节点、写改派事件——不计 failed、不隔离下游"""
+        unavailable_workers.add(worker)
+        needs_reassign.add(key)
+        engine.update_status(item_id, WorkItemStatus.NEEDS_REASSIGN)
+        engine._log_event(run.id, "node_needs_reassign", {
+            "node_key": key,
+            "worker": worker,
+            "reason": reason
+        })
+        print(f"  🔁 节点 {key} 待改派：worker '{worker}' 不可用（{reason}）")
 
     while True:
         # 读取当前状态快照
@@ -183,19 +203,17 @@ def execute_dag(
                 "blocked_by": work_item.blocked_by
             }
 
-        # 计算 frontier（考虑失败隔离）
+        # 计算 frontier（仅 failed 隔离下游；needs_reassign 不隔离下游）
         blocked = downstream_of(snapshot, failed)
-        ready = [k for k in frontier(snapshot) if k not in blocked and k not in failed and k not in completed]
+        ready = [k for k in frontier(snapshot)
+                 if k not in blocked and k not in failed and k not in completed
+                 and k not in needs_reassign]
 
+        # 同步执行（顺序、阻塞到终态）：循环顶端不存在 in-flight 节点，
+        # 故 ready 为空即表示再无可推进节点 → 收口。剩余 todo 节点是失败/待改派的下游，
+        # 它们因上游永不完成而卡住，归入 blocked_leftover 报告，不算成功。
         if not ready:
-            # 检查是否全部完成或失败
-            if len(completed) + len(failed) >= len(key_to_id):
-                break
-
-            # 还有任务但都被阻塞，继续等待
-            print(f"  ⏸️  所有任务都被阻塞，等待 {engine.config.polling_interval}s 后重试...")
-            time.sleep(engine.config.polling_interval)
-            continue
+            break
 
         # 派发任务（简化：顺序执行）
         for key in ready[:1]:  # 一次只处理一个
@@ -208,12 +226,17 @@ def execute_dag(
 
             # 派发 worker
             engine.update_status(item_id, WorkItemStatus.IN_PROGRESS)
-            result = dispatch_worker(engine, key, item_id, worker, run)
+            result, reason = dispatch_worker(engine, key, item_id, worker, run)
 
             if result != "ok":
-                engine.update_status(item_id, WorkItemStatus.BLOCKED)
-                failed.add(key)
-                # 保存检查点
+                node_fail_count[key] = node_fail_count.get(key, 0) + 1
+                # 不可恢复信号：原因命中关键词，或同节点连续失败达阈值
+                if is_unrecoverable(reason) or node_fail_count[key] >= max_fails:
+                    _suspend_for_reassign(key, item_id, worker, reason)
+                else:
+                    # 可恢复/逻辑失败：标 BLOCKED、计 failed、隔离下游
+                    engine.update_status(item_id, WorkItemStatus.BLOCKED)
+                    failed.add(key)
                 engine._save_checkpoint(run.id, key_to_id, list(completed), list(failed))
                 continue
 
@@ -240,12 +263,19 @@ def execute_dag(
     print(f"\n=== DAG 执行完成 ===")
     print(f"  ✅ 完成: {len(completed)}/{run.total_tasks}")
     print(f"  ❌ 失败: {len(failed)}/{run.total_tasks}")
+    print(f"  🔁 待改派: {len(needs_reassign)}/{run.total_tasks}")
     print(f"  📊 成功率: {len(completed) / run.total_tasks * 100:.1f}%")
+
+    if needs_reassign:
+        print(f"\n⚠️  以下节点的 worker 不可用，需改派后续跑（改 manifest 换 worker → --resume {run.id}）:")
+        for key in sorted(needs_reassign):
+            print(f"  - {key}: 原 worker '{manifest.nodes[key].worker}' 不可用")
 
     # 记录完成事件
     engine._log_event(run.id, "engine_completed", {
         "completed": list(completed),
         "failed": list(failed),
+        "needs_reassign": list(needs_reassign),
         "success_rate": len(completed) / run.total_tasks * 100 if run.total_tasks > 0 else 0
     })
 

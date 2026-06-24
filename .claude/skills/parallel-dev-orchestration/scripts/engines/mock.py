@@ -35,6 +35,13 @@ class MockEngine(CollaborationEngine):
         self._auto_complete_delay = int(config.extra.get('MOCK_AUTO_COMPLETE_DELAY', '2'))  # 秒
         self._assigned_items: Dict[str, float] = {}  # item_id -> assign_time
 
+        # 故障模拟（测试改派挂起链路用）：
+        # MOCK_FAILING_WORKERS="alice,bob" → 这些 worker 接到任务即失败
+        # MOCK_FAILURE_REASON="quota exhausted" → 失败原因（命中关键词则判不可恢复）
+        failing = config.extra.get('MOCK_FAILING_WORKERS', '')
+        self._failing_workers = {w.strip() for w in failing.split(',') if w.strip()}
+        self._failure_reason = config.extra.get('MOCK_FAILURE_REASON', 'quota exhausted')
+
         # 本地存储目录（用于持久化）
         self._state_dir = Path(config.extra.get('MOCK_STATE_DIR', '.multica_state'))
         self._state_dir.mkdir(exist_ok=True)
@@ -72,6 +79,13 @@ class MockEngine(CollaborationEngine):
         if elapsed >= self._auto_complete_delay:
             # 自动完成
             if item.status == WorkItemStatus.IN_PROGRESS:
+                # 故障模拟：当前 worker 在失败名单 → 标 FAILED 并带 failure_reason
+                if item.worker in self._failing_workers:
+                    print(f"[Mock] 💥 worker '{item.worker}' 故障：{self._failure_reason}")
+                    item.status = WorkItemStatus.FAILED
+                    item.failure_reason = self._failure_reason
+                    del self._assigned_items[item_id]
+                    return
                 print(f"[Mock] 🤖 自动完成任务 {item_id}")
                 item.status = WorkItemStatus.DONE
                 # 模拟产物
