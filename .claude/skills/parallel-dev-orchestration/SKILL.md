@@ -42,13 +42,13 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动�
 ## 你的职责
 
 1. **拆解任务** → 从设计文档产出 manifest.yaml（创造性工作：理解需求、识别模块边界、设计依赖图）
-2. **启动编排** → 调用引擎脚本 `python scripts/run_dag.py --help` 查看完整用法
+2. **启动编排** → 调用 `python scripts/run_dag.py --help` 查看完整用法
 3. **处理失败** → 当引擎报告节点失败时，分析原因、调整 manifest、决定策略（重跑/降范围/换 agent）
 4. **汇总收尾** → 引擎完成后，输出决策日志与交付总结
 
 **你的工具箱**：
-- `python scripts/run_dag.py --help` — 查看引擎脚本完整用法
-- 引擎适配器命令（Multica: `multica --help`, GitHub: `gh --help`）— 查看平台特定能力
+- `python scripts/run_dag.py --help` — 查看编排脚本完整用法，这是你的总入口
+- 不要直接操作底层引擎 CLI（multica/gh 等）—— 派发、轮询、状态更新都由 `run_dag.py` 统一完成
 - 不要编造参数 — `--help` 是权威清单
 
 **核心原则**: 你只拆、只策、只收。引擎自动执行：
@@ -213,7 +213,7 @@ user-api
 ```
 
 **关键字段**:
-- `squad`: workspace ID，由引擎提供（Multica 通过 `workspace list`，GitHub 通过 `org/repo`，Mock 使用本地 ID）
+- `squad`: workspace ID（manifest 的 workspace 标识，具体取值由所选引擎决定）
 - `nodes.<key>.worker`: worker agent 名(必须∈workspace agents)
 - `nodes.<key>.reviewer`: reviewer agent 名(可选,非空时必须≠worker)
 - `nodes.<key>.depends_on`: 依赖节点 key 列表(空 = Wave 0 可立即开始)
@@ -236,8 +236,8 @@ user-api
 从 workspace agents 中按 role 字段选择（**不要写死 agent 名字**）。
 
 **查询 agents**：
-- 使用引擎提供的查询命令（Multica: `multica agent --help`，GitHub: `gh api` 相关端点）
-- 不要编造命令 — 先跑 `--help` 查看实际可用的子命令和参数
+- workspace 中的 agent 列表由用户提供，或从团队配置中获取
+- 不要直接调用底层引擎 CLI 去查询 —— 你的入口是 `run_dag.py`
 
 **Role 定义**：
 - `role: "worker"`: 工作 agent，负责实现任务（后端/前端/数据处理/复杂逻辑）
@@ -406,7 +406,7 @@ nodes:
    - PR 链接列表
    - 已知问题与限制
 2. **写决策日志**:
-   - 根据使用的引擎记录活动（Multica 使用 `squad activity`，GitHub 创建 issue comment）
+   - 引擎已把运行过程记录到 work item 的事件日志，你只需汇总digest 向用户汇报
 3. **向用户汇报**:
    - 交付物(PR 列表 / 集成分支)
    - 验收状态(哪些通过、哪些有限制)
@@ -598,7 +598,7 @@ python scripts/run_dag.py --help
 **如何让执行者知道这个机制**：
 - 该机制已写入 `parallel-dev-executor` skill（Executor Skill）
 - Worker 在认领 issue 后，执行协议第 3 步"按需拆解"会指导使用 sub-issue
-- 使用引擎提供的子任务创建功能（Multica: `issue create --parent`，GitHub: sub-tasks）
+- 子任务创建由 worker 在执行侧按引擎能力完成（orchestrator 不直接操作底层引擎）
 - 父 issue 不会被自动关闭，需要所有 sub-issue 完成后手工关闭
 
 **你（orchestrator）的职责**：
@@ -865,7 +865,7 @@ python scripts/run_dag.py --help
 **如何让执行者知道这个机制**：
 - 该机制已写入 `parallel-dev-executor` skill（Executor Skill）
 - Worker 在认领 issue 后，执行协议第 3 步"按需拆解"会指导使用 sub-issue
-- 使用引擎提供的子任务创建功能（Multica: `issue create --parent`，GitHub: sub-tasks）
+- 子任务创建由 worker 在执行侧按引擎能力完成（orchestrator 不直接操作底层引擎）
 - 父 issue 不会被自动关闭，需要所有 sub-issue 完成后手工关闭
 
 **你（orchestrator）的职责**：

@@ -75,10 +75,9 @@ description: Worker/Reviewer 在并行开发机制中的执行协议——从 me
 ### 1. 认领前检查
 ```bash
 # 确认依赖已关闭（实时查询，不信列表快照）
-# 使用引擎提供的查询命令，例如 Multica: `multica issue --help`
 # 查询 work item 的 blocked_by metadata，确保依赖已完成
 ```
-- 使用引擎命令认领并标记状态（具体命令见引擎文档）
+- 使用引擎 CLI 认领并标记进行中（先跑 `<engine-cli> --help` 查看子命令，不要编造参数）
 
 ### 2. 读全唯一口径
 - 打开 issue body 中的 **🎯 目标** 与 **定位表** 找到唯一口径文档
@@ -122,19 +121,13 @@ git push origin <branch-name>
 
 # 开 PR（base = 集成分支）
 # 使用 gh/hub 或其他工具，确保 base 指向集成分支
-
-# 写 metadata 证据
-# 使用引擎命令写入证据（具体命令见引擎文档）
-# 需记录：PR URL、分支名、测试命令、验证结果、已知问题
 ```
+- 写 metadata 证据：用引擎 CLI 写入 `artifacts`（PR URL/分支/测试命令）和 `verification`（测试结果/手工验证路径），可选 `known_issues`
+- 命令和参数以 `<engine-cli> --help` 为准，不要编造
 
 ### 8. 写 comment + 转状态
-```bash
-# 写 comment 汇总完成情况
-# 使用引擎命令添加评论和更新状态
-# 内容包括：PR 链接、验证结果、手工验证路径、已知限制
-# 使用引擎命令更新状态 <issue-id> --status in_review
-```
+- 用引擎 CLI 写 comment 汇总（PR 链接、验证结果、手工验证路径、已知限制）
+- 将 work item 转为 `in_review` 状态，交给 reviewer
 
 ### Worker 禁止事项
 
@@ -149,21 +142,12 @@ git push origin <branch-name>
 当你是 reviewer 时，按以下顺序执行：
 
 ### 1. 接手前检查
-```bash
-# 确认 issue 已进入 in_review
-# 引擎特定命令示例（Multica）:
-# multica issue get <issue-id> --output json | jq '.status'
-# 确认 worker 已写证据
-# 引擎特定命令示例（Multica）:
-# multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
-```
+- 确认 work item 状态已进入 `in_review`
+- 确认 worker 已写入证据（`artifacts` 和 `verification` metadata）
+- 使用引擎 CLI 查询 work item metadata（先跑 `<engine-cli> --help`，不要编造参数）
 
 ### 2. 读取上游证据
-```bash
-# 提取 PR 链接、测试命令、验证路径
-# 引擎特定命令示例（Multica）:
-# multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
-```
+- 从 work item metadata 中提取 PR 链接、测试命令、验证路径
 - 找到 PR URL
 - 找到测试命令
 - 找到手工验证路径
@@ -251,18 +235,18 @@ pytest <test-path>  # 或 issue 指定的测试命令
 
 ```bash
 # 判决写入 metadata
-# 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "<pass|blocked|pass-with-nits>"
+# 使用引擎 CLI 设置 metadata
 ```
 
 **三种判决**：
 - **`pass`**：无 blocker，可合并
   ```bash
-  # 使用引擎命令更新状态 <issue-id> --status done
+  # 使用引擎 CLI 更新状态
   ```
 
 - **`blocked`**：有 blocker，必须返工
   ```bash
-  # 使用引擎命令添加评论 <issue-id> "
+  # 使用引擎 CLI 添加评论
   ❌ Blocked
   必修项：
   1. <精确描述 blocker + 修复方向>
@@ -274,15 +258,15 @@ pytest <test-path>  # 或 issue 指定的测试命令
 
 - **`pass-with-nits`**：可合并，但有建议
   ```bash
-  # 使用引擎命令设置 metadata <issue-id> --key known_issues --value "<nits 描述>"
-  # 使用引擎命令更新状态 <issue-id> --status done
+  # 使用引擎 CLI 设置 metadata
+  # 使用引擎 CLI 更新状态
   # nits 可以挂入后续卡或忽略
   ```
 
 ### 6. 写 comment 汇总
 
 ```bash
-# 使用引擎命令添加评论 <issue-id> "
+# 使用引擎 CLI 添加评论
 🔍 评审完成
 
 审查范围：
@@ -389,7 +373,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 
 **判决输出**：
 ```bash
-# 使用引擎命令添加评论 <issue-id> "
+# 使用引擎 CLI 添加评论
 🏗️ 架构评审完成
 
 ### 模块边界
@@ -421,8 +405,8 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 "
 
 # 写入判决
-# 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "blocked"
-# 使用引擎命令设置 metadata <issue-id> --key architecture_issues --value "循环依赖/越界依赖"
+# 使用引擎 CLI 设置 metadata
+# 使用引擎 CLI 设置 metadata
 ```
 
 ### Architect 禁止事项
@@ -502,17 +486,17 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 ### Worker 失败
 - 做不了 / 卡住 / 发现依赖有问题：
   ```bash
-  # 使用引擎命令添加评论 <issue-id> "<问题描述> + <建议方向>"
-  # 使用引擎命令设置 metadata <issue-id> --key known_issues --value "<问题>"
-  # 使用引擎命令更新状态 <issue-id> --status blocked
+  # 使用引擎 CLI 添加评论
+  # 使用引擎 CLI 设置 metadata
+  # 使用引擎 CLI 更新状态
   ```
 - 不要硬撑到 `in_review`，坦诚标 `blocked` 回流给编排器
 
 ### Reviewer blocked
 - 发现 blocker：
   ```bash
-  # 使用引擎命令添加评论 <issue-id> "❌ Blocked: <精确描述>"
-  # 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "blocked"
+  # 使用引擎 CLI 添加评论
+  # 使用引擎 CLI 设置 metadata
   # 保持 in_review 或改回 todo，等 worker 返工
   ```
 - 不要自己改，回流给 worker
