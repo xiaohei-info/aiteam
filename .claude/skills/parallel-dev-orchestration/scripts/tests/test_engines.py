@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from engines import create_engine_from_config, WorkItemStatus
 
 
-def test_engine(engine_type: str, workspace_id: str):
+def run_engine_interface_test(engine_type: str, workspace_id: str):
     """测试引擎的核心接口"""
     print(f"\n{'='*60}")
     print(f"测试 {engine_type.upper()} 引擎")

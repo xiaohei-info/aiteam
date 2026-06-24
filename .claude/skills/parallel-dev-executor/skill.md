@@ -105,6 +105,9 @@ git checkout -b <prefix>/<issue-key>-<slug> origin/<integration-branch>
 - **实现**：只 import 共享契约，守红线与非目标
 - **验证**：测试全绿，手工验证关键路径
 
+**完成判定铁律**：必须装全依赖 + 跑**全量测试套件**（不只跑本模块），绝不只跑子集。
+真实教训：worker 在新 worktree 只装本模块依赖、只跑本模块用例，缺依赖致跨模块测试被静默跳过，误判"全绿完成"。
+
 ### 6. 验收自查
 对照 issue body 的 **✅ 验收** 清单，逐条勾完：
 - [ ] 测试全绿（运行测试命令，截图或复制输出）
@@ -172,6 +175,9 @@ pytest <test-path>  # 或 issue 指定的测试命令
 
 **为什么必须看 diff**：worker 的 prose 总结可能漏掉关键改动、或美化实际情况；只有 diff 是真实的。
 
+**只读共享态铁律**：用 `git diff <集成分支>...<工作分支>` / `git show <ref>:<path>` 审阅。
+⚠️ **绝不在共享主工作树 reset/checkout/merge**（编排者可能正在那里集成，你一动就冲掉它）；要跑测试就进被审分支自己的 worktree 里跑。
+
 #### Superpowers 增强（如果可用）
 
 当你有 Superpowers skill 可用时，可以使用专门的 code-reviewer agent 进行深度审查：
@@ -230,6 +236,14 @@ pytest <test-path>  # 或 issue 指定的测试命令
 - **重要风险**（强烈建议修）：边界处理缺失、错误处理不当
 - **普通建议**（可后续）：性能优化、代码风格、注释完善
 - **风格偏好**（不拦）：个人习惯差异
+
+#### 契约存在性核对
+- 对 issue body 的「必消费契约」清单，逐个 grep 确认契约文件**已冻结**（存在且可 import）
+- 区分"该 import 却自造"（违规，必须 blocker）与"契约尚未定义的合理本地占位"（放行，但提 known_issues）
+
+#### 验收↔测试映射（强制产出表格）
+- 每条「验收」锚定到具体 test 函数，产出一张映射表
+- 无对应 test = 覆盖缺口，必须在 comment 中标出
 
 ### 5. 判决 + 写回
 
@@ -478,8 +492,8 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 - **仓库路径**：由 issue metadata 或编排引擎指定（通常是项目根目录）
 - **集成分支**：由 issue metadata 指定（如 `feature/v1.0.0`），不是 `master`
 - **Python 环境**：本机 python3 + pytest（或 issue 指定的测试框架）
-- **Multica CLI**：已配置，`multica issue` 命令可用
-- **Git/GitHub CLI**：`git` + `gh` 可用
+- **引擎 CLI**：所选协作引擎的客户端已配置（先跑 `<engine-cli> --help` 确认可用命令）
+- **Git CLI**：`git` 可用；提 PR 用 `gh` 或项目约定的工具
 
 ## 失败处理
 
@@ -526,7 +540,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 5. **PR base**：必须指向 `<integration-branch>`，不是 master
 
 **执行协议**：
-参照 `parallel-dev-executor-multica` skill 的 Worker 8 步清单
+参照 `parallel-dev-executor` skill 的 Worker 8 步清单
 
 **完成标准**：
 - 测试全绿（全量测试套件，不只本模块）
@@ -571,7 +585,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 - `pass-with-nits`: 可合并但有建议 → metadata.known_issues
 
 **执行协议**：
-参照 `parallel-dev-executor-multica` skill 的 Reviewer 6 步清单
+参照 `parallel-dev-executor` skill 的 Reviewer 6 步清单
 
 **Superpowers 增强**（如果可用）：
 使用 `requesting-code-review` + `code-reviewer` agent 进行深度审查，传递上述"只读共享态/入口/映射表"要求
@@ -597,7 +611,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 - 判决：必修项（架构问题）vs 建议项（优化方向）
 
 **执行协议**：
-参照 `parallel-dev-executor-multica` skill 的 Architect 执行清单
+参照 `parallel-dev-executor` skill 的 Architect 执行清单
 ```
 
 **注意**：这些 dispatch prompt 由编排引擎在派发时动态生成，不写入 issue body，而是注入到派发消息或 system prompt 中。
