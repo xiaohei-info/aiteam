@@ -1,11 +1,11 @@
 ---
-name: parallel-dev-executor-multica
-description: Worker/Reviewer 在 multica 并行开发机制中的执行协议——从 metadata 读配置、TDD 实现、独立复跑测试、产 gateable PR、写 metadata 证据
+name: parallel-dev-executor
+description: Worker/Reviewer 在并行开发机制中的执行协议——从 metadata 读配置、TDD 实现、独立复跑测试、产 gateable PR、写 metadata 证据，支持多种协作引擎
 ---
 
-# Multica 并行开发执行协议 (Worker/Reviewer)
+# 并行开发执行协议 (Worker/Reviewer)
 
-当你被 multica 编排机制派发任务（issue metadata 含 `worker`/`reviewer` 字段）时加载本 skill。
+当你被编排机制派发任务（work item metadata 含 `worker`/`reviewer` 字段）时加载本 skill。
 
 ## 你要解决什么问题
 
@@ -75,7 +75,8 @@ description: Worker/Reviewer 在 multica 并行开发机制中的执行协议—
 ### 1. 认领前检查
 ```bash
 # 确认依赖已关闭（实时查询，不信列表快照）
-multica issue get <issue-id> --output json | jq '.metadata.blocked_by'
+# 引擎特定命令示例（Multica）:
+# multica issue get <issue-id> --output json | jq '.metadata.blocked_by'
 # 如果非空，说明还有依赖未完成，不要强行开工
 ```
 - 原子认领：`multica issue assign <issue-id> --to <你的agent-id>`
@@ -161,15 +162,18 @@ multica issue update <issue-id> --status in_review
 ### 1. 接手前检查
 ```bash
 # 确认 issue 已进入 in_review
-multica issue get <issue-id> --output json | jq '.status'
+# 引擎特定命令示例（Multica）:
+# multica issue get <issue-id> --output json | jq '.status'
 # 确认 worker 已写证据
-multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
+# 引擎特定命令示例（Multica）:
+# multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
 ```
 
 ### 2. 读取上游证据
 ```bash
 # 提取 PR 链接、测试命令、验证路径
-multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
+# 引擎特定命令示例（Multica）:
+# multica issue get <issue-id> --output json | jq '.metadata.artifacts, .metadata.verification'
 ```
 - 找到 PR URL
 - 找到测试命令

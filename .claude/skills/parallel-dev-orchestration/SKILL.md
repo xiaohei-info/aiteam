@@ -1,13 +1,13 @@
 ---
-name: parallel-dev-orchestration-multica
-description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 multica 多 Agent 并行开发到收敛闭环，采用 Harness 动态编排机制
+name: parallel-dev-orchestration
+description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动多 Agent 并行开发到收敛闭环，采用 Harness 动态编排机制，支持 Multica/GitHub/Mock 等多种协作引擎
 ---
 
-# Multica 并行开发编排机制 (Orchestrator)
+# 并行开发编排机制 (Orchestrator)
 
-你作为 **leader**,在 multica 上编排并行开发任务时使用本 skill。
+你作为 **leader**,在协作平台上编排并行开发任务时使用本 skill。
 
-**核心**:契约先行方法论 + 声明式 manifest + 固定引擎 + multica 原生派发。
+**核心**:契约先行方法论 + 声明式 manifest + 固定引擎 + 多引擎适配（Multica/GitHub/Mock）。
 
 ---
 
@@ -43,9 +43,9 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 m
 
 1. **拆解任务** → 从设计文档产出 manifest.yaml（创造性工作：理解需求、识别模块边界、设计依赖图）
 2. **启动编排** → 调用引擎脚本：
-   - 新启动：`python scripts/run_dag.py <manifest.yaml> [--orchestrator-issue <issue-id>] [--storage multica]`
-   - 续跑：`python scripts/run_dag.py --resume <run-id> [--orchestrator-issue <issue-id>] [--storage multica]`
-   - 查看状态：`python scripts/run_dag.py --list`
+   - 新启动：`python scripts/run_dag.py <manifest.yaml> [--engine <multica|github|mock>] [--workspace-id <workspace-id>]`
+   - 续跑：`python scripts/run_dag.py --resume <run-id>`
+   - 查看状态：`python scripts/run_dag.py --list [--workspace-id <workspace-id>]`
 3. **处理失败** → 当引擎报告节点失败时，分析原因、调整 manifest、决定策略（重跑/降范围/换 agent）
 4. **汇总收尾** → 引擎完成后，输出决策日志与交付总结
 
@@ -56,16 +56,22 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动 m
 - ✅ 状态持久化（支持断点续跑）
 
 **引擎已自动化的内容**（你不需要手动做）：
-- ❌ 不需要手动 comment 进度（引擎每个节点状态变更自动 comment）
+- ❌ 不需要手动 comment 进度（引擎每个节点状态变更自动更新）
 - ❌ 不需要手动轮询状态（引擎自动轮询并更新）
 - ❌ 不需要手动计算 frontier（引擎自动计算）
 - ❌ 不需要手动隔离失败（引擎自动阻塞下游）
 
 **断点续跑支持**：
-- 引擎状态自动保存（本地文件或 multica issue metadata）
-- Manifest 自动保存（本地文件或 multica issue 附件）
+- 引擎状态自动保存到引擎后端（Multica metadata、GitHub issues、本地文件等）
+- Manifest 自动保存到引擎后端
 - 任何时候都可以用 `--resume <run-id>` 续跑
-- 换机器也能续跑（使用 `--storage multica` 模式）
+- 换机器也能续跑（使用云端存储的引擎如 Multica/GitHub）
+
+**多引擎支持**：
+- **Multica** - 云端协作平台，支持多租户、权限控制
+- **GitHub** - 基于 GitHub Issues 和 Projects
+- **Mock** - 本地模拟引擎，用于开发测试
+- 引擎配置通过环境变量或命令行参数指定
 
 ---
 
@@ -205,13 +211,8 @@ user-api
 ```
 
 **关键字段**:
-- `squad`: workspace ID，需要先获取并让用户确认：
-  ```bash
-  # 列出所有 workspace
-  multica workspace list --output json | jq '.[] | {id, name, description}'
-  # 让用户确认使用哪个，或由用户直接提供
-  ```
-- `nodes.<key>.worker`: worker agent 名(必须∈squad agents)
+- `squad`: workspace ID，由引擎提供（Multica 通过 `workspace list`，GitHub 通过 `org/repo`，Mock 使用本地 ID）
+- `nodes.<key>.worker`: worker agent 名(必须∈workspace agents)
 - `nodes.<key>.reviewer`: reviewer agent 名(可选,非空时必须≠worker)
 - `nodes.<key>.depends_on`: 依赖节点 key 列表(空 = Wave 0 可立即开始)
 - `nodes.<key>.gate`: 自定义验收条件(可选,默认="测试全绿")
@@ -232,10 +233,10 @@ user-api
 
 从 workspace agents 中按 role 字段选择（**不要写死 agent 名字**）：
 
-```bash
-# 查询 workspace 中所有 agent 及其 role
-multica agent list --workspace-id <workspace-id> --output json | jq '.[] | {name, role}'
-```
+**查询方式（根据引擎类型）**：
+- Multica: `multica agent list --workspace-id <workspace-id> --output json`
+- GitHub: 查看团队成员和 bot 配置
+- Mock: 本地配置文件
 
 **Role 定义**：
 - `role: "worker"`: 工作 agent，负责实现任务（后端/前端/数据处理/复杂逻辑）
@@ -307,16 +308,16 @@ nodes:
 #### 新启动 run
 
 ```bash
-python scripts/run_dag.py <manifest-path>
+python scripts/run_dag.py <manifest-path> [--engine <multica|github|mock>] [--workspace-id <workspace-id>]
 
-# 示例
-python scripts/run_dag.py /tmp/my-feature.yaml
+# 示例 - Multica 引擎
+python scripts/run_dag.py /tmp/my-feature.yaml --engine multica --workspace-id <workspace-id>
 
-# 如果有 orchestrator issue（推荐），可以指定以获得自动进度报告
-python scripts/run_dag.py /tmp/my-feature.yaml --orchestrator-issue <issue-id>
+# 示例 - GitHub 引擎
+python scripts/run_dag.py /tmp/my-feature.yaml --engine github --workspace-id <org/repo>
 
-# 使用 multica 存储（支持跨机器续跑）
-python scripts/run_dag.py /tmp/my-feature.yaml --orchestrator-issue <issue-id> --storage multica
+# 示例 - Mock 引擎（本地测试）
+python scripts/run_dag.py /tmp/my-feature.yaml --engine mock
 ```
 
 引擎会自动：
@@ -362,20 +363,17 @@ python scripts/run_dag.py --list
 
 # 续跑指定 run
 python scripts/run_dag.py --resume dag-20260624-143052-a3f9
-
-# 换机器续跑（需要使用 multica 存储）
-python scripts/run_dag.py --resume dag-20260624-143052-a3f9 --orchestrator-issue <issue-id> --storage multica
 ```
 
 **注意**：scripts 目录及其所有 Python 文件已作为本 skill 的附件上传，当你加载此 skill 时可直接访问。
 
 **引擎会自动**:
 1. **Lint 校验**(无环、worker∈池、reviewer≠worker)
-2. **创建 multica issues**(如果不存在,通过 title 匹配 key)
-3. **编译 metadata**(blocked_by/worker/reviewer → issue metadata)
+2. **创建 work items**(如果不存在,通过 title 匹配 key)
+3. **编译 metadata**(blocked_by/worker/reviewer → work item metadata)
 4. **循环监督**:
    - 计算 frontier(ready 节点 = todo 且依赖全 done)
-   - 派发 worker(`multica issue assign`)
+   - 派发 worker(自动 assign)
    - 轮询 runs 到终态
    - 检查 PR(从 metadata.artifacts 读)
    - 派发 reviewer(如有)
@@ -429,9 +427,7 @@ nodes:
    - PR 链接列表
    - 已知问题与限制
 2. **写决策日志**:
-   ```bash
-   multica squad activity <squad-id> --message "完成 XX 功能编排:done 8/10,failed 2(降范围),详见 issues"
-   ```
+   - 根据使用的引擎记录活动（Multica 使用 `squad activity`，GitHub 创建 issue comment）
 3. **向用户汇报**:
    - 交付物(PR 列表 / 集成分支)
    - 验收状态(哪些通过、哪些有限制)
@@ -475,7 +471,7 @@ nodes:
 
 ## 与 Executor Skill 的关系
 
-Worker/Reviewer 通过 `parallel-dev-executor-multica` skill 知道:
+Worker/Reviewer 通过 `parallel-dev-executor` skill 知道:
 - 从 issue metadata 读配置(worker/gate/blocked_by)
 - TDD 实现 → 产 PR → 写证据(metadata.artifacts)
 - Reviewer 复跑测试 → 判 verdict(metadata.review_verdict)
@@ -620,9 +616,9 @@ python scripts/run_dag.py /tmp/my-feature.yaml
 卡偏大时，由**领到它、已读完口径文档、具备完整上下文**的执行者，拆成 2–5 个子任务逐个执行。
 
 **如何让执行者知道这个机制**：
-- 该机制已写入 `parallel-dev-executor-multica` skill（Executor Skill）
+- 该机制已写入 `parallel-dev-executor` skill（Executor Skill）
 - Worker 在认领 issue 后，执行协议第 3 步"按需拆解"会指导使用 sub-issue
-- 使用 `multica issue create --parent <issue-id>` 创建子 issue
+- 使用引擎提供的子任务创建功能（Multica: `issue create --parent`，GitHub: sub-tasks）
 - 父 issue 不会被自动关闭，需要所有 sub-issue 完成后手工关闭
 
 **你（orchestrator）的职责**：
@@ -666,7 +662,7 @@ python scripts/run_dag.py /tmp/my-feature.yaml
 
 ## Issue 描述结构化模板
 
-虽然 manifest 是 YAML，但创建 multica issue 时，**description 字段应遵循结构化模板**，使 worker/reviewer 能快速定位关键信息：
+虽然 manifest 是 YAML，但创建 work item 时，**description 字段应遵循结构化模板**，使 worker/reviewer 能快速定位关键信息：
 
 ```markdown
 ## 工单卡 · <KEY> <名>
@@ -708,7 +704,7 @@ python scripts/run_dag.py /tmp/my-feature.yaml
 - `tests/integration/test_module_integration.py`
 
 ### 🤖 执行协议
-Worker/Reviewer 执行协议详见 `parallel-dev-executor-multica` skill（Executor Skill）。
+Worker/Reviewer 执行协议详见 `parallel-dev-executor` skill（Executor Skill）。
 ```
 
 **关键**：
@@ -720,7 +716,7 @@ Worker/Reviewer 执行协议详见 `parallel-dev-executor-multica` skill（Execu
 
 ## 与 Executor Skill 的关系
 
-Worker/Reviewer 通过 `parallel-dev-executor-multica` skill 知道：
+Worker/Reviewer 通过 `parallel-dev-executor` skill 知道：
 - 从 issue metadata 读配置（worker/gate/blocked_by）
 - Worker 8 步执行清单：认领前检查 → 读全口径 → 按需拆解 → 切分支 → TDD 实现 → 验收自查 → 提交与写证据 → 转 in_review
 - Reviewer 6 步执行清单：接手前检查 → 读取证据 → 独立复跑验证（收活铁律）→ 质量审查 → 判决 → 写回
@@ -741,7 +737,7 @@ Worker/Reviewer 通过 `parallel-dev-executor-multica` skill 知道：
 
 ## 与 Executor Skill 的关系
 
-Worker/Reviewer 通过 `parallel-dev-executor-multica` skill 知道:
+Worker/Reviewer 通过 `parallel-dev-executor` skill 知道:
 - 从 issue metadata 读配置(worker/gate/blocked_by)
 - TDD 实现 → 产 PR → 写证据(metadata.artifacts)
 - Reviewer 复跑测试 → 判 verdict(metadata.review_verdict)
@@ -886,9 +882,9 @@ python scripts/run_dag.py /tmp/my-feature.yaml
 卡偏大时，由**领到它、已读完口径文档、具备完整上下文**的执行者，拆成 2–5 个子任务逐个执行。
 
 **如何让执行者知道这个机制**：
-- 该机制已写入 `parallel-dev-executor-multica` skill（Executor Skill）
+- 该机制已写入 `parallel-dev-executor` skill（Executor Skill）
 - Worker 在认领 issue 后，执行协议第 3 步"按需拆解"会指导使用 sub-issue
-- 使用 `multica issue create --parent <issue-id>` 创建子 issue
+- 使用引擎提供的子任务创建功能（Multica: `issue create --parent`，GitHub: sub-tasks）
 - 父 issue 不会被自动关闭，需要所有 sub-issue 完成后手工关闭
 
 **你（orchestrator）的职责**：
@@ -932,7 +928,7 @@ python scripts/run_dag.py /tmp/my-feature.yaml
 
 ## Issue 描述结构化模板
 
-虽然 manifest 是 YAML，但创建 multica issue 时，**description 字段应遵循结构化模板**，使 worker/reviewer 能快速定位关键信息：
+虽然 manifest 是 YAML，但创建 work item 时，**description 字段应遵循结构化模板**，使 worker/reviewer 能快速定位关键信息：
 
 ```markdown
 ## 工单卡 · <KEY> <名>
