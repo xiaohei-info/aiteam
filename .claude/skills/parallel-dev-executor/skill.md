@@ -75,12 +75,10 @@ description: Worker/Reviewer 在并行开发机制中的执行协议——从 me
 ### 1. 认领前检查
 ```bash
 # 确认依赖已关闭（实时查询，不信列表快照）
-# 引擎特定命令示例（Multica）:
-# multica issue get <issue-id> --output json | jq '.metadata.blocked_by'
-# 如果非空，说明还有依赖未完成，不要强行开工
+# 使用引擎提供的查询命令，例如 Multica: `multica issue --help`
+# 查询 work item 的 blocked_by metadata，确保依赖已完成
 ```
-- 原子认领：`multica issue assign <issue-id> --to <你的agent-id>`
-- 标记进行中：`multica issue update <issue-id> --status in_progress`
+- 使用引擎命令认领并标记状态（具体命令见引擎文档）
 
 ### 2. 读全唯一口径
 - 打开 issue body 中的 **🎯 目标** 与 **定位表** 找到唯一口径文档
@@ -91,15 +89,15 @@ description: Worker/Reviewer 在并行开发机制中的执行协议——从 me
 
 ### 3. 按需拆解（可选）
 - 任务小：直接做
-- 任务大：拆 2–5 个 sub-issue，用父子关系（`--parent <issue-id>`）
+- 任务大：拆 2–5 个 sub-issue，使用引擎的子任务功能
 - 拆解后，按 sub-issue 顺序逐个完成
 
 ### 4. 切分支
 ```bash
 # 从集成分支切（不是默认主分支！）
 git fetch origin
-git checkout -b multica/<issue-key>-<slug> origin/feature/v1.0.0
-# 或 issue metadata 指定的集成分支
+git checkout -b <prefix>/<issue-key>-<slug> origin/<integration-branch>
+# integration-branch 见 issue metadata 或项目约定
 ```
 **⚠️ 关键**：base 必须是 issue 中指定的集成分支（如 `feature/v1.0.0`），不是 `master`。
 
@@ -120,31 +118,22 @@ git checkout -b multica/<issue-key>-<slug> origin/feature/v1.0.0
 ```bash
 # 提交 + 推送
 git add . && git commit -m "feat(module): <简短描述> (#<issue-number>)"
-git push origin multica/<issue-key>-<slug>
+git push origin <branch-name>
 
 # 开 PR（base = 集成分支）
-gh pr create --base feature/v1.0.0 --title "[<ISSUE-ID>] <标题>" --body "..."
+# 使用 gh/hub 或其他工具，确保 base 指向集成分支
 
 # 写 metadata 证据
-multica issue metadata set <issue-id> --key artifacts --value "PR: <url>; branch: <name>; tests: <命令>"
-multica issue metadata set <issue-id> --key verification --value "pytest 全绿 <summary>; 手工验证: <路径>"
-# 可选：已知问题
-multica issue metadata set <issue-id> --key known_issues --value "<问题描述>"
+# 使用引擎命令写入证据（具体命令见引擎文档）
+# 需记录：PR URL、分支名、测试命令、验证结果、已知问题
 ```
 
-### 8. 写 comment + 转 in_review
+### 8. 写 comment + 转状态
 ```bash
-# 写 comment 汇总
-multica issue comment <issue-id> "
-✅ 完成实现
-- PR: <链接>
-- 验证: pytest 全绿 (xx passed)
-- 手工验证: <路径>
-- 已知限制: <如果有>
-"
-
-# 转交给 reviewer（如果有）或等待编排器
-multica issue update <issue-id> --status in_review
+# 写 comment 汇总完成情况
+# 使用引擎命令添加评论和更新状态
+# 内容包括：PR 链接、验证结果、手工验证路径、已知限制
+# 使用引擎命令更新状态 <issue-id> --status in_review
 ```
 
 ### Worker 禁止事项
@@ -262,18 +251,18 @@ pytest <test-path>  # 或 issue 指定的测试命令
 
 ```bash
 # 判决写入 metadata
-multica issue metadata set <issue-id> --key review_verdict --value "<pass|blocked|pass-with-nits>"
+# 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "<pass|blocked|pass-with-nits>"
 ```
 
 **三种判决**：
 - **`pass`**：无 blocker，可合并
   ```bash
-  multica issue update <issue-id> --status done
+  # 使用引擎命令更新状态 <issue-id> --status done
   ```
 
 - **`blocked`**：有 blocker，必须返工
   ```bash
-  multica issue comment <issue-id> "
+  # 使用引擎命令添加评论 <issue-id> "
   ❌ Blocked
   必修项：
   1. <精确描述 blocker + 修复方向>
@@ -285,15 +274,15 @@ multica issue metadata set <issue-id> --key review_verdict --value "<pass|blocke
 
 - **`pass-with-nits`**：可合并，但有建议
   ```bash
-  multica issue metadata set <issue-id> --key known_issues --value "<nits 描述>"
-  multica issue update <issue-id> --status done
+  # 使用引擎命令设置 metadata <issue-id> --key known_issues --value "<nits 描述>"
+  # 使用引擎命令更新状态 <issue-id> --status done
   # nits 可以挂入后续卡或忽略
   ```
 
 ### 6. 写 comment 汇总
 
 ```bash
-multica issue comment <issue-id> "
+# 使用引擎命令添加评论 <issue-id> "
 🔍 评审完成
 
 审查范围：
@@ -400,7 +389,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 
 **判决输出**：
 ```bash
-multica issue comment <issue-id> "
+# 使用引擎命令添加评论 <issue-id> "
 🏗️ 架构评审完成
 
 ### 模块边界
@@ -432,8 +421,8 @@ multica issue comment <issue-id> "
 "
 
 # 写入判决
-multica issue metadata set <issue-id> --key review_verdict --value "blocked"
-multica issue metadata set <issue-id> --key architecture_issues --value "循环依赖/越界依赖"
+# 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "blocked"
+# 使用引擎命令设置 metadata <issue-id> --key architecture_issues --value "循环依赖/越界依赖"
 ```
 
 ### Architect 禁止事项
@@ -513,17 +502,17 @@ multica issue metadata set <issue-id> --key architecture_issues --value "循环�
 ### Worker 失败
 - 做不了 / 卡住 / 发现依赖有问题：
   ```bash
-  multica issue comment <issue-id> "<问题描述> + <建议方向>"
-  multica issue metadata set <issue-id> --key known_issues --value "<问题>"
-  multica issue update <issue-id> --status blocked
+  # 使用引擎命令添加评论 <issue-id> "<问题描述> + <建议方向>"
+  # 使用引擎命令设置 metadata <issue-id> --key known_issues --value "<问题>"
+  # 使用引擎命令更新状态 <issue-id> --status blocked
   ```
 - 不要硬撑到 `in_review`，坦诚标 `blocked` 回流给编排器
 
 ### Reviewer blocked
 - 发现 blocker：
   ```bash
-  multica issue comment <issue-id> "❌ Blocked: <精确描述>"
-  multica issue metadata set <issue-id> --key review_verdict --value "blocked"
+  # 使用引擎命令添加评论 <issue-id> "❌ Blocked: <精确描述>"
+  # 使用引擎命令设置 metadata <issue-id> --key review_verdict --value "blocked"
   # 保持 in_review 或改回 todo，等 worker 返工
   ```
 - 不要自己改，回流给 worker

@@ -42,12 +42,14 @@ description: 把设计/plan 拆成声明式 manifest DAG,用固定引擎驱动�
 ## 你的职责
 
 1. **拆解任务** → 从设计文档产出 manifest.yaml（创造性工作：理解需求、识别模块边界、设计依赖图）
-2. **启动编排** → 调用引擎脚本：
-   - 新启动：`python scripts/run_dag.py <manifest.yaml> [--engine <multica|github|mock>] [--workspace-id <workspace-id>]`
-   - 续跑：`python scripts/run_dag.py --resume <run-id>`
-   - 查看状态：`python scripts/run_dag.py --list [--workspace-id <workspace-id>]`
+2. **启动编排** → 调用引擎脚本 `python scripts/run_dag.py --help` 查看完整用法
 3. **处理失败** → 当引擎报告节点失败时，分析原因、调整 manifest、决定策略（重跑/降范围/换 agent）
 4. **汇总收尾** → 引擎完成后，输出决策日志与交付总结
+
+**你的工具箱**：
+- `python scripts/run_dag.py --help` — 查看引擎脚本完整用法
+- 引擎适配器命令（Multica: `multica --help`, GitHub: `gh --help`）— 查看平台特定能力
+- 不要编造参数 — `--help` 是权威清单
 
 **核心原则**: 你只拆、只策、只收。引擎自动执行：
 - ✅ 派发与轮询（自动 assign + 监控 runs）
@@ -231,12 +233,11 @@ user-api
 
 #### Agent 选择（按 role 字段）
 
-从 workspace agents 中按 role 字段选择（**不要写死 agent 名字**）：
+从 workspace agents 中按 role 字段选择（**不要写死 agent 名字**）。
 
-**查询方式（根据引擎类型）**：
-- Multica: `multica agent list --workspace-id <workspace-id> --output json`
-- GitHub: 查看团队成员和 bot 配置
-- Mock: 本地配置文件
+**查询 agents**：
+- 使用引擎提供的查询命令（Multica: `multica agent --help`，GitHub: `gh api` 相关端点）
+- 不要编造命令 — 先跑 `--help` 查看实际可用的子命令和参数
 
 **Role 定义**：
 - `role: "worker"`: 工作 agent，负责实现任务（后端/前端/数据处理/复杂逻辑）
@@ -305,19 +306,16 @@ nodes:
 
 保存 manifest 后,执行本 skill 附带的引擎脚本:
 
-#### 新启动 run
+#### 启动与管理 run
 
 ```bash
-python scripts/run_dag.py <manifest-path> [--engine <multica|github|mock>] [--workspace-id <workspace-id>]
+# 查看完整用法
+python scripts/run_dag.py --help
 
-# 示例 - Multica 引擎
-python scripts/run_dag.py /tmp/my-feature.yaml --engine multica --workspace-id <workspace-id>
-
-# 示例 - GitHub 引擎
-python scripts/run_dag.py /tmp/my-feature.yaml --engine github --workspace-id <org/repo>
-
-# 示例 - Mock 引擎（本地测试）
-python scripts/run_dag.py /tmp/my-feature.yaml --engine mock
+# 常用操作（具体参数见 --help）：
+# - 新启动：指定 manifest 文件和引擎配置
+# - 续跑：使用 --resume <run-id>
+# - 查看状态：列出所有 run 及其进度
 ```
 
 引擎会自动：
@@ -344,26 +342,7 @@ python scripts/run_dag.py /tmp/my-feature.yaml --engine mock
 
 #### 断点续跑
 
-引擎支持随时中断和续跑：
-
-```bash
-# 列出所有 run
-python scripts/run_dag.py --list
-
-# 输出示例：
-# 找到 2 个 run:
-#
-#   dag-20260624-143052-a3f9
-#     进度: 12/15 (80.0%)
-#     失败: 0 | 耗时: 2h 34m
-#
-#   dag-20260624-120030-b7e2
-#     进度: 15/15 (100.0%)
-#     失败: 1 | 耗时: 3h 12m
-
-# 续跑指定 run
-python scripts/run_dag.py --resume dag-20260624-143052-a3f9
-```
+引擎支持随时中断和续跑。使用 `python scripts/run_dag.py --help` 查看续跑相关参数。
 
 **注意**：scripts 目录及其所有 Python 文件已作为本 skill 的附件上传，当你加载此 skill 时可直接访问。
 
@@ -556,7 +535,8 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python scripts/run_dag.py /tmp/my-feature.yaml
+# 查看用法
+python scripts/run_dag.py --help
 ```
 
 **4. 监督 + 失败决策**
@@ -822,7 +802,8 @@ nodes:
 
 **3. 跑引擎**
 ```bash
-python scripts/run_dag.py /tmp/my-feature.yaml
+# 查看用法
+python scripts/run_dag.py --help
 ```
 
 **4. 监督 + 失败决策**
