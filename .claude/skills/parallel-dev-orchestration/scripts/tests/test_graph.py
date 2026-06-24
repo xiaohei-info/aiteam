@@ -1,5 +1,9 @@
 # tests/test_graph.py
-from graph import frontier, is_done, all_terminal, downstream_of
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core import frontier, downstream_of
+from core.graph import is_done, all_terminal
 
 def iss(key, status, blocked_by=None):
     return {"key": key, "id": key, "status": status,

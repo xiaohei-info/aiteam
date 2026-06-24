@@ -1,5 +1,5 @@
 # lint.py
-from manifest import Manifest
+from .manifest import Manifest
 
 def _has_cycle(nodes):
     WHITE, GREY, BLACK = 0, 1, 2

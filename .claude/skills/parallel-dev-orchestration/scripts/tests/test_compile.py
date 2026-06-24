@@ -1,7 +1,10 @@
 # tests/test_compile.py
-from manifest import Manifest, Node
-from client import FakeMulticaClient
-from compile import compile_manifest
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core import Manifest, compile_manifest
+from core.manifest import Node
+from clients.multica import FakeMulticaClient
 
 def test_compile_writes_blocked_by_and_worker():
     m = Manifest(meta={}, nodes={

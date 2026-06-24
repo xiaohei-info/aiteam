@@ -1,6 +1,9 @@
 # tests/test_lint.py
-from manifest import Manifest, Node
-from lint import lint
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core import Manifest, lint
+from core.manifest import Node
 
 POOL = {"agent-be", "agent-fe", "agent-rev"}
 

@@ -1,6 +1,10 @@
 # tests/test_manifest.py
 import pytest
-from manifest import load_manifest, Manifest, Node
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core import load_manifest, Manifest
+from core.manifest import Node
 
 def test_load_minimal_manifest(tmp_path):
     p = tmp_path / "m.yaml"

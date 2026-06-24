@@ -1,6 +1,6 @@
 # compile.py
-from manifest import Manifest
-from client import MulticaClient
+from .manifest import Manifest
+from clients import MulticaClient
 
 def compile_manifest(m: Manifest, client: MulticaClient):
     """单向编译：manifest 节点的 blocked_by/worker/旋钮 → issue metadata。"""

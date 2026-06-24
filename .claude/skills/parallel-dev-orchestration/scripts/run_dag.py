@@ -16,9 +16,7 @@ from typing import Dict, Set, Optional
 # 添加当前目录到 path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from manifest import load_manifest, Manifest
-from lint import lint
-from graph import frontier, downstream_of
+from core import load_manifest, Manifest, lint, frontier, downstream_of
 from utils import format_duration
 
 # 引入引擎

@@ -3,8 +3,11 @@
 """
 import time
 from typing import Optional, Dict, Set
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import format_duration, format_timestamp, estimate_remaining_time
-from state import EngineState
+from .models import EngineState
 
 
 class ProgressReporter:
