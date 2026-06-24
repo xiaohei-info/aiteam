@@ -10,10 +10,11 @@ from state import EngineState
 class ProgressReporter:
     """进度报告器 - 负责生成进度条和自动 comment"""
 
-    def __init__(self, state: EngineState, storage, manifest):
+    def __init__(self, state: EngineState, storage, manifest, engine=None):
         self.state = state
         self.storage = storage
         self.manifest = manifest
+        self.engine = engine  # 引擎实例（可选）
         self.node_start_times: Dict[str, float] = {}
 
     def update_progress(self, event_type: str, **kwargs):
@@ -262,12 +263,18 @@ class ProgressReporter:
 
     def _comment(self, message: str):
         """发送 comment（如果有 orchestrator issue）"""
-        if self.state.orchestrator_issue_id:
-            # 通过 storage 发送 comment
-            # storage.append_event 已经会调用 comment，这里不需要重复
-            pass
+        if self.state.orchestrator_issue_id and self.engine:
+            # 使用引擎接口发送评论
+            try:
+                self.engine.add_comment(self.state.orchestrator_issue_id, message)
+            except Exception as e:
+                print(f"⚠️  发送评论失败: {e}")
+                # 回退到打印
+                print("\n" + "="*60)
+                print(message)
+                print("="*60 + "\n")
         else:
-            # 如果没有 orchestrator issue，打印到控制台
+            # 如果没有 orchestrator issue 或 engine，打印到控制台
             print("\n" + "="*60)
             print(message)
             print("="*60 + "\n")
