@@ -62,7 +62,9 @@ def test_owner_first_login_requires_reset_then_logs_in(svc):
 def test_member_login(svc):
     service, tid_a, _ = svc
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    service.create_member(tid_a, phone=phone, initial_password="member-Pass-1", display_name="Alice")
+    # must_reset=False：验证「成员凭初始密码直接登录」的信任场景（create_member 默认
+    # must_reset=True 走首登强制改密，那条路径由 owner-reset 用例覆盖）。
+    service.create_member(tid_a, phone=phone, initial_password="member-Pass-1", display_name="Alice", must_reset=False)
 
     out = service.login(LoginInput(tenant_id=tid_a, account=phone, password="member-Pass-1"))
     assert out.claims.tenant_id == tid_a
@@ -78,8 +80,9 @@ def test_same_phone_different_tenants_no_crosswire(svc):
     """同手机号属不同企业是不同身份，不能跨 tenant 串线（unique(tenant_id, provider, external_id)）。"""
     service, tid_a, tid_b = svc
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    service.create_member(tid_a, phone=phone, initial_password="pass-A-111", display_name="A")
-    service.create_member(tid_b, phone=phone, initial_password="pass-B-222", display_name="B")
+    # must_reset=False：本用例验证跨 tenant 不串线，需成员能直接登录（非首登改密路径）。
+    service.create_member(tid_a, phone=phone, initial_password="pass-A-111", display_name="A", must_reset=False)
+    service.create_member(tid_b, phone=phone, initial_password="pass-B-222", display_name="B", must_reset=False)
 
     out_a = service.login(LoginInput(tenant_id=tid_a, account=phone, password="pass-A-111"))
     out_b = service.login(LoginInput(tenant_id=tid_b, account=phone, password="pass-B-222"))
