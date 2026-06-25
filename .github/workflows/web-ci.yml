@@ -17,7 +17,9 @@ on:
       - "web/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
-    branches: ["master"]
+    # master = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
+    # 两者都触发，覆盖棘轮才能在开发期就守住集成分支、不必等大合并。
+    branches: ["master", "feature/**"]
     paths:
       - "web/**"
       - ".github/workflows/web-ci.yml"

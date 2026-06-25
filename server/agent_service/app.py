@@ -18,9 +18,16 @@ from agent_service.auth.local_login import (
     LoginResult,
     ManagerLoginClient,
 )
-from agent_service.auth.manager_client import UnconfiguredManagerClient
+from agent_service.auth.manager_client import (
+    RealManagerLoginClient,
+    UnconfiguredManagerClient,
+)
 from agent_service.auth.token_cache import InMemoryTokenCache
-from agent_service.grants.client import ManagerGrantsClient
+from agent_service.grants.client import (
+    ManagerGrantsClient,
+    ServiceClientGrantsClient,
+    UnconfiguredGrantsClient,
+)
 from agent_service.grants.factory import build_grants_service
 from agent_service.grants.routes import build_grants_router
 from agent_service.loop.factory import build_loop_service
@@ -28,11 +35,16 @@ from agent_service.loop.routes import build_loop_router
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.routes import build_mainline_router
 from agent_service.mainline.service import MainlineService
-from agent_service.usage.client import ManagerUsageClient
+from agent_service.usage.client import (
+    ManagerUsageClient,
+    ServiceClientUsageClient,
+    UnconfiguredUsageClient,
+)
 from agent_service.usage.factory import build_usage_service
 from agent_service.usage.routes import build_usage_router
 from shared.app_factory import create_app
 from shared.config import load_settings
+from shared.service_client import ServiceClient
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 from shared.errors import Unauthorized
@@ -68,6 +80,42 @@ def build_router(login_service: LocalLoginService) -> APIRouter:
     return router
 
 
+def _manager_service_client(settings) -> ServiceClient:
+    """构造指向 Manager 的窄通信 ServiceClient（服务身份 + 共享 token，03 §9.1）。"""
+    return ServiceClient(
+        base_url=settings.manager_url,
+        service_identity=settings.service_name,
+        service_token=settings.service_token,
+    )
+
+
+def _build_manager_login_client() -> ManagerLoginClient:
+    """配置 MANAGER_URL → RealManagerLoginClient，否则占位（D14 离线降级，#219）。
+
+    对齐 Manager 侧 _build_operator_catalog 装配模式。
+    """
+    settings = load_settings("agent")
+    if not settings.manager_url:
+        return UnconfiguredManagerClient()
+    return RealManagerLoginClient(_manager_service_client(settings))
+
+
+def _build_grants_client() -> ManagerGrantsClient:
+    """配置 MANAGER_URL → ServiceClientGrantsClient，否则占位（#219）。"""
+    settings = load_settings("agent")
+    if not settings.manager_url:
+        return UnconfiguredGrantsClient()
+    return ServiceClientGrantsClient(_manager_service_client(settings))
+
+
+def _build_usage_client() -> ManagerUsageClient:
+    """配置 MANAGER_URL → ServiceClientUsageClient，否则占位（#219）。"""
+    settings = load_settings("agent")
+    if not settings.manager_url:
+        return UnconfiguredUsageClient()
+    return ServiceClientUsageClient(_manager_service_client(settings))
+
+
 def build_app(
     *,
     manager_client: ManagerLoginClient | None = None,
@@ -75,19 +123,20 @@ def build_app(
     usage_client: ManagerUsageClient | None = None,
     grants_client: ManagerGrantsClient | None = None,
 ) -> FastAPI:
-    """构造用户端 app。manager_client 默认占位（A0 对端 fake）；测试可注入 stub。
+    """构造用户端 app。login/usage/grants 三客户端默认按 MANAGER_URL 装配（#219）：
+    配置 MANAGER_URL → 经 ServiceClient 装配真实跨端客户端；未配置 → 占位客户端
+    （dev/离线降级，D14）。测试可显式注入 stub 覆盖默认装配。
 
     mainline_service 默认用 fake runtime 装配的本地主链（A1）；测试可注入自定义编排器。
     Loop 调度器复用同一 mainline_service（A3，06 §7.6），默认不 start 后台循环——
     dev/测试用手动触发端点或 scheduler.fire_ready 驱动；生产由进程启动期决定是否 start。
-    usage_client 默认占位（A5 对端 M8/#42 未联调）；上报失败留 pending 重试，不阻塞本地。
-    grants_client 默认占位（A4 对端 M7/#41 未联调）；sync 失败按离线降级处理，本地凭既有
+    usage 上报失败留 pending 重试，不阻塞本地；grants sync 失败按离线降级处理，本地凭既有
     投影 + 已冻结快照继续工作，不致本端 not-ready（D14）。
     """
     from agent_service.local_db import apply_migrations, connect
 
     login_service = LocalLoginService(
-        manager=manager_client or UnconfiguredManagerClient(),
+        manager=manager_client or _build_manager_login_client(),
         cache=InMemoryTokenCache(),
     )
     settings = load_settings("agent")
@@ -111,9 +160,9 @@ def build_app(
     if settings.agent_loop_autostart:
         app.router.on_startup.append(_loop_scheduler.start)
         app.router.on_shutdown.append(_loop_scheduler.stop)
-    usage_service = build_usage_service(client=usage_client, db=db)
+    usage_service = build_usage_service(client=usage_client or _build_usage_client(), db=db)
     app.include_router(build_usage_router(usage_service))
-    grants_service = build_grants_service(client=grants_client, db=db)
+    grants_service = build_grants_service(client=grants_client or _build_grants_client(), db=db)
     app.include_router(build_grants_router(grants_service))
     return app
 
