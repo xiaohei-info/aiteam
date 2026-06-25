@@ -45,12 +45,15 @@ class RealManagerLoginClient:
     def login(self, req: LoginRequest) -> tuple[str, dict]:
         # ① 校验凭据。401 是凭据错误（透传）；其它失败/不可达归一为 ManagerUnreachable。
         try:
+            # Manager LoginInput 契约（manager_service/auth_service.py，extra="forbid"）：
+            # 必填 tenant_id + account + password，不接受额外字段。tenant_hint 即定位到的
+            # tenant_id（调用方传入），按服务端冻结 schema 以 tenant_id 提交，勿发 tenant_hint。
             resp = self._sc.post(
                 "/api/auth/login",
                 {
+                    "tenant_id": req.tenant_hint,
                     "account": req.account,
                     "password": req.password,
-                    "tenant_hint": req.tenant_hint,
                 },
             )
         except Unauthorized:

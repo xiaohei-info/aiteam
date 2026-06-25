@@ -24,6 +24,16 @@ on:
       - "server/**"
       - ".github/workflows/ci.yml"
 
+# 运营端系统管理员凭据：build_system_account_repository() 启动时强制读取
+# OPERATION_SYSTEM_USERNAME/OPERATION_SYSTEM_PASSWORD（无默认值，缺则 ValueError）。
+# 凡构建运营端 app（get_app("operation")）的用例——契约/集成/棘轮三个 job 都会触到——
+# 缺这两个 env 就在 setup 阶段全 ERROR、CI 全红（#235）。值必须为 sysadmin/changeme-me：
+# tests/operation/test_system_auth.py 与入户链 e2e 硬编码用这对凭据登录断言。
+# 签名密钥（OPERATION_SIGNING_*）可选（缺省启动临时生成）；SERVICE_TOKEN 由各测试自带，无需全局注入。
+env:
+  OPERATION_SYSTEM_USERNAME: sysadmin
+  OPERATION_SYSTEM_PASSWORD: changeme-me
+
 jobs:
   contracts-and-boundary:
     name: 契约校验 + 边界约束
@@ -137,6 +147,10 @@ jobs:
         working-directory: head/server
         # 跑全量套件（含 integration，PG 已就绪）以反映真实总覆盖；
         # 测试是否全绿由上面的 contracts/integration job 把关，此处只取覆盖数字。
+        # continue-on-error：用例失败不应让棘轮红（那是 contracts/integration 的职责）；
+        # pytest-cov 在会话结束仍写出 json，比对步骤据此取数。否则「修失败用例的 PR」会
+        # 因 base 分支仍带旧失败用例 → base 步 pytest 非零退出 → 棘轮假阴性（对齐 web-ci.yml）。
+        continue-on-error: true
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-cov
@@ -144,6 +158,8 @@ jobs:
 
       - name: 覆盖率 - base master（全量套件 + 分支）
         working-directory: base/server
+        # 同上：base 只取覆盖数字，base 套件是否全绿不影响棘轮（对齐 web-ci.yml base 步）。
+        continue-on-error: true
         run: |
           pip install -r requirements.txt pytest pytest-cov
           python -m pytest -q --cov=. --cov-branch --cov-report=json:"$RUNNER_TEMP/base.json"
