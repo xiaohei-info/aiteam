@@ -24,6 +24,16 @@ on:
       - "server/**"
       - ".github/workflows/ci.yml"
 
+# 运营端系统管理员凭据：build_system_account_repository() 启动时强制读取
+# OPERATION_SYSTEM_USERNAME/OPERATION_SYSTEM_PASSWORD（无默认值，缺则 ValueError）。
+# 凡构建运营端 app（get_app("operation")）的用例——契约/集成/棘轮三个 job 都会触到——
+# 缺这两个 env 就在 setup 阶段全 ERROR、CI 全红（#235）。值必须为 sysadmin/changeme-me：
+# tests/operation/test_system_auth.py 与入户链 e2e 硬编码用这对凭据登录断言。
+# 签名密钥（OPERATION_SIGNING_*）可选（缺省启动临时生成）；SERVICE_TOKEN 由各测试自带，无需全局注入。
+env:
+  OPERATION_SYSTEM_USERNAME: sysadmin
+  OPERATION_SYSTEM_PASSWORD: changeme-me
+
 jobs:
   contracts-and-boundary:
     name: 契约校验 + 边界约束
