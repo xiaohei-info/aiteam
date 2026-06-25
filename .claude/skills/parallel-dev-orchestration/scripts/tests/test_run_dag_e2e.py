@@ -1,14 +1,11 @@
 """
-端到端测试（manifest 驱动）：对 mock 和 multica（fake CLI）各跑一遍 start_new_run 完整链路。
+端到端测试（manifest 驱动）：对 mock 引擎跑一遍 start_new_run 完整链路。
+真 multica CLI 的状态映射与命令面覆盖在 tests/test_run_dag_live_multica.py（gated by MULTICA_LIVE=1）。
 
 断言：两层 DAG A->B 跑到全 done；manifest 节点回填 work_item_id、status=done；
 幂等重跑已 done 且有 work_item_id 的节点 0 新建；blocked 重跑只重做该节点；reconcile 纠正状态。
 """
-import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -36,185 +33,6 @@ def _make_mock_engine(state_dir):
     return engine
 
 
-# ==================== fake multica CLI ====================
-
-_FAKE_MULTICA_SCRIPT = r'''#!/usr/bin/env python3
-"""Fake multica CLI for testing. Simulates issue CRUD via a JSON store."""
-import sys
-import json
-import os
-
-STORE = os.environ.get("FAKE_MULTICA_STORE", "/tmp/fake_multica_store.json")
-
-def _load():
-    if os.path.exists(STORE):
-        with open(STORE) as f:
-            return json.load(f)
-    return {"issues": {}, "agents": [{"id": "a1", "name": "alice"}, {"id": "a2", "name": "bob"}, {"id": "a3", "name": "carol"}], "squads": {"sq": ["alice", "bob", "carol"]}, "next_id": 1}
-
-def _save(data):
-    with open(STORE, "w") as f:
-        json.dump(data, f)
-
-def main():
-    args = sys.argv[1:]
-    # Strip --workspace-id and its value
-    filtered = []
-    i = 0
-    while i < len(args):
-        if args[i] == "--workspace-id":
-            i += 2
-            continue
-        filtered.append(args[i])
-        i += 1
-    args = filtered
-
-    data = _load()
-
-    if args[:2] == ["issue", "create"]:
-        title = desc = status = None
-        j = 2
-        while j < len(args):
-            if args[j] == "--title": title = args[j+1]; j += 2
-            elif args[j] == "--description": desc = args[j+1]; j += 2
-            elif args[j] == "--status": status = args[j+1]; j += 2
-            elif args[j] == "--output": j += 2
-            else: j += 1
-        issue_id = str(data["next_id"])
-        data["next_id"] += 1
-        issue = {"id": issue_id, "title": title, "description": desc or "", "status": status or "todo", "metadata": {}, "assignees": [], "comments": []}
-        data["issues"][issue_id] = issue
-        _save(data)
-        print(json.dumps({"id": issue_id}))
-        return
-
-    if args[:2] == ["issue", "get"]:
-        issue_id = args[2]
-        issue = data["issues"].get(issue_id)
-        if not issue:
-            print(json.dumps({"error": "not found"}), file=sys.stderr)
-            sys.exit(1)
-        # Auto-complete: if assigned and in_progress, mark done
-        if issue["status"] == "in_progress" and issue.get("assignees"):
-            issue["status"] = "done"
-            issue["metadata"]["artifacts"] = {"pr": f"https://fake/pr/{issue_id}"}
-            _save(data)
-        elif issue["status"] == "in_review" and issue.get("assignees"):
-            issue["metadata"]["review_verdict"] = "pass"
-            issue["metadata"]["review_comment"] = "LGTM"
-            issue["status"] = "done"
-            issue["metadata"]["artifacts"] = {"pr": f"https://fake/pr/{issue_id}"}
-            _save(data)
-        print(json.dumps(issue))
-        return
-
-    if args[:3] == ["issue", "metadata", "set"]:
-        issue_id = args[3]
-        key = val = None
-        j = 4
-        while j < len(args):
-            if args[j] == "--key": key = args[j+1]; j += 2
-            elif args[j] == "--value": val = args[j+1]; j += 2
-            else: j += 1
-        issue = data["issues"].get(issue_id)
-        if issue:
-            try:
-                issue["metadata"][key] = json.loads(val) if val and val.startswith("[") or val.startswith("{") else val
-            except:
-                issue["metadata"][key] = val
-            _save(data)
-        return
-
-    if args[:2] == ["issue", "update"]:
-        issue_id = args[2]
-        j = 3
-        while j < len(args):
-            if args[j] == "--status":
-                issue = data["issues"].get(issue_id)
-                if issue:
-                    issue["status"] = args[j+1]
-                    _save(data)
-                j += 2
-            else: j += 1
-        return
-
-    if args[:2] == ["issue", "list"]:
-        issues = list(data["issues"].values())
-        if "--status" in args:
-            idx = args.index("--status")
-            st = args[idx+1]
-            issues = [i for i in issues if i["status"] == st]
-        print(json.dumps(issues))
-        return
-
-    if args[:3] == ["issue", "comment", "add"]:
-        issue_id = args[3]
-        msg = None
-        j = 4
-        while j < len(args):
-            if args[j] == "--content": msg = args[j+1]; j += 2
-            else: j += 1
-        issue = data["issues"].get(issue_id)
-        if issue:
-            issue["comments"].append(msg)
-            _save(data)
-        return
-
-    if args[:2] == ["issue", "assign"]:
-        issue_id = args[2]
-        agent_id = None
-        j = 3
-        while j < len(args):
-            if args[j] == "--to": agent_id = args[j+1]; j += 2
-            else: j += 1
-        issue = data["issues"].get(issue_id)
-        if issue:
-            issue["assignees"].append(agent_id)
-            _save(data)
-        return
-
-    if args[:2] == ["agent", "list"]:
-        print(json.dumps(data["agents"]))
-        return
-
-    if args[:3] == ["squad", "member", "list"]:
-        squad_id = args[3]
-        names = data["squads"].get(squad_id, [])
-        print(json.dumps([{"name": n} for n in names]))
-        return
-
-    print(f"Unknown command: {args}", file=sys.stderr)
-    sys.exit(1)
-
-if __name__ == "__main__":
-    main()
-'''
-
-
-def _make_multica_engine(tmp_path):
-    """Create a MulticaEngine with a fake multica CLI on PATH."""
-    store_path = str(tmp_path / "multica_store.json")
-    os.environ["FAKE_MULTICA_STORE"] = store_path
-    # Reset store
-    with open(store_path, "w") as f:
-        json.dump({"issues": {}, "agents": [{"id": "a1", "name": "alice"}, {"id": "a2", "name": "bob"}, {"id": "a3", "name": "carol"}], "squads": {"sq": ["alice", "bob", "carol"]}, "next_id": 1}, f)
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    fake_cli = bin_dir / "multica"
-    fake_cli.write_text(_FAKE_MULTICA_SCRIPT)
-    fake_cli.chmod(0o755)
-
-    # Inject PATH
-    old_path = os.environ.get("PATH", "")
-    os.environ["PATH"] = f"{bin_dir}:{old_path}"
-
-    engine = create_engine_from_config("multica", "ws")
-    engine.config.squad_id = "sq"
-    engine.config.polling_interval = 0.001
-    return engine
-
-
 # ==================== shared manifest ====================
 
 def _write_manifest(path):
@@ -239,16 +57,12 @@ def _write_manifest(path):
 
 # ==================== tests ====================
 
-@pytest.mark.parametrize("engine_factory", ["mock", "multica"], ids=["mock", "multica"])
-def test_e2e_full_dag_done(tmp_path, engine_factory, monkeypatch):
+def test_e2e_full_dag_done(tmp_path, monkeypatch):
     """两层 DAG A->B 跑到全 done；manifest 回填 work_item_id + status=done。"""
     manifest_path = str(tmp_path / "dag.yaml")
     _write_manifest(manifest_path)
 
-    if engine_factory == "mock":
-        engine = _make_mock_engine(str(tmp_path))
-    else:
-        engine = _make_multica_engine(tmp_path)
+    engine = _make_mock_engine(str(tmp_path))
     import run_dag as rd
     monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
 
@@ -262,20 +76,14 @@ def test_e2e_full_dag_done(tmp_path, engine_factory, monkeypatch):
     assert m.nodes["A"].work_item_id != m.nodes["B"].work_item_id, "A/B work_item_id 不同"
 
 
-@pytest.mark.parametrize("engine_factory", ["mock", "multica"], ids=["mock", "multica"])
-def test_e2e_idempotent_rerun(tmp_path, engine_factory, monkeypatch):
+def test_e2e_idempotent_rerun(tmp_path, monkeypatch):
     """重跑已 done 且有 work_item_id 的节点：0 新建、精准 get_work_item。"""
     manifest_path = str(tmp_path / "dag.yaml")
     _write_manifest(manifest_path)
 
-    if engine_factory == "mock":
-        engine = _make_mock_engine(str(tmp_path))
-        import run_dag as rd
-        monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
-    else:
-        import run_dag as rd
-        monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
-        engine = _make_multica_engine(tmp_path)
+    engine = _make_mock_engine(str(tmp_path))
+    import run_dag as rd
+    monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
 
     # 第一遍
     start_new_run(manifest_path, engine=engine)
@@ -283,22 +91,12 @@ def test_e2e_idempotent_rerun(tmp_path, engine_factory, monkeypatch):
     a_id = m1.nodes["A"].work_item_id
     b_id = m1.nodes["B"].work_item_id
 
-    # 记录平台 work item 数量
-    if engine_factory == "mock":
-        count_before = len(engine._work_items)
-    else:
-        store = json.load(open(os.environ["FAKE_MULTICA_STORE"]))
-        count_before = len(store["issues"])
+    count_before = len(engine._work_items)
 
     # 第二遍重跑
     start_new_run(manifest_path, engine=engine)
 
-    if engine_factory == "mock":
-        count_after = len(engine._work_items)
-    else:
-        store = json.load(open(os.environ["FAKE_MULTICA_STORE"]))
-        count_after = len(store["issues"])
-
+    count_after = len(engine._work_items)
     assert count_after == count_before, f"重跑不应新建 work item: before={count_before} after={count_after}"
 
     m2 = load_manifest(manifest_path)
@@ -306,16 +104,12 @@ def test_e2e_idempotent_rerun(tmp_path, engine_factory, monkeypatch):
     assert m2.nodes["B"].work_item_id == b_id, "B work_item_id 不变"
 
 
-@pytest.mark.parametrize("engine_factory", ["mock", "multica"], ids=["mock", "multica"])
-def test_e2e_blocked_rerun_redoes_only_that(tmp_path, engine_factory, monkeypatch):
+def test_e2e_blocked_rerun_redoes_only_that(tmp_path, monkeypatch):
     """B 退回 blocked 重跑 -> 只重做 B，A 复用 done。"""
     manifest_path = str(tmp_path / "dag.yaml")
     _write_manifest(manifest_path)
 
-    if engine_factory == "mock":
-        engine = _make_mock_engine(str(tmp_path))
-    else:
-        engine = _make_multica_engine(tmp_path)
+    engine = _make_mock_engine(str(tmp_path))
     import run_dag as rd
     monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
 
@@ -341,16 +135,12 @@ def test_e2e_blocked_rerun_redoes_only_that(tmp_path, engine_factory, monkeypatc
     assert m2.nodes["B"].work_item_id == b_id, "B 复用原 work_item_id"
 
 
-@pytest.mark.parametrize("engine_factory", ["mock", "multica"], ids=["mock", "multica"])
-def test_e2e_reconcile_fixes_stale_status(tmp_path, engine_factory, monkeypatch):
+def test_e2e_reconcile_fixes_stale_status(tmp_path, monkeypatch):
     """reconcile：manifest 记 work_item_id 但 status 落后于平台（平台已 done）-> 补成 done。"""
     manifest_path = str(tmp_path / "dag.yaml")
     _write_manifest(manifest_path)
 
-    if engine_factory == "mock":
-        engine = _make_mock_engine(str(tmp_path))
-    else:
-        engine = _make_multica_engine(tmp_path)
+    engine = _make_mock_engine(str(tmp_path))
     import run_dag as rd
     monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
 
@@ -373,16 +163,12 @@ def test_e2e_reconcile_fixes_stale_status(tmp_path, engine_factory, monkeypatch)
     assert m3.nodes["A"].work_item_id == a_id, "work_item_id 不变"
 
 
-@pytest.mark.parametrize("engine_factory", ["mock", "multica"], ids=["mock", "multica"])
-def test_e2e_reconcile_clears_missing_work_item_id(tmp_path, engine_factory, monkeypatch):
+def test_e2e_reconcile_clears_missing_work_item_id(tmp_path, monkeypatch):
     """reconcile：work_item_id 指向平台不存在的 item -> 清空待新建。"""
     manifest_path = str(tmp_path / "dag.yaml")
     _write_manifest(manifest_path)
 
-    if engine_factory == "mock":
-        engine = _make_mock_engine(str(tmp_path))
-    else:
-        engine = _make_multica_engine(tmp_path)
+    engine = _make_mock_engine(str(tmp_path))
     import run_dag as rd
     monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
 

@@ -73,7 +73,7 @@ class MulticaEngine(CollaborationEngine):
             WorkItemStatus.IN_PROGRESS: "in_progress",
             WorkItemStatus.IN_REVIEW: "in_review",
             WorkItemStatus.DONE: "done",
-            WorkItemStatus.FAILED: "failed",
+            WorkItemStatus.FAILED: "blocked",
             WorkItemStatus.BLOCKED: "blocked"
         }
         return mapping.get(status, "todo")
@@ -86,7 +86,8 @@ class MulticaEngine(CollaborationEngine):
             "in_review": WorkItemStatus.IN_REVIEW,
             "done": WorkItemStatus.DONE,
             "failed": WorkItemStatus.FAILED,
-            "blocked": WorkItemStatus.BLOCKED
+            "blocked": WorkItemStatus.BLOCKED,
+            "cancelled": WorkItemStatus.BLOCKED,
         }
         return mapping.get(multica_status, WorkItemStatus.TODO)
 

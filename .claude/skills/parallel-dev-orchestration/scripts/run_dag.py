@@ -17,7 +17,7 @@ from typing import Set
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core import load_manifest, save_manifest, set_node, lint, frontier, downstream_of
-from utils import format_duration, commit_manifest, render_progress
+from utils import commit_manifest
 
 from engines import (
     create_engine_from_env,
@@ -119,6 +119,11 @@ def _harvest(
             elif item.status == WorkItemStatus.FAILED:
                 print(f"  harvest: {key} worker failed -> blocked")
                 engine.update_status(node.work_item_id, WorkItemStatus.BLOCKED)
+                set_node(manifest, key, status="blocked")
+                failed.add(key)
+                changed = True
+            elif item.status == WorkItemStatus.BLOCKED:
+                print(f"  harvest: {key} worker blocked on platform -> blocked")
                 set_node(manifest, key, status="blocked")
                 failed.add(key)
                 changed = True

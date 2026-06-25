@@ -2,27 +2,6 @@
 工具函数模块
 """
 import subprocess
-from datetime import datetime
-
-
-def format_duration(seconds: float) -> str:
-    """格式化时长为可读格式。"""
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    minutes = int(seconds // 60)
-    remaining_seconds = int(seconds % 60)
-    if minutes < 60:
-        if remaining_seconds > 0:
-            return f"{minutes}m {remaining_seconds}s"
-        return f"{minutes}m"
-    hours = minutes // 60
-    remaining_minutes = minutes % 60
-    parts = [f"{hours}h"]
-    if remaining_minutes > 0:
-        parts.append(f"{remaining_minutes}m")
-    if remaining_seconds > 0:
-        parts.append(f"{remaining_seconds}s")
-    return " ".join(parts)
 
 
 def commit_manifest(path: str, message: str, repo_root: str = ".") -> bool:
@@ -53,25 +32,3 @@ def commit_manifest(path: str, message: str, repo_root: str = ".") -> bool:
         print(f"  manifest 已本地 commit 但未 push——跨机器口径可能滞后！")
     return True
 
-
-def render_progress(manifest, completed: set, failed: set) -> str:
-    """从 manifest + completed/failed 生成全局进度 digest 文本。"""
-    total = len(manifest.nodes)
-    done = len(completed)
-    fail = len(failed)
-    in_flight = sum(1 for n in manifest.nodes.values()
-                    if n.status in ("in_progress", "in_review"))
-    todo = total - done - fail - in_flight
-    pct = done / total * 100 if total > 0 else 0
-
-    bar_width = 20
-    filled = int(bar_width * pct / 100)
-    bar = "=" * filled + "-" * (bar_width - filled)
-
-    lines = [
-        f"[{bar}] {done}/{total} ({pct:.0f}%)",
-        f"done={sorted(completed) if completed else []}",
-        f"failed={sorted(failed) if failed else []}",
-        f"in_progress={in_flight} todo={todo}",
-    ]
-    return "\n".join(lines)
