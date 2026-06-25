@@ -4,10 +4,9 @@ GitHub 引擎实现
 import json
 import subprocess
 import yaml
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .base import CollaborationEngine
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
 
 
 class GithubEngine(CollaborationEngine):
@@ -400,77 +399,4 @@ class GithubEngine(CollaborationEngine):
             self.update_work_item_metadata(item_id, reviewer=assignee)
 
     # ==================== 第四组：查询 ====================
-
-    def find_work_item_by_dag_key(
-        self,
-        workspace_id: str,
-        dag_key: str
-    ) -> Optional[WorkItem]:
-        """按 DAG key 查找工作单元"""
-        # 方式 1: 按 title 搜索
-        try:
-            result = self._run_gh([
-                "search", "issues",
-                f"[DAG:{dag_key}] in:title repo:{workspace_id}",
-                "--json", "number,title,body,labels,state",
-                "--limit", "1"
-            ])
-
-            if isinstance(result, list) and len(result) > 0:
-                return self._issue_to_work_item(result[0], workspace_id)
-        except:
-            pass
-
-        # 方式 2: 列出所有 issues，解析 YAML
-        all_items = self.list_work_items(workspace_id)
-        for item in all_items:
-            if item.dag_key == dag_key:
-                return item
-
-        return None
-
-    # ==================== Run 生命周期管理 ====================
-
-    def create_run(
-        self,
-        workspace_id: str,
-        manifest: Any,
-        orchestrator_issue_id: Optional[str] = None
-    ) -> Run:
-        """创建新的编排运行
-
-        GitHub 实现：保存到本地文件或 tracking issue
-        """
-        # TODO: 完整实现
-        # 可以选择：
-        # 1. 保存到本地 .multica_state/（类似 Mock）
-        # 2. 创建一个 tracking issue 保存 manifest 和状态
-        raise NotImplementedError("GitHub create_run 待实现")
-
-    def get_run(self, run_id: str) -> Optional[Run]:
-        """获取编排运行的当前状态
-
-        GitHub 实现：从本地文件或 tracking issue 加载
-        """
-        # TODO: 完整实现
-        raise NotImplementedError("GitHub get_run 待实现")
-
-    def list_runs(
-        self,
-        workspace_id: Optional[str] = None,
-        status: Optional[RunStatus] = None
-    ) -> List[Run]:
-        """列出编排运行历史
-
-        GitHub 实现：从本地目录扫描或查询 tracking issues
-        """
-        # TODO: 完整实现
-        return []
-
-    def delete_run(self, run_id: str):
-        """删除编排运行记录
-
-        GitHub 实现：删除本地文件或关闭 tracking issue
-        """
-        # TODO: 完整实现
-        raise NotImplementedError("GitHub delete_run 待实现")
+    # (find_work_item_by_dag_key 已删除——manifest.work_item_id + get_work_item 精准取代)

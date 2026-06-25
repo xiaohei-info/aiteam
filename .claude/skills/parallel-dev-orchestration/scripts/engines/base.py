@@ -1,18 +1,31 @@
 """
-CollaborationEngine 抽象接口 - 纯业务语义
+CollaborationEngine 抽象接口 — manifest 驱动，纯业务语义
+
+子类实现者须读：每个方法的 docstring 描述了编排层对该方法的**契约保证**，
+即子类必须满足什么条件，编排器才能正常工作。只看接口定义 + docstring 即可
+知道如何根据当前引擎的平台特性来实现。
 """
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
+from typing import List, Dict, Optional
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
 
 
 class CollaborationEngine(ABC):
-    """协作引擎抽象接口
+    """协作引擎抽象接口 — 子类只需实现 9 个抽象方法。
 
     设计原则：
     1. 接口定义业务语义，不暴露技术细节（labels/body/state）
-    2. 实现方式由各引擎内部决定
+    2. 实现方式由各引擎内部决定（metadata 存哪、status 怎么表达）
     3. 引擎只管状态和元数据，不管执行（执行由外部 worker 负责）
+
+    核心数据流（编排器视角）：
+        create_work_item -> 返回 WorkItem.id（= manifest 中的 work_item_id）
+        get_work_item(work_item_id) -> 每轮轮询调用，检测节点是否 done
+        update_status / update_work_item_metadata / assign_work_item -> 改状态
+        get_work_item(work_item_id) -> 必须能读到上述变更
+
+    因此最重要的契约是：**写后读一致性**——任何 update_* / assign 后，
+    紧接着的 get_work_item 必须返回更新后的值。
     """
 
     def __init__(self, config: EngineConfig):
@@ -23,23 +36,23 @@ class CollaborationEngine(ABC):
     @classmethod
     @abstractmethod
     def get_required_env_vars(cls) -> List[Dict[str, str]]:
-        """声明引擎需要的环境变量
+        """声明引擎需要的环境变量（供 setup.py 交互式配置）。
 
-        返回格式：
-        [
-            {
-                'name': 'MULTICA_WORKSPACE_ID',
-                'description': '工作空间 ID',
-                'prompt': '请输入 multica workspace ID:',
-                'validator': lambda x: len(x) > 0
-            }
-        ]
+        契约：返回的每个 dict 至少含 'name' 和 'description'；
+        可选 'prompt'/'default'/'choices'/'validator' 用于交互引导。
+        setup.py 会读这些声明来提示用户输入，结果写入 .env。
+
+        返回格式示例：
+            [{'name': 'YOUR_PLATFORM_WORKSPACE_ID',
+              'description': '工作空间 ID',
+              'prompt': '请输入 workspace ID:',
+              'validator': lambda x: len(x) > 0}]
         """
         pass
 
     @classmethod
     def get_common_env_vars(cls) -> List[Dict[str, str]]:
-        """通用环境变量（所有引擎共享）"""
+        """通用环境变量（所有引擎共享，子类一般不覆盖）。"""
         return [
             {
                 'name': 'ENGINE_TYPE',
@@ -58,15 +71,12 @@ class CollaborationEngine(ABC):
 
     @classmethod
     def get_recommended_polling_interval(cls) -> int:
-        """返回推荐的轮询间隔（秒）
-
-        各引擎可以根据平台特性覆盖
-        """
+        """返回推荐的轮询间隔（秒）。子类按平台 API 限额覆盖。"""
         return 30  # 默认 30 秒
 
     @classmethod
     def get_rate_limit_info(cls) -> Dict[str, int]:
-        """返回平台的 API 限额信息"""
+        """返回平台的 API 限额信息（信息性，不影响编排逻辑）。"""
         return {
             "requests_per_hour": 5000,
             "requests_per_minute": 100
@@ -76,12 +86,20 @@ class CollaborationEngine(ABC):
 
     @abstractmethod
     def list_members(self, workspace_id: str) -> List[str]:
-        """列出工作空间中可分配任务的成员
+        """列出可分配任务的成员名称列表。
 
-        业务语义：查询可用的 worker/reviewer
+        契约：
+        - 返回的名称必须与 manifest 中 worker/reviewer 字段的值**按字符串完全匹配**，
+          否则 lint 会报 "worker not in squad pool"。
+        - 如果平台用 id 而非 name 标识成员，内部做 name->id 映射，
+          但此方法返回的是 **name**（与 manifest 对齐）。
+        - workspace_id 参数是「作用域 id」：若引擎有小队/分组概念，
+          config.squad_id 优先，否则用 workspace_id 退化为全员。
 
-        multica: multica agent list
-        github: repo collaborators
+        实现示例：
+        - multica: multica squad member list <squad_id> -> 提取 name
+        - github:  gh api repos/{owner}/{repo}/collaborators -> 提取 login
+        - mock:    返回内置 ['alice', 'bob', 'charlie']
 
         返回：['alice', 'bob', 'charlie']
         """
@@ -102,38 +120,56 @@ class CollaborationEngine(ABC):
         wave: Optional[int] = None,
         initial_status: WorkItemStatus = WorkItemStatus.TODO
     ) -> WorkItem:
-        """创建工作单元
+        """在平台上创建一个工作单元，返回带确定性 id 的 WorkItem。
 
-        业务语义：创建一个任务，指定元数据和初始状态
+        **最重要的契约**：返回的 WorkItem.id 必须是一个**稳定且唯一**的标识符，
+        后续 get_work_item(id) 用它能精准取回这个工作单元。
+        编排层把这个 id 回填进 manifest 的 work_item_id 字段，
+        之后所有查询都走 get_work_item(work_item_id)，不再全量扫描。
 
-        multica: issue create + metadata set
-        github: issue create，body 包含 YAML frontmatter + 添加 status label
+        平台如何存 metadata 由你决定（issue body YAML / metadata API / label 等），
+        但存完后立刻调 get_work_item(id) 应能读回全部字段。
 
         参数：
-            workspace_id: 工作空间 ID
-            title: 任务标题
-            description: 任务描述
-            dag_key: DAG 节点标识（用于查找和去重）
-            worker: 执行者（必填）
-            reviewer: 审核者（可选）
-            blocked_by: 依赖的 DAG key 列表
-            wave: 所属 wave
-            initial_status: 初始状态（默认 TODO）
+            workspace_id: 作用域 id（通常 = config.squad_id 或 workspace_id）
+            title: 任务标题（编排层会自动加 [DAG:{dag_key}] 前缀，你不必再加）
+            description: 完整 issue body（worker 的上下文来源，须原样存入平台）
+            dag_key: DAG 节点标识（存进 metadata，供 list_work_items 调试用）
+            worker: 执行者名称（存进 metadata，不在此方法内 assign——assign 由编排层在派发时调 assign_work_item）
+            reviewer: 审核者名称（可选，存进 metadata）
+            blocked_by: 依赖的 DAG key 列表（存进 metadata）
+            wave: 所属 wave（可选，存进 metadata）
+            initial_status: 初始状态（默认 TODO，存进平台 status 字段/label）
 
-        返回：创建的 WorkItem
+        返回：WorkItem，其中 .id 是平台返回的确定性 id（int 转成 str 也可）。
+
+        实现示例：
+        - multica: issue create -> 拿 issue id -> metadata set 写各字段 -> get_work_item(id) 返回
+        - github:  gh issue create（body 含 YAML frontmatter） -> 拿 issue number -> get_work_item(number) 返回
         """
         pass
 
     @abstractmethod
     def get_work_item(self, item_id: str) -> WorkItem:
-        """获取工作单元详情
+        """按 item_id 精准取回工作单元的完整当前状态。
 
-        业务语义：查询任务的当前状态和元数据
+        **主查询接口**——编排层每个轮询周期都调此方法检测节点是否 done。
+        这是 O(1) 精准查询，不扫描全量。
 
-        multica: issue get，从 metadata 解析
-        github: issue get，从 body YAML 解析
+        契约：
+        - 返回的 WorkItem 必须包含**全部**业务字段：
+          status（反映 update_status 的最新值）、worker、reviewer、blocked_by、
+          artifacts（worker 写入的产物）、review_verdict、review_comment。
+        - **写后读一致性**：任何 update_status / update_work_item_metadata /
+          assign_work_item 调用后，紧接着的 get_work_item 必须返回更新后的值。
+        - item_id 在平台上不存在时应抛异常（编排层的 reconcile 据此清空 work_item_id 走新建）。
 
-        返回的 WorkItem 包含所有业务字段（status/worker/artifacts/review_verdict 等）
+        实现示例：
+        - multica: issue get <id> -> 从 metadata 解析各字段
+        - github:  gh issue view <number> -> 从 body YAML frontmatter 解析
+
+        返回：WorkItem（含全部业务字段）
+        异常：item_id 不存在时抛 RuntimeError 或同类异常
         """
         pass
 
@@ -148,14 +184,23 @@ class CollaborationEngine(ABC):
         review_verdict: Optional[str] = None,
         review_comment: Optional[str] = None
     ) -> WorkItem:
-        """更新工作单元的元数据
+        """更新工作单元的业务元数据（不改 status）。
 
-        业务语义：修改任务的分配、依赖关系、产物、审核结果
+        契约：
+        - 参数为 None 的字段**不更新**（保持原值），只更新显式传入的字段。
+        - 写入后立刻 get_work_item(item_id) 必须能读回新值。
+        - 返回更新后的 WorkItem（方便调用方确认）。
 
-        multica: issue metadata set
-        github: 更新 issue body 的 YAML frontmatter
+        何时被调用：
+        - worker 完成 -> 编排层写 artifacts（如 {"pr": "https://..."}）
+        - reviewer 完成 -> 编排层写 review_verdict + review_comment
+        - assign_work_item 内部也会调此方法同步 metadata
 
-        参数为 None 表示不更新该字段
+        实现示例：
+        - multica: issue metadata set <id> --key worker --value alice（逐字段调）
+        - github:  读当前 body YAML -> 合并新字段 -> gh issue edit --body 新body
+
+        返回：更新后的 WorkItem
         """
         pass
 
@@ -165,23 +210,31 @@ class CollaborationEngine(ABC):
         workspace_id: str,
         status: Optional[WorkItemStatus] = None
     ) -> List[WorkItem]:
-        """列出工作单元
+        """列出工作单元（供进度查看/调试，非主查询路径）。
 
-        业务语义：查询任务列表，可按状态过滤
+        契约：
+        - 编排层的主查询走 get_work_item(work_item_id) 精准取，不走此方法。
+        - 此方法主要用于调试、进度汇总、人工查看。
+        - status 过滤是可选优化（不传则返回全部）。
+        - 返回的每个 WorkItem 须含完整字段（同 get_work_item 契约）。
 
-        multica: issue list --status
-        github: issue list，按 status:xxx label 过滤
+        实现示例：
+        - multica: issue list --output json
+        - github:  gh issue list --json number,title,body,labels,state
+
+        返回：List[WorkItem]
         """
         pass
 
     @abstractmethod
     def add_comment(self, item_id: str, comment: str):
-        """添加评论
+        """向工作单元追加一条评论（进度报告/通知）。
 
-        业务语义：发送进度报告或通知
+        契约：追加写入，不覆盖已有评论。失败不应中断编排（编排层会 catch）。
 
-        multica: issue comment
-        github: issue comment
+        实现示例：
+        - multica: issue comment <id> --message <comment>
+        - github:  gh issue comment <number> --body <comment>
         """
         pass
 
@@ -189,12 +242,23 @@ class CollaborationEngine(ABC):
 
     @abstractmethod
     def update_status(self, item_id: str, status: WorkItemStatus):
-        """更新工作单元状态
+        """更新工作单元状态（todo/in_progress/in_review/done/failed/blocked）。
 
-        业务语义：标记任务进入新阶段（开始/完成/失败）
+        契约：
+        - 写入后立刻 get_work_item(item_id) 必须返回新 status。
+        - 状态是**排他**的（同一时刻只有一个状态），不是叠加。
+        - 平台如何表达状态由你决定（status 字段 / label / state），
+          但 get_work_item 解析时必须还原为 WorkItemStatus 枚举。
 
-        multica: issue update --status in_progress
-        github: 更新 labels（添加 status:in-progress，移除旧的）
+        何时被调用（编排层状态机）：
+        - 派 worker 前:  -> IN_PROGRESS
+        - worker done, 有 reviewer: -> IN_REVIEW
+        - reviewer pass: -> DONE
+        - worker fail / reviewer reject: -> BLOCKED
+
+        实现示例：
+        - multica: issue update <id> --status in_progress
+        - github:  移除旧 status:xxx label + 添加新 status:xxx label
         """
         pass
 
@@ -205,161 +269,51 @@ class CollaborationEngine(ABC):
         assignee: str,
         role: str  # "worker" | "reviewer"
     ):
-        """将任务（重新）分配给指定协作者
+        """将工作单元分配给指定协作者，并同步 metadata。
 
-        业务语义：指定谁来执行/审核这个任务
+        契约：
+        - assignee 是**成员名称**（与 list_members 返回的格式一致），
+          若平台用 id 标识，内部做 name->id 解析。
+        - 必须做两件事：① 平台侧 assign（触发通知）② 同步 metadata
+          （role=="worker" -> update_work_item_metadata(worker=assignee)，
+           role=="reviewer" -> update_work_item_metadata(reviewer=assignee)）
+          这样 get_work_item 才能读到当前分配。
+        - role 只影响写哪个 metadata 字段，不影响平台 assign 逻辑。
 
-        multica: issue assign --to agent_id + 更新 metadata
-        github: gh issue edit --add-assignee + 更新 body YAML + 添加 role label
+        何时被调用：
+        - 派发 worker 时: assign_work_item(id, worker_name, "worker")
+        - 派发 reviewer 时: assign_work_item(id, reviewer_name, "reviewer")
+        - 失败重派时: 再次 assign 同一 item 给新 worker
 
-        用途：
-        - 重新分配失败的任务
-        - 动态负载均衡
-        - worker 完成后分配给 reviewer
+        实现示例：
+        - multica: resolve agent name -> id -> issue assign --to <id> + metadata set worker/reviewer
+        - github:  gh issue edit --add-assignee <login> + 更新 body YAML 的 worker/reviewer 字段
         """
         pass
 
-    # ==================== 第四组：查询（1 个）====================
-
-    @abstractmethod
-    def find_work_item_by_dag_key(
-        self,
-        workspace_id: str,
-        dag_key: str
-    ) -> Optional[WorkItem]:
-        """按 DAG key 查找工作单元
-
-        业务语义：查找对应 manifest 节点的任务（避免重复创建）
-
-        multica: issue list + 过滤 metadata.dag_key
-        github: 搜索 title 中的 [DAG:xxx] 或 body YAML
-        """
-        pass
-
-    # ==================== 便捷方法（基类实现）====================
+    # ==================== 便捷方法（基类实现，子类不用覆盖）====================
 
     def check_member_exists(self, workspace_id: str, member_name: str) -> bool:
-        """检查成员是否存在（基类实现）"""
+        """检查成员是否存在（基类实现）。"""
         members = self.list_members(workspace_id)
         return member_name in members
 
     def mark_in_progress(self, item_id: str):
-        """标记为进行中（便捷方法）"""
+        """便捷方法：update_status(IN_PROGRESS)。"""
         self.update_status(item_id, WorkItemStatus.IN_PROGRESS)
 
     def mark_done(self, item_id: str):
-        """标记为完成（便捷方法）"""
+        """便捷方法：update_status(DONE)。"""
         self.update_status(item_id, WorkItemStatus.DONE)
 
     def mark_failed(self, item_id: str):
-        """标记为失败（便捷方法）"""
+        """便捷方法：update_status(FAILED)。"""
         self.update_status(item_id, WorkItemStatus.FAILED)
 
     def mark_blocked(self, item_id: str):
-        """标记为阻塞（便捷方法）"""
+        """便捷方法：update_status(BLOCKED)。"""
         self.update_status(item_id, WorkItemStatus.BLOCKED)
 
     def mark_in_review(self, item_id: str):
-        """标记为审核中（便捷方法）"""
+        """便捷方法：update_status(IN_REVIEW)。"""
         self.update_status(item_id, WorkItemStatus.IN_REVIEW)
-
-    # ==================== Run 生命周期管理（4 个核心接口）====================
-
-    @abstractmethod
-    def create_run(
-        self,
-        workspace_id: str,
-        manifest: Any,  # Manifest 对象
-        orchestrator_issue_id: Optional[str] = None
-    ) -> Run:
-        """创建新的编排运行
-
-        业务语义：启动一个新的 DAG 编排
-
-        引擎内部职责：
-        - 生成 run_id
-        - 保存 manifest（如何保存由引擎决定）
-        - 初始化内部状态（如何保存由引擎决定）
-        - 为所有 DAG 节点创建工作单元
-
-        实现方式：
-        - multica: 保存到 orchestrator issue 的 metadata + 附件
-        - github: 保存到本地文件或 tracking issue
-        - mock: 保存到本地 .multica_state/
-
-        返回：Run 对象（包含 id/status/progress 等业务信息）
-        """
-        pass
-
-    @abstractmethod
-    def get_run(self, run_id: str) -> Optional[Run]:
-        """获取编排运行的当前状态
-
-        业务语义：查询某个编排的实时状态和进度
-
-        引擎内部职责：
-        - 从存储加载基本信息（如何加载由引擎决定）
-        - 查询关联的工作单元状态
-        - 计算实时进度
-
-        返回：Run 对象（包含最新的进度信息），不存在返回 None
-        """
-        pass
-
-    @abstractmethod
-    def list_runs(
-        self,
-        workspace_id: Optional[str] = None,
-        status: Optional[RunStatus] = None
-    ) -> List[Run]:
-        """列出编排运行历史
-
-        业务语义：查看历史编排记录，可按工作空间和状态过滤
-
-        实现方式：
-        - multica: 从 orchestrator issue metadata 提取
-        - github: 从本地目录扫描
-        - mock: 从本地目录扫描
-
-        返回：Run 对象列表（按创建时间倒序）
-        """
-        pass
-
-    @abstractmethod
-    def delete_run(self, run_id: str):
-        """删除编排运行记录
-
-        业务语义：清理历史编排数据
-
-        引擎内部职责：
-        - 删除保存的 manifest
-        - 删除保存的状态
-        - 删除事件日志
-        - 不删除创建的工作单元（用户可能还需要）
-
-        注意：如果引擎不支持删除，可以抛出 NotImplementedError
-        """
-        pass
-
-    # ==================== 内部辅助方法（供子类使用，不是抽象接口）====================
-
-    def _save_checkpoint(self, run_id: str, key_to_id: Dict[str, str], completed: List[str], failed: List[str]):
-        """内部方法：保存检查点（子类可选实现）
-
-        业务层不调用此方法，由引擎在关键节点自动调用
-        """
-        pass
-
-    def _load_checkpoint(self, run_id: str) -> Optional[Dict[str, Any]]:
-        """内部方法：加载检查点（子类可选实现）
-
-        返回：{"key_to_id": {...}, "completed": [...], "failed": [...]}
-        """
-        return None
-
-    def _log_event(self, run_id: str, event_type: str, data: Dict[str, Any]):
-        """内部方法：记录事件（子类可选实现）
-
-        业务层不调用此方法，由引擎在关键节点自动调用
-        """
-        pass

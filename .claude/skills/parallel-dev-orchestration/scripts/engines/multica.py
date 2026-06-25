@@ -3,10 +3,9 @@ Multica 引擎实现
 """
 import json
 import subprocess
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .base import CollaborationEngine
-from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig, Run, RunStatus
+from .models import WorkspaceInfo, WorkItem, WorkItemStatus, EngineConfig
 
 
 class MulticaEngine(CollaborationEngine):
@@ -365,8 +364,8 @@ class MulticaEngine(CollaborationEngine):
     def add_comment(self, item_id: str, comment: str):
         """添加评论"""
         self._run_multica([
-            "issue", "comment", item_id,
-            "--message", comment
+            "issue", "comment", "add", item_id,
+            "--content", comment
         ], capture=False)
 
     # ==================== 第三组：状态和分配 ====================
@@ -400,67 +399,4 @@ class MulticaEngine(CollaborationEngine):
             self.update_work_item_metadata(item_id, reviewer=assignee)
 
     # ==================== 第四组：查询 ====================
-
-    def find_work_item_by_dag_key(
-        self,
-        workspace_id: str,
-        dag_key: str
-    ) -> Optional[WorkItem]:
-        """按 DAG key 查找工作单元"""
-        all_items = self.list_work_items(workspace_id)
-
-        for item in all_items:
-            if item.dag_key == dag_key:
-                return item
-            # 兼容：也检查 title 中的 [DAG:xxx]
-            if f"[DAG:{dag_key}]" in item.title:
-                return item
-
-        return None
-
-    # ==================== Run 生命周期管理 ====================
-
-    def create_run(
-        self,
-        workspace_id: str,
-        manifest: Any,
-        orchestrator_issue_id: Optional[str] = None
-    ) -> Run:
-        """创建新的编排运行
-
-        Multica 实现：保存到 orchestrator issue 的 metadata + 附件
-        """
-        # TODO: 完整实现
-        # 1. 生成 run_id
-        # 2. 上传 manifest 为 orchestrator issue 附件
-        # 3. 创建工作单元
-        # 4. 保存 run metadata 到 orchestrator issue
-        raise NotImplementedError("Multica create_run 待实现")
-
-    def get_run(self, run_id: str) -> Optional[Run]:
-        """获取编排运行的当前状态
-
-        Multica 实现：从 orchestrator issue metadata 加载
-        """
-        # TODO: 完整实现
-        raise NotImplementedError("Multica get_run 待实现")
-
-    def list_runs(
-        self,
-        workspace_id: Optional[str] = None,
-        status: Optional[RunStatus] = None
-    ) -> List[Run]:
-        """列出编排运行历史
-
-        Multica 实现：从 orchestrator issue metadata 提取所有 run
-        """
-        # TODO: 完整实现
-        return []
-
-    def delete_run(self, run_id: str):
-        """删除编排运行记录
-
-        Multica 实现：从 orchestrator issue metadata 删除
-        """
-        # TODO: 完整实现
-        raise NotImplementedError("Multica delete_run 待实现")
+    # (find_work_item_by_dag_key 已删除——manifest.work_item_id + get_work_item 精准取代)

@@ -274,6 +274,19 @@ Track C: 通知服务(邮件 / 短信 / 推送)
 
 最后一波:替换 mock → 真对端,跑端到端测试。
 
+#### 阶段 B 收尾：manifest 落盘 + PR 评审门
+
+拆完 DAG 后，把 manifest 写到项目根 `.orchestrator/<name>.yaml`（固定路径）。manifest 必须含完整 issue body（每节点的 `description` 是 worker 的上下文来源）。
+
+然后进入 PR 评审门：
+1. 建分支 `git checkout -b orchestrator/<name>`
+2. `gh pr create` —— 把 manifest 作为 PR 内容提交评审
+3. 等评审通过（评审者是人或 agent 都行，orchestrator 只看「是否通过」，不关心「谁评审」）
+4. 通过即 `gh pr merge` 合并到目标分支
+5. 到此 Phase 1（拆 DAG）才算完成
+
+**PR 评审未通过不进 Phase 2（跑引擎）。** 评审反馈可能要求你调整 DAG 结构、粒度或依赖。
+
 #### Manifest 编写规范
 
 **依赖关系(depends_on)**:
@@ -448,47 +461,57 @@ manifest 写好后，这部分讲「**怎么把它跑起来、出问题怎么处
 
 ## 执行编排（阶段 C — 跑引擎）
 
-保存 manifest 后,执行本 skill 附带的引擎脚本:
+PR 评审通过后，执行本 skill 附带的引擎脚本跑 Phase 2（跑 DAG）:
 
-### 启动与管理 run
+### 启动编排
 
 ```bash
 # 查看完整用法
 python scripts/run_dag.py --help
 
-# 常用操作（具体参数见 --help）：
-# - 启动/重跑：指定 manifest 文件和引擎配置
-# - 查看状态：列出所有 run 及其进度
+# 启动/重跑：指定 manifest 文件和引擎配置
+python scripts/run_dag.py .orchestrator/<name>.yaml
 ```
 
 引擎会自动：
 - ✅ Lint manifest（校验依赖/agent 池/无环）
-- ✅ 创建/复用 issues（按 manifest 节点 `id`(dag_key) 去重：已 DONE 的复用其产物不重派，非 DONE 的重置后重派）
-- ✅ 编译 metadata（blocked_by/worker/reviewer）
+- ✅ Reconcile（启动校验：逐节点拿 work_item_id 去平台核对真实状态 vs manifest 记录，补齐 gap）
+- ✅ 创建 work items（首次建后 work_item_id 回填进 manifest 并 commit+push）
 - ✅ 计算 frontier 并派发
-- ✅ 轮询 runs 直到完成
-- ✅ 自动 comment 进度（带 ASCII 进度条）
+- ✅ 轮询直到完成
+- ✅ 节点状态变更实时写回 manifest（关键节点 commit+push）
 - ✅ 失败隔离（阻塞下游）
-- ✅ 持久化状态快照（支持中断后重跑）
+- ✅ 幂等重跑（已 done 且有 work_item_id 的节点直接 get_work_item 精准取，0 新建）
 
-### 进度报告示例
+### 双 ID 机制
 
-引擎会自动生成类似这样的进度报告：
+每个节点有两个 ID：
+- **`dag_key`**：orchestrator 生成、写进 manifest（即节点的 `id`）
+- **`work_item_id`**：平台建完 work item 返回的唯一 id（GitHub issue 号 / Multica issue id），Phase 2 回填进 manifest
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 整体进度 [████████████░░░░░░░░] 12/15 (80.0%)
-⏱️  已用时间: 2h 34m | 预计剩余: 38m
-✅ 完成: 12 | 🔄 进行中: 1 | ⏸️  待开始: 2 | ❌ 失败: 0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+有了 `work_item_id`，幂等查询从「全量扫」变成 `get_work_item(work_item_id)` 精准取（O(n)->O(1)）。`dag_key ↔ work_item_id` 的映射钉死在 manifest 里，不必再单独维护对应关系，也不必再扫平台。
+
+### manifest 唯一口径
+
+manifest 文件是全局唯一口径——不依赖 checkpoint、Run 存储、event log 等自造存储。节点状态直接写进 manifest 的 `status` 字段，经 git 流转。
+
+关键节点 commit+push：
+- 每节点首次建 work item 回填 work_item_id 后 push 一次
+- 节点进终态（done/blocked/failed）后 push 一次
+- 中间 status 只写本地文件不提交
+- push 失败醒目告警但不中断编排；不自动 merge（PR 评审是外部门控）
+
+### reconcile（跨机器接力）
+
+manifest 经 git 流转，可能是别的机器 commit 来的、带部分状态。因此 Phase 2 启动时做一次全局 reconcile：逐节点拿 `work_item_id` 去平台核对真实状态 vs manifest 记录，补齐 gap，再继续跑。manifest 是口径，平台是实况，二者对齐后才往下跑。
 
 ### 断点续跑 / 幂等重跑
 
-引擎天然支持中断后重跑：直接对**同一个 manifest** 再次执行 `python scripts/run_dag.py <manifest>` 即可，无需指定 run-id。引擎按 manifest 节点 `id`（dag_key）全局去重：
+直接对**同一个 manifest** 再次执行 `python scripts/run_dag.py <manifest>` 即可。manifest 是唯一口径：
 
-- **已 DONE 的节点**：复用其工作单元与产物，**跳过派发不重做**；
-- **非 DONE 的节点**（BLOCKED/FAILED/INFLIGHT/TODO）：复用同一工作单元（不另建，避免遗留孤儿 issue），重置为 TODO 后**重新派发**。
+- **已 done 且有 work_item_id 的节点**：reconcile 用 `get_work_item(work_item_id)` 精准取，确认平台也是 done -> 跳过，**0 新建、不全量扫**；
+- **blocked/failed 的节点**：重置为 todo 重试，复用原 work_item_id（不另建）；
+- **无 work_item_id 的节点**：首次建 work item 并回填。
 
 因此失败处理与断点续跑是**同一条路径**：leader 改完 manifest（换 worker / 拆小 / 降范围）后重跑，已成功的节点自动跳过，只重做待执行或失败的部分。全新 DAG 因节点 `id` 不同，自然全部新建。
 
@@ -496,20 +519,18 @@ python scripts/run_dag.py --help
 
 **引擎会自动**:
 1. **Lint 校验**(无环、worker∈池、reviewer≠worker)
-2. **创建 work items**(如果不存在,通过 title 匹配 key)
-3. **编译 metadata**(blocked_by/worker/reviewer → work item metadata)
+2. **Reconcile**(拿 work_item_id 去平台核对真实状态，补齐 gap)
+3. **创建 work items**(无 work_item_id 的节点建 work item，回填 work_item_id 并 commit+push)
 4. **循环监督**:
    - 计算 frontier(ready 节点 = todo 且依赖全 done)
    - 派发 worker(自动 assign)
-   - 轮询 runs 到终态
+   - 轮询到终态
    - 检查 PR(从 metadata.artifacts 读)
    - 派发 reviewer(如有)
-   - done 或 failed
+   - 节点进终态 -> 写回 manifest status + commit+push
 5. **输出 digest**: `done: [oauth-setup, jwt-service, ...], failed: []`
 
 **你不需要写循环逻辑**——引擎是固定的,你的价值在拆解质量和失败决策。
-
----
 
 ## 处理失败与重试
 
@@ -571,13 +592,11 @@ nodes:
 某节点 failed → `downstream_of(failed)` 标记为 blocked → 不再派发
 
 ### 幂等重跑
-引擎按 manifest 节点 `id`(dag_key) 全局去重，对同一 manifest 多次执行：
-- 已 done 的节点复用其工作单元与产物，跳过派发不重做
-- 非 done 的节点（BLOCKED/FAILED/INFLIGHT/TODO）复用同一工作单元并重置为 TODO 重新派发
-- 失败处理与中断续跑是同一条路径：改完 manifest 重跑即可，无需指定 run-id
-
-### 并发
-当前实现顺序执行(`max_parallel=1`)。后续改线程池时仍保持语义。
+manifest 是唯一口径，对同一 manifest 多次执行：
+- 已 done 且有 work_item_id 的节点：reconcile 用 get_work_item(work_item_id) 精准取，0 新建、不全量扫
+- blocked/failed 的节点：重置为 todo 重试，复用原 work_item_id（不另建）
+- 无 work_item_id 的节点：首次建 work item 并回填
+- 失败处理与中断续跑是同一条路径：改完 manifest 重跑即可
 
 ---
 
@@ -586,8 +605,8 @@ nodes:
 本 skill 自带编排引擎，包结构按职责分层（你只跑 `run_dag.py`，其余是引擎内部实现）：
 
 - `scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
-- `scripts/core/`: 核心编排逻辑 — `manifest.py`(数据模型+YAML加载) / `compile.py`(manifest→metadata 编译) / `graph.py`(frontier 算法+失败隔离) / `lint.py`(校验:无环/无孤儿/worker∈池) / `models.py`(引擎状态) / `progress.py`(进度报告)
-- `scripts/engines/`: 引擎适配层 — `base.py`(抽象接口) / `models.py`(Run/WorkItem 等数据模型) / `multica.py` / `github.py` / `mock.py`（三种协作平台实现）
+- `scripts/core/`: 核心编排逻辑 — `manifest.py`(数据模型+YAML加载+save_manifest/set_node 回写) / `graph.py`(frontier 算法+失败隔离) / `lint.py`(校验:无环/无孤儿/worker∈池)
+- `scripts/engines/`: 引擎适配层 — `base.py`(抽象接口 ~8 个核心方法) / `models.py`(WorkItem/WorkItemStatus/EngineConfig 数据模型) / `multica.py` / `github.py` / `mock.py`（三种协作平台实现）
 - `scripts/clients/multica.py`: Multica CLI 客户端封装
 - `scripts/utils.py`: 通用工具函数
 
@@ -642,4 +661,3 @@ Worker/Reviewer 通过 `parallel-dev-executor` skill 知道:
 6. ❌ 不要拆成数百微任务(粒度=并行单元,半天~两天可收口)
 
 ---
-

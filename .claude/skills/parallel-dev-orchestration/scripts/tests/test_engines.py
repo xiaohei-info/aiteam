@@ -7,8 +7,7 @@
 import sys
 from pathlib import Path
 
-# 添加当前目录到 path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from engines import create_engine_from_config, WorkItemStatus
 
@@ -68,12 +67,12 @@ def run_engine_interface_test(engine_type: str, workspace_id: str):
     print(f"   ✅ 状态: {retrieved_item.status.value}")
 
     # 5. 按 DAG key 查找
-    print("\n5️⃣ 按 DAG key 查找...")
-    found_item = engine.find_work_item_by_dag_key(workspace_id, "test-task-001")
-    if found_item:
-        print(f"   ✅ 找到任务: {found_item.id}")
+    print("\n5️⃣ 按 work_item_id 精准取...")
+    retrieved_by_id = engine.get_work_item(item_id)
+    if retrieved_by_id and retrieved_by_id.dag_key == "test-task-001":
+        print(f"   ✅ 精准取到任务: {retrieved_by_id.id}")
     else:
-        print(f"   ❌ 未找到任务")
+        print(f"   ❌ 精准取失败")
 
     # 6. 更新状态
     print("\n6️⃣ 更新任务状态...")

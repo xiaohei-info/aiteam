@@ -1,26 +1,66 @@
 #!/usr/bin/env python3
 """
-DAG 编排引擎 - 使用 Run 生命周期接口
+DAG 编排引擎 - manifest 驱动
 
-改进：
-- 引擎统一管理 Run 生命周期（创建、查询、恢复）
-- 业务层不再直接操作 storage
-- 引擎内部自动保存检查点和事件日志
+主循环结构（sync -> decide -> dispatch）：
+  1. SYNC:    harvest 在飞节点终态（查平台 -> 写回 manifest）
+  2. DECIDE:  读 manifest 算 frontier + 失败隔离（下游标 blocked）
+  3. DISPATCH: 派发 ready 节点（建 work item -> assign -> 轮询）
+  4. 终止:    无 ready 且无在飞 -> 带报告退出
 """
 import sys
 import time
 import argparse
 from pathlib import Path
-from typing import Dict, Set, Optional
+from typing import Optional, Callable, Set
 
-# 添加当前目录到 path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core import load_manifest, Manifest, lint, frontier, downstream_of
-from utils import format_duration
+from core import load_manifest, save_manifest, set_node, lint, frontier, downstream_of
+from utils import format_duration, commit_manifest, render_progress
 
-# 引入引擎
-from engines import create_engine_from_env, create_engine_from_config, CollaborationEngine, WorkItemStatus, Run, RunStatus
+from engines import (
+    create_engine_from_env,
+    create_engine_from_config,
+    CollaborationEngine,
+    WorkItemStatus,
+)
+
+# manifest 中的终态值
+TERMINAL_STATUSES = {"done", "blocked", "failed"}
+INFLIGHT_STATUSES = {"in_progress", "in_review"}
+
+
+# ==================== reconcile ====================
+
+def reconcile(engine: CollaborationEngine, manifest, manifest_path: str):
+    """启动校验：逐节点拿 work_item_id 去平台核对真实状态，全量同步回 manifest。
+
+    - 有 work_item_id -> get_work_item(work_item_id) 精准取：
+      平台状态与 manifest 不一致 -> 以平台为准写回 manifest（含 in_progress/in_review）；
+      work_item_id 指向的 item 在平台已不存在 -> 清空 work_item_id 走新建。
+    - 无 work_item_id -> 该节点未建，留待 execute_dag 首次建。
+    """
+    changed = False
+    for key, node in manifest.nodes.items():
+        if not node.work_item_id:
+            continue
+        try:
+            item = engine.get_work_item(node.work_item_id)
+        except Exception:
+            print(f"  reconcile: {key} work_item_id={node.work_item_id} 平台不存在，清空待新建")
+            set_node(manifest, key, work_item_id=None, status="todo")
+            changed = True
+            continue
+
+        platform_status = item.status.value
+        if platform_status != node.status:
+            print(f"  reconcile: {key} manifest={node.status} -> 平台={platform_status}，同步")
+            set_node(manifest, key, status=platform_status)
+            changed = True
+
+    if changed:
+        save_manifest(manifest, manifest_path)
 
 
 # ==================== 核心执行逻辑 ====================
@@ -30,69 +70,34 @@ def dispatch_worker(
     key: str,
     item_id: str,
     worker_name: str,
-    run: Run
 ) -> str:
-    """派发 worker：assign → 轮询到完成 → 检查产物
-
-    返回: "ok" | "failed"
-    """
-    # 分配任务给 worker
+    """派发 worker：assign -> 轮询到完成 -> 检查产物。返回 "ok" | "failed"。"""
     engine.assign_work_item(item_id, worker_name, "worker")
+    print(f"  派发任务 {key} 给 {worker_name}")
 
-    print(f"  📤 派发任务 {key} 给 {worker_name}")
-
-    # 记录事件
-    engine._log_event(run.id, "node_started", {
-        "node_key": key,
-        "worker": worker_name
-    })
-
-    # 轮询等待完成
     polling_interval = engine.config.polling_interval
-    max_wait_time = 3600  # 最长等待 1 小时
+    max_wait_time = 3600
     elapsed = 0
 
     while elapsed < max_wait_time:
         time.sleep(polling_interval)
         elapsed += polling_interval
 
-        # 查询当前状态
         work_item = engine.get_work_item(item_id)
 
-        # 检查是否完成
         if work_item.status == WorkItemStatus.DONE:
-            # 检查产物
             if work_item.artifacts and ("pr" in work_item.artifacts or "PR" in str(work_item.artifacts)):
-                print(f"  ✅ 任务 {key} 完成，产物: {work_item.artifacts}")
-                engine._log_event(run.id, "node_completed", {
-                    "node_key": key,
-                    "artifacts": work_item.artifacts
-                })
+                print(f"  任务 {key} 完成，产物: {work_item.artifacts}")
                 return "ok"
             else:
-                reason = "缺少 PR 产物"
-                print(f"  ❌ 任务 {key} 失败: {reason}")
-                engine._log_event(run.id, "node_failed", {
-                    "node_key": key,
-                    "reason": reason
-                })
+                print(f"  任务 {key} 失败: 缺少 PR 产物")
                 return "failed"
 
         elif work_item.status == WorkItemStatus.FAILED:
-            reason = "Worker run failed"
-            print(f"  ❌ 任务 {key} 失败: {reason}")
-            engine._log_event(run.id, "node_failed", {
-                "node_key": key,
-                "reason": reason
-            })
+            print(f"  任务 {key} 失败: Worker run failed")
             return "failed"
 
-    # 超时
-    print(f"  ⏰ 任务 {key} 超时")
-    engine._log_event(run.id, "node_failed", {
-        "node_key": key,
-        "reason": "执行超时"
-    })
+    print(f"  任务 {key} 超时")
     return "failed"
 
 
@@ -101,176 +106,252 @@ def run_gate(
     key: str,
     item_id: str,
     reviewer_name: Optional[str],
-    run: Run
 ) -> str:
-    """派发 reviewer：assign → 轮询 → 读 verdict
-
-    返回: "approve" | "reject"
-    """
+    """派发 reviewer：assign -> 轮询 -> 读 verdict。返回 "approve" | "reject"。"""
     if not reviewer_name:
-        return "approve"  # 无 reviewer = 自动通过
+        return "approve"
 
-    # 分配任务给 reviewer
     engine.assign_work_item(item_id, reviewer_name, "reviewer")
+    print(f"  派发审核 {key} 给 {reviewer_name}")
 
-    print(f"  🔍 派发审核 {key} 给 {reviewer_name}")
-
-    # 轮询等待审核完成
     polling_interval = engine.config.polling_interval
-    max_wait_time = 1800  # 最长等待 30 分钟
+    max_wait_time = 1800
     elapsed = 0
 
     while elapsed < max_wait_time:
         time.sleep(polling_interval)
         elapsed += polling_interval
 
-        # 查询当前状态
         work_item = engine.get_work_item(item_id)
 
-        # 检查审核结果
         if work_item.review_verdict:
             if work_item.review_verdict in ["pass", "pass-with-nits"]:
-                print(f"  ✅ 审核通过: {key}")
+                print(f"  审核通过: {key}")
                 return "approve"
             else:
-                print(f"  ❌ 审核拒绝: {key} - {work_item.review_verdict}")
-                engine._log_event(run.id, "node_failed", {
-                    "node_key": key,
-                    "reason": f"Reviewer blocked: {work_item.review_verdict}"
-                })
+                print(f"  审核拒绝: {key} - {work_item.review_verdict}")
                 return "reject"
 
-    # 超时，视为拒绝
-    print(f"  ⏰ 审核超时: {key}")
-    engine._log_event(run.id, "node_failed", {
-        "node_key": key,
-        "reason": "审核超时"
-    })
+    print(f"  审核超时: {key}")
     return "reject"
+
+
+def _harvest(
+    engine: CollaborationEngine,
+    manifest,
+    manifest_path: str,
+    completed: Set[str],
+    failed: Set[str],
+) -> bool:
+    """SYNC 阶段：查平台，收割在飞节点的终态，写回 manifest。
+
+    对每个 manifest 状态为 in_progress/in_review 且有 work_item_id 的节点，
+    查平台实际状态。若平台已进终态（done/blocked/failed），写回 manifest
+    并更新 completed/failed 集合。返回是否有变更。
+    """
+    changed = False
+    for key, node in manifest.nodes.items():
+        if node.status not in INFLIGHT_STATUSES or not node.work_item_id:
+            continue
+        try:
+            item = engine.get_work_item(node.work_item_id)
+        except Exception:
+            continue
+
+        platform_status = item.status.value
+        if platform_status in TERMINAL_STATUSES:
+            print(f"  harvest: {key} 平台已 {platform_status}，写回 manifest")
+            set_node(manifest, key, status=platform_status)
+            save_manifest(manifest, manifest_path)
+            commit_manifest(manifest_path, f"harvest: {key} -> {platform_status}")
+            if platform_status == "done":
+                completed.add(key)
+            else:
+                failed.add(key)
+            changed = True
+
+    return changed
+
+
+def _build_snapshot(manifest) -> dict:
+    """DECIDE 阶段：从 manifest 构建 snapshot（不查平台，manifest 是唯一口径）。"""
+    snapshot = {}
+    for key, node in manifest.nodes.items():
+        snapshot[key] = {
+            "id": node.work_item_id or key,
+            "status": node.status,
+            "worker": node.worker,
+            "reviewer": node.reviewer,
+            "blocked_by": node.blocked_by,
+        }
+    return snapshot
+
+
+def _mark_blocked(manifest, manifest_path, failed: Set[str]) -> Set[str]:
+    """将失败节点的下游标记为 blocked（因上游失败/被拒，不再派发）。返回 blocked 集合。"""
+    snapshot = _build_snapshot(manifest)
+    downstream = downstream_of(snapshot, failed)
+    blocked = set()
+    for key in downstream:
+        if manifest.nodes[key].status not in TERMINAL_STATUSES:
+            set_node(manifest, key, status="blocked")
+            blocked.add(key)
+    if blocked:
+        save_manifest(manifest, manifest_path)
+        print(f"  失败隔离: {sorted(blocked)} 标记为 blocked")
+    return blocked
 
 
 def execute_dag(
     engine: CollaborationEngine,
-    run: Run,
-    manifest: Manifest,
-    key_to_id: Dict[str, str]
+    manifest,
+    manifest_path: str,
 ):
-    """执行 DAG 编排循环
+    """执行 DAG 编排循环 - sync -> decide -> dispatch。
 
-    Args:
-        engine: 引擎实例
-        run: Run 对象
-        manifest: Manifest 对象
-        key_to_id: {dag_key: item_id} 映射
+    SYNC:    harvest 在飞节点终态（查平台 -> 写回 manifest）
+    DECIDE:  读 manifest 算 frontier + 失败隔离（下游标 blocked）
+    DISPATCH: 派发 ready 节点（建 work item -> assign -> 轮询 -> 终态写回）
+    终止:    无 ready 且无在飞 -> 带报告退出
     """
-    workspace_id = run.workspace_id
-    # 从检查点恢复 completed/failed 种子（幂等重跑时，复用的 DONE 节点已在此）
-    checkpoint = engine._load_checkpoint(run.id) or {}
-    completed = set(checkpoint.get("completed", []))
-    failed = set(checkpoint.get("failed", []))
-    key_to_id = dict(checkpoint.get("key_to_id", key_to_id))
+    squad_id = engine.config.squad_id or engine.config.workspace_id
+
+    completed = {k for k, n in manifest.nodes.items() if n.status == "done"}
+    failed = {k for k, n in manifest.nodes.items() if n.status in ("blocked", "failed")}
+
+    # 上一轮 blocked/failed 的节点重置为 todo 以便重试
+    # （上游修好后重跑，被阻塞的下游自动恢复；若上游仍失败，_mark_blocked 下轮会重新标）
+    for key, node in manifest.nodes.items():
+        if node.status in ("blocked", "failed") and key not in completed:
+            set_node(manifest, key, status="todo")
+            failed.discard(key)
+    save_manifest(manifest, manifest_path)
 
     if completed:
-        print(f"  ♻️  复用已完成节点: {sorted(completed)}")
+        print(f"  复用已完成节点: {sorted(completed)}")
 
+    total = len(manifest.nodes)
     print(f"\n=== 开始执行 DAG ===")
-    print(f"  总任务数: {run.total_tasks}（待执行 {run.total_tasks - len(completed)}）")
+    print(f"  总任务数: {total}（待执行 {total - len(completed)}）")
 
     while True:
-        # 读取当前状态快照
-        snapshot = {}
-        for key, item_id in key_to_id.items():
-            work_item = engine.get_work_item(item_id)
-            snapshot[key] = {
-                "id": item_id,
-                "status": work_item.status.value,
-                "worker": work_item.worker,
-                "reviewer": work_item.reviewer,
-                "blocked_by": work_item.blocked_by
-            }
+        # ---- SYNC: harvest 在飞节点终态 ----
+        _harvest(engine, manifest, manifest_path, completed, failed)
 
-        # 计算 frontier（考虑失败隔离）
-        blocked = downstream_of(snapshot, failed)
-        ready = [k for k in frontier(snapshot) if k not in blocked and k not in failed and k not in completed]
+        # ---- DECIDE: 读 manifest 算 frontier + 失败隔离 ----
+        if failed:
+            _mark_blocked(manifest, manifest_path, failed)
+
+        snapshot = _build_snapshot(manifest)
+        ready = [k for k in frontier(snapshot)
+                 if k not in failed and k not in completed]
+
+        # ---- 终止判定：无 ready 且无在飞 ----
+        in_flight = {k for k, n in manifest.nodes.items()
+                     if n.status in INFLIGHT_STATUSES}
+        if not ready and not in_flight:
+            break
 
         if not ready:
-            # 检查是否全部完成或失败
-            if len(completed) + len(failed) >= len(key_to_id):
-                break
-
-            # 还有任务但都被阻塞，继续等待
-            print(f"  ⏸️  所有任务都被阻塞，等待 {engine.config.polling_interval}s 后重试...")
+            print(f"  等待在飞节点完成（{len(in_flight)} 个在飞），{engine.config.polling_interval}s 后重试...")
             time.sleep(engine.config.polling_interval)
             continue
 
-        # 派发任务（简化：顺序执行）
-        for key in ready[:1]:  # 一次只处理一个
-            item_id = key_to_id[key]
-            node = manifest.nodes[key]
-            worker = node.worker
-            reviewer = getattr(node, 'reviewer', None)
+        # ---- DISPATCH: 派发一个 ready 节点 ----
+        key = ready[0]
+        node = manifest.nodes[key]
+        worker = node.worker
+        reviewer = getattr(node, "reviewer", None)
 
-            print(f"\n▶️  处理任务: {key}")
+        print(f"\n> 处理任务: {key}")
 
-            # 派发 worker
-            engine.update_status(item_id, WorkItemStatus.IN_PROGRESS)
-            result = dispatch_worker(engine, key, item_id, worker, run)
+        # 首次派发：若无 work_item_id 则建 work item 并回填
+        if not node.work_item_id:
+            item = engine.create_work_item(
+                workspace_id=squad_id,
+                title=node.title or key,
+                description=node.description or f"Task {key}",
+                dag_key=key,
+                worker=worker,
+                reviewer=reviewer,
+                blocked_by=node.blocked_by,
+            )
+            set_node(manifest, key, work_item_id=item.id)
+            save_manifest(manifest, manifest_path)
+            commit_manifest(manifest_path, f"backfill work_item_id: {key}")
+            print(f"  建 work item {item.id} for {key}")
 
-            if result != "ok":
-                engine.update_status(item_id, WorkItemStatus.BLOCKED)
-                failed.add(key)
-                # 保存检查点
-                engine._save_checkpoint(run.id, key_to_id, list(completed), list(failed))
-                continue
+        item_id = node.work_item_id
 
-            # 派发 reviewer（如果有）
-            if reviewer:
-                engine.update_status(item_id, WorkItemStatus.IN_REVIEW)
-                gate_result = run_gate(engine, key, item_id, reviewer, run)
+        # 派发 worker
+        engine.update_status(item_id, WorkItemStatus.IN_PROGRESS)
+        set_node(manifest, key, status="in_progress")
+        save_manifest(manifest, manifest_path)
 
-                if gate_result == "approve":
-                    engine.update_status(item_id, WorkItemStatus.DONE)
-                    completed.add(key)
-                else:
-                    engine.update_status(item_id, WorkItemStatus.BLOCKED)
-                    failed.add(key)
-            else:
-                # 无 reviewer，直接标记完成
+        result = dispatch_worker(engine, key, item_id, worker)
+
+        if result != "ok":
+            engine.update_status(item_id, WorkItemStatus.BLOCKED)
+            set_node(manifest, key, status="blocked")
+            save_manifest(manifest, manifest_path)
+            commit_manifest(manifest_path, f"{key} -> blocked")
+            failed.add(key)
+            engine.add_comment(item_id, f"[{key}] blocked\n\n{render_progress(manifest, completed, failed)}")
+            continue
+
+        # 派发 reviewer（如果有）
+        if reviewer:
+            engine.update_status(item_id, WorkItemStatus.IN_REVIEW)
+            set_node(manifest, key, status="in_review")
+            save_manifest(manifest, manifest_path)
+
+            gate_result = run_gate(engine, key, item_id, reviewer)
+
+            if gate_result == "approve":
                 engine.update_status(item_id, WorkItemStatus.DONE)
+                set_node(manifest, key, status="done")
+                save_manifest(manifest, manifest_path)
+                commit_manifest(manifest_path, f"{key} -> done")
                 completed.add(key)
-
-            # 保存检查点
-            engine._save_checkpoint(run.id, key_to_id, list(completed), list(failed))
+                engine.add_comment(item_id, f"[{key}] done\n\n{render_progress(manifest, completed, failed)}")
+            else:
+                engine.update_status(item_id, WorkItemStatus.BLOCKED)
+                set_node(manifest, key, status="blocked")
+                save_manifest(manifest, manifest_path)
+                commit_manifest(manifest_path, f"{key} -> blocked")
+                failed.add(key)
+                engine.add_comment(item_id, f"[{key}] blocked\n\n{render_progress(manifest, completed, failed)}")
+        else:
+            engine.update_status(item_id, WorkItemStatus.DONE)
+            set_node(manifest, key, status="done")
+            save_manifest(manifest, manifest_path)
+            commit_manifest(manifest_path, f"{key} -> done")
+            completed.add(key)
+            engine.add_comment(item_id, f"[{key}] done\n\n{render_progress(manifest, completed, failed)}")
 
     # 最终汇总
     print(f"\n=== DAG 执行完成 ===")
-    print(f"  ✅ 完成: {len(completed)}/{run.total_tasks}")
-    print(f"  ❌ 失败: {len(failed)}/{run.total_tasks}")
-    print(f"  📊 成功率: {len(completed) / run.total_tasks * 100:.1f}%")
+    print(f"  完成: {len(completed)}/{total}")
+    print(f"  失败: {len(failed)}/{total}")
+    done_pct = len(completed) / total * 100 if total > 0 else 0
+    print(f"  成功率: {done_pct:.1f}%")
 
-    # 记录完成事件
-    engine._log_event(run.id, "engine_completed", {
-        "completed": list(completed),
-        "failed": list(failed),
-        "success_rate": len(completed) / run.total_tasks * 100 if run.total_tasks > 0 else 0
-    })
+    save_manifest(manifest, manifest_path)
+    commit_manifest(manifest_path, f"DAG execution complete: {len(completed)}/{total} done")
 
 
 # ==================== 主流程 ====================
 
 def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
-    """启动新的 run"""
-    # 1. 加载 manifest
+    """启动新的编排：load -> lint -> reconcile -> execute_dag。"""
     print(f"=== 加载 manifest: {manifest_path} ===")
     manifest = load_manifest(manifest_path)
 
-    # manifest 的 squad = 小队（派发与成员池作用域）；workspace 走引擎 env/配置
     squad_id = manifest.meta.get("squad")
     if not squad_id:
-        print("❌ 错误: manifest.meta 缺少 'squad'（派发小队）")
+        print("错误: manifest.meta 缺少 'squad'（派发小队）")
         sys.exit(1)
 
-    # 2. 创建或获取引擎
     if engine is None:
         print("=== 初始化引擎 ===")
         engine = create_engine_from_env()
@@ -279,100 +360,47 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
         print(f"  小队: {squad_id}")
         print(f"  轮询间隔: {engine.config.polling_interval}s")
 
-    # manifest 的 squad 注入 config，供引擎限定派发与成员池
     engine.config.squad_id = squad_id
 
-    # 3. Lint
+    # Lint
     print("=== Lint manifest ===")
     members = engine.list_members(squad_id)
     errors = lint(manifest, members)
     if errors:
-        print("❌ Lint 失败:")
+        print("Lint 失败:")
         for e in errors:
             print(f"  - {e}")
         sys.exit(1)
-    print("✅ Lint 通过")
+    print("Lint 通过")
 
-    # 4. 创建 Run（引擎内部自动创建工作单元、保存 manifest 和状态）
-    print(f"\n=== 创建 Run ===")
-    run = engine.create_run(squad_id, manifest)
+    # Reconcile（全量同步平台状态）
+    print(f"\n=== Reconcile ===")
+    reconcile(engine, manifest, manifest_path)
 
-    print(f"🚀 启动 run {run.id}")
-    print(f"  总任务: {run.total_tasks}")
-    print(f"  创建时间: {run.created_at}")
+    # 执行 DAG
+    execute_dag(engine, manifest, manifest_path)
 
-    # 5. 获取 key_to_id 映射（从检查点加载）
-    checkpoint = engine._load_checkpoint(run.id)
-    if not checkpoint:
-        print("❌ 错误: 无法加载检查点")
-        sys.exit(1)
-
-    key_to_id = checkpoint["key_to_id"]
-
-    # 6. 执行 DAG
-    execute_dag(engine, run, manifest, key_to_id)
-
-    # 7. 查询最终状态
-    final_run = engine.get_run(run.id)
-    if final_run:
-        print(f"\n=== 最终状态 ===")
-        print(f"  Run ID: {final_run.id}")
-        print(f"  状态: {final_run.status.value}")
-        print(f"  完成: {final_run.completed_tasks}/{final_run.total_tasks}")
-        print(f"  失败: {final_run.failed_tasks}/{final_run.total_tasks}")
-        print(f"  进度: {final_run.progress_percent:.1f}%")
-
-
-def list_runs_command(engine: CollaborationEngine = None):
-    """列出所有 runs"""
-    if engine is None:
-        engine = create_engine_from_env()
-
-    runs = engine.list_runs()
-
-    if not runs:
-        print("📭 没有找到任何 run")
-        return
-
-    print(f"=== 历史 Runs（共 {len(runs)} 个）===\n")
-
-    for run in runs:
-        status_icon = {
-            RunStatus.RUNNING: "🔄",
-            RunStatus.COMPLETED: "✅",
-            RunStatus.FAILED: "❌",
-            RunStatus.PAUSED: "⏸️"
-        }.get(run.status, "❓")
-
-        print(f"{status_icon} {run.id}")
-        print(f"   状态: {run.status.value}")
-        print(f"   名称: {run.manifest_name}")
-        print(f"   进度: {run.completed_tasks}/{run.total_tasks} ({run.progress_percent:.1f}%)")
-        print(f"   创建: {run.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        print()
+    # 最终状态
+    total = len(manifest.nodes)
+    done_count = sum(1 for n in manifest.nodes.values() if n.status == "done")
+    failed_count = sum(1 for n in manifest.nodes.values() if n.status in ("blocked", "failed"))
+    print(f"\n=== 最终状态 ===")
+    print(f"  完成: {done_count}/{total}")
+    print(f"  失败: {failed_count}/{total}")
 
 
 def main():
-    """主入口"""
-    parser = argparse.ArgumentParser(description="DAG 编排引擎 v3")
+    parser = argparse.ArgumentParser(description="DAG 编排引擎 - manifest 驱动")
     parser.add_argument("manifest", nargs="?", help="manifest 文件路径")
     parser.add_argument("--engine", help="引擎类型（默认从 .env 读取）")
     parser.add_argument("--workspace", help="工作空间 ID（默认从 manifest 读取）")
-    parser.add_argument("--list", action="store_true", help="列出所有 runs")
 
     args = parser.parse_args()
 
-    # 列出 runs
-    if args.list:
-        list_runs_command()
-        return
-
-    # 新运行（幂等：已 DONE 的节点自动复用不重派，非 DONE 的重派）
     if not args.manifest:
         parser.print_help()
         sys.exit(1)
 
-    # 创建引擎（如果指定）
     engine = None
     if args.engine and args.workspace:
         print(f"=== 使用指定引擎: {args.engine} ===")
@@ -381,5 +409,5 @@ def main():
     start_new_run(args.manifest, engine=engine)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
