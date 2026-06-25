@@ -530,3 +530,110 @@ def test_e2e_reconcile_syncs_in_progress(tmp_path, monkeypatch):
     assert m3.nodes["A"].status == "in_progress", (
         f"reconcile 应同步平台 in_progress，实际 {m3.nodes['A'].status}"
     )
+
+
+# ==================== 并发派发 e2e ====================
+
+def _write_parallel_manifest(path):
+    """A、B 无依赖 + C 依赖 [A,B] — 构造并行 frontier。"""
+    yaml_text = (
+        "meta:\n"
+        "  name: parallel-test\n"
+        "  squad: sq\n"
+        "nodes:\n"
+        "  - id: A\n"
+        "    worker: alice\n"
+        "    title: Task A\n"
+        "    description: 'Independent task A'\n"
+        "  - id: B\n"
+        "    worker: bob\n"
+        "    title: Task Task B\n"
+        "    description: 'Independent task B'\n"
+        "  - id: C\n"
+        "    worker: carol\n"
+        "    title: Task C\n"
+        "    description: 'Depends on A and B'\n"
+        "    blocked_by: [A, B]\n"
+    )
+    with open(path, "w") as f:
+        f.write(yaml_text)
+
+
+def _make_mock_engine_slow(state_dir, delay=1):
+    """Mock 引擎但 auto_complete_delay > 0，使外部能观察到并发 in_progress 窗口。"""
+    env = {
+        "ENGINE_TYPE": "mock",
+        "MOCK_WORKSPACE_ID": "ws",
+        "MOCK_AUTO_COMPLETE": "true",
+        "MOCK_AUTO_COMPLETE_DELAY": str(delay),
+        "POLLING_INTERVAL": "1",
+    }
+    engine = create_engine_from_config("mock", "ws", **env)
+    engine.config.polling_interval = 0.05   # 快速轮询，但 delay 留出并发窗口
+    engine._members["sq"] = ["alice", "bob", "carol"]
+    engine.assign_log = []
+    return engine
+
+
+def test_e2e_parallel_dispatch_concurrent(tmp_path, monkeypatch):
+    """A、B 无依赖 + C 依赖 [A,B]：A/B 并发启动（同一轮 dispatch），C 等两者 done 后才跑。"""
+    manifest_path = str(tmp_path / "dag.yaml")
+    _write_parallel_manifest(manifest_path)
+
+    engine = _make_mock_engine_slow(str(tmp_path), delay=2)
+    import run_dag as rd
+    monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
+
+    start_new_run(manifest_path, engine=engine, max_parallel=4)
+
+    m = load_manifest(manifest_path)
+    assert m.nodes["A"].status == "done", f"A 应 done，实际 {m.nodes['A'].status}"
+    assert m.nodes["B"].status == "done", f"B 应 done，实际 {m.nodes['B'].status}"
+    assert m.nodes["C"].status == "done", f"C 应 done，实际 {m.nodes['C'].status}"
+
+    # 验证 A/B worker 被同一轮 dispatch 派发（时间差极小）
+    worker_assigns = [(dag, ts) for _, dag, role, ts in engine.assign_log if role == "worker"]
+    a_ts = [ts for dag, ts in worker_assigns if dag == "A"]
+    b_ts = [ts for dag, ts in worker_assigns if dag == "B"]
+    assert a_ts and b_ts, f"应有两者的 worker assign 记录: {worker_assigns}"
+    # 同一轮 dispatch 顺序执行，时间差应在 1s 以内（远小于 auto_complete_delay=2s）
+    assert abs(a_ts[0] - b_ts[0]) < 1.0, (
+        f"A/B 应同一轮并发派发，时间差 {abs(a_ts[0]-b_ts[0]):.3f}s 过大（串行了？）"
+    )
+
+    # C 的 worker assign 必须在 A、B 都 done 之后
+    c_ts = [ts for dag, ts in worker_assigns if dag == "C"]
+    assert c_ts, "C 应有 worker assign 记录"
+    assert c_ts[0] > a_ts[0] + 1.5, (
+        f"C 应在 A 完成后才派发，C ts={c_ts[0]:.3f} vs A ts={a_ts[0]:.3f}"
+    )
+    assert c_ts[0] > b_ts[0] + 1.5, (
+        f"C 应在 B 完成后才派发，C ts={c_ts[0]:.3f} vs B ts={b_ts[0]:.3f}"
+    )
+
+
+def test_e2e_max_parallel_limits_concurrency(tmp_path, monkeypatch):
+    """max_parallel=1 时 A、B 不并发：B 的 worker assign 必须在 A 完成之后。"""
+    manifest_path = str(tmp_path / "dag.yaml")
+    _write_parallel_manifest(manifest_path)
+
+    engine = _make_mock_engine_slow(str(tmp_path), delay=2)
+    import run_dag as rd
+    monkeypatch.setattr(rd, "commit_manifest", lambda *a, **k: False)
+
+    start_new_run(manifest_path, engine=engine, max_parallel=1)
+
+    m = load_manifest(manifest_path)
+    assert m.nodes["A"].status == "done", f"A 应 done，实际 {m.nodes['A'].status}"
+    assert m.nodes["B"].status == "done", f"B 应 done，实际 {m.nodes['B'].status}"
+    assert m.nodes["C"].status == "done", f"C 应 done，实际 {m.nodes['C'].status}"
+
+    worker_assigns = [(dag, ts) for _, dag, role, ts in engine.assign_log if role == "worker"]
+    a_ts = [ts for dag, ts in worker_assigns if dag == "A"]
+    b_ts = [ts for dag, ts in worker_assigns if dag == "B"]
+    assert a_ts and b_ts, f"应有两者的 worker assign 记录: {worker_assigns}"
+    # max_parallel=1: B 必须在 A 完成（assign + delay）之后才被派发
+    assert b_ts[0] > a_ts[0] + 1.5, (
+        f"max_parallel=1 时 B 应在 A 完成后才派发，"
+        f"B ts={b_ts[0]:.3f} vs A ts={a_ts[0]:.3f} (差 {b_ts[0]-a_ts[0]:.3f}s)"
+    )

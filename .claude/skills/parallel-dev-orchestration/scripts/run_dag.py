@@ -3,16 +3,16 @@
 DAG 编排引擎 - manifest 驱动
 
 主循环结构（sync -> decide -> dispatch）：
-  1. SYNC:    harvest 在飞节点终态（查平台 -> 写回 manifest）
+  1. SYNC:    harvest 在飞节点终态 + worker/reviewer 阶段过渡（查平台 -> 写回 manifest）
   2. DECIDE:  读 manifest 算 frontier + 失败隔离（下游标 blocked）
-  3. DISPATCH: 派发 ready 节点（建 work item -> assign -> 轮询）
+  3. DISPATCH: fire-and-forget 派发所有 ready 节点（建 work item -> assign -> 标 in_progress，不阻塞）
   4. 终止:    无 ready 且无在飞 -> 带报告退出
 """
 import sys
 import time
 import argparse
 from pathlib import Path
-from typing import Optional, Callable, Set
+from typing import Set
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -29,6 +29,8 @@ from engines import (
 # manifest 中的终态值
 TERMINAL_STATUSES = {"done", "blocked", "failed"}
 INFLIGHT_STATUSES = {"in_progress", "in_review"}
+
+REVIEW_APPROVE = {"pass", "pass-with-nits"}
 
 
 # ==================== reconcile ====================
@@ -65,77 +67,6 @@ def reconcile(engine: CollaborationEngine, manifest, manifest_path: str):
 
 # ==================== 核心执行逻辑 ====================
 
-def dispatch_worker(
-    engine: CollaborationEngine,
-    key: str,
-    item_id: str,
-    worker_name: str,
-) -> str:
-    """派发 worker：assign -> 轮询到完成 -> 检查产物。返回 "ok" | "failed"。"""
-    engine.assign_work_item(item_id, worker_name, "worker")
-    print(f"  派发任务 {key} 给 {worker_name}")
-
-    polling_interval = engine.config.polling_interval
-    max_wait_time = 3600
-    elapsed = 0
-
-    while elapsed < max_wait_time:
-        time.sleep(polling_interval)
-        elapsed += polling_interval
-
-        work_item = engine.get_work_item(item_id)
-
-        if work_item.status == WorkItemStatus.DONE:
-            if work_item.artifacts and ("pr" in work_item.artifacts or "PR" in str(work_item.artifacts)):
-                print(f"  任务 {key} 完成，产物: {work_item.artifacts}")
-                return "ok"
-            else:
-                print(f"  任务 {key} 失败: 缺少 PR 产物")
-                return "failed"
-
-        elif work_item.status == WorkItemStatus.FAILED:
-            print(f"  任务 {key} 失败: Worker run failed")
-            return "failed"
-
-    print(f"  任务 {key} 超时")
-    return "failed"
-
-
-def run_gate(
-    engine: CollaborationEngine,
-    key: str,
-    item_id: str,
-    reviewer_name: Optional[str],
-) -> str:
-    """派发 reviewer：assign -> 轮询 -> 读 verdict。返回 "approve" | "reject"。"""
-    if not reviewer_name:
-        return "approve"
-
-    engine.assign_work_item(item_id, reviewer_name, "reviewer")
-    print(f"  派发审核 {key} 给 {reviewer_name}")
-
-    polling_interval = engine.config.polling_interval
-    max_wait_time = 1800
-    elapsed = 0
-
-    while elapsed < max_wait_time:
-        time.sleep(polling_interval)
-        elapsed += polling_interval
-
-        work_item = engine.get_work_item(item_id)
-
-        if work_item.review_verdict:
-            if work_item.review_verdict in ["pass", "pass-with-nits"]:
-                print(f"  审核通过: {key}")
-                return "approve"
-            else:
-                print(f"  审核拒绝: {key} - {work_item.review_verdict}")
-                return "reject"
-
-    print(f"  审核超时: {key}")
-    return "reject"
-
-
 def _harvest(
     engine: CollaborationEngine,
     manifest,
@@ -143,13 +74,20 @@ def _harvest(
     completed: Set[str],
     failed: Set[str],
 ) -> bool:
-    """SYNC 阶段：查平台，收割在飞节点的终态，写回 manifest。
+    """SYNC 阶段：收割在飞节点的终态 + worker→reviewer 阶段过渡。
 
-    对每个 manifest 状态为 in_progress/in_review 且有 work_item_id 的节点，
-    查平台实际状态。若平台已进终态（done/blocked/failed），写回 manifest
-    并更新 completed/failed 集合。返回是否有变更。
+    in_progress 节点：
+      平台 DONE + 有 PR 产物 -> 有 reviewer 则 assign reviewer + 转 in_review，
+      无 reviewer 直接标 done + completed.add
+      平台 DONE 缺 PR 产物 / FAILED -> 标 blocked + failed.add
+
+    in_review 节点：
+      平台有 review_verdict -> pass/pass-with-nits 标 done + completed.add，
+      其他 verdict 标 blocked + failed.add
     """
     changed = False
+    pending_review = []  # reviewer 过渡（遍历后执行，避免改 manifest 影响遍历）
+
     for key, node in manifest.nodes.items():
         if node.status not in INFLIGHT_STATUSES or not node.work_item_id:
             continue
@@ -158,17 +96,59 @@ def _harvest(
         except Exception:
             continue
 
-        platform_status = item.status.value
-        if platform_status in TERMINAL_STATUSES:
-            print(f"  harvest: {key} 平台已 {platform_status}，写回 manifest")
-            set_node(manifest, key, status=platform_status)
-            save_manifest(manifest, manifest_path)
-            commit_manifest(manifest_path, f"harvest: {key} -> {platform_status}")
-            if platform_status == "done":
+        # ---- in_progress: worker 完成 -> done 或 reviewer 过渡 ----
+        if node.status == "in_progress":
+            if item.status == WorkItemStatus.DONE:
+                has_pr = (item.artifacts and
+                          ("pr" in item.artifacts or "PR" in str(item.artifacts)))
+                reviewer = getattr(node, "reviewer", None)
+                if has_pr:
+                    if reviewer:
+                        print(f"  harvest: {key} worker done，过渡到 reviewer {reviewer}")
+                        pending_review.append((key, node.work_item_id, reviewer))
+                    else:
+                        print(f"  harvest: {key} -> done")
+                        set_node(manifest, key, status="done")
+                        completed.add(key)
+                else:
+                    print(f"  harvest: {key} worker done 但缺 PR 产物 -> blocked")
+                    engine.update_status(node.work_item_id, WorkItemStatus.BLOCKED)
+                    set_node(manifest, key, status="blocked")
+                    failed.add(key)
+                changed = True
+            elif item.status == WorkItemStatus.FAILED:
+                print(f"  harvest: {key} worker failed -> blocked")
+                engine.update_status(node.work_item_id, WorkItemStatus.BLOCKED)
+                set_node(manifest, key, status="blocked")
+                failed.add(key)
+                changed = True
+
+        # ---- in_review: reviewer 完成 -> done 或 blocked ----
+        elif node.status == "in_review":
+            verdict = item.review_verdict
+            if not verdict:
+                continue
+            if verdict in REVIEW_APPROVE:
+                print(f"  harvest: {key} reviewer approved -> done")
+                engine.update_status(node.work_item_id, WorkItemStatus.DONE)
+                set_node(manifest, key, status="done")
                 completed.add(key)
             else:
+                print(f"  harvest: {key} reviewer rejected ({verdict}) -> blocked")
+                engine.update_status(node.work_item_id, WorkItemStatus.BLOCKED)
+                set_node(manifest, key, status="blocked")
                 failed.add(key)
             changed = True
+
+    # ---- reviewer 过渡（遍历后执行）----
+    for key, item_id, reviewer in pending_review:
+        engine.assign_work_item(item_id, reviewer, "reviewer")
+        engine.update_status(item_id, WorkItemStatus.IN_REVIEW)
+        set_node(manifest, key, status="in_review")
+
+    if changed:
+        save_manifest(manifest, manifest_path)
+        commit_manifest(manifest_path, "harvest: sync in-flight")
 
     return changed
 
@@ -206,12 +186,13 @@ def execute_dag(
     engine: CollaborationEngine,
     manifest,
     manifest_path: str,
+    max_parallel: int = 4,
 ):
     """执行 DAG 编排循环 - sync -> decide -> dispatch。
 
-    SYNC:    harvest 在飞节点终态（查平台 -> 写回 manifest）
+    SYNC:    harvest 在飞节点终态 + worker/reviewer 阶段过渡
     DECIDE:  读 manifest 算 frontier + 失败隔离（下游标 blocked）
-    DISPATCH: 派发 ready 节点（建 work item -> assign -> 轮询 -> 终态写回）
+    DISPATCH: fire-and-forget 派发所有 ready 节点（受 max_parallel 约束，不阻塞）
     终止:    无 ready 且无在飞 -> 带报告退出
     """
     squad_id = engine.config.squad_id or engine.config.workspace_id
@@ -233,6 +214,7 @@ def execute_dag(
     total = len(manifest.nodes)
     print(f"\n=== 开始执行 DAG ===")
     print(f"  总任务数: {total}（待执行 {total - len(completed)}）")
+    print(f"  并发上限: {max_parallel}")
 
     while True:
         # ---- SYNC: harvest 在飞节点终态 ----
@@ -257,77 +239,46 @@ def execute_dag(
             time.sleep(engine.config.polling_interval)
             continue
 
-        # ---- DISPATCH: 派发一个 ready 节点 ----
-        key = ready[0]
-        node = manifest.nodes[key]
-        worker = node.worker
-        reviewer = getattr(node, "reviewer", None)
+        # ---- DISPATCH: fire-and-forget 派发所有 ready 节点（受 max_parallel 约束）----
+        in_flight_count = len(in_flight)
+        slots = max(0, max_parallel - in_flight_count)
+        to_dispatch = ready[:slots]
 
-        print(f"\n> 处理任务: {key}")
-
-        # 首次派发：若无 work_item_id 则建 work item 并回填
-        if not node.work_item_id:
-            item = engine.create_work_item(
-                workspace_id=squad_id,
-                title=node.title or key,
-                description=node.description or f"Task {key}",
-                dag_key=key,
-                worker=worker,
-                reviewer=reviewer,
-                blocked_by=node.blocked_by,
-            )
-            set_node(manifest, key, work_item_id=item.id)
-            save_manifest(manifest, manifest_path)
-            commit_manifest(manifest_path, f"backfill work_item_id: {key}")
-            print(f"  建 work item {item.id} for {key}")
-
-        item_id = node.work_item_id
-
-        # 派发 worker
-        engine.update_status(item_id, WorkItemStatus.IN_PROGRESS)
-        set_node(manifest, key, status="in_progress")
-        save_manifest(manifest, manifest_path)
-
-        result = dispatch_worker(engine, key, item_id, worker)
-
-        if result != "ok":
-            engine.update_status(item_id, WorkItemStatus.BLOCKED)
-            set_node(manifest, key, status="blocked")
-            save_manifest(manifest, manifest_path)
-            commit_manifest(manifest_path, f"{key} -> blocked")
-            failed.add(key)
-            engine.add_comment(item_id, f"[{key}] blocked\n\n{render_progress(manifest, completed, failed)}")
+        if not to_dispatch:
+            print(f"  并发已满（{in_flight_count}/{max_parallel}），等待在飞节点完成...")
+            time.sleep(engine.config.polling_interval)
             continue
 
-        # 派发 reviewer（如果有）
-        if reviewer:
-            engine.update_status(item_id, WorkItemStatus.IN_REVIEW)
-            set_node(manifest, key, status="in_review")
-            save_manifest(manifest, manifest_path)
+        for key in to_dispatch:
+            node = manifest.nodes[key]
+            worker = node.worker
 
-            gate_result = run_gate(engine, key, item_id, reviewer)
+            print(f"\n> 派发任务: {key}（worker: {worker}）")
 
-            if gate_result == "approve":
-                engine.update_status(item_id, WorkItemStatus.DONE)
-                set_node(manifest, key, status="done")
-                save_manifest(manifest, manifest_path)
-                commit_manifest(manifest_path, f"{key} -> done")
-                completed.add(key)
-                engine.add_comment(item_id, f"[{key}] done\n\n{render_progress(manifest, completed, failed)}")
-            else:
-                engine.update_status(item_id, WorkItemStatus.BLOCKED)
-                set_node(manifest, key, status="blocked")
-                save_manifest(manifest, manifest_path)
-                commit_manifest(manifest_path, f"{key} -> blocked")
-                failed.add(key)
-                engine.add_comment(item_id, f"[{key}] blocked\n\n{render_progress(manifest, completed, failed)}")
-        else:
-            engine.update_status(item_id, WorkItemStatus.DONE)
-            set_node(manifest, key, status="done")
-            save_manifest(manifest, manifest_path)
-            commit_manifest(manifest_path, f"{key} -> done")
-            completed.add(key)
-            engine.add_comment(item_id, f"[{key}] done\n\n{render_progress(manifest, completed, failed)}")
+            # 建工单（若无）
+            if not node.work_item_id:
+                item = engine.create_work_item(
+                    workspace_id=squad_id,
+                    title=node.title or key,
+                    description=node.description or f"Task {key}",
+                    dag_key=key,
+                    worker=worker,
+                    reviewer=getattr(node, "reviewer", None),
+                    blocked_by=node.blocked_by,
+                )
+                set_node(manifest, key, work_item_id=item.id)
+                print(f"  建 work item {item.id} for {key}")
+
+            # fire-and-forget: assign worker + 标 in_progress（不轮询）
+            engine.assign_work_item(node.work_item_id, worker, "worker")
+            engine.update_status(node.work_item_id, WorkItemStatus.IN_PROGRESS)
+            set_node(manifest, key, status="in_progress")
+
+        save_manifest(manifest, manifest_path)
+        commit_manifest(manifest_path, f"dispatch: {', '.join(to_dispatch)}")
+
+        # 不阻塞等结果：下一轮 harvest 会收割
+        time.sleep(engine.config.polling_interval)
 
     # 最终汇总
     print(f"\n=== DAG 执行完成 ===")
@@ -342,7 +293,7 @@ def execute_dag(
 
 # ==================== 主流程 ====================
 
-def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
+def start_new_run(manifest_path: str, engine: CollaborationEngine = None, max_parallel: int = 4):
     """启动新的编排：load -> lint -> reconcile -> execute_dag。"""
     print(f"=== 加载 manifest: {manifest_path} ===")
     manifest = load_manifest(manifest_path)
@@ -362,6 +313,14 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
 
     engine.config.squad_id = squad_id
 
+    # 从引擎配置读 max_parallel（覆盖默认）
+    mp = engine.config.extra.get("MAX_PARALLEL")
+    if mp:
+        try:
+            max_parallel = int(mp)
+        except (ValueError, TypeError):
+            pass
+
     # Lint
     print("=== Lint manifest ===")
     members = engine.list_members(squad_id)
@@ -378,7 +337,7 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None):
     reconcile(engine, manifest, manifest_path)
 
     # 执行 DAG
-    execute_dag(engine, manifest, manifest_path)
+    execute_dag(engine, manifest, manifest_path, max_parallel=max_parallel)
 
     # 最终状态
     total = len(manifest.nodes)
@@ -394,6 +353,8 @@ def main():
     parser.add_argument("manifest", nargs="?", help="manifest 文件路径")
     parser.add_argument("--engine", help="引擎类型（默认从 .env 读取）")
     parser.add_argument("--workspace", help="工作空间 ID（默认从 manifest 读取）")
+    parser.add_argument("--max-parallel", type=int, default=4,
+                        help="最大并发派发数（默认 4）")
 
     args = parser.parse_args()
 
@@ -406,7 +367,7 @@ def main():
         print(f"=== 使用指定引擎: {args.engine} ===")
         engine = create_engine_from_config(args.engine, args.workspace)
 
-    start_new_run(args.manifest, engine=engine)
+    start_new_run(args.manifest, engine=engine, max_parallel=args.max_parallel)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,10 @@ class MockEngine(CollaborationEngine):
         # 失败注入：dag_key 集合中的节点会被模拟为失败（而不是自动完成）
         self._fail_keys: set = set()
 
+        # 派发日志：记录每次 assign_work_item 的 (item_id, dag_key, role, timestamp)
+        # 测试用于验证并发派发（同一批 ready 节点的 assign 时间戳接近）
+        self.assign_log: list = []
+
         # 初始化默认工作空间
         self._init_default_workspace()
 
@@ -247,7 +251,8 @@ class MockEngine(CollaborationEngine):
             item.reviewer = assignee
         print(f"[Mock] 任务 {item_id} 分配给 {assignee} (role: {role})")
 
-        # 记录分配时间（用于自动完成）
+        # 记录分配时间（用于自动完成 + 并发追踪）
+        self.assign_log.append((item_id, item.dag_key, role, time.time()))
         self._assigned_items[item_id] = time.time()
 
     # ==================== 第四组：查询 ====================
