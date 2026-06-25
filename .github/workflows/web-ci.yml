@@ -61,3 +61,60 @@ jobs:
       - name: Build
         working-directory: web
         run: pnpm -r build
+
+  branch-coverage-ratchet:
+    name: 分支覆盖棘轮（PR→master 不退化）
+    runs-on: ubuntu-latest
+    # 总控门：仅 PR→master 触发（push 不跑）。口径=四个子包聚合的总分支覆盖「不退化」：
+    # PR head 不得低于 base(master)。per-卡 diff 覆盖由 worker/reviewer 本地把守，CI 不重复。
+    # 引入覆盖能力的首个 PR：base(master) 尚无 @vitest/coverage-v8 → base 跑不出覆盖，
+    # 自动跳过比对（bootstrap）；合并后 master 即基线，后续 PR 起真比对。
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Checkout base (master)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: 覆盖率 - PR head（四包聚合分支覆盖）
+        working-directory: head/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @aiteam/shared run build
+          pnpm -r exec vitest run --coverage
+          node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<4){console.error("缺包覆盖产物 n="+n);process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.RUNNER_TEMP+"/head.txt",pct);console.log("head web 分支覆盖 "+pct+"% ("+c+"/"+t+")");'
+
+      - name: 覆盖率 - base master（容忍未 instrumented）
+        working-directory: base/web
+        continue-on-error: true
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @aiteam/shared run build
+          pnpm -r exec vitest run --coverage
+          node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<1){process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.RUNNER_TEMP+"/base.txt",pct);console.log("base web 分支覆盖 "+pct+"%");'
+
+      - name: 棘轮比对（head ≥ base 否则红灯）
+        run: |
+          HEAD=$(cat "$RUNNER_TEMP/head.txt")
+          if [ ! -f "$RUNNER_TEMP/base.txt" ]; then
+            echo "::notice::base(master) 尚未具备覆盖工具（首次引入），跳过棘轮比对；head=${HEAD}%。合并后 master 即为基线。"
+            exit 0
+          fi
+          BASE=$(cat "$RUNNER_TEMP/base.txt")
+          python3 -c "import sys; h=float('${HEAD}'); b=float('${BASE}'); print(f'base(master) 分支覆盖: {b:.2f}%'); print(f'head(PR)     分支覆盖: {h:.2f}%'); sys.exit(1 if h + 0.01 < b else 0)" || {
+            echo "::error::web 分支覆盖回退 ${BASE}% → ${HEAD}%——PR 不得降低 master 总覆盖（补测试后再合）"; exit 1; }
+          echo "OK：web 总分支覆盖未退化"
