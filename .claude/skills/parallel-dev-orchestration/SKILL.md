@@ -203,6 +203,7 @@ Agent/人都会被稀释注意力；**一卡一口径**。
 [ ] 3. 把这些口径写成代码契约(shared/contracts/或类似位置),作为地基第一件
 [ ] 4. 为契约写"不变量测试"(取值集合、必填字段等),这是漂移守卫
 [ ] 5. 写边界扫描测试(禁用旧口径/越界 import等)+ 质量门禁,接进 CI
+       - **改动分支覆盖闸门(硬门槛)**:集成分支 CI 加一道 `diff-cover` check —— 跑 `pytest --cov-branch --cov-report=xml` 后 `diff-cover coverage.xml --compare-branch=<集成分支> --fail-under=90`,**改动分支覆盖 < 90% → CI 红灯、合并不了**。与 reviewer 独立复跑同口径(双层:CI 物理拦 + reviewer 判决兜底)。
 [ ] 6. 搭可运行骨架(每个模块能起来、暴露健康检查与接口文档入口)
 [ ] 7. 为尚未实现的对端写 fake/mock(让下游能脱离真对端开发)
 [ ] 8. 用测试验证地基本身可跑、可测、全绿 → 地基冻结,可以扇出了
@@ -337,7 +338,7 @@ user-api
 - `nodes.<key>.worker`: worker agent 名(必须∈小队成员池)
 - `nodes.<key>.reviewer`: reviewer agent 名(可选,非空时必须≠worker)
 - `nodes.<key>.depends_on`: 依赖节点 key 列表(空 = Wave 0 可立即开始)
-- `nodes.<key>.gate`: 自定义验收条件(可选,默认="测试全绿")
+- `nodes.<key>.gate`: 自定义验收条件(可选,默认="测试全绿 + 本卡改动分支覆盖 ≥ 90%")。**改动分支覆盖(diff branch coverage)是硬门槛**:只卡本卡改动的分支、不卡整仓总分;reviewer 独立复跑 `diff-cover` 判决,CI 也设同口径闸门(见「质量门禁」)。要升/降阈值就在 gate 文本写明(如 `"...覆盖 ≥ 80%(glue 代码,理由:...)"`）
 
 #### 粒度与依赖（拆图规则速查）
 

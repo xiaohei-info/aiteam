@@ -104,13 +104,22 @@ git checkout -b <prefix>/<issue-key>-<slug> origin/<integration-branch>
 - **测试先行**：先写（或找到）对应测试用例，红灯
 - **实现**：只 import 共享契约，守红线与非目标
 - **验证**：测试全绿，手工验证关键路径
+- **分支覆盖**：用 `--cov-branch` 跑，**本卡改动的每个分支（含失败旁路：错误处理、边界返回、early-return）都要有测试**，不是只测 happy path。改动分支覆盖必须达到 gate 阈值（缺省 90%）。
 
 **完成判定铁律**：必须装全依赖 + 跑**全量测试套件**（不只跑本模块），绝不只跑子集。
 真实教训：worker 在新 worktree 只装本模块依赖、只跑本模块用例，缺依赖致跨模块测试被静默跳过，误判"全绿完成"。
 
+**改动分支覆盖自测**（转 in_review 前必过）：
+```bash
+pytest --cov=<改动模块> --cov-branch --cov-report=xml   # 跑全量套件 + 分支覆盖
+diff-cover coverage.xml --compare-branch=<集成分支> --fail-under=90
+# 退出码非 0 = 改动分支覆盖不达标 → 补测试，不得转 in_review
+```
+
 ### 6. 验收自查
 对照 issue body 的 **✅ 验收** 清单，逐条勾完：
 - [ ] 测试全绿（运行测试命令，截图或复制输出）
+- [ ] **改动分支覆盖 ≥ gate 阈值**（`diff-cover` 输出，复制数字与未覆盖行清单）
 - [ ] 手工验证关键路径（按 issue 指定的验证点）
 - [ ] 守住红线（没碰禁区）
 - [ ] 没越界（非目标没做）
@@ -126,6 +135,7 @@ git push origin <branch-name>
 # 使用 gh/hub 或其他工具，确保 base 指向集成分支
 ```
 - 写 metadata 证据：用引擎 CLI 写入 `artifacts`（PR URL/分支/测试命令）和 `verification`（测试结果/手工验证路径），可选 `known_issues`
+- **`verification` 必须含改动分支覆盖证据**：diff-cover 命令 + 实测数字（如 `diff branch coverage: 93% (≥90 gate)`）+ 若有未覆盖分支说明理由。写进 `verification` 自由文本，**不新增 metadata 字段**。
 - 命令和参数以 `<engine-cli> --help` 为准，不要编造
 
 ### 8. 写 comment + 转状态
@@ -136,6 +146,7 @@ git push origin <branch-name>
 
 ❌ **不要自审自放行**：不要自己改成 `done`，质量门交给 reviewer  
 ❌ **不要跳过测试**：验证必须客观，不能伪造  
+❌ **改动分支覆盖不达标不得转 in_review**：`diff-cover` 退出码非 0（低于 gate 阈值）就补测试，别把缺口甩给 reviewer  
 ❌ **不要强行开工**：blocked_by 非空时必须等依赖完成  
 ❌ **不要越界**：非目标明确说了不做的，就真的不做  
 ❌ **不要顺手重构**：只做卡内范围，相邻模块的问题留给它自己的卡
@@ -168,6 +179,11 @@ git diff origin/feature/v1.0.0..HEAD
 
 # 独立复跑测试（不信 worker 说的"通过"）
 pytest <test-path>  # 或 issue 指定的测试命令
+
+# 独立复跑改动分支覆盖（不信 worker 报的数字）
+pytest --cov=<改动模块> --cov-branch --cov-report=xml
+diff-cover coverage.xml --compare-branch=<集成分支> --fail-under=<gate阈值,缺省90>
+# 退出码非 0 = 改动分支覆盖不达标 → Blocker，判 blocked
 
 # 手工验证关键路径
 # 按 issue 验收清单 + worker 的 verification 路径，亲自走一遍
@@ -230,9 +246,10 @@ pytest <test-path>  # 或 issue 指定的测试命令
 - 边界处理：错误、边界值、失败路径
 - 契约遵守：只 import 共享契约，没重定义
 - 测试质量：覆盖主路径 + 失败路径，无 flake
+- **改动分支覆盖**：独立复跑 `diff-cover`，本卡改动分支覆盖 ≥ gate 阈值
 
 **区分四类发现**：
-- **Blocker**（必修）：违反约束、破坏契约、功能缺失、测试不过
+- **Blocker**（必修）：违反约束、破坏契约、功能缺失、测试不过、**改动分支覆盖 < gate 阈值**
 - **重要风险**（强烈建议修）：边界处理缺失、错误处理不当
 - **普通建议**（可后续）：性能优化、代码风格、注释完善
 - **风格偏好**（不拦）：个人习惯差异
@@ -244,6 +261,7 @@ pytest <test-path>  # 或 issue 指定的测试命令
 #### 验收↔测试映射（强制产出表格）
 - 每条「验收」锚定到具体 test 函数，产出一张映射表
 - 无对应 test = 覆盖缺口，必须在 comment 中标出
+- **改动分支未被覆盖 = 覆盖缺口**：把 `diff-cover` 报告的未覆盖分支逐条列出；低于 gate 阈值则整体判 Blocker
 
 ### 5. 判决 + 写回
 
@@ -253,6 +271,8 @@ pytest <test-path>  # 或 issue 指定的测试命令
 ```
 
 **三种判决**：
+> **硬门槛**：改动分支覆盖 < gate 阈值（缺省 90%）一律判 `blocked`，不接受"功能没问题先合、覆盖后补"——补在哪张卡就该在哪张卡过门。
+
 - **`pass`**：无 blocker，可合并
   ```bash
   # 使用引擎 CLI 更新状态
@@ -475,7 +495,10 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 - `worker`: worker agent 名
 - `reviewer`: reviewer agent 名（可空 = 无 reviewer）
 - `blocked_by`: 依赖 issue id 列表（JSON 数组字符串）
-- `gate`: 自定义验收条件（可选，缺省 = "测试全绿 + 无 flake"）
+- `gate`: 自定义验收条件（可选，缺省 = "测试全绿 + 无 flake + **本卡改动分支覆盖 ≥ 90%**"）
+  - **改动分支覆盖（diff branch coverage）是硬门槛**：只卡本卡新写/改动的分支，不卡整仓总分（避免被历史遗留代码稀释、避免靠测无关老代码刷分）。
+  - 度量口径：`pytest --cov=<改动模块> --cov-branch --cov-report=xml` → `diff-cover coverage.xml --compare-branch=<集成分支> --fail-under=90`。
+  - 节点可经 manifest `gate` 覆盖阈值（升/降需在 gate 文本写明理由）。
 
 **Worker 写入**（Reviewer 读取）：
 - `artifacts`: PR/分支/文件/截图/说明文档
@@ -544,9 +567,10 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 
 **完成标准**：
 - 测试全绿（全量测试套件，不只本模块）
+- **改动分支覆盖 ≥ gate 阈值（缺省 90%）**：`diff-cover coverage.xml --compare-branch=<集成分支> --fail-under=90` 退出码 0
 - PR 已产出并指向正确 base
 - metadata.artifacts 已写入
-- metadata.verification 已写入
+- metadata.verification 已写入（含改动分支覆盖数字）
 - issue 状态改为 `in_review`
 
 **如遇阻塞**：
@@ -571,6 +595,7 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
    - Issue body 的约束与红线
    - Git diff 的真实改动
 4. **独立复跑测试**：不信截图，亲自 checkout 分支跑测试
+5. **独立复跑改动分支覆盖**：亲自跑 `diff-cover`，不信 worker 报的数字；< gate 阈值 = Blocker
 
 **评审重点**：
 - 需求对齐：做了该做的，没做不该做的
@@ -578,9 +603,10 @@ grep -r "class.*DTO" --include="*.py" | grep -v "shared/contracts"
 - 边界处理：错误、边界值、失败路径
 - 契约遵守：只 import 共享契约，没重定义
 - 测试质量：覆盖主路径 + 失败路径
+- 改动分支覆盖：≥ gate 阈值（缺省 90%），未覆盖分支逐条列出
 
 **判决输出**：
-- `pass`: 无 blocker → 改 status 为 `done`
+- `pass`: 无 blocker（含改动分支覆盖达标）→ 改 status 为 `done`
 - `blocked`: 有 blocker → comment 详细问题 + 保持 `in_review`
 - `pass-with-nits`: 可合并但有建议 → metadata.known_issues
 
