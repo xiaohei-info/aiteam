@@ -239,7 +239,7 @@ def main():
 
     print("\n✅ Setup 完成！现在可以运行:")
     print(f"    cd {skill_root}")
-    print(f"    python scripts/run_dag.py manifest.yaml")
+    print(f"    python3 scripts/run_dag.py manifest.yaml")
 
 
 if __name__ == '__main__':

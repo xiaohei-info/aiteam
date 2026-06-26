@@ -283,7 +283,7 @@ def test_start_new_run_engine_none_calls_create_engine_from_env(tmp_path, monkey
     mock_engine = _make_mock_engine()
 
     call_count = [0]
-    def fake_create_engine_from_env():
+    def fake_create_engine_from_env(*args, **kwargs):
         call_count[0] += 1
         return mock_engine
 
@@ -487,3 +487,33 @@ def test_harvest_worker_blocked_on_platform(tmp_path, monkeypatch):
     assert m.nodes["A"].status == "blocked", f"BLOCKED 应 -> blocked，实际 {m.nodes['A'].status}"
     assert "A" in failed, "BLOCKED 应进 failed 集合"
     assert "A" not in completed
+
+
+# ==================== git 回写开关：.env 经 resolver 桥接进 os.environ ====================
+def test_dotenv_orch_git_sync_bridged_to_environ(tmp_path, monkeypatch):
+    """.env 里的 ORCH_GIT_SYNC=1 经 create_engine_from_env 桥接 -> git_sync_enabled 生效。"""
+    import os
+    from engines import create_engine_from_env
+    from utils import git_sync_enabled
+
+    monkeypatch.delenv("ORCH_GIT_SYNC", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("ENGINE_TYPE=mock\nMOCK_WORKSPACE_ID=ws\nORCH_GIT_SYNC=1\n")
+    assert git_sync_enabled() is False
+    try:
+        create_engine_from_env(env)  # 桥接：setdefault 写入真实 os.environ
+        assert git_sync_enabled() is True
+    finally:
+        os.environ.pop("ORCH_GIT_SYNC", None)  # 清理，避免泄漏到后续用例
+
+
+def test_explicit_export_overrides_dotenv_sync(tmp_path, monkeypatch):
+    """显式 export 优先：export=0 不被 .env=1 覆盖。"""
+    from engines import create_engine_from_env
+    from utils import git_sync_enabled
+
+    monkeypatch.setenv("ORCH_GIT_SYNC", "0")
+    env = tmp_path / ".env"
+    env.write_text("ENGINE_TYPE=mock\nMOCK_WORKSPACE_ID=ws\nORCH_GIT_SYNC=1\n")
+    create_engine_from_env(env)
+    assert git_sync_enabled() is False

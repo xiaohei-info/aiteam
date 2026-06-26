@@ -1,9 +1,11 @@
 """
-Live MulticaEngine 测试 —— 直接对真 multica CLI（/opt/homebrew/bin/multica v0.3.27）验证命令面。
+Live MulticaEngine 测试 —— 直接对真 multica CLI 验证命令面。
 
 Gating:
-- 有 multica CLI 就跑（workspace/squad 有默认值），没有就 skip。
-- 需 `MULTICA_WORKSPACE_ID` + `MULTICA_TEST_SQUAD` 指定工作空间与测试用小队。
+- 需同时满足：multica CLI 在 PATH，且 `MULTICA_WORKSPACE_ID` + `MULTICA_TEST_SQUAD` 已就绪。
+- 任一缺失即 skip（开源仓库不携带任何私有 workspace/squad 默认值）。
+- 持久开启：把这两个变量写进 skill 根的 `.env`（gitignored），conftest 会在每次 pytest
+  启动时自动读进环境——「第一次」填一次，以后每次都自动带上，无需反复 export。
 
 测试间隔离：每个 test 用唯一 dag_key 前缀（test_live_<func>_<timestamp>），收尾用
 `multica issue status <id> cancelled` 把创建的 issue 标取消（不删，留审计痕）。
@@ -28,21 +30,19 @@ from engines.multica import MulticaEngine
 
 
 # ==================== Live test gating ====================
-# 有 multica CLI 就跑，没有就 skip。workspace/squad 有默认值，无需额外设置。
-# 可用环境变量覆盖默认值：
-#   MULTICA_WORKSPACE_ID  — workspace ID（默认 guantik-aiteam）
-#   MULTICA_TEST_SQUAD    — squad ID（默认 orchestration-skill-test 测试专用小队，
-#                           非真实任务小队；issue 跑完标 cancelled，可随时清理）
+# 仅当 multica CLI 在 PATH 且显式提供以下环境变量时才跑，否则 skip：
+#   MULTICA_WORKSPACE_ID  — 你的 workspace ID
+#   MULTICA_TEST_SQUAD    — 测试专用 squad ID（issue 跑完标 cancelled，可随时清理）
 #
 # 排除 live 测试（CI 或无 CLI 环境）：
-#   python -m pytest tests/ -m "not live_multica"
+#   python3 -m pytest tests/ -m "not live_multica"
 
 _CLI = shutil.which("multica") is not None
-_WS = os.environ.get("MULTICA_WORKSPACE_ID", "410ade5e-8ae0-4402-b975-813dea2ff3e1")
-_SQUAD = os.environ.get("MULTICA_TEST_SQUAD", "742c5840-128b-4881-9fd0-d069e3f0f484")
+_WS = os.environ.get("MULTICA_WORKSPACE_ID", "")
+_SQUAD = os.environ.get("MULTICA_TEST_SQUAD", "")
 
-_SKIP = not _CLI
-_REASON = "multica CLI 不在 PATH 中（安装后自动启用 live 测试）"
+_SKIP = not (_CLI and _WS and _SQUAD)
+_REASON = "需 multica CLI + MULTICA_WORKSPACE_ID + MULTICA_TEST_SQUAD（缺任一则 skip）"
 
 # module 级 marker：让 -m "not live_multica" 能排掉整个文件
 pytestmark = pytest.mark.live_multica

@@ -17,11 +17,10 @@ from typing import Set
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core import load_manifest, save_manifest, set_node, lint, frontier, downstream_of
-from utils import commit_manifest
+from utils import commit_manifest, git_sync_enabled
 
 from engines import (
     create_engine_from_env,
-    create_engine_from_config,
     CollaborationEngine,
     WorkItemStatus,
 )
@@ -298,8 +297,12 @@ def execute_dag(
 
 # ==================== 主流程 ====================
 
-def start_new_run(manifest_path: str, engine: CollaborationEngine = None, max_parallel: int = 4):
-    """启动新的编排：load -> lint -> reconcile -> execute_dag。"""
+def start_new_run(manifest_path: str, engine: CollaborationEngine = None, max_parallel: int = 4,
+                  *, engine_type: str = None, workspace_id: str = None):
+    """启动新的编排：load -> lint -> reconcile -> execute_dag。
+
+    engine 为 None 时按「环境变量为唯一面」解析配置（.env 可选 + 命令行覆盖）。
+    """
     print(f"=== 加载 manifest: {manifest_path} ===")
     manifest = load_manifest(manifest_path)
 
@@ -310,11 +313,12 @@ def start_new_run(manifest_path: str, engine: CollaborationEngine = None, max_pa
 
     if engine is None:
         print("=== 初始化引擎 ===")
-        engine = create_engine_from_env()
+        engine = create_engine_from_env(engine_type=engine_type, workspace_id=workspace_id)
         print(f"  引擎类型: {engine.__class__.__name__}")
         print(f"  工作空间: {engine.config.workspace_id}")
         print(f"  小队: {squad_id}")
         print(f"  轮询间隔: {engine.config.polling_interval}s")
+        print(f"  git 回写: {'开（ORCH_GIT_SYNC）' if git_sync_enabled() else '关（默认，仅本地写文件，不 commit/push）'}")
 
     engine.config.squad_id = squad_id
 
@@ -367,12 +371,13 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    engine = None
-    if args.engine and args.workspace:
-        print(f"=== 使用指定引擎: {args.engine} ===")
-        engine = create_engine_from_config(args.engine, args.workspace)
-
-    start_new_run(args.manifest, engine=engine, max_parallel=args.max_parallel)
+    # 配置统一走 create_engine_from_env：.env(可选) < 进程环境 < 命令行参数
+    start_new_run(
+        args.manifest,
+        max_parallel=args.max_parallel,
+        engine_type=args.engine,
+        workspace_id=args.workspace,
+    )
 
 
 if __name__ == "__main__":

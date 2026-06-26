@@ -217,16 +217,16 @@ squad: <squad-id>   # 派发小队：成员池与派发都限定在该小队内�
 nodes:
   shared-contracts:
     description: "定义跨模块 DTO/事件/错误契约(TypeScript/Python types)"
-    worker: codex-ubuntu
+    worker: backend-agent
   
   project-scaffold:
     description: "项目骨架:目录结构/构建/CI pipeline"
-    worker: claude-macmini
+    worker: frontend-agent
     depends_on: [shared-contracts]
   
   mock-services:
     description: "对端 mock/fake(让业务模块对着假件并行开发)"
-    worker: codex-ubuntu
+    worker: backend-agent
     depends_on: [shared-contracts]
 ```
 
@@ -295,29 +295,29 @@ Track C: 通知服务(邮件 / 短信 / 推送)
 nodes:
   # Wave 0: 地基(串行)
   contracts:
-    worker: codex-ubuntu
+    worker: backend-agent
   
   scaffold:
     depends_on: [contracts]
-    worker: claude-macmini
+    worker: frontend-agent
   
   # Wave 1: 并行 track(小地基先行)
   user-data-layer:
     depends_on: [contracts, scaffold]
-    worker: codex-ubuntu
+    worker: backend-agent
   
   user-api:
     depends_on: [user-data-layer]  # track 内先后
-    worker: claude-macmini
+    worker: frontend-agent
   
   order-service:
     depends_on: [contracts, scaffold]  # 与 user 并行
-    worker: codex-ubuntu
+    worker: backend-agent
   
   # Wave 2: 集成验收
   e2e-test:
     depends_on: [user-api, order-service]  # 等全部 Wave 1 完成
-    worker: codex-ubuntu
+    worker: backend-agent
 ```
 
 **拓扑**:
@@ -339,6 +339,8 @@ user-api
 - `nodes.<key>.reviewer`: reviewer agent 名(可选,非空时必须≠worker)
 - `nodes.<key>.depends_on`: 依赖节点 key 列表(空 = Wave 0 可立即开始)
 - `nodes.<key>.gate`: 自定义验收条件(可选,默认="测试全绿 + 本卡改动分支覆盖 ≥ 90%")。**改动分支覆盖(diff branch coverage)是硬门槛**:只卡本卡改动的分支、不卡整仓总分;reviewer 独立复跑 `diff-cover` 判决,CI 也设同口径闸门(见「质量门禁」)。要升/降阈值就在 gate 文本写明(如 `"...覆盖 ≥ 80%(glue 代码,理由:...)"`）
+
+**环境变量展开**:manifest 任意字段值支持 `${VAR}` 与 `${VAR:-默认值}`，加载时用环境变量替换。用于把 squad / 仓库标识等 id **从文件里挪到环境变量**——团队/CI/他人克隆后设环境变量即可，不必手改 manifest；未设且无默认值则保留原样（一眼看出"未配"）。例：`squad: "${MULTICA_TEST_SQUAD:-mock-squad}"`。
 
 #### 粒度与依赖（拆图规则速查）
 
@@ -409,7 +411,7 @@ nodes:
 ```yaml
 nodes:
   security-audit:
-    worker: codex-ubuntu
+    worker: backend-agent
     reviewer: hermes-reviewer
     gate: "安全扫描无 critical / high + PM sign-off"
 ```
@@ -445,7 +447,7 @@ nodes:
 **成员检查**:
 - [ ] 所有 worker∈squad members
 - [ ] reviewer(如有)∈squad 且≠worker
-- [ ] 按 agent 特长分配(codex→后端,claude→前端)
+- [ ] 按 agent 特长分配(后端类 agent 接后端卡、前端类接前端卡、架构类接契约/评审)
 
 **验收检查**:
 - [ ] Wave 0 + Wave 2 有 reviewer
@@ -468,10 +470,10 @@ PR 评审通过后，执行本 skill 附带的引擎脚本跑 Phase 2（跑 DAG�
 
 ```bash
 # 查看完整用法
-python scripts/run_dag.py --help
+python3 scripts/run_dag.py --help
 
 # 启动/重跑：指定 manifest 文件和引擎配置
-python scripts/run_dag.py .orchestrator/<name>.yaml
+python3 scripts/run_dag.py .orchestrator/<name>.yaml
 ```
 
 引擎会自动：
@@ -502,13 +504,15 @@ manifest 文件是全局唯一口径——不依赖 checkpoint、Run 存储、ev
 - 中间 status 只写本地文件不提交
 - push 失败醒目告警但不中断编排；不自动 merge（PR 评审是外部门控）
 
+> **git 回写开关（`ORCH_GIT_SYNC`，默认关）**：上述 commit+push 默认**关闭**——只在本地写 manifest 文件，不碰 git，避免装完试跑/单机/CI 时污染业务仓。真实跨机器协作（manifest 落在项目 `.orchestrator/` 受版本管理）时 `export ORCH_GIT_SYNC=1` 打开。关闭状态下 manifest 仍以本地文件为口径，单机断点续跑不受影响；只有「跨机器经 git 流转」依赖打开它。引擎启动会打印当前开/关状态。
+
 ### reconcile（跨机器接力）
 
 manifest 经 git 流转，可能是别的机器 commit 来的、带部分状态。因此 Phase 2 启动时做一次全局 reconcile：逐节点拿 `work_item_id` 去平台核对真实状态 vs manifest 记录，补齐 gap，再继续跑。manifest 是口径，平台是实况，二者对齐后才往下跑。
 
 ### 断点续跑 / 幂等重跑
 
-直接对**同一个 manifest** 再次执行 `python scripts/run_dag.py <manifest>` 即可。manifest 是唯一口径：
+直接对**同一个 manifest** 再次执行 `python3 scripts/run_dag.py <manifest>` 即可。manifest 是唯一口径：
 
 - **已 done 且有 work_item_id 的节点**：reconcile 用 `get_work_item(work_item_id)` 精准取，确认平台也是 done -> 跳过，**0 新建、不全量扫**；
 - **blocked/failed 的节点**：重置为 todo 重试，复用原 work_item_id（不另建）；
@@ -516,7 +520,7 @@ manifest 经 git 流转，可能是别的机器 commit 来的、带部分状态�
 
 因此失败处理与断点续跑是**同一条路径**：leader 改完 manifest（换 worker / 拆小 / 降范围）后重跑，已成功的节点自动跳过，只重做待执行或失败的部分。全新 DAG 因节点 `id` 不同，自然全部新建。
 
-**注意**：scripts 目录及其所有 Python 文件已作为本 skill 的附件上传，当你加载此 skill 时可直接访问。
+**注意**：编排引擎脚本位于本 skill 目录下的 `scripts/`，按相对路径调用（如 `python3 scripts/run_dag.py`）。无论运行在哪个 Agent 平台（Claude / Codex / OpenCode 等），脚本都随 skill 一起分发，加载 skill 后即可直接执行。
 
 **引擎会自动**:
 1. **Lint 校验**(无环、worker∈池、reviewer≠worker)
@@ -552,17 +556,17 @@ manifest 经 git 流转，可能是别的机器 commit 来的、带部分状态�
 # 原 manifest(jwt-service failed)
 nodes:
   jwt-service:
-    worker: claude-macmini  # 失败了
+    worker: frontend-agent  # 失败了
     depends_on: [oauth-setup]
 
 # 调整 manifest(换 worker + 拆小)
 nodes:
   jwt-core:
-    worker: codex-ubuntu  # 换擅长后端的
+    worker: backend-agent  # 换擅长后端的
     depends_on: [oauth-setup]
   
   jwt-middleware:
-    worker: claude-macmini
+    worker: frontend-agent
     depends_on: [jwt-core]  # 拆小,先做核心
 ```
 
@@ -601,17 +605,17 @@ manifest 是唯一口径，对同一 manifest 多次执行：
 
 ---
 
-## 脚本清单(作为 skill 附件)
+## 脚本清单(随 skill 分发)
 
 本 skill 自带编排引擎，包结构按职责分层（你只跑 `run_dag.py`，其余是引擎内部实现）：
 
 - `scripts/run_dag.py`: CLI 入口 ★ **这是你要跑的**
 - `scripts/core/`: 核心编排逻辑 — `manifest.py`(数据模型+YAML加载+save_manifest/set_node 回写) / `graph.py`(frontier 算法+失败隔离) / `lint.py`(校验:无环/无孤儿/worker∈池)
 - `scripts/engines/`: 引擎适配层 — `base.py`(抽象接口 ~8 个核心方法) / `models.py`(WorkItem/WorkItemStatus/EngineConfig 数据模型) / `multica.py` / `github.py` / `mock.py`（三种协作平台实现）
-- `scripts/clients/multica.py`: Multica CLI 客户端封装
+- `scripts/setup.py`: 交互式配置向导（生成 `.env`，选引擎并填环境变量）
 - `scripts/utils.py`: 通用工具函数
 
-加载本 skill 后这些脚本可直接访问和执行。
+这些脚本随 skill 一起分发，加载 skill 后即可直接访问和执行（与运行在哪个 Agent 平台无关）。
 
 ---
 
