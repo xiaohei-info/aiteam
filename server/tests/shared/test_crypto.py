@@ -8,7 +8,7 @@ import json
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from server.shared.crypto import KeyManager, KeyRotationError, CredentialEncryptor
+from shared.crypto import KeyManager, KeyRotationError, CredentialEncryptor
 
 
 class TestKeyManager:
