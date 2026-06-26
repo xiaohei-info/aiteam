@@ -77,6 +77,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: head
+          fetch-depth: 0
 
       - name: Checkout base (master)
         uses: actions/checkout@v4
@@ -129,7 +130,7 @@ jobs:
         run: |
           pip install diff-cover
           diff-cover "$RUNNER_TEMP/web-lcov.info" \
-            --compare-branch=origin/${{ github.event.pull_request.base.ref }} \
+            --compare-branch=${{ github.event.pull_request.base.sha }} \
             --fail-under=90
 
       - name: 棘轮比对（head ≥ base 否则红灯）
