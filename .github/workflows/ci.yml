@@ -100,7 +100,7 @@ jobs:
         # 显式 -m integration；迁移在首次连接自动应用（apply_migrations），无需手动建表。
         run: python -m pytest -q -m integration
 
-branch-coverage-ratchet:
+  branch-coverage-ratchet:
     name: 分支覆盖棘轮（PR→master 不退化）
     runs-on: ubuntu-latest
     # 总控门：仅在 PR 时跑（PR→master 与 PR→feature/** 均触发，push 不跑）。
