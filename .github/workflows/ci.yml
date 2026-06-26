@@ -100,13 +100,14 @@ jobs:
         # 显式 -m integration；迁移在首次连接自动应用（apply_migrations），无需手动建表。
         run: python -m pytest -q -m integration
 
-  branch-coverage-ratchet:
+branch-coverage-ratchet:
     name: 分支覆盖棘轮（PR→master 不退化）
     runs-on: ubuntu-latest
-    # 总控门：仅在 PR→master 时跑（push 到任意分支不触发）。
+    # 总控门：仅在 PR 时跑（PR→master 与 PR→feature/** 均触发，push 不跑）。
     # 口径=整仓总分支覆盖「不退化」：PR head 不得低于 base(master)。
     # master 自身即基线，永远最新、自动随提升上调、能 block 聚合回退——无需维护基线文件。
-    # 注：per-卡的 diff 覆盖硬门槛由 worker/reviewer 本地 diff-cover 把守，不在 CI 重复。
+    # 注：per-卡 diff 覆盖硬门槛由 worker/reviewer 本地 diff-cover 把守；CI 侧改动分支
+    # 覆盖门（F1, diff-cover --fail-under=90）待 baseline 抬到≥90% 后点亮。
     if: github.event_name == 'pull_request'
     services:
       postgres:
@@ -153,8 +154,11 @@ jobs:
         continue-on-error: true
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-cov
-          python -m pytest -q --cov=. --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json"
+          pip install -r requirements.txt pytest pytest-cov diff-cover
+          python -m pytest -q \
+            --cov=operation_service --cov=manager_service \
+            --cov=agent_service --cov=agent_gateway --cov=shared \
+            --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
       - name: 覆盖率 - base master（全量套件 + 分支）
         working-directory: base/server
@@ -162,7 +166,21 @@ jobs:
         continue-on-error: true
         run: |
           pip install -r requirements.txt pytest pytest-cov
-          python -m pytest -q --cov=. --cov-branch --cov-report=json:"$RUNNER_TEMP/base.json"
+          python -m pytest -q \
+            --cov=operation_service --cov=manager_service \
+            --cov=agent_service --cov=agent_gateway --cov=shared \
+            --cov-branch --cov-report=json:"$RUNNER_TEMP/base.json"
+
+      - name: 改动分支覆盖门槛（diff-cover ≥90%）
+        # F1: skill 要求的 CI 物理层 diff-cover 门——改动行分支覆盖 <90% → CI 红灯。
+        # baseline 已抬到整仓 94%（#234 补齐后），门可安全点亮。
+        # 该步不含 continue-on-error：diff-cover 是硬门槛，低于阈值必须 block PR。
+        # 棘轮（总覆盖不退化）仍在下方保留为额外兜底。
+        working-directory: head
+        run: |
+          diff-cover server/coverage.xml \
+            --compare-branch=origin/${{ github.event.pull_request.base.ref }} \
+            --fail-under=90
 
       - name: 棘轮比对（head ≥ base 否则红灯）
         run: |

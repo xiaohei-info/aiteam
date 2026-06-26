@@ -67,8 +67,8 @@ jobs:
   branch-coverage-ratchet:
     name: 分支覆盖棘轮（PR→master 不退化）
     runs-on: ubuntu-latest
-    # 总控门：仅 PR→master 触发（push 不跑）。口径=四个子包聚合的总分支覆盖「不退化」：
-    # PR head 不得低于 base(master)。per-卡 diff 覆盖由 worker/reviewer 本地把守，CI 不重复。
+    # 总控门：仅在 PR 时跑（PR→master 与 PR→feature/** 均触发，push 不跑）。
+    # 双层：CI 物理层 diff-cover --fail-under=90 改动分支覆盖门 + 棘轮总覆盖不退化兜底。
     # 引入覆盖能力的首个 PR：base(master) 尚无 @vitest/coverage-v8 → base 跑不出覆盖，
     # 自动跳过比对（bootstrap）；合并后 master 即基线，后续 PR 起真比对。
     if: github.event_name == 'pull_request'
@@ -99,6 +99,13 @@ jobs:
           pnpm --filter @aiteam/shared run build
           pnpm -r exec vitest run --coverage
           node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<4){console.error("缺包覆盖产物 n="+n);process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.RUNNER_TEMP+"/head.txt",pct);console.log("head web 分支覆盖 "+pct+"% ("+c+"/"+t+")");'
+          # 合并四包 lcov.info 并重写 SF: 路径为 git-root-relative（web/<pkg>/src/...）
+          # 供 diff-cover 吃 lcov 格式（diff-cover 按 git diff 路径匹配）
+          for pkg in shared operation manager agent; do
+            if [ -f "$pkg/coverage/lcov.info" ]; then
+              sed "s|^SF:src/|SF:web/$pkg/src/|" "$pkg/coverage/lcov.info" >> "$RUNNER_TEMP/web-lcov.info"
+            fi
+          done
 
       - name: 覆盖率 - base master（容忍未 instrumented）
         working-directory: base/web
@@ -108,6 +115,22 @@ jobs:
           pnpm --filter @aiteam/shared run build
           pnpm -r exec vitest run --coverage
           node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<1){process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.RUNNER_TEMP+"/base.txt",pct);console.log("base web 分支覆盖 "+pct+"%");'
+
+      - name: Setup Python（diff-cover 门）
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 改动分支覆盖门槛（diff-cover ≥90%）
+        # F2: web 前端 CI 物理层 diff-cover 门——改动行分支覆盖 <90% → CI 红灯。
+        # lcov.info 路径已重写为 git-root-relative，diff-cover 从 head/ 运行。
+        # 该步不含 continue-on-error：硬门槛，低于阈值必须 block PR。
+        working-directory: head
+        run: |
+          pip install diff-cover
+          diff-cover "$RUNNER_TEMP/web-lcov.info" \
+            --compare-branch=origin/${{ github.event.pull_request.base.ref }} \
+            --fail-under=90
 
       - name: 棘轮比对（head ≥ base 否则红灯）
         run: |

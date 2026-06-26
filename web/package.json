@@ -11,7 +11,9 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "coverage": "pnpm -r exec vitest run --coverage",
+    "coverage:diff": "bash scripts/coverage-diff.sh"
   },
   "packageManager": "pnpm@11.4.0"
 }
