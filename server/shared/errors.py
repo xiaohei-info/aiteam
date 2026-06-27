@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from shared.contracts.envelope import Problem, ProblemFieldError
 
@@ -87,6 +88,16 @@ def install_exception_handlers(app: FastAPI) -> None:
         return _response(_to_problem(
             status=exc.status, code=exc.code, title=exc.title, detail=exc.detail,
             instance=request.url.path, request_id=_request_id(request), errors=exc.errors,
+        ))
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _handle_http_exception(request: Request, exc: StarletteHTTPException):  # noqa: ANN202
+        code = "not_found" if exc.status_code == 404 else "http_error"
+        title = "Not Found" if exc.status_code == 404 else "HTTP error"
+        detail = exc.detail if isinstance(exc.detail, str) else None
+        return _response(_to_problem(
+            status=exc.status_code, code=code, title=title, detail=detail,
+            instance=request.url.path, request_id=_request_id(request), errors=None,
         ))
 
     @app.exception_handler(RequestValidationError)

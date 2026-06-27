@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
-from shared.errors import install_exception_handlers
+from shared.errors import NotFound, install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
 
 logger = logging.getLogger(__name__)
@@ -86,11 +86,11 @@ def _mount_frontend(app: FastAPI, tier: str) -> None:
     async def serve_spa_root() -> FileResponse:
         return FileResponse(frontend_dist / "index.html")
 
-    # SPA 路由回退：非 API/healthz/readyz/docs 路径都返回 index.html，由前端路由处理
+    # SPA 路由回退：只服务前端路由；保留后端路径继续返回 problem+json。
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa_fallback(full_path: str) -> FileResponse:
-        # 所有其他路径（前端路由）返回 index.html
-        # API 路径、健康检查、文档已由更具体的路由处理，不会走到这里
+        if full_path.startswith(("api/", "healthz", "readyz", "docs", "redoc", "openapi.json")):
+            raise NotFound(f"route not found: /{full_path}")
         return FileResponse(frontend_dist / "index.html")
 
     logger.info(f"前端静态托管已启用: {frontend_dist} -> / (tier={tier})")

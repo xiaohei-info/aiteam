@@ -99,6 +99,20 @@ def test_mount_frontend_serves_spa(_dist_dir):
     assert client.get("/healthz").json()["status"] == "ok"
 
 
+def test_mount_frontend_does_not_fallback_for_unknown_api_paths(_dist_dir):
+    """未知 API 路径必须返回 problem+json 404，不能被 SPA 回退吞成 index.html。"""
+    app = create_app(_settings(), _empty_router())
+    client = TestClient(app)
+
+    response = client.get("/api/operation/catalog")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert "text/html" not in response.headers["content-type"]
+    assert response.json()["code"] == "not_found"
+    assert "SPA" not in response.text
+
+
 def test_mount_frontend_no_dist_skips():
     """无 dist 产物时 _mount_frontend 跳过挂载（早退分支）。"""
     if _DIST.exists():
@@ -107,3 +121,17 @@ def test_mount_frontend_no_dist_skips():
     client = TestClient(app)
     # 无 SPA 挂载 -> 未知路径 404
     assert client.get("/some/route").status_code == 404
+
+
+def test_unknown_api_path_without_dist_returns_problem_json():
+    """即使没有前端 dist，框架级 404 也必须保持 problem+json。"""
+    if _DIST.exists():
+        pytest.skip("dist 产物已存在，无法验证无 SPA 挂载分支")
+    app = create_app(_settings(tier="manager"), _empty_router(prefix="/api/manager"))
+    client = TestClient(app)
+
+    response = client.get("/api/manager/__missing_route__")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "not_found"

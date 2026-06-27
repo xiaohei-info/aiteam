@@ -13,7 +13,11 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "coverage": "pnpm -r exec vitest run --coverage",
-    "coverage:diff": "bash scripts/coverage-diff.sh"
+    "coverage:diff": "bash scripts/coverage-diff.sh",
+    "e2e": "pnpm --filter @aiteam/shared run build && playwright test"
   },
-  "packageManager": "pnpm@11.4.0"
+  "packageManager": "pnpm@11.4.0",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
 }

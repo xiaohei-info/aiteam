@@ -9,3 +9,9 @@ import sys
 _SERVER_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _SERVER_ROOT not in sys.path:
     sys.path.insert(0, _SERVER_ROOT)
+
+# Operation app builds its system-account repository at import time. Tests use
+# explicit non-secret defaults so app assembly checks do not depend on local env.
+os.environ.setdefault("OPERATION_SYSTEM_USERNAME", "sysadmin")
+os.environ.setdefault("OPERATION_SYSTEM_PASSWORD", "changeme-me")
+os.environ.setdefault("SERVICE_TOKEN", "test-service-token")
