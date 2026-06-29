@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from shared.errors import AppError, Unauthorized
+from shared.errors import AppError, Unauthorized, ValidationProblem
 from shared.service_client import ServiceClient
 
 from .local_login import LoginRequest, ManagerUnreachable
@@ -43,7 +43,12 @@ class RealManagerLoginClient:
         self._sc = service_client
 
     def login(self, req: LoginRequest) -> tuple[str, dict]:
-        # ① 校验凭据。401 是凭据错误（透传）；其它失败/不可达归一为 ManagerUnreachable。
+        # ① 前置校验：tenant_hint 是 Manager LoginInput.tenant_id 的来源，空值会被
+        # Manager Pydantic 拒绝（422）。fail fast 给明确提示，不发无意义网络请求（#258）。
+        if not req.tenant_hint or not req.tenant_hint.strip():
+            raise ValidationProblem("tenant_hint 必填，请填写企业定位提示（tenant_id）")
+
+        # ② 校验凭据。401 是凭据错误（透传）；其它失败/不可达归一为 ManagerUnreachable。
         try:
             # Manager LoginInput 契约（manager_service/auth_service.py，extra="forbid"）：
             # 必填 tenant_id + account + password，不接受额外字段。tenant_hint 即定位到的
@@ -65,8 +70,8 @@ class RealManagerLoginClient:
         if not token:
             raise ManagerUnreachable("manager login response missing token")
 
-        # ② 领取验签公钥（JWKS）。tenant_hint 缺失时回退 'default'。
-        tenant = req.tenant_hint or "default"
+        # ③ 领取验签公钥（JWKS）。tenant_hint 已在 ① 保证非空。
+        tenant = req.tenant_hint
         try:
             jwks = self._sc.get(f"/api/auth/{tenant}/jwks.json")
         except Unauthorized:

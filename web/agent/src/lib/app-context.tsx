@@ -100,6 +100,7 @@ export function useApiError(): (err: unknown) => string {
         if (err.status === 403) return i18n.t("error.forbidden");
         if (err.status === 404) return i18n.t("error.not_found");
         if (err.status === 409) return i18n.t("error.conflict");
+        if (err.status === 422) return i18n.t("error.validation");
         if (err.status === 0) return i18n.t("error.network");
         return i18n.t("agent.login.failed", { detail: err.message });
       }
