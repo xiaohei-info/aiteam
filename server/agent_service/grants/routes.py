@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.grants import LoadedExpertProjection
@@ -23,8 +23,8 @@ from .service import GrantsService
 
 class SyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    tenant_id: str
-    member_id: str
+    tenant_id: str = Field(description="租户 id")
+    member_id: str = Field(description="成员 id")
 
 
 class SyncResultBody(BaseModel):
@@ -32,16 +32,17 @@ class SyncResultBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ok: bool
-    upserted: int
-    revoked: int
-    error: str | None = None
+    ok: bool = Field(description="是否 sync 成功")
+    upserted: int = Field(description="本次新增/更新授权数")
+    revoked: int = Field(description="本次撤销授权数")
+    error: str | None = Field(default=None, description="错误信息（降级时非空）")
 
 
 def build_grants_router(service: GrantsService) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-grants"])
 
     @router.post("/grants/sync", summary="主动 pull Manager 授权配置落本地投影（尽力而为）",
+                 description="Agent 主动从 Manager pull 授权配置变更，落本地只读投影。失败不阻断本地工作。",
                  operation_id="agent_sync_grants")
     async def sync(req: SyncRequest) -> Envelope[SyncResultBody]:
         r = service.sync(req.tenant_id, req.member_id)
@@ -50,6 +51,7 @@ def build_grants_router(service: GrantsService) -> APIRouter:
         )
 
     @router.get("/grants/experts", summary="列本地可用专家投影（已授权未撤销）",
+                description="列出本端已装载且未撤销的专家投影。数据来源为上一次 sync 的本地只读投影。",
                 operation_id="agent_list_loaded_experts")
     async def list_experts() -> ListEnvelope[LoadedExpertProjection]:
         items = service.available_experts()
@@ -59,6 +61,7 @@ def build_grants_router(service: GrantsService) -> APIRouter:
         )
 
     @router.get("/grants/snapshots", summary="列已冻结执行快照（观测）",
+                description="列出本端已冻结的执行快照。快照在授权有效时冻结，授权撤销后仍可查阅。",
                 operation_id="agent_list_frozen_snapshots")
     async def list_snapshots() -> ListEnvelope[EmployeeExecutionSnapshot]:
         items = service.frozen_snapshots()

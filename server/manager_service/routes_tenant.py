@@ -20,6 +20,7 @@ router = APIRouter(tags=["manager", "control-plane"])
 @router.post(
     "/api/manager/tenants",
     summary="F01 企业开通——建 tenant_registry 行（Operator→Manager 云侧调用）",
+    description="运营端Manager云侧调用：新建 tenant 注册行，返回 tenant_id。企业开通入口。",
     operation_id="manager_provision_tenant",
     status_code=status.HTTP_201_CREATED,
 )

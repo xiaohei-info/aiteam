@@ -54,7 +54,7 @@ def _fire_outcome_to_response(outcome: FireOutcome) -> FireNowResponse:
 def build_loop_router(service: LoopService, scheduler: LoopScheduler) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-loop"])
 
-    @router.post("/loops", summary="建 Loop（默认 disabled）", operation_id="agent_create_loop")
+    @router.post("/loops", summary="建 Loop（默认 disabled）", description="创建定时循环。需指定关联会话和 cron 表达式。创建后默认不启用。", operation_id="agent_create_loop")
     async def create_loop(req: CreateLoopRequest) -> Envelope[Loop]:
         loop = service.create_loop(
             conversation_id=req.conversation_id,
@@ -65,7 +65,7 @@ def build_loop_router(service: LoopService, scheduler: LoopScheduler) -> APIRout
         )
         return Envelope[Loop](data=loop)
 
-    @router.get("/loops", summary="列 Loop", operation_id="agent_list_loops")
+    @router.get("/loops", summary="列 Loop", description="列出本端所有 Loop，含启用/停用状态。", operation_id="agent_list_loops")
     async def list_loops() -> ListEnvelope[Loop]:
         loops = service.list_loops()
         next_cursor = str(len(loops)) if loops else None
@@ -73,21 +73,24 @@ def build_loop_router(service: LoopService, scheduler: LoopScheduler) -> APIRout
             data=loops, page=Page(next_cursor=next_cursor, has_more=False)
         )
 
-    @router.get("/loops/{loop_id}", summary="取 Loop", operation_id="agent_get_loop")
+    @router.get("/loops/{loop_id}", summary="取 Loop", description="取单个 Loop 详情，含 cron、启用状态、关联会话等。", operation_id="agent_get_loop")
     async def get_loop(loop_id: str) -> Envelope[Loop]:
         return Envelope[Loop](data=service.get_loop(loop_id))
 
     @router.post("/loops/{loop_id}/enable", summary="启用 Loop（进调度）",
+                 description="启用指定 Loop，进入调度器定时触发。",
                  operation_id="agent_enable_loop")
     async def enable_loop(loop_id: str) -> Envelope[Loop]:
         return Envelope[Loop](data=service.enable(loop_id))
 
     @router.post("/loops/{loop_id}/disable", summary="停用 Loop（出调度）",
+                 description="停用指定 Loop，移出调度器。已触发的 run 不影响。",
                  operation_id="agent_disable_loop")
     async def disable_loop(loop_id: str) -> Envelope[Loop]:
         return Envelope[Loop](data=service.disable(loop_id))
 
     @router.post("/loops/{loop_id}/fire", summary="立即手动触发（不经 cron）",
+                 description="手动触发一次：绕过 cron 判定，直接起 run。到点调度走同一 _fire 路径。",
                  operation_id="agent_fire_loop_now")
     async def fire_loop_now(loop_id: str) -> Envelope[FireNowResponse]:
         """手动触发一次：绕过 cron 判定，直接起 run。到点调度走同一 _fire 路径。"""
@@ -96,6 +99,7 @@ def build_loop_router(service: LoopService, scheduler: LoopScheduler) -> APIRout
         return Envelope[FireNowResponse](data=_fire_outcome_to_response(outcome))
 
     @router.post("/loops/tick", summary="手动驱动一次调度 tick（dev/测试）",
+                 description="以当前时刻驱动一次 fire_ready。生产后台调度由 scheduler.start() 自动驱动。",
                  operation_id="agent_loop_tick")
     async def loop_tick() -> ListEnvelope[FireNowResponse]:
         """以当前时刻驱动一次 fire_ready（同调度器后台 tick 用的入口，便于演示/测试）。

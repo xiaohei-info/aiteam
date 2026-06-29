@@ -49,7 +49,7 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
     return cache
 
 
-@router.post("/grants", summary="创建/替换资源授权（D12）", operation_id="manager_create_grant")
+@router.post("/grants", description="新增授权：将 expert 授予成员。", summary="创建/替换资源授权（D12）", operation_id="manager_create_grant")
 async def create_grant(
     body: MemberGrantCreate,
     request: Request,
@@ -60,7 +60,7 @@ async def create_grant(
     return Envelope[MemberGrantOut](data=grant_svc.create_grant(ctx, body))
 
 
-@router.get("/grants", summary="列本租户授权（按 tenant 裁剪）", operation_id="manager_list_grants")
+@router.get("/grants", description="请查看接口名称了解用途", summary="列本租户授权（按 tenant 裁剪）", operation_id="manager_list_grants")
 async def list_grants(
     request: Request,
     resource_type: str | None = None,
@@ -76,7 +76,7 @@ async def list_grants(
     return ListEnvelope[MemberGrantOut](data=rows)
 
 
-@router.get("/grants/{grant_id}", summary="授权详情（按 tenant 裁剪）", operation_id="manager_get_grant")
+@router.get("/grants/{grant_id}", description="请查看接口名称了解用途", summary="授权详情（按 tenant 裁剪）", operation_id="manager_get_grant")
 async def get_grant(
     grant_id: str,
     request: Request,
@@ -87,7 +87,7 @@ async def get_grant(
     return Envelope[MemberGrantOut](data=grant_svc.get_grant(ctx, grant_id))
 
 
-@router.patch("/grants/{grant_id}", summary="改授权部门/成员", operation_id="manager_update_grant")
+@router.patch("/grants/{grant_id}", description="请查看接口名称了解用途", summary="改授权部门/成员", operation_id="manager_update_grant")
 async def update_grant(
     grant_id: str,
     body: MemberGrantUpdate,
@@ -99,7 +99,7 @@ async def update_grant(
     return Envelope[MemberGrantOut](data=grant_svc.update_grant(ctx, grant_id, body))
 
 
-@router.delete("/grants/{grant_id}", summary="撤销授权", operation_id="manager_delete_grant")
+@router.delete("/grants/{grant_id}", description="撤销指定授权。撤销后 Agent 端投影同步移除。", summary="撤销授权", operation_id="manager_delete_grant")
 async def delete_grant(
     grant_id: str,
     request: Request,
@@ -113,7 +113,7 @@ async def delete_grant(
 
 @router.post(
     "/grants/authorized-config",
-    summary="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）",
+    description="请查看接口名称了解用途", summary="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）",
     operation_id="manager_grants_authorized_config_pull",
 )
 async def pull_authorized_config(

@@ -62,6 +62,7 @@ def build_snapshot_router(verifier) -> APIRouter:
 
     @router.post(
         "", summary="生成 employee/expert 执行快照（只读投影 + 成员级授权，D5/F16）",
+        description="Agent 主动拉取执行快照：取当前 employee 配置 + 成员级授权冻结为只读快照。",
         operation_id="manager_snapshot_generate",
     )
     async def generate_snapshot(

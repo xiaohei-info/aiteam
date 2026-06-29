@@ -84,7 +84,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/usage/upload",
-        summary="接收脱敏 usage/audit 摘要上报（F13，本端消费落库聚合）",
+        description="请查看接口名称了解用途", summary="接收脱敏 usage/audit 摘要上报（F13，本端消费落库聚合）",
         operation_id="manager_usage_upload",
     )
     async def upload_usage(
@@ -101,7 +101,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/usage/rollup",
-        summary="查本租户 usage 聚合（按窗口）/ 明细",
+        description="请查看接口名称了解用途", summary="查本租户 usage 聚合（按窗口）/ 明细",
         operation_id="manager_usage_rollup",
     )
     async def get_usage_rollup(
@@ -120,7 +120,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/usage/rollup/list",
-        summary="列本租户全部 usage 明细",
+        description="请查看接口名称了解用途", summary="列本租户全部 usage 明细",
         operation_id="manager_usage_rollup_list",
         response_model_exclude_none=True,
     )
@@ -135,7 +135,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/audits",
-        summary="列本租户审计事件摘要（无会话内容）",
+        description="请查看接口名称了解用途", summary="列本租户审计事件摘要（无会话内容）",
         operation_id="manager_audit_list",
         response_model_exclude_none=True,
     )
@@ -150,7 +150,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/quota-policies",
-        summary="建软配额策略（owner/enterprise_admin/finance_admin）",
+        description="请查看接口名称了解用途", summary="建软配额策略（owner/enterprise_admin/finance_admin）",
         operation_id="manager_quota_policy_create",
         status_code=status.HTTP_201_CREATED,
         response_model_exclude_none=True,
@@ -167,7 +167,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/quota-policies",
-        summary="列本租户配额策略",
+        description="请查看接口名称了解用途", summary="列本租户配额策略",
         operation_id="manager_quota_policy_list",
         response_model_exclude_none=True,
     )
@@ -180,7 +180,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/quota-policies/{policy_id}",
-        summary="取单个配额策略",
+        description="请查看接口名称了解用途", summary="取单个配额策略",
         operation_id="manager_quota_policy_get",
         response_model_exclude_none=True,
     )
@@ -196,7 +196,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.put(
         "/quota-policies/{policy_id}",
-        summary="改写配额策略（version 自增）",
+        description="请查看接口名称了解用途", summary="改写配额策略（version 自增）",
         operation_id="manager_quota_policy_update",
         response_model_exclude_none=True,
     )
@@ -213,7 +213,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.delete(
         "/quota-policies/{policy_id}",
-        summary="删配额策略",
+        description="请查看接口名称了解用途", summary="删配额策略",
         operation_id="manager_quota_policy_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -228,7 +228,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/quota-policies/{policy_id}/evaluate",
-        summary="评估配额并产出软治理动作（不阻断 run，D24）",
+        description="请查看接口名称了解用途", summary="评估配额并产出软治理动作（不阻断 run，D24）",
         operation_id="manager_quota_policy_evaluate",
         response_model_exclude_none=True,
     )

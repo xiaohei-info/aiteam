@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 
@@ -22,15 +22,16 @@ class FlushResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    sent: int
-    failed: int
-    batches: int
+    sent: int = Field(description="成功上报数")
+    failed: int = Field(description="失败数（留 pending 重试）")
+    batches: int = Field(description="批次数")
 
 
 def build_usage_router(service: UsageService) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-usage"])
 
     @router.get("/usage/outbox", summary="列待发脱敏摘要（pending）",
+                description="列出 outbox 中待上报的脱敏 usage/audit 摘要。仅含脱敏聚合信息，不含会话内容。",
                 operation_id="agent_list_usage_outbox")
     async def list_outbox() -> ListEnvelope[OutboxItem]:
         items = service.pending()
@@ -40,6 +41,7 @@ def build_usage_router(service: UsageService) -> APIRouter:
         )
 
     @router.post("/usage/flush", summary="手动 drain outbox 上报 Manager（尽力而为）",
+                 description="手动触发 outbox drain：将待发摘要上报 Manager。生产由进程周期驱动。失败留 pending 重试。",
                  operation_id="agent_flush_usage_outbox")
     async def flush() -> Envelope[FlushResult]:
         r = service.flush()

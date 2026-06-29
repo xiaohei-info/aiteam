@@ -46,7 +46,7 @@ class AgentRuntimeEvent(BaseModel):
     type: RuntimeEventType
     source: str = Field(description="产生该事件的 runtime/driver 标识")
     timestamp: datetime
-    payload: dict = Field(default_factory=dict)
+    payload: dict = Field(default_factory=dict, description="事件载荷（内容因 event_type 而异）")
 
 
 class TimelineCursor(BaseModel):

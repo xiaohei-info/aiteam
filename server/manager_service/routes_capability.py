@@ -55,7 +55,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- skill 目录（/api/manager/skills/*）----
 
     @router.post(
-        "/skills", summary="建技能目录条目（runtime 中立，D16）",
+        "/skills", description="请查看接口名称了解用途", summary="建技能目录条目（runtime 中立，D16）",
         operation_id="manager_skill_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_skill(
@@ -64,14 +64,14 @@ def build_capability_router(verifier) -> APIRouter:
         svc = _service(request)
         return Envelope[SkillCatalogOut](data=svc.create_skill(tenant_context_from(claims), body))
 
-    @router.get("/skills", summary="列本租户技能目录", operation_id="manager_skill_catalog_list")
+    @router.get("/skills", description="列本租户所有技能目录条目。", summary="列本租户技能目录", operation_id="manager_skill_catalog_list")
     async def list_skills(
         request: Request, claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SkillCatalogOut]:
         svc = _service(request)
         return ListEnvelope[SkillCatalogOut](data=svc.list_skills(tenant_context_from(claims)))
 
-    @router.get("/skills/{catalog_id}", summary="取单个技能目录条目", operation_id="manager_skill_catalog_get")
+    @router.get("/skills/{catalog_id}", description="请查看接口名称了解用途", summary="取单个技能目录条目", operation_id="manager_skill_catalog_get")
     async def get_skill(
         catalog_id: str, request: Request, claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillCatalogOut]:
@@ -81,7 +81,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/skills/{catalog_id}", summary="改写技能目录条目（catalog_version 自增）",
+        "/skills/{catalog_id}", description="请查看接口名称了解用途", summary="改写技能目录条目（catalog_version 自增）",
         operation_id="manager_skill_catalog_update",
     )
     async def update_skill(
@@ -94,7 +94,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/skills/{catalog_id}", summary="删技能目录条目",
+        "/skills/{catalog_id}", description="删技能目录条目。删除后不可恢复。", summary="删技能目录条目",
         operation_id="manager_skill_catalog_delete", status_code=status.HTTP_204_NO_CONTENT,
     )
     async def delete_skill(
@@ -107,7 +107,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- connector 目录（/api/manager/connectors/*）----
 
     @router.post(
-        "/connectors", summary="建连接器目录条目（凭据本体归 M5，D18）",
+        "/connectors", description="请查看接口名称了解用途", summary="建连接器目录条目（凭据本体归 M5，D18）",
         operation_id="manager_connector_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_connector(
@@ -118,7 +118,7 @@ def build_capability_router(verifier) -> APIRouter:
             data=svc.create_connector(tenant_context_from(claims), body)
         )
 
-    @router.get("/connectors", summary="列本租户连接器目录", operation_id="manager_connector_catalog_list")
+    @router.get("/connectors", description="列本租户所有连接器目录。", summary="列本租户连接器目录", operation_id="manager_connector_catalog_list")
     async def list_connectors(
         request: Request, claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[ConnectorCatalogOut]:
@@ -126,7 +126,7 @@ def build_capability_router(verifier) -> APIRouter:
         return ListEnvelope[ConnectorCatalogOut](data=svc.list_connectors(tenant_context_from(claims)))
 
     @router.get(
-        "/connectors/{catalog_id}", summary="取单个连接器目录条目",
+        "/connectors/{catalog_id}", description="请查看接口名称了解用途", summary="取单个连接器目录条目",
         operation_id="manager_connector_catalog_get",
     )
     async def get_connector(
@@ -138,7 +138,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/connectors/{catalog_id}", summary="改写连接器目录条目（catalog_version 自增）",
+        "/connectors/{catalog_id}", description="请查看接口名称了解用途", summary="改写连接器目录条目（catalog_version 自增）",
         operation_id="manager_connector_catalog_update",
     )
     async def update_connector(
@@ -151,7 +151,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/connectors/{catalog_id}", summary="删连接器目录条目",
+        "/connectors/{catalog_id}", description="删连接器目录条目。", summary="删连接器目录条目",
         operation_id="manager_connector_catalog_delete", status_code=status.HTTP_204_NO_CONTENT,
     )
     async def delete_connector(
@@ -164,7 +164,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- memory_policy 目录（/api/manager/memory-policies/*，D17）----
 
     @router.post(
-        "/memory-policies", summary="建记忆策略目录条目（复用 mem0，D17）",
+        "/memory-policies", description="请查看接口名称了解用途", summary="建记忆策略目录条目（复用 mem0，D17）",
         operation_id="manager_memory_policy_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_memory_policy(
@@ -176,7 +176,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/memory-policies", summary="列本租户记忆策略目录",
+        "/memory-policies", description="列本租户所有记忆策略目录。", summary="列本租户记忆策略目录",
         operation_id="manager_memory_policy_catalog_list",
     )
     async def list_memory_policies(
@@ -188,7 +188,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/memory-policies/{catalog_id}", summary="取单个记忆策略目录条目",
+        "/memory-policies/{catalog_id}", description="请查看接口名称了解用途", summary="取单个记忆策略目录条目",
         operation_id="manager_memory_policy_catalog_get",
     )
     async def get_memory_policy(
@@ -200,7 +200,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/memory-policies/{catalog_id}", summary="改写记忆策略目录条目（catalog_version 自增）",
+        "/memory-policies/{catalog_id}", description="请查看接口名称了解用途", summary="改写记忆策略目录条目（catalog_version 自增）",
         operation_id="manager_memory_policy_catalog_update",
     )
     async def update_memory_policy(
@@ -213,7 +213,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/memory-policies/{catalog_id}", summary="删记忆策略目录条目",
+        "/memory-policies/{catalog_id}", description="删记忆策略条目。", summary="删记忆策略目录条目",
         operation_id="manager_memory_policy_catalog_delete", status_code=status.HTTP_204_NO_CONTENT,
     )
     async def delete_memory_policy(

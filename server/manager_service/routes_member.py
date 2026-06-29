@@ -49,7 +49,7 @@ def _services(request: Request) -> tuple[MemberDeptService, "object"]:
 router = APIRouter(prefix="/api/manager", tags=["member", "department"])
 
 
-@router.post("/departments", summary="建部门（owner/enterprise_admin）", operation_id="manager_create_department")
+@router.post("/departments", description="请查看接口名称了解用途", summary="建部门（owner/enterprise_admin）", operation_id="manager_create_department")
 async def create_department(
     body: DepartmentCreate,
     request: Request,
@@ -60,7 +60,7 @@ async def create_department(
     return Envelope[DepartmentOut](data=member_svc.create_department(ctx, body))
 
 
-@router.get("/departments", summary="列部门（所有角色）", operation_id="manager_list_departments")
+@router.get("/departments", description="列本租户所有部门。", summary="列部门（所有角色）", operation_id="manager_list_departments")
 async def list_departments(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
@@ -71,7 +71,7 @@ async def list_departments(
     return ListEnvelope[DepartmentOut](data=rows)
 
 
-@router.get("/departments/{department_id}", summary="部门详情", operation_id="manager_get_department")
+@router.get("/departments/{department_id}", description="请查看接口名称了解用途", summary="部门详情", operation_id="manager_get_department")
 async def get_department(
     department_id: str,
     request: Request,
@@ -82,7 +82,7 @@ async def get_department(
     return Envelope[DepartmentOut](data=member_svc.get_department(ctx, department_id))
 
 
-@router.patch("/departments/{department_id}", summary="改部门", operation_id="manager_update_department")
+@router.patch("/departments/{department_id}", description="请查看接口名称了解用途", summary="改部门", operation_id="manager_update_department")
 async def update_department(
     department_id: str,
     body: DepartmentUpdate,
@@ -94,7 +94,7 @@ async def update_department(
     return Envelope[DepartmentOut](data=member_svc.update_department(ctx, department_id, body))
 
 
-@router.delete("/departments/{department_id}", summary="删部门", operation_id="manager_delete_department")
+@router.delete("/departments/{department_id}", description="删部门。删除前部门内应无成员。", summary="删部门", operation_id="manager_delete_department")
 async def delete_department(
     department_id: str,
     request: Request,
@@ -106,7 +106,7 @@ async def delete_department(
     return Envelope[dict](data={"deleted": department_id})
 
 
-@router.post("/members", summary="建成员（03 §9.4B）", operation_id="manager_create_member")
+@router.post("/members", description="请查看接口名称了解用途", summary="建成员（03 §9.4B）", operation_id="manager_create_member")
 async def create_member(
     body: MemberCreate,
     request: Request,
@@ -117,7 +117,7 @@ async def create_member(
     return Envelope[MemberOut](data=member_svc.create_member(ctx, body))
 
 
-@router.get("/members", summary="列成员（不回显凭据）", operation_id="manager_list_members")
+@router.get("/members", description="列本租户所有成员。", summary="列成员（不回显凭据）", operation_id="manager_list_members")
 async def list_members(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
@@ -127,7 +127,7 @@ async def list_members(
     return ListEnvelope[MemberOut](data=member_svc.list_members(ctx))
 
 
-@router.get("/members/{member_id}", summary="成员详情（不回显凭据）", operation_id="manager_get_member")
+@router.get("/members/{member_id}", description="请查看接口名称了解用途", summary="成员详情（不回显凭据）", operation_id="manager_get_member")
 async def get_member(
     member_id: str,
     request: Request,
@@ -138,7 +138,7 @@ async def get_member(
     return Envelope[MemberOut](data=member_svc.get_member(ctx, member_id))
 
 
-@router.patch("/members/{member_id}", summary="改成员（角色/部门/状态）", operation_id="manager_update_member")
+@router.patch("/members/{member_id}", description="请查看接口名称了解用途", summary="改成员（角色/部门/状态）", operation_id="manager_update_member")
 async def update_member(
     member_id: str,
     body: MemberUpdate,
@@ -150,7 +150,7 @@ async def update_member(
     return Envelope[MemberOut](data=member_svc.update_member(ctx, member_id, body))
 
 
-@router.delete("/members/{member_id}", summary="删成员", operation_id="manager_delete_member")
+@router.delete("/members/{member_id}", description="删成员账号。已删除成员不再可登录。", summary="删成员", operation_id="manager_delete_member")
 async def delete_member(
     member_id: str,
     request: Request,
