@@ -185,13 +185,19 @@ test.describe("Loop-C usage audit 跨端数据隔离", () => {
 });
 
 test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播", () => {
-  test("Agent create conversation + run → outbox 产生 usage → flush → sent > 0", async ({
+  test("Agent create conversation + run → outbox 产生 usage → flush sent>0 → Manager rollup 观测到增量", async ({
     request,
   }) => {
-    const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
-    const agentOrigin = TIER_API_ORIGIN.agent;
+    // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
+    // Agent create conversation → message → run → outbox 增长 → flush sent>0 →
+    // 取 run 返回的 run_id 在 Manager rollup 中按 employee+窗口验证可见性。
 
-    // 1. 读 flush 前 outbox pending 基线。
+    const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
+    const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
+    const agentOrigin = TIER_API_ORIGIN.agent;
+    const mgrOrigin = TIER_API_ORIGIN.manager;
+
+    // ── 阶段 1/6: outbox pending 基线 ──
     const beforeResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
@@ -200,38 +206,34 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     const beforeBody = (await beforeResp.json()) as { data: unknown[] };
     const pendingBefore = Array.isArray(beforeBody.data) ? beforeBody.data.length : 0;
 
-    // 2. 创建会话 + 发一条消息（含可唯一追踪的文本）。
-    const traceId = `e2e-usage-${Date.now()}`;
+    // ── 阶段 2/6: 创建会话 + 发消息 + 起 run（FakeRuntime 产生 usage → UsageRecorder 入 outbox）──
+    const traceId = `e2e-loopc-${Date.now()}`;
     const convResp = await request.post(`${agentOrigin}/api/agent/conversations`, {
-      data: { title: `Loop-C E2E ${traceId}` },
+      data: { title: `Loop-C propagation ${traceId}` },
       headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
       failOnStatusCode: false,
     });
     expect(convResp.ok(), `create conversation: ${convResp.status()}`).toBe(true);
     const convId = ((await convResp.json()) as { data: { id: string } }).data.id;
 
-    const msgResp = await request.post(
-      `${agentOrigin}/api/agent/conversations/${convId}/messages`,
-      {
-        data: { role: "user", content: `E2E usage propagation test: ${traceId}` },
-        headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
-        failOnStatusCode: false,
-      },
-    );
+    const msgResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/messages`, {
+      data: { role: "user", content: `E2E usage cross-tier: ${traceId}` },
+      headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
+      failOnStatusCode: false,
+    });
     expect(msgResp.ok(), `send message: ${msgResp.status()}`).toBe(true);
 
-    // 3. 起 run——FakeRuntime 会产生 usage 事件，终态落库后经 UsageRecorder 写入 outbox。
-    const runResp = await request.post(
-      `${agentOrigin}/api/agent/conversations/${convId}/runs`,
-      {
-        data: {},
-        headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
-        failOnStatusCode: false,
-      },
-    );
+    const runResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/runs`, {
+      data: {},
+      headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
+      failOnStatusCode: false,
+    });
     expect(runResp.ok(), `start run: ${runResp.status()}`).toBe(true);
+    const runBody = (await runResp.json()) as { data: { id: string; employee_id?: string } };
+    const runId = runBody.data.id;
+    const employeeId = runBody.data.employee_id ?? undefined;
 
-    // 4. 验证 outbox 有新增 pending（run 的 usage 已入队）。
+    // ── 阶段 3/6: 验证 outbox pending 增长 → run 的 usage 已入队 ──
     const afterRunResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
@@ -244,7 +246,7 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       `run 后 outbox pending 应增长 (before=${pendingBefore}, after=${pendingAfterRun})`,
     ).toBe(true);
 
-    // 5. Flush outbox → 上报 Manager。
+    // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
     const flushResp = await request.post(`${agentOrigin}/api/agent/usage/flush`, {
       headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
       failOnStatusCode: false,
@@ -254,11 +256,20 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       data: { sent: number; failed: number; batches: number };
     };
     expect(flushBody, "flush envelope has data").toHaveProperty("data");
-    // 至少有一次发送尝试（batch > 0）；Manager 不可达时 sent=0/failed>0 也算尽力而为。
-    const totalAttempted = flushBody.data.sent + flushBody.data.failed + flushBody.data.batches;
-    expect(totalAttempted, `flush must attempt at least one batch`).toBeGreaterThan(0);
 
-    // 6. Flush 后 outbox pending 应减少（sent 条目不再 pending）。
+    // Manager 不可达时 reporter 会标记 failed，但 batch 仍 >0。在完整三端栈 CI 中 sent 应 >0。
+    // 若 sent===0 且 failed>0，说明 Manager 不可达——CI 应 fail（三端栈不全）。
+    const { sent, failed, batches } = flushBody.data;
+    expect(batches, "flush 至少发起一批").toBeGreaterThan(0);
+    if (failed > 0 && sent === 0) {
+      // Manager 不可达：在完整三端栈 CI 中此为失败信号。
+      throw new Error(
+        `flush failed to reach Manager: sent=${sent} failed=${failed} batches=${batches}。确认 MANAGER_URL 可达且三端栈已启动。`,
+      );
+    }
+    expect(sent, `flush sent 应 > 0 (failed=${failed} batches=${batches})`).toBeGreaterThan(0);
+
+    // ── 阶段 5/6: Flush 后 outbox pending 减少（sent 出队）──
     const afterFlushResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
@@ -270,42 +281,43 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       pendingAfterFlush <= pendingAfterRun,
       `flush 后 pending 应 ≤ run 后 (afterRun=${pendingAfterRun}, afterFlush=${pendingAfterFlush})`,
     ).toBe(true);
-  });
 
-  test("Manager rollup/list 在 Agent usage flush 后可观测到数据（跨端传播闭环）", async ({
-    request,
-  }) => {
-    // 前提：Agent 端已完成 conversation+run+flush（前一条 test 已触发）。
-    // 本 test 验证 Manager 端 rollup 聚合端点：
-    // 1. list 可用且含脱敏 summary_id/employee_id 字段
-    // 2. 记录不含会话内容键名（D13）
-    const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
-    const mgrOrigin = TIER_API_ORIGIN.manager;
-
-    const resp = await request.get(`${mgrOrigin}/api/manager/usage/rollup/list`, {
+    // ── 阶段 6/6: Manager rollup 收端可见性验证 ──
+    // 上一步 flush 已将脱敏 summary 上报 Manager；Manager 端 rollup 聚合应可见该增量。
+    const rollupResp = await request.get(`${mgrOrigin}/api/manager/usage/rollup/list`, {
       headers: { Authorization: `Bearer ${mgrLogin.token}` },
       failOnStatusCode: false,
     });
-    expect(resp.ok(), `rollup list: ${resp.status()}`).toBe(true);
+    expect(rollupResp.ok(), `rollup list: ${rollupResp.status()}`).toBe(true);
 
-    const body = (await resp.json()) as { data: Array<Record<string, unknown>>; page?: unknown };
-    expect(Array.isArray(body.data), "rollup list data is array").toBe(true);
-    expect(body, "rollup list has page").toHaveProperty("page");
+    const rollupBody = (await rollupResp.json()) as {
+      data: Array<Record<string, unknown>>;
+      page?: unknown;
+    };
+    expect(Array.isArray(rollupBody.data), "rollup list data is array").toBe(true);
+    expect(rollupBody, "rollup list has page").toHaveProperty("page");
 
-    // Manager 收端应已收到 Agent 上报的脱敏摘要（至少一条 rollup）。
-    // 若无数据，说明 flush 未成功到达 Manager——在完整三端栈 CI 中应 fail。
-    expect(body.data.length, "Manager rollup list 应有至少一条记录（Agent 上报已到达）").toBeGreaterThan(0);
+    // 按 run_id / employee_id 精确定位本次 flush 产生的 records（非任意历史数据）。
+    // run_id 在 outbox summary 中以 employee_id 或 run_id 形式出现。
+    const matchingRecords = rollupBody.data.filter((r) => {
+      if (employeeId && r.employee_id === employeeId) return true;
+      // summary_id 包含 run_id 前缀或完整 run_id
+      if (typeof r.summary_id === "string" && r.summary_id.includes(runId)) return true;
+      return false;
+    });
+    expect(
+      matchingRecords.length,
+      `Manager rollup 中应含至少一条 run_id="${runId}" 匹配记录（本轮 Agent 上报）`,
+    ).toBeGreaterThan(0);
 
-    // 逐条验证脱敏契约：含 summary_id/employee_id，不含会话内容。
+    // D13：每条 matching record 必须含脱敏标识字段（summary_id/rollup_id），且不含会话内容键名。
     const forbiddenKeys = [
       "prompt", "completion", "messages", "conversation_text",
       "file_content", "tool_input", "tool_output",
     ];
-    for (const record of body.data) {
-      expect(
-        "summary_id" in record || "rollup_id" in record,
-        "每条 rollup 记录含 summary_id 或 rollup_id",
-      ).toBe(true);
+    for (const record of matchingRecords) {
+      const hasIdField = "summary_id" in record || "rollup_id" in record;
+      expect(hasIdField, `rollup record 含 summary_id 或 rollup_id`).toBe(true);
       for (const key of forbiddenKeys) {
         expect(record, `rollup record must not contain "${key}"`).not.toHaveProperty(key);
       }
