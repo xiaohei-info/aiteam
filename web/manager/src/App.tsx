@@ -1,10 +1,3 @@
-/**
- * 企业端根路由：登录页 + 受保护区（AppShell 内的业务页占位）。
- *
- * /login 公开；其余经 RequireAuth 门控（未登录跳 /login）。
- * 企业端业务面（成员账号 / 招募专家 / 成员级授权 / 企业治理，见 08 §12.1）由后续卡接入真实页面，
- * 当前脚手架放占位，并按企业角色（owner/enterprise_admin/finance_admin/member）门控导航。
- */
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./shell";
 import { RequireAuth } from "./auth/RequireAuth";
@@ -17,18 +10,20 @@ import { GovernancePage } from "./features/governance";
 import { ProvidersPage } from "./features/providers";
 import { KnowledgePage } from "./features/knowledge";
 import { CapabilityPage } from "./features/capability";
+import { BillingPage } from "./features/billing";
+import { LlmPage } from "./features/llm";
+import { MemoryPage } from "./features/memory-items";
+import { ConnectorsPage } from "./features/connectors";
+import { OrgPage } from "./features/org";
+import { CollaborationPage } from "./features/collaboration";
+import { AuditPage } from "./features/audit";
+import { SettingsPage } from "./features/settings";
 
 export function App(): React.ReactNode {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route
-        element={
-          <RequireAuth>
-            <AppShell />
-          </RequireAuth>
-        }
-      >
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/members" element={<MembersPage />} />
         <Route path="/experts" element={<ExpertsPage />} />
@@ -37,6 +32,14 @@ export function App(): React.ReactNode {
         <Route path="/providers" element={<ProvidersPage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
+        <Route path="/billing" element={<BillingPage />} />
+        <Route path="/llm" element={<LlmPage />} />
+        <Route path="/memory" element={<MemoryPage />} />
+        <Route path="/connectors" element={<ConnectorsPage />} />
+        <Route path="/org" element={<OrgPage />} />
+        <Route path="/collaboration" element={<CollaborationPage />} />
+        <Route path="/audit" element={<AuditPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
