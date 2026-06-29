@@ -3,3 +3,7 @@ dist/
 *.tsbuildinfo
 coverage/
 .vite/
+# AITEAM-224 Playwright BE2E harness 临时态（不入仓）
+.auth/
+test-results/
+playwright-report/

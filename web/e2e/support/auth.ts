@@ -1,0 +1,192 @@
+/**
+ * AITEAM-224 可复用认证 harness（最终执行 DAG §5.1 BE2E 基座）。
+ *
+ * 三端登录收敛到本模块：凭据来源、storageState 路径、页面登录 / API 登录统一出口。
+ * 各端前端只调本端 `/api/<tier>/*` 与 `/api/auth/*`（08 §12.2），不跨端直调、不直绑
+ * Hermes Runtime 内部对象——本 harness 经前端真实登录链拿 token，复现用户路径。
+ *
+ * storageState：globalSetup 用本模块的 API 登录产出 `storageState.<tier>.json`，
+ * 各端 spec 经 fixtures 注入后即"已登录"，跳过每用例重复登录（Playwright 官方模式）。
+ * 本地无 storageState（首跑 / 凭据变更）时，fixtures 回退到页面登录实时产出。
+ */
+
+import { type APIRequestContext, type Page, expect } from "@playwright/test";
+import { join } from "node:path";
+
+/** 三端 tier（对齐 @aiteam/shared ApiClient.Tier / 后端 §4 命名映射）。 */
+export type Tier = "operation" | "manager" | "agent";
+
+/** 前端 dev server 基址（对齐 playwright.config.ts projects.use.baseURL）。 */
+export const TIER_BASE_URL: Record<Tier, string> = {
+  operation: "http://127.0.0.1:5173",
+  manager: "http://127.0.0.1:5174",
+  agent: "http://127.0.0.1:5180",
+};
+
+/** 后端服务 origin（对齐 playwright.config.ts webServer 端口）。 */
+export const TIER_API_ORIGIN: Record<Tier, string> = {
+  operation: "http://127.0.0.1:8000",
+  manager: "http://127.0.0.1:8001",
+  agent: "http://127.0.0.1:8180",
+};
+
+/**
+ * 前端 localStorage token key（对齐各端 AppProviders / token-store）。
+ * storageState 只需持久化本 key（+ agent 端 claims key），其余为浏览器运行态。
+ */
+export const TOKEN_STORAGE_KEY: Record<Tier, string> = {
+  operation: "aiteam.operation.token",
+  manager: "aiteam.manager.token",
+  agent: "aiteam.agent.token",
+};
+
+/** agent 端额外持久化的 claims key（对齐 agent/src/lib/token-store.ts）。 */
+export const AGENT_CLAIMS_STORAGE_KEY = "aiteam.agent.claims";
+
+/** storageState 落盘根目录（gitignored 临时态，不入仓）。 */
+export const STORAGE_STATE_DIR = join(process.cwd(), ".auth");
+
+/** storageState 文件路径：globalSetup 产出 / fixtures 注入的单一事实源。 */
+export function storageStatePath(tier: Tier): string {
+  return join(STORAGE_STATE_DIR, `storageState.${tier}.json`);
+}
+
+/** 各端默认凭据（dev/单机部署 SOP 口径，对齐 .env.example 与 conftest）。 */
+export interface TierCredentials {
+  /** operation: username + password；manager/agent: account(phone) + password + tenant_id。 */
+  username?: string;
+  account?: string;
+  password: string;
+  tenant_id?: string;
+}
+
+/**
+ * 默认凭据。operation 取 env（与 server/conftest 同源默认）。
+ * manager/agent 取 globalSetup 注入的 E2E 租户成员账号（见 globalSetup.ts）。
+ * 凭据经 env 覆盖（E2E_OPERATION_USERNAME 等），便于不同部署复用同一 harness。
+ */
+export function defaultCredentials(tier: Tier): TierCredentials {
+  if (tier === "operation") {
+    return {
+      username: process.env.E2E_OPERATION_USERNAME ?? "sysadmin",
+      password: process.env.E2E_OPERATION_PASSWORD ?? "changeme-me",
+    };
+  }
+  const tenantId = process.env.E2E_TENANT_ID ?? "00000000-0000-0000-0000-00000000e2e0";
+  const phone = process.env.E2E_MEMBER_ACCOUNT ?? "13800000001";
+  const password = process.env.E2E_MEMBER_PASSWORD ?? "E2e-Pass-2024";
+  return { account: phone, password, tenant_id: tenantId };
+}
+
+/** operation 登录入参（对齐 server SystemLoginInput）。 */
+interface OperationLoginInput {
+  username: string;
+  password: string;
+}
+/** manager 登录入参（对齐 server LoginInput，extra="forbid"）。 */
+interface ManagerLoginInput {
+  tenant_id: string;
+  account: string;
+  password: string;
+}
+/** agent 登录入参（对齐 server LoginRequest）。 */
+interface AgentLoginInput {
+  account: string;
+  password: string;
+  tenant_hint?: string;
+}
+
+/** 各端登录返回 envelope.data 的最小形状（只需 token，agent 额外 claims）。 */
+interface LoginResult {
+  token: string;
+  claims?: Record<string, unknown>;
+}
+
+/** 各端登录 API 路径（对齐前端 LoginPage 真实调用）。 */
+const LOGIN_PATH: Record<Tier, string> = {
+  operation: "/api/operation/auth/login",
+  manager: "/api/auth/login",
+  agent: "/api/agent/login",
+};
+
+/**
+ * API 登录（不经浏览器，直接打后端 login 端点）。globalSetup 用它产出 storageState。
+ * 返回 token（agent 连同 claims）。凭据错误抛非 2xx（由调用方断言）。
+ */
+export async function apiLogin(
+  request: APIRequestContext,
+  tier: Tier,
+  creds: TierCredentials = defaultCredentials(tier),
+): Promise<LoginResult> {
+  const origin = TIER_API_ORIGIN[tier];
+  let body: OperationLoginInput | ManagerLoginInput | AgentLoginInput;
+  if (tier === "operation") {
+    body = { username: creds.username ?? "", password: creds.password };
+  } else if (tier === "manager") {
+    body = { tenant_id: creds.tenant_id ?? "", account: creds.account ?? "", password: creds.password };
+  } else {
+    body = { account: creds.account ?? "", password: creds.password, tenant_hint: creds.tenant_id };
+  }
+  const response = await request.post(`${origin}${LOGIN_PATH[tier]}`, {
+    data: body,
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+  });
+  expect(response.ok(), `${tier} api login failed: ${response.status()}`).toBeTruthy();
+  const payload = (await response.json()) as { data: LoginResult };
+  expect(payload.data?.token, `${tier} login envelope missing token`).toBeTruthy();
+  return payload.data;
+}
+
+/**
+ * 页面登录（经前端真实 LoginPage 表单）。复现用户真实路径，验证前端登录链贯通。
+ * 登录成功后 token 自动写入 localStorage（由前端 AppProviders/signIn 负责）。
+ */
+export async function loginViaPage(
+  page: Page,
+  tier: Tier,
+  creds: TierCredentials = defaultCredentials(tier),
+): Promise<void> {
+  await page.goto("/login");
+  const form = page.getByTestId("login-form").or(page.locator("form"));
+  await expect(form.first()).toBeVisible();
+
+  // 三端 LoginPage 字段结构有差异（operation/manager 用 Field+Input，agent 用裸 label+input）。
+  // 按 input 元素类型与顺序稳健定位，不依赖 testid / htmlFor / getByLabel。
+  const textInputs = form.locator("input[type=text], input:not([type])");
+  const passwordInput = form.locator("input[type=password]");
+
+  // manager/agent 有租户字段（第一个 text input）；operation 只有 username。
+  if (tier !== "operation" && creds.tenant_id) {
+    await textInputs.first().fill(creds.tenant_id);
+  }
+  // 账号/用户名：operation 是第一个 text input；manager/agent 是第二个（第一个是 tenant）。
+  const accountIndex = tier === "operation" ? 0 : 1;
+  await textInputs.nth(accountIndex).fill(creds.username ?? creds.account ?? "");
+  await passwordInput.first().fill(creds.password);
+  await form.locator("button[type=submit]").first().click();
+
+  // 登录成功后前端跳离 /login（RequireAuth 放行）；失败留在 /login。
+  await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * 构造某 tier 已登录的 storageState 对象（内存态，供 APIRequestContext.storageState 直接用）。
+ * 只持久化 token（+ agent claims），不带无关浏览器态——最小必要。
+ */
+export function buildStorageState(
+  tier: Tier,
+  token: string,
+  claims?: Record<string, unknown>,
+): {
+  cookies: never[];
+  origins: Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }>;
+} {
+  const origin = TIER_BASE_URL[tier];
+  const localStorage: Array<{ name: string; value: string }> = [
+    { name: TOKEN_STORAGE_KEY[tier], value: token },
+  ];
+  if (tier === "agent" && claims) {
+    localStorage.push({ name: AGENT_CLAIMS_STORAGE_KEY, value: JSON.stringify(claims) });
+  }
+  return { cookies: [], origins: [{ origin, localStorage }] };
+}
