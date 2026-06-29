@@ -55,6 +55,11 @@ export default defineConfig({
       testMatch: /agent\/.*\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5180" },
     },
+    {
+      name: "cross-tier",
+      testMatch: /cross-tier\/.*\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+    },
   ],
   webServer: [
     {
