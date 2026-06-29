@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { ARTIFACT_OUTPUT_DIR, artifactReporter, artifactUse } from "./e2e/support/artifacts";
 
 const isCI = Boolean(process.env.CI);
 
@@ -7,12 +8,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: isCI,
   retries: isCI ? 1 : 0,
-  reporter: isCI ? [["html", { outputFolder: "playwright-report", open: "never" }], ["list"]] : "list",
-  outputDir: "test-results",
+  // P1-F5 artifact 基线集中在 e2e/support/artifacts.ts（report/trace/screenshot/video）。
+  reporter: artifactReporter(isCI),
+  outputDir: ARTIFACT_OUTPUT_DIR,
   use: {
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    ...artifactUse(),
   },
   projects: [
     {

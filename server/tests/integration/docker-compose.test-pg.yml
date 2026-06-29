@@ -1,0 +1,21 @@
+# Reviewer / 本地可复跑的测试 PG（与 .github/workflows/ci.yml 的 integration job 同口径）。
+#
+# 库名必须是 manager_control_db：0001 迁移硬编码 `GRANT CONNECT ON DATABASE manager_control_db`。
+# 两类连接（#60）：管理连接（postgres 超管，跑迁移/建角色/DDL）+ 业务连接（app_rw 受 RLS）。
+# app_rw 的 LOGIN 口令由 apply_migrations 用 APP_RW_PASSWORD 幂等下发（不入迁移脚本）。
+#
+# 用法见同目录 README.md。
+services:
+  test-pg:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: manager_control_db
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d manager_control_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
