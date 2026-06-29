@@ -36,11 +36,11 @@ test -f docs/ci/troubleshooting.md && test -f docs/ci/runbook.md
 
 ### G3 命令等价
 
-contract 的 `pnpm e2e --project=chromium` 是"chromium 浏览器 gate"的通用标签。`web/playwright.config.ts` 的所有 e2e project（harness / operation-smoke / manager-smoke / agent-smoke / cross-tier）均固定 `devices["Desktop Chrome"]`（chromium），不存在非 chromium project，也没有名为 `chromium` 的 project。因此：
+contract 的 `pnpm e2e --project=chromium` 是"chromium 浏览器 gate"的通用标签。`web/playwright.config.ts` 的所有 e2e project（harness / operation-smoke / manager-smoke / agent-smoke / cross-tier）默认使用 chromium（Desktop Chrome），不存在名为 `chromium` 的 project。因此：
 
 - 实际 gate 命令 = `pnpm e2e`（跑全部 chromium smoke project）。
 - `pnpm e2e --project=chromium` 在本仓库会因无同名 project 而选 0 用例；**不要直接用**。要限定单端，用 `--project=operation-smoke|manager-smoke|agent-smoke|cross-tier`。
-- 多浏览器（firefox/webkit）是 G4 nightly 职责，经 `pnpm e2e --browser=<browser>` 覆盖（见下）。
+- 多浏览器（firefox/webkit）是 G4 nightly 职责，经 `AITEAM_E2E_BROWSER=<browser> pnpm e2e` 覆盖（见下）。不要使用 `--browser=<browser>`；Playwright 在配置文件已定义 projects 时会拒绝该参数。
 
 ## artifact 获取
 
@@ -108,9 +108,9 @@ pnpm e2e                 # chromium gate（全部 smoke project）
 ```bash
 cd web
 pnpm exec playwright install              # 装全部浏览器
-pnpm e2e --browser=chromium
-pnpm e2e --browser=firefox
-pnpm e2e --browser=webkit
+AITEAM_E2E_BROWSER=chromium pnpm e2e
+AITEAM_E2E_BROWSER=firefox pnpm e2e
+AITEAM_E2E_BROWSER=webkit pnpm e2e
 ```
 big-data：`cd server && AITEAM_NIGHTLY_BIG_DATA=1 pytest -q -m integration --timeout=600`。
 

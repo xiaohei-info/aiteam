@@ -66,7 +66,9 @@ jobs:
 
       - name: Nightly E2E — ${{ matrix.browser }}
         working-directory: web
-        run: pnpm e2e --browser=${{ matrix.browser }}
+        env:
+          AITEAM_E2E_BROWSER: ${{ matrix.browser }}
+        run: pnpm e2e
 
       - name: Upload report
         if: always()
@@ -145,4 +147,6 @@ jobs:
         run: pnpm --filter @aiteam/shared run build
       - name: Performance observation run (non-blocking)
         working-directory: web
-        run: pnpm e2e --browser=chromium
+        env:
+          AITEAM_E2E_BROWSER: chromium
+        run: pnpm e2e

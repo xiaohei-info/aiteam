@@ -30,19 +30,19 @@ G1（pr_quick 子集）与 G2（全量 integration）都跑 `server/` 下 `@pyte
 
 ## G3：web 浏览器 E2E（chromium）
 
-`web-ci.yml:playwright-smoke` 跑 `pnpm e2e`，`web/playwright.config.ts` 的所有 project（harness / operation-smoke / manager-smoke / agent-smoke / cross-tier）均用 `devices["Desktop Chrome"]`，即 chromium gate。
+`web-ci.yml:playwright-smoke` 跑 `pnpm e2e`，`web/playwright.config.ts` 的所有 project（harness / operation-smoke / manager-smoke / agent-smoke / cross-tier）默认使用 chromium（Desktop Chrome），即 G3 chromium gate。G4 nightly 通过 `AITEAM_E2E_BROWSER=firefox|webkit` 复用同一组 project 做多浏览器观察。
 
 - **webServer 起不来**：配置拉起三端后端（`server/run.py --tier operation|manager|agent`）+ 三端前端 dev server。manager 需 `DB_URL/ADMIN_DB_URL`；agent 需 `MANAGER_URL`。看 `web/test-results/` 下 stderr。
 - **`pnpm --filter @aiteam/shared run build` 失败**：消费端经 exports 解析 `@aiteam/shared/*` 到 `shared/dist`，typecheck/test/e2e 前必须先产出 shared dist。
 - **globalSetup 失败**：seed E2E 租户 + 三端登录产出 storageState。看 globalSetup 日志，通常是 DB 不可达或运营端凭据错。
 - **chromium 未装**：CI 跑 `pnpm exec playwright install --with-deps chromium`；本地同样。
-- **`--project=chromium` 语义**：contract 的 `pnpm e2e --project=chromium` 是"chromium 浏览器 gate"的通用标签。本项目所有 e2e project 已固定 chromium（`Desktop Chrome`），无独立 `chromium` project；等价命令为 `pnpm e2e`（详见 runbook §"G3 命令等价"）。
+- **`--project=chromium` 语义**：contract 的 `pnpm e2e --project=chromium` 是"chromium 浏览器 gate"的通用标签。本项目所有 e2e project 默认使用 chromium（`Desktop Chrome`），无独立 `chromium` project；等价命令为 `pnpm e2e`（详见 runbook §"G3 命令等价"）。
 
 ## G4：nightly 失败
 
 - **不阻断 PR**：nightly 是独立 workflow，PR 不触发它；所有 job `continue-on-error: true`。
 - **连续 3 天失败 → P0**：见 runbook §"G4 连续失败升级 P0"。
-- **多浏览器某款挂**：`fail-fast: false`，单浏览器失败不拖垮整轮。看对应 `nightly-playwright-<browser>` artifact。
+- **多浏览器某款挂**：`fail-fast: false`，单浏览器失败不拖垮整轮。看对应 `nightly-playwright-<browser>` artifact。本仓库使用 `AITEAM_E2E_BROWSER=<browser> pnpm e2e`；不要改回 `pnpm e2e --browser=<browser>`，后者与已定义 projects 的 Playwright config 不兼容。
 - **big-data / perf job 挂**：观察性 job，失败只影响趋势，不升级除非连续 3 天。
 
 ## G5：pre-deploy 失败
