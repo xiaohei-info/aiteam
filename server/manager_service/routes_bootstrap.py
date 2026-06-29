@@ -11,12 +11,24 @@ from fastapi import APIRouter, Depends, Request, status
 
 from shared.contracts.crosstier import OwnerBootstrapSync
 from shared.contracts.envelope import Envelope
-from shared.errors import Conflict
+from shared.errors import Conflict, NotFound
 from shared.service_token import verify_service_token
 
 from .exceptions import ManagerAdminDbNotConfigured
 
 router = APIRouter(tags=["manager", "control-plane"])
+
+
+def _tenant_exists(admin_db_url: str, tenant_id: str) -> bool:
+    """Return whether the control-plane tenant has been provisioned."""
+    import psycopg
+
+    with psycopg.connect(admin_db_url, autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
+            (tenant_id,),
+        ).fetchone()
+    return row is not None
 
 
 @router.post(
@@ -35,6 +47,9 @@ def owner_bootstrap(
     admin_db_url = settings.admin_db_url
     if not db_url or not admin_db_url:
         raise ManagerAdminDbNotConfigured("Manager DB 未配置（设置 DB_URL 与 ADMIN_DB_URL）")
+
+    if not _tenant_exists(admin_db_url, body.tenant_id):
+        raise NotFound("tenant not found")
 
     from manager_service.auth_service import build_auth_service
 

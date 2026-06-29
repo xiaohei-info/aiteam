@@ -21,14 +21,10 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.integration
-def test_bootstrap_to_nonexistent_tenant(
+def test_bootstrap_to_nonexistent_tenant_rejected(
     tenant_scope, service_token_headers,
 ):
-    """F02 bootstrap 到不存在的 tenant → 不应该静默成功。
-
-    实际行为取决于 auth_service 实现——如果在不存在的 RLS 会话中无法创建 identity，
-    应产生错误而非静默挂起。
-    """
+    """F02 bootstrap 到不存在的 tenant → 404 problem+json，且不创建 owner。"""
     from manager_service.app import app as manager_app
 
     fake_tenant_id = str(uuid.uuid4())
@@ -43,13 +39,61 @@ def test_bootstrap_to_nonexistent_tenant(
         },
         headers=service_token_headers,
     )
-    # 不存在的 tenant——RLS 会话可能无法建 identity
-    # 不应返回 201（成功），应为 4xx/5xx
-    assert resp.status_code == 201, (
-        f"F02 对不存在 tenant 的 bootstrap 当前返回 201（tenant_registry 未校验）: {resp.text}"
+    assert resp.status_code == 404, (
+        f"不存在 tenant 的 bootstrap 应被拒绝，实际: {resp.status_code} body={resp.text}"
     )
     ct = resp.headers.get("content-type", "")
-    assert "text/html" not in ct, f"错误响应不应为 text/html: {ct}"
+    assert ct.startswith("application/problem+json"), f"错误响应应为 problem+json: {ct}"
+    assert resp.json()["code"] == "not_found"
+
+
+@pytest.mark.integration
+def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
+    tenant_scope, service_token_headers,
+):
+    """有效 tenant A 存在时，向未开通 tenant B bootstrap 被拒，A 不被污染。"""
+    import psycopg
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    tenant_a = str(uuid.uuid4())
+    tenant_b = str(uuid.uuid4())
+    phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+
+    r1 = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": tenant_a,
+            "enterprise_name": "Tenant A",
+            "enterprise_code": f"ta_{uuid.uuid4().hex[:6]}",
+        },
+        headers=service_token_headers,
+    )
+    assert r1.status_code == 201
+
+    resp = client.post(
+        "/api/manager/owner-bootstrap",
+        json={
+            "tenant_id": tenant_b,
+            "owner_phone": phone,
+            "bootstrap_secret": "cross-secret",
+            "must_reset": True,
+        },
+        headers=service_token_headers,
+    )
+    assert resp.status_code == 404
+    assert resp.headers.get("content-type", "").startswith("application/problem+json")
+
+    admin_url = os.getenv("ADMIN_DB_URL")
+    if admin_url:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND external_id = %s",
+                (tenant_b, phone),
+            ).fetchone()
+            assert row is None
+            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tenant_a,))
 
 
 # ── service token 负例（不 fail-open） ──
