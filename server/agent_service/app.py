@@ -160,7 +160,7 @@ def build_app(
         runs_root=settings.agent_runs_root,
         runtime_env_passthrough=settings.agent_runtime_env_passthrough,
     )
-    app.include_router(build_mainline_router(mainline))
+    app.include_router(build_mainline_router(mainline, identity_provider=login_service.current_identity))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline, db=db)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
     # 生产可配置自启动 loop 调度后台循环（#173）；默认否，dev/测试用手动触发端点。

@@ -53,6 +53,7 @@ def get_manager_gateway() -> ManagerGateway:
     client = ServiceClient(
         settings.manager_url or "http://manager.invalid",
         service_identity=settings.service_name,
+        service_token=settings.service_token,
     )
     return HttpManagerGateway(client)
 

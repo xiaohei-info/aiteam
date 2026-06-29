@@ -17,7 +17,7 @@ from shared.contracts.crosstier import UsageSummaryUpload
 from shared.errors import AppError
 from shared.service_client import ServiceClient
 
-_UPLOAD_PATH = "/api/manager/usage/summary"
+_UPLOAD_PATH = "/api/manager/usage/upload"
 
 
 class ManagerUsageClient(Protocol):

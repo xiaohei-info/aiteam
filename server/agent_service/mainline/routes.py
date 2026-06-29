@@ -11,11 +11,13 @@ BusinessTimelineEvent + 瞬时 display 镜像，绝不下发 runtime 原生事�
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import ConversationState
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.events import BusinessTimelineEvent
@@ -90,7 +92,11 @@ async def sse_event_stream(service: MainlineService, conversation_id: str, after
             yield _sse(frame_to_dict(frame))
 
 
-def build_mainline_router(service: MainlineService) -> APIRouter:
+def build_mainline_router(
+    service: MainlineService,
+    *,
+    identity_provider: Callable[[], TokenClaims | None] | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-mainline"])
 
     # ---- conversation ----
@@ -131,8 +137,12 @@ def build_mainline_router(service: MainlineService) -> APIRouter:
     @router.post("/conversations/{conversation_id}/runs", summary="起 run（驱动 runtime）",
                  operation_id="agent_start_run")
     async def start_run(conversation_id: str, req: StartRunRequest) -> Envelope[Run]:
+        claims = identity_provider() if identity_provider is not None else None
         run = await service.start_run(
-            conversation_id, task_id=req.task_id, run_spec=req.run_spec
+            conversation_id,
+            task_id=req.task_id,
+            run_spec=req.run_spec,
+            tenant_id=claims.tenant_id if claims is not None else None,
         )
         return Envelope[Run](data=run)
 

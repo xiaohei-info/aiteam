@@ -55,7 +55,7 @@ def test_usage_client_wired_when_manager_url_configured():
 
     def mock_handler(request: httpx.Request) -> httpx.Response:
         # 模拟 Manager 接收 usage 上报
-        if "/usage/summary" in str(request.url):
+        if "/usage/upload" in str(request.url):
             return httpx.Response(204)  # 成功无 body
         return httpx.Response(404)
 

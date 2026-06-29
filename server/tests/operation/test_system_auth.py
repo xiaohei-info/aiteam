@@ -33,6 +33,17 @@ def test_system_login_unknown_user_401():
     assert r.status_code == 401
 
 
+def test_system_login_rejects_service_token_header():
+    client = _client()
+    r = client.post(
+        "/api/operation/auth/login",
+        json={"username": "sysadmin", "password": "changeme-me"},
+        headers={"X-Service-Token": "test-service-token"},
+    )
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("application/problem+json")
+
+
 def test_system_login_returns_rs256_token():
     client = _client()
     token = _login(client)

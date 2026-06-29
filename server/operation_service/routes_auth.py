@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from shared.contracts.envelope import Envelope
+from shared.errors import Unauthorized
 
 from .auth_service import OperationAuthService, SystemAuthResult, SystemLoginInput
 
@@ -34,6 +35,9 @@ def _service(request: Request) -> OperationAuthService:
 @router.post("/login", summary="系统账号登录（公开端点）", operation_id="operation_system_login")
 async def login(body: SystemLoginInput, request: Request) -> Response:
     from fastapi.responses import JSONResponse
+
+    if request.headers.get("X-Service-Token") is not None:
+        raise Unauthorized("service token is not accepted on auth endpoints")
 
     result: SystemAuthResult = _service(request).login(body)
     envelope = Envelope[SystemAuthResult].model_validate({"data": result})

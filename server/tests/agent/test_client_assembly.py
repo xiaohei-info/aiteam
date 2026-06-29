@@ -117,7 +117,7 @@ def test_build_app_with_real_clients_when_manager_url_configured():
                     }
                 },
             )
-        if "/usage/summary" in url:
+        if "/usage/upload" in url:
             return httpx.Response(204)
         return httpx.Response(404)
 
