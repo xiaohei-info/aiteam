@@ -21,6 +21,36 @@ import {
   expectListEnvelope,
 } from "../support/api-assertions";
 
+type UsageOutboxItem = {
+  summary_id?: string;
+  kind?: string;
+  usage?: Record<string, unknown> | null;
+  updated_at?: string;
+};
+
+function usageOutboxItems(data: unknown): UsageOutboxItem[] {
+  if (!Array.isArray(data)) return [];
+  return data.filter((item): item is UsageOutboxItem => {
+    if (typeof item !== "object" || item === null) return false;
+    const record = item as UsageOutboxItem;
+    return record.kind === "usage" && typeof summaryId(record) === "string";
+  });
+}
+
+function summaryId(item: UsageOutboxItem): string | undefined {
+  const nested = item.usage?.summary_id;
+  if (typeof nested === "string") return nested;
+  return typeof item.summary_id === "string" ? item.summary_id : undefined;
+}
+
+function outboxFingerprint(item: UsageOutboxItem): string {
+  return JSON.stringify({
+    summary_id: summaryId(item),
+    usage: item.usage ?? null,
+    updated_at: item.updated_at ?? null,
+  });
+}
+
 // ── Loop-C usage audit flow（跨端）──
 
 test.describe("Loop-C usage audit flow（跨端）", () => {
@@ -185,12 +215,12 @@ test.describe("Loop-C usage audit 跨端数据隔离", () => {
 });
 
 test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播", () => {
-  test("Agent create conversation + run → outbox 产生 usage → flush sent>0 → Manager rollup 观测到增量", async ({
+  test("Agent create conversation + run → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
     request,
   }) => {
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
-    // Agent create conversation → message → run → outbox 增长 → flush sent>0 →
-    // 取 run 返回的 run_id 在 Manager rollup 中按 employee+窗口验证可见性。
+    // Agent create conversation → message → run → outbox summary 写入/更新 → flush sent>0 →
+    // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。
 
     const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
     const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
@@ -205,6 +235,10 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     expect(beforeResp.ok(), `outbox read: ${beforeResp.status()}`).toBe(true);
     const beforeBody = (await beforeResp.json()) as { data: unknown[] };
     const pendingBefore = Array.isArray(beforeBody.data) ? beforeBody.data.length : 0;
+    const usageBefore = usageOutboxItems(beforeBody.data);
+    const beforeBySummaryId = new Map(
+      usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
+    );
 
     // ── 阶段 2/6: 创建会话 + 发消息 + 起 run（FakeRuntime 产生 usage → UsageRecorder 入 outbox）──
     const traceId = `e2e-loopc-${Date.now()}`;
@@ -229,11 +263,10 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       failOnStatusCode: false,
     });
     expect(runResp.ok(), `start run: ${runResp.status()}`).toBe(true);
-    const runBody = (await runResp.json()) as { data: { id: string; employee_id?: string } };
+    const runBody = (await runResp.json()) as { data: { id: string } };
     const runId = runBody.data.id;
-    const employeeId = runBody.data.employee_id ?? undefined;
 
-    // ── 阶段 3/6: 验证 outbox pending 增长 → run 的 usage 已入队 ──
+    // ── 阶段 3/6: 捕获本轮 run 写入/更新的 pending usage summary_id ──
     const afterRunResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
@@ -241,10 +274,18 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     expect(afterRunResp.ok(), `outbox read after run: ${afterRunResp.status()}`).toBe(true);
     const afterRunBody = (await afterRunResp.json()) as { data: unknown[] };
     const pendingAfterRun = Array.isArray(afterRunBody.data) ? afterRunBody.data.length : 0;
+    const usageAfterRun = usageOutboxItems(afterRunBody.data);
+    const changedUsageItems = usageAfterRun.filter((item) => {
+      const id = summaryId(item);
+      return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
+    });
+    const flushedSummaryIds = new Set(
+      changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
+    );
     expect(
-      pendingAfterRun > pendingBefore,
-      `run 后 outbox pending 应增长 (before=${pendingBefore}, after=${pendingAfterRun})`,
-    ).toBe(true);
+      flushedSummaryIds.size,
+      `run ${runId} 后 outbox 应新增或更新至少一条 usage summary (pending before=${pendingBefore}, after=${pendingAfterRun})`,
+    ).toBeGreaterThan(0);
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
     const flushResp = await request.post(`${agentOrigin}/api/agent/usage/flush`, {
@@ -269,7 +310,7 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     }
     expect(sent, `flush sent 应 > 0 (failed=${failed} batches=${batches})`).toBeGreaterThan(0);
 
-    // ── 阶段 5/6: Flush 后 outbox pending 减少（sent 出队）──
+    // ── 阶段 5/6: Flush 后本轮 summary 不再 pending（sent 出队）──
     const afterFlushResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
@@ -281,6 +322,13 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       pendingAfterFlush <= pendingAfterRun,
       `flush 后 pending 应 ≤ run 后 (afterRun=${pendingAfterRun}, afterFlush=${pendingAfterFlush})`,
     ).toBe(true);
+    const remainingFlushedIds = usageOutboxItems(afterFlushBody.data)
+      .map((item) => summaryId(item))
+      .filter((id): id is string => Boolean(id) && flushedSummaryIds.has(id));
+    expect(
+      remainingFlushedIds,
+      `flush sent 后本轮 summary_id 不应继续 pending: ${remainingFlushedIds.join(", ")}`,
+    ).toHaveLength(0);
 
     // ── 阶段 6/6: Manager rollup 收端可见性验证 ──
     // 上一步 flush 已将脱敏 summary 上报 Manager；Manager 端 rollup 聚合应可见该增量。
@@ -297,17 +345,13 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     expect(Array.isArray(rollupBody.data), "rollup list data is array").toBe(true);
     expect(rollupBody, "rollup list has page").toHaveProperty("page");
 
-    // 按 run_id / employee_id 精确定位本次 flush 产生的 records（非任意历史数据）。
-    // run_id 在 outbox summary 中以 employee_id 或 run_id 形式出现。
+    // 按 outbox/Manager 共享的 summary_id 精确定位本次 flush 发送的 records（非任意历史数据）。
     const matchingRecords = rollupBody.data.filter((r) => {
-      if (employeeId && r.employee_id === employeeId) return true;
-      // summary_id 包含 run_id 前缀或完整 run_id
-      if (typeof r.summary_id === "string" && r.summary_id.includes(runId)) return true;
-      return false;
+      return typeof r.summary_id === "string" && flushedSummaryIds.has(r.summary_id);
     });
     expect(
       matchingRecords.length,
-      `Manager rollup 中应含至少一条 run_id="${runId}" 匹配记录（本轮 Agent 上报）`,
+      `Manager rollup 中应含本轮 flush 的 summary_id: ${[...flushedSummaryIds].join(", ")}`,
     ).toBeGreaterThan(0);
 
     // D13：每条 matching record 必须含脱敏标识字段（summary_id/rollup_id），且不含会话内容键名。
