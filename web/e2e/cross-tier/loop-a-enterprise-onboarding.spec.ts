@@ -53,11 +53,12 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
   test("Operator 开通企业 → Manager tenant 收端 → 负责人 whoami tenant 正确", async ({
     request,
   }) => {
-    // 1. Operator 开通企业（API 层，service token 守卫）
-    const enterpriseId = randomUUID();
-    const tenantId = randomUUID();
+    // 1. Operator 开通企业（API 层，需 platform role system_admin/system_operator）
+    // server 侧自行生成 enterprise_id / tenant_id；请求体只需传 enterprise_name + owner_phone
+    // 等必要字段（对齐 ProvisionEnterpriseRequest schema）。
     const enterpriseCode = uniqueEnterpriseCode();
     const enterpriseName = `E2E Onboarding Corp ${enterpriseCode}`;
+    const ownerPhone = `138${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
     // 1a. Operator enterprise provision（POST /api/operation/enterprises）
     const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
@@ -65,10 +66,9 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
       `${TIER_API_ORIGIN.operation}/api/operation/enterprises`,
       {
         data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
           enterprise_name: enterpriseName,
           enterprise_code: enterpriseCode,
+          owner_phone: ownerPhone,
           // 数据面维度：带配额策略以验证端到端落库
           initial_quota_policy: {
             policy_slug: "be2e-basic",
@@ -84,31 +84,45 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
       },
     );
 
-    // 需平台侧角色（system_admin / system_operator）的 token 才能成功 provision，
-    // 在 CI 环境中应已配置。本地/缺平台操作员 token 时，跳过而非 fail（无法打通全链）。
-    const provisionFailed = !provisionResp.ok();
+    // 需平台侧角色（system_admin / system_operator）的 token 才能成功 provision。
+    // CI 环境已配置对应 token；本地/缺 token 时 skip（无法打通全链）。
     if (provisionResp.status() === 401 || provisionResp.status() === 403) {
       test.skip(true, "Operator 开通企业需 system_admin/system_operator token（CI 环境）");
       return;
     }
-    // 201 表示 provision 成功；问题响应需验证非 SPA fallback。
-    if (provisionFailed) {
-      await expectProblemJson(request, "operation", "/api/operation/enterprises", {
-        expectedStatus: provisionResp.status(),
-      });
-      return;
+
+    // provision 非 201 即为失败：必须 fail 测试而非静默 return（不再绕过验收主链）。
+    // 同时采集 problem+json 诊断信息辅助定位。
+    if (!provisionResp.ok()) {
+      const ct = provisionResp.headers()["content-type"] ?? "";
+      const text = await provisionResp.text();
+      // 诊断：证明返回了 problem+json 非 SPA fallback（对齐 02 §11.2）
+      expect(ct, "provision 非 2xx 响应 content-type 应为 application/problem+json").toContain("application/problem+json");
+      expect(ct).not.toContain("text/html");
+      // 必须失败——不能绕过核心验收
+      throw new Error(
+        `Operator enterprise provision 失败: status=${provisionResp.status()} body=${text.slice(0, 500)}`,
+      );
     }
     expect(provisionResp.status()).toBe(201);
+
+    // 从响应中读取 server 端生成的 enterprise_id / tenant_id 与一次性 bootstrap_secret。
+    // EnterpriseProvisioned schema：{enterprise_id, tenant_id, ..., owner_bootstrap_secret, must_reset}
     const provisionBody = (await provisionResp.json()) as {
-      data: { tenant_id: string; owner_bootstrap?: { secret: string } };
+      data: {
+        enterprise_id: string;
+        tenant_id: string;
+        owner_bootstrap_secret: string;
+        must_reset: boolean;
+      };
     };
-    expect(provisionBody.data?.tenant_id).toBe(tenantId);
+    const tenantId = provisionBody.data.tenant_id;
+    expect(tenantId, "provision 响应须含 tenant_id").toBeTruthy();
 
     // 1b. 负责人首次登录并重置密码（经 Manager /api/auth/login + /api/auth/owner-reset）
-    const ownerPhone = `138${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-    // 用 Operator 上一步产出的 bootstrap_secret 去 Manager 重置
-    const bootstrapSecret = provisionBody.data?.owner_bootstrap?.secret;
-    expect(bootstrapSecret, "Operator 开通企业须返回 owner_bootstrap.secret").toBeTruthy();
+    // bootstrap_secret 一次明文，来自 provision 响应，非手写（对齐 EnterpriseProvisioned schema）。
+    const bootstrapSecret = provisionBody.data.owner_bootstrap_secret;
+    expect(bootstrapSecret, "Operator 开通企业须返回 owner_bootstrap_secret").toBeTruthy();
 
     const mgrApi = TIER_API_ORIGIN.manager;
 

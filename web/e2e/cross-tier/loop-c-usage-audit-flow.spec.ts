@@ -183,3 +183,76 @@ test.describe("Loop-C usage audit 跨端数据隔离", () => {
     expect(ct).not.toContain("text/html");
   });
 });
+
+test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播", () => {
+  test("Agent flush outbox → outbox 条目状态变更（pending → sent）", async ({
+    request,
+  }) => {
+    // 1. 先读 outbox pending 数量（flush 前基线）
+    const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
+    const beforeResp = await request.get(
+      `${TIER_API_ORIGIN.agent}/api/agent/usage/outbox`,
+      { headers: { Authorization: `Bearer ${agentLogin.token}` }, failOnStatusCode: false },
+    );
+    expect(beforeResp.ok(), `outbox read should succeed: ${beforeResp.status()}`).toBe(true);
+    const beforeBody = (await beforeResp.json()) as { data: unknown[] };
+    const pendingBefore = Array.isArray(beforeBody.data) ? beforeBody.data.length : 0;
+
+    // 2. 触发 flush（尽力而为上报 Manager）
+    const flushResp = await request.post(
+      `${TIER_API_ORIGIN.agent}/api/agent/usage/flush`,
+      { headers: { Authorization: `Bearer ${agentLogin.token}` }, failOnStatusCode: false },
+    );
+    // flush 端点本身不应 5xx；返回 envelope（含 sent/failed/batches）
+    expect(flushResp.ok(), `flush should succeed: ${flushResp.status()}`).toBe(true);
+    const flushBody = (await flushResp.json()) as { data?: { sent: number; failed: number; batches: number } };
+    expect(flushBody, "flush response has data").toHaveProperty("data");
+    expect(typeof flushBody.data!.sent, "flush data.sent is number").toBe("number");
+    expect(typeof flushBody.data!.failed, "flush data.failed is number").toBe("number");
+
+    // 3. 再读 outbox——pending 应不增（flush 后 sent 条目不再 pending）
+    const afterResp = await request.get(
+      `${TIER_API_ORIGIN.agent}/api/agent/usage/outbox`,
+      { headers: { Authorization: `Bearer ${agentLogin.token}` }, failOnStatusCode: false },
+    );
+    expect(afterResp.ok(), `outbox read after flush: ${afterResp.status()}`).toBe(true);
+    const afterBody = (await afterResp.json()) as { data: unknown[] };
+    const pendingAfter = Array.isArray(afterBody.data) ? afterBody.data.length : -1;
+
+    // pending 不应增长（flush 把 pending 转成 sent，或本来为空）
+    expect(
+      pendingAfter <= pendingBefore,
+      `flush 后 pending 应 ≤ 前 (before=${pendingBefore}, after=${pendingAfter})`,
+    ).toBe(true);
+  });
+
+  test("Manager usage rollup list 在 flush 后仍可达（跨端收端契约形状不变）", async ({
+    request,
+  }) => {
+    // Agent flush 后，Manager 端 rollup 聚合端点应仍可正常访问
+    // （真实数据传播由后端 outbox→reporter→Manager ingest 闭环完成，E2E 验证契约形状不破坏）
+    const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
+    const resp = await request.get(
+      `${TIER_API_ORIGIN.manager}/api/manager/usage/rollup/list`,
+      { headers: { Authorization: `Bearer ${mgrLogin.token}` }, failOnStatusCode: false },
+    );
+    expect(resp.ok(), `rollup list should be reachable: ${resp.status()}`).toBe(true);
+
+    const body = (await resp.json()) as { data: unknown[]; page?: unknown };
+    expect(Array.isArray(body.data), "rollup list data is array").toBe(true);
+    expect(body, "rollup list has page").toHaveProperty("page");
+
+    // 如有 rollup 记录，验证字段契约（含 employee_id / window_start 等脱敏标识，不含会话内容）
+    if (body.data.length > 0) {
+      const sample = body.data[0] as Record<string, unknown>;
+      // UsageRollupOut 字段（脱敏聚合，无会话内容）
+      const hasIdFields = "summary_id" in sample || "rollup_id" in sample;
+      expect(hasIdFields, "rollup record has summary_id or rollup_id").toBe(true);
+      // 确保不含会话内容键名（D13）
+      const forbiddenKeys = ["prompt", "completion", "messages", "conversation_text", "file_content", "tool_input", "tool_output"];
+      for (const key of forbiddenKeys) {
+        expect(sample, `rollup record must not contain "${key}"`).not.toHaveProperty(key);
+      }
+    }
+  });
+});

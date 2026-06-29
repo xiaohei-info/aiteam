@@ -53,19 +53,17 @@ async function assertProblemJson(text: string, ct: string, status: number): Prom
 // ── ServiceToken 合法访问 ──
 
 test.describe("ServiceToken 合法访问", () => {
-  test("Manager /api/manager/tenants 带正确 service token → 非 401", async ({
+  test("Manager /api/manager/tenants 带正确 service token → 通过守卫且返回 JSON envelope（非 401 非 HTML）", async ({
     request,
   }) => {
-    // 带正确 token 的请求应通过 service token 守卫（至少不是 token 校验失败）
-    const enterpriseId = randomUUID();
-    const tenantId = randomUUID();
-
+    // 带正确 token 的请求应通过 service token 守卫；无 PG 时可能 500，
+    // 但绝不应 401（token 校验本身必须通过）。
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
       {
         data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
+          enterprise_id: randomUUID(),
+          tenant_id: randomUUID(),
           enterprise_name: "E2E ServiceToken Corp",
           enterprise_code: `svctok-${randomUUID().replace(/-/g, "").slice(0, 6)}`,
         },
@@ -74,15 +72,28 @@ test.describe("ServiceToken 合法访问", () => {
       },
     );
 
-    // 正确 token 不应返回 401
-    expect(resp.status(), `正确 service token 不应 401: ${resp.status()}; body=${(await resp.clone().text()).slice(0, 200)}`)
-      .not.toBe(401);
-    // 也不应为 text/html SPA fallback
+    const status = resp.status();
+    // 正确 service token 不应被 token 守卫拒绝（401）。
+    expect(status, `正确 service token 不应 401: status=${status}`).not.toBe(401);
+    // 也不应为 text/html SPA fallback——无论成功/失败，后端统一返回 JSON。
     const ct = resp.headers()["content-type"] ?? "";
-    expect(ct).not.toContain("text/html");
+    expect(ct, `content-type 不应为 text/html: "${ct}"`).not.toContain("text/html");
+
+    // 如后端 PG 健全则应成功（201）；无 PG 则 5xx——两种情况均应可解析为 JSON。
+    if (status >= 200 && status < 400) {
+      const body = await resp.json() as { data?: Record<string, unknown> };
+      expect(body, "成功响应应含 data 字段（envelope 契约）").toHaveProperty("data");
+    } else {
+      // 5xx 或 4xx（非 401）说明 token 守卫已通过、问题在下游（DB 不可达等）。
+      // 仍应返回 JSON 错误体。
+      const text = await resp.text();
+      let parsed: unknown;
+      try { parsed = JSON.parse(text); } catch { /* 下抛 */ }
+      expect(parsed, "响应体应为合法 JSON（非空 HTML）").toBeDefined();
+    }
   });
 
-  test("Manager /api/manager/owner-bootstrap 带正确 service token → 非 401", async ({
+  test("Manager /api/manager/owner-bootstrap 带正确 service token → 通过守卫且返回 JSON（非 401 非 HTML）", async ({
     request,
   }) => {
     const resp = await request.post(
@@ -99,11 +110,20 @@ test.describe("ServiceToken 合法访问", () => {
       },
     );
 
-    // 正确 service token 不应对鉴权本身返回 401
-    expect(resp.status(), `正确 service token 不应 401: ${resp.status()}`)
-      .not.toBe(401);
+    const status = resp.status();
+    expect(status, `正确 service token 不应 401: status=${status}`).not.toBe(401);
     const ct = resp.headers()["content-type"] ?? "";
-    expect(ct).not.toContain("text/html");
+    expect(ct, `content-type 不应为 text/html: "${ct}"`).not.toContain("text/html");
+
+    if (status >= 200 && status < 400) {
+      const body = (await resp.json()) as { data?: Record<string, unknown> };
+      expect(body, "成功响应应含 data 字段").toHaveProperty("data");
+    } else {
+      const text = await resp.text();
+      let parsed: unknown;
+      try { parsed = JSON.parse(text); } catch { /* 下抛 */ }
+      expect(parsed, "响应体应为合法 JSON").toBeDefined();
+    }
   });
 });
 
@@ -271,7 +291,7 @@ test.describe("ServiceToken 错误/过期/越权", () => {
     }
   });
 
-  test("Bearer 格式传 service token（Authorization: Bearer <token>）→ 可通过守卫", async ({
+  test("Bearer 格式传 service token（Authorization: Bearer <token>）→ 通过守卫且返回 JSON", async ({
     request,
   }) => {
     const token = serviceToken();
@@ -291,8 +311,15 @@ test.describe("ServiceToken 错误/过期/越权", () => {
         failOnStatusCode: false,
       },
     );
-    // Authorization: Bearer 格式 token 也应被 service token 守卫接受
-    expect(resp.status(), `Bearer 格式 token 不应 401: ${resp.status()}`).not.toBe(401);
+    // Authorization: Bearer 格式 token 也应被 service token 守卫接受。
+    const status = resp.status();
+    expect(status, `Bearer 格式 token 不应 401: status=${status}`).not.toBe(401);
+    const ct = resp.headers()["content-type"] ?? "";
+    expect(ct, `content-type 不应为 text/html: "${ct}"`).not.toContain("text/html");
+    if (status >= 200 && status < 400) {
+      const body = (await resp.json()) as { data?: Record<string, unknown> };
+      expect(body, "成功响应应含 data").toHaveProperty("data");
+    }
   });
 });
 
