@@ -1,7 +1,7 @@
 """企业级 usage/audit rollup + 软配额治理 integration（M8，04 §6.5/§6.5.1，D13/D24，真 PG RLS）。
 
 验：
-- F13 上报全链路：owner POST /usage/upload → 落库聚合 → GET 查询可见（201/200，envelope）。
+- F13 上报全链路：service-token POST /usage/upload → 落库聚合 → GET 查询可见（201/200，envelope）。
 - usage/audit rollup 按 summary_id 幂等去重。
 - 跨租户 RLS：t-a 上报的 usage/audit，t-b 查不到（D22）。
 - 软配额策略 CRUD HTTP 全链路（201/200/204），version 自增。
@@ -227,11 +227,12 @@ def test_quota_evaluate_soft_does_not_block(migrated_db, admin_url, two_tenants)
     pid = r.json()["data"]["policy_id"]
 
     # 上报超阈 usage
-    client.post(
+    upload_resp = client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [_usage("s1", run_count=10, cost_total="150.00")]},
-        headers={"Authorization": f"Bearer {owner_a}"},
+        headers={"X-Service-Token": "test-service-token"},
     )
+    assert upload_resp.status_code == 200, upload_resp.text
 
     r = client.post(
         f"/api/manager/quota-policies/{pid}/evaluate"
@@ -249,14 +250,12 @@ def test_ingest_rejects_conversation_content_at_http(migrated_db, admin_url, two
     """D13 红线（真库）：上报体含会话内容字段 → 422（service 层断言，经 HTTP 透传 problem+json）。"""
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
-    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
-
     bad_usage = _usage("s-bad")
     bad_usage["message"] = "敏感会话内容"
     r = client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [bad_usage]},
-        headers={"Authorization": f"Bearer {owner_a}"},
+        headers={"X-Service-Token": "test-service-token"},
     )
     assert r.status_code == 422
     assert r.headers["content-type"].startswith("application/problem+json")
