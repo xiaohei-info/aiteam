@@ -96,7 +96,16 @@ def test_bootstrap_extra_field_422():
     assert r.status_code == 422
 
 
-# ---- happy / idempotent ----
+# ---- tenant guard / happy / idempotent ----
+
+def test_bootstrap_unknown_tenant_404():
+    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+    with patch("manager_service.routes_bootstrap._tenant_exists", return_value=False):
+        r = client.post("/api/manager/owner-bootstrap", json=_body())
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "not_found"
+
 
 def _fake_auth_svc(provision_uid="user-1"):
     svc = MagicMock()
@@ -107,7 +116,8 @@ def _fake_auth_svc(provision_uid="user-1"):
 def test_bootstrap_happy():
     """正常 bootstrap → 201 + user_id + cache hit（第二次请求）。"""
     fake = _fake_auth_svc()
-    with patch("manager_service.auth_service.build_auth_service", return_value=fake):
+    with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
+            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r.status_code == 201
@@ -121,7 +131,8 @@ def test_bootstrap_idempotent_conflict():
     """provision_owner 抛 Conflict → 幂等返回 201 idempotent=True。"""
     fake = _fake_auth_svc()
     fake.provision_owner.side_effect = Conflict("already exists")
-    with patch("manager_service.auth_service.build_auth_service", return_value=fake):
+    with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
+            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r.status_code == 201
@@ -132,7 +143,8 @@ def test_bootstrap_idempotent_cache_hit_after_conflict():
     """Conflict 分支也覆盖 cache hit（第二次请求重新构造路径——build 缓存仍命中）。"""
     fake = _fake_auth_svc()
     fake.provision_owner.side_effect = Conflict("already exists")
-    with patch("manager_service.auth_service.build_auth_service", return_value=fake):
+    with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
+            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         c.post("/api/manager/owner-bootstrap", json=_body())
         # 第二次 cache hit
