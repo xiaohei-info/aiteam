@@ -1,0 +1,148 @@
+# G4 — Nightly gate.
+# Runs nightly (and on dispatch) for broader, slower observation that must NOT
+# block PRs: multi-browser E2E, big-data integration, and performance timing.
+# Every job is `continue-on-error: true` so a nightly red never blocks a PR.
+#
+# Escalation: a failure that persists across 3 consecutive nightly runs is
+# upgraded to P0 and temporarily mirrored into the PR gate until fixed — see
+# docs/ci/runbook.md §"G4 连续失败升级 P0". (Non-goal: never let nightly-only
+# checks become a permanent PR-quick blocker.)
+name: nightly
+
+on:
+  schedule:
+    # 18:00 UTC daily (off the :00 mark to spread load).
+    - cron: "7 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OPERATION_SYSTEM_USERNAME: sysadmin
+  OPERATION_SYSTEM_PASSWORD: changeme-me
+
+jobs:
+  multi-browser:
+    name: 多浏览器 E2E (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Install server deps
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r server/requirements.txt pytest pytest-asyncio pytest-timeout
+
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (${{ matrix.browser }})
+        working-directory: web
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Build shared (prereq for consumers)
+        working-directory: web
+        run: pnpm --filter @aiteam/shared run build
+
+      - name: Nightly E2E — ${{ matrix.browser }}
+        working-directory: web
+        run: pnpm e2e --browser=${{ matrix.browser }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-playwright-${{ matrix.browser }}
+          path: web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  big-data:
+    name: 大数据集成观察
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: manager_control_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d manager_control_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/manager_control_db
+      DB_URL: postgresql://app_rw:apprwpass@localhost:5432/manager_control_db
+      APP_RW_PASSWORD: apprwpass
+      AITEAM_NIGHTLY_BIG_DATA: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt pytest pytest-timeout
+      - name: Big-data integration observation (non-blocking)
+        working-directory: server
+        run: python -m pytest -q -m integration --timeout=600
+
+  performance:
+    name: 性能观察（chromium 计时）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: corepack enable
+      - name: Install server deps
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r server/requirements.txt pytest pytest-asyncio pytest-timeout
+      - name: Install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright chromium
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build shared
+        working-directory: web
+        run: pnpm --filter @aiteam/shared run build
+      - name: Performance observation run (non-blocking)
+        working-directory: web
+        run: pnpm e2e --browser=chromium
