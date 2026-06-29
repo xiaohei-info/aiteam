@@ -327,18 +327,25 @@ test.describe("ServiceToken 错误/过期/越权", () => {
     }
   });
 
-  test("Bearer 格式传 service token（Authorization: Bearer <token>）→ 通过守卫且返回 JSON", async ({
+  test("Bearer 格式传 service token（Authorization: Bearer <token>）→ 201 + envelope data.tenant_id（守卫接受 Bearer + 租户成功落库）", async ({
     request,
   }) => {
+    // 与 X-Service-Token 合法用例同一验收口径：Bearer 格式 token 也必须穿透守卫并成功
+    // provision tenant。固定 enterprise_code 会在重复运行时撞 tenant_registry_enterprise_slug_key
+    // 唯一约束导致 500，故使用随机 code；断言收紧为 201 + JSON envelope + data.tenant_id，
+    // 不再把 4xx/5xx 当作通过。
     const token = serviceToken();
+    const tenantId = randomUUID();
+    const enterpriseId = randomUUID();
+    const code = `bear-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
       {
         data: {
-          enterprise_id: randomUUID(),
-          tenant_id: randomUUID(),
+          enterprise_id: enterpriseId,
+          tenant_id: tenantId,
           enterprise_name: "BearerToken Corp",
-          enterprise_code: "bear1",
+          enterprise_code: code,
         },
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -349,13 +356,24 @@ test.describe("ServiceToken 错误/过期/越权", () => {
     );
     // Authorization: Bearer 格式 token 也应被 service token 守卫接受。
     const status = resp.status();
-    expect(status, `Bearer 格式 token 不应 401: status=${status}`).not.toBe(401);
     const ct = resp.headers()["content-type"] ?? "";
-    expect(ct, `content-type 不应为 text/html: "${ct}"`).not.toContain("text/html");
-    if (status >= 200 && status < 400) {
-      const body = (await resp.json()) as { data?: Record<string, unknown> };
-      expect(body, "成功响应应含 data").toHaveProperty("data");
+    const text = await resp.text();
+
+    // 503（Manager 管理 DB 未配置）是 infra 前置缺失，skip 而非 fail。
+    if (status === 503 && (text.includes("manager_db") || text.includes("unconfigured") || text.includes("ADMIN_DB_URL"))) {
+      test.skip(true, "Manager PG 未配置——完整三端栈需 ADMIN_DB_URL/DB_URL");
+      return;
     }
+
+    // 严格断言：Bearer 格式合法 service token → 201 + JSON envelope + data.tenant_id。
+    // 不接受 5xx/4xx 伪装成通过（500 UniqueViolation 等业务失败必须暴露）。
+    expect(status, `Bearer 格式合法 token → tenant provision 应 201，实际 ${status}: ${text.slice(0, 200)}`).toBe(201);
+    expect(ct, `content-type 应为 application/json: "${ct}"`).toContain("application/json");
+    expect(ct).not.toContain("text/html");
+
+    const body = JSON.parse(text) as { data?: { tenant_id: string } };
+    expect(body, "envelope 含 data").toHaveProperty("data");
+    expect(body.data?.tenant_id, "envelope.data.tenant_id 与请求一致").toBe(tenantId);
   });
 });
 
