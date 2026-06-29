@@ -42,6 +42,8 @@ from agent_service.usage.client import (
 )
 from agent_service.usage.factory import build_run_usage_recorder, build_usage_service
 from agent_service.usage.routes import build_usage_router
+from agent_service.routes_workspace import build_workspace_router
+from agent_service.routes_group_mgmt import build_group_mgmt_router
 from shared.app_factory import create_app, mount_frontend
 from shared.config import load_settings
 from shared.service_client import ServiceClient
@@ -173,6 +175,10 @@ def build_app(
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(client=grants_client or _build_grants_client(), db=db)
     app.include_router(build_grants_router(grants_service))
+    # ---- 功能补全：P02 工作台 + P03 人才市场 + P08 知识库 + P09 办公室 + P07 组织树 + 文件上传 ----
+    app.include_router(build_workspace_router(None))
+    # ---- 功能补全：P06 群聊完整管理（创建/成员/消息/归档/更新）----
+    app.include_router(build_group_mgmt_router(None))
     # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
     mount_frontend(app, settings.tier)
     return app
