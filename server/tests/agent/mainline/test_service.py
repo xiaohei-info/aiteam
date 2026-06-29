@@ -51,6 +51,42 @@ def test_start_run_forwards_conversation_messages_to_runtime():
     ]
 
 
+def test_start_run_uses_call_tenant_for_runtime_request_and_usage_recorder():
+    """Authenticated Agent runs must report usage under the login tenant, not process default local."""
+    from agent_gateway.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+
+    captured: dict = {}
+    usage_records: list[tuple[str, str]] = []
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured["tenant_id"] = request.tenant_id
+            return RunResult(
+                run_id=request.run_id,
+                success=True,
+                usage={"input_tokens": 1, "output_tokens": 2},
+            )
+
+        async def cancel(self, run_id):
+            return None
+
+    def _record(tenant_id, run_id, run_status, usage, error):
+        usage_records.append((tenant_id, run_id))
+
+    svc = build_mainline_service(
+        executor=_CapturingExecutor(),
+        driver=FakeDriver(),
+        usage_recorder=_record,
+    )
+    conv = svc.create_conversation()
+
+    run = asyncio.run(svc.start_run(conv.id, tenant_id="tenant-from-login"))
+
+    assert captured["tenant_id"] == "tenant-from-login"
+    assert usage_records == [("tenant-from-login", run.id)]
+
+
 def test_minimal_mainline_to_timeline_parity():
     svc = _svc()
     conv = svc.create_conversation(title="hello")

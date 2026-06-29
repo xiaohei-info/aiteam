@@ -26,10 +26,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import require_claims, tenant_context_from
+from shared.contracts.tenancy import TenantContext
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
+from shared.service_token import verify_service_token
 
 from .schemas import (
     AuditSummaryOut,
@@ -88,10 +90,11 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
     async def upload_usage(
         body: UsageSummaryUploadIn,
         request: Request,
-        claims: TokenClaims = Depends(require),
+        _service_token: None = Depends(verify_service_token),
     ) -> Envelope[dict]:
         svc = _service(request)
-        result = svc.ingest_upload(tenant_context_from(claims), body.model_dump())
+        ctx = TenantContext(tenant_id=body.tenant_id, user_id="agent-service", roles=["service"])
+        result = svc.ingest_upload(ctx, body.model_dump())
         return Envelope[dict](data=result)
 
     # ---- usage 查询 ----

@@ -38,7 +38,12 @@ def _client(db_url: str, admin_url: str | None = None) -> TestClient:
 
     verifier = make_verifier(admin_url) if admin_url else _INMEM_VERIFIER
 
-    settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
+    settings = Settings(
+        tier="manager",
+        service_name="aiteam-manager-service",
+        db_url=db_url,
+        service_token="test-service-token",
+    )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
     app.include_router(build_usage_audit_quota_router(verifier))
@@ -88,7 +93,7 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, admin_url, two_ten
         }],
     }
     r = client.post(
-        "/api/manager/usage/upload", json=upload, headers={"Authorization": f"Bearer {owner_a}"},
+        "/api/manager/usage/upload", json=upload, headers={"X-Service-Token": "test-service-token"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["data"] == {"usage_ingested": 2, "audits_ingested": 1}
@@ -118,7 +123,7 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, admin_url, two_ten
 
     # 幂等：同 summary_id 重复上报不新增
     client.post(
-        "/api/manager/usage/upload", json=upload, headers={"Authorization": f"Bearer {owner_a}"},
+        "/api/manager/usage/upload", json=upload, headers={"X-Service-Token": "test-service-token"},
     )
     r = client.get(
         "/api/manager/usage/rollup/list", headers={"Authorization": f"Bearer {owner_a}"},
@@ -133,7 +138,7 @@ def test_usage_aggregate_by_window(migrated_db, admin_url, two_tenants):
     client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [_usage("s1", run_count=5, token_total=1000)]},
-        headers={"Authorization": f"Bearer {owner_a}"},
+        headers={"X-Service-Token": "test-service-token"},
     )
     r = client.get(
         "/api/manager/usage/rollup?window_start=2026-01-01T00:00:00Z&window_end=2026-02-01T00:00:00Z",

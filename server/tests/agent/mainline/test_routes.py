@@ -52,6 +52,35 @@ def test_message_endpoints(client):
     assert [m["content"] for m in r.json()["data"]] == ["hi"]
 
 
+def test_start_run_api_forwards_current_identity_tenant_to_service():
+    """Route-level regression: authenticated local identity tenant must reach MainlineService.start_run."""
+    from shared.contracts.auth import TokenClaims
+
+    captured: dict = {}
+
+    class _Service:
+        async def start_run(self, conversation_id, *, task_id=None, run_spec=None, tenant_id=None):
+            captured["conversation_id"] = conversation_id
+            captured["tenant_id"] = tenant_id
+            return {"id": "run-1", "conversation_id": conversation_id, "status": "completed"}
+
+    def _identity():
+        return TokenClaims(user_id="u-1", tenant_id="tenant-from-login", roles=["member"], exp=9999999999)
+
+    from fastapi import FastAPI
+
+    from agent_service.mainline.routes import build_mainline_router
+
+    app = FastAPI()
+    app.include_router(build_mainline_router(_Service(), identity_provider=_identity))
+    client = TestClient(app)
+
+    r = client.post("/api/agent/conversations/conv-1/runs", json={})
+
+    assert r.status_code == 200, r.text
+    assert captured == {"conversation_id": "conv-1", "tenant_id": "tenant-from-login"}
+
+
 def test_start_run_api_forwards_run_spec_model_and_thinking():
     """北向 API 必须把 run_spec（指定模型/切换思考深度）下达到 runtime，否则 API 用户无从指定。"""
     from agent_gateway.fake_runtime import FakeDriver

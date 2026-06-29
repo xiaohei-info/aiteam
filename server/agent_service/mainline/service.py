@@ -163,12 +163,14 @@ class MainlineService:
         *,
         run_spec: RunSpec | None = None,
         task_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> Run:
         """起一次 run：驱动 runtime，事件归一落 timeline + 推流，终态落 Run。
 
         返回 run 的**最终持久态**（终态已落库）。展示态全程只经 broker，不落库（D6）。
         """
         self._conversations.get(conversation_id)
+        effective_tenant_id = tenant_id or self._tenant_id
         run = self._runs.create(Run(id=_new_id("run"), conversation_id=conversation_id))
         if task_id is not None:
             self._tasks.set_status(task_id, TaskStatus.RUNNING)
@@ -177,7 +179,7 @@ class MainlineService:
 
         request = AgentRunRequest(
             run_id=run.id,
-            tenant_id=self._tenant_id,
+            tenant_id=effective_tenant_id,
             conversation_id=conversation_id,
             task_id=task_id,
             run_spec=run_spec or RunSpec(),
@@ -192,7 +194,7 @@ class MainlineService:
         if task_id is not None:
             self._tasks.set_status(task_id, _task_status_for(final_run.status))
         # 闭环 C：run 终态落库后尽力把用量回流进 outbox（D14：失败不阻断本地 run）。
-        self._record_run_usage(final_run)
+        self._record_run_usage(final_run, tenant_id=effective_tenant_id)
         await self._broker.publish_display(conversation_id, DisplayState.RESOLVED, run_id=run.id)
         return final_run
 
@@ -228,7 +230,7 @@ class MainlineService:
         """
         self._usage_recorder = recorder
 
-    def _record_run_usage(self, run: Run) -> None:
+    def _record_run_usage(self, run: Run, *, tenant_id: str | None = None) -> None:
         """闭环 C 运行期→用量 outbox 钩子：把本次 run 的 usage 回流进 outbox（尽力，不阻断）。
 
         只回传 runtime 提取的 usage dict（token/成本计量）与终态/error 诊断串；**绝不**回传
@@ -238,7 +240,7 @@ class MainlineService:
         if self._usage_recorder is None:
             return
         try:
-            self._usage_recorder(self._tenant_id, run.id, run.status, run.usage, run.error)
+            self._usage_recorder(tenant_id or self._tenant_id, run.id, run.status, run.usage, run.error)
         except Exception:  # noqa: BLE001 — D14：outbox 副链失败不阻断本地 run
             pass
 

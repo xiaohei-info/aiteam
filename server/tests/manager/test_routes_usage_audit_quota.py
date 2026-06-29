@@ -30,6 +30,10 @@ def _hdr(roles=("owner",)):
     return {"Authorization": "Bearer " + sign_inmem_token(_SIGNER, "t1", list(roles))}
 
 
+def _svc_hdr():
+    return {"X-Service-Token": "test-service-token"}
+
+
 def _client(db_url):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
@@ -37,7 +41,10 @@ def _client(db_url):
     from manager_service.routes_employee import build_employee_router
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
-    app = create_app(Settings(tier="manager", service_name="m", db_url=db_url), manager_router)
+    app = create_app(
+        Settings(tier="manager", service_name="m", db_url=db_url, service_token="test-service-token"),
+        manager_router,
+    )
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
     app.include_router(build_usage_audit_quota_router(_VERIFIER))
@@ -141,14 +148,14 @@ def test_quota_create_no_db_503():
 
 def test_usage_upload_no_db_503():
     client = _client(None)
-    r = client.post("/api/manager/usage/upload", json=_UPLOAD_BODY, headers=_hdr())
+    r = client.post("/api/manager/usage/upload", json=_UPLOAD_BODY, headers=_svc_hdr())
     assert r.status_code == 503
 
 
 def test_usage_upload_extra_422():
     client = _client("postgresql://fake/fake")
     r = client.post("/api/manager/usage/upload",
-                    json={**_UPLOAD_BODY, "bad": 1}, headers=_hdr())
+                    json={**_UPLOAD_BODY, "bad": 1}, headers=_svc_hdr())
     assert r.status_code == 422
 
 
@@ -211,7 +218,7 @@ def test_usage_upload_happy():
                return_value=fake):
         c = _client("postgresql://fake/fake")
         r = c.post("/api/manager/usage/upload",
-                   json={**_UPLOAD_BODY, "usage": [{"id": "s1"}]}, headers=_hdr())
+                   json={**_UPLOAD_BODY, "usage": [{"id": "s1"}]}, headers=_svc_hdr())
         assert r.status_code == 200
         assert r.json()["data"]["ingested"] == 1
 

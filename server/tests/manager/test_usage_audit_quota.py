@@ -511,7 +511,12 @@ def _client(db_url: str | None) -> TestClient:
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_usage_audit_quota import build_usage_audit_quota_router
 
-    settings = Settings(tier="manager", service_name="aiteam-manager-service", db_url=db_url)
+    settings = Settings(
+        tier="manager",
+        service_name="aiteam-manager-service",
+        db_url=db_url,
+        service_token="test-service-token",
+    )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
     app.include_router(build_usage_audit_quota_router(_INMEM_VERIFIER))
@@ -532,10 +537,9 @@ def test_usage_upload_without_token_returns_401():
 
 def test_usage_upload_without_db_returns_503():
     client = _client(None)
-    token = _token("t1", ["owner"])
     resp = client.post(
         "/api/manager/usage/upload",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"X-Service-Token": "test-service-token"},
         json={"tenant_id": "t1", "usage": [], "audits": []},
     )
     assert resp.status_code == 503
