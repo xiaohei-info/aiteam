@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, Field
 
 from shared.auth import RS256TokenVerifier
 from shared.contracts.auth import TokenClaims

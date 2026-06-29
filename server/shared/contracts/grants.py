@@ -24,9 +24,9 @@ class MemberGrant(BaseModel):
     tenant_id: str
     resource_type: str = Field(description="expert | solution")
     resource_id: str
-    department_ids: list[str] = Field(default_factory=list)
-    member_ids: list[str] = Field(default_factory=list)
-    updated_at: datetime | None = Field(default=None)
+    department_ids: list[str] = Field(default_factory=list, description="部门 id 列表")
+    member_ids: list[str] = Field(default_factory=list, description="成员 id 列表")
+    updated_at: datetime | None = Field(default=None, description="最后更新（UTC）")
 
 
 class LoadedExpertProjection(BaseModel):
@@ -38,6 +38,6 @@ class LoadedExpertProjection(BaseModel):
     tenant_id: str
     version: str = Field(description="配置版本/etag，用于增量 sync")
     display_name: str = ""
-    runtime_binding: str | None = Field(default=None)
-    synced_at: datetime | None = Field(default=None)
+    runtime_binding: str | None = Field(default=None, description="runtime 标识符（hermes_acp/claude_code_json_stream 等）")
+    synced_at: datetime | None = Field(default=None, description="最后同步时间（UTC）")
     revoked: bool = Field(default=False, description="授权撤销后置 true 并从可用列表移除")

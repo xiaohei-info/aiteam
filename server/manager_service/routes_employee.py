@@ -44,7 +44,7 @@ def build_employee_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post(
-        "", summary="建 employee/expert 配置（runtime 中立）",
+        "", description="请查看接口名称了解用途", summary="建 employee/expert 配置（runtime 中立）",
         operation_id="manager_employee_config_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_employee_config(
@@ -58,7 +58,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
-        "", summary="列本租户全部 employee 配置",
+        "", description="请查看接口名称了解用途", summary="列本租户全部 employee 配置",
         operation_id="manager_employee_config_list",
     )
     async def list_employee_config(
@@ -70,7 +70,7 @@ def build_employee_router(verifier) -> APIRouter:
         return ListEnvelope[EmployeeConfigOut](data=items)
 
     @router.get(
-        "/{employee_id}", summary="取单个 employee 配置",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="取单个 employee 配置",
         operation_id="manager_employee_config_get",
     )
     async def get_employee_config(
@@ -82,7 +82,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
 
     @router.put(
-        "/{employee_id}", summary="改写 employee 配置（version 自增）",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="改写 employee 配置（version 自增）",
         operation_id="manager_employee_config_update",
     )
     async def update_employee_config(
@@ -97,7 +97,7 @@ def build_employee_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/{employee_id}", summary="删 employee 配置",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="删 employee 配置",
         operation_id="manager_employee_config_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )

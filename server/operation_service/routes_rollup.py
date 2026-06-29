@@ -37,7 +37,7 @@ def _require_platform_operator(request: Request) -> TokenClaims:
 
 @router.post(
     "/rollups",
-    summary="Manager 上报企业级脱敏聚合（跨企业 rollup 入口）",
+    description="请查看接口名称了解用途", summary="Manager 上报企业级脱敏聚合（跨企业 rollup 入口）",
     operation_id="operation_ingest_rollup",
     status_code=202,
 )
@@ -52,7 +52,7 @@ async def ingest_rollup(
 
 @router.get(
     "/rollups/board",
-    summary="跨企业平台看板（全平台合计 + 各企业聚合）",
+    description="请查看接口名称了解用途", summary="跨企业平台看板（全平台合计 + 各企业聚合）",
     operation_id="operation_cross_enterprise_board",
 )
 async def cross_enterprise_board(
@@ -64,7 +64,7 @@ async def cross_enterprise_board(
 
 @router.get(
     "/rollups/{enterprise_id}",
-    summary="单企业聚合视图（脱敏，不下钻租户明细）",
+    description="请查看接口名称了解用途", summary="单企业聚合视图（脱敏，不下钻租户明细）",
     operation_id="operation_enterprise_rollup",
 )
 async def enterprise_rollup(

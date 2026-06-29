@@ -30,8 +30,8 @@ class TenantProvisionRequest(BaseModel):
     tenant_id: str
     enterprise_name: str
     enterprise_code: str | None = Field(default=None, description="可读账号/slug，不参与 RLS 主键")
-    initial_quota_policy: dict | None = Field(default=None)
-    visible_catalog_policy: dict | None = Field(default=None)
+    initial_quota_policy: dict | None = Field(default=None, description="首次开通时默认配额策略（可选）")
+    visible_catalog_policy: dict | None = Field(default=None, description="可见目录策略（可选）")
 
 
 class OwnerBootstrapSync(BaseModel):
@@ -58,7 +58,7 @@ class CatalogReleaseNotify(BaseModel):
     template_id: str
     version: str
     action: str = Field(description="published | unpublished | visibility_changed")
-    visible_scope: dict | None = Field(default=None)
+    visible_scope: dict | None = Field(default=None, description="可见范围定义（可选）")
 
 
 # ---- Manager → Operator（云侧）----
@@ -72,7 +72,7 @@ class ExpertTemplateDetail(BaseModel):
     version: str
     display_name: str
     persona: str | None = None
-    recommended_config: dict = Field(default_factory=dict)
+    recommended_config: dict = Field(default_factory=dict, description="推荐配置键值对（招募时预填充）")
 
 
 class SolutionPackage(BaseModel):
@@ -83,10 +83,10 @@ class SolutionPackage(BaseModel):
     solution_id: str
     version: str
     display_name: str
-    experts: list[ExpertTemplateDetail] = Field(default_factory=list)
-    knowledge_refs: list[str] = Field(default_factory=list)
-    skill_refs: list[str] = Field(default_factory=list)
-    default_grants: dict | None = Field(default=None)
+    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表")
+    knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
+    skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
+    default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
 
 
 # ---- Agent → Manager（用户端主动访问）----
@@ -109,7 +109,7 @@ class AuthorizedConfigPullResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experts: list[dict] = Field(default_factory=list, description="可见专家配置（投影源）")
-    solutions: list[dict] = Field(default_factory=list)
+    solutions: list[dict] = Field(default_factory=list, description="方案实例列表")
     revoked_ids: list[str] = Field(default_factory=list, description="已撤销/不可见，需本地失效移除")
 
 
@@ -138,5 +138,5 @@ class UsageSummaryUpload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tenant_id: str
-    usage: list[UsageSummary] = Field(default_factory=list)
-    audits: list[AuditSummaryEvent] = Field(default_factory=list)
+    usage: list[UsageSummary] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
+    audits: list[AuditSummaryEvent] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")

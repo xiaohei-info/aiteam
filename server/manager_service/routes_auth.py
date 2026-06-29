@@ -40,17 +40,17 @@ def _auth_service(request: Request) -> AuthService:
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/login", summary="成员/负责人登录（公开端点）", operation_id="manager_login")
+@router.post("/login", description="成员或负责人使用凭据登录获取 token。登录成功后返回 JWT access token。", summary="成员/负责人登录（公开端点）", operation_id="manager_login")
 async def login(body: LoginInput, svc: AuthService = Depends(_auth_service)) -> Envelope[AuthResult]:
     return Envelope[AuthResult](data=svc.login(body))
 
 
-@router.post("/owner-reset", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
+@router.post("/owner-reset", description="负责人首登时强制重置密码。首次登录后必须调用此端点设置新密码。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
 async def owner_reset(body: OwnerResetInput, svc: AuthService = Depends(_auth_service)) -> Envelope[AuthResult]:
     return Envelope[AuthResult](data=svc.owner_reset(body))
 
 
-@router.get("/{tenant_id}/jwks.json", summary="下发 tenant 验签公钥（JWKS）", operation_id="manager_jwks")
+@router.get("/{tenant_id}/jwks.json", description="下发指定 tenant 的验签公钥（JWKS 格式）。用户端凭此本地验签。", summary="下发 tenant 验签公钥（JWKS）", operation_id="manager_jwks")
 async def jwks(tenant_id: str, svc: AuthService = Depends(_auth_service)) -> dict:
     # JWKS 是公开验签材料（公钥），可下发用户端本地验签（D23）。
     return svc.jwks(tenant_id)

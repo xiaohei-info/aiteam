@@ -21,5 +21,5 @@ class TenantContext(BaseModel):
 
     tenant_id: str = Field(description="租户 id（UUID 字符串），RLS 主键来源")
     user_id: str
-    roles: list[str] = Field(default_factory=list)
-    enterprise_id: str | None = Field(default=None)
+    roles: list[str] = Field(default_factory=list, description="角色列表（EnterpriseRole/PlatformRole）")
+    enterprise_id: str | None = Field(default=None, description="企业 id（可选）")

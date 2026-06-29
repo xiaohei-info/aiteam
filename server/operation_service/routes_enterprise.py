@@ -37,7 +37,7 @@ def _require_platform_operator(request: Request) -> TokenClaims:
 
 @router.post(
     "/enterprises",
-    summary="开通企业（建 tenant + 签发负责人 bootstrap）",
+    description="请查看接口名称了解用途", summary="开通企业（建 tenant + 签发负责人 bootstrap）",
     operation_id="operation_provision_enterprise",
     status_code=201,
 )
@@ -51,7 +51,7 @@ async def provision_enterprise(
 
 @router.post(
     "/enterprises/{enterprise_id}/owner-bootstrap/reset",
-    summary="重置负责人 bootstrap 凭据",
+    description="请查看接口名称了解用途", summary="重置负责人 bootstrap 凭据",
     operation_id="operation_reset_owner_bootstrap",
 )
 async def reset_owner_bootstrap(
