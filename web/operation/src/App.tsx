@@ -1,9 +1,3 @@
-/**
- * 运营端根路由：登录页 + 受保护区（AppShell 内的业务页占位）。
- *
- * /login 公开；其余经 RequireAuth 门控（未登录跳 /login）。
- * 业务页（企业开通/目录/看板）由 W-O.2/3/4 接入真实页面，当前脚手架放占位。
- */
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./shell";
 import { RequireAuth } from "./auth/RequireAuth";
@@ -13,24 +7,24 @@ import { BoardPage, EnterpriseDetailPage } from "./features/board";
 import { EnterprisePage } from "./features/enterprise";
 import { EnterprisePageWired } from "./EnterprisePageWired";
 import { CatalogPage, CatalogDetailPage } from "./features/catalog";
+import { AccountsPage } from "./features/accounts";
+import { FinancePage } from "./features/finance";
+import { SystemHealthPage } from "./features/system-health";
 
 export function App(): React.ReactNode {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route
-        element={
-          <RequireAuth>
-            <AppShell />
-          </RequireAuth>
-        }
-      >
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePageWired />} />
+        <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/catalog" element={<CatalogPage />} />
         <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
+        <Route path="/finance" element={<FinancePage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/board/:enterprise_id" element={<EnterpriseDetailPage />} />
+        <Route path="/health" element={<SystemHealthPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
