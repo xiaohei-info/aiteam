@@ -76,6 +76,13 @@ def test_get_manager_gateway_with_url(monkeypatch):
     assert "manager-svc" in gw._client._base_url
 
 
+def test_get_manager_gateway_passes_service_token(monkeypatch):
+    monkeypatch.setenv("MANAGER_URL", "http://manager-svc:8000")
+    monkeypatch.setenv("SERVICE_TOKEN", "test-service-token")
+    gw = get_manager_gateway()
+    assert gw._client._service_token == "test-service-token"
+
+
 def test_get_provisioning_service(monkeypatch):
     for k in ("ADMIN_DB_URL", "DB_URL"):
         monkeypatch.delenv(k, raising=False)

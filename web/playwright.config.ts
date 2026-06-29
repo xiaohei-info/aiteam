@@ -64,7 +64,7 @@ export default defineConfig({
   webServer: [
     {
       command:
-        `cd .. && OPERATION_SYSTEM_USERNAME=${OPERATION_SYSTEM_USERNAME} OPERATION_SYSTEM_PASSWORD=${OPERATION_SYSTEM_PASSWORD} SERVICE_TOKEN=${SERVICE_TOKEN} .venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000`,
+        `cd .. && OPERATION_SYSTEM_USERNAME=${OPERATION_SYSTEM_USERNAME} OPERATION_SYSTEM_PASSWORD=${OPERATION_SYSTEM_PASSWORD} MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} .venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000`,
       url: "http://127.0.0.1:8000/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,

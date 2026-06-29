@@ -11,16 +11,71 @@
  * 非目标（DAG contract）：不测 usage 数值精度到结算级、不覆盖多浏览器 nightly 矩阵、不用 mock 后端。
  */
 
-import { test, expect } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import {
   apiLogin,
   defaultCredentials,
   TIER_API_ORIGIN,
 } from "../support/auth";
-import {
-  expectListEnvelope,
-  expectEnvelope,
-} from "../support/api-assertions";
+
+function serviceToken(): string {
+  return process.env.SERVICE_TOKEN ?? "test-service-token";
+}
+
+function svcHeaders(): Record<string, string> {
+  return { "X-Service-Token": serviceToken(), "Content-Type": "application/json" };
+}
+
+async function createOwnerToken(request: APIRequestContext): Promise<string> {
+  const tenantId = randomUUID();
+  const enterpriseId = randomUUID();
+  const enterpriseCode = `gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const ownerPhone = `138${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const bootstrapSecret = `Boot-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const newPassword = `New-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+
+  const tenantResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/tenants`, {
+    data: {
+      enterprise_id: enterpriseId,
+      tenant_id: tenantId,
+      enterprise_name: "E2E Governance Corp",
+      enterprise_code: enterpriseCode,
+    },
+    headers: svcHeaders(),
+    failOnStatusCode: false,
+  });
+  expect(tenantResp.status(), `governance tenant provision 应成功: ${tenantResp.status()} body=${await tenantResp.text()}`).toBe(201);
+
+  const bootstrapResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/owner-bootstrap`, {
+    data: {
+      tenant_id: tenantId,
+      owner_phone: ownerPhone,
+      bootstrap_secret: bootstrapSecret,
+      must_reset: true,
+    },
+    headers: svcHeaders(),
+    failOnStatusCode: false,
+  });
+  expect(
+    [200, 201],
+    `governance owner-bootstrap 应成功: ${bootstrapResp.status()} body=${await bootstrapResp.text()}`,
+  ).toContain(bootstrapResp.status());
+
+  const resetResp = await request.post(`${TIER_API_ORIGIN.manager}/api/auth/owner-reset`, {
+    data: {
+      tenant_id: tenantId,
+      account: ownerPhone,
+      old_password: bootstrapSecret,
+      new_password: newPassword,
+    },
+    failOnStatusCode: false,
+  });
+  expect(resetResp.ok(), `governance owner-reset 应成功: ${resetResp.status()} body=${await resetResp.text()}`).toBe(true);
+  const resetBody = (await resetResp.json()) as { data?: { token?: string } };
+  expect(resetBody.data?.token, "owner-reset 应返回 owner token").toBeTruthy();
+  return resetBody.data.token;
+}
 
 test.describe("Loop-C governance（跨端）", () => {
   test("Manager quota-policies 端点完整 CRUD 契约形状", async ({
@@ -91,19 +146,20 @@ test.describe("Loop-C governance（跨端）", () => {
   test("Manager quota-policies 创建 + 列表可达（契约形状验证）", async ({
     request,
   }) => {
-    const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
-    const token = mgrLogin.token;
+    const token = await createOwnerToken(request);
     const origin = TIER_API_ORIGIN.manager;
+    const policySlug = `be2e-gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
-    // 创建 quota policy（测试创建端点契约形状）
     const createResp = await request.post(`${origin}/api/manager/quota-policies`, {
       data: {
-        policy_slug: `be2e-gov-${Date.now()}`,
+        policy_slug: policySlug,
         display_name: "E2E Governance Policy",
         scope: "tenant",
-        window_days: 30,
+        window_start: "2026-01-01T00:00:00Z",
+        window_end: "2026-02-01T00:00:00Z",
         dimensions: { cost_cap_usd: 200, token_cap: 1000000 },
         enforcement: "soft",
+        status: "active",
       },
       headers: {
         Authorization: `Bearer ${token}`,
@@ -112,10 +168,35 @@ test.describe("Loop-C governance（跨端）", () => {
       failOnStatusCode: false,
     });
 
-    // 创建可能成功也可能因 policy_slug 冲突 409——均应为 problem+json（非 SPA fallback）
+    expect(createResp.status(), `quota policy create 应成功: ${createResp.status()}`).toBe(201);
     const ct = createResp.headers()["content-type"] ?? "";
     expect(ct).toContain("application/json");
     expect(ct).not.toContain("text/html");
+
+    const createBody = (await createResp.json()) as {
+      data?: {
+        policy_id?: string;
+        policy_slug?: string;
+        enforcement?: string;
+        status?: string;
+      };
+    };
+    expect(createBody.data?.policy_id, "create envelope 应返回 policy_id").toBeTruthy();
+    expect(createBody.data?.policy_slug).toBe(policySlug);
+    expect(createBody.data?.enforcement).toBe("soft");
+    expect(createBody.data?.status).toBe("active");
+
+    const listResp = await request.get(`${origin}/api/manager/quota-policies`, {
+      headers: { Authorization: `Bearer ${token}` },
+      failOnStatusCode: false,
+    });
+    expect(listResp.ok(), `quota-policies list 应可达: ${listResp.status()}`).toBe(true);
+    expect(listResp.headers()["content-type"] ?? "").toContain("application/json");
+    const listBody = (await listResp.json()) as { data: Array<{ policy_slug?: string }> };
+    expect(
+      listBody.data.some((policy) => policy.policy_slug === policySlug),
+      "list envelope 应包含刚创建的 quota policy",
+    ).toBe(true);
   });
 
   test("Governance 汇总不含会话内容/成员可识别信息（D13）", async ({
