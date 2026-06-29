@@ -40,7 +40,7 @@ contract 的 `pnpm e2e --project=chromium` 是"chromium 浏览器 gate"的通用
 
 - 实际 gate 命令 = `pnpm e2e`（跑全部 chromium smoke project）。
 - `pnpm e2e --project=chromium` 在本仓库会因无同名 project 而选 0 用例；**不要直接用**。要限定单端，用 `--project=operation-smoke|manager-smoke|agent-smoke|cross-tier`。
-- 多浏览器（firefox/webkit）是 G4 nightly 职责，经 `AITEAM_E2E_BROWSER=<browser> pnpm e2e` 覆盖（见下）。不要使用 `--browser=<browser>`；Playwright 在配置文件已定义 projects 时会拒绝该参数。
+- 多浏览器（firefox/webkit）是 G4 nightly 职责，经 `.github/scripts/write-nightly-playwright-config.mjs <browser>` 生成 `web/playwright.nightly.config.ts` 后执行 `pnpm exec playwright test --config=playwright.nightly.config.ts` 覆盖（见下）。不要使用 `--browser=<browser>`；Playwright 在配置文件已定义 projects 时会拒绝该参数。
 
 ## artifact 获取
 
@@ -108,9 +108,9 @@ pnpm e2e                 # chromium gate（全部 smoke project）
 ```bash
 cd web
 pnpm exec playwright install              # 装全部浏览器
-AITEAM_E2E_BROWSER=chromium pnpm e2e
-AITEAM_E2E_BROWSER=firefox pnpm e2e
-AITEAM_E2E_BROWSER=webkit pnpm e2e
+node ../.github/scripts/write-nightly-playwright-config.mjs chromium && pnpm exec playwright test --config=playwright.nightly.config.ts
+node ../.github/scripts/write-nightly-playwright-config.mjs firefox && pnpm exec playwright test --config=playwright.nightly.config.ts
+node ../.github/scripts/write-nightly-playwright-config.mjs webkit && pnpm exec playwright test --config=playwright.nightly.config.ts
 ```
 big-data：`cd server && AITEAM_NIGHTLY_BIG_DATA=1 pytest -q -m integration --timeout=600`。
 

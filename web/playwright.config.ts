@@ -11,22 +11,7 @@ const isCI = Boolean(process.env.CI);
  *   manager 需 DB_URL/ADMIN_DB_URL（多租户 PG/RLS）；agent 需 MANAGER_URL（跨端登录）。
  *   env 默认值对齐 .env.example / 单机部署 SOP；经环境变量覆盖（CI/不同部署）。
  * - projects：三端单端 smoke（operation/manager/agent），testMatch 按目录隔离。
- * - AITEAM_E2E_BROWSER：nightly 多浏览器覆盖专用；默认 chromium。
  */
-
-const E2E_BROWSER = process.env.AITEAM_E2E_BROWSER ?? "chromium";
-const E2E_DEVICE = (() => {
-  switch (E2E_BROWSER) {
-    case "chromium":
-      return devices["Desktop Chrome"];
-    case "firefox":
-      return devices["Desktop Firefox"];
-    case "webkit":
-      return devices["Desktop Safari"];
-    default:
-      throw new Error(`Unsupported AITEAM_E2E_BROWSER: ${E2E_BROWSER}`);
-  }
-})();
 
 // manager/agent 跨端依赖的 DB 与服务地址（dev 默认；env 可覆盖）。
 const DB_URL = process.env.DB_URL ?? "postgresql://app_rw:aiteam_dev@127.0.0.1:5433/manager_control_db";
@@ -53,27 +38,27 @@ export default defineConfig({
     {
       name: "harness",
       testMatch: /support\/__tests__\/.*\.test\.ts/,
-      use: { ...E2E_DEVICE },
+      use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "operation-smoke",
       testMatch: /operation\/.*\.spec\.ts/,
-      use: { ...E2E_DEVICE, baseURL: "http://127.0.0.1:5173" },
+      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5173" },
     },
     {
       name: "manager-smoke",
       testMatch: /manager\/.*\.spec\.ts/,
-      use: { ...E2E_DEVICE, baseURL: "http://127.0.0.1:5174" },
+      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5174" },
     },
     {
       name: "agent-smoke",
       testMatch: /agent\/.*\.spec\.ts/,
-      use: { ...E2E_DEVICE, baseURL: "http://127.0.0.1:5180" },
+      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5180" },
     },
     {
       name: "cross-tier",
       testMatch: /cross-tier\/.*\.spec\.ts/,
-      use: { ...E2E_DEVICE },
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
   webServer: [

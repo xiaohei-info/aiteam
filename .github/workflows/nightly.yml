@@ -64,11 +64,12 @@ jobs:
         working-directory: web
         run: pnpm --filter @aiteam/shared run build
 
+      - name: Generate nightly Playwright config (${{ matrix.browser }})
+        run: node .github/scripts/write-nightly-playwright-config.mjs ${{ matrix.browser }}
+
       - name: Nightly E2E — ${{ matrix.browser }}
         working-directory: web
-        env:
-          AITEAM_E2E_BROWSER: ${{ matrix.browser }}
-        run: pnpm e2e
+        run: pnpm exec playwright test --config=playwright.nightly.config.ts
 
       - name: Upload report
         if: always()
@@ -145,8 +146,8 @@ jobs:
       - name: Build shared
         working-directory: web
         run: pnpm --filter @aiteam/shared run build
+      - name: Generate nightly Playwright config (chromium)
+        run: node .github/scripts/write-nightly-playwright-config.mjs chromium
       - name: Performance observation run (non-blocking)
         working-directory: web
-        env:
-          AITEAM_E2E_BROWSER: chromium
-        run: pnpm e2e
+        run: pnpm exec playwright test --config=playwright.nightly.config.ts
