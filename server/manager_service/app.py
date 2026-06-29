@@ -23,6 +23,13 @@ from .routes_recruit import build_recruit_router
 from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
+from .routes_billing import build_billing_router
+from .routes_llm import build_llm_router
+from .routes_memory_items import build_memory_items_router
+from .routes_connector_ops import build_connector_ops_router
+from .routes_org import build_org_router
+from .routes_settings import build_settings_router
+from .routes_collab_audit import build_audit_router, build_collab_router
 from .operator_catalog import FakeOperatorCatalogClient, OperatorCatalogClient
 
 
@@ -104,6 +111,21 @@ app.include_router(build_snapshot_router(_verifier))
 # F01/F02 控制面收端（Operator→Manager 云侧调用，05 §5.1 D4）。无 token 校验（服务间调用）。
 app.include_router(tenant_router)
 app.include_router(bootstrap_router)
+# ---- 功能补全：B04/B09 账单工资+充值 ----
+app.include_router(build_billing_router(_verifier))
+# ---- 功能补全：B01 LLM Provider/Model 管理 ----
+app.include_router(build_llm_router(_verifier))
+# ---- 功能补全：B07 记忆条目管理 ----
+app.include_router(build_memory_items_router(_verifier))
+# ---- 功能补全：B05 连接器测试/状态/grants/预设 ----
+app.include_router(build_connector_ops_router(_verifier))
+# ---- 功能补全：P07 组织树/部门分配 ----
+app.include_router(build_org_router(_verifier))
+# ---- 功能补全：B08 企业设置/子管理员邀请 ----
+app.include_router(build_settings_router(_verifier))
+# ---- 功能补全：协作模板 + 审计事件 ----
+app.include_router(build_collab_router(_verifier))
+app.include_router(build_audit_router(_verifier))
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
 # 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。
 mount_frontend(app, settings.tier)
