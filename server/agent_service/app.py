@@ -40,7 +40,7 @@ from agent_service.usage.client import (
     ServiceClientUsageClient,
     UnconfiguredUsageClient,
 )
-from agent_service.usage.factory import build_usage_service
+from agent_service.usage.factory import build_run_usage_recorder, build_usage_service
 from agent_service.usage.routes import build_usage_router
 from shared.app_factory import create_app
 from shared.config import load_settings
@@ -116,6 +116,13 @@ def _build_usage_client() -> ManagerUsageClient:
     return ServiceClientUsageClient(_manager_service_client(settings))
 
 
+def _attach_usage_recorder(mainline, usage_service) -> None:
+    """把 usage 回流钩子接到 mainline；mainline 若不支持（测试替身）则静默跳过。"""
+    setter = getattr(mainline, "set_usage_recorder", None)
+    if callable(setter):
+        setter(build_run_usage_recorder(usage_service))
+
+
 def build_app(
     *,
     manager_client: ManagerLoginClient | None = None,
@@ -161,6 +168,8 @@ def build_app(
         app.router.on_startup.append(_loop_scheduler.start)
         app.router.on_shutdown.append(_loop_scheduler.stop)
     usage_service = build_usage_service(client=usage_client or _build_usage_client(), db=db)
+    # 闭环 C：把 run 终态 usage 回流进 outbox（D14：回流失败不阻断本地 run；mainline 侧已吞异常）。
+    _attach_usage_recorder(mainline, usage_service)
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(client=grants_client or _build_grants_client(), db=db)
     app.include_router(build_grants_router(grants_service))

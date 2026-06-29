@@ -21,6 +21,7 @@ from shared.contracts.gateway import Driver, Executor
 
 from ..local_db import apply_migrations, connect
 from .service import MainlineService
+from .service import UsageRecorder  # noqa: F401  (re-exported for assembly)
 from .store import (
     InMemoryConversationRepository,
     InMemoryMessageRepository,
@@ -48,6 +49,8 @@ def build_mainline_service(
     runtime_selection: str | None = None,
     runs_root: str | None = None,
     runtime_env_passthrough: tuple[str, ...] = (),
+    usage_recorder=None,
+    tenant_id: str = "local",
 ) -> MainlineService:
     if executor is not None or driver is not None:
         # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。
@@ -87,4 +90,6 @@ def build_mainline_service(
         broker=StreamBroker(),
         runner=runner,
         raw_archive=raw_archive,
+        usage_recorder=usage_recorder,
+        tenant_id=tenant_id,
     )

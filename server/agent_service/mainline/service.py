@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 
 from shared.contracts.enums import ConversationState, DisplayState
 from shared.contracts.events import AgentRuntimeEvent
@@ -53,6 +54,16 @@ _TERMINAL_RUN_STATUS: dict[str, RunStatus] = {
 }
 
 
+UsageRecorder = Callable[[str, str, "RunStatus", "dict | None", "str | None"], None]
+"""闭环 C 运行期→用量 outbox 钩子（A5 / 04 §6.5 / 05 §5.2 / D13/D14）。
+
+在 run 终态落库后**尽力**回调一次，签名为 (tenant_id, run_id, run_status, usage, error)：
+- 只把 runtime 提取的 usage dict（token/成本计量）交给 outbox 服务脱敏聚合；绝不传会话内容。
+- 失败一律吞掉、绝不抛出：outbox 不可用 / 上报对端不可达只影响用量回流，不阻断本地 run（D14）。
+调用方（agent app 装配）注入 `UsageService` 的薄适配器；默认 None = 不回流（dev/测试默认）。
+"""
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
@@ -80,6 +91,7 @@ class MainlineService:
         runner: GatewayRunner,
         raw_archive: RawEventArchive,
         tenant_id: str = "local",
+        usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._conversations = conversations
         self._messages = messages
@@ -90,6 +102,7 @@ class MainlineService:
         self._runner = runner
         self._raw_archive = raw_archive
         self._tenant_id = tenant_id
+        self._usage_recorder = usage_recorder
 
     @property
     def broker(self) -> StreamBroker:
@@ -178,6 +191,8 @@ class MainlineService:
         final_run = self._finalize_run(run.id, conversation_id, result)
         if task_id is not None:
             self._tasks.set_status(task_id, _task_status_for(final_run.status))
+        # 闭环 C：run 终态落库后尽力把用量回流进 outbox（D14：失败不阻断本地 run）。
+        self._record_run_usage(final_run)
         await self._broker.publish_display(conversation_id, DisplayState.RESOLVED, run_id=run.id)
         return final_run
 
@@ -205,6 +220,27 @@ class MainlineService:
         stored = self._timeline.append(business)
         # 3) 推业务事件给订阅者（只推产品事件，绝不推 runtime 原生事件）。
         await self._broker.publish_timeline(stored)
+
+    def set_usage_recorder(self, recorder: "UsageRecorder | None") -> None:
+        """运行期注入/替换用量回流钩子（供 app 装配在 mainline 与 usage_service 都就绪后接线）。
+
+        传 None 即关闭回流。注入的 recorder 仍受 _record_run_usage 的异常吞没保护（D14）。
+        """
+        self._usage_recorder = recorder
+
+    def _record_run_usage(self, run: Run) -> None:
+        """闭环 C 运行期→用量 outbox 钩子：把本次 run 的 usage 回流进 outbox（尽力，不阻断）。
+
+        只回传 runtime 提取的 usage dict（token/成本计量）与终态/error 诊断串；**绝不**回传
+        会话内容/prompt/completion（D13：脱敏在下游聚合器，本钩子只交计量）。未注入 recorder
+        或 recorder 抛异常时静默吞掉——用量回流是尽力而为的治理副链，不阻断本地主链（D14）。
+        """
+        if self._usage_recorder is None:
+            return
+        try:
+            self._usage_recorder(self._tenant_id, run.id, run.status, run.usage, run.error)
+        except Exception:  # noqa: BLE001 — D14：outbox 副链失败不阻断本地 run
+            pass
 
     def _finalize_run(self, run_id: str, conversation_id: str, result: RunResult) -> Run:
         """据 timeline 终态事件收敛 Run 持久终态（#64 单一真相源）。
