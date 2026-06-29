@@ -89,7 +89,7 @@ def _provision_initial_quota_policy(dsn: str, tenant_id: str, policy: dict) -> N
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             # 设置租户上下文（RLS 策略要求）
-            cur.execute("SET LOCAL app.tenant_id = %s", (tenant_id,))
+            cur.execute("SELECT set_config('app.tenant_id', %s, true)", (tenant_id,))
 
             # 幂等插入：ON CONFLICT DO NOTHING（重复调用不报错）
             cur.execute(

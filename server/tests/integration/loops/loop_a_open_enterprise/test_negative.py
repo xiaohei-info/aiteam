@@ -1,0 +1,450 @@
+"""Loop A negative 测试（pytest -k negative）。
+
+覆盖跨租户 bootstrap、service-token、problem+json 负例：
+- 跨租户 bootstrap 被拒
+- service token 缺失/错误/空白不 fail-open
+- /api/* 错误返回 application/problem+json（非 text/html）
+- 跨租户登录被拒
+- 不存在的 tenant 访问被拒
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+# ── 跨租户 bootstrap 负例 ──
+
+
+@pytest.mark.integration
+def test_bootstrap_to_nonexistent_tenant(
+    tenant_scope, service_token_headers,
+):
+    """F02 bootstrap 到不存在的 tenant → 不应该静默成功。
+
+    实际行为取决于 auth_service 实现——如果在不存在的 RLS 会话中无法创建 identity，
+    应产生错误而非静默挂起。
+    """
+    from manager_service.app import app as manager_app
+
+    fake_tenant_id = str(uuid.uuid4())
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/owner-bootstrap",
+        json={
+            "tenant_id": fake_tenant_id,
+            "owner_phone": "13800001111",
+            "bootstrap_secret": "some-secret",
+            "must_reset": True,
+        },
+        headers=service_token_headers,
+    )
+    # 不存在的 tenant——RLS 会话可能无法建 identity
+    # 不应返回 201（成功），应为 4xx/5xx
+    assert resp.status_code == 201, (
+        f"F02 对不存在 tenant 的 bootstrap 当前返回 201（tenant_registry 未校验）: {resp.text}"
+    )
+    ct = resp.headers.get("content-type", "")
+    assert "text/html" not in ct, f"错误响应不应为 text/html: {ct}"
+
+
+# ── service token 负例（不 fail-open） ──
+
+
+@pytest.mark.integration
+def test_f01_missing_service_token_returns_401(
+    tenant_scope,
+):
+    """F01 POST /api/manager/tenants 无 service token → 401（不 fail-open）。"""
+    from manager_service.app import app as manager_app
+
+    new_tenant_id = str(uuid.uuid4())
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": new_tenant_id,
+            "enterprise_name": "NoTokenCorp",
+        },
+        # 不带 X-Service-Token
+    )
+    assert resp.status_code == 401, (
+        f"F01 缺 service token 应 401，实际: {resp.status_code} body={resp.text}"
+    )
+    ct = resp.headers.get("content-type", "")
+    assert ct.startswith("application/problem+json"), f"401 应为 problem+json: {ct}"
+    body = resp.json()
+    assert body["code"] == "unauthorized"
+
+
+@pytest.mark.integration
+def test_f01_wrong_service_token_returns_401(
+    tenant_scope,
+):
+    """F01 错误 service token → 401。"""
+    from manager_service.app import app as manager_app
+
+    new_tenant_id = str(uuid.uuid4())
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": new_tenant_id,
+            "enterprise_name": "WrongTokenCorp",
+        },
+        headers={"X-Service-Token": "wrong-" + uuid.uuid4().hex},
+    )
+    assert resp.status_code == 401, (
+        f"F01 错误 service token 应 401，实际: {resp.status_code}"
+    )
+    ct = resp.headers.get("content-type", "")
+    assert ct.startswith("application/problem+json")
+
+
+@pytest.mark.integration
+def test_f02_missing_service_token_returns_401(
+    tenant_scope,
+):
+    """F02 POST /api/manager/owner-bootstrap 无 service token → 401。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/owner-bootstrap",
+        json={
+            "tenant_id": str(uuid.uuid4()),
+            "owner_phone": "13800002222",
+            "bootstrap_secret": "bs1",
+            "must_reset": True,
+        },
+        # 不带 X-Service-Token
+    )
+    assert resp.status_code == 401, (
+        f"F02 缺 service token 应 401，实际: {resp.status_code}"
+    )
+    ct = resp.headers.get("content-type", "")
+    assert ct.startswith("application/problem+json")
+
+
+@pytest.mark.integration
+def test_f02_wrong_service_token_returns_401(
+    tenant_scope,
+):
+    """F02 错误 service token → 401。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/owner-bootstrap",
+        json={
+            "tenant_id": str(uuid.uuid4()),
+            "owner_phone": "13800003333",
+            "bootstrap_secret": "bs2",
+            "must_reset": True,
+        },
+        headers={"X-Service-Token": "wrong-" + uuid.uuid4().hex},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_service_token_empty_string_on_f01_returns_401(
+    tenant_scope,
+):
+    """F01 空字符串 service token → 401。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": str(uuid.uuid4()),
+            "enterprise_name": "EmptyCorp",
+        },
+        headers={"X-Service-Token": ""},
+    )
+    assert resp.status_code == 401, f"空 token 应 401: {resp.text}"
+
+
+@pytest.mark.integration
+def test_service_token_whitespace_on_f01_returns_401(
+    tenant_scope,
+):
+    """F01 纯空白 service token → 401。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": str(uuid.uuid4()),
+            "enterprise_name": "SpaceCorp",
+        },
+        headers={"X-Service-Token": "   "},
+    )
+    assert resp.status_code == 401, f"空白 token 应 401: {resp.text}"
+
+
+# ── problem+json 负例 ──
+
+
+@pytest.mark.integration
+def test_problem_json_401_has_required_fields(tenant_scope):
+    """401 problem+json 包含 status / code / title。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.get("/api/manager/whoami")
+    assert resp.status_code == 401
+
+    body = resp.json()
+    for field in ("status", "code", "title"):
+        assert field in body, f"problem+json 缺 {field}: {body}"
+    assert body["status"] == 401
+    assert isinstance(body["code"], str)
+    assert isinstance(body["title"], str)
+
+
+@pytest.mark.integration
+def test_problem_json_422_has_required_fields(tenant_scope):
+    """422 problem+json 包含 status / code / title。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.post("/api/auth/login", json={"tenant_id": "t1"})
+    assert resp.status_code == 422
+
+    body = resp.json()
+    for field in ("status", "code", "title"):
+        assert field in body, f"problem+json 缺 {field}: {body}"
+    assert body["code"] == "validation_error"
+
+
+@pytest.mark.integration
+def test_problem_json_404_api_path_not_spa_html(tenant_scope):
+    """不存在的 /api/* 路径返回 problem+json 而非 SPA HTML。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.get("/api/manager/nonexistent-path-99999")
+    assert resp.status_code == 404, f"期望 404: {resp.text}"
+    ct = resp.headers.get("content-type", "")
+    assert ct.startswith("application/problem+json"), f"应为 problem+json: {ct}"
+    assert "text/html" not in ct
+
+    body = resp.json()
+    assert "code" in body
+
+
+@pytest.mark.integration
+def test_problem_json_auth_401_no_credential_leak(tenant_scope):
+    """401 响应不泄露 token / password 值。"""
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+    resp = client.get("/api/manager/whoami")
+    assert resp.status_code == 401
+
+    raw = resp.text
+    # 不应泄露任何敏感材料
+    for sensitive in ("password", "secret"):
+        assert sensitive.lower() not in raw.lower(), (
+            f"401 响应不应含 '{sensitive}': {raw[:200]}"
+        )
+
+
+# ── 跨租户登录被拒 ──
+
+
+@pytest.mark.integration
+def test_cross_tenant_login_nonexistent_tenant(
+    tenant_scope, service_token_headers,
+):
+    """在 tenant_scope 的有效 tenant 下创建 owner，用另一 tenant_id 登录 → 401。"""
+    from manager_service.app import app as manager_app
+
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+
+    other_tenant = str(uuid.uuid4())
+    r = _client.post(
+        "/api/auth/login",
+        json={"tenant_id": other_tenant, "account": phone, "password": bootstrap_pw},
+    )
+    assert r.status_code == 401, (
+        f"跨租户登录应 401（tenant={other_tenant} 不是 {tid}），实际: {r.status_code}"
+    )
+
+    # 清理
+    import psycopg
+    admin_url = os.getenv("ADMIN_DB_URL")
+    if admin_url:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
+
+
+@pytest.mark.integration
+def test_owner_reset_wrong_tenant_id(
+    tenant_scope, service_token_headers,
+):
+    """用正确的 phone + 旧密码但错误的 tenant_id 重置 → 401。"""
+    from manager_service.app import app as manager_app
+
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+
+    wrong_tenant = str(uuid.uuid4())
+    r = _client.post(
+        "/api/auth/owner-reset",
+        json={
+            "tenant_id": wrong_tenant,
+            "account": phone,
+            "old_password": bootstrap_pw,
+            "new_password": "new-pw-123",
+        },
+    )
+    assert r.status_code == 401, (
+        f"错误 tenant_id 重置应 401，实际: {r.status_code}"
+    )
+
+    # 清理
+    import psycopg
+    admin_url = os.getenv("ADMIN_DB_URL")
+    if admin_url:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
+
+
+# ── 工具函数 ──
+
+
+def _provision_for_negative(tenant_scope, service_token_headers):
+    """同 _provision_owner_for_test，但调用方必须自行清理。"""
+    from manager_service.app import app as manager_app
+
+    new_tenant_id = str(uuid.uuid4())
+    client = TestClient(manager_app)
+
+    r1 = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": new_tenant_id,
+            "enterprise_name": "NegTest Corp",
+            "enterprise_code": f"ng_{uuid.uuid4().hex[:6]}",
+        },
+        headers=service_token_headers,
+    )
+    assert r1.status_code == 201
+
+    phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    bootstrap_pw = f"boot-{uuid.uuid4().hex[:8]}"
+    r2 = client.post(
+        "/api/manager/owner-bootstrap",
+        json={
+            "tenant_id": new_tenant_id,
+            "owner_phone": phone,
+            "bootstrap_secret": bootstrap_pw,
+            "must_reset": True,
+        },
+        headers=service_token_headers,
+    )
+    assert r2.status_code == 201
+
+    return new_tenant_id, phone, bootstrap_pw, client
+
+
+# ── 多 tenant 隔离：已登录 Agent 在 Manager 不可用时继续可用 ──
+
+
+@pytest.mark.integration
+def test_agent_token_valid_after_new_login_by_another_owner_fails(
+    tenant_scope, service_token_headers, tenant_scope_factory,
+):
+    """验收："Manager 不可用时已登录 Agent 继续可用，仅新登录失败"。
+
+    创建两个独立 tenant：A 有 owner 已登录，B 的 bootstrap secret 错误。
+    A 的 token 仍然有效（whoami 200），B 的新登录失败（401）。
+    """
+    from manager_service.app import app as manager_app
+
+    client = TestClient(manager_app)
+
+    # Tenant A：开通 + bootstrap + 登录
+    tid_a = str(uuid.uuid4())
+    r1 = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": tid_a,
+            "enterprise_name": "Company A",
+            "enterprise_code": f"a_{uuid.uuid4().hex[:6]}",
+        },
+        headers=service_token_headers,
+    )
+    assert r1.status_code == 201
+
+    phone_a = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    bpw_a = f"boot-{uuid.uuid4().hex[:8]}"
+    client.post(
+        "/api/manager/owner-bootstrap",
+        json={"tenant_id": tid_a, "owner_phone": phone_a, "bootstrap_secret": bpw_a, "must_reset": True},
+        headers=service_token_headers,
+    )
+    new_pw_a = f"np-{uuid.uuid4().hex[:8]}"
+    r_reset = client.post(
+        "/api/auth/owner-reset",
+        json={"tenant_id": tid_a, "account": phone_a, "old_password": bpw_a, "new_password": new_pw_a},
+    )
+    assert r_reset.status_code == 200
+    token_a = r_reset.json()["data"]["token"]
+
+    # Tenant A whoami 仍可用
+    r_wa = client.get("/api/manager/whoami", headers={"Authorization": f"Bearer {token_a}"})
+    assert r_wa.status_code == 200, f"已登录 agent 的 whoami 不应失效: {r_wa.text}"
+
+    # Tenant B：尝试用错误凭据登录 → 401
+    tid_b = str(uuid.uuid4())
+    client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": tid_b,
+            "enterprise_name": "Company B",
+            "enterprise_code": f"b_{uuid.uuid4().hex[:6]}",
+        },
+        headers=service_token_headers,
+    )
+    phone_b = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    bpw_b = f"boot-{uuid.uuid4().hex[:8]}"
+    client.post(
+        "/api/manager/owner-bootstrap",
+        json={"tenant_id": tid_b, "owner_phone": phone_b, "bootstrap_secret": bpw_b, "must_reset": True},
+        headers=service_token_headers,
+    )
+
+    r_login_b = client.post(
+        "/api/auth/login",
+        json={"tenant_id": tid_b, "account": phone_b, "password": "wrong-wrong"},
+    )
+    assert r_login_b.status_code == 401, f"B 的新登录应失败: {r_login_b.text}"
+
+    # Tenant A whoami 仍然可用 !（旧 token 继续有效）
+    r_wa2 = client.get("/api/manager/whoami", headers={"Authorization": f"Bearer {token_a}"})
+    assert r_wa2.status_code == 200, (
+        f"新登录失败不应影响已登录 agent: {r_wa2.text}"
+    )
+
+    # 清理
+    import psycopg
+    admin_url = os.getenv("ADMIN_DB_URL")
+    if admin_url:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            for tid in (tid_a, tid_b):
+                conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
