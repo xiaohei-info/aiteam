@@ -20,7 +20,7 @@ export function useSettingsApi(): SettingsApi {
       update(body) { return client.patch<EnterpriseSettings>("/api/manager/settings", { body }); },
       async listInvites() { const r = await client.listGet<AdminInvite>("/api/manager/settings/admin-invites"); return r.items ?? []; },
       createInvite(phone, display_name = "") { return client.post<AdminInvite>("/api/manager/settings/admin-invites", { body: { phone, display_name } }); },
-      deleteInvite(invite_id) { return client.delete(`/api/manager/settings/admin-invites/${invite_id}`); },
+      deleteInvite(invite_id) { return client.del(`/api/manager/settings/admin-invites/${invite_id}`); },
     };
   }, [token, onUnauthorized]);
 }

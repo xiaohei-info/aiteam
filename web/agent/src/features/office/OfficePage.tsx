@@ -3,13 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
 import { GlassPanel } from "@aiteam/shared/ui";
 import { useApp } from "../../lib/app-context";
-import { getScene, type OfficeScene } from "./useOfficeApi";
+import { getScene } from "./useOfficeApi";
+import type { OfficeScene } from "./types";
 
 const STATUS_COLORS: Record<string, string> = { working: "text-warning", ready: "text-success", offline: "text-text-muted", busy: "text-danger" };
 const STATUS_ICONS: Record<string, string> = { working: "⚡", ready: "●", offline: "○", busy: "🔄" };
 
 export function OfficePage() {
-  const { client, i18n } = useApp();
+  const { client } = useApp();
   const [scene, setScene] = useState<OfficeScene | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

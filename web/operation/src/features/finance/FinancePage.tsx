@@ -38,7 +38,7 @@ export function FinancePage(): ReactNode {
         <h1 className="m-0 text-xl font-bold text-text-primary">财务管理</h1>
         <div className="flex gap-xs">
           {PERIODS.map((p) => (
-            <Button key={p.key} variant={period === p.key ? "primary" : "ghost"} size="sm" onClick={() => setPeriod(p.key)}>
+            <Button key={p.key} variant={period === p.key ? "metal" : "ghost"} size="sm" onClick={() => setPeriod(p.key)}>
               {p.label}
             </Button>
           ))}

@@ -21,10 +21,10 @@ export function useLlmApi(): LlmApi {
       async listProviders() { const r = await client.listGet<LlmProvider>("/api/manager/llm/providers"); return r.items ?? []; },
       createProvider(body) { return client.post<LlmProvider>("/api/manager/llm/providers", { body }); },
       patchProvider(provider_id, body) { return client.patch<LlmProvider>(`/api/manager/llm/providers/${provider_id}`, { body }); },
-      deleteProvider(provider_id) { return client.delete(`/api/manager/llm/providers/${provider_id}`); },
+      deleteProvider(provider_id) { return client.del(`/api/manager/llm/providers/${provider_id}`); },
       async listModels(provider_id) { const sp = provider_id ? `?provider_id=${provider_id}` : ""; const r = await client.listGet<LlmModel>(`/api/manager/llm/models${sp}`); return r.items ?? []; },
       createModel(provider_id, body) { return client.post<LlmModel>(`/api/manager/llm/providers/${provider_id}/models`, { body }); },
-      deleteModel(model_id) { return client.delete(`/api/manager/llm/models/${model_id}`); },
+      deleteModel(model_id) { return client.del(`/api/manager/llm/models/${model_id}`); },
     };
   }, [token, onUnauthorized]);
 }

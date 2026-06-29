@@ -1,10 +1,10 @@
 /** P03 人才市场页 — 专家模板浏览 + 招募。 */
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useApp } from "../../lib/app-context";
-import { listTemplates, recruit, type MarketTemplate } from "./useMarketplaceApi";
+import { listTemplates, recruit } from "./useMarketplaceApi";
+import type { MarketTemplate } from "./types";
 
 const CATEGORIES = ["全部", "市场营销", "财务分析", "技术研发", "客户服务", "人力资源"];
 
@@ -43,7 +43,7 @@ export function MarketplacePage() {
 
       <div className="flex gap-xs">
         {CATEGORIES.map((c) => (
-          <Button key={c} variant={category === c ? "primary" : "ghost"} size="sm" onClick={() => setCategory(c)}>{c}</Button>
+          <Button key={c} variant={category === c ? "metal" : "ghost"} size="sm" onClick={() => setCategory(c)}>{c}</Button>
         ))}
       </div>
 
@@ -60,7 +60,7 @@ export function MarketplacePage() {
               <p className="m-0 mt-xs text-xs text-text-muted">已有 {t.recruit_count} 家企业招募</p>
               <div className="mt-sm">
                 {t.is_recruited ? <span className="text-sm text-success">✓ 已招募</span> :
-                  <Button variant="primary" size="sm" disabled={recruiting === t.template_id} onClick={() => void handleRecruit(t.template_id)}>
+                  <Button variant="metal" size="sm" disabled={recruiting === t.template_id} onClick={() => void handleRecruit(t.template_id)}>
                     {recruiting === t.template_id ? "招募中…" : "招募"}
                   </Button>}
               </div>

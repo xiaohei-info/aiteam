@@ -24,7 +24,7 @@ export function MemoryPage(): ReactNode {
     <section className="flex flex-col gap-md">
       <div className="flex items-center justify-between">
         <h1 className="m-0 text-xl font-bold text-text-primary">记忆管理</h1>
-        <Button variant="primary" size="sm" onClick={() => setShowForm(!showForm)}>+ 新增记忆</Button>
+        <Button variant="metal" size="sm" onClick={() => setShowForm(!showForm)}>+ 新增记忆</Button>
       </div>
 
       <div className="flex gap-sm"><Input placeholder="搜索记忆内容…" value={keyword} onChange={(e) => setKeyword((e.target as HTMLInputElement).value)} className="flex-1" /><Button variant="ghost" onClick={() => void load()}>搜索</Button></div>
@@ -34,7 +34,7 @@ export function MemoryPage(): ReactNode {
           <Field label="员工ID"><Input value={newEmployee} onChange={(e) => setNewEmployee((e.target as HTMLInputElement).value)} /></Field>
           <Field label="记忆内容"><Input value={newContent} onChange={(e) => setNewContent((e.target as HTMLInputElement).value)} /></Field>
           <div className="mt-sm">
-            <Button variant="primary" size="sm" onClick={async () => { if (newEmployee && newContent) { await api.create({ employee_id: newEmployee, content: newContent }); setNewContent(""); setNewEmployee(""); setShowForm(false); await load(); } }}>保存</Button>
+            <Button variant="metal" size="sm" onClick={async () => { if (newEmployee && newContent) { await api.create({ employee_id: newEmployee, content: newContent }); setNewContent(""); setNewEmployee(""); setShowForm(false); await load(); } }}>保存</Button>
             <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>取消</Button>
           </div>
         </GlassPanel>

@@ -27,8 +27,8 @@ function createApi(client: ApiClient): AccountsApi {
     getDetail(orgId) {
       return client.get<EnterpriseAccountDetail>(`/api/operation/admin/enterprises/${orgId}`);
     },
-    exportAll() {
-      return client.get<{ export_url: string; total: number }>("/api/operation/admin/enterprises/export/all") ?? Promise.resolve({ export_url: "", total: 0 });
+    async exportAll() {
+      return (await client.get<{ export_url: string; total: number }>("/api/operation/admin/enterprises/export/all")) ?? { export_url: "", total: 0 };
     },
     doAction(orgId, body) {
       return client.post(`/api/operation/admin/enterprises/${orgId}/actions`, { body });

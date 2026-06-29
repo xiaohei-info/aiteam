@@ -40,7 +40,7 @@ export function SettingsPage(): ReactNode {
       {settings && (
         <GlassPanel className="rounded-window p-md">
           <Field label="企业名称"><Input value={settings.enterprise_name} onChange={(e) => setSettings({ ...settings, enterprise_name: (e.target as HTMLInputElement).value })} /></Field>
-          <div className="mt-sm"><Button variant="primary" size="sm" onClick={handleSave}>保存</Button></div>
+          <div className="mt-sm"><Button variant="metal" size="sm" onClick={handleSave}>保存</Button></div>
         </GlassPanel>
       )}
 
@@ -48,7 +48,7 @@ export function SettingsPage(): ReactNode {
       <GlassPanel className="rounded-window p-md">
         <div className="flex gap-sm">
           <Input placeholder="手机号" value={newPhone} onChange={(e) => setNewPhone((e.target as HTMLInputElement).value)} className="flex-1" />
-          <Button variant="primary" size="sm" onClick={handleInvite}>发送邀请</Button>
+          <Button variant="metal" size="sm" onClick={handleInvite}>发送邀请</Button>
         </div>
         {invites.length > 0 && (
           <div className="mt-md space-y-xs">

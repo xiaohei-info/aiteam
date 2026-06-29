@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useApp } from "../../lib/app-context";
-import { listKnowledgeBases, searchKnowledge, type KnowledgeBase, type KnowledgeSearchResult } from "./useKnowledgeApi";
+import { listKnowledgeBases, searchKnowledge, uploadDocument } from "./useKnowledgeApi";
+import type { KnowledgeBase, KnowledgeSearchResult } from "./types";
 
 export function KnowledgePage() {
   const { client, i18n } = useApp();
@@ -30,7 +31,7 @@ export function KnowledgePage() {
 
   const handleUpload = useCallback(async () => {
     if (!selectedKb || !fileRef.current?.files?.[0]) return;
-    try { await import("../../lib/api-client").then(({ AgentApiClient }) => void 0); /* noop type guard */ await client.post(`/api/agent/knowledge-bases/${selectedKb}/documents`, { body: (() => { const fd = new FormData(); fd.append("file", fileRef.current!.files![0]); return fd; })() }); await load(); } catch { /* ignore */ }
+    try { await uploadDocument(client, selectedKb, fileRef.current.files[0]); await load(); } catch { /* ignore */ }
   }, [client, selectedKb, load]);
 
   if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
@@ -56,7 +57,7 @@ export function KnowledgePage() {
             <GlassPanel className="rounded-window p-md">
               <div className="flex gap-sm">
                 <Input placeholder="语义搜索…" value={query} onChange={(e) => setQuery((e.target as HTMLInputElement).value)} className="flex-1" />
-                <Button variant="primary" size="sm" onClick={() => void handleSearch()}>搜索</Button>
+                <Button variant="metal" size="sm" onClick={() => void handleSearch()}>搜索</Button>
                 <input ref={fileRef} type="file" className="hidden" onChange={() => void handleUpload()} />
                 <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>上传文档</Button>
               </div>

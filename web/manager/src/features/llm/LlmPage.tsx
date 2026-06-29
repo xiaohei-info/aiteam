@@ -24,14 +24,14 @@ export function LlmPage(): ReactNode {
     <section className="flex flex-col gap-md">
       <div className="flex items-center justify-between">
         <h1 className="m-0 text-xl font-bold text-text-primary">LLM 管理</h1>
-        <Button variant="primary" size="sm" onClick={() => setShowForm(!showForm)}>+ 新增 Provider</Button>
+        <Button variant="metal" size="sm" onClick={() => setShowForm(!showForm)}>+ 新增 Provider</Button>
       </div>
 
       {showForm && (
         <GlassPanel className="rounded-window p-md">
           <Field label="Provider 名称"><Input value={newName} onChange={(e) => setNewName((e.target as HTMLInputElement).value)} /></Field>
           <Field label="Provider Key"><Input value={newKey} onChange={(e) => setNewKey((e.target as HTMLInputElement).value)} /></Field>
-          <div className="mt-sm"><Button variant="primary" size="sm" onClick={async () => { if (newName && newKey) { await api.createProvider({ name: newName, provider_key: newKey }); setNewName(""); setNewKey(""); setShowForm(false); await load(); } }}>创建</Button><Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>取消</Button></div>
+          <div className="mt-sm"><Button variant="metal" size="sm" onClick={async () => { if (newName && newKey) { await api.createProvider({ name: newName, provider_key: newKey }); setNewName(""); setNewKey(""); setShowForm(false); await load(); } }}>创建</Button><Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>取消</Button></div>
         </GlassPanel>
       )}
 

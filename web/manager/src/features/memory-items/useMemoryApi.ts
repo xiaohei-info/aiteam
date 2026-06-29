@@ -26,7 +26,7 @@ export function useMemoryApi(): MemoryApi {
       },
       create(body) { return client.post<MemoryItem>("/api/manager/memories", { body }); },
       update(memory_id, body) { return client.patch(`/api/manager/memories/${memory_id}`, { body }); },
-      delete(memory_id) { return client.delete(`/api/manager/memories/${memory_id}`); },
+      delete(memory_id) { return client.del(`/api/manager/memories/${memory_id}`); },
       bulkDelete(memory_ids) { return client.post("/api/manager/memories/bulk-delete", { body: { memory_ids } }); },
     };
   }, [token, onUnauthorized]);

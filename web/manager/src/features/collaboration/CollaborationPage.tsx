@@ -28,7 +28,7 @@ export function CollaborationPage(): ReactNode {
         <Field label="路由提示词"><textarea className={textareaCls} value={tmpl.routing_prompt} onChange={(e) => setTmpl({ ...tmpl, routing_prompt: e.target.value })} /></Field>
         <Field label="接续提示词"><textarea className={textareaCls} value={tmpl.handoff_prompt} onChange={(e) => setTmpl({ ...tmpl, handoff_prompt: e.target.value })} /></Field>
         <Field label="单消息最大回复数"><Input type="number" value={tmpl.max_replies_per_message} onChange={(e) => setTmpl({ ...tmpl, max_replies_per_message: Number((e.target as HTMLInputElement).value) })} /></Field>
-        <div className="mt-sm"><Button variant="primary" size="sm" onClick={handleSave}>保存</Button></div>
+        <div className="mt-sm"><Button variant="metal" size="sm" onClick={handleSave}>保存</Button></div>
       </GlassPanel>
     </section>
   );
