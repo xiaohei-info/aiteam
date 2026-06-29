@@ -1,7 +1,7 @@
-"""shared/app_factory.py create_app + _mount_frontend 分支测试。
+"""shared/app_factory.py create_app + mount_frontend 分支测试。
 
 覆盖：healthz/readyz 端点返回体、expose_public_docs True/False 分支、
-_mount_frontend 挂载静态资源 + SPA 回退（用真实临时 dist 目录，测试后清理）。
+mount_frontend 挂载静态资源 + SPA 回退（用真实临时 dist 目录，测试后清理）。
 """
 
 import shutil
@@ -11,11 +11,11 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.config import Settings
 
 
-# 与 _mount_frontend 内部计算对齐：server/../web/<tier>/dist
+# 与 mount_frontend 内部计算对齐：server/../web/<tier>/dist
 _DIST = Path(__file__).resolve().parent.parent.parent.parent / "web" / "operation" / "dist"
 
 
@@ -75,9 +75,10 @@ def _dist_dir():
 
 
 def test_mount_frontend_serves_spa(_dist_dir):
-    """有 dist 产物时 _mount_frontend 挂载静态资源 + SPA 回退。"""
+    """有 dist 产物时 mount_frontend 挂载静态资源 + SPA 回退。"""
     assert _DIST.exists()
     app = create_app(_settings(), _empty_router())
+    mount_frontend(app, "operation")
     client = TestClient(app)
 
     # 根路径 -> index.html
@@ -102,6 +103,7 @@ def test_mount_frontend_serves_spa(_dist_dir):
 def test_mount_frontend_does_not_fallback_for_unknown_api_paths(_dist_dir):
     """未知 API 路径必须返回 problem+json 404，不能被 SPA 回退吞成 index.html。"""
     app = create_app(_settings(), _empty_router())
+    mount_frontend(app, "operation")
     client = TestClient(app)
 
     response = client.get("/api/operation/catalog")
@@ -114,10 +116,11 @@ def test_mount_frontend_does_not_fallback_for_unknown_api_paths(_dist_dir):
 
 
 def test_mount_frontend_no_dist_skips():
-    """无 dist 产物时 _mount_frontend 跳过挂载（早退分支）。"""
+    """无 dist 产物时 mount_frontend 跳过挂载（早退分支）。"""
     if _DIST.exists():
         pytest.skip("dist 产物已存在，无法验证跳过分支")
     app = create_app(_settings(tier="manager"), _empty_router(prefix="/api/manager"))
+    mount_frontend(app, "manager")
     client = TestClient(app)
     # 无 SPA 挂载 -> 未知路径 404
     assert client.get("/some/route").status_code == 404

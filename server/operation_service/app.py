@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.auth import RS256TokenVerifier, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
@@ -34,7 +34,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-app = create_app(load_settings("operation"), router)
+settings = load_settings("operation")
+app = create_app(settings, router)
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth
 app.state._token_verifier = _verifier
@@ -47,3 +48,5 @@ app.include_router(enterprise_router)
 app.include_router(catalog_pull_router)
 app.include_router(catalog_router)
 app.include_router(rollup_router)
+# 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
+mount_frontend(app, settings.tier)

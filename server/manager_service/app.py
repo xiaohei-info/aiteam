@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
@@ -75,7 +75,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-app = create_app(load_settings("manager"), router)
+settings = load_settings("manager")
+app = create_app(settings, router)
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
 # Operator 目录拉取端口（05 F06/F07，#176）。有 OPERATOR_URL → 真实客户端；无 → Fake。
@@ -103,3 +104,6 @@ app.include_router(build_snapshot_router(_verifier))
 # F01/F02 控制面收端（Operator→Manager 云侧调用，05 §5.1 D4）。无 token 校验（服务间调用）。
 app.include_router(tenant_router)
 app.include_router(bootstrap_router)
+# 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
+# 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。
+mount_frontend(app, settings.tier)

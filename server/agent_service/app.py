@@ -42,7 +42,7 @@ from agent_service.usage.client import (
 )
 from agent_service.usage.factory import build_run_usage_recorder, build_usage_service
 from agent_service.usage.routes import build_usage_router
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.config import load_settings
 from shared.service_client import ServiceClient
 from shared.contracts.auth import TokenClaims
@@ -173,6 +173,8 @@ def build_app(
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(client=grants_client or _build_grants_client(), db=db)
     app.include_router(build_grants_router(grants_service))
+    # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
+    mount_frontend(app, settings.tier)
     return app
 
 

@@ -2,6 +2,10 @@
 
 统一装配：可观测中间件、problem+json 异常处理、健康/就绪端点、OpenAPI 文档入口。
 各端服务只需提供自己的 APIRouter（前缀 /api/<tier>），不重复造壳（CLAUDE/AGENTS §3.10 底座统一）。
+
+前端静态托管由各端 app.py 在**所有 API 路由注册之后**显式调用 ``mount_frontend(app, tier)``
+完成——绝不在 create_app 内部挂载，否则 SPA fallback catch-all ``GET /{full_path:path}``
+会遮蔽此后才 include 的 GET API 路由（#257）。
 """
 
 from __future__ import annotations
@@ -45,14 +49,19 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
 
     app.include_router(router)
 
-    # 托管本端前端静态资源（08 §12.3 各端自托管，D15 用户端产物不含控制面前端）
-    _mount_frontend(app, settings.tier)
+    # 注意：前端静态托管（含 SPA fallback catch-all）不在此处挂载——由各端 app.py 在
+    # 所有 include_router 之后最后调用 mount_frontend(app, settings.tier)（#257）。
+    # 若在此挂载，后注册的 GET API 路由会被 catch-all 遮蔽 → 404。
 
     return app
 
 
-def _mount_frontend(app: FastAPI, tier: str) -> None:
+def mount_frontend(app: FastAPI, tier: str) -> None:
     """挂载本端前端静态产物到根路径。
+
+    必须在各端 app.py 的**所有 API 路由 include 之后**最后调用（#257）：
+    SPA fallback 注册 catch-all ``GET /{full_path:path}``，Starlette 按注册顺序匹配，
+    若在 API 路由之前注册，后注册的 GET API 路由会被遮蔽。
 
     Args:
         app: FastAPI 应用实例
