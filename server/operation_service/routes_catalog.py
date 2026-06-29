@@ -20,6 +20,8 @@ from .catalog_schemas import (
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
+    UpdateExpertTemplateRequest,
+    UpdateSolutionTemplateRequest,
 )
 from .catalog_service import CatalogService
 
@@ -142,6 +144,24 @@ async def get_catalog_entry(
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
     return Envelope[CatalogEntryResponse](data=service.get_entry(catalog_type, template_id))
+
+
+@router.patch(
+    "/{catalog_type}/{template_id}",
+    description="编辑目录项（专家模板或行业方案）", summary="编辑目录项",
+    operation_id="operation_update_catalog_entry",
+)
+async def update_catalog_entry(
+    catalog_type: CatalogType,
+    template_id: str,
+    body: UpdateExpertTemplateRequest | UpdateSolutionTemplateRequest,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Envelope[CatalogEntryResponse]:
+    entry = service.get_entry(catalog_type, template_id)
+    changes = body.model_dump(exclude_none=True)
+    updated = service.update_entry(catalog_type, template_id, changes)
+    return Envelope[CatalogEntryResponse](data=updated)
 
 
 # ---- Manager 拉取端点（服务间调用，05 F06/F07 §5.4）----

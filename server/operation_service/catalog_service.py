@@ -131,6 +131,14 @@ class CatalogService:
     ) -> list[CatalogEntryResponse]:
         return [_to_response(e) for e in self._repo.list(catalog_type=catalog_type, status=status)]
 
+    def update_entry(
+        self, catalog_type: CatalogType, template_id: str, changes: dict
+    ) -> CatalogEntryResponse:
+        """编辑目录项（部分更新）。"""
+        entry = self._repo.get(catalog_type, template_id)
+        updated = self._repo.update(entry, **changes)
+        return _to_response(updated)
+
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
 
     def pull_expert_template_detail(
