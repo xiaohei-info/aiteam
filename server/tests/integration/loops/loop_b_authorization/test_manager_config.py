@@ -36,6 +36,7 @@ def _tenant_ctx(tid: str, roles: list[str], user_id: str | None = None) -> Tenan
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_manager_config_owner_create_employee_and_grant_to_member_then_pull_authorized(
     migrated_pg, pg_admin_url,
 ):

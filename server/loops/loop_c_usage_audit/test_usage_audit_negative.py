@@ -84,6 +84,7 @@ def test_usage_recorder_exception_does_not_block_local_run():
 # ---- quota soft/hard 不阻断本地 run（D24）----
 
 
+@pytest.mark.pr_quick
 def test_quota_soft_default_does_not_block_run():
     """soft 配额超阈只产出告警/建议，不阻断；本地 run 不感知配额评估。"""
     manager = UsageAuditQuotaService(FakeUsageAuditRepo())

@@ -73,6 +73,7 @@ def test_health_checkpoints_not_in_api_routes(operation_client, manager_client, 
 # ── 错误响应 problem+json（非 SPA fallback） ──
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_api_404_returns_problem_json_not_spa_html(operation_client, manager_client, agent_client):
     """三端不存在的 /api/* 路径返回 application/problem+json 而非 SPA HTML。"""
     for name, client in [

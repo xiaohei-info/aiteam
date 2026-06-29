@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_bootstrap_to_nonexistent_tenant_rejected(
     tenant_scope, service_token_headers,
 ):

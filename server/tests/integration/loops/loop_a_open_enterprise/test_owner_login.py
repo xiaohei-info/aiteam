@@ -221,6 +221,7 @@ def test_repeated_reset_login_cycle(
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_owner_whoami_after_login(
     tenant_scope, service_token_headers,
 ):
@@ -256,6 +257,7 @@ def test_owner_whoami_after_login(
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_manager_whoami_without_auth_returns_401(
     tenant_scope,
 ):

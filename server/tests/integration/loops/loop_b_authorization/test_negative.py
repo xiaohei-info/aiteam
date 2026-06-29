@@ -127,6 +127,7 @@ def test_negative_ungranted_member_sees_no_experts(
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_negative_snapshot_unauthorized_member_403_and_audit_recorded(
     migrated_pg, pg_admin_url,
 ):

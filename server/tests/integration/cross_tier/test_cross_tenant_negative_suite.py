@@ -55,6 +55,7 @@ def test_tenant_scope_factory_produces_isolated_tenants(
 # ── 跨租户 HTTP 访问被拒 ──
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_manager_whoami_accepts_valid_cross_tenant_token_but_token_has_different_tenant(
     tenant_scope, cross_tenant_actor,
 ):

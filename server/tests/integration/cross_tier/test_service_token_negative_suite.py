@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 # ── service token 守卫直接测试 ──
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_service_token_guard_missing_returns_401():
     """缺失 service token 返回 401（生产模式 fail-closed）。"""
     from tests.integration.fixtures.identities import build_service_token_probe_app

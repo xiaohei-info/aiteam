@@ -26,6 +26,7 @@ def _agent_service(client=None):
     return build_usage_service(client=client or CapturingUsageClient())
 
 
+@pytest.mark.pr_quick
 def test_outbox_flush_delivers_usage_summary_to_manager():
     """Agent record_usage -> flush -> Manager ingest_upload -> list_usage 可见聚合。"""
     client = CapturingUsageClient()
@@ -74,6 +75,7 @@ def test_outbox_flush_delivers_audit_summary_to_manager():
     assert actions == {"login", "grant_change"}
 
 
+@pytest.mark.pr_quick
 def test_manager_ingested_usage_has_no_conversation_content():
     """D13：上报到 Manager 的 payload 不含会话文本/文件/工具 I/O 明细。"""
     client = CapturingUsageClient()

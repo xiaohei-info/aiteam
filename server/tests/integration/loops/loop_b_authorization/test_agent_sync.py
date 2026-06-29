@@ -235,6 +235,7 @@ def test_agent_sync_grants_pull_lands_local_projection(
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_agent_sync_freeze_snapshot_via_manager_http_then_local_loadable(
     migrated_pg, pg_admin_url,
 ):

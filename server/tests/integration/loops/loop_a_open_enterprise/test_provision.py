@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_tenant_provision_creates_tenant_registry(
     tenant_scope, service_token_headers, migrated_pg,
 ):
@@ -152,6 +153,7 @@ def test_tenant_provision_with_quota_policy(
 
 
 @pytest.mark.integration
+@pytest.mark.pr_quick
 def test_owner_bootstrap_creates_identity(
     tenant_scope, service_token_headers,
 ):
