@@ -107,15 +107,15 @@ class MemoryItemsRepository:
 
     def delete(self, ctx: TenantContext, memory_id: str) -> bool:
         with self._router.session(ctx) as s:
-            s.execute("DELETE FROM memory_item WHERE id = %s", (memory_id,))
-            return True
+            cur = s.execute("DELETE FROM memory_item WHERE id = %s", (memory_id,))
+            return cur.rowcount > 0
 
     def bulk_delete(self, ctx: TenantContext, memory_ids: list[str]) -> int:
         if not memory_ids:
             return 0
         with self._router.session(ctx) as s:
-            s.execute(
+            cur = s.execute(
                 "DELETE FROM memory_item WHERE id = ANY(%s)",
                 (memory_ids,),
             )
-            return len(memory_ids)
+            return cur.rowcount

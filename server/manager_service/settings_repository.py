@@ -49,7 +49,7 @@ def _row_to_settings(row: Any) -> SettingsRow:
 def _row_to_invite(row: Any) -> AdminInviteRow:
     return AdminInviteRow(
         invite_id=str(row[0]), phone=row[1], display_name=row[2] or "",
-        status=row[3], created_at=row[4],
+        status=row[4], created_at=row[5],
     )
 
 
@@ -106,7 +106,7 @@ class SettingsRepository:
     def list_invites(self, ctx: TenantContext) -> list[AdminInviteRow]:
         with self._router.session(ctx) as s:
             rows = s.execute(
-                "SELECT id, email, roles, status, created_at "
+                "SELECT id, email, display_name, roles, status, created_at "
                 "FROM admin_invite ORDER BY created_at DESC",
             ).fetchall()
         return [_row_to_invite(r) for r in rows]
@@ -114,17 +114,17 @@ class SettingsRepository:
     def create_invite(self, ctx: TenantContext, *, phone: str, display_name: str, created_by: str) -> AdminInviteRow:
         with self._router.session(ctx) as s:
             row = s.execute(
-                "INSERT INTO admin_invite (tenant_id, email, roles, created_by) "
-                "VALUES (%s, %s, %s, %s) "
-                "RETURNING id, email, roles, status, created_at",
-                (ctx.tenant_id, phone, [display_name], created_by),
+                "INSERT INTO admin_invite (tenant_id, email, display_name, roles, created_by) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "RETURNING id, email, display_name, roles, status, created_at",
+                (ctx.tenant_id, phone, display_name, [], created_by),
             ).fetchone()
         return _row_to_invite(row)
 
     def delete_invite(self, ctx: TenantContext, invite_id: str) -> bool:
         with self._router.session(ctx) as s:
-            s.execute("DELETE FROM admin_invite WHERE id = %s", (invite_id,))
-            return True
+            cur = s.execute("DELETE FROM admin_invite WHERE id = %s", (invite_id,))
+            return cur.rowcount > 0
 
 
 def _empty_settings() -> SettingsRow:

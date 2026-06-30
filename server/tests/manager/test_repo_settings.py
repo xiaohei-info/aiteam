@@ -42,14 +42,14 @@ def test_upsert_settings_update():
 def test_list_invites():
     from datetime import datetime
     router = FakeRouter()
-    router.queue(FakeCursor(fetchall=[("i-1", "13800138000", ["Admin"], "pending", datetime.utcnow())]))
+    router.queue(FakeCursor(fetchall=[("i-1", "13800138000", "Admin", ["Admin"], "pending", datetime.utcnow())]))
     rows = SettingsRepository(router).list_invites(ctx())
     assert len(rows) == 1
 
 def test_create_invite():
     from datetime import datetime
     router = FakeRouter()
-    router.queue(FakeCursor(fetchone=("i-1", "13800138000", ["Admin"], "pending", datetime.utcnow())))
+    router.queue(FakeCursor(fetchone=("i-1", "13800138000", "Admin", [], "pending", datetime.utcnow())))
     row = SettingsRepository(router).create_invite(ctx(), phone="13800138000", display_name="Admin", created_by="u-1")
     assert row.phone == "13800138000"
 
@@ -61,4 +61,4 @@ def test_delete_invite():
 def test_delete_invite_not_found():
     router = FakeRouter()
     router.queue(FakeCursor(rowcount=0))
-    assert SettingsRepository(router).delete_invite(ctx(), "i-1") is True
+    assert SettingsRepository(router).delete_invite(ctx(), "i-1") is False

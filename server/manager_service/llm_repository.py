@@ -120,8 +120,8 @@ class LlmRepository:
 
     def delete_provider(self, ctx: TenantContext, provider_id: str) -> bool:
         with self._router.session(ctx) as s:
-            s.execute("DELETE FROM llm_provider WHERE id = %s", (provider_id,))
-            return s.rowcount > 0 if hasattr(s, 'rowcount') else True
+            cur = s.execute("DELETE FROM llm_provider WHERE id = %s", (provider_id,))
+            return cur.rowcount > 0
 
     def list_models(self, ctx: TenantContext, provider_id: str | None = None) -> list[LlmModelRow]:
         with self._router.session(ctx) as s:
@@ -154,5 +154,5 @@ class LlmRepository:
 
     def delete_model(self, ctx: TenantContext, model_id: str) -> bool:
         with self._router.session(ctx) as s:
-            s.execute("DELETE FROM llm_model WHERE id = %s", (model_id,))
-            return True
+            cur = s.execute("DELETE FROM llm_model WHERE id = %s", (model_id,))
+            return cur.rowcount > 0

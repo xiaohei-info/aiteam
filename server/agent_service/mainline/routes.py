@@ -227,7 +227,10 @@ def build_mainline_router(
                             await frame_task
                         return
                     frame = frame_task.result()
-                    await websocket.send_json(frame_to_dict(frame))
+                    try:
+                        await websocket.send_json(frame_to_dict(frame))
+                    except (WebSocketDisconnect, RuntimeError):
+                        return
             finally:
                 disconnect_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

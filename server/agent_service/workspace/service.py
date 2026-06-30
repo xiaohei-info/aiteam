@@ -195,7 +195,8 @@ class WorkspaceService:
         if template is None:
             return RecruitResult(success=False, message=f"模板不存在: {template_id}")
 
-        # 检查是否已招募：已有同 display_name 的投影即为已招募
+        # 检查是否已招募：通过 display_name 匹配。
+        # 注意：若两个不同模板 display_name 相同会有碰撞风险（低优先级已知限制）。
         for p in self._projections.list_all():
             if p.display_name == template.display_name and not p.revoked:
                 return RecruitResult(

@@ -45,10 +45,14 @@ class ConnectorOpsService:
         return {"connector_id": row.connector_id, "employee_ids": row.employee_ids}
 
     def set_grants(self, ctx: TenantContext, connector_id: str, employee_ids: list[str], action: str) -> dict:
+        current = self._repo.get_grants(ctx, connector_id)
         if action == "revoke":
-            employee_ids = []
+            if current:
+                remaining = set(current.employee_ids) - set(employee_ids)
+                employee_ids = list(remaining)
+            else:
+                employee_ids = []
         else:
-            current = self._repo.get_grants(ctx, connector_id)
             if current:
                 merged = set(current.employee_ids) | set(employee_ids)
                 employee_ids = list(merged)

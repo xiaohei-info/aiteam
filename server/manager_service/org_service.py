@@ -26,9 +26,8 @@ class OrgService:
             ).fetchall()
             # 取所有员工（含 department_ids）
             emp_rows = s.execute(
-                "SELECT e.id, e.employee_slug, e.display_name, COALESCE(au.department_ids, '{}') as dept_ids "
-                "FROM employee e LEFT JOIN app_user au ON au.id = e.id "
-                "ORDER BY e.display_name",
+                "SELECT e.id, e.employee_slug, e.display_name, e.department_ids "
+                "FROM employee e ORDER BY e.display_name",
             ).fetchall()
 
         # 构建部门节点
@@ -78,9 +77,9 @@ class OrgService:
             emp = s.execute("SELECT id FROM employee WHERE id = %s", (employee_id,)).fetchone()
             if emp is None:
                 raise NotFound("employee not found in this tenant")
-            # 更新 app_user.department_ids（追加到列表）
+            # 更新 employee.department_ids（追加到列表）
             s.execute(
-                "UPDATE app_user SET department_ids = array_append(department_ids, %s) "
+                "UPDATE employee SET department_ids = array_append(department_ids, %s) "
                 "WHERE id = %s AND NOT (%s = ANY(department_ids))",
                 (department_id, employee_id, department_id),
             )
