@@ -80,6 +80,10 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
           <BootstrapSecretDisplay
             secret={provisionResult.owner_bootstrap_secret}
             enterpriseId={provisionResult.enterprise_id}
+            tenantId={provisionResult.tenant_id}
+            ownerPhone={provisionResult.owner_phone}
+            enterpriseCode={provisionResult.enterprise_code}
+            mustReset={provisionResult.must_reset}
           />
         </div>
       ) : null}
@@ -121,6 +125,9 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
           <BootstrapSecretDisplay
             secret={resetResult.owner_bootstrap_secret}
             enterpriseId={resetEnterpriseId.trim()}
+            tenantId={resetResult.tenant_id}
+            ownerPhone={resetResult.owner_phone}
+            mustReset={resetResult.must_reset}
           />
         </div>
       ) : null}
