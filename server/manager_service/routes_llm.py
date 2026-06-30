@@ -5,67 +5,39 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
-from uuid import uuid4
-
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError
+
+from .llm_repository import LlmRepository
+from .llm_service import LlmService
+from .routes_llm_schemas import (
+    LlmModelCreate,
+    LlmModelOut,
+    LlmProviderCreate,
+    LlmProviderOut,
+    LlmProviderPatch,
+)
 
 
-class LlmProviderOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    provider_id: str
-    name: str
-    provider_key: str
-    base_url: str | None = None
-    is_active: bool = True
-    model_count: int = 0
-    created_at: datetime
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
 
-class LlmProviderCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    provider_key: str
-    base_url: str | None = None
-
-
-class LlmProviderPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = None
-    base_url: str | None = None
-    is_active: bool | None = None
-
-
-class LlmModelOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model_id: str
-    provider_id: str
-    model_uid: str
-    model_name: str
-    context_window: int | None = None
-    input_price: str | None = None
-    output_price: str | None = None
-    is_active: bool = True
-
-
-class LlmModelCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model_uid: str
-    model_name: str
-    context_window: int | None = None
-    input_price: str | None = None
-    output_price: str | None = None
+def _service(request: Request) -> LlmService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    cache = getattr(request.app.state, "_llm_service", None)
+    if cache is None:
+        cache = LlmService(LlmRepository(PgTenantRouter(dsn)))
+        request.app.state._llm_service = cache
+    return cache
 
 
 def build_llm_router(verifier) -> APIRouter:
@@ -74,85 +46,88 @@ def build_llm_router(verifier) -> APIRouter:
 
     @router.get("/providers", summary="列出 LLM Provider", operation_id="manager_llm_provider_list")
     async def list_providers(
+        request: Request,
         keyword: str | None = Query(default=None),
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[LlmProviderOut]:
-        tenant_context_from(claims)
-        return ListEnvelope(data=[])
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        items = svc.list_providers(ctx, keyword=keyword)
+        return ListEnvelope(data=[LlmProviderOut(**r) for r in items])
 
     @router.post("/providers", summary="新增 LLM Provider", operation_id="manager_llm_provider_create")
     async def create_provider(
         body: LlmProviderCreate,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[LlmProviderOut]:
-        tenant_context_from(claims)
-        now = datetime.now(timezone.utc)
-        return Envelope(data=LlmProviderOut(
-            provider_id=str(uuid4()),
-            name=body.name,
-            provider_key=body.provider_key,
-            base_url=body.base_url,
-            model_count=0,
-            created_at=now,
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.create_provider(ctx, name=body.name, provider_key=body.provider_key, base_url=body.base_url)
+        return Envelope(data=LlmProviderOut(**data))
 
     @router.patch("/providers/{provider_id}", summary="编辑 LLM Provider", operation_id="manager_llm_provider_patch")
     async def patch_provider(
         provider_id: str,
         body: LlmProviderPatch,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[LlmProviderOut]:
-        tenant_context_from(claims)
-        now = datetime.now(timezone.utc)
-        return Envelope(data=LlmProviderOut(
-            provider_id=provider_id,
-            name=body.name or "",
-            provider_key="",
-            base_url=body.base_url,
-            is_active=body.is_active if body.is_active is not None else True,
-            model_count=0,
-            created_at=now,
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.patch_provider(
+            ctx, provider_id, name=body.name, base_url=body.base_url, is_active=body.is_active,
+        )
+        return Envelope(data=LlmProviderOut(**data))
 
-    @router.delete("/providers/{provider_id}", summary="删除 LLM Provider", operation_id="manager_llm_provider_delete")
+    @router.delete("/providers/{provider_id}", summary="删除 LLM Provider", operation_id="manager_llm_provider_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_provider(
         provider_id: str,
+        request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
-        tenant_context_from(claims)
-        return {"deleted": True, "provider_id": provider_id}
+    ) -> Response:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        svc.delete_provider(ctx, provider_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/models", summary="列出 LLM Model（平铺）", operation_id="manager_llm_model_list")
     async def list_models(
+        request: Request,
         provider_id: str | None = Query(default=None),
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[LlmModelOut]:
-        tenant_context_from(claims)
-        return ListEnvelope(data=[])
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        items = svc.list_models(ctx, provider_id=provider_id)
+        return ListEnvelope(data=[LlmModelOut(**r) for r in items])
 
     @router.post("/providers/{provider_id}/models", summary="新增 LLM Model", operation_id="manager_llm_model_create")
     async def create_model(
         provider_id: str,
         body: LlmModelCreate,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[LlmModelOut]:
-        tenant_context_from(claims)
-        return Envelope(data=LlmModelOut(
-            model_id=str(uuid4()),
-            provider_id=provider_id,
-            model_uid=body.model_uid,
-            model_name=body.model_name,
-            context_window=body.context_window,
-            input_price=body.input_price,
-            output_price=body.output_price,
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.create_model(
+            ctx, provider_id=provider_id, model_uid=body.model_uid, model_name=body.model_name,
+            context_window=body.context_window, input_price=body.input_price, output_price=body.output_price,
+        )
+        return Envelope(data=LlmModelOut(**data))
 
-    @router.delete("/models/{model_id}", summary="删除 LLM Model", operation_id="manager_llm_model_delete")
+    @router.delete("/models/{model_id}", summary="删除 LLM Model", operation_id="manager_llm_model_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_model(
         model_id: str,
+        request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
-        tenant_context_from(claims)
-        return {"deleted": True, "model_id": model_id}
+    ) -> Response:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        svc.delete_model(ctx, model_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

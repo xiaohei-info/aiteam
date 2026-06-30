@@ -5,54 +5,38 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError
+
+from .routes_settings_schemas import (
+    AdminInviteCreate,
+    AdminInviteOut,
+    EnterpriseSettingsOut,
+    EnterpriseSettingsPatch,
+)
+from .settings_repository import SettingsRepository
+from .settings_service import SettingsService
 
 
-class EnterpriseSettingsOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enterprise_name: str = ""
-    logo_url: str | None = None
-    phone: str | None = None
-    wechat: str | None = None
-    invite_code: str | None = None
-    notify_on_task_complete: bool = True
-    notify_on_system: bool = True
-    version: str = "v1.0.0"
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
 
-class EnterpriseSettingsPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enterprise_name: str | None = None
-    logo_url: str | None = None
-    notify_on_task_complete: bool | None = None
-    notify_on_system: bool | None = None
-
-
-class AdminInviteOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    invite_id: str
-    phone: str
-    display_name: str
-    status: str = "pending"
-    created_at: datetime
-
-
-class AdminInviteCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    phone: str
-    display_name: str = ""
+def _service(request: Request) -> SettingsService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    cache = getattr(request.app.state, "_settings_service", None)
+    if cache is None:
+        cache = SettingsService(SettingsRepository(PgTenantRouter(dsn)))
+        request.app.state._settings_service = cache
+    return cache
 
 
 def build_settings_router(verifier) -> APIRouter:
@@ -60,53 +44,59 @@ def build_settings_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get("", summary="获取企业设置", operation_id="manager_settings_get")
-    async def get_settings(claims: TokenClaims = Depends(require)) -> Envelope[EnterpriseSettingsOut]:
-        tenant_context_from(claims)
-        return Envelope(data=EnterpriseSettingsOut())
+    async def get_settings(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[EnterpriseSettingsOut]:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.get_settings(ctx)
+        return Envelope(data=EnterpriseSettingsOut(**data))
 
     @router.patch("", summary="更新企业设置", operation_id="manager_settings_patch")
     async def patch_settings(
         body: EnterpriseSettingsPatch,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EnterpriseSettingsOut]:
-        tenant_context_from(claims)
-        current = EnterpriseSettingsOut()
-        if body.enterprise_name is not None:
-            current.enterprise_name = body.enterprise_name
-        if body.logo_url is not None:
-            current.logo_url = body.logo_url
-        if body.notify_on_task_complete is not None:
-            current.notify_on_task_complete = body.notify_on_task_complete
-        if body.notify_on_system is not None:
-            current.notify_on_system = body.notify_on_system
-        return Envelope(data=current)
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.patch_settings(
+            ctx, enterprise_name=body.enterprise_name, logo_url=body.logo_url,
+        )
+        return Envelope(data=EnterpriseSettingsOut(**data))
 
     @router.get("/admin-invites", summary="列出子管理员邀请", operation_id="manager_admin_invite_list")
-    async def list_invites(claims: TokenClaims = Depends(require)) -> ListEnvelope[AdminInviteOut]:
-        tenant_context_from(claims)
-        return ListEnvelope(data=[])
+    async def list_invites(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[AdminInviteOut]:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        items = svc.list_invites(ctx)
+        return ListEnvelope(data=[AdminInviteOut(**r) for r in items])
 
     @router.post("/admin-invites", summary="发送子管理员邀请", operation_id="manager_admin_invite_create")
     async def create_invite(
         body: AdminInviteCreate,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[AdminInviteOut]:
-        tenant_context_from(claims)
-        now = datetime.now(timezone.utc)
-        return Envelope(data=AdminInviteOut(
-            invite_id=str(uuid4()),
-            phone=body.phone,
-            display_name=body.display_name,
-            status="pending",
-            created_at=now,
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.create_invite(ctx, phone=body.phone, display_name=body.display_name)
+        return Envelope(data=AdminInviteOut(**data))
 
-    @router.delete("/admin-invites/{invite_id}", summary="撤销子管理员邀请", operation_id="manager_admin_invite_delete")
+    @router.delete("/admin-invites/{invite_id}", summary="撤销子管理员邀请", operation_id="manager_admin_invite_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_invite(
         invite_id: str,
+        request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
-        tenant_context_from(claims)
-        return {"deleted": True, "invite_id": invite_id}
+    ) -> Response:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        svc.delete_invite(ctx, invite_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router
