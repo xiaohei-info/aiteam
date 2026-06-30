@@ -35,6 +35,21 @@ class RegisterSolutionTemplateRequest(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list)
     skill_refs: list[str] = Field(default_factory=list)
     default_grants: dict | None = Field(default=None)
+    planner_prompt: str = Field(
+        default="", description="方案级协作编排规则：planner 阶段 prompt；空=回退运行时内置默认模板"
+    )
+    subtask_prompt: str = Field(
+        default="", description="方案级协作编排规则：子任务拆解 prompt"
+    )
+    aggregate_prompt: str = Field(
+        default="", description="方案级协作编排规则：多专家结果聚合 prompt"
+    )
+    default_kb_blueprint: dict = Field(default_factory=dict, description="默认知识库蓝图（apply 时下发）")
+    default_skill_bundle: dict = Field(default_factory=dict, description="默认技能包（apply 时下发）")
+    default_collaboration_template_ref: str | None = Field(
+        default=None, description="默认协作模板引用（可选）"
+    )
+    tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 
 class PublishTemplateRequest(BaseModel):
@@ -70,6 +85,13 @@ class UpdateSolutionTemplateRequest(BaseModel):
     knowledge_refs: list[str] | None = None
     skill_refs: list[str] | None = None
     default_grants: dict | None = None
+    planner_prompt: str | None = None
+    subtask_prompt: str | None = None
+    aggregate_prompt: str | None = None
+    default_kb_blueprint: dict | None = None
+    default_skill_bundle: dict | None = None
+    default_collaboration_template_ref: str | None = None
+    tags: list[str] | None = None
 
 
 class CatalogEntryResponse(BaseModel):

@@ -240,3 +240,60 @@ def test_update_solution_template_mixed_fields(service, manager):
     assert updated.display_name == "Growth v2"
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload.get("knowledge_refs") == ["k1", "k2"]
+
+
+# ---- Issue #278：方案模板编排规则/蓝图字段 ----
+
+def test_register_solution_with_orchestration_fields(service):
+    """注册方案时携带编排规则 + 蓝图字段，应存入 payload。"""
+    req = _solution(
+        planner_prompt="Plan the campaign",
+        subtask_prompt="Break into steps",
+        aggregate_prompt="Summarize outputs",
+        default_kb_blueprint={"graph": "knowledge_graph_v1"},
+        default_skill_bundle={"skills": ["seo", "analytics"]},
+        default_collaboration_template_ref="collab-tpl-001",
+        tags=["marketing", "growth"],
+    )
+    service.register_solution_template(req)
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_prompt"] == "Plan the campaign"
+    assert entry.payload["subtask_prompt"] == "Break into steps"
+    assert entry.payload["aggregate_prompt"] == "Summarize outputs"
+    assert entry.payload["default_kb_blueprint"] == {"graph": "knowledge_graph_v1"}
+    assert entry.payload["default_skill_bundle"] == {"skills": ["seo", "analytics"]}
+    assert entry.payload["default_collaboration_template_ref"] == "collab-tpl-001"
+    assert entry.payload["tags"] == ["marketing", "growth"]
+
+
+def test_register_solution_default_orchestration_fields(service):
+    """注册方案时不带编排字段，应落默认值（空字符串/空 dict/空 list/None）。"""
+    service.register_solution_template(_solution())
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_prompt"] == ""
+    assert entry.payload["subtask_prompt"] == ""
+    assert entry.payload["aggregate_prompt"] == ""
+    assert entry.payload["default_kb_blueprint"] == {}
+    assert entry.payload["default_skill_bundle"] == {}
+    assert entry.payload["default_collaboration_template_ref"] is None
+    assert entry.payload["tags"] == []
+
+
+def test_update_solution_orchestration_fields(service):
+    """PATCH 方案模板可更新编排字段。"""
+    service.register_solution_template(_solution())
+    service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {
+            "planner_prompt": "New planner",
+            "tags": ["updated"],
+            "default_kb_blueprint": {"new": True},
+        },
+    )
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_prompt"] == "New planner"
+    assert entry.payload["tags"] == ["updated"]
+    assert entry.payload["default_kb_blueprint"] == {"new": True}
+    # 未更新字段保持原默认值
+    assert entry.payload["subtask_prompt"] == ""
+    assert entry.payload["default_collaboration_template_ref"] is None

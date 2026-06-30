@@ -233,3 +233,59 @@ def test_openapi_exposes_pull_routes(client):
     assert "/api/operation/catalog/pull/solution-templates/{solution_id}" in paths
     assert "/api/operation/catalog/pull/expert-templates" in paths
     assert "/api/operation/catalog/pull/solution-templates" in paths
+
+
+# ---- Issue #278：方案包拉取透传编排规则/蓝图字段 ----
+
+def _register_solution_with_orchestration(client):
+    """辅助：注册并发布带编排字段的方案模板。"""
+    from shared.contracts.enums import PlatformRole
+
+    def _token(role: str) -> str:
+        from operation_service.app import _auth
+        from shared.contracts.auth import TokenClaims
+        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+
+    def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
+        return {"Authorization": f"Bearer {_token(role)}"}
+
+    client.post(
+        "/api/operation/catalog/solution-templates",
+        json={
+            "solution_id": "sol-orch",
+            "display_name": "Orchestration Solution",
+            "expert_template_ids": [],
+            "planner_prompt": "Plan multi-agent flow",
+            "subtask_prompt": "Decompose into subtasks",
+            "aggregate_prompt": "Merge expert outputs",
+            "default_kb_blueprint": {"graph": "kg_v1"},
+            "default_skill_bundle": {"skills": ["search"]},
+            "default_collaboration_template_ref": "collab-001",
+            "tags": ["ai", "agent"],
+        },
+        headers=_auth_header(),
+    )
+    client.post(
+        "/api/operation/catalog/solution_template/sol-orch/publish",
+        json={},
+        headers=_auth_header(),
+    )
+
+
+def test_pull_solution_package_includes_orchestration_fields(client):
+    """F07：拉取方案包时编排规则/蓝图字段应透传（issue #278 修复验证）。"""
+    _register_solution_with_orchestration(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/solution-templates/sol-orch",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["planner_prompt"] == "Plan multi-agent flow"
+    assert data["subtask_prompt"] == "Decompose into subtasks"
+    assert data["aggregate_prompt"] == "Merge expert outputs"
+    assert data["default_kb_blueprint"] == {"graph": "kg_v1"}
+    assert data["default_skill_bundle"] == {"skills": ["search"]}
+    assert data["default_collaboration_template_ref"] == "collab-001"
+    assert data["tags"] == ["ai", "agent"]

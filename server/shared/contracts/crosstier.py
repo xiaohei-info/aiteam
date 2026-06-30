@@ -87,6 +87,13 @@ class SolutionPackage(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
     skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
     default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
+    planner_prompt: str = Field(default="", description="方案级协作编排规则：planner prompt；空=回退运行时默认")
+    subtask_prompt: str = Field(default="", description="方案级协作编排规则：子任务拆解 prompt")
+    aggregate_prompt: str = Field(default="", description="方案级协作编排规则：多专家结果聚合 prompt")
+    default_kb_blueprint: dict = Field(default_factory=dict, description="默认知识库蓝图（apply 时下发）")
+    default_skill_bundle: dict = Field(default_factory=dict, description="默认技能包（apply 时下发）")
+    default_collaboration_template_ref: str | None = Field(default=None, description="默认协作模板引用（可选）")
+    tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 
 # ---- Agent → Manager（用户端主动访问）----

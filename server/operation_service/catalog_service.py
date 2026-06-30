@@ -77,6 +77,13 @@ class CatalogService:
                     "knowledge_refs": req.knowledge_refs,
                     "skill_refs": req.skill_refs,
                     "default_grants": req.default_grants,
+                    "planner_prompt": req.planner_prompt,
+                    "subtask_prompt": req.subtask_prompt,
+                    "aggregate_prompt": req.aggregate_prompt,
+                    "default_kb_blueprint": req.default_kb_blueprint,
+                    "default_skill_bundle": req.default_skill_bundle,
+                    "default_collaboration_template_ref": req.default_collaboration_template_ref,
+                    "tags": req.tags,
                 },
             )
         )
@@ -219,6 +226,13 @@ class CatalogService:
             knowledge_refs=payload.get("knowledge_refs", []),
             skill_refs=payload.get("skill_refs", []),
             default_grants=payload.get("default_grants"),
+            planner_prompt=payload.get("planner_prompt", ""),
+            subtask_prompt=payload.get("subtask_prompt", ""),
+            aggregate_prompt=payload.get("aggregate_prompt", ""),
+            default_kb_blueprint=payload.get("default_kb_blueprint", {}),
+            default_skill_bundle=payload.get("default_skill_bundle", {}),
+            default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
+            tags=payload.get("tags", []),
         )
 
     def list_published_expert_templates(self):
