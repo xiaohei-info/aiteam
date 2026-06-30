@@ -5,61 +5,38 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, Request
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError
+
+from .connector_ops_repository import ConnectorOpsRepository
+from .connector_ops_service import ConnectorOpsService
+from .routes_connector_schemas import (
+    ConnectorGrantsPatch,
+    ConnectorPreset,
+    ConnectorStatusOut,
+    ConnectorTestResult,
+    PRESETS,
+)
 
 
-class ConnectorStatusOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    connector_id: str
-    status: str  # connected | disconnected | error
-    last_check_at: datetime | None = None
-    error_message: str | None = None
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
 
-class ConnectorTestResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    connector_id: str
-    success: bool
-    latency_ms: int = 0
-    message: str = ""
-
-
-class ConnectorGrantsPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    employee_ids: list[str] = []
-    action: str = "grant"  # grant | revoke
-
-
-class ConnectorPreset(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    preset_id: str
-    name: str
-    type: str  # preset_oauth | preset_apikey | custom_mcp
-    icon: str | None = None
-    description: str = ""
-
-
-PRESETS: list[ConnectorPreset] = [
-    ConnectorPreset(preset_id="feishu", name="飞书", type="preset_oauth", icon="feishu", description="飞书办公协作"),
-    ConnectorPreset(preset_id="dingtalk", name="钉钉", type="preset_oauth", icon="dingtalk", description="钉钉办公协作"),
-    ConnectorPreset(preset_id="wecom", name="企业微信", type="preset_oauth", icon="wecom", description="企业微信"),
-    ConnectorPreset(preset_id="salesforce", name="Salesforce", type="preset_oauth", icon="salesforce", description="CRM"),
-    ConnectorPreset(preset_id="jira", name="Jira", type="preset_apikey", icon="jira", description="项目管理"),
-    ConnectorPreset(preset_id="github", name="GitHub", type="preset_oauth", icon="github", description="代码托管"),
-    ConnectorPreset(preset_id="slack", name="Slack", type="preset_oauth", icon="slack", description="团队沟通"),
-    ConnectorPreset(preset_id="google", name="Google Workspace", type="preset_oauth", icon="google", description="Google 办公套件"),
-]
+def _service(request: Request) -> ConnectorOpsService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    cache = getattr(request.app.state, "_connector_ops_service", None)
+    if cache is None:
+        cache = ConnectorOpsService(ConnectorOpsRepository(PgTenantRouter(dsn)))
+        request.app.state._connector_ops_service = cache
+    return cache
 
 
 def build_connector_ops_router(verifier) -> APIRouter:
@@ -74,40 +51,34 @@ def build_connector_ops_router(verifier) -> APIRouter:
     @router.get("/{connector_id}/status", summary="连接器健康状态", operation_id="manager_connector_status")
     async def get_status(
         connector_id: str,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorStatusOut]:
-        tenant_context_from(claims)
-        return Envelope(data=ConnectorStatusOut(
-            connector_id=connector_id,
-            status="disconnected",
-            last_check_at=datetime.now(timezone.utc),
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.get_status(ctx, connector_id)
+        return Envelope(data=ConnectorStatusOut(**data))
 
     @router.post("/{connector_id}/test", summary="测试连接器", operation_id="manager_connector_test")
     async def test_connector(
         connector_id: str,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorTestResult]:
-        tenant_context_from(claims)
-        return Envelope(data=ConnectorTestResult(
-            connector_id=connector_id,
-            success=True,
-            latency_ms=42,
-            message="连接测试成功",
-        ))
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.test_connector(ctx, connector_id)
+        return Envelope(data=ConnectorTestResult(**data))
 
     @router.patch("/{connector_id}/grants", summary="设置连接器对员工可见性", operation_id="manager_connector_grants")
     async def patch_grants(
         connector_id: str,
         body: ConnectorGrantsPatch,
+        request: Request,
         claims: TokenClaims = Depends(require),
     ) -> dict:
-        tenant_context_from(claims)
-        return {
-            "connector_id": connector_id,
-            "action": body.action,
-            "employee_ids": body.employee_ids,
-            "updated": True,
-        }
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        return svc.set_grants(ctx, connector_id, body.employee_ids, body.action)
 
     return router
