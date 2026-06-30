@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import CatalogStatus, CatalogType, PlatformRole
-from shared.contracts.envelope import Envelope
+from shared.contracts.envelope import Envelope, ListEnvelope
 
 from .catalog_dependencies import get_catalog_service
 from .catalog_schemas import (
@@ -126,8 +126,8 @@ async def list_catalog(
     status: CatalogStatus | None = None,
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
-) -> Envelope[list[CatalogEntryResponse]]:
-    return Envelope[list[CatalogEntryResponse]](
+) -> ListEnvelope[CatalogEntryResponse]:
+    return ListEnvelope[CatalogEntryResponse](
         data=service.list_catalog(catalog_type=catalog_type, status=status)
     )
 

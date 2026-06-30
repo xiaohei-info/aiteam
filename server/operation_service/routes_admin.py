@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
-from shared.contracts.envelope import Envelope
+from shared.contracts.envelope import Envelope, ListEnvelope
 
 from .admin_dependencies import get_admin_service
 from .admin_service import AdminService
@@ -149,10 +149,10 @@ def build_admin_router(verifier) -> APIRouter:
         page_size: int = Query(default=20, ge=1, le=100),
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
-    ) -> Envelope[list[EnterpriseAccountOut]]:
+    ) -> ListEnvelope[EnterpriseAccountOut]:
         rows = service.list_enterprises(keyword=keyword, status=status, page=page, page_size=page_size)
         items = [EnterpriseAccountOut(**r) for r in rows]
-        return Envelope(data=items)
+        return ListEnvelope[EnterpriseAccountOut](data=items)
 
     @router.get(
         "/enterprises/{org_id}",
@@ -214,9 +214,9 @@ def build_admin_router(verifier) -> APIRouter:
     async def solution_stats(
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
-    ) -> Envelope[list[SolutionStatsOut]]:
+    ) -> ListEnvelope[SolutionStatsOut]:
         rows = [SolutionStatsOut(**r) for r in service.get_solution_stats()]
-        return Envelope(data=rows)
+        return ListEnvelope[SolutionStatsOut](data=rows)
 
     # ---- S04 财务管理 ----
 
