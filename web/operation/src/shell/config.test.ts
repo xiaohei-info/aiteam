@@ -43,6 +43,7 @@ describe("operation shell config", () => {
       "enterprises",
       "accounts",
       "catalog",
+      "solutions",
       "finance",
       "board",
       "health",
