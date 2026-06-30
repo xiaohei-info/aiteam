@@ -2,12 +2,12 @@
  * 招募专家页（W-M.3，08 §12.1）。
  *
  * 三段：可招募专家模板（浏览 Operator 目录 → 招募为本 tenant 实例）、可应用行业方案（浏览 → 应用）、
- * 已招募专家实例（列出 + 查看/编辑配置）。owner/enterprise_admin 可写，其余只读（后端鉴权兜底）。
- * 编辑：PUT 全量替换，仅改 display_name/persona，保全其余配置字段（其余只读展示）。
+ * 已招募专家实例（列出 + 查看/编辑配置：模型/运行时/能力/记忆策略，PUT 全量替换）。owner/enterprise_admin 可写，其余只读（后端鉴权兜底）。
+ * 编辑：PUT 全量替换，可改 display_name/persona/模型配置/运行时/能力引用/记忆策略，未改字段保全原值。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
@@ -18,7 +18,7 @@ const textareaCls =
   "outline-none transition placeholder:text-text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold";
 
 export function ExpertsPage(): ReactNode {
-  const { session } = useSession();
+  const { session, token } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useExpertsApi();
@@ -74,7 +74,7 @@ export function ExpertsPage(): ReactNode {
 
   const handleExport = useCallback(async () => {
     try {
-      const token = session.token;
+      // token is captured from useSession() above
       const resp = await fetch("/api/manager/employees/export/all", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -89,7 +89,7 @@ export function ExpertsPage(): ReactNode {
     } catch {
       // silently ignore export errors
     }
-  }, [session.token]);
+  }, [token]);
 
   return (
     <section className="flex flex-col gap-lg">
@@ -278,11 +278,51 @@ interface InstanceProps {
   onSave: (updated: EmployeeConfig) => void;
 }
 
+/** 列表/JSON 字段编辑：逗号或换行分隔输入 → 字符串数组。 */
+function parseList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactNode {
   const i18n = useI18n();
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(employee.display_name);
   const [persona, setPersona] = useState(employee.persona ?? "");
+  const [model, setModel] = useState(employee.model_policy.model ?? "");
+  const [providerRef, setProviderRef] = useState(employee.model_policy.provider_ref ?? "");
+  const [thinkingLevel, setThinkingLevel] = useState(employee.model_policy.thinking_level ?? "");
+  const [runtimeBinding, setRuntimeBinding] = useState(employee.runtime_policy.runtime_binding ?? "");
+  const [timeoutSeconds, setTimeoutSeconds] = useState(
+    employee.runtime_policy.timeout_seconds != null ? String(employee.runtime_policy.timeout_seconds) : "",
+  );
+  const [tools, setTools] = useState(employee.tools.join("\n"));
+  const [skills, setSkills] = useState(employee.skills.join("\n"));
+  const [knowledgeRefs, setKnowledgeRefs] = useState(employee.knowledge_refs.join("\n"));
+  const [connectorRefs, setConnectorRefs] = useState(employee.connector_refs.join("\n"));
+  const [memoryPolicy, setMemoryPolicy] = useState(
+    employee.memory_policy != null ? JSON.stringify(employee.memory_policy, null, 2) : "",
+  );
+
+  const resetEditing = useCallback(() => {
+    setDisplayName(employee.display_name);
+    setPersona(employee.persona ?? "");
+    setModel(employee.model_policy.model ?? "");
+    setProviderRef(employee.model_policy.provider_ref ?? "");
+    setThinkingLevel(employee.model_policy.thinking_level ?? "");
+    setRuntimeBinding(employee.runtime_policy.runtime_binding ?? "");
+    setTimeoutSeconds(
+      employee.runtime_policy.timeout_seconds != null ? String(employee.runtime_policy.timeout_seconds) : "",
+    );
+    setTools(employee.tools.join("\n"));
+    setSkills(employee.skills.join("\n"));
+    setKnowledgeRefs(employee.knowledge_refs.join("\n"));
+    setConnectorRefs(employee.connector_refs.join("\n"));
+    setMemoryPolicy(employee.memory_policy != null ? JSON.stringify(employee.memory_policy, null, 2) : "");
+    setEditing(false);
+  }, [employee]);
 
   return (
     <GlassPanel data-testid="instance-row" className="flex flex-col gap-sm rounded-window p-lg">
@@ -298,11 +338,29 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-sm">
             <dt className="text-text-muted">{i18n.t("manager.experts.model")}</dt>
-            <dd className="m-0 text-text-primary">{employee.model_policy.model}</dd>
-            <dt className="text-text-muted">{i18n.t("manager.experts.runtime")}</dt>
+            <dd className="m-0 text-text-primary">{employee.model_policy.model || "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.provider_ref")}</dt>
+            <dd className="m-0 text-text-primary">{employee.model_policy.provider_ref ?? "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.thinking_level")}</dt>
+            <dd className="m-0 text-text-primary">{employee.model_policy.thinking_level ?? "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.runtime_binding")}</dt>
             <dd className="m-0 text-text-primary">{employee.runtime_policy.runtime_binding ?? "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.timeout_seconds")}</dt>
+            <dd className="m-0 text-text-primary">
+              {employee.runtime_policy.timeout_seconds != null ? String(employee.runtime_policy.timeout_seconds) : "-"}
+            </dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.tools")}</dt>
+            <dd className="m-0 text-text-primary">{employee.tools.join(", ") || "-"}</dd>
             <dt className="text-text-muted">{i18n.t("manager.experts.skills")}</dt>
             <dd className="m-0 text-text-primary">{employee.skills.join(", ") || "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.knowledge_refs")}</dt>
+            <dd className="m-0 text-text-primary">{employee.knowledge_refs.join(", ") || "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.connector_refs")}</dt>
+            <dd className="m-0 text-text-primary">{employee.connector_refs.join(", ") || "-"}</dd>
+            <dt className="text-text-muted">{i18n.t("manager.experts.memory_policy")}</dt>
+            <dd className="m-0 text-text-primary">
+              {employee.memory_policy != null ? JSON.stringify(employee.memory_policy) : "-"}
+            </dd>
           </dl>
           {canWrite && (
             <Button
@@ -321,20 +379,130 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
           className="flex flex-col gap-md"
           onSubmit={(e) => {
             e.preventDefault();
-            onSave({ ...employee, display_name: displayName.trim(), persona });
+            const memoryParsed = memoryPolicy.trim() ? JSON.parse(memoryPolicy) : null;
+            onSave({
+              ...employee,
+              display_name: displayName.trim(),
+              persona,
+              model_policy: {
+                model: model.trim(),
+                provider_ref: providerRef.trim() || null,
+                thinking_level: thinkingLevel.trim() || null,
+              },
+              runtime_policy: {
+                runtime_binding: runtimeBinding.trim() || null,
+                timeout_seconds: timeoutSeconds.trim() ? Number(timeoutSeconds) : null,
+              },
+              tools: parseList(tools),
+              skills: parseList(skills),
+              knowledge_refs: parseList(knowledgeRefs),
+              connector_refs: parseList(connectorRefs),
+              memory_policy: memoryParsed,
+            });
             setEditing(false);
           }}
         >
-          <Field label={i18n.t("manager.experts.display_name")}>
-            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </Field>
-          <Field label={i18n.t("manager.experts.persona")}>
-            <textarea
-              className={textareaCls}
-              value={persona}
-              onChange={(e) => setPersona(e.target.value)}
-            />
-          </Field>
+          <fieldset className="flex flex-col gap-md">
+            <legend className="mb-xs text-xs font-semibold text-text-secondary">
+              {i18n.t("manager.experts.section_prompt")}
+            </legend>
+            <Field label={i18n.t("manager.experts.display_name")}>
+              <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+            </Field>
+            <Field label={i18n.t("manager.experts.persona")}>
+              <textarea
+                className={textareaCls}
+                value={persona}
+                onChange={(e) => setPersona(e.target.value)}
+                rows={4}
+              />
+            </Field>
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-md">
+            <legend className="mb-xs text-xs font-semibold text-text-secondary">
+              {i18n.t("manager.experts.section_model")}
+            </legend>
+            <Field label={i18n.t("manager.experts.model")}>
+              <Input value={model} onChange={(e) => setModel(e.target.value)} />
+            </Field>
+            <Field label={i18n.t("manager.experts.provider_ref")}>
+              <Input value={providerRef} onChange={(e) => setProviderRef(e.target.value)} />
+            </Field>
+            <Field label={i18n.t("manager.experts.thinking_level")}>
+              <Select
+                value={thinkingLevel}
+                onChange={(e) => setThinkingLevel(e.target.value)}
+              >
+                <option value="">{i18n.t("manager.experts.thinking_none")}</option>
+                <option value="basic">{i18n.t("manager.experts.thinking_basic")}</option>
+                <option value="deep">{i18n.t("manager.experts.thinking_deep")}</option>
+              </Select>
+            </Field>
+            <Field label={i18n.t("manager.experts.runtime_binding")}>
+              <Input value={runtimeBinding} onChange={(e) => setRuntimeBinding(e.target.value)} />
+            </Field>
+            <Field label={i18n.t("manager.experts.timeout_seconds")}>
+              <Input
+                type="number"
+                value={timeoutSeconds}
+                onChange={(e) => setTimeoutSeconds(e.target.value)}
+              />
+            </Field>
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-md">
+            <legend className="mb-xs text-xs font-semibold text-text-secondary">
+              {i18n.t("manager.experts.section_capabilities")}
+            </legend>
+            <Field label={i18n.t("manager.experts.tools")}>
+              <textarea
+                className={textareaCls}
+                value={tools}
+                onChange={(e) => setTools(e.target.value)}
+                rows={3}
+              />
+            </Field>
+            <Field label={i18n.t("manager.experts.skills")}>
+              <textarea
+                className={textareaCls}
+                value={skills}
+                onChange={(e) => setSkills(e.target.value)}
+                rows={3}
+              />
+            </Field>
+            <Field label={i18n.t("manager.experts.knowledge_refs")}>
+              <textarea
+                className={textareaCls}
+                value={knowledgeRefs}
+                onChange={(e) => setKnowledgeRefs(e.target.value)}
+                rows={3}
+              />
+            </Field>
+            <Field label={i18n.t("manager.experts.connector_refs")}>
+              <textarea
+                className={textareaCls}
+                value={connectorRefs}
+                onChange={(e) => setConnectorRefs(e.target.value)}
+                rows={3}
+              />
+            </Field>
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-md">
+            <legend className="mb-xs text-xs font-semibold text-text-secondary">
+              {i18n.t("manager.experts.section_memory")}
+            </legend>
+            <Field label={i18n.t("manager.experts.memory_policy")}>
+              <textarea
+                className={textareaCls}
+                value={memoryPolicy}
+                onChange={(e) => setMemoryPolicy(e.target.value)}
+                rows={4}
+              />
+            </Field>
+          </fieldset>
+
           <div className="flex gap-sm">
             <Button type="submit" size="sm">
               {i18n.t("manager.experts.save")}
@@ -343,11 +511,7 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => {
-                setDisplayName(employee.display_name);
-                setPersona(employee.persona ?? "");
-                setEditing(false);
-              }}
+              onClick={() => resetEditing()}
             >
               {i18n.t("manager.experts.cancel")}
             </Button>

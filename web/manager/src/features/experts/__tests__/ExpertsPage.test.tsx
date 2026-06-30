@@ -1,9 +1,9 @@
 /**
  * 招募专家页测试（W-M.3）：
- * - 浏览：渲染可招募模板/方案 + 已招募实例
+ * - 浏览：渲染可招募模板/方案 + 已招募实例（含模型/运行时/能力/记忆）
  * - 招募：填 slug → recruitExpert(template_id, slug)
  * - 应用方案：applySolution(solution_id)
- * - 编辑实例：改 persona → updateEmployee 收到全量配置 + 改后 persona（保全其余字段）
+ * - 编辑实例：改 persona/模型/能力 → updateEmployee 收到全量配置 + 改后值（保全其余字段）
  * - 只读角色（member）不显示招募/应用/编辑入口
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -58,6 +58,7 @@ function mockApi(overrides: Partial<apiModule.ExpertsApi> = {}) {
     applySolution: vi.fn().mockResolvedValue({}),
     listEmployees: vi.fn().mockResolvedValue([employee]),
     updateEmployee: vi.fn().mockResolvedValue(employee),
+    listSolutionInstances: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
   vi.spyOn(apiModule, "useExpertsApi").mockReturnValue(api);
@@ -117,6 +118,7 @@ describe("ExpertsPage 招募专家", () => {
     await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("编辑配置"));
+    await waitFor(() => expect(screen.getByLabelText("模型")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("人设（persona）"), { target: { value: "新人设" } });
     fireEvent.click(screen.getByText("保存"));
 
@@ -145,5 +147,70 @@ describe("ExpertsPage 招募专家", () => {
     expect(screen.queryByText("招募")).not.toBeInTheDocument();
     expect(screen.queryByText("应用方案")).not.toBeInTheDocument();
     expect(screen.queryByText("编辑配置")).not.toBeInTheDocument();
+  });
+
+  it("浏览：已招募实例渲染完整配置项（模型/运行时/能力/记忆）", async () => {
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+
+    // 模型 + provider + 运行时
+    expect(screen.getByText("claude-opus-4-8")).toBeInTheDocument();
+    expect(screen.getByText("relay")).toBeInTheDocument();
+    expect(screen.getByText("hermes_acp")).toBeInTheDocument();
+    // 列表字段逗号展示
+    expect(screen.getByText("search")).toBeInTheDocument();
+    expect(screen.getByText("code-review")).toBeInTheDocument();
+    expect(screen.getByText("ks1")).toBeInTheDocument();
+    expect(screen.getByText("slack")).toBeInTheDocument();
+    // 记忆策略（JSON 序列化展示）
+    expect(screen.getByText(JSON.stringify(employee.memory_policy))).toBeInTheDocument();
+  });
+
+  it("编辑实例：改模型与思考深度 → updateEmployee 收新 model_policy 并保全其余", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("编辑配置"));
+    await waitFor(() => expect(screen.getByLabelText("模型")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("模型"), { target: { value: "claude-sonnet-4-20250514" } });
+    fireEvent.change(screen.getByLabelText("Provider 引用"), { target: { value: "anthropic" } });
+    const thinkingSelect = screen.getByLabelText("思考深度") as HTMLSelectElement;
+    fireEvent.change(thinkingSelect, { target: { value: "deep" } });
+    fireEvent.change(screen.getByLabelText("技能"), { target: { value: "code-review\nwriting" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => expect(api.updateEmployee).toHaveBeenCalledTimes(1));
+    expect(api.updateEmployee).toHaveBeenCalledWith(
+      "e1",
+      expect.objectContaining({
+        display_name: "专家A",
+        model_policy: { model: "claude-sonnet-4-20250514", provider_ref: "anthropic", thinking_level: "deep" },
+        skills: ["code-review", "writing"],
+        // 其余原值保全
+        tools: employee.tools,
+        knowledge_refs: employee.knowledge_refs,
+        connector_refs: employee.connector_refs,
+        memory_policy: employee.memory_policy,
+      }),
+    );
+  });
+
+  it("编辑实例：空数组输入 → tools/skills 传 [] 而非字符串", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("编辑配置"));
+    await waitFor(() => expect(screen.getByLabelText("模型")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("工具"), { target: { value: "" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => expect(api.updateEmployee).toHaveBeenCalledTimes(1));
+    expect(api.updateEmployee).toHaveBeenCalledWith(
+      "e1",
+      expect.objectContaining({ tools: [] }),
+    );
   });
 });
