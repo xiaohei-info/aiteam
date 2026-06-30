@@ -4,7 +4,7 @@ import pytest
 
 from agent_gateway.drivers.hermes import HermesAcpDriver
 from agent_gateway.acp_executor import AcpClientExecutor
-from agent_gateway.fake_runtime import FakeDriver
+from agent_gateway.drivers.fake_runtime import FakeDriver
 from agent_service.mainline.factory import build_mainline_service
 
 

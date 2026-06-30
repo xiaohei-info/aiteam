@@ -83,7 +83,7 @@ def test_start_run_api_forwards_current_identity_tenant_to_service():
 
 def test_start_run_api_forwards_run_spec_model_and_thinking():
     """北向 API 必须把 run_spec（指定模型/切换思考深度）下达到 runtime，否则 API 用户无从指定。"""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import Executor, RunResult
 
     captured: dict = {}

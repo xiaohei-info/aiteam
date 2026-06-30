@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
+from agent_gateway.drivers.fake_runtime import FakeDriver, FakeExecutor
 from shared.contracts.gateway import Executor
 from shared.contracts.runspec import AgentRunRequest, RunSpec
 

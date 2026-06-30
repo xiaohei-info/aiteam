@@ -101,7 +101,7 @@ def test_at_loop_blocked_expert_output_does_not_self_trigger():
     才进入 @提及编排。本测试用一个产出 "@bob" 的 executor 模拟专家自激尝试，断言不会
     因此再起新 run（run 数仍只等于用户本轮 @ 的专家数）。
     """
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.events import AgentRuntimeEvent
     from shared.contracts.gateway import Executor, RunResult
 
