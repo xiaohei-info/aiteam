@@ -23,7 +23,7 @@ def _svc():
 def test_start_run_forwards_conversation_messages_to_runtime():
     """端到端接线：start_run 必须把会话历史组装成 input_messages 喂给 runtime，
     否则真实 runtime 收到空 prompt（此前的端到端缺口）。"""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import Executor, RunResult
 
     captured: dict = {}
@@ -53,7 +53,7 @@ def test_start_run_forwards_conversation_messages_to_runtime():
 
 def test_start_run_uses_call_tenant_for_runtime_request_and_usage_recorder():
     """Authenticated Agent runs must report usage under the login tenant, not process default local."""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import Executor, RunResult
 
     captured: dict = {}
@@ -147,7 +147,7 @@ def test_cancelled_run_maps_to_cancelled_terminal():
     用一个总是短路为 cancelled 的 executor 驱动，验证终态收尾到 RunStatus.CANCELLED 且
     timeline 末事件是 run_cancelled。
     """
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.events import AgentRuntimeEvent
     from shared.contracts.gateway import Executor, RunResult
 
@@ -179,7 +179,7 @@ def _terminal_executor(*, runtime_terminal: str, result: "RunResult") -> "Execut
     用于回归 #64：Run 终态由 timeline 终态事件反查派生（单一真相源），不再靠
     result.error 字符串硬匹配——即使 runtime 回非标准 error 串，Run 终态也随 timeline 一致。
     """
-    from agent_gateway.fake_runtime import FakeDriver  # noqa: F401  仅示意，实际调用方传入
+    from agent_gateway.drivers.fake_runtime import FakeDriver  # noqa: F401  仅示意，实际调用方传入
     from shared.contracts.events import AgentRuntimeEvent
     from shared.contracts.gateway import Executor
 
@@ -206,7 +206,7 @@ def test_nonstandard_cancelled_error_string_keeps_run_timeline_consistency():
     Run=FAILED，但 timeline 末事件=run_cancelled -> Run/timeline 终态撕裂。
     新逻辑（timeline 终态事件反查）：cancelled 事件 -> run_cancelled -> Run=CANCELLED，一致。
     """
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import RunResult
 
     result = RunResult(run_id="ignored", success=False, error="cancelled by timeout")
@@ -223,7 +223,7 @@ def test_nonstandard_cancelled_error_string_keeps_run_timeline_consistency():
 
 def test_nonstandard_failed_error_string_keeps_run_timeline_consistency():
     """回归 #64：error 事件 + 任意 error 串 -> Run=FAILED 与 timeline=run_failed 一致。"""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import RunResult
 
     result = RunResult(run_id="ignored", success=False, error="boom: segfault at 0xff")
@@ -239,7 +239,7 @@ def test_nonstandard_failed_error_string_keeps_run_timeline_consistency():
 
 def test_succeeded_run_derives_completed_from_timeline():
     """回归 #64：completed 事件 -> run_succeeded -> Run=COMPLETED（timeline 反查派生）。"""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import RunResult
 
     result = RunResult(run_id="ignored", success=True, session_id="s1",
@@ -261,7 +261,7 @@ def test_finalize_run_falls_back_to_runresult_when_no_terminal_event():
     timeline 无终态事件是契约异常路径（正常 runtime 必发 completed/cancelled/error）；
     此处用 success=True 但无终态事件验证 fallback 走 COMPLETED，而非卡死。
     """
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.events import AgentRuntimeEvent
     from shared.contracts.gateway import Executor, RunResult
 
@@ -284,7 +284,7 @@ def test_finalize_run_falls_back_to_runresult_when_no_terminal_event():
 
 def test_retry_run_creates_new_run_in_same_conversation():
     """P1 gap: retry_run creates independent run in the same conversation."""
-    from agent_gateway.fake_runtime import FakeDriver
+    from agent_gateway.drivers.fake_runtime import FakeDriver
     from shared.contracts.gateway import Executor, RunResult
 
     captured: list[dict] = []

@@ -19,6 +19,12 @@ from .factory import build_usage_service
 from .models import RawAuditEvent, RawUsageEvent
 from .reporter import DrainResult, UsageReporter
 from .service import UsageService
+from .ledger import (
+    InMemoryUsageLedgerRepository,
+    SqliteUsageLedgerRepository,
+    UsageLedger,
+    UsageLedgerRepository,
+)
 from .store import (
     InMemoryOutboxRepository,
     OutboxItem,
@@ -43,4 +49,8 @@ __all__ = [
     "OutboxKind",
     "OutboxRepository",
     "OutboxStatus",
+    "UsageLedger",
+    "UsageLedgerRepository",
+    "InMemoryUsageLedgerRepository",
+    "SqliteUsageLedgerRepository",
 ]

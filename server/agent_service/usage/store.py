@@ -4,7 +4,8 @@ outbox 模式：脱敏摘要先落本地待发队列（pending），上报成功
 - **幂等**：以 summary_id 为主键；同一 summary 反复 enqueue 不产生重复条目（已存在则更新内容、
   保留状态）。已 sent 的不回退 pending（不重复上报）。
 - **不丢**：pending 持久于本地库直至 sent；上报失败留 pending 等下次 drain。
-- **可重试**：记录 attempts/last_error 供观测与退避。
+- **可重试**：记录 attempts/last_error 供观测与退避；attempts 触阈后置 failed 终态，drain 不再重试
+  （#293 要求 pending/retry/failed 三态）。
 
 agent 本地库口径（与 loop/mainline 一致）：用户端单租户本地库；但 outbox 条目仍带 tenant_id
 （摘要 payload 的一部分，上报需要）。接口 + 内存实现，真实持久化后续替换不改形状。
@@ -31,6 +32,7 @@ def _now() -> datetime:
 class OutboxStatus(str, Enum):
     PENDING = "pending"
     SENT = "sent"
+    FAILED = "failed"  # 终态：attempts 触阈后转入，drain 不再重试（#293）。
 
 
 class OutboxKind(str, Enum):
@@ -61,7 +63,15 @@ class OutboxRepository(ABC):
         """按 summary_id 幂等写入：新建或更新内容；已 sent 的不回退、不重复入队。"""
 
     @abstractmethod
+    def get(self, summary_id: str) -> OutboxItem | None:
+        """按 summary_id 取单条（含 sent/failed 任何状态）；不存在返回 None。"""
+
+    @abstractmethod
     def list_pending(self, tenant_id: str | None = None) -> list[OutboxItem]: ...
+
+    @abstractmethod
+    def list_failed(self, tenant_id: str | None = None) -> list[OutboxItem]:
+        """列 failed 终态条目（按 tenant 可选过滤）。仅供运维/重放。"""
 
     @abstractmethod
     def list_all(self) -> list[OutboxItem]: ...
@@ -70,14 +80,16 @@ class OutboxRepository(ABC):
     def mark_sent(self, summary_id: str) -> OutboxItem: ...
 
     @abstractmethod
-    def mark_failed(self, summary_id: str, error: str) -> OutboxItem: ...
+    def mark_failed(self, summary_id: str, error: str) -> OutboxItem:
+        """attempts+1 并记 error；attempts ≥ max_retries 时转入 failed 终态。"""
 
 
 class InMemoryOutboxRepository(OutboxRepository):
     """内存 outbox（本地库占位；接口稳定，真实持久化后续替换）。"""
 
-    def __init__(self) -> None:
+    def __init__(self, max_retries: int = 3) -> None:
         self._items: dict[str, OutboxItem] = {}
+        self._max_retries = max_retries
 
     def upsert(self, item: OutboxItem) -> OutboxItem:
         existing = self._items.get(item.summary_id)
@@ -99,11 +111,20 @@ class InMemoryOutboxRepository(OutboxRepository):
         self._items[item.summary_id] = item
         return item
 
+    def get(self, summary_id: str) -> OutboxItem | None:
+        return self._items.get(summary_id)
+
     def list_pending(self, tenant_id: str | None = None) -> list[OutboxItem]:
         items = [i for i in self._items.values() if i.status is OutboxStatus.PENDING]
         if tenant_id is not None:
             items = [i for i in items if i.tenant_id == tenant_id]
         return sorted(items, key=lambda i: i.created_at)
+
+    def list_failed(self, tenant_id: str | None = None) -> list[OutboxItem]:
+        items = [i for i in self._items.values() if i.status is OutboxStatus.FAILED]
+        if tenant_id is not None:
+            items = [i for i in items if i.tenant_id == tenant_id]
+        return sorted(items, key=lambda i: i.updated_at)
 
     def list_all(self) -> list[OutboxItem]:
         return sorted(self._items.values(), key=lambda i: i.created_at)
@@ -118,12 +139,13 @@ class InMemoryOutboxRepository(OutboxRepository):
 
     def mark_failed(self, summary_id: str, error: str) -> OutboxItem:
         item = self._items[summary_id]
+        if item.status is OutboxStatus.SENT:
+            # 已 sent 不可回退（幂等）。
+            return item
+        attempts = item.attempts + 1
+        status = OutboxStatus.FAILED if attempts >= self._max_retries else item.status
         updated = item.model_copy(
-            update={
-                "attempts": item.attempts + 1,
-                "last_error": error,
-                "updated_at": _now(),
-            }
+            update={"attempts": attempts, "last_error": error, "status": status, "updated_at": _now()}
         )
         self._items[summary_id] = updated
         return updated
@@ -132,14 +154,15 @@ class InMemoryOutboxRepository(OutboxRepository):
 # ---- SQLite 实现（agent 本地库；与内存实现行为等价，重启不丢）----
 
 def _iso(dt: datetime) -> str:
-    return dt.isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 class SqliteOutboxRepository(OutboxRepository):
     """SQLite outbox 仓储（本地库持久化，#159）。"""
 
-    def __init__(self, db: LocalDb) -> None:
+    def __init__(self, db: LocalDb, max_retries: int = 3) -> None:
         self._db = db
+        self._max_retries = max_retries
 
     @staticmethod
     def _row_to_item(row) -> OutboxItem:
@@ -182,6 +205,12 @@ class SqliteOutboxRepository(OutboxRepository):
         )
         return item
 
+    def get(self, summary_id: str) -> OutboxItem | None:
+        row = self._db.query_one(
+            "SELECT * FROM outbox_items WHERE summary_id = ?", (summary_id,)
+        )
+        return self._row_to_item(row) if row else None
+
     def list_pending(self, tenant_id: str | None = None) -> list[OutboxItem]:
         if tenant_id is not None:
             rows = self._db.query(
@@ -193,6 +222,20 @@ class SqliteOutboxRepository(OutboxRepository):
             rows = self._db.query(
                 "SELECT * FROM outbox_items WHERE status = ? ORDER BY created_at, rowid",
                 (OutboxStatus.PENDING.value,),
+            )
+        return [self._row_to_item(r) for r in rows]
+
+    def list_failed(self, tenant_id: str | None = None) -> list[OutboxItem]:
+        if tenant_id is not None:
+            rows = self._db.query(
+                "SELECT * FROM outbox_items WHERE status = ? AND tenant_id = ? "
+                "ORDER BY updated_at, rowid",
+                (OutboxStatus.FAILED.value, tenant_id),
+            )
+        else:
+            rows = self._db.query(
+                "SELECT * FROM outbox_items WHERE status = ? ORDER BY updated_at, rowid",
+                (OutboxStatus.FAILED.value,),
             )
         return [self._row_to_item(r) for r in rows]
 
@@ -210,15 +253,26 @@ class SqliteOutboxRepository(OutboxRepository):
         return self._row_to_item(row)
 
     def mark_failed(self, summary_id: str, error: str) -> OutboxItem:
-        # 原子读-改-写：先读取当前 attempts，然后加 1
+        # 已 sent 的不可回退。
+        cur = self._db.query_one(
+            "SELECT status FROM outbox_items WHERE summary_id = ?", (summary_id,)
+        )
+        if cur is None:
+            raise KeyError(summary_id)
+        if cur["status"] == OutboxStatus.SENT.value:
+            return self._row_to_item(
+                self._db.query_one("SELECT * FROM outbox_items WHERE summary_id = ?", (summary_id,))
+            )
+        # 原子读-改-写：先读取当前 attempts，+1；触阈则转 failed。
         row = self._db.query_one(
             "SELECT attempts FROM outbox_items WHERE summary_id = ?", (summary_id,)
         )
-        current_attempts = row["attempts"] if row else 0
+        attempts = (row["attempts"] if row else 0) + 1
+        new_status = OutboxStatus.FAILED.value if attempts >= self._max_retries else OutboxStatus.PENDING.value
         self._db.execute(
-            "UPDATE outbox_items SET attempts = ?, last_error = ?, updated_at = ? "
+            "UPDATE outbox_items SET attempts = ?, last_error = ?, status = ?, updated_at = ? "
             "WHERE summary_id = ?",
-            (current_attempts + 1, error, _iso(_now()), summary_id),
+            (attempts, error, new_status, _iso(_now()), summary_id),
         )
         row = self._db.query_one("SELECT * FROM outbox_items WHERE summary_id = ?", (summary_id,))
         return self._row_to_item(row)

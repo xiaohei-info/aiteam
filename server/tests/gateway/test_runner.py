@@ -9,7 +9,7 @@ session/usage 透传、取消短路。
 
 import asyncio
 
-from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
+from agent_gateway.drivers.fake_runtime import FakeDriver, FakeExecutor
 from agent_gateway.runner import GatewayRunner
 from shared.contracts.events import AgentRuntimeEvent
 from shared.contracts.runspec import AgentRunRequest, RunSpec

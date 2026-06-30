@@ -14,7 +14,7 @@ import asyncio
 
 import pytest
 
-from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
+from agent_gateway.drivers.fake_runtime import FakeDriver, FakeExecutor
 from agent_service.app import _attach_usage_recorder
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.models import MessageRole, RunStatus

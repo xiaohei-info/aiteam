@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
+from agent_gateway.drivers.fake_runtime import FakeDriver, FakeExecutor
 from agent_service.loop.factory import build_loop_service
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.group import GroupChatService, GroupExpert
