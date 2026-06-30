@@ -135,6 +135,12 @@ describe("EnterprisePage 企业开通", () => {
     expect(screen.getByText("一次性 bootstrap 凭据")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "复制凭据" })).toBeInTheDocument();
     expect(screen.queryByText("sec_test_abc123")).toBeNull();
+
+    // 开通结果完整字段：tenant_id / owner_phone / enterprise_code / must_reset
+    expect(screen.getByText("ent_001")).toBeInTheDocument();
+    expect(screen.getByText("t_001")).toBeInTheDocument();
+    expect(screen.getByText("13800138000")).toBeInTheDocument();
+    expect(screen.getByText("是")).toBeInTheDocument();
   });
 
   it("展示重置凭据入口", () => {
@@ -169,6 +175,13 @@ describe("EnterprisePage 企业开通", () => {
     await waitFor(() => {
       expect(screen.getByText("凭据已重置")).toBeInTheDocument();
     });
+
+    // 重置结果字段：tenant_id / owner_phone / must_reset
+    const displays = screen.getAllByTestId("secret-display");
+    expect(displays.length).toBeGreaterThan(0);
+    expect(screen.getAllByText("ent_001").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("t_001").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("13800138000").length).toBeGreaterThan(0);
   });
 
   it("bootstrap_secret 不写入 localStorage", async () => {
