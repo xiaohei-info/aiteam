@@ -26,6 +26,7 @@ from manager_service.operator_catalog import (
     FakeOperatorCatalogClient,
     OperatorCatalogPort,
 )
+from manager_service.recruit_order_repository import RecruitmentOrderRow, RecruitOrderRepository
 from manager_service.recruit_repository import (
     RecruitEventRow,
     SolutionInstanceRow,
@@ -141,12 +142,50 @@ class _FakeRecruitRepo:
         return list(self._events.get(ctx.tenant_id, []))
 
 
-def _build_service(catalog: OperatorCatalogPort) -> tuple[RecruitService, _FakeEmployeeRepo, _FakeGrantRepo, _FakeRecruitRepo]:
+class _FakeOrderRepo(RecruitOrderRepository):
+    """fake orders repo"""
+
+    def __init__(self):
+        self._store = {}
+
+    def _bucket(self, ctx):
+        return self._store.setdefault(ctx.tenant_id, {})
+
+    def create(self, ctx, **kw):
+        row = RecruitmentOrderRow(
+            id=str(uuid.uuid4()), idempotency_key=kw["idempotency_key"],
+            action=kw.get("action", "recruit_expert"),
+            template_id=kw.get("template_id"), solution_id=kw.get("solution_id"),
+            requested_by=kw.get("requested_by"), created_employee_id=None,
+            status=kw.get("status", "pending"), error_code=None, error_message=None,
+        )
+        self._bucket(ctx)[row.id] = row
+        return row
+
+    def get(self, ctx, *, order_id):
+        return self._bucket(ctx).get(order_id)
+
+    def get_by_idempotency_key(self, ctx, *, idempotency_key):
+        for r in self._bucket(ctx).values():
+            if r.idempotency_key == idempotency_key:
+                return r
+        return None
+
+    def list_orders(self, ctx):
+        return sorted(self._bucket(ctx).values(), key=lambda r: (r.created_at is None, r.created_at, r.id))
+
+    def update(self, ctx, order):
+        self._bucket(ctx)[order.id] = order
+        return order
+
+
+def _build_service(catalog: OperatorCatalogPort):
     emp = _FakeEmployeeRepo()
     grant = _FakeGrantRepo()
     recruit = _FakeRecruitRepo()
-    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit)
-    return svc, emp, grant, recruit
+    orders = _FakeOrderRepo()
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+    return svc, emp, grant, recruit, orders
 
 
 def _ctx(tid: str, roles=None) -> TenantContext:
@@ -173,7 +212,7 @@ def test_recruit_expert_creates_employee_instance_from_template():
     """F06 主路径：拉模板 → 建 employee 实例（persona/model 等中立字段来自模板，D16）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, emp, _, recruit = _build_service(catalog)
+    svc, emp, _, recruit, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
@@ -201,7 +240,7 @@ def test_recruit_expert_binds_grants_when_subjects_provided():
     """F06 可选招募即绑定授权（D12）：提供 department_ids/member_ids → 落 member_grant。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, _, grant, _ = _build_service(catalog)
+    svc, _, grant, _, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"),
@@ -223,7 +262,7 @@ def test_recruit_expert_overrides_take_precedence():
     """F06 display_name_override / persona_override 覆盖模板默认值。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, emp, _, _ = _build_service(catalog)
+    svc, emp, _, _, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"),
@@ -241,7 +280,7 @@ def test_recruit_expert_slug_conflict_in_tenant():
     """同 tenant 同 slug 重复招募 → 409 Conflict。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="dup"))
     with pytest.raises(Conflict):
@@ -252,7 +291,7 @@ def test_recruit_expert_member_forbidden():
     """招募写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     with pytest.raises(Forbidden):
         svc.recruit_expert(
@@ -287,7 +326,7 @@ def test_apply_solution_expands_experts_and_instance():
     """F07 主路径：拉方案包 → 建 solution_instance → 展开两个专家 employee 实例 + 知识/技能叠加。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, emp, _, recruit = _build_service(catalog)
+    svc, emp, _, recruit, _ = _build_service(catalog)
 
     result = svc.apply_solution(
         _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"),
@@ -317,7 +356,7 @@ def test_apply_solution_applies_default_grants_from_package():
     """F07：请求未指定授权时，用方案包 default_grants 展开到每个专家（D12）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, grant, _ = _build_service(catalog)
+    svc, _, grant, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
@@ -332,7 +371,7 @@ def test_apply_solution_request_grants_override_package_defaults():
     """F07：请求显式指定授权 → 覆盖方案包 default_grants。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, grant, _ = _build_service(catalog)
+    svc, _, grant, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(
         _ctx("t-a"),
@@ -349,7 +388,7 @@ def test_apply_solution_conflict_when_already_applied():
     """同 tenant 同 (solution_id, version) 重复应用方案 → 409（避免重复展开）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
     with pytest.raises(Conflict):
@@ -360,7 +399,7 @@ def test_apply_solution_member_forbidden():
     """应用方案写操作需 owner/enterprise_admin；member → 403。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     with pytest.raises(Forbidden):
         svc.apply_solution(
@@ -372,7 +411,7 @@ def test_get_solution_instance_not_found_cross_tenant():
     """跨租户查方案实例：t-a 建的，t-b 视角 → 404（D22 + RLS 语义）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
     with pytest.raises(NotFound):
@@ -402,7 +441,7 @@ def test_recruit_does_not_mutate_pulled_template():
     catalog = FakeOperatorCatalogClient()
     template = _expert_template()
     catalog.seed_expert(template)
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     # 用模板 Persona 字段做"被改"探针：招募后模板 persona 应保持不变
     original_persona = template.persona
@@ -419,7 +458,7 @@ def test_cross_tenant_employee_isolation():
     """红线③：t-a 招募的专家，t-b 的 employee repository 视角看不到（D22 + RLS）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, emp, _, _ = _build_service(catalog)
+    svc, emp, _, _, _ = _build_service(catalog)
 
     created = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
     # t-b 看不到（不同 tenant 桶）
@@ -433,7 +472,7 @@ def test_cross_tenant_solution_instances_isolated():
     """红线③：t-a 应用的方案实例，t-b list/get 看不到（D22 + RLS）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, _ = _build_service(catalog)
+    svc, _, _, _, _ = _build_service(catalog)
 
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
@@ -464,3 +503,92 @@ def test_fake_catalog_versioned_and_latest_lookup():
         catalog.pull_expert_template(template_id="missing")
     with pytest.raises(NotFound):
         catalog.pull_solution_package(solution_id="missing")
+
+
+# ---- AITEAM-243: 招募订单追踪验收 ----
+
+
+def test_recruit_expert_returns_completed_order():
+    """F06 招募成功后，result.order 应携带 succeeded 状态 + created_employee_id。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, _, _, _, orders = _build_service(catalog)
+
+    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+
+    assert result.order is not None
+    assert result.order.status == "succeeded"
+    assert result.order.created_employee_id == result.employee_id
+    assert result.order.action == "recruit_expert"
+    # order stored in repo
+    stored = orders.list_orders(_ctx("t-a"))
+    assert len(stored) == 1
+    assert stored[0].status == "succeeded"
+
+
+def test_recruit_expert_failure_marks_order_failed():
+    """F06 招募抛异常时，order 应 failed 并被持久化。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, emp, _, _, orders = _build_service(catalog)
+
+    # 让 employee 落库 create 失败（模拟 provisioning 阶段报错）
+    original_create = emp.create
+    def boom(ctx, **kw):
+        from shared.errors import NotFound as _NotFound
+        raise _NotFound("database unavailable")
+    emp.create = boom
+
+    from shared.errors import NotFound
+    with pytest.raises(NotFound):
+        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="boom"))
+
+    stored = orders.list_orders(_ctx("t-a"))
+    assert len(stored) == 1
+    assert stored[0].status == "failed"
+    assert stored[0].error_code == "template_not_found"
+    # restore (not strictly needed)
+    emp.create = original_create
+
+
+
+def test_apply_solution_expands_one_order_per_expert():
+    """F07 方案展开每个专家都生成一个 succeeded order。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, orders = _build_service(catalog)
+
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    assert len(result.experts) == 2
+    # 每个 expert 结果都带 order
+    for r in result.experts:
+        assert r.order is not None
+        assert r.order.status == "succeeded"
+        assert r.order.action == "apply_solution"
+        assert r.order.solution_id == "sol-1"
+
+    stored = orders.list_orders(_ctx("t-a"))
+    assert len(stored) == 2
+    assert all(o.status == "succeeded" for o in stored)
+
+
+def test_list_and_get_recruit_orders():
+    """查询接口 list/get 返回 RecruitmentOrderOut 形态（按 tenant 裁剪）。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, _, _, _, _ = _build_service(catalog)
+    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+
+    orders_out = svc.list_recruit_orders(_ctx("t-a"))
+    assert len(orders_out) == 1
+    o = orders_out[0]
+    assert o.status == "succeeded"
+    assert o.order_id
+    # get one
+    got = svc.get_recruit_order(_ctx("t-a"), order_id=o.order_id)
+    assert got.order_id == o.order_id
+    # t-b is empty (RLS)
+    assert svc.list_recruit_orders(_ctx("t-b")) == []
+    from shared.errors import NotFound
+    with pytest.raises(NotFound):
+        svc.get_recruit_order(_ctx("t-b"), order_id=o.order_id)

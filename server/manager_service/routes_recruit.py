@@ -25,6 +25,7 @@ from .schemas import (
     ApplySolutionResult,
     RecruitExpertRequest,
     RecruitExpertResult,
+    RecruitmentOrderOut,
     SolutionInstanceOut,
 )
 
@@ -133,5 +134,37 @@ def build_recruit_router(verifier) -> APIRouter:
                 tenant_context_from(claims), instance_id=instance_id
             )
         )
+
+    @router.get(
+        "/orders",
+        description="请查看接口名称了解用途",
+        summary="列本租户招募订单（追踪异步招募链路）",
+        operation_id="manager_list_recruit_orders",
+    )
+    async def list_recruit_orders(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[RecruitmentOrderOut]:
+        svc = _service(request)
+        return ListEnvelope[RecruitmentOrderOut](
+            data=svc.list_recruit_orders(tenant_context_from(claims))
+        )
+
+    @router.get(
+        "/orders/{order_id}",
+        description="请查看接口名称了解用途",
+        summary="招募订单详情（按 tenant 裁剪）",
+        operation_id="manager_get_recruit_order",
+    )
+    async def get_recruit_order(
+        order_id: str,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[RecruitmentOrderOut]:
+        svc = _service(request)
+        return Envelope[RecruitmentOrderOut](
+            data=svc.get_recruit_order(tenant_context_from(claims), order_id=order_id)
+        )
+
 
     return router

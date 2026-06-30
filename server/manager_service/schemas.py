@@ -401,6 +401,9 @@ class RecruitExpertResult(BaseModel):
     grants_applied: bool = Field(
         default=False, description="是否在本 tenant 落了 member_grant 授权（D12）"
     )
+    order: RecruitmentOrderOut | None = Field(
+        default=None, description="本次招募对应的追踪订单（AITEAM-243；失败/幂等追踪）"
+    )
 
 
 class ApplySolutionResult(BaseModel):
@@ -413,6 +416,31 @@ class ApplySolutionResult(BaseModel):
         default_factory=list, description="方案包内每个专家展开后的 employee 实例结果"
     )
     grants_applied: bool = Field(default=False, description="是否落了默认授权（D12）")
+
+
+# ---- 招募订单 RecruitmentOrder（AITEAM-243，对应旧 app/team_panel RecruitmentOrder）----
+# 每个 order = 单专家粒度（created_employee_id），状态机：pending → provisioning → succeeded/failed/cancelled。
+# 用于追踪异步招募链路、重试与幂等（idempotency_key）。
+
+
+class RecruitmentOrderOut(BaseModel):
+    """招募订单出参（单专家粒度的招募执行追踪）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str
+    idempotency_key: str
+    action: str = Field(..., description="recruit_expert | apply_solution")
+    template_id: str | None = None
+    solution_id: str | None = None
+    requested_by: str | None = None
+    created_employee_id: str | None = None
+    status: str = Field(..., description="pending | provisioning | succeeded | failed | cancelled")
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
 
 # ---- 企业级 usage/audit rollup + 软配额治理（M8，04 §6.5/§6.5.1，D13/D24）----
 #
