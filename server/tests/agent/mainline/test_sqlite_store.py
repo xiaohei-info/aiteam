@@ -221,3 +221,50 @@ def test_factory_without_db_path_uses_memory(db_path):
     assert svc.get_conversation(conv.id).title == "ephemeral"
     # 内存路径不应创建任何 db 文件。
     assert not os.path.exists(db_path)
+
+
+def test_sqlite_collaboration_persists_and_roundtrips(db_path):
+    """协作编排字段落 SQLite，跨重建可读回；orchestrated 必填 brief，free 清空 brief。"""
+    d1 = connect(db_path)
+    apply_migrations(d1)
+    repo = SqliteConversationRepository(d1)
+    conv = repo.create(Conversation(id="conv_orch", title="编排群"))
+    assert conv.collaboration_mode == "free"
+    assert conv.orchestration_brief == ""
+
+    updated = repo.update_collaboration(
+        "conv_orch", collaboration_mode="orchestrated",
+        orchestration_brief="先调研再撰写", planner_employee_id="alice",
+    )
+    assert updated.collaboration_mode == "orchestrated"
+    assert updated.orchestration_brief == "先调研再撰写"
+    assert updated.planner_employee_id == "alice"
+
+    # 跨重建读回
+    d1.close()
+    d2 = connect(db_path)
+    assert apply_migrations(d2) == []
+    reloaded = SqliteConversationRepository(d2).get("conv_orch")
+    assert reloaded.collaboration_mode == "orchestrated"
+    assert reloaded.orchestration_brief == "先调研再撰写"
+    assert reloaded.planner_employee_id == "alice"
+
+    # 切回 free 清空 brief
+    cleared = SqliteConversationRepository(d2).update_collaboration("conv_orch", collaboration_mode="free")
+    assert cleared.collaboration_mode == "free"
+    assert cleared.orchestration_brief == ""
+    d2.close()
+
+
+def test_sqlite_orchestrated_without_brief_rejected(db_path):
+    d = connect(db_path)
+    apply_migrations(d)
+    repo = SqliteConversationRepository(d)
+    repo.create(Conversation(id="conv_orch2", title="x"))
+    with pytest.raises(ValueError):
+        repo.update_collaboration("conv_orch2", collaboration_mode="orchestrated")
+    # 清空 brief 的 orchestrated 也拒绝
+    repo.update_collaboration("conv_orch2", collaboration_mode="orchestrated", orchestration_brief="ok")
+    with pytest.raises(ValueError):
+        repo.update_collaboration("conv_orch2", orchestration_brief="")
+    d.close()

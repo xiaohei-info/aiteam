@@ -55,13 +55,23 @@ class TaskStatus(str, Enum):
 
 
 class Conversation(BaseModel):
-    """本地会话。主状态固定枚举；**无展示态字段**（D6）。"""
+    """本地会话。主状态固定枚举；**无展示态字段**（D6）。
+
+    协作编排口径（parity Manager侧 app/team_panel Conversation）：
+    - collaboration_mode: "free" 自由讨论（@提及驱动）| "orchestrated" 规则编排（planner 按
+      orchestration_brief 拆解后分配专家 + 聚合）。私聊/默认 = free。
+    - orchestration_brief: 编排指令，orchestrated 模式下注入 planner 拆解提示词。
+    - planner_employee_id: 指定编排者（roster 内 handle）；空则运行时自动选一非专家做 planner。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
     title: str | None = None
     state: ConversationState = ConversationState.ACTIVE
+    collaboration_mode: str = Field(default="free", description="free | orchestrated")
+    orchestration_brief: str = Field(default="", description="orchestrated 模式下的 planner 编排指令")
+    planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 

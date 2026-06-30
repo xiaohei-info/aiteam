@@ -34,6 +34,16 @@ class ConversationRepository(ABC):
     @abstractmethod
     def set_state(self, conversation_id: str, state: ConversationState) -> Conversation: ...
 
+    @abstractmethod
+    def update_collaboration(
+        self,
+        conversation_id: str,
+        *,
+        collaboration_mode: str | None = None,
+        orchestration_brief: str | None = None,
+        planner_employee_id: str | None = None,
+    ) -> Conversation: ...
+
 
 class MessageRepository(ABC):
     @abstractmethod
@@ -87,6 +97,34 @@ class InMemoryConversationRepository(ConversationRepository):
     def set_state(self, conversation_id: str, state: ConversationState) -> Conversation:
         item = self.get(conversation_id)
         updated = item.model_copy(update={"state": state, "updated_at": _now()})
+        self._items[conversation_id] = updated
+        return updated
+
+    def update_collaboration(
+        self,
+        conversation_id: str,
+        *,
+        collaboration_mode: str | None = None,
+        orchestration_brief: str | None = None,
+        planner_employee_id: str | None = None,
+    ) -> Conversation:
+        item = self.get(conversation_id)
+        data = item.model_dump()
+        if collaboration_mode is not None:
+            data["collaboration_mode"] = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
+        mode = data["collaboration_mode"]
+        if mode == "orchestrated":
+            if orchestration_brief is not None:
+                data["orchestration_brief"] = str(orchestration_brief).strip()
+            if not str(data.get("orchestration_brief") or "").strip():
+                raise ValueError("orchestration_brief is required when collaboration_mode is orchestrated")
+        else:
+            data["orchestration_brief"] = ""
+        if planner_employee_id is not None:
+            value = None if (isinstance(planner_employee_id, str) and not planner_employee_id.strip()) else planner_employee_id
+            data["planner_employee_id"] = value
+        data["updated_at"] = _now()
+        updated = Conversation(**data)
         self._items[conversation_id] = updated
         return updated
 
@@ -179,21 +217,34 @@ class SqliteConversationRepository(ConversationRepository):
 
     def create(self, conversation: Conversation) -> Conversation:
         self._db.execute(
-            "INSERT INTO conversations (id, title, state, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO conversations "
+            "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (conversation.id, conversation.title, conversation.state.value,
+             conversation.collaboration_mode, conversation.orchestration_brief,
+             conversation.planner_employee_id,
              _iso(conversation.created_at), _iso(conversation.updated_at)),
         )
         return conversation
 
     def get(self, conversation_id: str) -> Conversation:
-        row = self._db.query_one("SELECT * FROM conversations WHERE id = ?", (conversation_id,))
+        row = self._db.query_one(
+            "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
+            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
+            "created_at, updated_at FROM conversations WHERE id = ?",
+            (conversation_id,),
+        )
         if row is None:
             raise NotFound(f"conversation {conversation_id} not found")
         return Conversation(**dict(row))
 
     def list(self) -> list[Conversation]:
-        rows = self._db.query("SELECT * FROM conversations ORDER BY created_at, rowid")
+        rows = self._db.query(
+            "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
+            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
+            "created_at, updated_at FROM conversations ORDER BY created_at, rowid"
+        )
         return [Conversation(**dict(r)) for r in rows]
 
     def set_state(self, conversation_id: str, state: ConversationState) -> Conversation:
@@ -201,6 +252,38 @@ class SqliteConversationRepository(ConversationRepository):
         self._db.execute(
             "UPDATE conversations SET state = ?, updated_at = ? WHERE id = ?",
             (state.value, _iso(_now()), conversation_id),
+        )
+        return self.get(conversation_id)
+
+    def update_collaboration(
+        self,
+        conversation_id: str,
+        *,
+        collaboration_mode: str | None = None,
+        orchestration_brief: str | None = None,
+        planner_employee_id: str | None | object = None,
+    ) -> Conversation:
+        """更新群聊协作编排字段（orchestrated 必填 brief；free 清空 brief）。"""
+        conv = self.get(conversation_id)
+        if collaboration_mode is not None:
+            conv = Conversation(
+                **{**conv.model_dump(), "collaboration_mode": "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"}
+            )
+        if conv.collaboration_mode == "orchestrated":
+            if orchestration_brief is not None:
+                conv = Conversation(**{**conv.model_dump(), "orchestration_brief": str(orchestration_brief).strip()})
+            if not str(conv.orchestration_brief or "").strip():
+                raise ValueError("orchestration_brief is required when collaboration_mode is orchestrated")
+        else:
+            conv = Conversation(**{**conv.model_dump(), "orchestration_brief": ""})
+        if planner_employee_id is not None:
+            value = None if (isinstance(planner_employee_id, str) and not planner_employee_id.strip()) else planner_employee_id
+            conv = Conversation(**{**conv.model_dump(), "planner_employee_id": value})
+        self._db.execute(
+            "UPDATE conversations SET collaboration_mode = ?, orchestration_brief = ?, "
+            "planner_employee_id = ?, updated_at = ? WHERE id = ?",
+            (conv.collaboration_mode, conv.orchestration_brief, conv.planner_employee_id,
+             _iso(_now()), conversation_id),
         )
         return self.get(conversation_id)
 

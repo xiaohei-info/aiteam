@@ -34,11 +34,23 @@ from .stream import StreamBroker, StreamFrame
 class CreateConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, description="会话标题（可选，未给则自动生成）")
+    collaboration_mode: str | None = Field(default=None, description="free | orchestrated; 默认 free")
+    orchestration_brief: str | None = Field(default=None, description="orchestrated 必填：planner 编排指令")
+    planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
 
 
 class SetConversationStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     state: ConversationState = Field(description="会话主状态：active=正常 / archived=归档 / deleted=软删")
+
+
+class ConversationCollaborationRequest(BaseModel):
+    """会话协作编排更新（parity Manager 侧 PATCH /group-conversations/{id}）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    collaboration_mode: str | None = Field(default=None, description="free | orchestrated")
+    orchestration_brief: str | None = Field(default=None, description="orchestrated 必填")
+    planner_employee_id: str | None = Field(default=None, description="编排者 handle；传空串清除")
 
 
 class CreateMessageRequest(BaseModel):
@@ -105,7 +117,12 @@ def build_mainline_router(
 
     @router.post("/conversations", summary="建会话", description="创建新会话。可指定标题，留空自动生成。会话是对话/run/task 的容器。", operation_id="agent_create_conversation")
     async def create_conversation(req: CreateConversationRequest) -> Envelope[Conversation]:
-        return Envelope[Conversation](data=service.create_conversation(title=req.title))
+        return Envelope[Conversation](data=service.create_conversation(
+            title=req.title,
+            collaboration_mode=req.collaboration_mode,
+            orchestration_brief=req.orchestration_brief,
+            planner_employee_id=req.planner_employee_id,
+        ))
 
     @router.get("/conversations", summary="列会话", description="列出本端所有会话，按创建时间倒序排列。", operation_id="agent_list_conversations")
     async def list_conversations() -> ListEnvelope[Conversation]:
@@ -118,6 +135,16 @@ def build_mainline_router(
     @router.put("/conversations/{conversation_id}/state", summary="改会话主状态", description="修改会话主状态：active=正常、archived=归档、deleted=软删。", operation_id="agent_set_conversation_state")
     async def set_state(conversation_id: str, req: SetConversationStateRequest) -> Envelope[Conversation]:
         return Envelope[Conversation](data=service.set_conversation_state(conversation_id, req.state))
+
+    @router.patch("/conversations/{conversation_id}/collaboration", summary="更新会话协作编排", description="切换自由讨论/规则编排模式、设置编排指令与编排者（parity Manager 侧 PATCH /group-conversations/{id}）。", operation_id="agent_set_conversation_collaboration")
+    async def set_collaboration(conversation_id: str, req: ConversationCollaborationRequest) -> Envelope[Conversation]:
+        updated = service.set_conversation_collaboration(
+            conversation_id,
+            collaboration_mode=req.collaboration_mode,
+            orchestration_brief=req.orchestration_brief,
+            planner_employee_id=req.planner_employee_id,
+        )
+        return Envelope[Conversation](data=updated)
 
     # ---- message ----
 

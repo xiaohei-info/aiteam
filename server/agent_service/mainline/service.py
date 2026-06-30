@@ -123,8 +123,21 @@ class MainlineService:
 
     # ---- conversation ----
 
-    def create_conversation(self, *, title: str | None = None) -> Conversation:
-        conv = Conversation(id=_new_id("conv"), title=title, state=ConversationState.ACTIVE)
+    def create_conversation(
+        self,
+        *,
+        title: str | None = None,
+        collaboration_mode: str | None = None,
+        orchestration_brief: str | None = None,
+        planner_employee_id: str | None = None,
+    ) -> Conversation:
+        mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
+        brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
+        conv = Conversation(
+            id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
+            collaboration_mode=mode, orchestration_brief=brief,
+            planner_employee_id=(planner_employee_id or None),
+        )
         return self._conversations.create(conv)
 
     def get_conversation(self, conversation_id: str) -> Conversation:
@@ -142,6 +155,23 @@ class MainlineService:
                 f"allowed: {[s.value for s in allowed] or "none"}"
             )
         return self._conversations.set_state(conversation_id, state)
+
+    def set_conversation_collaboration(
+        self,
+        conversation_id: str,
+        *,
+        collaboration_mode: str | None = None,
+        orchestration_brief: str | None = None,
+        planner_employee_id: str | None = None,
+    ) -> Conversation:
+        """更新会话协作编排字段（parioty Manager侧 update_group_conversation）。"""
+        self._conversations.get(conversation_id)  # 存在性校验 -> NotFound
+        return self._conversations.update_collaboration(
+            conversation_id,
+            collaboration_mode=collaboration_mode,
+            orchestration_brief=orchestration_brief,
+            planner_employee_id=planner_employee_id,
+        )
 
     # ---- message ----
 
