@@ -159,7 +159,10 @@ def test_connector_test_ok():
                                         "message": "ok"}
     with patch("manager_service.routes_connector_ops._service", return_value=svc):
         c = _build_app("postgresql://x", build_connector_ops_router)
-        r = c.post("/api/manager/connectors/slack/test", headers=_hdr())
+        r = c.post("/api/manager/connectors/slack/test",
+                    json={"auth_scheme": "oauth2",
+                          "config_schema_json": {"properties": {"app_id": {"type": "string"}}}},
+                    headers=_hdr())
     assert r.status_code == 200
     assert r.json()["data"]["success"] is True
 

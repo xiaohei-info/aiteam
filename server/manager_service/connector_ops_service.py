@@ -1,11 +1,20 @@
-"""连接器操作编排（B05）。"""
+"""Connector operation orchestration (B05).
+
+Local validation replaces the old "always-success mock" (issue #296):
+managers record connector test results and status based on REAL local validation
+(connector_id semantics + auth_scheme enum + config_schema_json parse). Real
+outbound connectivity is still deferred to the user-side executor per D18 — but
+the operator now gets observable, actionable feedback instead of a stub.
+"""
 
 from __future__ import annotations
+
 import time
 
 from shared.contracts.tenancy import TenantContext
 
 from .connector_ops_repository import ConnectorOpsRepository
+from .connector_probe import validate_connector
 
 
 class ConnectorOpsService:
@@ -22,21 +31,40 @@ class ConnectorOpsService:
             "last_check_at": row.last_check_at, "error_message": row.error_message,
         }
 
-    def test_connector(self, ctx: TenantContext, connector_id: str) -> dict:
-        # 测试：local/mock 验证语义——记录为 success，真实连通性由用户端验证
+    def test_connector(
+        self,
+        ctx: TenantContext,
+        connector_id: str,
+        *,
+        auth_scheme: str | None = None,
+        config_schema_json: str | dict | None = None,
+    ) -> dict:
+        # Real local validation: connector_id + auth_scheme + config_schema_json.
+        # D18: no outbound connector-API calls here; only admin-face validation.
         t0 = time.time()
-        # 模拟轻量连接检查（Manager 不做真正对外调用——D18 凭据归 M5，执行在用户端）
-        elapsed_ms = int((time.time() - t0) * 1000)
-        success = True
-        message = "连接基本检查通过（本地 mock，真实连通性由用户端验证）"
+        probe = validate_connector(connector_id, auth_scheme=auth_scheme,
+                                   config_schema_json=config_schema_json)
+        latency_ms = max(1, int((time.time() - t0) * 1000))
 
-        # 记录测试结果
-        self._repo.create_test(ctx, connector_id, success=success, latency_ms=elapsed_ms, message=message)
-        # 更新状态
-        self._repo.upsert_status(ctx, connector_id, status="connected" if success else "error",
-                                 error_message=None if success else message)
-
-        return {"connector_id": connector_id, "success": success, "latency_ms": elapsed_ms, "message": message}
+        self._repo.create_test(
+            ctx, connector_id,
+            success=probe.success,
+            latency_ms=latency_ms,
+            message=probe.message,
+        )
+        self._repo.upsert_status(
+            ctx, connector_id,
+            status="connected" if probe.success else "error",
+            error_message=None if probe.success else probe.message,
+        )
+        return {
+            "connector_id": connector_id,
+            "success": probe.success,
+            "latency_ms": latency_ms,
+            "message": probe.message,
+            "auth_scheme": probe.auth_scheme,
+            "flow": probe.flow,
+        }
 
     def get_grants(self, ctx: TenantContext, connector_id: str) -> dict:
         row = self._repo.get_grants(ctx, connector_id)

@@ -1,6 +1,8 @@
-"""Manager 企业端连接器操作路由（B05 连接器测试/状态/grants/预设）。
+"""Manager enterprise connector operations routes (B05: test/status/grants/presets).
 
-边界：Manager 管理连接器实例操作；连接器目录已在 capability catalog 管理。
+Boundary: Manager manages connector instance operations; the connector catalog is
+already managed by the capability catalog. No outbound calls to external connector
+APIs (D18) — test only runs LOCAL validation.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from .routes_connector_schemas import (
     ConnectorGrantsPatch,
     ConnectorPreset,
     ConnectorStatusOut,
+    ConnectorTestIn,
     ConnectorTestResult,
     PRESETS,
 )
@@ -59,15 +62,20 @@ def build_connector_ops_router(verifier) -> APIRouter:
         data = svc.get_status(ctx, connector_id)
         return Envelope(data=ConnectorStatusOut(**data))
 
-    @router.post("/{connector_id}/test", summary="测试连接器", operation_id="manager_connector_test")
+    @router.post("/{connector_id}/test", summary="本地校验连接器", operation_id="manager_connector_test")
     async def test_connector(
         connector_id: str,
+        body: ConnectorTestIn,
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorTestResult]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
-        data = svc.test_connector(ctx, connector_id)
+        data = svc.test_connector(
+            ctx, connector_id,
+            auth_scheme=body.auth_scheme,
+            config_schema_json=body.config_schema_json,
+        )
         return Envelope(data=ConnectorTestResult(**data))
 
     @router.patch("/{connector_id}/grants", summary="设置连接器对员工可见性", operation_id="manager_connector_grants")

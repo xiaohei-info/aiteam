@@ -1,4 +1,4 @@
-"""Connector 路由 Pydantic schema（B05）。"""
+"""Connector route Pydantic schemas (B05)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,19 @@ class ConnectorTestResult(BaseModel):
     success: bool
     latency_ms: int = 0
     message: str = ""
+    auth_scheme: str | None = None
+    flow: str | None = None
+
+
+class ConnectorTestIn(BaseModel):
+    """Body for POST /api/manager/connectors/{id}/test.
+
+    Operator provides the connector definition fields known at registration time;
+    Manager validates them locally (no outbound calls per D18) and records the result.
+    """
+    model_config = ConfigDict(extra="forbid")
+    auth_scheme: str | None = None
+    config_schema_json: str | dict | None = None
 
 
 class ConnectorGrantsPatch(BaseModel):
