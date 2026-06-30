@@ -122,7 +122,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         conversation_id: str,
         body: GroupConversationPatch,
         request: Request,
-    ) -> dict:
+    ) -> Envelope[dict]:
         conv = service.update_group(conversation_id, group_name=body.group_name)
         if conv is None:
             from shared.errors import NotFound
@@ -133,7 +133,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
     async def archive_group(
         conversation_id: str,
         request: Request,
-    ) -> dict:
+    ) -> Envelope[dict]:
         conv = service.archive_group(conversation_id)
         if conv is None:
             from shared.errors import NotFound
@@ -145,7 +145,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         conversation_id: str,
         body: GroupMemberAdd,
         request: Request,
-    ) -> dict:
+    ) -> Envelope[dict]:
         ok = service.add_member(conversation_id, body.employee_id)
         if not ok:
             from shared.errors import NotFound
@@ -157,7 +157,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         conversation_id: str,
         member_id: str,
         request: Request,
-    ) -> dict:
+    ) -> Envelope[dict]:
         service.remove_member(conversation_id, member_id)
         return Envelope(data={"conversation_id": conversation_id, "member_id": member_id, "removed": True})
 
