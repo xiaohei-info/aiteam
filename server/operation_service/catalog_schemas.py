@@ -22,6 +22,11 @@ class RegisterExpertTemplateRequest(BaseModel):
     display_name: str = Field(min_length=1)
     persona: str | None = Field(default=None)
     recommended_config: dict = Field(default_factory=dict)
+    default_model_json: dict = Field(default_factory=dict, description="默认模型配置（provider/model/temperature/max_tokens）")
+    default_binding_json: dict = Field(default_factory=dict, description="默认运行时绑定（skills/knowledge_bases/memory 等）")
+    prompt_pack_json: dict = Field(default_factory=dict, description="提示词包（system_prompt/behavior_rules/opening_message 等）")
+    category_code: str = Field(default="", description="专家分类码（用于目录筛选）")
+    role_name: str = Field(default="", description="角色名称（如技术专家、销售顾问）")
 
 
 class RegisterSolutionTemplateRequest(BaseModel):
@@ -76,6 +81,11 @@ class UpdateExpertTemplateRequest(BaseModel):
     display_name: str | None = None
     persona: str | None = None
     recommended_config: dict | None = None
+    default_model_json: dict | None = None
+    default_binding_json: dict | None = None
+    prompt_pack_json: dict | None = None
+    category_code: str | None = None
+    role_name: str | None = None
 
 class UpdateSolutionTemplateRequest(BaseModel):
     """编辑行业方案模板（北向请求）。部分更新。"""
@@ -105,3 +115,8 @@ class CatalogEntryResponse(BaseModel):
     display_name: str
     status: CatalogStatus
     visible_scope: dict | None = None
+    default_model_json: dict = Field(default_factory=dict)
+    default_binding_json: dict = Field(default_factory=dict)
+    prompt_pack_json: dict = Field(default_factory=dict)
+    category_code: str = Field(default="")
+    role_name: str = Field(default="")
