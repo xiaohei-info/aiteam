@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { GlassPanel } from "@aiteam/shared/ui";
+import { Button, GlassPanel, cn } from "@aiteam/shared/ui";
 
 import { useApp } from "../../lib/app-context";
 import { ConversationStateControl } from "./ConversationStateControl";
@@ -14,13 +14,15 @@ import type { Conversation } from "./useChatApi";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
-import { RunsPanel } from "../runs";
+import { LoopPanel, RunsPanel } from "../runs";
 
 export function ChatPage() {
   const { client } = useApp();
   const [selected, setSelected] = useState<Conversation | null>(null);
   // 发送消息后 +1，触发列表刷新（updated_at）+ timeline catchUp。
   const [sentSignal, setSentSignal] = useState(0);
+  // Loop 面板展开态（局部运行态，不落库）。
+  const [loopPanelOpen, setLoopPanelOpen] = useState(false);
 
   const handleSelect = useCallback((conv: Conversation) => setSelected(conv), []);
   const handleSent = useCallback(() => setSentSignal((n) => n + 1), []);
@@ -43,6 +45,28 @@ export function ChatPage() {
                 onStateChanged={setSelected}
               />
             </div>
+            <div className="flex items-center justify-between border-b border-gold/10 px-md py-sm">
+              <span className="truncate text-sm font-semibold text-text-primary">
+                {selected.title ?? selected.id}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={loopPanelOpen}
+                aria-label="任务编排"
+                title="任务编排（Loop 周期任务队列）"
+                className={cn("gap-xs", loopPanelOpen && "bg-surface-raised text-gold-bright")}
+                onClick={() => setLoopPanelOpen((v) => !v)}
+              >
+                🦞 编排
+              </Button>
+            </div>
+            {loopPanelOpen && (
+              <div className="px-md pt-sm">
+                <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+              </div>
+            )}
             <TimelineView
               client={client}
               conversationId={selected.id}
