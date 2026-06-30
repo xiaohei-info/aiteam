@@ -11,7 +11,7 @@ import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
-import type { EmployeeConfig, ExpertTemplate, SolutionPackage } from "./types";
+import type { EmployeeConfig, ExpertTemplate, SolutionInstance, SolutionPackage } from "./types";
 
 const textareaCls =
   "min-h-[80px] rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
@@ -26,6 +26,7 @@ export function ExpertsPage(): ReactNode {
   const [templates, setTemplates] = useState<ExpertTemplate[]>([]);
   const [solutions, setSolutions] = useState<SolutionPackage[]>([]);
   const [employees, setEmployees] = useState<EmployeeConfig[]>([]);
+  const [solutionInstances, setSolutionInstances] = useState<SolutionInstance[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -35,14 +36,16 @@ export function ExpertsPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      const [t, s, e] = await Promise.all([
+      const [t, s, e, si] = await Promise.all([
         api.listTemplates(),
         api.listSolutions(),
         api.listEmployees(),
+        api.listSolutionInstances(),
       ]);
       setTemplates(t);
       setSolutions(s);
       setEmployees(e);
+      setSolutionInstances(si);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.load_error"));
     } finally {
@@ -68,6 +71,25 @@ export function ExpertsPage(): ReactNode {
     },
     [i18n, load],
   );
+
+  const handleExport = useCallback(async () => {
+    try {
+      const token = session.token;
+      const resp = await fetch("/api/manager/employees/export/all", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) throw new Error("Export failed");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "employees.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // silently ignore export errors
+    }
+  }, [session.token]);
 
   return (
     <section className="flex flex-col gap-lg">
@@ -134,9 +156,16 @@ export function ExpertsPage(): ReactNode {
       </Catalog>
 
       <div className="flex flex-col gap-md">
-        <h2 className="m-0 text-base font-semibold text-text-primary">
-          {i18n.t("manager.experts.instances_title")}
-        </h2>
+        <div className="flex items-center gap-md">
+          <h2 className="m-0 text-base font-semibold text-text-primary">
+            {i18n.t("manager.experts.instances_title")}
+          </h2>
+          {canWrite && employees.length > 0 && (
+            <Button type="button" variant="ghost" size="sm" onClick={handleExport}>
+              {i18n.t("manager.experts.export_csv")}
+            </Button>
+          )}
+        </div>
         {employees.length === 0 ? (
           <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
             {i18n.t("manager.experts.instances_empty")}
@@ -151,6 +180,40 @@ export function ExpertsPage(): ReactNode {
                 runAction(() => api.updateEmployee(emp.employee_id, updated), "manager.experts.save_ok")
               }
             />
+          ))
+        )}
+      </div>
+
+      {/* 已应用方案实例 */}
+      <div className="flex flex-col gap-md">
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("manager.experts.solution_instances_title")}
+        </h2>
+        {solutionInstances.length === 0 ? (
+          <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
+            {i18n.t("manager.experts.solution_instances_empty")}
+          </GlassPanel>
+        ) : (
+          solutionInstances.map((si) => (
+            <GlassPanel key={si.id} className="rounded-window p-md">
+              <div className="flex items-center gap-md mb-sm">
+                <span className="font-semibold text-text-primary">{si.display_name}</span>
+                <code className="text-xs text-gold-bright">{si.solution_id}@{si.solution_version}</code>
+                <span className={`text-xs px-sm py-xs rounded-full ${si.status === "active" ? "bg-success/20 text-success" : "bg-text-muted/20 text-text-muted"}`}>
+                  {si.status}
+                </span>
+              </div>
+              <div className="text-xs text-text-secondary space-y-xs">
+                <div>{i18n.t("manager.experts.expert_count")}: {si.expert_employee_ids.length}</div>
+                {si.expert_employee_ids.length > 0 && (
+                  <div className="flex flex-wrap gap-xs">
+                    {si.expert_employee_ids.map((eid) => (
+                      <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </GlassPanel>
           ))
         )}
       </div>

@@ -7,6 +7,7 @@ export const operationMessages: LocaleCatalog = {
     "operation.nav.dashboard": "概览",
     "operation.nav.enterprises": "企业开通",
     "operation.nav.catalog": "目录治理",
+    "operation.nav.solutions": "行业方案统计",
     "operation.nav.board": "跨企业看板",
     "operation.nav.accounts": "账号管理",
     "operation.nav.finance": "财务管理",

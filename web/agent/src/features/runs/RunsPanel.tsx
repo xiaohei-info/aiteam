@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Button, GlassPanel, Table } from "@aiteam/shared/ui";
 import type { AgentApiClient } from "../../lib/api-client";
-import { listRuns, listTasks, cancelRun, type Run, type Task } from "./useRunsApi";
+import { listRuns, listTasks, cancelRun, retryRun, type Run, type Task } from "./useRunsApi";
 
 interface Props { client: AgentApiClient; conversationId: string; refreshSignal?: number; }
 
@@ -48,9 +48,16 @@ export function RunsPanel({ client, conversationId, refreshSignal = 0 }: Props):
                 <tr key={r.id}>
                   <td><code className="text-xs text-gold-bright">{r.id.slice(-8)}</code></td>
                   <td><span className={statusColor(r.status)}>{r.status}</span></td>
-                  <td>{r.status === "running" && (
-                    <Button type="button" variant="ghost" size="sm" onClick={async () => { await cancelRun(client, r.id); void load(); }}>取消</Button>
-                  )}</td>
+                  <td>
+                    <div className="flex gap-xs">
+                      {r.status === "running" && (
+                        <Button type="button" variant="ghost" size="sm" onClick={async () => { await cancelRun(client, r.id); void load(); }}>取消</Button>
+                      )}
+                      {(r.status === "completed" || r.status === "failed" || r.status === "cancelled") && (
+                        <Button type="button" variant="ghost" size="sm" onClick={async () => { await retryRun(client, r.id); void load(); }}>重试</Button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

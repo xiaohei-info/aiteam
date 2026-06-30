@@ -19,3 +19,7 @@ export async function listTasks(client: AgentApiClient, conversationId: string):
 export async function cancelRun(client: AgentApiClient, runId: string): Promise<void> {
   await client.post(`/api/agent/runs/${encodeURIComponent(runId)}/cancel`, {});
 }
+
+export async function retryRun(client: AgentApiClient, runId: string): Promise<Run | null> {
+  return client.post<Run>(`/api/agent/runs/${encodeURIComponent(runId)}/retry`);
+}

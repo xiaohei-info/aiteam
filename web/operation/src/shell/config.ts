@@ -12,6 +12,7 @@ export const operationShellConfig: PageShellConfig = {
     { id: "enterprises", labelKey: "operation.nav.enterprises", path: "/enterprises", icon: "enterprise", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "accounts", labelKey: "operation.nav.accounts", path: "/accounts", icon: "enterprise", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "catalog", labelKey: "operation.nav.catalog", path: "/catalog", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
+    { id: "solutions", labelKey: "operation.nav.solutions", path: "/solutions", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "finance", labelKey: "operation.nav.finance", path: "/finance", icon: "board", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "board", labelKey: "operation.nav.board", path: "/board", icon: "board", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "health", labelKey: "operation.nav.health", path: "/health", icon: "dashboard", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },

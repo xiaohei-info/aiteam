@@ -65,3 +65,17 @@ export interface ApplySolutionInput {
   solution_version?: string | null;
   display_name_override?: string | null;
 }
+
+/** 本 tenant 的方案实例（对齐 SolutionInstanceOut）。 */
+export interface SolutionInstance {
+  id: string;
+  solution_id: string;
+  solution_version: string;
+  display_name: string;
+  status: string;
+  expert_employee_ids: string[];
+  knowledge_refs: string[];
+  skill_refs: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
