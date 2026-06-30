@@ -19,6 +19,8 @@ Responsibilities:
   in real-time (§9.4 Event Hydrator pattern)
 - 会话承接: the WebUI session_id is persisted on a conversation-scoped
   RuntimeBinding so follow-up turns share context.
+- 终端能力: 每个 run 拥有一个 run-scoped PTY shell（见 ``agent_gateway.terminal``），
+  执行 bash/CLI 命令、流式回传输出并在 finalize 时清理，补齐 GitHub #300 的 Gap。
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ import threading
 import time
 import uuid
 from pathlib import Path
+
+from agent_gateway.terminal import close_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -516,6 +520,12 @@ def _finalize(run_id: str, *, success: bool, output: str,
     finally:
         if own_conn:
             conn.close()
+        # Clean up the run's PTY shell so interactive CLI tools don't leak
+        # when a run reaches a terminal state.
+        try:
+            close_terminal(run_id)
+        except Exception:  # noqa: BLE001 — cleanup must never fail finalize.
+            logger.debug("[executor] terminal cleanup failed for run %s", run_id)
         # Clean up hydrator stream after finalize.
         from agent_gateway.event_hydrator import get_hydrator
         get_hydrator().remove_stream(run_id)
