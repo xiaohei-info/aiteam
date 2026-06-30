@@ -127,7 +127,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         if conv is None:
             from shared.errors import NotFound
             raise NotFound(f"group conversation not found: {conversation_id}")
-        return {"conversation_id": conversation_id, "updated": True}
+        return Envelope(data={"conversation_id": conversation_id, "updated": True})
 
     @router.delete("/{conversation_id}", summary="解散群聊", operation_id="agent_group_archive")
     async def archive_group(
@@ -138,7 +138,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         if conv is None:
             from shared.errors import NotFound
             raise NotFound(f"group conversation not found: {conversation_id}")
-        return {"conversation_id": conversation_id, "archived": True}
+        return Envelope(data={"conversation_id": conversation_id, "archived": True})
 
     @router.post("/{conversation_id}/members", summary="添加群聊成员", operation_id="agent_group_member_add")
     async def add_member(
@@ -150,7 +150,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         if not ok:
             from shared.errors import NotFound
             raise NotFound(f"group conversation not found: {conversation_id}")
-        return {"conversation_id": conversation_id, "employee_id": body.employee_id, "added": True}
+        return Envelope(data={"conversation_id": conversation_id, "employee_id": body.employee_id, "added": True})
 
     @router.delete("/{conversation_id}/members/{member_id}", summary="移除群聊成员", operation_id="agent_group_member_remove")
     async def remove_member(
@@ -159,7 +159,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         request: Request,
     ) -> dict:
         service.remove_member(conversation_id, member_id)
-        return {"conversation_id": conversation_id, "member_id": member_id, "removed": True}
+        return Envelope(data={"conversation_id": conversation_id, "member_id": member_id, "removed": True})
 
     @router.post("/{conversation_id}/messages", summary="发送群聊消息", operation_id="agent_group_message_send")
     async def send_group_message(

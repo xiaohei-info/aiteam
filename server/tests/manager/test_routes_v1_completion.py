@@ -224,3 +224,208 @@ def test_no_db_503(builder, path, method):
     c = _build_app(None, builder_fn)
     r = c.request(method, path, headers=_hdr())
     assert r.status_code == 503
+
+# ---- settings invites ----
+
+def test_settings_invite_list_ok():
+    from manager_service.routes_settings import build_settings_router
+    svc = MagicMock()
+    svc.list_invites.return_value = [{"invite_id": "i-1", "phone": "13800138000", "display_name": "Admin",
+                                       "status": "pending", "created_at": datetime.utcnow()}]
+    with patch("manager_service.routes_settings._service", return_value=svc):
+        c = _build_app("postgresql://x", build_settings_router)
+        r = c.get("/api/manager/settings/admin-invites", headers=_hdr())
+    assert r.status_code == 200
+
+def test_settings_invite_create_ok():
+    from manager_service.routes_settings import build_settings_router
+    svc = MagicMock()
+    svc.create_invite.return_value = {"invite_id": "i-1", "phone": "13800138000", "display_name": "Admin",
+                                       "status": "pending", "created_at": datetime.utcnow()}
+    with patch("manager_service.routes_settings._service", return_value=svc):
+        c = _build_app("postgresql://x", build_settings_router)
+        r = c.post("/api/manager/settings/admin-invites", json={"phone": "13800138000", "display_name": "Admin"}, headers=_hdr())
+    assert r.status_code == 200
+
+def test_settings_invite_delete_ok():
+    from manager_service.routes_settings import build_settings_router
+    svc = MagicMock()
+    svc.delete_invite.return_value = None
+    with patch("manager_service.routes_settings._service", return_value=svc):
+        c = _build_app("postgresql://x", build_settings_router)
+        r = c.delete("/api/manager/settings/admin-invites/i-1", headers=_hdr())
+    assert r.status_code == 204
+
+def test_settings_invite_delete_404():
+    from manager_service.routes_settings import build_settings_router
+    from shared.errors import NotFound
+    svc = MagicMock()
+    svc.delete_invite.side_effect = NotFound("nope")
+    with patch("manager_service.routes_settings._service", return_value=svc):
+        c = _build_app("postgresql://x", build_settings_router)
+        r = c.delete("/api/manager/settings/admin-invites/i-1", headers=_hdr())
+    assert r.status_code == 404
+
+# ---- settings_service ----
+
+def test_settings_service_get_defaults():
+    """get_settings 返回空 row 时调用 upsert。"""
+    from manager_service.settings_service import SettingsService
+    from manager_service.settings_repository import SettingsRepository
+    from tests.manager._fake_router import FakeRouter, FakeCursor, ctx
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=None))  # get_settings SELECT → None
+    # upsert_settings 内部: 1) SELECT id check → exists → skipped update; 2) final SELECT
+    router.queue(FakeCursor(fetchone=("s-1",)))  # existing check returns id
+    router.queue(FakeCursor(fetchone=("s-1", "DefaultCo", "", None, True, True, 100, {}, datetime.utcnow())))  # final SELECT
+    svc = SettingsService(SettingsRepository(router))
+    result = svc.get_settings(ctx())
+    assert result["enterprise_name"] == "DefaultCo"
+
+def test_settings_service_delete_invite_404():
+    """delete_invite 返回 False 时抛 NotFound。"""
+    from manager_service.settings_service import SettingsService
+    from manager_service.settings_repository import SettingsRepository
+    from tests.manager._fake_router import FakeRouter, FakeCursor, ctx
+    from shared.errors import NotFound
+    router = FakeRouter()
+    router.queue(FakeCursor(rowcount=0))  # delete → no rows
+    svc = SettingsService(SettingsRepository(router))
+    with pytest.raises(NotFound):
+        svc.delete_invite(ctx(), "missing")
+
+# ---- llm model routes ----
+
+def test_llm_model_list_ok():
+    from manager_service.routes_llm import build_llm_router
+    svc = MagicMock()
+    svc.list_models.return_value = [{"model_id": "m-1", "provider_id": "p-1", "model_uid": "gpt-4", "model_name": "GPT-4",
+                                      "context_window": 8192, "input_price": "0.03", "output_price": "0.06",
+                                      "is_active": True}]
+    with patch("manager_service.routes_llm._service", return_value=svc):
+        c = _build_app("postgresql://x", build_llm_router)
+        r = c.get("/api/manager/llm/models", headers=_hdr())
+    assert r.status_code == 200
+
+def test_llm_model_create_ok():
+    from manager_service.routes_llm import build_llm_router
+    svc = MagicMock()
+    svc.create_model.return_value = {"model_id": "m-1", "provider_id": "p-1", "model_uid": "gpt-4", "model_name": "GPT-4",
+                                      "context_window": 8192, "input_price": "0.03", "output_price": "0.06",
+                                      "is_active": True}
+    with patch("manager_service.routes_llm._service", return_value=svc):
+        c = _build_app("postgresql://x", build_llm_router)
+        r = c.post("/api/manager/llm/providers/p-1/models", json={"model_uid": "gpt-4", "model_name": "GPT-4"}, headers=_hdr())
+    assert r.status_code == 200
+
+def test_llm_provider_delete_ok():
+    from manager_service.routes_llm import build_llm_router
+    svc = MagicMock()
+    svc.delete_provider.return_value = None
+    with patch("manager_service.routes_llm._service", return_value=svc):
+        c = _build_app("postgresql://x", build_llm_router)
+        r = c.delete("/api/manager/llm/providers/p-1", headers=_hdr())
+    assert r.status_code == 204
+
+def test_llm_model_delete_ok():
+    from manager_service.routes_llm import build_llm_router
+    svc = MagicMock()
+    svc.delete_model.return_value = None
+    with patch("manager_service.routes_llm._service", return_value=svc):
+        c = _build_app("postgresql://x", build_llm_router)
+        r = c.delete("/api/manager/llm/models/m-1", headers=_hdr())
+    assert r.status_code == 204
+
+def test_llm_provider_delete_404():
+    from manager_service.routes_llm import build_llm_router
+    from shared.errors import NotFound
+    svc = MagicMock()
+    svc.delete_provider.side_effect = NotFound("nope")
+    with patch("manager_service.routes_llm._service", return_value=svc):
+        c = _build_app("postgresql://x", build_llm_router)
+        r = c.delete("/api/manager/llm/providers/p-1", headers=_hdr())
+    assert r.status_code == 404
+
+# ---- memory routes 补充 ----
+
+def test_memory_update_ok():
+    from manager_service.routes_memory_items import build_memory_items_router
+    svc = MagicMock()
+    svc.patch_memory.return_value = {"memory_id": "m-1", "employee_id": "e-1", "content": "updated",
+                                      "category": "preference", "importance": 5, "source": "manual",
+                                      "created_at": datetime.utcnow(), "last_used_at": None}
+    with patch("manager_service.routes_memory_items._service", return_value=svc):
+        c = _build_app("postgresql://x", build_memory_items_router)
+        r = c.patch("/api/manager/memories/m-1", json={"content": "updated"}, headers=_hdr())
+    assert r.status_code == 200
+
+def test_memory_delete_ok():
+    from manager_service.routes_memory_items import build_memory_items_router
+    svc = MagicMock()
+    svc.delete_memory.return_value = None
+    with patch("manager_service.routes_memory_items._service", return_value=svc):
+        c = _build_app("postgresql://x", build_memory_items_router)
+        r = c.delete("/api/manager/memories/m-1", headers=_hdr())
+    assert r.status_code == 204
+
+# ---- org routes 补充 ----
+
+def test_org_update_assignment_ok():
+    from manager_service.routes_org import build_org_router
+    svc = MagicMock()
+    svc.update_assignment.return_value = {"assignment_id": "emp-1", "department_id": "dept-1", "updated": True}
+    with patch("manager_service.routes_org._service", return_value=svc):
+        c = _build_app("postgresql://x", build_org_router)
+        r = c.patch("/api/manager/org/assignments/emp-1", json={"department_id": "dept-1"}, headers=_hdr())
+    assert r.status_code == 200
+
+def test_org_update_assignment_404():
+    from manager_service.routes_org import build_org_router
+    from shared.errors import NotFound
+    svc = MagicMock()
+    svc.update_assignment.side_effect = NotFound("nope")
+    with patch("manager_service.routes_org._service", return_value=svc):
+        c = _build_app("postgresql://x", build_org_router)
+        r = c.patch("/api/manager/org/assignments/emp-1", json={"department_id": "dept-1"}, headers=_hdr())
+    assert r.status_code == 404
+
+# ---- employee export ----
+
+def test_employee_export_ok():
+    from manager_service.routes_employee import build_employee_router
+    svc = MagicMock()
+    mock_item = MagicMock()
+    mock_item.employee_id = "e-1"
+    mock_item.employee_slug = "expert-1"
+    mock_item.display_name = "专家A"
+    mock_item.model = "gpt-4"
+    mock_item.runtime_binding = "hermes_acp"
+    mock_item.skills = ["skill1", "skill2"]
+    mock_item.version = 1
+    svc.list_all.return_value = [mock_item]
+    with patch("manager_service.routes_employee._service", return_value=svc):
+        c = _build_app("postgresql://x", build_employee_router)
+        r = c.get("/api/manager/employees/export/all", headers=_hdr())
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+
+# ---- 401 补漏 ----
+
+@pytest.mark.parametrize("builder,path,method", [
+    ("routes_settings", "/api/manager/settings/admin-invites", "GET"),
+    ("routes_settings", "/api/manager/settings/admin-invites", "POST"),
+    ("routes_llm", "/api/manager/llm/models?provider_id=p-1", "GET"),
+    ("routes_llm", "/api/manager/llm/providers/p-1/models", "POST"),
+    ("routes_org", "/api/manager/org/assignments/emp-1", "PATCH"),
+])
+def test_401_missing_routes(builder, path, method):
+    mod = __import__(f"manager_service.{builder}", fromlist=["x"])
+    name_map = {
+        "routes_settings": "build_settings_router",
+        "routes_llm": "build_llm_router",
+        "routes_org": "build_org_router",
+    }
+    builder_fn = getattr(mod, name_map[builder])
+    c = _build_app("postgresql://x", builder_fn)
+    r = c.request(method, path, json={"display_name": "x", "phone": "x", "model_uid": "x", "model_name": "x", "employee_id": "x", "department_id": "x"})
+    assert r.status_code == 401

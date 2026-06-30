@@ -17,5 +17,5 @@ function setup() {
 
 describe("useCollabApi", () => {
   it("get 调用 client.get", async () => { const { client, wrapper } = setup(); const { result } = renderHook(() => useCollabApi(), { wrapper }); await result.current.get(); expect(client.get).toHaveBeenCalledWith("/api/manager/collaboration-template"); });
-  it("update 调用 client.put", async () => { const { client, wrapper } = setup(); const { result } = renderHook(() => useCollabApi(), { wrapper }); await result.current.update({ title: "T" }); expect(client.put).toHaveBeenCalledWith("/api/manager/collaboration-template", { body: { title: "T" } }); });
+  it("update 调用 client.put", async () => { const { client, wrapper } = setup(); const { result } = renderHook(() => useCollabApi(), { wrapper }); await result.current.update({ name: "T" }); expect(client.put).toHaveBeenCalledWith("/api/manager/collaboration-template", { body: { name: "T" } }); });
 });

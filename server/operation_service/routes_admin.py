@@ -127,7 +127,7 @@ _PLATFORM_ROLES = [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR
 
 
 def build_admin_router(verifier) -> APIRouter:
-    router = APIRouter(prefix="/api/operation/admin", tags=["operation", "admin"])
+    router = APIRouter(prefix="/api/operation/admin", tags=["operation", "platform"])
     require_any = require_claims(verifier)
 
     def require_op(request: Request) -> TokenClaims:
