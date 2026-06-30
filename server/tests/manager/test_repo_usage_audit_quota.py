@@ -217,3 +217,160 @@ def test_row_to_quota_empty_dims():
     raw[8] = None
     row = _row_to_quota(tuple(raw))
     assert row.dimensions == {}
+
+# ---- run_event / usage_ledger (issue #292) ----
+
+from manager_service.usage_audit_quota_repository import (
+    RunEventRow,
+    UsageLedgerRow,
+    _row_to_run,
+    _row_to_ledger,
+)
+
+from ._fake_router import FakeCursor, FakeRouter, ctx
+
+
+def _run_row(eid="e-1", tid="t-1", rid="r-1", cursor=1, et="step_start",
+             st="session", sid="s-1", tt=None, emp=None, ets=None,
+             pv="step", payload=None, ca=None):
+    return (eid, tid, rid, cursor, et, st, sid, tt, emp, ets or datetime(2026, 1, 10), pv,
+            payload or {"k": "v"}, ca or datetime(2026, 1, 10))
+
+
+def _ledger_row(lid="l-1", tid="t-1", rid="r-1", emp="emp-1", conv=None,
+                it=100, ot=200, tt=300, cc=5, src="run_summary", occ=None,
+                ca=None, by="svc"):
+    return (lid, tid, rid, emp, conv, it, ot, tt, cc, src, occ or datetime(2026, 1, 10),
+            ca or datetime(2026, 1, 10), by)
+
+
+def test_row_to_run_round_trip():
+    row = _row_to_run(_run_row())
+    assert isinstance(row, RunEventRow)
+    assert row.event_id == "e-1"
+    assert row.cursor_no == 1
+    assert row.team_task_id is None
+    assert row.payload_json == {"k": "v"}
+
+
+def test_row_to_run_null_refs():
+    row = _row_to_run(_run_row(tt=None, emp=None))
+    assert row.team_task_id is None
+    assert row.employee_id is None
+
+
+def test_row_to_ledger_round_trip():
+    row = _row_to_ledger(_ledger_row(it=100, ot=200, tt=300, cc=5, src="usage_event", by="svc"))
+    assert isinstance(row, UsageLedgerRow)
+    assert row.input_tokens == 100 and row.output_tokens == 200
+    assert row.total_tokens == 300 and row.cost_cents == 5
+    assert row.source_type == "usage_event" and row.created_by == "svc"
+
+
+def test_append_run_event_inserts():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_run_row(eid="r-1")))
+    row = UsageAuditQuotaRepository(router).append_run_event(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111", cursor_no=1,
+        event_type="step_start", source_type="session", source_id="s-1",
+        employee_id="33333333-3333-3333-3333-333333333333",
+    )
+    assert row is not None and row.event_id == "r-1"
+    sql = router.last_sql
+    assert "INSERT INTO run_event" in sql
+    assert "ON CONFLICT" in sql
+
+
+def test_append_run_event_conflict_returns_none():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=None))  # DO NOTHING -> no row
+    row = UsageAuditQuotaRepository(router).append_run_event(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111", cursor_no=1,
+        event_type="step_start", source_type="session", source_id="s-1",
+    )
+    assert row is None
+
+
+def test_list_run_events_cursor_pagination():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchall=[_run_row(eid="r-1", cursor=1), _run_row(eid="r-2", cursor=2)]))
+    rows = UsageAuditQuotaRepository(router).list_run_events(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111", after_cursor=0,
+    )
+    assert len(rows) == 2
+    assert "cursor_no > %s" in router.last_sql
+
+
+def test_get_max_cursor_value():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=(7,)))
+    assert UsageAuditQuotaRepository(router).get_max_cursor(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111") == 7
+
+
+def test_get_latest_run_event():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_run_row(eid="latest", cursor=9)))
+    row = UsageAuditQuotaRepository(router).get_latest_run_event(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111")
+    assert row.event_id == "latest"
+    assert "ORDER BY cursor_no DESC" in router.last_sql
+
+
+def test_create_ledger_returns_row():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_ledger_row(lid="l-1", cc=5)))
+    payload = {
+        "run_id": "11111111-1111-1111-1111-111111111111",
+        "employee_id": "33333333-3333-3333-3333-333333333333",
+        "input_tokens": 100, "output_tokens": 200, "total_tokens": 300,
+        "cost_cents": 5, "source_type": "run_summary",
+    }
+    row = UsageAuditQuotaRepository(router).create_ledger(ctx(), payload=payload)
+    assert row.ledger_id == "l-1" and row.cost_cents == 5
+
+
+def test_upsert_ledger_row():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_ledger_row(lid="l-1", cc=9)))
+    payload = {
+        "run_id": "11111111-1111-1111-1111-111111111111",
+        "employee_id": "33333333-3333-3333-3333-333333333333",
+        "input_tokens": 1, "output_tokens": 2, "total_tokens": 3,
+        "cost_cents": 9, "source_type": "usage_event",
+    }
+    row = UsageAuditQuotaRepository(router).upsert_ledger(ctx(), payload=payload)
+    assert row.cost_cents == 9
+    assert "ON CONFLICT" in router.last_sql
+
+
+def test_get_ledger_by_run_found_and_notfound():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_ledger_row()))
+    found = UsageAuditQuotaRepository(router).get_ledger_by_run(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111", source_type="run_summary")
+    assert found is not None
+    router.queue(FakeCursor(fetchone=None))
+    assert UsageAuditQuotaRepository(router).get_ledger_by_run(
+        ctx(), run_id="11111111-1111-1111-1111-111111111111", source_type="x") is None
+
+
+def test_list_ledger_with_filters():
+    from manager_service.usage_audit_quota_repository import UsageAuditQuotaRepository
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchall=[_ledger_row(lid="l-1"), _ledger_row(lid="l-2")]))
+    rows = UsageAuditQuotaRepository(router).list_ledger(
+        ctx(), employee_id="33333333-3333-3333-3333-333333333333",
+        period_start="2026-01-01", period_end="2026-02-01",
+    )
+    assert len(rows) == 2
+    assert "employee_id = %s" in router.last_sql
+    assert "occurred_at >= %s::timestamptz" in router.last_sql

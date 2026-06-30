@@ -65,3 +65,24 @@ def test_create_event():
     router.queue(FakeCursor(fetchone=("e-1", "login", "u-1", None, None, {}, datetime.utcnow())))
     row = CollabAuditRepository(router).create_event(ctx(), event_type="login", actor_id="u-1")
     assert row.event_type == "login"
+
+def test_list_events_by_target_id():
+    from datetime import datetime
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchall=[("e-1", "login", None, "user", "u-1", {}, datetime.utcnow())]))
+    rows = CollabAuditRepository(router).list_events(ctx(), target_id="u-1")
+    assert len(rows) == 1
+    sql = router.last_sql
+    assert "target_id = %s::uuid" in sql
+    assert "target_type =" not in sql
+
+
+def test_list_events_combined_target_filters():
+    from datetime import datetime
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchall=[("e-1", "login", None, "user", "u-1", {}, datetime.utcnow())]))
+    rows = CollabAuditRepository(router).list_events(ctx(), target_type="user", target_id="u-1")
+    assert len(rows) == 1
+    sql = router.last_sql
+    assert "target_type = %s" in sql
+    assert "target_id = %s::uuid" in sql

@@ -24,7 +24,11 @@ from .schemas import (
     QuotaEnforcementActionOut,
     QuotaPolicyIn,
     QuotaPolicyOut,
+    RunEventIn,
+    RunEventOut,
     UsageAggregateOut,
+    UsageLedgerIn,
+    UsageLedgerOut,
     UsageRollupOut,
 )
 from .usage_audit_quota_repository import (
@@ -275,6 +279,74 @@ class UsageAuditQuotaService:
         return row
 
 
+    # ---- run_event（runtime 归一事件脱敏归档）+ usage_ledger（逐 token 计费明细）----
+
+    def append_run_event(self, ctx: TenantContext, body) -> dict | None:
+        """归档单条 run-event。返回出参（含 event_id）；重复归档返回 None。"""
+        self._assert_no_conversation_content(body.payload_json or {}, kind="RunEvent.payload_json")
+        row = self._repo.append_run_event(
+            ctx,
+            run_id=body.run_id,
+            cursor_no=body.cursor_no,
+            event_type=body.event_type,
+            source_type=body.source_type,
+            source_id=body.source_id,
+            team_task_id=body.team_task_id,
+            employee_id=body.employee_id,
+            event_ts=body.event_ts.isoformat() if body.event_ts else None,
+            preview_text=body.preview_text or "",
+            payload_json=body.payload_json,
+        )
+        return _to_run_event_out(row) if row is not None else None
+
+    def list_run_events(self, ctx: TenantContext, *, run_id: str,
+                        after_cursor: int = 0, limit: int = 100) -> dict:
+        items = [_to_run_event_out(r) for r in self._repo.list_run_events(
+            ctx, run_id=run_id, after_cursor=after_cursor, limit=limit,
+        )]
+        return {
+            "run_id": run_id,
+            "items": [i.model_dump(mode="json") for i in items],
+            "max_cursor": self._repo.get_max_cursor(ctx, run_id=run_id),
+        }
+
+    def get_max_cursor(self, ctx: TenantContext, *, run_id: str) -> dict:
+        return {"run_id": run_id, "max_cursor": self._repo.get_max_cursor(ctx, run_id=run_id)}
+
+    def record_usage(self, ctx: TenantContext, body, *, mode: str = "upsert") -> dict:
+        """记录逐 token 计费明细行。mode=upsert（默认，幂等）| create（严格新增）。"""
+        payload = {
+            "run_id": body.run_id,
+            "employee_id": body.employee_id,
+            "conversation_id": body.conversation_id,
+            "input_tokens": body.input_tokens,
+            "output_tokens": body.output_tokens,
+            "total_tokens": body.total_tokens,
+            "cost_cents": body.cost_cents,
+            "source_type": body.source_type or "run_summary",
+            "occurred_at": body.occurred_at.isoformat() if body.occurred_at else None,
+            "created_by": body.created_by,
+        }
+        if mode == "create":
+            row = self._repo.create_ledger(ctx, payload=payload)
+        else:
+            row = self._repo.upsert_ledger(ctx, payload=payload)
+        return _to_ledger_out(row).model_dump(mode="json")
+
+    def get_usage(self, ctx: TenantContext, *, run_id: str, source_type: str) -> dict | None:
+        row = self._repo.get_ledger_by_run(ctx, run_id=run_id, source_type=source_type)
+        return _to_ledger_out(row).model_dump(mode="json") if row is not None else None
+
+    def list_usage_ledger(self, ctx: TenantContext, *, run_id: str | None = None,
+                          employee_id: str | None = None,
+                          period_start: str | None = None, period_end: str | None = None) -> list[dict]:
+        rows = self._repo.list_ledger(
+            ctx, run_id=run_id, employee_id=employee_id,
+            period_start=period_start, period_end=period_end,
+        )
+        return [_to_ledger_out(r).model_dump(mode="json") for r in rows]
+
+
 def _ensure_can_write_quota(ctx: TenantContext) -> None:
     """配额策略写操作鉴权（03 §9.7）。非 owner/enterprise_admin/finance_admin → 403。"""
     if not set(ctx.roles) & set(_QUOTA_WRITE_ROLES):
@@ -350,6 +422,41 @@ def _to_quota_out(row: QuotaPolicyRow) -> QuotaPolicyOut:
         enforcement=row.enforcement,
         status=row.status,
         version=row.version,
+    )
+
+
+def _to_run_event_out(row) -> "RunEventOut":
+    return RunEventOut(
+        event_id=row.event_id,
+        run_id=row.run_id,
+        cursor_no=row.cursor_no,
+        event_type=row.event_type,
+        source_type=row.source_type,
+        source_id=row.source_id,
+        team_task_id=row.team_task_id,
+        employee_id=row.employee_id,
+        event_ts=row.event_ts,
+        preview_text=row.preview_text,
+        payload_json=row.payload_json,
+        created_at=row.created_at,
+    )
+
+
+def _to_ledger_out(row) -> "UsageLedgerOut":
+    return UsageLedgerOut(
+        ledger_id=row.ledger_id,
+        tenant_id=row.tenant_id,
+        run_id=row.run_id,
+        employee_id=row.employee_id,
+        conversation_id=row.conversation_id,
+        input_tokens=row.input_tokens,
+        output_tokens=row.output_tokens,
+        total_tokens=row.total_tokens,
+        cost_cents=row.cost_cents,
+        source_type=row.source_type,
+        occurred_at=row.occurred_at,
+        created_at=row.created_at,
+        created_by=row.created_by,
     )
 
 

@@ -104,7 +104,8 @@ class CollabAuditRepository:
     # ---- audit_event ----
 
     def list_events(self, ctx: TenantContext, *, event_type: str | None = None,
-                    target_type: str | None = None, page: int = 1, page_size: int = 20) -> list[AuditEventRow]:
+                    target_type: str | None = None, target_id: str | None = None,
+                    page: int = 1, page_size: int = 20) -> list[AuditEventRow]:
         clauses = []
         params: list = []
         if event_type:
@@ -113,6 +114,9 @@ class CollabAuditRepository:
         if target_type:
             clauses.append("target_type = %s")
             params.append(target_type)
+        if target_id:
+            clauses.append("target_id = %s::uuid")
+            params.append(target_id)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         offset = (page - 1) * page_size
         params.extend([page_size, offset])

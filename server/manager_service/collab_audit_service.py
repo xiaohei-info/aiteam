@@ -45,9 +45,10 @@ class CollabAuditService:
     # ---- audit events ----
 
     def list_events(self, ctx: TenantContext, *, event_type: str | None = None,
-                    target_type: str | None = None, page: int = 1, page_size: int = 20) -> list[dict]:
+                    target_type: str | None = None, target_id: str | None = None,
+                    page: int = 1, page_size: int = 20) -> list[dict]:
         rows = self._repo.list_events(ctx, event_type=event_type, target_type=target_type,
-                                      page=page, page_size=page_size)
+                                      target_id=target_id, page=page, page_size=page_size)
         return [
             {
                 "event_id": r.event_id, "event_type": r.event_type, "actor_id": r.actor_id,

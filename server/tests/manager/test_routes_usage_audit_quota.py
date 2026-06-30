@@ -294,3 +294,199 @@ def test_quota_update_forbidden_403():
         r = c.put("/api/manager/quota-policies/qp-1", json=_QUOTA_BODY,
                   headers=_hdr(roles=["member"]))
         assert r.status_code == 403
+
+# ---- run-events / usage-ledger routes (issue #292) ----
+
+import pytest
+from fastapi.testclient import TestClient
+
+from shared.config import Settings
+from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+
+_VERIFIER2, _SIGNER2 = make_inmem_verifier_and_signer()
+
+
+def _hdr2(roles=("owner",)):
+    return {"Authorization": "Bearer " + sign_inmem_token(_SIGNER2, "t9", list(roles))}
+
+
+def _svc_hdr2():
+    return {"X-Service-Token": "test-service-token"}
+
+
+def _client2(db_url):
+    from shared.app_factory import create_app
+    from manager_service.app import router as manager_router
+    from manager_service.routes_usage_audit_quota import build_usage_audit_quota_router
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+
+    app = create_app(
+        Settings(tier="manager", service_name="m", db_url=db_url, service_token="test-service-token"),
+        manager_router,
+    )
+    app.state._token_verifier = _VERIFIER2
+    app.state._operator_catalog = FakeOperatorCatalogClient()
+    app.include_router(build_usage_audit_quota_router(_VERIFIER2))
+    return TestClient(app)
+
+
+def _fake_svc2():
+    svc = MagicMock()
+    from datetime import datetime, timezone
+    svc.append_run_event.return_value = {
+        "event_id": "ev-1", "run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+        "source_type": "session", "source_id": "s-1", "team_task_id": None,
+        "employee_id": None, "event_ts": None, "preview_text": "", "payload_json": {},
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+    }
+    svc.list_run_events.return_value = {
+        "run_id": "r-1", "items": [
+            {"event_id": "ev-1", "run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+             "source_type": "session", "source_id": "s-1", "team_task_id": None,
+             "employee_id": None, "event_ts": None, "preview_text": "", "payload_json": {},
+             "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+        ], "max_cursor": 1,
+    }
+    svc.get_max_cursor.return_value = {"run_id": "r-1", "max_cursor": 3}
+    svc.record_usage.return_value = {
+        "ledger_id": "l-1", "tenant_id": "t9", "run_id": "r-1", "employee_id": "emp-1",
+        "conversation_id": None, "input_tokens": 100, "output_tokens": 200, "total_tokens": 300,
+        "cost_cents": 5, "source_type": "run_summary", "occurred_at": None,
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "created_by": None,
+    }
+    svc.get_usage.return_value = None
+    svc.list_usage_ledger.return_value = []
+    return svc
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/manager/run-events?tenant_id=t9"),
+    ("GET", "/api/manager/run-events/r-1"),
+    ("GET", "/api/manager/run-events/r-1/max-cursor"),
+    ("POST", "/api/manager/usage-ledger?tenant_id=t9"),
+    ("GET", "/api/manager/usage-ledger/r-1"),
+    ("GET", "/api/manager/usage-ledger"),
+])
+def test_run_and_ledger_no_token_401(method, path):
+    client = _client2(None)
+    body = None
+    if method == "POST":
+        body = {"run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+                "source_type": "session", "source_id": "s-1"} if "run-events" in path else {
+            "run_id": "r-1", "employee_id": "emp-1"}
+    r = client.request(method, path, json=body)
+    assert r.status_code == 401
+
+
+def test_run_event_no_db_503():
+    client = _client2(None)
+    r = client.post("/api/manager/run-events?tenant_id=t9",
+                    json={"run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+                          "source_type": "session", "source_id": "s-1"},
+                    headers=_svc_hdr2())
+    assert r.status_code == 503
+
+
+def test_run_event_extra_field_422():
+    client = _client2("postgresql://fake/fake")
+    r = client.post("/api/manager/run-events?tenant_id=t9",
+                    json={"run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+                          "source_type": "session", "source_id": "s-1", "bogus": 1},
+                    headers=_svc_hdr2())
+    assert r.status_code == 422
+
+
+def test_run_event_append_happy():
+    fake = _fake_svc2()
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.post("/api/manager/run-events?tenant_id=t9",
+                   json={"run_id": "r-1", "cursor_no": 1, "event_type": "step_start",
+                         "source_type": "session", "source_id": "s-1"},
+                   headers=_svc_hdr2())
+        assert r.status_code == 200
+        assert r.json()["data"]["event_id"] == "ev-1"
+
+
+def test_run_event_list_happy():
+    fake = _fake_svc2()
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.get("/api/manager/run-events/r-1?after_cursor=0&limit=50", headers=_hdr2())
+        assert r.status_code == 200
+        body = r.json()["data"]
+        assert body["run_id"] == "r-1" and body["max_cursor"] == 1
+        assert len(body["items"]) == 1
+
+
+def test_run_event_max_cursor_happy():
+    fake = _fake_svc2()
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.get("/api/manager/run-events/r-1/max-cursor", headers=_hdr2())
+        assert r.status_code == 200
+        assert r.json()["data"]["max_cursor"] == 3
+
+
+def test_usage_ledger_no_db_503():
+    client = _client2(None)
+    r = client.post("/api/manager/usage-ledger?tenant_id=t9",
+                    json={"run_id": "r-1", "employee_id": "emp-1"}, headers=_svc_hdr2())
+    assert r.status_code == 503
+
+
+def test_usage_ledger_upsert_happy():
+    fake = _fake_svc2()
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.post("/api/manager/usage-ledger?tenant_id=t9",
+                   json={"run_id": "r-1", "employee_id": "emp-1",
+                         "input_tokens": 100, "output_tokens": 200,
+                         "total_tokens": 300, "cost_cents": 5},
+                   headers=_svc_hdr2())
+        assert r.status_code == 200 and r.json()["data"]["ledger_id"] == "l-1"
+
+
+def test_usage_ledger_get_happy():
+    fake = _fake_svc2()
+    fake.get_usage.return_value = {
+        "ledger_id": "l-1", "tenant_id": "t9", "run_id": "r-1", "employee_id": "emp-1",
+        "input_tokens": 5, "output_tokens": 5, "total_tokens": 10, "cost_cents": 1,
+        "source_type": "run_summary", "created_at": "2026-01-01T00:00:00Z",
+    }
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.get("/api/manager/usage-ledger/r-1?source_type=run_summary", headers=_hdr2())
+        assert r.status_code == 200
+
+
+def test_usage_ledger_get_not_found_404():
+    fake = _fake_svc2()
+    fake.get_usage.return_value = None
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.get("/api/manager/usage-ledger/r-1?source_type=run_summary", headers=_hdr2())
+        assert r.status_code == 404
+
+
+def test_usage_ledger_list_happy():
+    fake = _fake_svc2()
+    fake.list_usage_ledger.return_value = [
+        {"ledger_id": "l-1", "tenant_id": "t9", "run_id": "r-1", "employee_id": "emp-1",
+         "input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "cost_cents": 1,
+         "source_type": "run_summary", "created_at": "2026-01-01T00:00:00Z"}
+    ]
+    with patch("manager_service.routes_usage_audit_quota.build_usage_audit_quota_service",
+               return_value=fake):
+        c = _client2("postgresql://fake/fake")
+        r = c.get("/api/manager/usage-ledger?run_id=r-1", headers=_hdr2())
+        assert r.status_code == 200 and len(r.json()["data"]) == 1
+
+

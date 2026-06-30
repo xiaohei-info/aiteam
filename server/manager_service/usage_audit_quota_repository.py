@@ -351,3 +351,249 @@ class UsageAuditQuotaRepository:
                 "SELECT " + _QUOTA_COLUMNS + " FROM quota_policy ORDER BY created_at"
             ).fetchall()
         return [_row_to_quota(r) for r in rows]
+
+    # ---- run_event：runtime 归一事件脱敏归档（issue #292）----
+
+    def append_run_event(self, ctx: TenantContext, *, run_id: str, cursor_no: int,
+                         event_type: str, source_type: str, source_id: str,
+                         team_task_id: str | None = None, employee_id: str | None = None,
+                         event_ts: str | None = None, preview_text: str = "",
+                         payload_json: dict | None = None) -> RunEventRow | None:
+        """归档单条 run-event；ON CONFLICT DO NOTHING 去重（重复归档静默跳过，返回 None）。
+
+        event_ts/preview_text 为空时让 PG 走 DEFAULT，对齐旧 run_event_repo 行为。
+        调用方对 preview_text/payload_json 的脱敏负责（D13）。
+        """
+        tenant_uuid = _to_uuid(ctx.tenant_id)
+        rid = _to_uuid(run_id)
+        tt = _to_uuid(team_task_id)
+        eid = _to_uuid(employee_id)
+        import json
+        cols = ["tenant_id", "run_id", "cursor_no", "event_type", "source_type", "source_id",
+                "team_task_id", "employee_id"]
+        vals: list[object] = [tenant_uuid, rid, cursor_no, event_type, source_type, source_id, tt, eid]
+        if event_ts:
+            cols.append("event_ts")
+            vals.append(event_ts)
+        if preview_text:
+            cols.append("preview_text")
+            vals.append(preview_text)
+        cols.append("payload_json")
+        vals.append(json.dumps(payload_json or {}))
+        col_spec = ", ".join(cols)
+        ph = ", ".join(["%s"] * len(vals))
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                f"INSERT INTO run_event ({col_spec}) VALUES ({ph}) "
+                "ON CONFLICT (tenant_id, run_id, cursor_no) DO NOTHING "
+                "RETURNING " + _RUN_COLUMNS,
+                vals,
+            ).fetchone()
+        return _row_to_run(row) if row is not None else None
+
+    def list_run_events(self, ctx: TenantContext, *, run_id: str, after_cursor: int = 0,
+                        limit: int = 100) -> list[RunEventRow]:
+        """cursor 分页列 run 的事件（cursor_no > after_cursor，ASC）。"""
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT " + _RUN_COLUMNS + " FROM run_event "
+                "WHERE run_id = %s AND cursor_no > %s "
+                "ORDER BY cursor_no ASC LIMIT %s",
+                (_to_uuid(run_id), after_cursor, limit),
+            ).fetchall()
+        return [_row_to_run(r) for r in rows]
+
+    def get_max_cursor(self, ctx: TenantContext, *, run_id: str) -> int:
+        """某 run 当前最大游标水位；无事件返回 0。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT COALESCE(MAX(cursor_no), 0) FROM run_event WHERE run_id = %s",
+                (_to_uuid(run_id),),
+            ).fetchone()
+        return row[0] if row else 0
+
+    def get_latest_run_event(self, ctx: TenantContext, *, run_id: str) -> RunEventRow | None:
+        """某 run 最新一条事件（按 cursor_no DESC）。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _RUN_COLUMNS + " FROM run_event WHERE run_id = %s "
+                "ORDER BY cursor_no DESC LIMIT 1",
+                (_to_uuid(run_id),),
+            ).fetchone()
+        return _row_to_run(row) if row is not None else None
+
+    # ---- usage_ledger：逐 token 计费明细（issue #292）----
+
+    def create_ledger(self, ctx: TenantContext, *, payload: dict) -> UsageLedgerRow:
+        """写入一行 usage_ledger（insert）。tenant_id 取自 ctx（D22）。"""
+        tenant_uuid = _to_uuid(ctx.tenant_id)
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO usage_ledger (tenant_id, run_id, employee_id, conversation_id, "
+                "input_tokens, output_tokens, total_tokens, cost_cents, source_type, occurred_at, created_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "COALESCE(NULLIF(%s, '')::timestamptz, now()), %s) "
+                "RETURNING " + _LEDGER_COLUMNS,
+                (
+                    tenant_uuid, _to_uuid(payload["run_id"]), _to_uuid(payload["employee_id"]),
+                    _to_uuid(payload.get("conversation_id")), payload.get("input_tokens", 0),
+                    payload.get("output_tokens", 0), payload.get("total_tokens", 0),
+                    payload.get("cost_cents", 0), payload.get("source_type", "run_summary"),
+                    payload.get("occurred_at"), payload.get("created_by"),
+                ),
+            ).fetchone()
+        return _row_to_ledger(row)
+
+    def upsert_ledger(self, ctx: TenantContext, *, payload: dict) -> UsageLedgerRow:
+        """按 (tenant_id, run_id, source_type) 幂等回写 usage_ledger（F13 重复上报覆盖）。"""
+        tenant_uuid = _to_uuid(ctx.tenant_id)
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO usage_ledger (tenant_id, run_id, employee_id, conversation_id, "
+                "input_tokens, output_tokens, total_tokens, cost_cents, source_type, occurred_at, created_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "COALESCE(NULLIF(%s, '')::timestamptz, now()), %s) "
+                "ON CONFLICT (tenant_id, run_id, source_type) DO UPDATE SET "
+                "employee_id=EXCLUDED.employee_id, conversation_id=EXCLUDED.conversation_id, "
+                "input_tokens=EXCLUDED.input_tokens, output_tokens=EXCLUDED.output_tokens, "
+                "total_tokens=EXCLUDED.total_tokens, cost_cents=EXCLUDED.cost_cents, "
+                "occurred_at=EXCLUDED.occurred_at, created_by=EXCLUDED.created_by, created_at=now() "
+                "RETURNING " + _LEDGER_COLUMNS,
+                (
+                    tenant_uuid, _to_uuid(payload["run_id"]), _to_uuid(payload["employee_id"]),
+                    _to_uuid(payload.get("conversation_id")), payload.get("input_tokens", 0),
+                    payload.get("output_tokens", 0), payload.get("total_tokens", 0),
+                    payload.get("cost_cents", 0), payload.get("source_type", "run_summary"),
+                    payload.get("occurred_at"), payload.get("created_by"),
+                ),
+            ).fetchone()
+        return _row_to_ledger(row)
+
+    def get_ledger_by_run(self, ctx: TenantContext, *, run_id: str, source_type: str) -> UsageLedgerRow | None:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _LEDGER_COLUMNS + " FROM usage_ledger "
+                "WHERE run_id = %s AND source_type = %s",
+                (_to_uuid(run_id), source_type),
+            ).fetchone()
+        return _row_to_ledger(row) if row is not None else None
+
+    def list_ledger(self, ctx: TenantContext, *, run_id: str | None = None,
+                    employee_id: str | None = None,
+                    period_start: str | None = None, period_end: str | None = None) -> list[UsageLedgerRow]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if run_id is not None:
+            clauses.append("run_id = %s")
+            params.append(_to_uuid(run_id))
+        if employee_id is not None:
+            clauses.append("employee_id = %s")
+            params.append(_to_uuid(employee_id))
+        if period_start:
+            clauses.append("occurred_at >= %s::timestamptz")
+            params.append(period_start)
+        if period_end:
+            clauses.append("occurred_at < %s::timestamptz")
+            params.append(period_end)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT " + _LEDGER_COLUMNS + f" FROM usage_ledger{where} "
+                "ORDER BY occurred_at DESC, id DESC",
+                tuple(params),
+            ).fetchall()
+        return [_row_to_ledger(r) for r in rows]
+
+
+# ---- run_event（运行事件明细）+ usage_ledger（逐 token 计费明细）----
+#
+# 补齐 Manager usage/audit 模块缺失的完整事件追踪（issue #292 / GitHub #292）。租户隔离一致：所有
+# 行模型 tenant_id 取自 TenantContext（D22），跨租户因 RLS 不可见（04 §6.1.1）。
+#
+# 红线（D13）：run_event 仅承载脱敏事件元数据；usage_ledger 仅承载逐 run 计量数字。两表均不含任何
+# 会话文本/prompt/session 内容/工具 IO 明文字段。
+
+
+@dataclass(frozen=True)
+class RunEventRow:
+    """运行事件明细行（对齐旧 entities.RunEvent + run_event_repo）。无会话内容字段。"""
+
+    event_id: str
+    tenant_id: str
+    run_id: str
+    cursor_no: int
+    event_type: str
+    source_type: str
+    source_id: str
+    team_task_id: str | None
+    employee_id: str | None
+    event_ts: datetime
+    preview_text: str
+    payload_json: dict
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class UsageLedgerRow:
+    """逐 token 计费明细行（对齐旧 entities.UsageLedger + usage_ledger_repo）。无会话内容字段。"""
+
+    ledger_id: str
+    tenant_id: str
+    run_id: str
+    employee_id: str
+    conversation_id: str | None
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_cents: int
+    source_type: str
+    occurred_at: datetime
+    created_at: datetime
+    created_by: str | None
+
+
+_RUN_COLUMNS = (
+    "id, tenant_id, run_id, cursor_no, event_type, source_type, source_id, "
+    "team_task_id, employee_id, event_ts, preview_text, payload_json, created_at"
+)
+
+_LEDGER_COLUMNS = (
+    "id, tenant_id, run_id, employee_id, conversation_id, input_tokens, output_tokens, "
+    "total_tokens, cost_cents, source_type, occurred_at, created_at, created_by"
+)
+
+
+def _row_to_run(row: Any) -> RunEventRow:
+    return RunEventRow(
+        event_id=str(row[0]),
+        tenant_id=str(row[1]),
+        run_id=str(row[2]),
+        cursor_no=row[3],
+        event_type=row[4],
+        source_type=row[5],
+        source_id=str(row[6]),
+        team_task_id=str(row[7]) if row[7] is not None else None,
+        employee_id=str(row[8]) if row[8] is not None else None,
+        event_ts=row[9],
+        preview_text=row[10] or "",
+        payload_json=row[11] if isinstance(row[11], dict) else {},
+        created_at=row[12],
+    )
+
+
+def _row_to_ledger(row: Any) -> UsageLedgerRow:
+    return UsageLedgerRow(
+        ledger_id=str(row[0]),
+        tenant_id=str(row[1]),
+        run_id=str(row[2]),
+        employee_id=str(row[3]),
+        conversation_id=str(row[4]) if row[4] is not None else None,
+        input_tokens=row[5],
+        output_tokens=row[6],
+        total_tokens=row[7],
+        cost_cents=row[8],
+        source_type=row[9],
+        occurred_at=row[10],
+        created_at=row[11],
+        created_by=row[12] or None,
+    )
