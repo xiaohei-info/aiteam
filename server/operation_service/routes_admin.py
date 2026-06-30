@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.auth import require_claims
+from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
+from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
 
 
@@ -101,9 +102,17 @@ class SystemHealthOut(BaseModel):
     timestamp: datetime
 
 
+_PLATFORM_ROLES = [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR.value]
+
+
 def build_admin_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/operation/admin", tags=["operation", "admin"])
-    require = require_claims(verifier)
+    require_any = require_claims(verifier)
+
+    def require_op(request: Request) -> TokenClaims:
+        claims = require_any(request)
+        authorize(claims, _PLATFORM_ROLES)
+        return claims
 
     # ---- S01 企业账号管理 ----
 
@@ -113,14 +122,14 @@ def build_admin_router(verifier) -> APIRouter:
         status: str | None = Query(default=None),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
-        claims: TokenClaims = Depends(require),
+        claims: TokenClaims = Depends(require_op),
     ) -> ListEnvelope[EnterpriseAccountOut]:
         return ListEnvelope(data=[])
 
     @router.get("/enterprises/{org_id}", summary="企业详情", operation_id="operation_admin_enterprise_detail")
     async def get_enterprise(
         org_id: str,
-        claims: TokenClaims = Depends(require),
+        claims: TokenClaims = Depends(require_op),
     ) -> Envelope[EnterpriseAccountDetail]:
         now = datetime.now(timezone.utc)
         return Envelope(data=EnterpriseAccountDetail(
@@ -130,25 +139,25 @@ def build_admin_router(verifier) -> APIRouter:
         ))
 
     @router.get("/enterprises/export/all", summary="导出企业列表", operation_id="operation_admin_enterprise_export")
-    async def export_enterprises(claims: TokenClaims = Depends(require)) -> dict:
+    async def export_enterprises(claims: TokenClaims = Depends(require_op)) -> dict:
         return {"export_url": "", "total": 0}
 
     @router.post("/enterprises/{org_id}/actions", summary="企业操作(充值/封禁/通知)", operation_id="operation_admin_enterprise_action")
     async def enterprise_action(
         org_id: str,
         body: EnterpriseActionRequest,
-        claims: TokenClaims = Depends(require),
+        claims: TokenClaims = Depends(require_op),
     ) -> dict:
         return {"org_id": org_id, "action": body.action, "executed": True}
 
     @router.get("/stats", summary="企业统计卡片", operation_id="operation_admin_stats")
-    async def get_stats(claims: TokenClaims = Depends(require)) -> Envelope[EnterpriseStatsOut]:
+    async def get_stats(claims: TokenClaims = Depends(require_op)) -> Envelope[EnterpriseStatsOut]:
         return Envelope(data=EnterpriseStatsOut())
 
     # ---- S03 行业方案统计 ----
 
     @router.get("/solutions/stats", summary="行业方案应用统计", operation_id="operation_admin_solution_stats")
-    async def solution_stats(claims: TokenClaims = Depends(require)) -> ListEnvelope[SolutionStatsOut]:
+    async def solution_stats(claims: TokenClaims = Depends(require_op)) -> ListEnvelope[SolutionStatsOut]:
         return ListEnvelope(data=[])
 
     # ---- S04 财务管理 ----
@@ -156,21 +165,21 @@ def build_admin_router(verifier) -> APIRouter:
     @router.get("/finance/overview", summary="财务总览", operation_id="operation_admin_finance_overview")
     async def finance_overview(
         period: Literal["month", "quarter", "year", "all"] = Query(default="month"),
-        claims: TokenClaims = Depends(require),
+        claims: TokenClaims = Depends(require_op),
     ) -> Envelope[FinanceOverviewOut]:
         return Envelope(data=FinanceOverviewOut(period=period))
 
     @router.get("/finance/reports", summary="财务报表", operation_id="operation_admin_finance_reports")
     async def finance_reports(
         period: Literal["month", "quarter", "year", "all"] = Query(default="month"),
-        claims: TokenClaims = Depends(require),
+        claims: TokenClaims = Depends(require_op),
     ) -> Envelope[FinanceReportOut]:
         return Envelope(data=FinanceReportOut())
 
     # ---- 系统健康 ----
 
     @router.get("/health", summary="系统健康状态", operation_id="operation_admin_health")
-    async def system_health(claims: TokenClaims = Depends(require)) -> Envelope[SystemHealthOut]:
+    async def system_health(claims: TokenClaims = Depends(require_op)) -> Envelope[SystemHealthOut]:
         return Envelope(data=SystemHealthOut(
             status="healthy",
             services={"operation": "up", "manager": "unknown", "agent": "local"},

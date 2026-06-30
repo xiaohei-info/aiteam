@@ -158,7 +158,6 @@ async def update_catalog_entry(
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
-    entry = service.get_entry(catalog_type, template_id)
     changes = body.model_dump(exclude_none=True)
     updated = service.update_entry(catalog_type, template_id, changes)
     return Envelope[CatalogEntryResponse](data=updated)
