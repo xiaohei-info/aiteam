@@ -8,6 +8,7 @@ import { SyncPage } from "../features/sync";
 import { MarketplacePage } from "../features/marketplace";
 import { OfficePage } from "../features/office";
 import { KnowledgePage } from "../features/knowledge";
+import { SettingsPage } from "../features/settings";
 import { LoginPage } from "../pages/LoginPage";
 
 export function AppRoutes() {
@@ -21,6 +22,7 @@ export function AppRoutes() {
       <Route path="/knowledge" element={<RequireAuth><PageShell><KnowledgePage /></PageShell></RequireAuth>} />
       <Route path="/office" element={<RequireAuth><PageShell><OfficePage /></PageShell></RequireAuth>} />
       <Route path="/sync" element={<RequireAuth><PageShell><SyncPage /></PageShell></RequireAuth>} />
+      <Route path="/settings" element={<RequireAuth><PageShell><SettingsPage /></PageShell></RequireAuth>} />
       <Route path="/" element={<Navigate to="/workspace" replace />} />
       <Route path="*" element={<Navigate to="/workspace" replace />} />
     </Routes>

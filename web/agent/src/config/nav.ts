@@ -10,6 +10,7 @@ export const agentShellConfig: PageShellConfig = {
     { id: "marketplace", labelKey: "agent.nav.marketplace", path: "/marketplace", icon: "grid" },
     { id: "knowledge", labelKey: "agent.nav.knowledge", path: "/knowledge", icon: "catalog" },
     { id: "office", labelKey: "agent.nav.office", path: "/office", icon: "dashboard" },
+    { id: "settings", labelKey: "agent.nav.settings", path: "/settings", icon: "settings" },
     { id: "sync", labelKey: "agent.nav.sync", path: "/sync", icon: "refresh" },
   ],
 };
