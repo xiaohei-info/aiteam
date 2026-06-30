@@ -128,6 +128,11 @@ class AdminService:
             ],
             "employee_count": 0,
             "token_history": token_history,
+            "audit_events": [
+                {"event_id": a.event_id, "action": a.action, "detail": a.detail,
+                 "created_at": a.created_at}
+                for a in audits
+            ],
         }
 
     def export_enterprises(self) -> dict:

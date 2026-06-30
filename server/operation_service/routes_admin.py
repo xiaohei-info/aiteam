@@ -58,8 +58,15 @@ class EnterpriseActionResponse(BaseModel):
 
     org_id: str
     action: str
-    executed: bool = True
+    executed: bool
     detail: str = ""
+
+
+class EnterpriseExportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = 0
+    rows: list[dict] = Field(default_factory=list)
 
 
 class EnterpriseStatsOut(BaseModel):
@@ -142,15 +149,10 @@ def build_admin_router(verifier) -> APIRouter:
         page_size: int = Query(default=20, ge=1, le=100),
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
-    ) -> dict:
+    ) -> Envelope[list[EnterpriseAccountOut]]:
         rows = service.list_enterprises(keyword=keyword, status=status, page=page, page_size=page_size)
-        total = service.count_enterprises(keyword=keyword, status=status)
-        return {
-            "data": rows,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+        items = [EnterpriseAccountOut(**r) for r in rows]
+        return Envelope(data=items)
 
     @router.get(
         "/enterprises/{org_id}",
@@ -161,8 +163,9 @@ def build_admin_router(verifier) -> APIRouter:
         org_id: str,
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
-    ) -> Envelope[dict]:
-        return Envelope(data=service.get_enterprise_detail(org_id))
+    ) -> Envelope[EnterpriseAccountDetail]:
+        detail = service.get_enterprise_detail(org_id)
+        return Envelope(data=EnterpriseAccountDetail(**detail))
 
     @router.get(
         "/enterprises/export/all",
@@ -172,8 +175,9 @@ def build_admin_router(verifier) -> APIRouter:
     async def export_enterprises(
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
-    ) -> dict:
-        return service.export_enterprises()
+    ) -> Envelope[EnterpriseExportResponse]:
+        result = service.export_enterprises()
+        return Envelope(data=EnterpriseExportResponse(**result))
 
     @router.post(
         "/enterprises/{org_id}/actions",

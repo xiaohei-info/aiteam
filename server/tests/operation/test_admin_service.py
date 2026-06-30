@@ -209,3 +209,14 @@ def test_system_health_returns_status(service):
     assert health["status"] in ("healthy", "degraded")
     assert "timestamp" in health
     assert health["services"]["operation"] == "up"
+
+
+def test_detail_includes_audit_events(service, enterprise_repo, admin_repo):
+    eid = _provision(enterprise_repo, "AuditCo")
+    service.execute_action(eid, "ban", None, None)
+    service.execute_action(eid, "notify", None, "rejected")
+    detail = service.get_enterprise_detail(eid)
+    assert len(detail["audit_events"]) == 2
+    actions = [a["action"] for a in detail["audit_events"]]
+    assert "ban" in actions
+    assert "notify" in actions
