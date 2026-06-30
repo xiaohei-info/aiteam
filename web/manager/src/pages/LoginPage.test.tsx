@@ -126,4 +126,61 @@ describe("LoginPage", () => {
       expect(screen.getByText("账号或密码错误")).toBeInTheDocument();
     });
   });
+
+  it("登录 403 触发 owner-reset 模式，重置成功后 signIn + 跳转", async () => {
+    const signIn = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Forbidden",
+            status: 403,
+            code: "password_reset_required",
+            detail: "password reset required before login",
+            instance: "/api/auth/login",
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/problem+json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { token: "reset-token", claims: {} } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    renderLogin({ signIn });
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "tenant1" } });
+    fireEvent.change(inputs[1]!, { target: { value: "owner1" } });
+    const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: "bootstrap" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("owner-reset-form")).toBeInTheDocument();
+    });
+    expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
+    expect(screen.getByText("tenant1 · owner1")).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const newPasswordInput = screen.getByTestId("new-password") as HTMLInputElement;
+    const confirmPasswordInput = screen.getByTestId("confirm-new-password") as HTMLInputElement;
+    fireEvent.change(newPasswordInput, { target: { value: "NewPass!234" } });
+    fireEvent.change(confirmPasswordInput, { target: { value: "NewPass!234" } });
+    fireEvent.click(screen.getByRole("button", { name: "设置新密码并登录" }));
+    await waitFor(() => {
+      expect(signIn).toHaveBeenCalledWith("reset-token");
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const secondCallBody = JSON.parse(fetchSpy.mock.calls[1]![1]!.body as string);
+    expect(secondCallBody).toEqual({
+      tenant_id: "tenant1",
+      account: "owner1",
+      old_password: "bootstrap",
+      new_password: "NewPass!234",
+    });
+  });
 });
