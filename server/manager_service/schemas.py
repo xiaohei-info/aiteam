@@ -553,6 +553,43 @@ class QuotaEnforcementActionOut(BaseModel):
     severity: str = Field(default="info", description="info | warn | alert")
     detail: str | None = None
 
+# ---- employee_prompt 版本管理 + 历史追踪（issue #303 gap，06 §7.6，D16/D22）----
+#
+# 红线：
+#   - 只承载中立 system_prompt / behavior_rules_json / opening_message；不写 runtime 原生片段，
+#     不配置 runtime 启动参数/路径（06 §7.5.3）。
+#   - 所有 creator/tenant_id 经 TenantContext，不接受手写 tenant 过滤（D22）。
+# version_no：版本号；update 单调 +1，rollback 基于历史版本产生新 version_no（不回退）。
+# source_template_version：追溯 prompt 是从哪个 template version 继承的。
+
+
+class EmployeePromptBase(BaseModel):
+    """employee prompt 可编辑字段（中立字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    system_prompt: str = Field(default="", description="中立 prompt 文本（不写 SOUL.md）")
+    behavior_rules_json: dict = Field(
+        default_factory=dict,
+        description="行为约束 JSON（中立结构；如{max_turns, forbid_topics,...}，runtime 端 Driver 翻译）",
+    )
+    opening_message: str | None = Field(
+        default=None, description="对话开场白（中立文本；runtime 端 Driver 注入）"
+    )
+    source_template_version: str | None = Field(
+        default=None,
+        description="来源模板版本（追溯 prompt 的模板来源；非 manager 版本号）",
+    )
+
+
+class EmployeePromptIn(EmployeePromptBase):
+    """创建/更新请求体。"""
+
+    change_reason: str | None = Field(
+        default=None, description="本次变更原因（写入历史追溯）"
+    )
+
+
 # ---- run_event：运行事件明细（runtime 归一事件脱敏归档）----
 #
 # 红线（D13）：run-event 仅承载脱敏事件元数据（event_type/source/preview/payload），不含会话/
