@@ -9,6 +9,7 @@ import { useCallback, useState } from "react";
 import { GlassPanel } from "@aiteam/shared/ui";
 
 import { useApp } from "../../lib/app-context";
+import { ConversationStateControl } from "./ConversationStateControl";
 import type { Conversation } from "./useChatApi";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
@@ -35,6 +36,13 @@ export function ChatPage() {
       <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
         {selected ? (
           <>
+            <div className="px-md pt-md">
+              <ConversationStateControl
+                client={client}
+                conversation={selected}
+                onStateChanged={setSelected}
+              />
+            </div>
             <TimelineView
               client={client}
               conversationId={selected.id}

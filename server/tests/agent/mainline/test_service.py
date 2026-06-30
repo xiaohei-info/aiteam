@@ -329,3 +329,70 @@ def test_missing_conversation_raises():
         svc.add_message("nope", role=MessageRole.USER, content="x")
     with pytest.raises(NotFound):
         asyncio.run(svc.start_run("nope"))
+
+
+def test_set_conversation_state_allows_valid_transitions():
+    """合法转换：draft→active / active→paused / paused→active / active→muted /
+    muted→active / 各态→archived。"""
+    from shared.contracts.enums import ConversationState
+
+    svc = _svc()
+    conv = svc.create_conversation()
+    assert conv.state == ConversationState.ACTIVE
+
+    # active → paused → active
+    svc.set_conversation_state(conv.id, ConversationState.PAUSED)
+    assert svc.get_conversation(conv.id).state == ConversationState.PAUSED
+    svc.set_conversation_state(conv.id, ConversationState.ACTIVE)
+    assert svc.get_conversation(conv.id).state == ConversationState.ACTIVE
+
+    # active → muted → active
+    svc.set_conversation_state(conv.id, ConversationState.MUTED)
+    assert svc.get_conversation(conv.id).state == ConversationState.MUTED
+    svc.set_conversation_state(conv.id, ConversationState.ACTIVE)
+    assert svc.get_conversation(conv.id).state == ConversationState.ACTIVE
+
+    # active → archived（终态）
+    svc.set_conversation_state(conv.id, ConversationState.ARCHIVED)
+    assert svc.get_conversation(conv.id).state == ConversationState.ARCHIVED
+
+
+def test_set_conversation_state_rejects_invalid_transitions():
+    """非法转换抛 Conflict(409)：archived 为终态、paused/muted 不可互转、不可跳过 active。"""
+    from shared.contracts.enums import ConversationState
+    from shared.errors import Conflict
+
+    svc = _svc()
+    conv = svc.create_conversation()
+
+    # archived 为终态：不可转为任何状态
+    svc.set_conversation_state(conv.id, ConversationState.ARCHIVED)
+    with pytest.raises(Conflict):
+        svc.set_conversation_state(conv.id, ConversationState.ACTIVE)
+
+    # paused → muted 非法（必须经 active）
+    conv2 = svc.create_conversation()
+    svc.set_conversation_state(conv2.id, ConversationState.PAUSED)
+    with pytest.raises(Conflict):
+        svc.set_conversation_state(conv2.id, ConversationState.MUTED)
+
+    # muted → paused 非法
+    conv3 = svc.create_conversation()
+    svc.set_conversation_state(conv3.id, ConversationState.MUTED)
+    with pytest.raises(Conflict):
+        svc.set_conversation_state(conv3.id, ConversationState.PAUSED)
+
+    # archived → paused 非法
+    conv4 = svc.create_conversation()
+    svc.set_conversation_state(conv4.id, ConversationState.ARCHIVED)
+    with pytest.raises(Conflict):
+        svc.set_conversation_state(conv4.id, ConversationState.PAUSED)
+
+
+def test_set_conversation_state_raises_for_missing_conversation():
+    from shared.contracts.enums import ConversationState
+    from shared.errors import NotFound
+
+    svc = _svc()
+    with pytest.raises(NotFound):
+        svc.set_conversation_state("does-not-exist", ConversationState.ARCHIVED)
