@@ -102,6 +102,17 @@ load_env() {
     echo "[ctl] ERROR: ADMIN_DB_URL empty — check ADMIN_DB_URL / POSTGRES_SUPER_* in .env.${ENV_CONFIG}" >&2
     exit 1
   fi
+
+  # 自动探测 Python 解释器：优先 venv 内的 python（能直接获得 venv 依赖），
+  # 否则 fallback 到系统 python3。避免部署必须 source .venv/bin/activate。
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    VENV_PYTHON="$(command -v python3)"
+  else
+    echo "[ctl] ERROR: 找不到 Python 解释器（.venv/bin/python 或系统 python3）" >&2
+    exit 1
+  fi
 }
 
 # 解析参数
@@ -304,7 +315,7 @@ start_service_local() {
         OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=manager \
+        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=manager \
           --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
@@ -326,7 +337,7 @@ start_service_local() {
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=operation \
+        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
           --host="${OPERATION_HOST:-127.0.0.1}" --port="${OPERATION_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
@@ -352,7 +363,7 @@ start_service_local() {
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=agent \
+        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=agent \
           --host="${AGENT_HOST:-127.0.0.1}" --port="${AGENT_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
