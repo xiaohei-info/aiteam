@@ -12,6 +12,7 @@ import type {
   EmployeeConfig,
   ExpertTemplate,
   RecruitExpertInput,
+  SolutionInstance,
   SolutionPackage,
 } from "./types";
 
@@ -22,6 +23,7 @@ export interface ExpertsApi {
   applySolution: (input: ApplySolutionInput) => Promise<unknown>;
   listEmployees: () => Promise<EmployeeConfig[]>;
   updateEmployee: (employeeId: string, config: EmployeeConfig) => Promise<EmployeeConfig | null>;
+  listSolutionInstances: () => Promise<SolutionInstance[]>;
 }
 
 export function useExpertsApi(): ExpertsApi {
@@ -55,6 +57,10 @@ export function useExpertsApi(): ExpertsApi {
         void employee_slug;
         void version;
         return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body });
+      },
+      async listSolutionInstances() {
+        const r = await client.listGet<SolutionInstance>("/api/manager/recruit/solutions");
+        return r.items;
       },
     };
   }, [token, onUnauthorized]);

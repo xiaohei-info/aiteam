@@ -12,6 +12,7 @@ import { GlassPanel, Button } from "@aiteam/shared/ui";
 
 import { useApp } from "../../lib/app-context";
 import {
+  createLoop,
   disableLoop,
   enableLoop,
   fireLoop,
@@ -60,14 +61,54 @@ export function WorkspacePage() {
     [load, i18n],
   );
 
+  const [showCreateLoop, setShowCreateLoop] = useState(false);
+  const [newConvId, setNewConvId] = useState("");
+  const [newCron, setNewCron] = useState("0 9 * * *");
+  const [newTitle, setNewTitle] = useState("");
+
+  const handleCreateLoop = useCallback(async () => {
+    if (!newConvId.trim() || !newCron.trim()) return;
+    try {
+      await createLoop(client, {
+        conversation_id: newConvId.trim(),
+        cron: newCron.trim(),
+        title: newTitle.trim() || undefined,
+      });
+      setShowCreateLoop(false);
+      setNewConvId("");
+      setNewCron("0 9 * * *");
+      setNewTitle("");
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : i18n.t("agent.workspace.action_error"));
+    }
+  }, [client, newConvId, newCron, newTitle, load, i18n]);
+
   const enabledCount = loops.filter((l) => l.status === "enabled").length;
 
   return (
     <div className="flex flex-col gap-lg">
       <header className="flex flex-col gap-xs">
-        <h1 className="m-0 text-xl font-bold text-text-primary">
-          {i18n.t("agent.nav.workspace")}
-        </h1>
+        <div className="flex items-center justify-between">
+          <h1 className="m-0 text-xl font-bold text-text-primary">
+            {i18n.t("agent.nav.workspace")}
+          </h1>
+          <Button size="sm" onClick={() => setShowCreateLoop(true)}>
+            + {i18n.t("agent.workspace.create_loop")}
+          </Button>
+        </div>
+        {showCreateLoop && (
+          <GlassPanel className="flex flex-col gap-sm rounded-window p-md">
+            <h3 className="m-0 text-sm font-semibold text-text-primary">{i18n.t("agent.workspace.create_loop_title")}</h3>
+            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none placeholder:text-text-muted" placeholder="会话 ID (conversation_id)" value={newConvId} onChange={(e) => setNewConvId(e.target.value)} />
+            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary font-mono outline-none placeholder:text-text-muted" placeholder="cron (e.g. 0 9 * * *)" value={newCron} onChange={(e) => setNewCron(e.target.value)} />
+            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none placeholder:text-text-muted" placeholder={i18n.t("agent.workspace.title_optional")} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
+            <div className="flex gap-sm">
+              <Button size="sm" onClick={handleCreateLoop}>{i18n.t("agent.workspace.create")}</Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowCreateLoop(false)}>{i18n.t("agent.workspace.cancel")}</Button>
+            </div>
+          </GlassPanel>
+        )}
         <p className="m-0 text-sm text-text-secondary">
           {i18n.t("agent.workspace.summary")}: {conversations.length} · Loop {loops.length}（
           {enabledCount} {i18n.t("agent.workspace.enabled")}）

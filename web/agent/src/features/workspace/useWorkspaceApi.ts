@@ -47,3 +47,13 @@ export async function disableLoop(client: AgentApiClient, loopId: string): Promi
 export async function fireLoop(client: AgentApiClient, loopId: string): Promise<unknown> {
   return client.post(`/api/agent/loops/${encodeURIComponent(loopId)}/fire`);
 }
+
+export interface CreateLoopInput {
+  conversation_id: string;
+  cron: string;
+  title?: string;
+}
+
+export async function createLoop(client: AgentApiClient, input: CreateLoopInput): Promise<Loop | null> {
+  return client.post<Loop>("/api/agent/loops", { body: input });
+}

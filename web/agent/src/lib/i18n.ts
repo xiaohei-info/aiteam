@@ -36,6 +36,11 @@ const agentMessages = {
     "agent.workspace.enable": "启用",
     "agent.workspace.disable": "停用",
     "agent.workspace.fire": "立即触发",
+    "agent.workspace.create_loop": "新建 Loop",
+    "agent.workspace.create_loop_title": "新建定时循环",
+    "agent.workspace.title_optional": "标题 (可选)",
+    "agent.workspace.create": "创建",
+    "agent.workspace.cancel": "取消",
   },
 };
 

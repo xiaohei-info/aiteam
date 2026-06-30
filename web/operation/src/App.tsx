@@ -9,6 +9,7 @@ import { EnterprisePageWired } from "./EnterprisePageWired";
 import { CatalogPage, CatalogDetailPage } from "./features/catalog";
 import { AccountsPage } from "./features/accounts";
 import { FinancePage } from "./features/finance";
+import { SolutionsPage } from "./features/solutions";
 import { SystemHealthPage } from "./features/system-health";
 
 export function App(): React.ReactNode {
@@ -22,6 +23,7 @@ export function App(): React.ReactNode {
         <Route path="/catalog" element={<CatalogPage />} />
         <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
         <Route path="/finance" element={<FinancePage />} />
+        <Route path="/solutions" element={<SolutionsPage />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/board/:enterprise_id" element={<EnterpriseDetailPage />} />
         <Route path="/health" element={<SystemHealthPage />} />
