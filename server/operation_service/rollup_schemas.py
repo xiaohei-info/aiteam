@@ -66,3 +66,81 @@ class CrossEnterpriseBoard(BaseModel):
     error_count: int = 0
     duration_seconds_total: int = 0
     enterprises: list[EnterpriseUsageRollup] = Field(default_factory=list)
+
+
+# ---- 治理汇总报表（聚合 / 排名 / 趋势）schema ----
+
+from enum import Enum
+
+
+class AggregationPeriod(Enum):
+    """聚合时间粒度。"""
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+
+
+class RollupMetric(Enum):
+    """可排名/趋势化的聚合指标。"""
+    RUN_COUNT = "run_count"
+    TOKEN_TOTAL = "token_total"
+    COST_TOTAL = "cost_total"
+    ERROR_COUNT = "error_count"
+    DURATION_SECONDS = "duration_seconds_total"
+
+
+class TimeBucket(BaseModel):
+    """单时间桶聚合。period_label 形式：日 2026-06-01、周 2026-W23、月 2026-06。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    period_label: str = Field(description="时间桶标签（日/周/月）")
+    run_count: int = 0
+    token_total: int = 0
+    cost_total: Decimal = Field(default=Decimal("0"))
+    error_count: int = 0
+    duration_seconds_total: int = 0
+    summary_count: int = 0
+
+
+class EnterpriseRankRow(BaseModel):
+    """企业排名行（按 metric 降序）。metric_value 即为排序指标当前值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rank: int
+    enterprise_id: str
+    tenant_id: str
+    run_count: int
+    token_total: int
+    cost_total: Decimal
+    error_count: int
+    duration_seconds_total: int
+    metric_value: int | Decimal = Field(description="排序指标本期值（与 metric 对应）")
+
+
+class EnterpriseTrend(BaseModel):
+    """单企业本期 vs 上期趋势。growth_pct 为百分比；上期 0 → None（无基线）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str
+    tenant_id: str
+    current: int | Decimal
+    previous: int | Decimal
+    growth_pct: float | None = Field(description="增长率(%)；上期 0 时为 None")
+
+
+class RollupReport(BaseModel):
+    """Rollup 治理汇总报表：聚合口径由 period/metric 决定（04 §6.5，D13 红线）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    period: str = Field(description="聚合粒度：day | week | month")
+    metric: str = Field(description="排名/趋势指标：run_count|token_total|cost_total|error_count|duration_seconds_total")
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    totals: TimeBucket = Field(description="本期全平台合计")
+    buckets: list[TimeBucket] = Field(description="按时间桶聚合序列（按 period_label 升序）")
+    ranking: list[EnterpriseRankRow] = Field(description="企业排名（按 metric 降序）")
+    trends: list[EnterpriseTrend] = Field(description="各企业本期 vs 上期趋势")
