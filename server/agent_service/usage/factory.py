@@ -9,7 +9,14 @@ from __future__ import annotations
 from agent_service.local_db import LocalDb
 
 from .client import ManagerUsageClient, UnconfiguredUsageClient
-from .models import RawUsageEvent
+from .ledger import (
+    InMemoryUsageLedgerRepository,
+    SqliteUsageLedgerRepository,
+    UsageLedger,
+    UsageLedgerRepository,
+    _to_cents,
+)
+from .models import RawUsageEvent, extract_cost_total, extract_token_total
 from .reporter import UsageReporter
 from .service import UsageService
 from ..mainline.models import RunStatus
@@ -17,16 +24,21 @@ from .store import InMemoryOutboxRepository, OutboxRepository, SqliteOutboxRepos
 
 
 def build_usage_service(
-    *, client: ManagerUsageClient | None = None, db: LocalDb | None = None
+    *,
+    client: ManagerUsageClient | None = None,
+    db: LocalDb | None = None,
+    max_retries: int = 3,
 ) -> UsageService:
-    """装配本地 usage outbox 服务。
+    """装配本地 usage outbox + ledger 服务。
 
-    db 非空时用 SQLite 实现（#159），空时用内存（dev/测试）。
+    db 非空时用 SQLite 实现（#159、#293），空时用内存（dev/测试）。
     client 默认占位；测试注入 fake、生产注入真实客户端。
+    max_retries 为上传失败触转 failed 终态的 attempts 阈值。
     """
-    outbox: OutboxRepository = SqliteOutboxRepository(db) if db else InMemoryOutboxRepository()
+    outbox: OutboxRepository = SqliteOutboxRepository(db, max_retries=max_retries) if db else InMemoryOutboxRepository(max_retries=max_retries)
+    ledger: UsageLedgerRepository = SqliteUsageLedgerRepository(db) if db else InMemoryUsageLedgerRepository()
     reporter = UsageReporter(outbox=outbox, client=client or UnconfiguredUsageClient())
-    return UsageService(outbox=outbox, reporter=reporter)
+    return UsageService(outbox=outbox, reporter=reporter, ledger=ledger)
 
 
 def build_run_usage_recorder(service: UsageService):
