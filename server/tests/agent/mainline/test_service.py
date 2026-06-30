@@ -282,6 +282,46 @@ def test_finalize_run_falls_back_to_runresult_when_no_terminal_event():
     assert run.status is RunStatus.COMPLETED
 
 
+def test_retry_run_creates_new_run_in_same_conversation():
+    """P1 gap: retry_run creates independent run in the same conversation."""
+    from agent_gateway.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+
+    captured: list[dict] = []
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured.append({"run_id": request.run_id, "messages": request.input_messages})
+            return RunResult(run_id=request.run_id, success=True, session_id="s1")
+
+        async def cancel(self, run_id):
+            return None
+
+    svc = build_mainline_service(executor=_CapturingExecutor(), driver=FakeDriver())
+    conv = svc.create_conversation()
+    svc.add_message(conv.id, role=MessageRole.USER, content="hello")
+
+    run1 = asyncio.run(svc.start_run(conv.id))
+    assert run1.status == RunStatus.COMPLETED
+
+    # Retry in same conversation
+    run2 = asyncio.run(svc.retry_run(run1.id))
+    assert run1.id != run2.id
+    assert run1.conversation_id == run2.conversation_id
+    assert run2.status == RunStatus.COMPLETED
+
+    # Both runs exist
+    all_runs = svc.list_runs(conv.id)
+    assert len(all_runs) == 2
+
+    # Both executions captured
+    assert len(captured) == 2
+    # Retry gets the same message context
+    assert captured[1]["messages"] == [{"role": "user", "content": "hello"}]
+
+
+
+
 def test_missing_conversation_raises():
     from shared.errors import NotFound
     svc = _svc()

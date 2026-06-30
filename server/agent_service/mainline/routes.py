@@ -156,6 +156,15 @@ def build_mainline_router(
         await service.cancel_run(run_id)
         return Envelope[dict](data={"cancelled": True})
 
+    @router.post("/runs/{run_id}/retry", summary="Retry run", description="Retry a completed/failed/cancelled run in the same conversation. Creates a new run with the same message context.", operation_id="agent_retry_run")
+    async def retry_run(run_id: str, req: StartRunRequest | None = None) -> Envelope[Run]:
+        run = await service.retry_run(
+            run_id,
+            run_spec=req.run_spec if req else None,
+        )
+        return Envelope[Run](data=run)
+
+
     # ---- 群聊（单机多专家 @提及编排，多 run 并入同一 timeline）----
 
     @router.post("/conversations/{conversation_id}/group-dispatch", summary="群聊一轮编排（@提及触发多专家、多 run 并入同一时间线）", description="@提及生效多专家并行编排。每位专家独立 run，并入同一时间线。", operation_id="agent_group_dispatch")
