@@ -272,6 +272,29 @@ class MainlineService:
     def list_runs(self, conversation_id: str) -> list[Run]:
         self._conversations.get(conversation_id)
         return self._runs.list(conversation_id)
+    # ---- run retry (P1 gap) ----
+
+    async def retry_run(
+        self,
+        run_id: str,
+        *,
+        run_spec: RunSpec | None = None,
+        tenant_id: str | None = None,
+    ) -> Run:
+        """Retry a run: create a new run in the same conversation.
+
+        New run inherits conversation context (message history) and can override RunSpec.
+        Original run is unaffected; new run is created independently.
+        """
+        existing = self._runs.get(run_id)
+        return await self.start_run(
+            conversation_id=existing.conversation_id,
+            run_spec=run_spec,
+            task_id=None,
+            tenant_id=tenant_id,
+        )
+
+
 
 
 def _task_status_for(run_status: RunStatus) -> TaskStatus:
