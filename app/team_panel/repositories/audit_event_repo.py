@@ -16,11 +16,12 @@ class AuditEventRepo:
         self._cur.execute(
             "INSERT INTO audit_event (id, enterprise_id, actor_type, actor_id, "
             "event_type, target_type, target_id, request_id, payload_json, "
-            "created_by) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "severity, result, ip_address, user_agent, created_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (event.id, event.enterprise_id, event.actor_type, event.actor_id,
              event.event_type, event.target_type, event.target_id,
              event.request_id, event.payload_json,
+             event.severity, event.result, event.ip_address, event.user_agent,
              event.created_by or None),
         )
         return event
@@ -29,6 +30,7 @@ class AuditEventRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, actor_type, actor_id, event_type, "
             "target_type, target_id, request_id, payload_json, "
+            "severity, result, ip_address, user_agent, "
             "created_at, created_by "
             "FROM audit_event WHERE id = %s",
             (event_id,),
@@ -43,6 +45,7 @@ class AuditEventRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, actor_type, actor_id, event_type, "
             "target_type, target_id, request_id, payload_json, "
+            "severity, result, ip_address, user_agent, "
             "created_at, created_by "
             "FROM audit_event WHERE enterprise_id = %s "
             "ORDER BY created_at DESC LIMIT %s",
@@ -56,6 +59,7 @@ class AuditEventRepo:
         self._cur.execute(
             "SELECT id, enterprise_id, actor_type, actor_id, event_type, "
             "target_type, target_id, request_id, payload_json, "
+            "severity, result, ip_address, user_agent, "
             "created_at, created_by "
             "FROM audit_event WHERE target_type = %s AND target_id = %s "
             "ORDER BY created_at DESC LIMIT %s",
@@ -73,6 +77,10 @@ class AuditEventRepo:
             target_type=row[5], target_id=row[6],
             request_id=row[7],
             payload_json=json.dumps(row[8]) if row[8] else "{}",
-            created_at=str(row[9]),
-            created_by=row[10] or "",
+            severity=row[9] or "info",
+            result=row[10] or "success",
+            ip_address=row[11],
+            user_agent=row[12],
+            created_at=str(row[13]),
+            created_by=row[14] or "",
         )

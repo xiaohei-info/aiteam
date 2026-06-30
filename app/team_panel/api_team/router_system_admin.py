@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from api.system_health import build_system_health_payload
 from ..domain.entities import AuditEvent, Enterprise
 from ..repositories.audit_event_repo import AuditEventRepo
+from ..repositories.enterprise_quota_repo import EnterpriseQuotaRepo
 from ..repositories.enterprise_repo import EnterpriseRepo
 from ..transactions.db import create_connection
 from .router_team import (
@@ -24,7 +25,7 @@ from .router_team import (
 )
 
 
-_ENTERPRISE_ACTIONS = {"suspend", "ban", "reactivate", "unban", "recharge", "notify"}
+_ENTERPRISE_ACTIONS = {"suspend", "ban", "close", "reactivate", "unban", "recharge", "notify"}
 _NOTIFICATION_LEVELS = {"info", "warning", "critical"}
 
 
@@ -177,6 +178,8 @@ def _handle_create_enterprise(path: str, body: dict | None) -> tuple[int, dict]:
                 updated_by=actor_id,
             )
             EnterpriseRepo(cur).create(enterprise)
+            # Bootstrap seed: owner membership + default quota + creation audit.
+            _seed_enterprise_bootstrap(cur, enterprise, actor_id)
             conn.commit()
             return 201, {
                 "id": enterprise.id,
@@ -190,6 +193,54 @@ def _handle_create_enterprise(path: str, body: dict | None) -> tuple[int, dict]:
             cur.close()
     finally:
         conn.close()
+
+
+def _seed_enterprise_bootstrap(cur, enterprise: Enterprise, actor_id: str) -> None:
+    """Seed owner membership and default quota right after enterprise creation.
+
+    Membership: the declared owner gets an active owner row.
+    Quota: a default enterprise_quota row is created so the quota endpoint is
+    immediately meaningful. A creation audit event ties the triad together.
+    """
+    membership_id = f"mem_{uuid.uuid4().hex[:12]}"
+    cur.execute(
+        "INSERT INTO membership (id, enterprise_id, user_id, role, status, "
+        "created_by, updated_by) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (enterprise_id, user_id) DO NOTHING",
+        (membership_id, enterprise.id, enterprise.owner_user_id, "owner",
+         "active", actor_id, actor_id),
+    )
+    q_repo = EnterpriseQuotaRepo(cur)
+    if q_repo.get_by_enterprise(enterprise.id) is None:
+        q_repo.create(
+            EnterpriseQuota(
+                enterprise_id=enterprise.id,
+                created_by=actor_id,
+                updated_by=actor_id,
+            )
+        )
+    q_record = q_repo.get_by_enterprise(enterprise.id)
+    audit = AuditEvent(
+        id=f"audit_{uuid.uuid4().hex[:12]}",
+        enterprise_id=enterprise.id,
+        actor_type="user",
+        actor_id=actor_id,
+        event_type="enterprise.created",
+        target_type="enterprise",
+        target_id=enterprise.id,
+        request_id=uuid.uuid4().hex[:12],
+        payload_json=json.dumps({
+            "name": enterprise.name,
+            "slug": enterprise.slug,
+            "owner_user_id": enterprise.owner_user_id,
+            "seed_membership": True,
+            "seed_quota": q_record is not None,
+        }, ensure_ascii=False),
+        severity="info",
+        created_by=actor_id,
+    )
+    AuditEventRepo(cur).create(audit)
 
 
 def _handle_enterprise_detail(path: str, sub: str) -> tuple[int, dict]:
@@ -231,6 +282,14 @@ def _enterprise_view(enterprise) -> dict:
     }
 
 
+def _event_severity(event_type: str) -> str:
+    if event_type in {"enterprise.banned", "enterprise.closed"}:
+        return "critical"
+    if event_type in {"enterprise.suspended"}:
+        return "warn"
+    return "info"
+
+
 def _create_audit_event(
     cur,
     *,
@@ -251,6 +310,7 @@ def _create_audit_event(
         target_id=target_id,
         request_id=str(_request_params(query, body).get("request_id") or uuid.uuid4().hex[:12]),
         payload_json=json.dumps(payload, ensure_ascii=False),
+        severity=_event_severity(event_type),
         created_by=_request_role(query, body),
     )
     AuditEventRepo(cur).create(event)
@@ -315,7 +375,8 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
     # Normalize action aliases
     action_aliases = {
         "suspend": "suspend",
-        "ban": "suspend",
+        "ban": "ban",
+        "close": "close",
         "reactivate": "reactivate",
         "unban": "reactivate",
         "recharge": "recharge",
@@ -371,6 +432,20 @@ def _apply_enterprise_action(ent_id: str, action: str, body: dict | None, query:
                 audit_payload["current_status"] = ent.status
                 event_type = "enterprise.suspended"
                 response_message = f"Enterprise {ent.id} suspended"
+            elif normalized == "ban":
+                ent.ban(str(payload.get("reason") or ""))
+                repo.update(ent)
+                audit_payload["previous_status"] = previous_status
+                audit_payload["current_status"] = ent.status
+                event_type = "enterprise.banned"
+                response_message = f"Enterprise {ent.id} banned"
+            elif normalized == "close":
+                ent.close(str(payload.get("reason") or ""))
+                repo.update(ent)
+                audit_payload["previous_status"] = previous_status
+                audit_payload["current_status"] = ent.status
+                event_type = "enterprise.closed"
+                response_message = f"Enterprise {ent.id} closed"
             elif normalized == "reactivate":
                 try:
                     ent.reactivate()
@@ -449,15 +524,16 @@ def _handle_quota_get(path: str, sub: str) -> tuple[int, dict]:
     try:
         cur = conn.cursor()
         try:
-            repo = EnterpriseRepo(cur)
-            ent = repo.get_by_id(ent_id)
+            ent = EnterpriseRepo(cur).get_by_id(ent_id)
             if ent is None:
                 return 404, {"error": "ENTERPRISE_NOT_FOUND", "message": f"Enterprise {ent_id} not found"}
+            q = EnterpriseQuotaRepo(cur).get_or_create(ent_id, defaults={})
             return 200, {
                 "id": ent.id,
-                "employee_quota": 50,
-                "storage_quota_mb": 1024,
-                "api_rate_limit": 100,
+                "employee_quota": q.employee_quota,
+                "storage_quota_mb": q.storage_quota_mb,
+                "api_rate_limit": q.api_rate_limit,
+                "token_quota": q.token_quota,
             }
         finally:
             cur.close()
@@ -467,27 +543,68 @@ def _handle_quota_get(path: str, sub: str) -> tuple[int, dict]:
 
 def _handle_quota_post(path: str, sub: str, body: dict | None) -> tuple[int, dict]:
     ent_id = sub[len("/enterprises/"):].split("/")[0]
-    new_quota = (body or {})
+    payload = body or {}
 
     conn = _make_conn()
     try:
         cur = conn.cursor()
         try:
-            repo = EnterpriseRepo(cur)
-            ent = repo.get_by_id(ent_id)
+            ent = EnterpriseRepo(cur).get_by_id(ent_id)
             if ent is None:
                 return 404, {"error": "ENTERPRISE_NOT_FOUND", "message": f"Enterprise {ent_id} not found"}
+            quota = EnterpriseQuotaRepo(cur).get_or_create(ent_id, defaults={})
+            for field in ("employee_quota", "storage_quota_mb", "api_rate_limit", "token_quota"):
+                if field in payload:
+                    setattr(quota, field, int(payload[field]))
+            quota.updated_by = _request_actor_id(
+                path.split("?", 1)[1] if "?" in path else "", body
+            ) or quota.updated_by
+            EnterpriseQuotaRepo(cur).update(quota)
+            _record_quota_audit(cur, ent.id, path, body, payload, quota)
+            conn.commit()
             return 200, {
                 "id": ent.id,
-                "employee_quota": new_quota.get("employee_quota", 50),
-                "storage_quota_mb": new_quota.get("storage_quota_mb", 1024),
-                "api_rate_limit": new_quota.get("api_rate_limit", 100),
+                "employee_quota": quota.employee_quota,
+                "storage_quota_mb": quota.storage_quota_mb,
+                "api_rate_limit": quota.api_rate_limit,
+                "token_quota": quota.token_quota,
                 "message": "quota updated",
             }
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
     finally:
         conn.close()
+
+
+def _record_quota_audit(cur, enterprise_id: str, path: str, body: dict | None,
+                        payload: dict, quota: EnterpriseQuota) -> None:
+    audit = AuditEvent(
+        id=f"audit_{uuid.uuid4().hex[:12]}",
+        enterprise_id=enterprise_id,
+        actor_type="user",
+        actor_id=_request_actor_id(
+            path.split("?", 1)[1] if "?" in path else "", body
+        ),
+        event_type="enterprise.quota_updated",
+        target_type="enterprise_quota",
+        target_id=enterprise_id,
+        request_id=uuid.uuid4().hex[:12],
+        payload_json=json.dumps({
+            "employee_quota": quota.employee_quota,
+            "storage_quota_mb": quota.storage_quota_mb,
+            "api_rate_limit": quota.api_rate_limit,
+            "token_quota": quota.token_quota,
+            "changed_fields": sorted(payload.keys()),
+        }, ensure_ascii=False),
+        severity="info",
+        created_by=_request_role(
+            path.split("?", 1)[1] if "?" in path else "", body
+        ),
+    )
+    AuditEventRepo(cur).create(audit)
 
 
 def _handle_export_enterprises(path: str) -> tuple[int, dict]:
@@ -678,6 +795,10 @@ def handle_team_route(path: str, method: str, body: dict | None = None) -> tuple
         ent_prefix = sub_clean[:-len("/notify")]
         if ent_prefix.startswith("/enterprises/") and ent_prefix.count("/") == 2:
             return _handle_legacy_action_alias(path, sub_clean, body, "notify")
+    if method == "POST" and sub_clean.endswith("/close"):
+        ent_prefix = sub_clean[:-len("/close")]
+        if ent_prefix.startswith("/enterprises/") and ent_prefix.count("/") == 2:
+            return _handle_legacy_action_alias(path, sub_clean, body, "close")
     if method == "GET" and sub_clean.rstrip("/") == "/enterprises":
         denial = _require_system_read(query, None)
         if denial is not None:

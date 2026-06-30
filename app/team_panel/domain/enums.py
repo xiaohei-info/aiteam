@@ -50,7 +50,8 @@ class EnterpriseStatus(StrEnum):
     """Enterprise control-plane status."""
     ACTIVE = "active"
     SUSPENDED = "suspended"
-    ARCHIVED = "archived"
+    BANNED = "banned"
+    CLOSED = "closed"
 
 
 class MembershipStatus(StrEnum):

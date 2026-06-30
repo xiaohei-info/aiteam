@@ -151,9 +151,9 @@ class TestSystemAdminSearchEnterprises:
         _, body = _get(_system_admin_path("/api/system-admin/enterprises?status=active"))
         assert body.get("total", 0) >= 1
 
-    def test_filter_by_status_archived_returns_empty(self, seeded_enterprise):
-        _, body = _get(_system_admin_path("/api/system-admin/enterprises?status=archived"))
-        # No archived enterprises in seed data
+    def test_filter_by_status_closed_returns_empty(self, seeded_enterprise):
+        _, body = _get(_system_admin_path("/api/system-admin/enterprises?status=closed"))
+        # No closed enterprises in seed data
         assert body.get("total", 0) == 0
 
     def test_filter_by_created_range_returns_matching_enterprise(self, seeded_enterprise):
@@ -228,14 +228,14 @@ class TestSystemAdminEnterpriseActions:
         assert body["message"]
         assert "audit_event_id" in body
 
-    def test_ban_action_changes_status_to_suspended(self, seeded_enterprise):
+    def test_ban_action_changes_status_to_banned(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
         _post(
             self._action_path(ent_id),
             {"action": "ban", "reason": "policy violation"},
         )
         _, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}"))
-        assert body.get("status") == "suspended", f"Expected suspended, got {body}"
+        assert body.get("status") == "banned", f"Expected banned, got {body}"
 
     def test_unban_action_restores_active_status(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
@@ -373,7 +373,7 @@ class TestSystemAdminQuotaEnterprise:
     def test_get_quota_has_expected_fields(self, seeded_enterprise):
         ent_id = seeded_enterprise["enterprise_id"]
         _, body = _get(_system_admin_path(f"/api/system-admin/enterprises/{ent_id}/quota"))
-        for key in ("employee_quota", "storage_quota_mb", "api_rate_limit"):
+        for key in ("employee_quota", "storage_quota_mb", "api_rate_limit", "token_quota"):
             assert key in body, f"Missing {key}: {body}"
 
     def test_post_quota_returns_200(self, seeded_enterprise):
