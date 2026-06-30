@@ -16,6 +16,7 @@ from .codex import CodexJsonRpcDriver
 from .hermes import HermesAcpDriver
 from .openclaw import OpenClawJsonStreamDriver
 from .opencode import OpenCodeJsonStreamDriver
+from .fake_runtime import FakeDriver
 
 # runtime 标识 → Driver 类（与各 Driver 的 runtime_name 对齐）。
 DRIVER_REGISTRY: dict[str, type[Driver]] = {
@@ -24,6 +25,7 @@ DRIVER_REGISTRY: dict[str, type[Driver]] = {
     ClaudeCodeJsonStreamDriver.runtime_name: ClaudeCodeJsonStreamDriver,
     OpenCodeJsonStreamDriver.runtime_name: OpenCodeJsonStreamDriver,
     OpenClawJsonStreamDriver.runtime_name: OpenClawJsonStreamDriver,
+    FakeDriver.runtime_name: FakeDriver,
 }
 
 
@@ -44,6 +46,7 @@ __all__ = [
     "HermesAcpDriver",
     "OpenClawJsonStreamDriver",
     "OpenCodeJsonStreamDriver",
+    "FakeDriver",
     "DRIVER_REGISTRY",
     "get_driver",
 ]
