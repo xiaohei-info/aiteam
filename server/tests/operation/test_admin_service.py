@@ -14,6 +14,7 @@ from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.rollup_repository import CrossEnterpriseRollupRepository
+from operation_service.solution_repository import SolutionRepository
 from operation_service.schemas import ProvisionEnterpriseRequest
 from operation_service.service import ProvisioningService
 from shared.contracts.enums import CatalogType
@@ -46,8 +47,13 @@ def rollup_repo():
 
 
 @pytest.fixture
-def service(admin_repo, enterprise_repo, catalog_repo, rollup_repo):
-    return AdminService(admin_repo, enterprise_repo, catalog_repo, rollup_repo)
+def solution_repo():
+    return SolutionRepository()
+
+
+@pytest.fixture
+def service(admin_repo, enterprise_repo, catalog_repo, rollup_repo, solution_repo):
+    return AdminService(admin_repo, enterprise_repo, catalog_repo, rollup_repo, solution_repo)
 
 
 def _provision(enterprise_repo: InMemoryEnterpriseRepository, name: str = "Acme") -> str:
@@ -200,6 +206,53 @@ def test_solution_stats_from_catalog(service, catalog_repo):
     stats = service.get_solution_stats()
     assert len(stats) >= 1
     assert any(s["solution_id"] == "sol-a" for s in stats)
+
+
+def test_solution_stats_returns_real_counts(service, catalog_repo, solution_repo):
+    catalog_repo.create(CatalogEntry(
+        catalog_type=CatalogType.SOLUTION_TEMPLATE,
+        template_id="sol-a", version="1", display_name="Marketing",
+    ))
+    catalog_repo.create(CatalogEntry(
+        catalog_type=CatalogType.SOLUTION_TEMPLATE,
+        template_id="sol-b", version="1", display_name="Sales",
+    ))
+    # sol-a applied by two tenants; sol-b applied once by one tenant.
+    solution_repo.record_apply(solution_id="sol-a", enterprise_id="ent-1")
+    solution_repo.record_apply(solution_id="sol-a", enterprise_id="ent-2")
+    solution_repo.record_apply(solution_id="sol-b", enterprise_id="ent-1")
+
+    stats = {s["solution_id"]: s for s in service.get_solution_stats()}
+    assert stats["sol-a"]["apply_count"] == 2
+    assert stats["sol-a"]["active_enterprises"] == 2
+    assert stats["sol-b"]["apply_count"] == 1
+    assert stats["sol-b"]["active_enterprises"] == 1
+
+
+def test_solution_stats_zero_when_unapplied(service, catalog_repo):
+    catalog_repo.create(CatalogEntry(
+        catalog_type=CatalogType.SOLUTION_TEMPLATE,
+        template_id="sol-c", version="1", display_name="Unused",
+    ))
+    stats = service.get_solution_stats()
+    matched = [s for s in stats if s["solution_id"] == "sol-c"]
+    assert matched, "sol-c should appear even with zero applications"
+    assert matched[0]["apply_count"] == 0
+    assert matched[0]["active_enterprises"] == 0
+
+
+def test_solution_stats_active_enterprises_distinct(service, catalog_repo, solution_repo):
+    catalog_repo.create(CatalogEntry(
+        catalog_type=CatalogType.SOLUTION_TEMPLATE,
+        template_id="sol-d", version="1", display_name="DupApply",
+    ))
+    # Same enterprise applies the same solution 3 times: apply_count累计, enterprises去重。
+    for _ in range(3):
+        solution_repo.record_apply(solution_id="sol-d", enterprise_id="ent-x")
+
+    stats = {s["solution_id"]: s for s in service.get_solution_stats()}
+    assert stats["sol-d"]["apply_count"] == 3
+    assert stats["sol-d"]["active_enterprises"] == 1
 
 
 # ---- 系统健康 ----

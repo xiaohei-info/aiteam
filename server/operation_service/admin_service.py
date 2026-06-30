@@ -4,7 +4,7 @@
 不执行 Agent、不持会话、不直写 Manager/Agent。
 
 编排层：组合 AdminRepository（运营状态）+ EnterpriseRepository（企业账号）+
-CatalogRepository（方案统计）+ RollupRepository（用量数据）。
+CatalogRepository（方案统计）+ RollupRepository（用量数据）+ SolutionRepository（方案应用统计）。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from .admin_repository import AdminRepository
 from .catalog_repository import CatalogRepository
 from .repository import EnterpriseRepository
 from .rollup_repository import CrossEnterpriseRollupRepository
+from .solution_repository import SolutionRepository
 
 
 class AdminService:
@@ -30,11 +31,13 @@ class AdminService:
         enterprise_repo: EnterpriseRepository,
         catalog_repo: CatalogRepository,
         rollup_repo: CrossEnterpriseRollupRepository,
+        solution_repo: SolutionRepository | None = None,
     ):
         self._admin = admin_repo
         self._enterprise = enterprise_repo
         self._catalog = catalog_repo
         self._rollup = rollup_repo
+        self._solution = solution_repo or SolutionRepository()
 
     # ---- 内部：确保 enterprise 有 admin state ----
 
@@ -200,15 +203,20 @@ class AdminService:
     # ---- S03 行业方案统计 ----
 
     def get_solution_stats(self) -> list[dict]:
-        """行业方案应用统计：从 catalog 读取方案模板列表并聚合。"""
+        """行业方案应用统计：从 catalog 读方案模板列表 + SolutionRepository 聚合真实统计。
+
+        口径：``apply_count`` = 方案被应用总次数；``active_enterprises`` = 当前持有
+        ``applied`` 状态实例的去重租户数。
+        """
         entries = self._catalog.list(catalog_type=CatalogType.SOLUTION_TEMPLATE)
         results: list[dict] = []
         for e in entries:
+            stats = self._solution.get_stats(e.template_id)
             results.append({
                 "solution_id": e.template_id,
                 "name": e.display_name,
-                "apply_count": 0,
-                "active_enterprises": 0,
+                "apply_count": stats["apply_count"],
+                "active_enterprises": stats["active_enterprises"],
             })
         return results
 
