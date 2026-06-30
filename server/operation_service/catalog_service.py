@@ -27,6 +27,7 @@ _INITIAL_VERSION = "1"
 
 
 def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
+    payload = entry.payload or {}
     return CatalogEntryResponse(
         catalog_type=entry.catalog_type,
         template_id=entry.template_id,
@@ -34,6 +35,11 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         display_name=entry.display_name,
         status=entry.status,
         visible_scope=entry.visible_scope,
+        default_model_json=payload.get("default_model_json", {}),
+        default_binding_json=payload.get("default_binding_json", {}),
+        prompt_pack_json=payload.get("prompt_pack_json", {}),
+        category_code=payload.get("category_code", ""),
+        role_name=payload.get("role_name", ""),
     )
 
 
@@ -58,6 +64,11 @@ class CatalogService:
                 payload={
                     "persona": req.persona,
                     "recommended_config": req.recommended_config,
+                    "default_model_json": req.default_model_json,
+                    "default_binding_json": req.default_binding_json,
+                    "prompt_pack_json": req.prompt_pack_json,
+                    "category_code": req.category_code,
+                    "role_name": req.role_name,
                 },
             )
         )
@@ -187,6 +198,11 @@ class CatalogService:
             display_name=entry.display_name,
             persona=payload.get("persona"),
             recommended_config=payload.get("recommended_config", {}),
+            default_model_json=payload.get("default_model_json", {}),
+            default_binding_json=payload.get("default_binding_json", {}),
+            prompt_pack_json=payload.get("prompt_pack_json", {}),
+            category_code=payload.get("category_code", ""),
+            role_name=payload.get("role_name", ""),
         )
 
     def pull_solution_package(
@@ -252,6 +268,11 @@ class CatalogService:
                     display_name=entry.display_name,
                     persona=payload.get("persona"),
                     recommended_config=payload.get("recommended_config", {}),
+                    default_model_json=payload.get("default_model_json", {}),
+                    default_binding_json=payload.get("default_binding_json", {}),
+                    prompt_pack_json=payload.get("prompt_pack_json", {}),
+                    category_code=payload.get("category_code", ""),
+                    role_name=payload.get("role_name", ""),
                 )
             )
         return results

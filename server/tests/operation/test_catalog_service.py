@@ -297,3 +297,74 @@ def test_update_solution_orchestration_fields(service):
     # 未更新字段保持原默认值
     assert entry.payload["subtask_prompt"] == ""
     assert entry.payload["default_collaboration_template_ref"] is None
+
+
+# ---- Issue #279：专家模板模型/绑定/提示词包/分类/角色字段 ----
+
+def test_register_expert_stores_model_binding_prompt_fields(service):
+    """注册专家模板时携带 default_model_json/default_binding_json/prompt_pack_json/category_code/role_name，应存入 payload。"""
+    req = _expert(
+        default_model_json={"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048},
+        default_binding_json={"skills": ["web_search"], "knowledge_bases": ["kb_general"], "memory": {"mode": "builtin"}},
+        prompt_pack_json={"system_prompt": "You are CMO", "behavior_rules": {"tone": "pro"}, "opening_message": "Hi"},
+        category_code="marketing",
+        role_name="CMO",
+    )
+    service.register_expert_template(req)
+    entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert entry.payload["default_model_json"] == {"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048}
+    assert entry.payload["default_binding_json"]["skills"] == ["web_search"]
+    assert entry.payload["prompt_pack_json"]["system_prompt"] == "You are CMO"
+    assert entry.payload["category_code"] == "marketing"
+    assert entry.payload["role_name"] == "CMO"
+
+
+def test_register_expert_default_model_binding_prompt_fields(service):
+    """注册专家模板时不带新字段，应落默认值（空 dict/string）。"""
+    service.register_expert_template(_expert())
+    entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert entry.payload["default_model_json"] == {}
+    assert entry.payload["default_binding_json"] == {}
+    assert entry.payload["prompt_pack_json"] == {}
+    assert entry.payload["category_code"] == ""
+    assert entry.payload["role_name"] == ""
+
+
+def test_update_expert_model_binding_prompt_fields(service):
+    """PATCH 专家模板可更新模型/绑定/提示词/分类/角色字段。"""
+    service.register_expert_template(_expert())
+    service.update_entry(
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
+        {
+            "default_model_json": {"provider": "relay", "model": "claude-opus-4-8", "temperature": 0.5, "max_tokens": 4096},
+            "default_binding_json": {"skills": ["seo"]},
+            "prompt_pack_json": {"system_prompt": "Updated"},
+            "category_code": "growth",
+            "role_name": "Growth Lead",
+        },
+    )
+    entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert entry.payload["default_model_json"] == {"provider": "relay", "model": "claude-opus-4-8", "temperature": 0.5, "max_tokens": 4096}
+    assert entry.payload["default_binding_json"] == {"skills": ["seo"]}
+    assert entry.payload["prompt_pack_json"] == {"system_prompt": "Updated"}
+    assert entry.payload["category_code"] == "growth"
+    assert entry.payload["role_name"] == "Growth Lead"
+
+
+def test_list_includes_full_config(service):
+    """GET 目录列表时 CatalogEntryResponse 应返回完整模板配置（issue #279 验收）。"""
+    service.register_expert_template(
+        _expert(
+            default_model_json={"model": "gpt-5"},
+            prompt_pack_json={"system_prompt": "x"},
+            category_code="marketing",
+            role_name="CMO",
+        )
+    )
+    items = service.list_catalog(catalog_type=CatalogType.EXPERT_TEMPLATE)
+    assert len(items) == 1
+    out = items[0]
+    assert out.default_model_json == {"model": "gpt-5"}
+    assert out.prompt_pack_json == {"system_prompt": "x"}
+    assert out.category_code == "marketing"
+    assert out.role_name == "CMO"
