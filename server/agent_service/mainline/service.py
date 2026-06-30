@@ -19,6 +19,7 @@ import uuid
 from collections.abc import Callable
 
 from shared.contracts.enums import ConversationState, DisplayState
+from shared.errors import Conflict
 from shared.contracts.events import AgentRuntimeEvent
 from shared.contracts.runspec import AgentRunRequest, RunSpec
 from shared.contracts.gateway import RunResult
@@ -76,6 +77,17 @@ _RUNTIME_ROLE: dict[MessageRole, str] = {
 }
 
 
+# Conversation 主状态机合法转换表（对齐 app/team_panel/domain/entities.py:Conversation）。
+# 前端只暴露合法转换对应的动作按钮；后端兜底校验，非法转换抛 Conflict(409)。
+_CONVERSATION_TRANSITIONS: dict[ConversationState, frozenset[ConversationState]] = {
+    ConversationState.DRAFT:   frozenset({ConversationState.ACTIVE, ConversationState.ARCHIVED}),
+    ConversationState.ACTIVE:  frozenset({ConversationState.PAUSED, ConversationState.MUTED, ConversationState.ARCHIVED}),
+    ConversationState.PAUSED:  frozenset({ConversationState.ACTIVE, ConversationState.ARCHIVED}),
+    ConversationState.MUTED:   frozenset({ConversationState.ACTIVE, ConversationState.ARCHIVED}),
+    ConversationState.ARCHIVED: frozenset(),
+}
+
+
 class MainlineService:
     """用户端本地主链编排器。单租户本地，无 tenant 路由（用户端单用户本地库）。"""
 
@@ -122,6 +134,13 @@ class MainlineService:
         return self._conversations.list()
 
     def set_conversation_state(self, conversation_id: str, state: ConversationState) -> Conversation:
+        conversation = self._conversations.get(conversation_id)
+        allowed = _CONVERSATION_TRANSITIONS.get(conversation.state, frozenset())
+        if state not in allowed:
+            raise Conflict(
+                f"Cannot transition conversation from {conversation.state.value} to {state.value}; "
+                f"allowed: {[s.value for s in allowed] or "none"}"
+            )
         return self._conversations.set_state(conversation_id, state)
 
     # ---- message ----

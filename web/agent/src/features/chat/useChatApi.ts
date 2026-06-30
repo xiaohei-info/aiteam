@@ -137,3 +137,15 @@ export async function startRun(
     { body: taskId ? { task_id: taskId } : {} },
   );
 }
+
+/** 改会话主状态（对齐 PUT /api/agent/conversations/{id}/state）。 */
+export async function setConversationState(
+  client: AgentApiClient,
+  conversationId: string,
+  state: string,
+): Promise<Conversation | null> {
+  return client.put<Conversation>(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}/state`,
+    { body: { state } },
+  );
+}
