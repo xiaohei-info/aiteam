@@ -83,6 +83,39 @@ class EmployeeConfigService:
         if not self._repo.delete(ctx, employee_id=employee_id):
             raise NotFound("employee not found in this tenant")
 
+    def transition(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        transition: str,
+        archive_reason: str | None = None,
+    ) -> EmployeeConfigOut:
+        """经状态机校验 + 行锁落库，返回更新后 EmployeeConfigOut。
+
+        - 非 owner/enterprise_admin → 403（同配置写）
+        - 跨 tenant 不可见 → 404
+        - 状态冲突（预期状态 != 当前状态）→ 409
+        - 非法 transition（状态机）→ 409
+        - archived 后配置写 → 已在前置 _ensure_can_write_and_not_archived 禁掉
+        """
+        _ensure_can_write(ctx)
+        row = self._require(ctx, employee_id)
+        from_s = EmployeeStatus(row.status)
+        if not can_write_config(from_s) and transition != "archive":
+            raise Forbidden("archived employee cannot be modified")
+        to_s = target_status(from_s, transition)  # 非法 transition → Conflict
+        updated = self._repo.transition_status(
+            ctx,
+            employee_id=employee_id,
+            from_status=from_s.value,
+            to_status=to_s.value,
+            archive_reason=archive_reason,
+        )
+        if updated is None:
+            raise NotFound("employee not found in this tenant")
+        return _to_out(updated)
+
     def list_all(self, ctx: TenantContext) -> list[EmployeeConfigOut]:
         return [_to_out(r) for r in self._repo.list_all(ctx)]
 
@@ -113,8 +146,22 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         connector_refs=row.connector_refs,
         memory_policy=row.memory_policy,
         version=row.version,
+        status=row.status,
+        archive_reason=row.archive_reason,
+        archived_at=row.archived_at,
     )
 
 
 def build_employee_config_service(router: PgTenantRouter) -> EmployeeConfigService:
     return EmployeeConfigService(EmployeeConfigRepository(router))
+
+
+# ---- 生命周期便捷查询（供前端/Agent 运行前检查）----
+
+def employee_runnable(row: EmployeeConfigRow) -> bool:
+    return is_runnable(EmployeeStatus(row.status))
+
+
+def employee_provisionable(row: EmployeeConfigRow) -> bool:
+    return is_provisionable(EmployeeStatus(row.status))
+

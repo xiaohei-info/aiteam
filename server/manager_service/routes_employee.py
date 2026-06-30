@@ -9,8 +9,11 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -19,11 +22,38 @@ from shared.errors import AppError
 from shared.db import PgTenantRouter
 
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
+from . import employee_lifecycle as _lc
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+class _LifecycleValidationError(AppError):
+    status, code, title = 422, "lifecycle_validation_error", "Lifecycle Validation Error"
+
+
+class EmployeeTransitionIn(BaseModel):
+    """请求体：archive 时提供 reason，其他 transition 留空即可。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = None
+
+
+class EmployeeLifecycleOptionsOut(BaseModel):
+    """可用 transitions + 运行前检查出参。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str
+    status: str
+    allowed_transitions: list[str]
+    is_runnable: bool
+    is_provisionable: bool
+
+
 
 
 def _service(request: Request) -> EmployeeConfigService:
@@ -134,5 +164,56 @@ def build_employee_router(verifier) -> APIRouter:
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=employees.csv"},
         )
+    @router.post(
+        "/{employee_id}/transitions/{transition}",
+        description="employee 生命周期流转（状态机校验 + 行锁 + 落库）。"
+        "transition 取值：provision/activate/pause/resume/archive/retry_provision/mark_provisioning_failed。",
+        summary="生命周期状态流转（issue #281）",
+        operation_id="manager_employee_lifecycle_transition",
+    )
+    async def employee_lifecycle_transition(
+        employee_id: str,
+        transition: str,
+        body: "EmployeeTransitionIn | None" = None,
+        request: Request = None,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[EmployeeConfigOut]:
+        svc = _service(request)
+        reason = body.reason if body is not None else None
+        if transition == "archive" and not reason:
+            raise _LifecycleValidationError("archive transition requires 'reason' in body")
+        out = svc.transition(
+            tenant_context_from(claims),
+            employee_id=employee_id,
+            transition=transition,
+            archive_reason=reason,
+        )
+        return Envelope[EmployeeConfigOut](data=out)
+
+    @router.get(
+        "/{employee_id}/transitions",
+        description="查询 employee 当前可执行的 transitions + 运行前检查（is_runnable / is_provisionable）。",
+        summary="查询可用 lifecycle transitions（issue #281）",
+        operation_id="manager_employee_lifecycle_options",
+    )
+    async def employee_lifecycle_options(
+        employee_id: str,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope["EmployeeLifecycleOptionsOut"]:
+        svc = _service(request)
+        row = svc.get(tenant_context_from(claims), employee_id=employee_id)
+        from shared.contracts.enums import EmployeeStatus
+        from . import employee_lifecycle as _lc
+        st = EmployeeStatus(row.status)
+        allowed = [t for t in _lc.ALLOWED_TRANSITION_LABELS if _lc.can_transition(st, t)]
+        opts = EmployeeLifecycleOptionsOut(
+            employee_id=employee_id,
+            status=row.status,
+            allowed_transitions=allowed,
+            is_runnable=_lc.is_runnable(st),
+            is_provisionable=_lc.is_provisionable(st),
+        )
+        return Envelope[EmployeeLifecycleOptionsOut](data=opts)
 
     return router

@@ -73,11 +73,14 @@ def _is_neutral_runtime_binding(value: str) -> bool:
 
 
 class EmployeeConfigOut(EmployeeConfig):
-    """读取响应体。带 employee 身份与版本（供增量 sync / 快照冻结）。"""
+    """读取响应体。带 employee 身份、版本与生命周期状态（供增量 sync / 快照冻结 / 运行前检查）。"""
 
     employee_id: str
     employee_slug: str
     version: int = Field(description="配置版本；每次配置变更单调递增")
+    status: str = Field(description="employee 主状态（EmployeeStatus 枚举值：draft/provisioning/active/paused/provisioning_failed/archived）")
+    archive_reason: str | None = Field(default=None, description="仅 archived 状态存在：归档原因")
+    archived_at: datetime | None = Field(default=None, description="仅 archived 状态存在：归档时间（UTC）")
 
 
 # ---- 成员/部门/角色 + member_grant 授权（issue #35；03 §9.7；04 §6.1，D12）----
