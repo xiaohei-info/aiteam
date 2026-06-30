@@ -159,10 +159,7 @@ def test_connector_test_ok():
                                         "message": "ok"}
     with patch("manager_service.routes_connector_ops._service", return_value=svc):
         c = _build_app("postgresql://x", build_connector_ops_router)
-        r = c.post("/api/manager/connectors/slack/test",
-                    json={"auth_scheme": "oauth2",
-                          "config_schema_json": {"properties": {"app_id": {"type": "string"}}}},
-                    headers=_hdr())
+        r = c.post("/api/manager/connectors/slack/test", headers=_hdr())
     assert r.status_code == 200
     assert r.json()["data"]["success"] is True
 
@@ -185,6 +182,8 @@ def test_collab_template_get_ok():
     svc = MagicMock()
     svc.get_template.return_value = {"template_id": "t-1", "name": "默认协作模板", "routing_prompt": "",
                                       "handoff_prompt": "", "max_replies_per_message": 3,
+                                      "planner_prompt": "规划提示词", "subtask_prompt": "子任务",
+                                      "aggregate_prompt": "汇总提示词", "is_default": True,
                                       "updated_at": datetime.utcnow()}
     with patch("manager_service.routes_collab_audit._service", return_value=svc):
         c = _build_app("postgresql://x", build_collab_router)

@@ -2,6 +2,13 @@
 
 表 collaboration_template 由 0010 创建，audit_event 由 0011 创建。
 tenant_id 只从 TenantContext 读（D22）。
+
+协作模板 ``config`` JSON blob 字段：
+
+- ``routing_prompt`` / ``handoff_prompt`` / ``max_replies_per_message`` — 群聊路由/交接/最大回复数。
+- ``planner_prompt`` / ``subtask_prompt`` / ``aggregate_prompt`` — 编排模式下的规划/子任务/汇总提示词。
+- ``is_default`` — 企业内默认模板标记。
+- ``name`` — 模板名称。
 """
 
 from __future__ import annotations
@@ -21,6 +28,10 @@ class CollabTemplateRow:
     routing_prompt: str
     handoff_prompt: str
     max_replies_per_message: int
+    planner_prompt: str
+    subtask_prompt: str
+    aggregate_prompt: str
+    is_default: bool
     updated_at: datetime
 
 
@@ -38,10 +49,15 @@ class AuditEventRow:
 def _row_to_template(row: Any) -> CollabTemplateRow:
     config = row[2] if isinstance(row[2], dict) else {}
     return CollabTemplateRow(
-        template_id=str(row[0]), name=config.get("name", "默认协作模板"),
+        template_id=str(row[0]),
+        name=config.get("name", "默认协作模板"),
         routing_prompt=config.get("routing_prompt", ""),
         handoff_prompt=config.get("handoff_prompt", ""),
         max_replies_per_message=config.get("max_replies_per_message", 3),
+        planner_prompt=config.get("planner_prompt", ""),
+        subtask_prompt=config.get("subtask_prompt", ""),
+        aggregate_prompt=config.get("aggregate_prompt", ""),
+        is_default=bool(config.get("is_default", True)),
         updated_at=row[3],
     )
 
@@ -70,7 +86,9 @@ class CollabAuditRepository:
 
     def upsert_template(self, ctx: TenantContext, *, name: str | None = None,
                         routing_prompt: str | None = None, handoff_prompt: str | None = None,
-                        max_replies_per_message: int | None = None) -> CollabTemplateRow:
+                        max_replies_per_message: int | None = None,
+                        planner_prompt: str | None = None, subtask_prompt: str | None = None,
+                        aggregate_prompt: str | None = None, is_default: bool | None = None) -> CollabTemplateRow:
         config = {}
         if name is not None:
             config["name"] = name
@@ -80,6 +98,14 @@ class CollabAuditRepository:
             config["handoff_prompt"] = handoff_prompt
         if max_replies_per_message is not None:
             config["max_replies_per_message"] = max_replies_per_message
+        if planner_prompt is not None:
+            config["planner_prompt"] = planner_prompt
+        if subtask_prompt is not None:
+            config["subtask_prompt"] = subtask_prompt
+        if aggregate_prompt is not None:
+            config["aggregate_prompt"] = aggregate_prompt
+        if is_default is not None:
+            config["is_default"] = is_default
 
         import json
         with self._router.session(ctx) as s:
@@ -104,8 +130,7 @@ class CollabAuditRepository:
     # ---- audit_event ----
 
     def list_events(self, ctx: TenantContext, *, event_type: str | None = None,
-                    target_type: str | None = None, target_id: str | None = None,
-                    page: int = 1, page_size: int = 20) -> list[AuditEventRow]:
+                    target_type: str | None = None, page: int = 1, page_size: int = 20) -> list[AuditEventRow]:
         clauses = []
         params: list = []
         if event_type:
@@ -114,9 +139,6 @@ class CollabAuditRepository:
         if target_type:
             clauses.append("target_type = %s")
             params.append(target_type)
-        if target_id:
-            clauses.append("target_id = %s::uuid")
-            params.append(target_id)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         offset = (page - 1) * page_size
         params.extend([page_size, offset])

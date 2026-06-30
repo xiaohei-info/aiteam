@@ -62,6 +62,8 @@ def build_collab_router(verifier) -> APIRouter:
         data = svc.put_template(
             ctx, name=body.name, routing_prompt=body.routing_prompt,
             handoff_prompt=body.handoff_prompt, max_replies_per_message=body.max_replies_per_message,
+            planner_prompt=body.planner_prompt, subtask_prompt=body.subtask_prompt,
+            aggregate_prompt=body.aggregate_prompt, is_default=body.is_default,
         )
         return Envelope(data=CollaborationTemplateOut(**data))
 
@@ -77,7 +79,6 @@ def build_audit_router(verifier) -> APIRouter:
         request: Request,
         event_type: str | None = Query(default=None),
         target_type: str | None = Query(default=None),
-        target_id: str | None = Query(default=None),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
         claims: TokenClaims = Depends(require),
@@ -85,7 +86,7 @@ def build_audit_router(verifier) -> APIRouter:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         items = svc.list_events(ctx, event_type=event_type, target_type=target_type,
-                                target_id=target_id, page=page, page_size=page_size)
+                                page=page, page_size=page_size)
         return ListEnvelope(data=[AuditEventOut(**r) for r in items])
 
     return router

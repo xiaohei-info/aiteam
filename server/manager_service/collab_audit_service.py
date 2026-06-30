@@ -23,15 +23,23 @@ class CollabAuditService:
             "routing_prompt": row.routing_prompt,
             "handoff_prompt": row.handoff_prompt,
             "max_replies_per_message": row.max_replies_per_message,
+            "planner_prompt": row.planner_prompt,
+            "subtask_prompt": row.subtask_prompt,
+            "aggregate_prompt": row.aggregate_prompt,
+            "is_default": row.is_default,
             "updated_at": row.updated_at,
         }
 
     def put_template(self, ctx: TenantContext, *, name: str | None = None,
                      routing_prompt: str | None = None, handoff_prompt: str | None = None,
-                     max_replies_per_message: int | None = None) -> dict:
+                     max_replies_per_message: int | None = None,
+                     planner_prompt: str | None = None, subtask_prompt: str | None = None,
+                     aggregate_prompt: str | None = None, is_default: bool | None = None) -> dict:
         row = self._repo.upsert_template(
             ctx, name=name, routing_prompt=routing_prompt,
             handoff_prompt=handoff_prompt, max_replies_per_message=max_replies_per_message,
+            planner_prompt=planner_prompt, subtask_prompt=subtask_prompt,
+            aggregate_prompt=aggregate_prompt, is_default=is_default,
         )
         return {
             "template_id": row.template_id,
@@ -39,16 +47,19 @@ class CollabAuditService:
             "routing_prompt": row.routing_prompt,
             "handoff_prompt": row.handoff_prompt,
             "max_replies_per_message": row.max_replies_per_message,
+            "planner_prompt": row.planner_prompt,
+            "subtask_prompt": row.subtask_prompt,
+            "aggregate_prompt": row.aggregate_prompt,
+            "is_default": row.is_default,
             "updated_at": row.updated_at,
         }
 
     # ---- audit events ----
 
     def list_events(self, ctx: TenantContext, *, event_type: str | None = None,
-                    target_type: str | None = None, target_id: str | None = None,
-                    page: int = 1, page_size: int = 20) -> list[dict]:
+                    target_type: str | None = None, page: int = 1, page_size: int = 20) -> list[dict]:
         rows = self._repo.list_events(ctx, event_type=event_type, target_type=target_type,
-                                      target_id=target_id, page=page, page_size=page_size)
+                                      page=page, page_size=page_size)
         return [
             {
                 "event_id": r.event_id, "event_type": r.event_type, "actor_id": r.actor_id,
