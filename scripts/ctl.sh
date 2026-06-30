@@ -356,7 +356,7 @@ start_service_local() {
         DB_URL="${DB_URL}" \
         MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
         AGENT_DB_PATH="${AGENT_DB_PATH:-${REPO_ROOT}/.state/agent.sqlite}" \
-        AGENT_RUNTIME="${AGENT_RUNTIME:-fake}" \
+        AGENT_RUNTIME="${AGENT_RUNTIME:-}" \
         AGENT_RUNS_ROOT="${AGENT_RUNS_ROOT:-${REPO_ROOT}/.state/runs}" \
         AGENT_LOOP_AUTOSTART="${AGENT_LOOP_AUTOSTART:-false}" \
         AGENT_RUNTIME_ENV_PASSTHROUGH="${AGENT_RUNTIME_ENV_PASSTHROUGH:-}" \

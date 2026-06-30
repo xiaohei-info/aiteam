@@ -14,7 +14,7 @@ import os
 import tempfile
 
 from agent_gateway.factory import build_runner
-from agent_gateway.fake_runtime import FakeDriver, FakeExecutor
+from agent_gateway.drivers import FakeDriver, FakeExecutor
 from agent_gateway.runner import GatewayRunner
 from agent_gateway.sandbox import SandboxPolicy
 from shared.contracts.gateway import Driver, Executor
