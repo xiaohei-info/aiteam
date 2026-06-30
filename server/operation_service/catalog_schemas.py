@@ -55,6 +55,23 @@ class SetVisibilityRequest(BaseModel):
     visible_scope: dict = Field(description="新的可见范围")
 
 
+class UpdateExpertTemplateRequest(BaseModel):
+    """编辑专家模板（北向请求）。部分更新。"""
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = None
+    persona: str | None = None
+    recommended_config: dict | None = None
+
+class UpdateSolutionTemplateRequest(BaseModel):
+    """编辑行业方案模板（北向请求）。部分更新。"""
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = None
+    expert_template_ids: list[str] | None = None
+    knowledge_refs: list[str] | None = None
+    skill_refs: list[str] | None = None
+    default_grants: dict | None = None
+
+
 class CatalogEntryResponse(BaseModel):
     """目录项响应（北向）。Operator 持有的模板真相态投影。"""
 

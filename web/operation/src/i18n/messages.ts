@@ -8,6 +8,9 @@ export const operationMessages: LocaleCatalog = {
     "operation.nav.enterprises": "企业开通",
     "operation.nav.catalog": "目录治理",
     "operation.nav.board": "跨企业看板",
+    "operation.nav.accounts": "账号管理",
+    "operation.nav.finance": "财务管理",
+    "operation.nav.health": "系统健康",
     "operation.login.username": "用户名",
     "operation.login.password": "密码",
     "operation.login.submit": "登录",
@@ -53,3 +56,5 @@ export const operationMessages: LocaleCatalog = {
     "operation.catalog.notFound": "未找到该目录项。",
   },
 };
+// ---- 功能补全：账号管理 + 财务 + 系统健康 ----
+// 追加到已有的 messages 对象内

@@ -110,4 +110,29 @@ def build_employee_router(verifier) -> APIRouter:
         svc.delete(tenant_context_from(claims), employee_id=employee_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @router.get(
+        "/export/all", summary="导出员工列表 CSV", operation_id="manager_employee_export",
+    )
+    async def export_employees(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        svc = _service(request)
+        items = svc.list_all(tenant_context_from(claims))
+        import csv, io
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["employee_id", "employee_slug", "display_name", "model", "runtime_binding", "skills", "version"])
+        for it in items:
+            writer.writerow([
+                it.employee_id, it.employee_slug, it.display_name,
+                it.model or "", it.runtime_binding or "",
+                ",".join(it.skills), it.version,
+            ])
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=employees.csv"},
+        )
+
     return router

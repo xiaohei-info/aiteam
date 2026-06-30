@@ -41,7 +41,10 @@ def main() -> int:
 
     import psycopg
 
-    # 1. 注册/复用 E2E 租户（控制面，管理连接）。
+    # 1. 先跑迁移（幂等），再注册/复用 E2E 租户（控制面，管理连接）。
+    from shared.db import apply_migrations
+    apply_migrations(admin_url, os.getenv("APP_RW_PASSWORD"))
+
     with psycopg.connect(admin_url, autocommit=True) as conn:
         row = conn.execute(
             "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s", (slug,)

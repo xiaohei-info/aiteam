@@ -81,6 +81,9 @@ class Subscription:
     async def __aexit__(self, *exc) -> None:
         await self._broker._unsubscribe(self._conversation_id, self._queue)
 
+    async def next_frame(self) -> StreamFrame:
+        return await self._queue.get()
+
     async def frames(self) -> AsyncIterator[StreamFrame]:
         while True:
             yield await self._queue.get()

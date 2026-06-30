@@ -10,6 +10,9 @@ Track A 工单（11 §4）填入。
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from fastapi import APIRouter, FastAPI
 
 from agent_service.auth.local_login import (
@@ -30,6 +33,11 @@ from agent_service.grants.client import (
 )
 from agent_service.grants.factory import build_grants_service
 from agent_service.grants.routes import build_grants_router
+from agent_service.grants.store import (
+    InMemoryProjectionRepository,
+    ProjectionRepository,
+    SqliteProjectionRepository,
+)
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
 from agent_service.mainline.factory import build_mainline_service
@@ -42,6 +50,10 @@ from agent_service.usage.client import (
 )
 from agent_service.usage.factory import build_run_usage_recorder, build_usage_service
 from agent_service.usage.routes import build_usage_router
+from agent_service.workspace.routes import build_workspace_router
+from agent_service.workspace.factory import build_workspace_service
+from agent_service.group_mgmt.routes import build_group_mgmt_router
+from agent_service.group_mgmt.factory import build_group_mgmt_service
 from shared.app_factory import create_app, mount_frontend
 from shared.config import load_settings
 from shared.service_client import ServiceClient
@@ -123,6 +135,15 @@ def _attach_usage_recorder(mainline, usage_service) -> None:
         setter(build_run_usage_recorder(usage_service))
 
 
+def _upload_dir() -> Path:
+    """用户端上传文件本地目录。优先 AGENT_UPLOAD_DIR，其次 ~/.aiteam-agent/uploads。"""
+    import os
+    env = os.getenv("AGENT_UPLOAD_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".aiteam-agent" / "uploads"
+
+
 def build_app(
     *,
     manager_client: ManagerLoginClient | None = None,
@@ -134,11 +155,8 @@ def build_app(
     配置 MANAGER_URL → 经 ServiceClient 装配真实跨端客户端；未配置 → 占位客户端
     （dev/离线降级，D14）。测试可显式注入 stub 覆盖默认装配。
 
-    mainline_service 默认用 fake runtime 装配的本地主链（A1）；测试可注入自定义编排器。
-    Loop 调度器复用同一 mainline_service（A3，06 §7.6），默认不 start 后台循环——
-    dev/测试用手动触发端点或 scheduler.fire_ready 驱动；生产由进程启动期决定是否 start。
-    usage 上报失败留 pending 重试，不阻塞本地；grants sync 失败按离线降级处理，本地凭既有
-    投影 + 已冻结快照继续工作，不致本端 not-ready（D14）。
+    workspace（工作台/市场/办公室/知识库/上传/组织树）与 group_mgmt（群聊 CRUD+消息）
+    通过本地 SQLite 仓储真实落数据，消除 #267 所指的 stub/假成功。
     """
     from agent_service.local_db import apply_migrations, connect
 
@@ -154,6 +172,10 @@ def build_app(
     if settings.agent_db_path:
         db = connect(settings.agent_db_path)
         apply_migrations(db)
+    # 本地投影仓储：grants 与 workspace 共享同一套 loaded_expert_projections
+    projections: ProjectionRepository = (
+        SqliteProjectionRepository(db) if db else InMemoryProjectionRepository()
+    )
     mainline = mainline_service or build_mainline_service(
         db_path=settings.agent_db_path,
         runtime_selection=settings.agent_runtime,
@@ -171,8 +193,18 @@ def build_app(
     # 闭环 C：把 run 终态 usage 回流进 outbox（D14：回流失败不阻断本地 run；mainline 侧已吞异常）。
     _attach_usage_recorder(mainline, usage_service)
     app.include_router(build_usage_router(usage_service))
-    grants_service = build_grants_service(client=grants_client or _build_grants_client(), db=db)
+    grants_service = build_grants_service(
+        client=grants_client or _build_grants_client(), db=db, projections=projections,
+    )
     app.include_router(build_grants_router(grants_service))
+    # ---- P02-P09 workspace：工作台 + 人才市场 + 办公室 + 知识库 + 组织树 + 文件上传 ----
+    workspace_service = build_workspace_service(
+        projections=projections, db=db, upload_dir=str(_upload_dir()),
+    )
+    app.include_router(build_workspace_router(workspace_service))
+    # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----
+    group_mgmt_service = build_group_mgmt_service(db=db)
+    app.include_router(build_group_mgmt_router(group_mgmt_service))
     # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
     mount_frontend(app, settings.tier)
     return app

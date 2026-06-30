@@ -15,6 +15,7 @@ from .routes_auth import router as auth_router
 from .routes_catalog import router as catalog_router, router_pull as catalog_pull_router
 from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
+from .routes_admin import build_admin_router
 
 # 系统账号认证（§9.2）：Operation 自持系统级 RSA key，自签自验系统 token（D23 RS256）。
 _auth = build_operation_auth_service()
@@ -48,5 +49,7 @@ app.include_router(enterprise_router)
 app.include_router(catalog_pull_router)
 app.include_router(catalog_router)
 app.include_router(rollup_router)
+# ---- 功能补全：S01 账号管理 + S03 方案统计 + S04 财务管理 + 系统健康 ----
+app.include_router(build_admin_router(_verifier))
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
 mount_frontend(app, settings.tier)

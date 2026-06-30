@@ -48,6 +48,16 @@ describe("manager shell config", () => {
       "grants",
       "governance",
       "providers",
+      "knowledge",
+      "capability",
+      "billing",
+      "llm",
+      "memory",
+      "connectors",
+      "org",
+      "collaboration",
+      "audit",
+      "settings",
     ]);
     expect(vm.activeItemId).toBe("members");
   });
@@ -65,6 +75,16 @@ describe("manager shell config", () => {
       "grants",
       "governance",
       "providers",
+      "knowledge",
+      "capability",
+      "billing",
+      "llm",
+      "memory",
+      "connectors",
+      "org",
+      "collaboration",
+      "audit",
+      "settings",
     ]);
     expect(vm.activeItemId).toBe("experts");
   });
@@ -75,7 +95,18 @@ describe("manager shell config", () => {
       session([EnterpriseRole.FINANCE_ADMIN]),
       "/governance",
     );
-    expect(vm.nav.map((n) => n.id)).toEqual(["dashboard", "governance"]);
+    expect(vm.nav.map((n) => n.id)).toEqual([
+      "dashboard",
+      "governance",
+      "knowledge",
+      "capability",
+      "billing",
+      "memory",
+      "connectors",
+      "org",
+      "collaboration",
+      "audit",
+    ]);
     expect(vm.activeItemId).toBe("governance");
   });
 
@@ -85,7 +116,16 @@ describe("manager shell config", () => {
       session([EnterpriseRole.MEMBER]),
       "/members",
     );
-    expect(vm.nav.map((n) => n.id)).toEqual(["dashboard"]);
+    expect(vm.nav.map((n) => n.id)).toEqual([
+      "dashboard",
+      "knowledge",
+      "capability",
+      "memory",
+      "connectors",
+      "org",
+      "collaboration",
+      "audit",
+    ]);
   });
 
   it("未登录：requiresLogin=true 且导航为空", () => {

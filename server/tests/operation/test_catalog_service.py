@@ -183,3 +183,60 @@ def test_gateway_only_service_call_no_tenant_write(service, manager):
     service.publish_template(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", PublishTemplateRequest())
     assert hasattr(manager, "notify_catalog_release")
     assert all(isinstance(n, CatalogReleaseNotify) for n, _ in manager.notifications)
+
+
+# ---- PATCH 回归测试（issue #266） ----
+
+def test_update_entry_top_level_field(service):
+    """PATCH 可更新顶层字段（如 display_name）。"""
+    service.register_expert_template(_expert())
+    updated = service.update_entry(
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"display_name": "NewCMO"}
+    )
+    assert updated.display_name == "NewCMO"
+
+
+def test_update_entry_payload_field_no_type_error(service):
+    """PATCH 写入非顶层字段（persona）应合并进 payload，不抛 TypeError。
+    这是 issue #266 的核心回归点：dataclasses.replace 不接受未定义的字段名。
+    """
+    service.register_expert_template(_expert())
+    updated = service.update_entry(
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"persona": "chief marketing"}
+    )
+    assert updated.display_name == "CMO"  # 不变
+    # 验证 payload 已更新
+    entry = service.get_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert entry is not None
+
+
+def test_update_entry_mixed_fields(service):
+    """PATCH 同时更新顶层 + payload 字段。"""
+    service.register_expert_template(_expert())
+    updated = service.update_entry(
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
+        {"display_name": "CMO v2", "persona": "vp marketing", "recommended_config": {"temp": 0.9}},
+    )
+    assert updated.display_name == "CMO v2"
+    # 再读回验证 payload 正确合并
+    from operation_service.catalog_repository import CatalogRepository
+    entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert entry.payload.get("persona") == "vp marketing"
+    assert entry.payload.get("recommended_config") == {"temp": 0.9}
+
+
+def test_update_entry_unknown_404(service):
+    with pytest.raises(NotFound):
+        service.update_entry(CatalogType.EXPERT_TEMPLATE, "ghost", {"display_name": "x"})
+
+
+def test_update_solution_template_mixed_fields(service, manager):
+    """PATCH 方案模板同时更新顶层 + payload 字段。"""
+    service.register_solution_template(_solution())
+    updated = service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {"display_name": "Growth v2", "knowledge_refs": ["k1", "k2"]},
+    )
+    assert updated.display_name == "Growth v2"
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload.get("knowledge_refs") == ["k1", "k2"]
