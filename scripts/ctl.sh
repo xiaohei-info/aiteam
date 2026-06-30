@@ -71,8 +71,25 @@ load_env() {
 
   # 构建数据库连接串
   DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
-  ADMIN_DB_URL="${DB_URL}"
-  APP_RW_PASSWORD="${POSTGRES_PASSWORD}"
+  # ADMIN_DB_URL：管理连接串，用于 Migration / RLS 启用 / 控制面表直读直写
+  # (04 §6.1)。PG16 Alpine 镜像无 `postgres` 系统超管角色（taiyi 实测唯一
+  # super 角色是 ${POSTGRES_USER}）；未显式声明 ADMIN_DB_URL 时 fallback 到
+  # POSTGRES_SUPER_USER（缺省同 POSTGRES_USER）。单账号承担 DDL+DML 是现状
+  # 权宜，独立 manager_admin 角色留 PR TODO。
+  ADMIN_DB_URL="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${POSTGRES_DB}}"
+  APP_RW_PASSWORD="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD}}"
+
+  # 启动前最小 env 校验：占位分支（routes_member.py:39 等）是正确的安全门；
+  # 触发 503 的真正原因是 DB_URL/ADMIN_DB_URL 未注入 .env.*，应在部署侧修，
+  # 而不是焊死成 200 空结果。
+  if [[ -z "${DB_URL:-}" ]]; then
+    echo "[ctl] ERROR: DB_URL empty — check POSTGRES_* in .env.${ENV_CONFIG}" >&2
+    exit 1
+  fi
+  if [[ -z "${ADMIN_DB_URL:-}" ]]; then
+    echo "[ctl] ERROR: ADMIN_DB_URL empty — check ADMIN_DB_URL / POSTGRES_SUPER_* in .env.${ENV_CONFIG}" >&2
+    exit 1
+  fi
 }
 
 # 解析参数
@@ -264,14 +281,16 @@ start_service_local() {
     manager)
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
       env \
+        APP_TIER=manager \
         DB_URL="${DB_URL}" \
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
-        OPERATOR_URL="http://127.0.0.1:${OPERATION_PORT}" \
+        OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=manager --port="${MANAGER_PORT}" \
+        python "${REPO_ROOT}/server/run.py" --tier=manager \
+          --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
       sleep 1
@@ -285,13 +304,15 @@ start_service_local() {
     operation)
       echo "[ctl] Starting operation on port ${OPERATION_PORT}..."
       env \
+        APP_TIER=operation \
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
-        MANAGER_URL="http://127.0.0.1:${MANAGER_PORT}" \
+        MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=operation --port="${OPERATION_PORT}" \
+        python "${REPO_ROOT}/server/run.py" --tier=operation \
+          --host="${OPERATION_HOST:-127.0.0.1}" --port="${OPERATION_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
       sleep 1
@@ -305,12 +326,19 @@ start_service_local() {
     agent)
       echo "[ctl] Starting agent on port ${AGENT_PORT}..."
       env \
+        APP_TIER=agent \
         DB_URL="${DB_URL}" \
-        MANAGER_URL="http://127.0.0.1:${MANAGER_PORT}" \
+        MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
+        AGENT_DB_PATH="${AGENT_DB_PATH:-${REPO_ROOT}/.state/agent.sqlite}" \
+        AGENT_RUNTIME="${AGENT_RUNTIME:-fake}" \
+        AGENT_RUNS_ROOT="${AGENT_RUNS_ROOT:-${REPO_ROOT}/.state/runs}" \
+        AGENT_LOOP_AUTOSTART="${AGENT_LOOP_AUTOSTART:-false}" \
+        AGENT_RUNTIME_ENV_PASSTHROUGH="${AGENT_RUNTIME_ENV_PASSTHROUGH:-}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        python "${REPO_ROOT}/server/run.py" --tier=agent --port="${AGENT_PORT}" \
+        python "${REPO_ROOT}/server/run.py" --tier=agent \
+          --host="${AGENT_HOST:-127.0.0.1}" --port="${AGENT_PORT}" \
         > "${LOG_FILE}" 2>&1 &
       echo $! > "${PID_FILE}"
       sleep 1
