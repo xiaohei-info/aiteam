@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -79,16 +80,17 @@ def build_llm_router(verifier) -> APIRouter:
         )
         return Envelope(data=LlmProviderOut(**data))
 
-    @router.delete("/providers/{provider_id}", summary="删除 LLM Provider", operation_id="manager_llm_provider_delete")
+    @router.delete("/providers/{provider_id}", summary="删除 LLM Provider", operation_id="manager_llm_provider_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_provider(
         provider_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Response:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         svc.delete_provider(ctx, provider_id)
-        return {"deleted": True, "provider_id": provider_id}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/models", summary="列出 LLM Model（平铺）", operation_id="manager_llm_model_list")
     async def list_models(
@@ -116,15 +118,16 @@ def build_llm_router(verifier) -> APIRouter:
         )
         return Envelope(data=LlmModelOut(**data))
 
-    @router.delete("/models/{model_id}", summary="删除 LLM Model", operation_id="manager_llm_model_delete")
+    @router.delete("/models/{model_id}", summary="删除 LLM Model", operation_id="manager_llm_model_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_model(
         model_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Response:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         svc.delete_model(ctx, model_id)
-        return {"deleted": True, "model_id": model_id}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -86,15 +87,16 @@ def build_settings_router(verifier) -> APIRouter:
         data = svc.create_invite(ctx, phone=body.phone, display_name=body.display_name)
         return Envelope(data=AdminInviteOut(**data))
 
-    @router.delete("/admin-invites/{invite_id}", summary="撤销子管理员邀请", operation_id="manager_admin_invite_delete")
+    @router.delete("/admin-invites/{invite_id}", summary="撤销子管理员邀请", operation_id="manager_admin_invite_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_invite(
         invite_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Response:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         svc.delete_invite(ctx, invite_id)
-        return {"deleted": True, "invite_id": invite_id}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -83,16 +84,17 @@ def build_memory_items_router(verifier) -> APIRouter:
         )
         return Envelope(data=MemoryItemOut(**data))
 
-    @router.delete("/{memory_id}", summary="删除记忆条目", operation_id="manager_memory_delete")
+    @router.delete("/{memory_id}", summary="删除记忆条目", operation_id="manager_memory_delete",
+                status_code=status.HTTP_204_NO_CONTENT)
     async def delete_memory(
         memory_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Response:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         svc.delete_memory(ctx, memory_id)
-        return {"deleted": True, "memory_id": memory_id}
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/bulk-delete", summary="批量删除记忆条目", operation_id="manager_memory_bulk_delete")
     async def bulk_delete(
