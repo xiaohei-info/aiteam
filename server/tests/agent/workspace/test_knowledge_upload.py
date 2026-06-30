@@ -1,5 +1,6 @@
 """知识库 + 文件上传测试（#267）。"""
 
+from __future__ import annotations
 import tempfile
 from pathlib import Path
 

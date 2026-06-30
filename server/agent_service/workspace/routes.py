@@ -1,4 +1,4 @@
-"""workspace 路由——工作台/市场/办公室/知识库/上传/组织树。
+"""workspace 路由——工作台/市场/办公室/知识库/摄入/上传/组织树。
 
 薄路由层：负责 HTTP 契约映射，业务编排委托给 WorkspaceService。
 """
@@ -118,6 +118,52 @@ class KnowledgeSearchResult(BaseModel):
     score: float
 
 
+# ---- P08 知识库文档 & 摄入 (AITEAM-260) ----
+
+class KnowledgeDocOut(BaseModel):
+    """文档元数据 + 摄入状态。"""
+    model_config = ConfigDict(extra="forbid")
+    doc_id: str
+    kb_id: str
+    title: str
+    snippet: str = ""
+    content_type: str = "text/plain"
+    size: int = 0
+    status: str = "uploaded"
+    rag_document_id: str = ""
+    ingestion_job_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    chunk_count: int = 0
+    source_kind: str = "file"
+    source_url: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class KnowledgeIngestionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    kb_id: str
+    document_id: str
+    status: str = "pending"
+    rag_document_id: str = ""
+    error_message: str | None = None
+    chunk_count: int = 0
+    started_at: str | None = None
+    completed_at: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+# ---- P08 知识库: URL 导入 ----
+
+class UrlImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1)
+    title: str | None = None
+
+
 # ---- P07 组织树 ----
 
 class OrgTreeNode(BaseModel):
@@ -176,6 +222,43 @@ def _map_template_detail(t) -> MarketTemplateDetail:
         knowledge_bases=t.knowledge_bases,
         initial_memories=t.initial_memories,
         rating=t.rating,
+    )
+
+
+def _map_doc(d) -> KnowledgeDocOut:
+    return KnowledgeDocOut(
+        doc_id=d.doc_id,
+        kb_id=d.kb_id,
+        title=d.title,
+        snippet=d.snippet or "",
+        content_type=d.content_type or "text/plain",
+        size=d.size or 0,
+        status=d.status,
+        rag_document_id=d.rag_document_id or "",
+        ingestion_job_id=d.ingestion_job_id,
+        error_code=d.error_code,
+        error_message=d.error_message,
+        chunk_count=d.chunk_count or 0,
+        source_kind=d.source_kind or "file",
+        source_url=d.source_url or "",
+        created_at=d.created_at or "",
+        updated_at=d.updated_at or "",
+    )
+
+
+def _map_ingestion(j) -> KnowledgeIngestionOut:
+    return KnowledgeIngestionOut(
+        job_id=j.job_id,
+        kb_id=j.kb_id,
+        document_id=j.document_id,
+        status=j.status,
+        rag_document_id=j.rag_document_id or "",
+        error_message=j.error_message,
+        chunk_count=j.chunk_count,
+        started_at=j.started_at,
+        completed_at=j.completed_at,
+        created_at=j.created_at or "",
+        updated_at=j.updated_at or "",
     )
 
 
@@ -300,12 +383,20 @@ def build_workspace_router(service: WorkspaceService) -> APIRouter:
             for d in docs
         ])
 
+    @router.get("/knowledge-bases/{kb_id}/documents", summary="文档列表（含摄入状态）", operation_id="agent_knowledge_doc_list")
+    async def knowledge_list_documents(
+        kb_id: str,
+        request: Request,
+    ) -> ListEnvelope[KnowledgeDocOut]:
+        docs = service.list_documents(kb_id)
+        return ListEnvelope(data=[_map_doc(d) for d in docs])
+
     @router.post("/knowledge-bases/{kb_id}/documents", summary="上传知识文档", operation_id="agent_knowledge_document_upload")
     async def upload_document(
         kb_id: str,
         request: Request,
         file: UploadFile = File(...),
-    ) -> dict:
+    ) -> Envelope[KnowledgeDocOut]:
         content = await file.read()
         doc = service.upload_document(
             kb_id=kb_id,
@@ -313,13 +404,62 @@ def build_workspace_router(service: WorkspaceService) -> APIRouter:
             content=content,
             content_type=file.content_type or "text/plain",
         )
-        return {
-            "kb_id": kb_id,
-            "doc_id": doc.doc_id,
-            "filename": file.filename,
-            "size": file.size,
-            "status": "uploaded",
-        }
+        return Envelope(data=_map_doc(doc))
+
+    @router.post("/knowledge-bases/{kb_id}/documents/url", summary="导入 URL", operation_id="agent_knowledge_document_import_url")
+    async def import_url(
+        kb_id: str,
+        body: UrlImportIn,
+        request: Request,
+    ) -> Envelope[KnowledgeDocOut]:
+        try:
+            doc = service.import_url(kb_id, url=body.url, title=body.title)
+        except RuntimeError as e:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=501, detail=str(e))
+        return Envelope(data=_map_doc(doc))
+
+    @router.post("/knowledge-bases/{kb_id}/documents/{doc_id}/retry", summary="重试失败的文档", operation_id="agent_knowledge_document_retry")
+    async def retry_document(
+        kb_id: str,
+        doc_id: str,
+        request: Request,
+    ) -> Envelope[KnowledgeDocOut]:
+        doc = service.retry_document(doc_id)
+        if doc is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="文档不存在")
+        return Envelope(data=_map_doc(doc))
+
+    @router.get("/knowledge-bases/{kb_id}/documents/{doc_id}/ingestion", summary="查询单条摄入记录", operation_id="agent_knowledge_ingestion_get")
+    async def get_ingestion(
+        kb_id: str,
+        doc_id: str,
+        request: Request,
+    ) -> Envelope[KnowledgeIngestionOut]:
+        # 先从文档拿 ingestion_job_id（若未保存则取最新一条）
+        doc = service.get_document(doc_id)
+        job = None
+        if doc and doc.ingestion_job_id:
+            job = service.get_ingestion(doc.ingestion_job_id)
+        if job is None:
+            # 兜底：找该文档最近一条 ingestion
+            for j in service.list_ingestions(kb_id):
+                if j.document_id == doc_id:
+                    job = j
+                    break
+        if job is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="摄入记录不存在")
+        return Envelope(data=_map_ingestion(job))
+
+    @router.get("/knowledge-bases/{kb_id}/ingestions", summary="知识库的所有摄入任务", operation_id="agent_knowledge_ingestions_list")
+    async def list_ingestions(
+        kb_id: str,
+        request: Request,
+    ) -> ListEnvelope[KnowledgeIngestionOut]:
+        jobs = service.list_ingestions(kb_id)
+        return ListEnvelope(data=[_map_ingestion(j) for j in jobs])
 
     # ---- P07 组织树 ----
 

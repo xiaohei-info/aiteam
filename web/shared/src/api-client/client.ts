@@ -149,7 +149,11 @@ export class ApiClient {
     let response: Response;
     try {
       const init: RequestInit = { method, headers };
-      if (options.body !== undefined) init.body = JSON.stringify(options.body);
+      if (options.body instanceof FormData) {
+        init.body = options.body;
+      } else if (options.body !== undefined) {
+        init.body = JSON.stringify(options.body);
+      }
       if (options.signal) init.signal = options.signal;
       response = await this.fetchImpl(url, init);
     } catch (err) {
@@ -162,7 +166,9 @@ export class ApiClient {
   private async buildHeaders(options: RequestOptions): Promise<Headers> {
     const headers = new Headers(options.headers);
     headers.set("Accept", "application/json");
-    if (options.body !== undefined) headers.set("Content-Type", "application/json");
+    if (options.body !== undefined && !(options.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
     if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
 
     const token = this.getToken ? await this.getToken() : null;

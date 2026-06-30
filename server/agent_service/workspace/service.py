@@ -1,4 +1,4 @@
-"""workspace 业务编排——工作台/人才市场/招募/办公室/知识库/上传/组织树。
+"""workspace 业务编排——工作台/人才市场/招募/办公室/知识库/摄入/上传/组织树。
 
 Agent 只做本地数据面；人才市场模板从 Manager catalog pull 后本地缓存展示。
 招募时创建本地 employee 投影条目（loaded_expert_projections）。
@@ -16,11 +16,28 @@ from .store import (
     KnowledgeBaseRepository,
     KnowledgeDocument,
     KnowledgeDocumentRepository,
+    KnowledgeIngestionJob,
+    KnowledgeIngestionRepository,
     UploadAsset,
     UploadAssetRepository,
     WorkbenchState,
     WorkbenchStateRepository,
 )
+
+try:
+    from .ingest import (
+        build_rag_document_id, chunk_text, extract_text_only, html_to_text,
+    )
+    _INGEST_AVAILABLE = True
+except Exception:  # pragma: no cover - 极端退化
+    _INGEST_AVAILABLE = False  # type: ignore[assignment]
+
+try:
+    import httpx as _httpx
+    _HTTPX_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _httpx = None
+    _HTTPX_AVAILABLE = False
 
 
 def _now() -> str:
@@ -118,15 +135,20 @@ class WorkspaceService:
         workbench_store: WorkbenchStateRepository,
         kb_store: KnowledgeBaseRepository,
         doc_store: KnowledgeDocumentRepository,
+        ingest_store: KnowledgeIngestionRepository | None = None,
         upload_store: UploadAssetRepository,
         upload_dir: str | None = None,
+        http_timeout: float = 15.0,
     ) -> None:
+        from .store import InMemoryKnowledgeIngestionRepository
         self._projections = projections
         self._workbench = workbench_store
         self._kb = kb_store
         self._docs = doc_store
+        self._ingests = ingest_store if ingest_store is not None else InMemoryKnowledgeIngestionRepository()
         self._uploads = upload_store
         self._upload_dir = Path(upload_dir) if upload_dir else None
+        self._http_timeout = http_timeout
         # 市场模板本地缓存（由 sync_marketplace 填充）
         self._market_templates: dict[str, MarketTemplate] = {}
 
@@ -264,10 +286,11 @@ class WorkspaceService:
     def search_knowledge(self, kb_id: str, q: str, top_k: int = 5) -> list[KnowledgeDocument]:
         return self._docs.search(kb_id, q, top_k)
 
+    # ---- P08 知识库文档摄入流程 (AITEAM-260) ----
+
     def upload_document(self, kb_id: str, filename: str, content: bytes,
                         content_type: str = "text/plain") -> KnowledgeDocument:
-        """上传文档到知识库：落本地文件 + 记录元数据。文件内容绝不上传 Manager/Operator。"""
-        # 确保 upload_dir 存在
+        """上传文档并走摄入流水线：落本地文件 + 元数据（uploaded）→ 解析 → 入库 → ready。"""
         if self._upload_dir is None:
             raise RuntimeError("upload_dir not configured")
         self._upload_dir.mkdir(parents=True, exist_ok=True)
@@ -282,18 +305,196 @@ class WorkspaceService:
             file_path=str(file_path),
             content_type=content_type,
             size=len(content),
+            source_kind="file",
         )
-        created = self._docs.create(doc)
+        self._docs.create(doc)
 
-        # 更新 KB 文档计数
+        # 同步完成一次 ingestion（本端无真实向量库 → build 一个本地 rag_document_id）
+        self._run_ingestion(doc)
+
+        # 刷新 KB 文档计数
+        self._refresh_kb_stats(kb_id)
+        return self._docs.get(doc.doc_id) or doc
+
+    def import_url(self, kb_id: str, url: str, *, title: str | None = None) -> KnowledgeDocument:
+        """从 URL 抓取内容并入库（AITEAM-260）。
+
+        抓取 → 解析 → 抽取文本 → 切块 & 入库 → 同 upload 流水线。
+        抓取或解析失败即把文档标 error 并附带可读错误信息。
+        """
+        if not _HTTPX_AVAILABLE:
+            raise RuntimeError("URL 导入需要 httpx；当前环境未安装")
+        if self._upload_dir is None:
+            raise RuntimeError("upload_dir not configured")
+
+        display_title = title or url.strip().rsplit("/", 1)[-1] or url
+
+        # 抓取
+        try:
+            with _httpx.Client(timeout=self._http_timeout, follow_redirects=True) as c:
+                resp = c.get(url)
+                resp.raise_for_status()
+                raw = resp.content
+                ctype = resp.headers.get("content_type", "text/html")
+        except Exception as e:
+            doc = self._create_errored_doc(
+                kb_id=kb_id, title=display_title, url=url,
+                err="fetch_failed", msg=f"URL 抓取失败: {e}",
+            )
+            self._refresh_kb_stats(kb_id)
+            return doc
+
+        # 落盘（保留原始字节，便于复跑）
+        self._upload_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re_url_to_filename(url)
+        file_path = self._upload_dir / f"{uuid4()}_{safe_name}"
+        file_path.write_bytes(raw)
+
+        doc = KnowledgeDocument(
+            doc_id=str(uuid4()),
+            kb_id=kb_id,
+            title=display_title,
+            snippet="",
+            file_path=str(file_path),
+            content_type=ctype,
+            size=len(raw),
+            source_kind="url",
+            source_url=url,
+        )
+        self._docs.create(doc)
+        self._run_ingestion(doc)
+        self._refresh_kb_stats(kb_id)
+        return self._docs.get(doc.doc_id) or doc
+
+    def _create_errored_doc(self, *, kb_id: str, title: str, url: str,
+                            err: str, msg: str) -> KnowledgeDocument:
+        """创建即标 error 的文档（抓取失败场景）。"""
+        doc = KnowledgeDocument(
+            doc_id=str(uuid4()),
+            kb_id=kb_id,
+            title=title,
+            snippet="",
+            file_path="",
+            content_type="text/html",
+            size=0,
+            source_kind="url",
+            source_url=url,
+        )
+        self._docs.create(doc)
+        try:
+            job = self._new_ingestion_job(doc)
+            job.start()
+            job.fail(msg)
+            self._ingests.update(job)
+            doc.start_ingesting(job.job_id)
+            doc.mark_error(err, msg)
+            self._docs.update(doc)
+        except Exception:
+            pass
+        return doc
+
+    def _new_ingestion_job(self, doc: KnowledgeDocument) -> KnowledgeIngestionJob:
+        job = KnowledgeIngestionJob(
+            job_id=str(uuid4()),
+            kb_id=doc.kb_id,
+            document_id=doc.doc_id,
+        )
+        self._ingests.create(job)
+        return job
+
+    def _run_ingestion(self, doc: KnowledgeDocument) -> KnowledgeIngestionJob:
+        """一次完整的 ingestion：写 job → parsing → inserting → complete/fail。
+
+        失败不往上传播——直接把 document/job 标 error/failed，让调用方拿到可展示的终态。
+        """
+        job = self._new_ingestion_job(doc)
+        try:
+            doc.start_ingesting(job.job_id)
+            self._docs.update(doc)
+
+            job.start()
+            self._ingests.update(job)
+
+            # 读取源字节
+            raw = _read_doc_bytes(doc)
+            # 抽取文本
+            # URL/HTML 场景需要单独做 html→text 抽取后切块
+            text = self._extract_for_doc(doc, raw)
+
+            snippet = text[:240]
+            job.start_inserting()
+            self._ingests.update(job)
+
+            chunks = chunk_text(text) if _INGEST_AVAILABLE else []
+            rag_doc_id = build_rag_document_id() if _INGEST_AVAILABLE else f"rag-{doc.doc_id[:12]}"
+            job.complete(chunk_count=len(chunks), rag_document_id=rag_doc_id)
+            self._ingests.update(job)
+
+            doc.mark_ready(rag_document_id=rag_doc_id, chunk_count=len(chunks))
+            doc.snippet = snippet
+            self._docs.update(doc)
+            return job
+
+        except Exception as e:  # 任何环节失败都标 error 而不是 500
+            err_msg = f"{e}"
+            try:
+                job.fail(err_msg)
+                self._ingests.update(job)
+            except Exception:
+                pass
+            try:
+                doc.mark_error("ingestion_failed", err_msg)
+                self._docs.update(doc)
+            except Exception:
+                pass
+            return job
+
+    def _extract_for_doc(self, doc: KnowledgeDocument, raw: bytes) -> str:
+        if doc.source_kind == "url":
+            # HTML → 文本
+            try:
+                html = raw.decode("utf-8", errors="replace")
+            except Exception:
+                html = raw.decode("latin-1", errors="replace")
+            return html_to_text(html)
+        return extract_text_only(raw, doc.content_type, doc.title)
+
+    def list_documents(self, kb_id: str) -> list[KnowledgeDocument]:
+        return self._docs.list_by_kb(kb_id)
+
+    def get_document(self, doc_id: str) -> KnowledgeDocument | None:
+        return self._docs.get(doc_id)
+
+    def get_ingestion(self, job_id: str) -> KnowledgeIngestionJob | None:
+        return self._ingests.get(job_id)
+
+    def list_ingestions(self, kb_id: str) -> list[KnowledgeIngestionJob]:
+        return self._ingests.list_by_kb(kb_id)
+
+    def retry_document(self, doc_id: str) -> KnowledgeDocument | None:
+        """重置 errored 文档为 uploaded 并重新走 ingestion。"""
+        doc = self._docs.get(doc_id)
+        if doc is None:
+            return None
+        doc.reset_for_retry()
+        self._docs.update(doc)
+        self._run_ingestion(doc)
+        self._refresh_kb_stats(doc.kb_id)
+        return self._docs.get(doc_id) or doc
+
+    def _refresh_kb_stats(self, kb_id: str) -> None:
         kb = self._kb.get(kb_id)
-        if kb:
-            kb.doc_count = len(self._docs.list_by_kb(kb_id))
-            kb.size_kb = sum(d.size for d in self._docs.list_by_kb(kb_id)) // 1024
-            self._kb.update(kb)
-        return created
+        if kb is None:
+            return
+        items = self._docs.list_by_kb(kb_id)
+        # 只统计 status != error（已入库可检索）的有效文档
+        valid = [d for d in items if d.status in ("ready", "ingesting", "uploaded")]
+        kb.doc_count = len(valid)
+        kb.size_kb = sum(d.size for d in items if d.status != "error" or d.size) // 1024
+        kb.size_kb = max(kb.size_kb, 0)
+        self._kb.update(kb)
 
-    # ---- 文件上传 ----
+    # ---- 文件上传 (通用) ----
 
     def upload_file(self, filename: str, content: bytes,
                     content_type: str = "application/octet-stream") -> UploadAsset:
@@ -327,3 +528,22 @@ class WorkspaceService:
             for e in experts
         ]
         return OrgTreeNode(id="root", type="department", name="企业", children=children)
+
+
+def _read_doc_bytes(doc: KnowledgeDocument) -> bytes:
+    if doc.file_path and Path(doc.file_path).exists():
+        return Path(doc.file_path).read_bytes()
+    return b""
+
+
+def re_url_to_filename(url: str) -> str:
+    """把 URL 映射成安全文件名（保留尾段作 title）。"""
+    from urllib.parse import urlparse, unquote
+    p = urlparse(url)
+    tail = unquote(p.path.rsplit("/", 1)[-1] or p.netloc)
+    tail = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in tail)
+    if not tail:
+        tail = p.netloc or "page"
+    if len(tail) > 80:
+        tail = tail[:80]
+    return tail

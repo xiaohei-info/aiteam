@@ -13,12 +13,15 @@ from .service import WorkspaceService
 from .store import (
     InMemoryKnowledgeBaseRepository,
     InMemoryKnowledgeDocumentRepository,
+    InMemoryKnowledgeIngestionRepository,
     InMemoryUploadAssetRepository,
     InMemoryWorkbenchStateRepository,
     KnowledgeBaseRepository,
     KnowledgeDocumentRepository,
+    KnowledgeIngestionRepository,
     SqliteKnowledgeBaseRepository,
     SqliteKnowledgeDocumentRepository,
+    SqliteKnowledgeIngestionRepository,
     SqliteUploadAssetRepository,
     SqliteWorkbenchStateRepository,
     UploadAssetRepository,
@@ -46,6 +49,9 @@ def build_workspace_service(
     doc_store: KnowledgeDocumentRepository = (
         SqliteKnowledgeDocumentRepository(db) if db else InMemoryKnowledgeDocumentRepository()
     )
+    ingest_store: KnowledgeIngestionRepository = (
+        SqliteKnowledgeIngestionRepository(db) if db else InMemoryKnowledgeIngestionRepository()
+    )
     upload_store: UploadAssetRepository = (
         SqliteUploadAssetRepository(db) if db else InMemoryUploadAssetRepository()
     )
@@ -54,6 +60,7 @@ def build_workspace_service(
         workbench_store=workbench_store,
         kb_store=kb_store,
         doc_store=doc_store,
+        ingest_store=ingest_store,
         upload_store=upload_store,
         upload_dir=upload_dir,
     )

@@ -60,6 +60,9 @@ describe("KnowledgePage", () => {
       if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents")) {
         return new Response(listEnvelope([kb1, kb2]), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
+      }
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
 
@@ -76,6 +79,9 @@ describe("KnowledgePage", () => {
       if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents")) {
         return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
+      }
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
 
@@ -85,7 +91,7 @@ describe("KnowledgePage", () => {
 
     expect(screen.getByPlaceholderText("语义搜索…")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "搜索" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "上传文档" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择文件" })).toBeInTheDocument();
   });
 
   it("搜索知识库 → 展示搜索结果", async () => {
@@ -97,6 +103,9 @@ describe("KnowledgePage", () => {
       }
       if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents")) {
         return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
       }
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
@@ -127,6 +136,9 @@ describe("KnowledgePage", () => {
       }
       if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents")) {
         return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
       }
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
@@ -160,6 +172,9 @@ describe("KnowledgePage", () => {
       if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents")) {
         return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
+      }
       return new Response(JSON.stringify({ data: [] }), { status: 200 });
     }) as typeof fetch;
 
@@ -192,5 +207,83 @@ describe("KnowledgePage", () => {
     await waitFor(() => {
       expect(screen.getByText(/数据库不可达/)).toBeInTheDocument();
     });
+  });
+});
+
+describe("URL 导入", () => {
+  it("选中 KB 后 URL 标签页出现并导入 URL 后刷新文档列表", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents") && !url.includes("/ingestions")) {
+        return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        // 首次列表 + URL import 后刷新（id 不同） {
+        if (method === "GET") {
+          return new Response(JSON.stringify({
+            data: [{ doc_id: "du1", kb_id: kb1.kb_id, title: "导入的网页", snippet: "", content_type: "text/html",
+                     size: 123, status: "ready", rag_document_id: "rag-x", ingestion_job_id: "j1",
+                     error_code: null, error_message: null, chunk_count: 1, source_kind: "url",
+                     source_url: "https://example.com/x", created_at: "", updated_at: "" }],
+            page: { next_cursor: null, has_more: false },
+          }), { status: 200 });
+        }
+        if (url.endsWith("/url") && method === "POST") {
+          const body = init?.body ? JSON.parse(init.body as string) : {};
+          return new Response(JSON.stringify({ data: {
+            doc_id: "du1", kb_id: kb1.kb_id, title: body.title ?? "导入的网页",
+            snippet: "hello world", content_type: "text/html", size: 123, status: "ready",
+            rag_document_id: "rag-x", ingestion_job_id: "j1", error_code: null, error_message: null,
+            chunk_count: 1, source_kind: "url", source_url: body.url, created_at: "", updated_at: "",
+          } }), { status: 200 });
+        }
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("产品文档")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("产品文档"));
+
+    // 切换到 URL 标签页
+    fireEvent.click(screen.getByText("从 URL 导入"));
+    const urlInput = screen.getByPlaceholderText("https://example.com/article");
+    fireEvent.change(urlInput, { target: { value: "https://example.com/x" } });
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+
+    await waitFor(() => expect(screen.getByText("导入的网页")).toBeInTheDocument());
+    expect(screen.getByText("导入的网页")).toBeInTheDocument();
+    expect(screen.getByText("URL")).toBeInTheDocument();
+  });
+
+  it("URL 导入失败展示 actionError", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/knowledge-bases") && !url.includes("/search") && !url.includes("/documents") && !url.includes("/ingestions")) {
+        return new Response(listEnvelope([kb1]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/url") && (init?.method ?? "GET").toUpperCase() === "POST") {
+        return new Response(
+          JSON.stringify({ type: "about:blank", title: "导入失败", status: 501, code: "httpx_missing", detail: "httpx 未安装" }),
+          { status: 501, headers: { "content-type": "application/problem+json" } },
+        );
+      }
+      if (url.includes("/documents") || url.includes("/ingestions")) {
+        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("产品文档")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("产品文档"));
+    fireEvent.click(screen.getByText("从 URL 导入"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/article"), { target: { value: "https://example.com/x" } });
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+
+    await waitFor(() => expect(screen.getByText(/导入失败|httpx 未安装/)).toBeInTheDocument());
   });
 });
