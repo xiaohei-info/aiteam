@@ -67,6 +67,10 @@ const agentMessages = {
     "agent.settings.security.token_expired": "已过期",
     "agent.settings.security.logout_hint": "退出后将清除本机登录态，下次使用需重新登录。",
     "agent.settings.security.logout": "退出登录",
+    "agent.marketplace.publish_requirement": "发布需求",
+    "agent.marketplace.list_my_agent": "+ 上架我的智能体",
+    "agent.marketplace.publish_requirement_hint": "发布需求功能",
+    "agent.marketplace.list_my_agent_hint": "成为专家 — 发布你的智能体",
   },
 };
 
