@@ -31,6 +31,7 @@ class EnterpriseRollupRow:
     window_start: datetime | None = None
     window_end: datetime | None = None
     _seen_ids: set[str] = field(default_factory=set)
+    _summaries: list["UsageSummary"] = field(default_factory=list)
 
     def apply(self, s: UsageSummary) -> bool:
         """累加一条脱敏摘要；已见 summary_id 直接跳过。返回是否真正计入。"""
@@ -47,6 +48,7 @@ class EnterpriseRollupRow:
             self.window_start = s.window_start
         if self.window_end is None or s.window_end > self.window_end:
             self.window_end = s.window_end
+        self._summaries.append(s)
         return True
 
 
@@ -71,3 +73,19 @@ class CrossEnterpriseRollupRepository:
 
     def list_all(self) -> list[EnterpriseRollupRow]:
         return list(self._rows.values())
+
+
+    def summaries_for(self, enterprise_id: str) -> list[UsageSummary]:
+        """某企业全部已入库脱敏摘要（按入库顺序）。未知企业 → []。"""
+        row = self._rows.get(enterprise_id)
+        if row is None:
+            return []
+        return list(row._summaries)
+
+    def all_summaries(self) -> list[tuple[str, UsageSummary]]:
+        """全平台已入库脱敏摘要，附带 enterprise_id。"""
+        out: list[tuple[str, UsageSummary]] = []
+        for eid, row in self._rows.items():
+            for s in row._summaries:
+                out.append((eid, s))
+        return out

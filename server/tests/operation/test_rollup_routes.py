@@ -155,3 +155,100 @@ def test_openapi_exposes_rollup_routes(client):
     assert "/api/operation/rollups" in paths
     assert "/api/operation/rollups/board" in paths
     assert "/api/operation/rollups/{enterprise_id}" in paths
+
+
+# ---- 治理汇总报表路由测试（/api/operation/rollups/report）----
+
+def _report_body(ent: str, tenant: str, summary_id: str, day: str, **kw) -> dict:
+    summary = {
+        "summary_id": summary_id,
+        "tenant_id": tenant,
+        "window_start": f"{day}T00:00:00",
+        "window_end": f"{day}T23:59:59",
+        "run_count": 2,
+        "token_total": 100,
+        "cost_total": "1.50",
+        "error_count": 0,
+        "duration_seconds_total": 10,
+    }
+    summary.update(kw)
+    return {"enterprise_id": ent, "tenant_id": tenant, "summaries": [summary]}
+
+
+def test_openapi_exposes_report_route(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "/api/operation/rollups/report" in paths
+    assert paths["/api/operation/rollups/report"]["get"]["operationId"] == "operation_rollup_report"
+
+
+def test_report_requires_auth(client):
+    r = client.get("/api/operation/rollups/report")
+    assert r.status_code == 401
+
+
+def test_report_forbidden_for_non_platform_role(client):
+    r = client.get("/api/operation/rollups/report", headers=_auth(EnterpriseRole.MEMBER.value))
+    assert r.status_code == 403
+
+
+def test_report_returns_daily_aggregation(client):
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "s1", "2026-06-01", token_total=100),
+                headers=_auth(_OP))
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "s2", "2026-06-02", token_total=50),
+                headers=_auth(_OP))
+    client.post("/api/operation/rollups",
+                json=_report_body("e2", "t2", "s3", "2026-06-01", token_total=300),
+                headers=_auth(_OP))
+    r = client.get("/api/operation/rollups/report?period=day&metric=token_total", headers=_auth(_OP))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["period"] == "day"
+    assert data["metric"] == "token_total"
+    assert data["totals"]["token_total"] == 450
+    assert len(data["buckets"]) == 2
+    # 排名 e2(300) > e1(150)
+    assert data["ranking"][0]["enterprise_id"] == "e2"
+    assert data["ranking"][0]["metric_value"] == 300
+
+
+def test_report_invalid_period_returns_422(client):
+    r = client.get("/api/operation/rollups/report?period=century", headers=_auth(_OP))
+    assert r.status_code in (400, 422)
+
+
+def test_report_window_filters_current_only(client):
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "w1", "2026-06-10", token_total=100),
+                headers=_auth(_OP))
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "w2", "2026-05-10", token_total=999),
+                headers=_auth(_OP))
+    r = client.get(
+        "/api/operation/rollups/report?period=day&metric=token_total"
+        "&window_start=2026-06-10T00:00:00&window_end=2026-06-11T00:00:00",
+        headers=_auth(_OP),
+    )
+    data = r.json()["data"]
+    assert data["totals"]["token_total"] == 100
+
+
+def test_trend_with_baseline_growth(client):
+    # 本期 6/10, 上期 6/9 (span 1d → prev [6/9,6/10))
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "g1", "2026-06-10", token_total=100),
+                headers=_auth(_OP))
+    client.post("/api/operation/rollups",
+                json=_report_body("e1", "t1", "g2", "2026-06-09", token_total=50),
+                headers=_auth(_OP))
+    r = client.get(
+        "/api/operation/rollups/report?period=day&metric=token_total"
+        "&window_start=2026-06-10T00:00:00&window_end=2026-06-11T00:00:00",
+        headers=_auth(_OP),
+    )
+    data = r.json()["data"]
+    trend = data["trends"][0]
+    assert trend["current"] == 100
+    assert trend["previous"] == 50
+    assert trend["growth_pct"] == 100.0
