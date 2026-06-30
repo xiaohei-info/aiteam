@@ -17,6 +17,7 @@ const agentMessages = {
     "agent.nav.marketplace": "人才市场",
     "agent.nav.knowledge": "知识库",
     "agent.nav.office": "办公室",
+    "agent.nav.org": "组织架构",
     "agent.login.title": "登录",
     "agent.login.account": "账号（手机号 / 用户名）",
     "agent.login.password": "密码",
@@ -71,6 +72,11 @@ const agentMessages = {
     "agent.marketplace.list_my_agent": "+ 上架我的智能体",
     "agent.marketplace.publish_requirement_hint": "发布需求功能",
     "agent.marketplace.list_my_agent_hint": "成为专家 — 发布你的智能体",
+    "agent.org.title": "组织架构",
+    "agent.org.subtitle": "智能体团队结构",
+    "agent.org.export": "导出 PNG",
+    "agent.org.loading": "加载中…",
+    "agent.org.load_error": "组织树加载失败，请重试",
   },
 };
 
