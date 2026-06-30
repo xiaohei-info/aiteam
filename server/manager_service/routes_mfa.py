@@ -1,0 +1,355 @@
+"""Manager 多因素认证北向路由（issue AITEAM-253）。
+
+公开端点（无需 token）：passkey 登录选项、passkey 登录、OAuth 提供商列表、OAuth 授权、OAuth 回调登录。
+需 token 端点：passkey 注册选项/提交、passkey 删除、OAuth 连接列举、OAuth 绑定、OAuth 解绑。
+
+统一经 shared/auth require_claims 解出身份；PasskeyService/OAuthService 以 tenant_id 经 TenantContext 隔离；
+token 经 AuthService.issue 签发（与密码登录同一出口）。
+"""
+
+from __future__ import annotations
+
+import os
+
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from shared.auth import RejectingTokenVerifier, require_claims, tenant_context_from
+from shared.contracts.auth import TokenClaims
+from shared.contracts.envelope import Envelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError, NotFound
+
+from .auth_service import AuthResult, AuthService, build_auth_service
+from .login_audit import LoginAuditRepository
+from .oauth import OAuthConnectionStore, GitHubOAuth, GoogleOAuth
+from .oauth_service import OAuthService
+from .passkey_service import PasskeyService
+from .passkey_store import PasskeyStore
+
+
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+class PasskeyRegistrationFinishIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str | None = None
+    response: dict = Field(description="navigator.credentials.create 返回的 PublicKeyCredential")
+
+
+class OAuthAuthorizeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    tenant_id: str
+    redirect_uri: str
+
+
+class OAuthCallbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    code: str
+    state: str
+
+
+class OAuthLinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    code: str
+    redirect_uri: str
+
+
+def _require(request: Request):
+    """Per-request dependency: resolve the verifier from app.state and return claims.
+    Resolves lazily so tests/dev without a configured admin DB degrade to a rejecting verifier
+    instead of crashing at import time."""
+    verifier = getattr(request.app.state, "_token_verifier", None)
+    if verifier is None:
+        verifier = RejectingTokenVerifier("manager signing key store unconfigured")
+    return require_claims(verifier)(request)
+
+
+def _settings(request: Request):
+    return request.app.state.settings
+
+
+def _auth_service(request: Request) -> AuthService:
+    settings = _settings(request)
+    dsn = settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    admin_dsn = settings.admin_db_url
+    if not admin_dsn:
+        raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
+    cache = getattr(request.app.state, "_auth_service", None)
+    if cache is None:
+        cache = build_auth_service(dsn, admin_dsn=admin_dsn, audit_dsn=dsn)
+        request.app.state._auth_service = cache
+    return cache
+
+
+def _build_oauth_providers() -> dict:
+    providers = {}
+    g_id = os.getenv("OAUTH_GOOGLE_CLIENT_ID")
+    g_secret = os.getenv("OAUTH_GOOGLE_CLIENT_SECRET")
+    if g_id and g_secret:
+        providers["google"] = GoogleOAuth(client_id=g_id, client_secret=g_secret)
+    gh_id = os.getenv("OAUTH_GITHUB_CLIENT_ID")
+    gh_secret = os.getenv("OAUTH_GITHUB_CLIENT_SECRET")
+    if gh_id and gh_secret:
+        providers["github"] = GitHubOAuth(client_id=gh_id, client_secret=gh_secret)
+    return providers
+
+
+def _router_for(request: Request) -> PgTenantRouter:
+    dsn = _settings(request).db_url
+    return PgTenantRouter(dsn)
+
+
+def _passkey_service(request: Request, auth: AuthService) -> PasskeyService:
+    cache = getattr(request.app.state, "_passkey_service", None)
+    if cache is None:
+        r = _router_for(request)
+        cache = PasskeyService(
+            auth_repo=auth._repo,
+            store=PasskeyStore(r),
+            audit=LoginAuditRepository(r),
+            issuer=auth.issue,
+        )
+        request.app.state._passkey_service = cache
+    return cache
+
+
+def _oauth_service(request: Request, auth: AuthService) -> OAuthService:
+    cache = getattr(request.app.state, "_oauth_service", None)
+    if cache is None:
+        r = _router_for(request)
+        cache = OAuthService(
+            providers=_build_oauth_providers(),
+            connections=OAuthConnectionStore(r),
+            auth_repo=auth._repo,
+            audit=LoginAuditRepository(r),
+            issuer=auth.issue,
+        )
+        request.app.state._oauth_service = cache
+    return cache
+
+
+def _iso(v):
+    return v.isoformat() if v is not None else None
+
+
+# ---------------- passkey public ----------------
+passkey_router = APIRouter(prefix="/api/auth/passkey", tags=["mfa", "passkey"])
+
+
+@passkey_router.get(
+    "/authentication-options",
+    summary="生成 WebAuthn 登录选项（challenge）",
+    description="按 tenant_id 生成挑战；携 account 则限定为该账号已注册凭据，否则 usernameless（依赖 resident credential）。",
+    operation_id="manager_passkey_authentication_options",
+)
+async def passkey_authentication_options(
+    tenant_id: str,
+    account: str | None = Query(default=None),
+    auth: AuthService = Depends(_auth_service),
+    request: Request = None,
+) -> Envelope[dict]:
+    svc = _passkey_service(request, auth)
+    return Envelope[dict](data=svc.authentication_options(tenant_id, account))
+
+
+@passkey_router.post(
+    "/login",
+    summary="Passkey 登录（公开端点）",
+    description="提交 WebAuthn 登录断言 + tenant_id；校验通过后 issue JWT access token。",
+    operation_id="manager_passkey_login",
+)
+async def passkey_login(
+    body: dict,
+    auth: AuthService = Depends(_auth_service),
+    request: Request = None,
+) -> Envelope[AuthResult]:
+    svc = _passkey_service(request, auth)
+    return Envelope[AuthResult](data=svc.finish_login(tenant_id=body.get("tenant_id"), payload=body))
+
+
+# ---------------- passkey protected (需 token) ----------------
+passkey_mgmt_router = APIRouter(prefix="/api/manager/passkeys", tags=["mfa", "passkey"])
+
+
+@passkey_mgmt_router.get(
+    "",
+    summary="列举当前用户已注册的 passkey 凭据",
+    operation_id="manager_passkeys_list",
+)
+async def passkeys_list(
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[list]:
+    ctx = tenant_context_from(claims)
+    store = PasskeyStore(_router_for(request))
+    rows = store.list_for_user(ctx, claims.user_id)
+    return Envelope[list](data=[
+        {"credential_id": r.credential_id, "label": r.label,
+         "created_at": _iso(r.created_at), "last_used_at": _iso(r.last_used_at)}
+        for r in rows
+    ])
+
+
+@passkey_mgmt_router.post(
+    "/registration-options",
+    summary="生成当前用户的 passkey 注册选项（challenge）",
+    operation_id="manager_passkey_registration_options",
+)
+async def passkey_registration_options(
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    ctx = tenant_context_from(claims)
+    svc = _passkey_service(request, auth)
+    return Envelope[dict](data=svc.registration_options(ctx, claims.user_id))
+
+
+@passkey_mgmt_router.post(
+    "",
+    summary="提交 passkey 注册响应，完成绑定",
+    operation_id="manager_passkey_register",
+)
+async def passkey_register(
+    body: PasskeyRegistrationFinishIn,
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    label = (body.label or "").strip() or None
+    ctx = tenant_context_from(claims)
+    svc = _passkey_service(request, auth)
+    result = svc.finish_registration(ctx, claims.user_id,
+                                     {"label": label, "response": body.response})
+    store = PasskeyStore(_router_for(request))
+    cred = store.find_by_credential(tenant_context_from(claims), result["credential_id"])
+    return Envelope[dict](data={"credential_id": result["credential_id"],
+                                 "label": cred.label if cred else result["label"]})
+
+
+@passkey_mgmt_router.delete(
+    "/{credential_id}",
+    summary="删除当前用户某个 passkey 凭据",
+    operation_id="manager_passkey_delete",
+)
+async def passkey_delete(
+    credential_id: str,
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    ctx = tenant_context_from(claims)
+    store = PasskeyStore(_router_for(request))
+    cred = store.find_by_credential(ctx, credential_id)
+    if cred is None or cred.user_id != claims.user_id:
+        raise NotFound("passkey not found")
+    store.delete(ctx, credential_id=credential_id)
+    return Envelope[dict](data={"deleted": True, "credential_id": credential_id})
+
+
+# ---------------- oauth public ----------------
+oauth_router = APIRouter(prefix="/api/auth/oauth", tags=["mfa", "oauth"])
+
+
+@oauth_router.get(
+    "/providers",
+    summary="列出当前已配置的 OAuth 提供方",
+    operation_id="manager_oauth_providers",
+)
+async def oauth_providers(
+    request: Request,
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[list]:
+    svc = _oauth_service(request, auth)
+    return Envelope[list](data=svc.provider_names())
+
+
+@oauth_router.post(
+    "/authorize",
+    summary="生成 OAuth 授权跳转 URL（含 CSRF state）",
+    operation_id="manager_oauth_authorize",
+)
+async def oauth_authorize(
+    body: OAuthAuthorizeIn,
+    request: Request,
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    svc = _oauth_service(request, auth)
+    return Envelope[dict](data=svc.authorize(provider=body.provider, tenant_id=body.tenant_id,
+                                             redirect_uri=body.redirect_uri))
+
+
+@oauth_router.post(
+    "/callback",
+    summary="OAuth 回调登录（公开端点）",
+    description="校验 state 后换 token / 取 profile，反查 / 绑定 manager 账号后 issue JWT access token。",
+    operation_id="manager_oauth_callback",
+)
+async def oauth_callback(
+    body: OAuthCallbackIn,
+    request: Request,
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[AuthResult]:
+    svc = _oauth_service(request, auth)
+    return Envelope[AuthResult](data=svc.callback(provider=body.provider, code=body.code, state=body.state))
+
+
+# ---------------- oauth protected (需 token) ----------------
+oauth_mgmt_router = APIRouter(prefix="/api/manager/oauth", tags=["mfa", "oauth"])
+
+
+@oauth_mgmt_router.get(
+    "/connections",
+    summary="列举当前用户已绑定的第三方连接",
+    operation_id="manager_oauth_connections",
+)
+async def oauth_connections(
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[list]:
+    ctx = tenant_context_from(claims)
+    svc = _oauth_service(request, auth)
+    return Envelope[list](data=svc.list_connections(ctx, claims.user_id))
+
+
+@oauth_mgmt_router.post(
+    "/link",
+    summary="把第三方身份绑定到当前用户",
+    operation_id="manager_oauth_link",
+)
+async def oauth_link(
+    body: OAuthLinkIn,
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    ctx = tenant_context_from(claims)
+    svc = _oauth_service(request, auth)
+    return Envelope[dict](data=svc.link(ctx, provider=body.provider, code=body.code,
+                                        redirect_uri=body.redirect_uri, user_id=claims.user_id))
+
+
+@oauth_mgmt_router.delete(
+    "/{provider}",
+    summary="解绑当前用户的某第三方连接",
+    operation_id="manager_oauth_unlink",
+)
+async def oauth_unlink(
+    provider: str,
+    request: Request,
+    claims: TokenClaims = Depends(_require),  # noqa: ARG001
+    auth: AuthService = Depends(_auth_service),
+) -> Envelope[dict]:
+    ctx = tenant_context_from(claims)
+    svc = _oauth_service(request, auth)
+    ok = svc.unlink(ctx, provider=provider, user_id=claims.user_id)
+    return Envelope[dict](data={"unlinked": ok, "provider": provider})

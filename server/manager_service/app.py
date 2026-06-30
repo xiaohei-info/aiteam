@@ -30,6 +30,12 @@ from .routes_connector_ops import build_connector_ops_router
 from .routes_org import build_org_router
 from .routes_settings import build_settings_router
 from .routes_collab_audit import build_audit_router, build_collab_router
+from .routes_mfa import (
+    oauth_mgmt_router,
+    oauth_router,
+    passkey_mgmt_router,
+    passkey_router,
+)
 from .operator_catalog import FakeOperatorCatalogClient, OperatorCatalogClient
 
 
@@ -126,6 +132,10 @@ app.include_router(build_settings_router(_verifier))
 # ---- 功能补全：协作模板 + 审计事件 ----
 app.include_router(build_collab_router(_verifier))
 app.include_router(build_audit_router(_verifier))
+app.include_router(passkey_router)
+app.include_router(passkey_mgmt_router)
+app.include_router(oauth_router)
+app.include_router(oauth_mgmt_router)
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
 # 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。
 mount_frontend(app, settings.tier)

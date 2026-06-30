@@ -57,6 +57,8 @@ class AuthProvider(str, Enum):
     PASSWORD = "password"
     PHONE = "phone"
     WECHAT = "wechat"
+    PASSKEY = "passkey"
+    OAUTH = "oauth"
 
 
 class CatalogType(str, Enum):

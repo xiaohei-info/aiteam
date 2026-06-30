@@ -20,6 +20,7 @@ class IdentityRow:
     secret: str | None
     must_reset: bool
     roles: list[str]
+    password_changed_at: float | None = None
 
 
 class TenantAuthRepository:
@@ -56,7 +57,8 @@ class TenantAuthRepository:
     def find_identity(self, ctx: TenantContext, *, provider: AuthProvider, external_id: str) -> IdentityRow | None:
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, u.roles "
+                "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, "
+                "       ai.password_changed_at, u.roles "
                 "FROM auth_identity ai JOIN app_user u ON u.id = ai.user_id "
                 "WHERE ai.provider = %s AND ai.external_id = %s",
                 (provider.value, external_id),
@@ -68,8 +70,67 @@ class TenantAuthRepository:
             user_id=str(row[1]),
             secret=row[2],
             must_reset=row[3],
-            roles=list(row[4] or []),
+            password_changed_at=row[4],
+            roles=list(row[5] or []),
         )
+
+
+    def find_user(self, ctx: TenantContext, *, user_id: str) -> IdentityRow | None:
+        """按 user_id 取规范账号（含 roles）。tenant_id 发自 ctx。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, u.roles "
+                "FROM auth_identity ai JOIN app_user u ON u.id = ai.user_id "
+                "WHERE ai.user_id = %s LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return IdentityRow(
+            identity_id=str(row[0]), user_id=str(row[1]),
+            secret=row[2], must_reset=row[3], password_changed_at=row[4],
+            roles=list(row[5] or []),
+        )
+
+    def find_or_create_passkey_identity(self, ctx: TenantContext, *, user_id: str) -> None:
+        """确保该 user 有一条 provider=passkey 的 auth_identity；已存在则跳过（幂等）。
+        passkey 无需 secret；external_id 仅作占位（唯一同 user_id 即可）。"""
+        with self._router.session(ctx) as s:
+            existing = s.execute(
+                "SELECT 1 FROM auth_identity WHERE user_id = %s AND provider = %s",
+                (user_id, AuthProvider.PASSKEY.value),
+            ).fetchone()
+            if existing:
+                return
+            external_id = "passkey:" + str(user_id)
+            s.execute(
+                "INSERT INTO auth_identity "
+                "  (tenant_id, user_id, provider, external_id, secret, must_reset) "
+                "VALUES (%s, %s, %s, %s, NULL, false) "
+                "ON CONFLICT (tenant_id, provider, external_id) DO NOTHING",
+                (ctx.tenant_id, user_id, AuthProvider.PASSKEY.value, external_id),
+            )
+
+    def find_oauth_identity(self, ctx: TenantContext, *, external_id: str) -> IdentityRow | None:
+        """按 provider=oauth + external_id（三方 sub）定位身份；用于 OAuth 登录。"""
+        return self.find_identity(ctx, provider=AuthProvider.OAUTH, external_id=external_id)
+
+    def upsert_oauth_identity(self, ctx: TenantContext, *, user_id: str, external_id: str) -> None:
+        """确保该 user 有一条 provider=oauth + external_id 的 auth_identity；已存在则跳过（幂等）。"""
+        with self._router.session(ctx) as s:
+            existing = s.execute(
+                "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND provider = %s AND external_id = %s",
+                (ctx.tenant_id, AuthProvider.OAUTH.value, external_id),
+            ).fetchone()
+            if existing:
+                return
+            s.execute(
+                "INSERT INTO auth_identity "
+                "  (tenant_id, user_id, provider, external_id, secret, must_reset) "
+                "VALUES (%s, %s, %s, %s, NULL, false)",
+                (ctx.tenant_id, user_id, AuthProvider.OAUTH.value, external_id),
+            )
+
 
     def update_secret(
         self, ctx: TenantContext, *, provider: AuthProvider, external_id: str, secret: str, must_reset: bool
