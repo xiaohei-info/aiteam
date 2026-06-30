@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_split_kv_args() {
+  # 同时支持 --key=value 与 --key value 两种传参写法（curl / docker 惯例）。
+  OUT=()
+  while (( $# > 0 )); do
+    case "$1" in
+      *=*) OUT+=("${1%%=*}" "${1#*=}") ;;
+      *)   OUT+=("$1") ;;
+    esac
+    shift
+  done
+}
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 默认值
@@ -94,6 +106,9 @@ load_env() {
 
 # 解析参数
 parse_args() {
+  # 同时支持 --key=value 与 --key value 两种写法（curl / docker 惯例）。
+  _split_kv_args "$@"
+  set -- "${OUT[@]}"
   ENV_CONFIG="${DEFAULT_ENV}"
   DEPLOY_MODE="${DEFAULT_DEPLOY}"
   SERVER="${DEFAULT_SERVER}"
