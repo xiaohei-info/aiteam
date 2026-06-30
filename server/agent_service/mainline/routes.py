@@ -10,6 +10,8 @@ BusinessTimelineEvent + 瞬时 display 镜像，绝不下发 runtime 原生事�
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from collections.abc import Callable
 
@@ -203,11 +205,33 @@ def build_mainline_router(
     async def ws_timeline(websocket: WebSocket, conversation_id: str):
         await websocket.accept()
         async with await service.broker.subscribe(conversation_id) as sub:
+
+            async def _wait_disconnect():
+                try:
+                    while True:
+                        await websocket.receive()
+                except (WebSocketDisconnect, RuntimeError):
+                    return
+
+            disconnect_task = asyncio.create_task(_wait_disconnect())
             try:
-                async for frame in sub.frames():
+                while True:
+                    frame_task = asyncio.create_task(sub.next_frame())
+                    done, _ = await asyncio.wait(
+                        {disconnect_task, frame_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if disconnect_task in done:
+                        frame_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await frame_task
+                        return
+                    frame = frame_task.result()
                     await websocket.send_json(frame_to_dict(frame))
-            except WebSocketDisconnect:
-                return
+            finally:
+                disconnect_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await disconnect_task
 
     return router
 

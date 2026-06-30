@@ -41,8 +41,11 @@ describe("operation shell config", () => {
     expect(vm.nav.map((n) => n.id)).toEqual([
       "dashboard",
       "enterprises",
+      "accounts",
       "catalog",
+      "finance",
       "board",
+      "health",
     ]);
     expect(vm.activeItemId).toBe("enterprises");
   });

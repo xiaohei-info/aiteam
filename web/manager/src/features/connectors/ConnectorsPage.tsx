@@ -1,5 +1,6 @@
 /** B05 连接器页 — 预设列表 + 状态/测试。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ApiError } from "@aiteam/shared";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useConnectorsApi } from "./useConnectorsApi";
 import type { ConnectorPreset } from "./types";
@@ -8,11 +9,15 @@ export function ConnectorsPage(): ReactNode {
   const api = useConnectorsApi();
   const [presets, setPresets] = useState<ConnectorPreset[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setPresets(await api.getPresets()); } catch { /* ignore */ } finally { setLoading(false); }
+    setError(null);
+    try { setPresets(await api.getPresets()); } catch (err) {
+      setError(err instanceof ApiError ? err.message : "连接器列表加载失败");
+    } finally { setLoading(false); }
   }, [api]);
 
   useEffect(() => { void load(); }, [load]);
@@ -20,7 +25,7 @@ export function ConnectorsPage(): ReactNode {
   const handleTest = useCallback(async (presetId: string) => {
     setTestResult(null);
     try { const r = await api.test(presetId); setTestResult(r ? `${r.success ? "✅" : "❌"} ${r.message} (${r.latency_ms}ms)` : "测试完成"); }
-    catch (e) { setTestResult(e instanceof Error ? e.message : "测试失败"); }
+    catch (e) { setTestResult(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "测试失败"); }
   }, [api]);
 
   if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
@@ -28,6 +33,7 @@ export function ConnectorsPage(): ReactNode {
   return (
     <section className="flex flex-col gap-md">
       <h1 className="m-0 text-xl font-bold text-text-primary">连接器</h1>
+      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
       {testResult && <GlassPanel className="rounded-window p-md text-sm text-text-secondary">{testResult}</GlassPanel>}
       <div className="grid grid-cols-4 gap-md">
         {presets.map((p) => (

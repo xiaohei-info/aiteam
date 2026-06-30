@@ -15,6 +15,7 @@ export function MarketplacePage() {
   const [category, setCategory] = useState("全部");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [recruiting, setRecruiting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -28,8 +29,8 @@ export function MarketplacePage() {
   useEffect(() => { void load(); }, [load]);
 
   const handleRecruit = useCallback(async (templateId: string) => {
-    setRecruiting(templateId);
-    try { await recruit(client, templateId); await load(); } catch { /* ignore */ } finally { setRecruiting(null); }
+    setRecruiting(templateId); setActionError(null);
+    try { await recruit(client, templateId); await load(); } catch (errRecruit) { setActionError(errRecruit instanceof ApiError ? errRecruit.message : "招募失败"); } finally { setRecruiting(null); }
   }, [client, load]);
 
   return (
@@ -46,6 +47,8 @@ export function MarketplacePage() {
           <Button key={c} variant={category === c ? "metal" : "ghost"} size="sm" onClick={() => setCategory(c)}>{c}</Button>
         ))}
       </div>
+
+      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
 
       {loading ? <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel> :
         error ? <GlassPanel className="rounded-window border border-danger/30 p-lg text-sm text-danger">{error}</GlassPanel> :

@@ -1,5 +1,6 @@
 /** B08 设置页 — 企业设置 + 子管理员邀请。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ApiError } from "@aiteam/shared";
 import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useSettingsApi } from "./useSettingsApi";
 import type { EnterpriseSettings, AdminInvite } from "./types";
@@ -9,33 +10,54 @@ export function SettingsPage(): ReactNode {
   const [settings, setSettings] = useState<EnterpriseSettings | null>(null);
   const [invites, setInvites] = useState<AdminInvite[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [newPhone, setNewPhone] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [s, ivs] = await Promise.all([api.get(), api.listInvites()]);
       setSettings(s); setInvites(ivs);
-    } catch { /* ignore */ } finally { setLoading(false); }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "设置加载失败");
+    } finally { setLoading(false); }
   }, [api]);
 
   useEffect(() => { void load(); }, [load]);
 
   const handleSave = useCallback(async () => {
     if (!settings) return;
-    try { await api.update({ enterprise_name: settings.enterprise_name }); await load(); } catch { /* ignore */ }
+    setActionError(null);
+    try { await api.update({ enterprise_name: settings.enterprise_name }); await load(); } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "保存失败，请重试");
+    }
   }, [api, settings, load]);
 
   const handleInvite = useCallback(async () => {
     if (!newPhone) return;
-    try { await api.createInvite(newPhone); setNewPhone(""); await load(); } catch { /* ignore */ }
+    setActionError(null);
+    try { await api.createInvite(newPhone); setNewPhone(""); await load(); } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "邀请发送失败，请重试");
+    }
   }, [api, newPhone, load]);
+
+  const handleRevoke = useCallback(async (inviteId: string) => {
+    setActionError(null);
+    try { await api.deleteInvite(inviteId); await load(); } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "撤销失败，请重试");
+    }
+  }, [api, load]);
 
   if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
 
   return (
     <section className="flex flex-col gap-md">
       <h1 className="m-0 text-xl font-bold text-text-primary">企业设置</h1>
+
+      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
+      {actionError && <GlassPanel className="rounded-window p-md text-sm text-danger">{actionError}</GlassPanel>}
 
       {settings && (
         <GlassPanel className="rounded-window p-md">
@@ -53,10 +75,10 @@ export function SettingsPage(): ReactNode {
         {invites.length > 0 && (
           <div className="mt-md space-y-xs">
             {invites.map((iv) => (
-              <div key={iv.invite_id} className="flex items-center justify-between border-b border-gold/5 py-xs text-sm">
+              <div key={iv.invite_id} className="flex items-center justify-between border-b border-gold/5 py-xs text-sm" data-testid="invite-row">
                 <span className="text-text-secondary">{iv.phone} — {iv.display_name}</span>
                 <span className="text-text-muted">{iv.status}</span>
-                <Button variant="ghost" size="sm" onClick={() => { void api.deleteInvite(iv.invite_id).then(load); }}>撤销</Button>
+                <Button variant="ghost" size="sm" onClick={() => void handleRevoke(iv.invite_id)}>撤销</Button>
               </div>
             ))}
           </div>
