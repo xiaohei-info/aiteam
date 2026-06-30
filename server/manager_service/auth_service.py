@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,7 +20,7 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, Forbidden, Unauthorized
+from shared.errors import Conflict, Forbidden, Unauthorized, ValidationProblem
 
 from .keys import TenantKeyStore
 from .repository import TenantAuthRepository
@@ -93,7 +94,18 @@ class AuthService:
         )
 
     # ---- 登录 / 重置 ----
+    @staticmethod
+    def _validate_tenant_id(tenant_id: str) -> None:
+        """拒绝非法 tenant_id（非 UUID 格式），避免其一路冲到写库后再在 _issue 按 tenant
+        查签名密钥时炸出 500。前置校验把此类请求拒在业务链路之外，返回 422 而非 500。
+        """
+        try:
+            uuid.UUID(tenant_id)
+        except (ValueError, TypeError):
+            raise ValidationProblem("invalid tenant_id format")
+
     def login(self, req: LoginInput) -> AuthResult:
+        self._validate_tenant_id(req.tenant_id)
         ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
         if identity is None or not identity.secret or not verify_password(req.password, identity.secret):
@@ -103,6 +115,7 @@ class AuthService:
         return self._issue(req.tenant_id, identity.user_id, identity.roles)
 
     def owner_reset(self, req: OwnerResetInput) -> AuthResult:
+        self._validate_tenant_id(req.tenant_id)
         ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
         if identity is None or not identity.secret or not verify_password(req.old_password, identity.secret):
