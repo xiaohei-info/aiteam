@@ -34,6 +34,7 @@ def _tenant_exists(admin_db_url: str, tenant_id: str) -> bool:
 @router.post(
     "/api/manager/owner-bootstrap",
     summary="F02 负责人 bootstrap——落凭据 hash（Operator→Manager 云侧调用）",
+    description="运营端Manager云侧调用：负责人首次登录凭据 hash 落库。用户端凭此完成首登重置。",
     operation_id="manager_owner_bootstrap",
     status_code=status.HTTP_201_CREATED,
 )

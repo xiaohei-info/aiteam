@@ -18,7 +18,7 @@ class McpServerConfig(BaseModel):
 
     name: str
     command: str | None = Field(default=None, description="本地启动命令；连接型可空")
-    args: list[str] = Field(default_factory=list)
+    args: list[str] = Field(default_factory=list, description="命令行参数列表")
     env: dict[str, str] = Field(default_factory=dict, description="最小权限注入，用后不留痕")
     url: str | None = Field(default=None, description="连接型 MCP 的 endpoint")
 
@@ -33,12 +33,12 @@ class RunSpec(BaseModel):
     provider_ref: str | None = Field(default=None, description="provider 配置引用（不内联明文凭据）")
     thinking_level: str | None = Field(default=None, description="中立 reasoning/effort 档位")
     mcp_config: list[McpServerConfig] = Field(default_factory=list, description="A 类能力统一注入")
-    resume_session_id: str | None = Field(default=None)
+    resume_session_id: str | None = Field(default=None, description="恢复会话 id（用于断点续跑）")
     custom_args: list[str] = Field(
         default_factory=list, description="透传参数；必须过 Driver 的 denylist 过滤（06 §7.5.4）"
     )
-    timeout_seconds: int | None = Field(default=None)
-    cancellation_policy: str | None = Field(default=None)
+    timeout_seconds: int | None = Field(default=None, description="运行超时秒数（可选）")
+    cancellation_policy: str | None = Field(default=None, description="取消策略：graceful=优雅终止, force=强制终止")
 
 
 class AgentRunRequest(BaseModel):
@@ -48,13 +48,13 @@ class AgentRunRequest(BaseModel):
 
     run_id: str
     tenant_id: str
-    enterprise_id: str | None = Field(default=None)
-    conversation_id: str | None = Field(default=None)
-    task_id: str | None = Field(default=None)
-    loop_id: str | None = Field(default=None)
+    enterprise_id: str | None = Field(default=None, description="企业 id（跨企业场景）")
+    conversation_id: str | None = Field(default=None, description="关联会话 id")
+    task_id: str | None = Field(default=None, description="关联任务 id")
+    loop_id: str | None = Field(default=None, description="关联 Loop id")
     runtime_selection: str | None = Field(default=None, description="选定的 Driver/runtime；不静默切换")
     run_spec: RunSpec = Field(description="由 EmployeeExecutionSnapshot 派生的中立规格")
-    input_messages: list[dict] = Field(default_factory=list)
-    attachments: list[dict] = Field(default_factory=list)
-    workspace_policy: dict | None = Field(default=None)
-    resume_session_id: str | None = Field(default=None)
+    input_messages: list[dict] = Field(default_factory=list, description="输入消息列表（预填上下文）")
+    attachments: list[dict] = Field(default_factory=list, description="附件列表（文件引用）")
+    workspace_policy: dict | None = Field(default=None, description="工作区策略（文件/目录隔离规则）")
+    resume_session_id: str | None = Field(default=None, description="恢复会话 id（用于断点续跑）")

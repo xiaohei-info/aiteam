@@ -131,6 +131,30 @@ class CatalogService:
     ) -> list[CatalogEntryResponse]:
         return [_to_response(e) for e in self._repo.list(catalog_type=catalog_type, status=status)]
 
+    def update_entry(
+        self, catalog_type: CatalogType, template_id: str, changes: dict
+    ) -> CatalogEntryResponse:
+        """编辑目录项（部分更新）。
+
+        将属于 CatalogEntry dataclass 的字段直接更新（如 display_name）；
+        其余字段（persona/recommended_config/expert_template_ids/knowledge_refs/
+        skill_refs/default_grants）合并进 payload，避免 dataclasses.replace 收到
+        未定义字段抛出 TypeError → 500。
+
+        body 中 None 值已在 routes 层经 exclude_none 排除，此处 changes 不含 None。
+        """
+        entry = self._repo.get(catalog_type, template_id)
+        # 分离 payload 字段与 dataclass 顶层字段
+        _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
+                       'status', 'visible_scope', 'payload'}
+        payload_updates = {k: v for k, v in changes.items() if k not in _top_fields}
+        top_updates = {k: v for k, v in changes.items() if k in _top_fields}
+        if payload_updates:
+            new_payload = {**(entry.payload or {}), **payload_updates}
+            top_updates['payload'] = new_payload
+        updated = self._repo.update(entry, **top_updates)
+        return _to_response(updated)
+
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
 
     def pull_expert_template_detail(

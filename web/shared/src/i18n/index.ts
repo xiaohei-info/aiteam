@@ -94,5 +94,6 @@ export const sharedMessages: LocaleCatalog = {
     "error.not_found": "资源不存在",
     "error.conflict": "操作冲突，请刷新后重试",
     "error.unknown": "操作失败，请稍后重试",
+    "error.validation": "输入校验失败，请检查后重试",
   },
 };

@@ -22,6 +22,10 @@ export function LoginPage() {
 
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (!tenantHint.trim()) {
+      setError(i18n.t("agent.login.tenant_hint_required"));
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {

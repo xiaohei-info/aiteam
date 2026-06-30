@@ -11,7 +11,7 @@ import pytest
 
 from agent_service.auth.manager_client import RealManagerLoginClient
 from agent_service.auth.local_login import LoginRequest, ManagerUnreachable
-from shared.errors import Unauthorized
+from shared.errors import Unauthorized, ValidationProblem
 from shared.service_client import ServiceClient
 
 
@@ -137,14 +137,31 @@ def test_jwks_fetch_failure():
         client.login(req)
 
 
-def test_default_tenant_when_hint_missing():
-    """tenant_hint 缺失时使用默认值 'default'。"""
+def test_empty_tenant_hint_fails_fast():
+    """tenant_hint 为 None 时 fail fast → ValidationProblem（#258）。
+
+    旧行为：发送 tenant_id=null 给 Manager → Pydantic 422 → 归一为
+    ManagerUnreachable("Request validation failed.")，用户无从得知缺了什么。
+    修复后：前置校验直接抛 ValidationProblem，不发网络请求。
+    """
     transport = FakeTransport()
     sc = ServiceClient("http://manager.local", transport=transport)
     client = RealManagerLoginClient(sc)
 
     req = LoginRequest(account="13800000000", password="pass123", tenant_hint=None)
-    client.login(req)
+    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
+        client.login(req)
+    # 不应发出任何网络请求
+    assert len(transport.requests) == 0
 
-    # 验证 JWKS 路径使用 'default'
-    assert transport.requests[1] == ("GET", "http://manager.local/api/auth/default/jwks.json")
+
+def test_blank_tenant_hint_fails_fast():
+    """tenant_hint 为空白字符串时同样 fail fast（#258）。"""
+    transport = FakeTransport()
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = LoginRequest(account="13800000000", password="pass123", tenant_hint="  ")
+    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
+        client.login(req)
+    assert len(transport.requests) == 0

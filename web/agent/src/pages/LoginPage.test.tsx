@@ -72,6 +72,7 @@ describe("LoginPage", () => {
         target: { value: "alice" },
       });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
+      fireEvent.change(screen.getByLabelText("企业提示（tenant_id）"), { target: { value: "t-1" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
       await waitFor(() => {
@@ -79,6 +80,35 @@ describe("LoginPage", () => {
       });
       const calls = (fetchImpl.mock.calls as unknown as [string, RequestInit][]).map((c) => c[0]);
       expect(calls.some((c) => c.endsWith("/api/agent/login"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("空 tenant_hint 时显示校验提示且不发请求（#258）", async () => {
+    const fetchImpl = mockFetch();
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    try {
+      render(
+        <MemoryRouter initialEntries={["/login"]}>
+          <AppProvider>
+            <AppRoutes />
+          </AppProvider>
+        </MemoryRouter>,
+      );
+      fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
+        target: { value: "alice" },
+      });
+      fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
+      // tenant_hint 留空
+      fireEvent.click(screen.getByRole("button", { name: "登录" }));
+
+      // 应显示校验提示
+      await waitFor(() => {
+        expect(screen.getByText("请填写企业提示（tenant_id）")).toBeInTheDocument();
+      });
+      // 不应发出任何 fetch 请求
+      expect(fetchImpl).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }

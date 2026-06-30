@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.auth import RS256TokenVerifier, require_claims
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
@@ -15,6 +15,7 @@ from .routes_auth import router as auth_router
 from .routes_catalog import router as catalog_router, router_pull as catalog_pull_router
 from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
+from .routes_admin import build_admin_router
 
 # 系统账号认证（§9.2）：Operation 自持系统级 RSA key，自签自验系统 token（D23 RS256）。
 _auth = build_operation_auth_service()
@@ -34,7 +35,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-app = create_app(load_settings("operation"), router)
+settings = load_settings("operation")
+app = create_app(settings, router)
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth
 app.state._token_verifier = _verifier
@@ -47,3 +49,7 @@ app.include_router(enterprise_router)
 app.include_router(catalog_pull_router)
 app.include_router(catalog_router)
 app.include_router(rollup_router)
+# ---- 功能补全：S01 账号管理 + S03 方案统计 + S04 财务管理 + 系统健康 ----
+app.include_router(build_admin_router(_verifier))
+# 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
+mount_frontend(app, settings.tier)

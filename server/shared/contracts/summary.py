@@ -22,12 +22,12 @@ class UsageSummary(BaseModel):
 
     summary_id: str = Field(description="幂等键")
     tenant_id: str
-    employee_id: str | None = Field(default=None)
+    employee_id: str | None = Field(default=None, description="员工 id（UUID 字符串）")
     window_start: datetime
     window_end: datetime
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"))
+    cost_total: Decimal = Field(default=Decimal("0"), description="总费用")
     error_count: int = 0
     duration_seconds_total: int = 0
 
@@ -41,6 +41,6 @@ class AuditSummaryEvent(BaseModel):
     tenant_id: str
     actor: str = Field(description="user_id 或服务身份")
     action: str = Field(description="如 expert_load / login / grant_change / unauthorized_attempt")
-    resource_type: str | None = Field(default=None)
-    resource_id: str | None = Field(default=None)
+    resource_type: str | None = Field(default=None, description="资源类型：expert/solution 等")
+    resource_id: str | None = Field(default=None, description="资源 id")
     occurred_at: datetime

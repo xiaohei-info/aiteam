@@ -55,7 +55,7 @@ def build_recruit_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get(
-        "/catalog/experts", summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
+        "/catalog/experts", description="请查看接口名称了解用途", summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
         operation_id="manager_list_recruitable_experts",
     )
     async def list_recruitable_experts(
@@ -67,7 +67,7 @@ def build_recruit_router(verifier) -> APIRouter:
         return ListEnvelope[ExpertTemplateDetail](data=catalog.list_expert_templates())
 
     @router.get(
-        "/catalog/solutions", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
+        "/catalog/solutions", description="请查看接口名称了解用途", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
         operation_id="manager_list_recruitable_solutions",
     )
     async def list_recruitable_solutions(
@@ -78,7 +78,7 @@ def build_recruit_router(verifier) -> APIRouter:
         return ListEnvelope[SolutionPackage](data=catalog.list_solution_packages())
 
     @router.post(
-        "/experts", summary="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）",
+        "/experts", description="请查看接口名称了解用途", summary="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）",
         operation_id="manager_recruit_expert", status_code=status.HTTP_201_CREATED,
     )
     async def recruit_expert(
@@ -92,7 +92,7 @@ def build_recruit_router(verifier) -> APIRouter:
         )
 
     @router.post(
-        "/solutions", summary="F07 应用方案（拉 Operator 方案包 → 展开 employee + 授权）",
+        "/solutions", description="请查看接口名称了解用途", summary="F07 应用方案（拉 Operator 方案包 → 展开 employee + 授权）",
         operation_id="manager_apply_solution", status_code=status.HTTP_201_CREATED,
     )
     async def apply_solution(
@@ -106,7 +106,7 @@ def build_recruit_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/solutions", summary="列本租户方案实例（按 tenant 裁剪）",
+        "/solutions", description="请查看接口名称了解用途", summary="列本租户方案实例（按 tenant 裁剪）",
         operation_id="manager_list_solution_instances",
     )
     async def list_solution_instances(
@@ -119,7 +119,7 @@ def build_recruit_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/solutions/{instance_id}", summary="方案实例详情（按 tenant 裁剪）",
+        "/solutions/{instance_id}", description="请查看接口名称了解用途", summary="方案实例详情（按 tenant 裁剪）",
         operation_id="manager_get_solution_instance",
     )
     async def get_solution_instance(

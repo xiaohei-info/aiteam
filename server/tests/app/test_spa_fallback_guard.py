@@ -13,7 +13,7 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-from shared.app_factory import create_app
+from shared.app_factory import create_app, mount_frontend
 from shared.config import Settings
 
 TIERS = ("operation", "manager", "agent")
@@ -29,7 +29,9 @@ def _dist_dir(tier: str) -> Path:
 
 def _app_for_tier(tier: str):
     settings = Settings(tier=tier, service_name=f"test-{tier}", log_level="WARNING")
-    return create_app(settings, APIRouter(prefix=f"/api/{tier}"))
+    app = create_app(settings, APIRouter(prefix=f"/api/{tier}"))
+    mount_frontend(app, tier)
+    return app
 
 
 @pytest.fixture(params=TIERS)
@@ -81,3 +83,31 @@ def test_frontend_routes_still_fallback_to_spa(tier_dist):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert f"{tier_dist} SPA" in response.text
+
+
+def test_get_api_route_registered_before_mount_frontend_is_reachable(tier_dist):
+    """#257 回归：在 mount_frontend 之前注册的 GET API 路由必须可达。
+
+    旧 bug：create_app 内部先挂 catch-all `GET /{full_path:path}`，各端之后才
+    include auth_router 等 → 后注册的 GET API 路由（如 jwks）被遮蔽 → 404。
+    修复后：mount_frontend 在所有 include_router 之后最后调用，catch-all 永远在后。
+    """
+    from fastapi import APIRouter
+
+    settings = Settings(tier=tier_dist, service_name=f"test-{tier_dist}", log_level="WARNING")
+    app = create_app(settings, APIRouter(prefix=f"/api/{tier_dist}"))
+
+    # 在 mount_frontend 之前注册一个 GET 路由（模拟 auth_router 的 jwks 等路由）
+    api_router = APIRouter(prefix=f"/api/{tier_dist}")
+
+    @api_router.get("/late-route")
+    async def _late():
+        return {"ok": True}
+
+    app.include_router(api_router)
+    # mount_frontend 在最后——catch-all 永远在所有 API 路由之后
+    mount_frontend(app, tier_dist)
+
+    response = TestClient(app).get(f"/api/{tier_dist}/late-route")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True

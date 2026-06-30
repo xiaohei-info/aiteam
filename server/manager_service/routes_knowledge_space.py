@@ -56,7 +56,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post(
-        "", summary="建知识空间（workspace 由 ManagerRagService 推导，D21）",
+        "", description="请查看接口名称了解用途", summary="建知识空间（workspace 由 ManagerRagService 推导，D21）",
         operation_id="manager_knowledge_space_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_knowledge_space(
@@ -69,7 +69,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
         return Envelope[KnowledgeSpaceOut](data=out)
 
     @router.get(
-        "", summary="列本租户全部知识空间",
+        "", description="请查看接口名称了解用途", summary="列本租户全部知识空间",
         operation_id="manager_knowledge_space_list",
     )
     async def list_knowledge_space(
@@ -81,7 +81,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
         return ListEnvelope[KnowledgeSpaceOut](data=items)
 
     @router.get(
-        "/{knowledge_space_id}", summary="取单个知识空间",
+        "/{knowledge_space_id}", description="请查看接口名称了解用途", summary="取单个知识空间",
         operation_id="manager_knowledge_space_get",
     )
     async def get_knowledge_space(
@@ -95,7 +95,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
         )
 
     @router.patch(
-        "/{knowledge_space_id}", summary="改知识空间展示名",
+        "/{knowledge_space_id}", description="请查看接口名称了解用途", summary="改知识空间展示名",
         operation_id="manager_knowledge_space_update",
     )
     async def update_knowledge_space(
@@ -110,7 +110,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/{knowledge_space_id}", summary="删知识空间（清残绑定）",
+        "/{knowledge_space_id}", description="请查看接口名称了解用途", summary="删知识空间（清残绑定）",
         operation_id="manager_knowledge_space_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -127,7 +127,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
 
     @router.post(
         "/{knowledge_space_id}/bindings",
-        summary="绑定知识空间到 专家/部门/成员（仅元数据，不检索，D21）",
+        description="请查看接口名称了解用途", summary="绑定知识空间到 专家/部门/成员（仅元数据，不检索，D21）",
         operation_id="manager_knowledge_space_bind",
         status_code=status.HTTP_201_CREATED,
     )
@@ -146,7 +146,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
 
     @router.get(
         "/{knowledge_space_id}/bindings",
-        summary="列知识空间的全部绑定（专家派生自 knowledge_refs + 部门/成员表）",
+        description="请查看接口名称了解用途", summary="列知识空间的全部绑定（专家派生自 knowledge_refs + 部门/成员表）",
         operation_id="manager_knowledge_space_list_bindings",
     )
     async def list_bindings(
@@ -162,7 +162,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
 
     @router.delete(
         "/{knowledge_space_id}/bindings/{resource_type}/{resource_id}",
-        summary="解绑",
+        description="请查看接口名称了解用途", summary="解绑",
         operation_id="manager_knowledge_space_unbind",
         status_code=status.HTTP_204_NO_CONTENT,
     )

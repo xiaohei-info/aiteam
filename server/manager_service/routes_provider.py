@@ -57,7 +57,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post(
-        "", summary="建 provider 凭据（明文加密存储，不回显）",
+        "", description="请查看接口名称了解用途", summary="建 provider 凭据（明文加密存储，不回显）",
         operation_id="manager_provider_credential_create",
         status_code=status.HTTP_201_CREATED,
     )
@@ -72,7 +72,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "", summary="列本租户全部 provider 凭据（不回明文）",
+        "", description="请查看接口名称了解用途", summary="列本租户全部 provider 凭据（不回明文）",
         operation_id="manager_provider_credential_list",
     )
     async def list_provider_credentials(
@@ -85,7 +85,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/{credential_id}", summary="取单个 provider 凭据（不回明文）",
+        "/{credential_id}", description="请查看接口名称了解用途", summary="取单个 provider 凭据（不回明文）",
         operation_id="manager_provider_credential_get",
     )
     async def get_provider_credential(
@@ -99,7 +99,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/{credential_id}", summary="改写 provider 凭据（明文加密存储，version 自增）",
+        "/{credential_id}", description="请查看接口名称了解用途", summary="改写 provider 凭据（明文加密存储，version 自增）",
         operation_id="manager_provider_credential_update",
     )
     async def update_provider_credential(
@@ -114,7 +114,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/{credential_id}", summary="删 provider 凭据",
+        "/{credential_id}", description="请查看接口名称了解用途", summary="删 provider 凭据",
         operation_id="manager_provider_credential_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )

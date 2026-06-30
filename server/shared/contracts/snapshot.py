@@ -17,14 +17,14 @@ class ModelPolicy(BaseModel):
 
     model: str | None = Field(default=None, description="中立 model id；空=runtime 默认")
     provider_ref: str | None = Field(default=None, description="provider 配置引用（04 §6.7）")
-    thinking_level: str | None = Field(default=None)
+    thinking_level: str | None = Field(default=None, description="思考深度：none/basic/deep")
 
 
 class RuntimePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runtime_binding: str | None = Field(default=None, description="employee 默认 runtime（06 §7.6）")
-    timeout_seconds: int | None = Field(default=None)
+    timeout_seconds: int | None = Field(default=None, description="超时秒数（可选，覆盖默认）")
 
 
 class EmployeeExecutionSnapshot(BaseModel):
@@ -39,8 +39,8 @@ class EmployeeExecutionSnapshot(BaseModel):
     persona: str | None = Field(default=None, description="中立 persona 文本（不写 SOUL.md）")
     model_policy: ModelPolicy = Field(default_factory=ModelPolicy)
     runtime_policy: RuntimePolicy = Field(default_factory=RuntimePolicy)
-    tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list, description="工具列表")
+    skills: list[str] = Field(default_factory=list, description="技能引用列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
-    connector_refs: list[str] = Field(default_factory=list)
+    connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
     memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")

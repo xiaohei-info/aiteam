@@ -22,21 +22,25 @@ from .store import (
 
 
 def build_grants_service(
-    *, client: ManagerGrantsClient | None = None, db: LocalDb | None = None
+    *,
+    client: ManagerGrantsClient | None = None,
+    db: LocalDb | None = None,
+    projections: ProjectionRepository | None = None,
 ) -> GrantsService:
     """装配本地 grants 服务。
 
     db 非空时用 SQLite 实现（#159），空时用内存（dev/测试）。
+    projections 可选注入（workspace 共享同一仓储）；未注入时按 db 构建。
     client 默认占位；测试注入 fake、生产注入真实客户端。
     """
-    projections: ProjectionRepository = (
-        SqliteProjectionRepository(db) if db else InMemoryProjectionRepository()
+    _projections: ProjectionRepository = (
+        projections or (SqliteProjectionRepository(db) if db else InMemoryProjectionRepository())
     )
     snapshots: SnapshotRepository = (
         SqliteSnapshotRepository(db) if db else InMemorySnapshotRepository()
     )
     return GrantsService(
         client=client or UnconfiguredGrantsClient(),
-        projections=projections,
+        projections=_projections,
         snapshots=snapshots,
     )

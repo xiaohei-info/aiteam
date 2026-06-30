@@ -15,3 +15,5 @@ agent-client-protocol>=0.10
 # 覆盖率闸门：diff-cover 改动分支覆盖≥90%（#234 F1 CI 物理层）+ pytest-cov 分支度量。
 diff-cover>=9.2
 pytest-cov>=5.0
+# agent_service 使用 UploadFile = File(...) 需要 python-multipart
+python-multipart>=0.0.20

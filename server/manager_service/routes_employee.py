@@ -44,7 +44,7 @@ def build_employee_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post(
-        "", summary="建 employee/expert 配置（runtime 中立）",
+        "", description="请查看接口名称了解用途", summary="建 employee/expert 配置（runtime 中立）",
         operation_id="manager_employee_config_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_employee_config(
@@ -58,7 +58,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
-        "", summary="列本租户全部 employee 配置",
+        "", description="请查看接口名称了解用途", summary="列本租户全部 employee 配置",
         operation_id="manager_employee_config_list",
     )
     async def list_employee_config(
@@ -70,7 +70,7 @@ def build_employee_router(verifier) -> APIRouter:
         return ListEnvelope[EmployeeConfigOut](data=items)
 
     @router.get(
-        "/{employee_id}", summary="取单个 employee 配置",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="取单个 employee 配置",
         operation_id="manager_employee_config_get",
     )
     async def get_employee_config(
@@ -82,7 +82,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
 
     @router.put(
-        "/{employee_id}", summary="改写 employee 配置（version 自增）",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="改写 employee 配置（version 自增）",
         operation_id="manager_employee_config_update",
     )
     async def update_employee_config(
@@ -97,7 +97,7 @@ def build_employee_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/{employee_id}", summary="删 employee 配置",
+        "/{employee_id}", description="请查看接口名称了解用途", summary="删 employee 配置",
         operation_id="manager_employee_config_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -109,5 +109,30 @@ def build_employee_router(verifier) -> APIRouter:
         svc = _service(request)
         svc.delete(tenant_context_from(claims), employee_id=employee_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.get(
+        "/export/all", summary="导出员工列表 CSV", operation_id="manager_employee_export",
+    )
+    async def export_employees(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        svc = _service(request)
+        items = svc.list_all(tenant_context_from(claims))
+        import csv, io
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["employee_id", "employee_slug", "display_name", "model", "runtime_binding", "skills", "version"])
+        for it in items:
+            writer.writerow([
+                it.employee_id, it.employee_slug, it.display_name,
+                it.model or "", it.runtime_binding or "",
+                ",".join(it.skills), it.version,
+            ])
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=employees.csv"},
+        )
 
     return router

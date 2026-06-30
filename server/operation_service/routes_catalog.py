@@ -20,6 +20,8 @@ from .catalog_schemas import (
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
+    UpdateExpertTemplateRequest,
+    UpdateSolutionTemplateRequest,
 )
 from .catalog_service import CatalogService
 
@@ -38,7 +40,7 @@ def _require_platform_operator(request: Request) -> TokenClaims:
 
 @router.post(
     "/expert-templates",
-    summary="注册专家模板（草稿态）",
+    description="请查看接口名称了解用途", summary="注册专家模板（草稿态）",
     operation_id="operation_register_expert_template",
     status_code=201,
 )
@@ -52,7 +54,7 @@ async def register_expert_template(
 
 @router.post(
     "/solution-templates",
-    summary="注册行业方案模板（草稿态）",
+    description="请查看接口名称了解用途", summary="注册行业方案模板（草稿态）",
     operation_id="operation_register_solution_template",
     status_code=201,
 )
@@ -66,7 +68,7 @@ async def register_solution_template(
 
 @router.post(
     "/{catalog_type}/{template_id}/publish",
-    summary="发布目录项（通知 Manager）",
+    description="请查看接口名称了解用途", summary="发布目录项（通知 Manager）",
     operation_id="operation_publish_catalog_entry",
 )
 async def publish_catalog_entry(
@@ -83,7 +85,7 @@ async def publish_catalog_entry(
 
 @router.post(
     "/{catalog_type}/{template_id}/unpublish",
-    summary="下架目录项（通知 Manager）",
+    description="请查看接口名称了解用途", summary="下架目录项（通知 Manager）",
     operation_id="operation_unpublish_catalog_entry",
 )
 async def unpublish_catalog_entry(
@@ -99,7 +101,7 @@ async def unpublish_catalog_entry(
 
 @router.put(
     "/{catalog_type}/{template_id}/visibility",
-    summary="变更可见范围（通知 Manager）",
+    description="请查看接口名称了解用途", summary="变更可见范围（通知 Manager）",
     operation_id="operation_set_catalog_visibility",
 )
 async def set_catalog_visibility(
@@ -116,7 +118,7 @@ async def set_catalog_visibility(
 
 @router.get(
     "",
-    summary="列举目录项（可按类型/状态过滤）",
+    description="请查看接口名称了解用途", summary="列举目录项（可按类型/状态过滤）",
     operation_id="operation_list_catalog",
 )
 async def list_catalog(
@@ -132,7 +134,7 @@ async def list_catalog(
 
 @router.get(
     "/{catalog_type}/{template_id}",
-    summary="获取单个目录项",
+    description="请查看接口名称了解用途", summary="获取单个目录项",
     operation_id="operation_get_catalog_entry",
 )
 async def get_catalog_entry(
@@ -142,6 +144,23 @@ async def get_catalog_entry(
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
     return Envelope[CatalogEntryResponse](data=service.get_entry(catalog_type, template_id))
+
+
+@router.patch(
+    "/{catalog_type}/{template_id}",
+    description="编辑目录项（专家模板或行业方案）", summary="编辑目录项",
+    operation_id="operation_update_catalog_entry",
+)
+async def update_catalog_entry(
+    catalog_type: CatalogType,
+    template_id: str,
+    body: UpdateExpertTemplateRequest | UpdateSolutionTemplateRequest,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Envelope[CatalogEntryResponse]:
+    changes = body.model_dump(exclude_none=True)
+    updated = service.update_entry(catalog_type, template_id, changes)
+    return Envelope[CatalogEntryResponse](data=updated)
 
 
 # ---- Manager 拉取端点（服务间调用，05 F06/F07 §5.4）----
@@ -157,7 +176,7 @@ def _require_service_token(request: Request) -> None:
 
 @router_pull.get(
     "/expert-templates/{template_id}",
-    summary="F06 Manager 拉取专家模板详情（服务间调用）",
+    description="请查看接口名称了解用途", summary="F06 Manager 拉取专家模板详情（服务间调用）",
     operation_id="operation_pull_expert_template",
 )
 async def pull_expert_template(
@@ -181,7 +200,7 @@ async def pull_expert_template(
 
 @router_pull.get(
     "/solution-templates/{solution_id}",
-    summary="F07 Manager 拉取行业方案包（服务间调用）",
+    description="请查看接口名称了解用途", summary="F07 Manager 拉取行业方案包（服务间调用）",
     operation_id="operation_pull_solution_package",
 )
 async def pull_solution_package(
@@ -205,7 +224,7 @@ async def pull_solution_package(
 
 @router_pull.get(
     "/expert-templates",
-    summary="F06 Manager 列举可招募专家模板（服务间调用）",
+    description="请查看接口名称了解用途", summary="F06 Manager 列举可招募专家模板（服务间调用）",
     operation_id="operation_list_expert_templates",
 )
 async def list_expert_templates(
@@ -225,7 +244,7 @@ async def list_expert_templates(
 
 @router_pull.get(
     "/solution-templates",
-    summary="F07 Manager 列举可应用行业方案包（服务间调用）",
+    description="请查看接口名称了解用途", summary="F07 Manager 列举可应用行业方案包（服务间调用）",
     operation_id="operation_list_solution_packages",
 )
 async def list_solution_packages(
