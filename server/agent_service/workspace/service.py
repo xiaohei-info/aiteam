@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 from uuid import uuid4
 
 from .store import (
@@ -171,6 +172,7 @@ class WorkspaceService:
         upload_store: UploadAssetRepository,
         upload_dir: str | None = None,
         http_timeout: float = 15.0,
+        unread_counts_provider: Callable[[str], int] | None = None,
     ) -> None:
         from .store import InMemoryKnowledgeIngestionRepository
         self._projections = projections
@@ -181,6 +183,7 @@ class WorkspaceService:
         self._uploads = upload_store
         self._upload_dir = Path(upload_dir) if upload_dir else None
         self._http_timeout = http_timeout
+        self._unread_counts_provider = unread_counts_provider
         # 市场模板本地缓存（由 sync_marketplace 填充）
         self._market_templates: dict[str, MarketTemplate] = {}
 
@@ -190,17 +193,19 @@ class WorkspaceService:
         """从已授权专家投影 + 本地偏好构建工作台视图。"""
         experts = self._projections.available()
         states = {s.employee_id: s for s in self._workbench.list_all()}
+        provider = self._unread_counts_provider
         employees: list[WorkbenchEmployeeView] = []
         total_unread = 0
         for e in experts:
             state = states.get(e.employee_id)
+            unread = provider(e.employee_id) if provider else 0
             employees.append(WorkbenchEmployeeView(
                 employee_id=e.employee_id,
                 display_name=e.display_name,
                 is_starred=state.is_starred if state else False,
-                unread_count=0,  # TODO: 跨模块读 mainline unread
+                unread_count=unread,
             ))
-            total_unread += 0  # TODO aggregate from mainline
+            total_unread += unread
         return WorkbenchView(employees=employees, total_unread=total_unread)
 
     def update_workbench_state(self, employee_id: str, is_starred: bool | None = None,

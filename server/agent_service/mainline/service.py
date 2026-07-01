@@ -133,6 +133,7 @@ class MainlineService:
         collaboration_mode: str | None = None,
         orchestration_brief: str | None = None,
         planner_employee_id: str | None = None,
+        entry_employee_id: str | None = None,
     ) -> Conversation:
         mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
         brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
@@ -140,6 +141,7 @@ class MainlineService:
             id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
             collaboration_mode=mode, orchestration_brief=brief,
             planner_employee_id=(planner_employee_id or None),
+            entry_employee_id=entry_employee_id or None,
         )
         return self._conversations.create(conv)
 
@@ -148,6 +150,33 @@ class MainlineService:
 
     def list_conversations(self) -> list[Conversation]:
         return self._conversations.list()
+
+    # ---- unread ----
+
+    def unread_count_for_employee(self, employee_id: str) -> int:
+        """该员工私聊会话的未读消息口径（parity Manager _conversation_unread_counts）。
+
+        取 entry_employee_id == employee_id 的会话；按最后一条消息 created_at 与
+        会话 last_read_at 比较，有新消息则计 1 否则计 0。无会话 / 无消息 / 从未阅读均返回 0-1。
+        """
+        conversation = self._conversation_for_employee(employee_id)
+        if conversation is None:
+            return 0
+        messages = self._messages.list(conversation.id)
+        if not messages:
+            return 0
+        last_message_at = messages[-1].created_at
+        if not conversation.last_read_at:
+            return 1
+        return 1 if last_message_at > conversation.last_read_at else 0
+
+    def _conversation_for_employee(self, employee_id: str) -> Conversation | None:
+        if not employee_id:
+            return None
+        for conv in self._conversations.list():
+            if conv.entry_employee_id == employee_id:
+                return conv
+        return None
 
     def set_conversation_state(self, conversation_id: str, state: ConversationState) -> Conversation:
         conversation = self._conversations.get(conversation_id)

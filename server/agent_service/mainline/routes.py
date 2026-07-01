@@ -39,6 +39,7 @@ class CreateConversationRequest(BaseModel):
     collaboration_mode: str | None = Field(default=None, description="free | orchestrated; 默认 free")
     orchestration_brief: str | None = Field(default=None, description="orchestrated 必填：planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
+    entry_employee_id: str | None = Field(default=None, description="私聊归属员工 employee_id")
 
 
 class SetConversationStateRequest(BaseModel):
@@ -133,6 +134,7 @@ def build_mainline_router(
             collaboration_mode=req.collaboration_mode,
             orchestration_brief=req.orchestration_brief,
             planner_employee_id=req.planner_employee_id,
+            entry_employee_id=req.entry_employee_id,
         ))
 
     @router.get("/conversations", summary="列会话", description="列出本端所有会话，按创建时间倒序排列。", operation_id="agent_list_conversations")

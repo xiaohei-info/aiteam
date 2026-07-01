@@ -185,6 +185,21 @@ def test_data_survives_reopen(db_path):
     d2.close()
 
 
+def test_sqlite_conversation_entry_employee_id_roundtrip_and_restart(tmp_path):
+    """工作台未读链路依赖 entry_employee_id，需要 SQLite roundtrip + 重启回读。"""
+    db_path = str(tmp_path / "agent_emp.db")
+    d = connect(db_path)
+    apply_migrations(d)
+    repo = SqliteConversationRepository(d)
+    repo.create(Conversation(id="c1", title="chat", entry_employee_id="emp-42"))
+    assert repo.get("c1").entry_employee_id == "emp-42"
+    assert [c.entry_employee_id for c in repo.list()] == ["emp-42"]
+    d.close()
+    d2 = connect(db_path)
+    assert SqliteConversationRepository(d2).get("c1").entry_employee_id == "emp-42"
+    d2.close()
+
+
 def test_sqlite_conversation_read_status_roundtrip_and_restart(tmp_path):
     """SQLite read-status roundtrip + restart re-read."""
     db_path = str(tmp_path / "agent_read.db")

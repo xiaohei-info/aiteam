@@ -10,6 +10,7 @@ parity 对照（与 MVP run_journal 口径）：
 import asyncio
 
 import pytest
+from datetime import datetime, timedelta, timezone
 
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.models import MessageRole, RunStatus, TaskStatus
@@ -442,3 +443,42 @@ def test_mark_read_raises_for_missing_conversation():
     svc = _svc()
     with pytest.raises(NotFound):
         svc.mark_read("does-not-exist", last_read_message_id="msg_1")
+
+
+class TestUnreadCountForEmployee:
+    def test_no_conversation_returns_zero(self):
+        svc = _svc()
+        assert svc.unread_count_for_employee("emp-1") == 0
+
+    def test_no_messages_returns_zero(self):
+        svc = _svc()
+        svc.create_conversation(entry_employee_id="emp-1")
+        assert svc.unread_count_for_employee("emp-1") == 0
+
+    def test_never_read_returns_one(self):
+        svc = _svc()
+        conv = svc.create_conversation(entry_employee_id="emp-1")
+        svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="hi")
+        assert svc.unread_count_for_employee("emp-1") == 1
+
+    def test_read_after_last_message_returns_zero(self):
+        svc = _svc()
+        conv = svc.create_conversation(entry_employee_id="emp-1")
+        svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="hi")
+        last = datetime.now(timezone.utc)
+        svc.mark_read(conv.id, last_read_at=last)
+        assert svc.unread_count_for_employee("emp-1") == 0
+
+    def test_new_message_after_read_returns_one(self):
+        svc = _svc()
+        conv = svc.create_conversation(entry_employee_id="emp-1")
+        svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="hi")
+        svc.mark_read(conv.id, last_read_at=datetime.now(timezone.utc))
+        svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="new")
+        assert svc.unread_count_for_employee("emp-1") == 1
+
+    def test_ignores_conversations_without_employee_link(self):
+        svc = _svc()
+        conv = svc.create_conversation()  # no entry_employee_id
+        svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="hi")
+        assert svc.unread_count_for_employee("emp-1") == 0

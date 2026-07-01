@@ -84,6 +84,33 @@ class TestWorkbench:
         assert view.employees == []
         assert view.total_unread == 0
 
+    def test_workbench_honors_unread_counts_provider(self):
+        svc, proj, _ = _make_service()
+        proj.upsert(_make_projection("emp-1", "Alice"))
+        proj.upsert(_make_projection("emp-2", "Bob"))
+        provider = {"emp-1": 3, "emp-2": 0}.get
+        svc_with_provider = WorkspaceService(
+            projections=proj,
+            workbench_store=svc._workbench,
+            kb_store=svc._kb,
+            doc_store=svc._docs,
+            upload_store=svc._uploads,
+            upload_dir=None,
+            unread_counts_provider=provider,
+        )
+        view = svc_with_provider.get_workbench()
+        by_id = {e.employee_id: e for e in view.employees}
+        assert by_id["emp-1"].unread_count == 3
+        assert by_id["emp-2"].unread_count == 0
+        assert view.total_unread == 3
+
+    def test_workbench_defaults_to_zero_without_provider(self):
+        svc, proj, _ = _make_service()
+        proj.upsert(_make_projection("emp-1", "Alice"))
+        view = svc.get_workbench()
+        assert view.employees[0].unread_count == 0
+        assert view.total_unread == 0
+
     def test_workbench_shows_projections_as_employees(self):
         svc, proj, _ = _make_service()
         proj.upsert(_make_projection("emp-1", "Alice"))

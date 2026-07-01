@@ -200,6 +200,7 @@ def build_app(
     # ---- P02-P09 workspace：工作台 + 人才市场 + 办公室 + 知识库 + 组织树 + 文件上传 ----
     workspace_service = build_workspace_service(
         projections=projections, db=db, upload_dir=str(_upload_dir()),
+        unread_counts_provider=mainline.unread_count_for_employee,
     )
     app.include_router(build_workspace_router(workspace_service))
     # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----

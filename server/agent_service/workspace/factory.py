@@ -1,10 +1,13 @@
 """workspace 服务装配。
 
+依赖注入：grants 投影仓储 + 本地仓储 + 主链未读计数回调。
 依赖注入 grants 投影仓储 + 本地仓储，对齐 grants/factory.py 装配模式。
 db 非空时用 SQLite 实现，空时用 InMemory（dev/测试）。
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from agent_service.grants.store import ProjectionRepository
 from agent_service.local_db import LocalDb
@@ -34,10 +37,13 @@ def build_workspace_service(
     projections: ProjectionRepository,
     db: LocalDb | None = None,
     upload_dir: str | None = None,
+    unread_counts_provider: Callable[[str], int] | None = None,
 ) -> WorkspaceService:
     """装配本地 workspace 服务。
 
     db 非空用 SQLite（#159），空用 InMemory（dev/测试）。
+    unread_counts_provider 由装配层注入（主链未读回调）；未注入时工作台未读回退 0，
+    不影响现有 dev/测试。
     upload_dir 为空时上传功能不可用——调用方应确保配置。
     """
     workbench_store: WorkbenchStateRepository = (
@@ -63,4 +69,5 @@ def build_workspace_service(
         ingest_store=ingest_store,
         upload_store=upload_store,
         upload_dir=upload_dir,
+        unread_counts_provider=unread_counts_provider,
     )

@@ -266,12 +266,13 @@ class SqliteConversationRepository(ConversationRepository):
     def create(self, conversation: Conversation) -> Conversation:
         self._db.execute(
             "INSERT INTO conversations "
-            "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, "
+            "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, entry_employee_id, "
             "last_read_at, last_read_message_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (conversation.id, conversation.title, conversation.state.value,
              conversation.collaboration_mode, conversation.orchestration_brief,
              conversation.planner_employee_id,
+             conversation.entry_employee_id,
              _iso(conversation.last_read_at) if conversation.last_read_at is not None else None,
              conversation.last_read_message_id,
              _iso(conversation.created_at), _iso(conversation.updated_at)),
@@ -281,7 +282,7 @@ class SqliteConversationRepository(ConversationRepository):
     def get(self, conversation_id: str) -> Conversation:
         row = self._db.query_one(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
-            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
+            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, entry_employee_id, "
             "last_read_at, last_read_message_id, created_at, updated_at FROM conversations WHERE id = ?",
             (conversation_id,),
         )
@@ -294,7 +295,7 @@ class SqliteConversationRepository(ConversationRepository):
     def list(self) -> list[Conversation]:
         rows = self._db.query(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
-            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
+            "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, entry_employee_id, "
             "last_read_at, last_read_message_id, created_at, updated_at FROM conversations "
             "ORDER BY created_at, rowid"
         )

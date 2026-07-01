@@ -99,6 +99,8 @@ class Conversation(BaseModel):
     collaboration_mode: str = Field(default="free", description="free | orchestrated")
     orchestration_brief: str = Field(default="", description="orchestrated 模式下的 planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
+    # 私聊归属员工（parity 企业侧 Conversation.entry_employee_id）。用于工作台按员工索引会话、推导未读。
+    entry_employee_id: str | None = Field(default=None, description="本私聊所属员工 employee_id；群聊/编排会话为 None")
     # 阅读状态（parity Manager 侧 ConversationReadState；本地单用户一列化）。
     last_read_at: datetime | None = Field(default=None, description="本会话最后阅读时间（用户查看时间线时刷新）")
     last_read_message_id: str | None = Field(default=None, description="用户已读的最后一条消息 id；None 表示尚未阅读")
