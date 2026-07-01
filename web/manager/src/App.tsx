@@ -17,6 +17,7 @@ import { ConnectorsPage } from "./features/connectors";
 import { OrgPage } from "./features/org";
 import { CollaborationPage } from "./features/collaboration";
 import { AuditPage } from "./features/audit";
+import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
 
 export function App(): React.ReactNode {
@@ -39,6 +40,7 @@ export function App(): React.ReactNode {
         <Route path="/org" element={<OrgPage />} />
         <Route path="/collaboration" element={<CollaborationPage />} />
         <Route path="/audit" element={<AuditPage />} />
+        <Route path="/solution-apply" element={<SolutionApplyHistoryPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

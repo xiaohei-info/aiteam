@@ -45,6 +45,7 @@ describe("manager shell config", () => {
       "dashboard",
       "members",
       "experts",
+      "solution_apply",
       "grants",
       "governance",
       "providers",
@@ -72,6 +73,7 @@ describe("manager shell config", () => {
       "dashboard",
       "members",
       "experts",
+      "solution_apply",
       "grants",
       "governance",
       "providers",
@@ -97,6 +99,7 @@ describe("manager shell config", () => {
     );
     expect(vm.nav.map((n) => n.id)).toEqual([
       "dashboard",
+      "solution_apply",
       "governance",
       "knowledge",
       "capability",
@@ -118,6 +121,7 @@ describe("manager shell config", () => {
     );
     expect(vm.nav.map((n) => n.id)).toEqual([
       "dashboard",
+      "solution_apply",
       "knowledge",
       "capability",
       "memory",
