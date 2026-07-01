@@ -168,6 +168,51 @@ def test_pull_expert_template_not_published(client):
     assert r.status_code == 404
 
 
+
+
+def _register_solution_with_bindings(client):
+    """注册并发布带显式专家绑定（排序号/启用开关）的方案模板。"""
+    from shared.contracts.enums import PlatformRole
+
+    def _token(role: str) -> str:
+        from operation_service.app import _auth
+        from shared.contracts.auth import TokenClaims
+        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+
+    def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
+        return {"Authorization": f"Bearer {_token(role)}"}
+
+    for tpl_id, name in [("tpl-cmo", "CMO"), ("tpl-ceo", "CEO")]:
+        client.post(
+            "/api/operation/catalog/expert-templates",
+            json={"template_id": tpl_id, "display_name": name, "persona": f"{name} persona"},
+            headers=_auth_header(),
+        )
+        client.post(
+            f"/api/operation/catalog/expert_template/{tpl_id}/publish",
+            json={},
+            headers=_auth_header(),
+        )
+
+    client.post(
+        "/api/operation/catalog/solution-templates",
+        json={
+            "solution_id": "sol-bound",
+            "display_name": "Bound Solution",
+            "expert_bindings": [
+                {"template_id": "tpl-cmo", "sequence_no": 2, "enabled": False},
+                {"template_id": "tpl-ceo", "sequence_no": 1, "enabled": True},
+            ],
+        },
+        headers=_auth_header(),
+    )
+    client.post(
+        "/api/operation/catalog/solution_template/sol-bound/publish",
+        json={},
+        headers=_auth_header(),
+    )
+
+
 # ---- 拉取方案包 ----
 
 def test_pull_solution_package_envelope(client):
@@ -381,3 +426,34 @@ def test_list_expert_templates_include_full_config(client):
     assert item["prompt_pack_json"] == {"system_prompt": "You are CMO", "opening_message": "Hi"}
     assert item["category_code"] == "marketing"
     assert item["role_name"] == "CMO"
+# ---- Issue #285：方案包拉取透传专家绑定排序号与启用开关 ----
+
+def test_pull_solution_package_includes_binding_metadata(client):
+    """F07：拉取方案包时，专家绑定排序号与启用开关应透传（issue #285 修复验证）。"""
+    _register_solution_with_bindings(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/solution-templates/sol-bound",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    experts = r.json()["data"]["experts"]
+    by_id = {e["template_id"]: e for e in experts}
+    assert by_id["tpl-ceo"]["sequence_no"] == 1
+    assert by_id["tpl-ceo"]["enabled"] is True
+    assert by_id["tpl-cmo"]["sequence_no"] == 2
+    assert by_id["tpl-cmo"]["enabled"] is False
+
+def test_pull_solution_package_flat_ids_default_binding_metadata(client):
+    """回退路径：仅 expert_template_ids 注册时，拉取应返回默认 sequence_no/enabled。"""
+    _register_and_publish_solution(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/solution-templates/sol-marketing",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    experts = r.json()["data"]["experts"]
+    assert experts[0]["template_id"] == "tpl-cmo"
+    assert experts[0]["sequence_no"] == 1
+    assert experts[0]["enabled"] is True

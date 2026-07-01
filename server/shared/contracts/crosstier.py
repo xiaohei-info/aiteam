@@ -78,6 +78,8 @@ class ExpertTemplateDetail(BaseModel):
     prompt_pack_json: dict = Field(default_factory=dict, description="提示词包（system_prompt/behavior_rules/opening_message 等）；Operator 预设，Manager 招募时继承")
     category_code: str = Field(default="", description="专家分类码（用于目录筛选）；Operator 预设")
     role_name: str = Field(default="", description="角色名称（如技术专家、销售顾问）；Operator 预设")
+    sequence_no: int = Field(default=1, ge=1, description="方案内专家绑定排序号，决定 apply 时专家的创建和编排顺序")
+    enabled: bool = Field(default=True, description="单个专家启用开关；false 时方案内该专家不参与 apply")
 
 
 class SolutionPackage(BaseModel):

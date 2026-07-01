@@ -21,6 +21,7 @@ from .catalog_schemas import (
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
+    ExpertBinding,
 )
 
 _INITIAL_VERSION = "1"
@@ -41,6 +42,22 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         category_code=payload.get("category_code", ""),
         role_name=payload.get("role_name", ""),
     )
+
+
+def _normalize_expert_bindings(
+    bindings: list[ExpertBinding] | None,
+    fallback_ids: list[str],
+) -> list[ExpertBinding]:
+    """归一化方案内专家绑定列表。
+
+    优先使用显式 bindings（含排序号/启用开关）；否则从 fallback_ids 派生，按位置顺序、全部启用。
+    """
+    if bindings:
+        return list(bindings)
+    return [
+        ExpertBinding(template_id=template_id, sequence_no=idx, enabled=True)
+        for idx, template_id in enumerate(fallback_ids, start=1)
+    ]
 
 
 class CatalogService:
@@ -77,6 +94,7 @@ class CatalogService:
     def register_solution_template(
         self, req: RegisterSolutionTemplateRequest
     ) -> CatalogEntryResponse:
+        bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
         entry = self._repo.create(
             CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
@@ -84,7 +102,15 @@ class CatalogService:
                 version=_INITIAL_VERSION,
                 display_name=req.display_name,
                 payload={
-                    "expert_template_ids": req.expert_template_ids,
+                    "expert_template_ids": [b.template_id for b in bindings],
+                    "expert_bindings": [
+                        {
+                            "template_id": b.template_id,
+                            "sequence_no": b.sequence_no,
+                            "enabled": b.enabled,
+                        }
+                        for b in bindings
+                    ],
                     "knowledge_refs": req.knowledge_refs,
                     "skill_refs": req.skill_refs,
                     "default_grants": req.default_grants,
@@ -223,12 +249,24 @@ class CatalogService:
 
         payload = entry.payload or {}
 
-        # 解析方案包中引用的专家模板
-        expert_template_ids = payload.get("expert_template_ids", [])
+        # 解析方案包中引用的专家模板。
+        # expert_bindings 为权威源（含 template_id/sequence_no/enabled），优先于派生的
+        # expert_template_ids，避免双源不同步导致拉取到过期专家。
+        bindings_meta = payload.get("expert_bindings") or []
+        if bindings_meta:
+            binding_order = [b["template_id"] for b in bindings_meta]
+            binding_overrides = {b["template_id"]: b for b in bindings_meta}
+        else:
+            binding_order = payload.get("expert_template_ids", [])
+            binding_overrides = {}
         experts: list[ExpertTemplateDetail] = []
-        for expert_id in expert_template_ids:
+        for expert_id in binding_order:
             try:
                 expert = self.pull_expert_template_detail(template_id=expert_id, version=None)
+                override = binding_overrides.get(expert_id)
+                if override is not None:
+                    expert.sequence_no = override.get("sequence_no", 1)
+                    expert.enabled = override.get("enabled", True)
                 experts.append(expert)
             except Exception:  # noqa: BLE001
                 # 跳过不存在或未发布的专家模板（方案可能引用了已下架的模板）

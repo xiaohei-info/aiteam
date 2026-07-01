@@ -12,6 +12,7 @@ from operation_service.catalog_schemas import (
     PublishTemplateRequest,
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
+    ExpertBinding,
     SetVisibilityRequest,
 )
 from operation_service.catalog_service import CatalogService
@@ -51,6 +52,19 @@ def _solution(**kw):
         solution_id="sol-growth",
         display_name="Growth",
         expert_template_ids=["tpl-cmo"],
+    )
+    base.update(kw)
+    return RegisterSolutionTemplateRequest(**base)
+
+
+def _multi_solution(**kw):
+    base = dict(
+        solution_id="sol-multi",
+        display_name="Multi",
+        expert_bindings=[
+            ExpertBinding(template_id="tpl-cmo", sequence_no=2, enabled=False),
+            ExpertBinding(template_id="tpl-ceo", sequence_no=1, enabled=True),
+        ],
     )
     base.update(kw)
     return RegisterSolutionTemplateRequest(**base)
@@ -368,3 +382,44 @@ def test_list_includes_full_config(service):
     assert out.prompt_pack_json == {"system_prompt": "x"}
     assert out.category_code == "marketing"
     assert out.role_name == "CMO"
+# ---- Issue #285：方案内专家绑定排序（sequence_no）与启用开关（enabled）----
+
+def test_register_solution_expert_bindings_persisted(service):
+    """显式 expert_bindings 应持久化到 payload，并派生有序 expert_template_ids。"""
+    service.register_solution_template(_multi_solution())
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-multi")
+    assert entry.payload["expert_template_ids"] == ["tpl-cmo", "tpl-ceo"]
+    assert entry.payload["expert_bindings"] == [
+        {"template_id": "tpl-cmo", "sequence_no": 2, "enabled": False},
+        {"template_id": "tpl-ceo", "sequence_no": 1, "enabled": True},
+    ]
+
+def test_register_solution_expert_bindings_overrides_flat_ids(service):
+    """提供 expert_bindings 时优先于 expert_template_ids（去重/重排序均由 bindings 决定）。"""
+    req = RegisterSolutionTemplateRequest(
+        solution_id="sol-over",
+        display_name="Over",
+        expert_template_ids=["tpl-ignored"],
+        expert_bindings=[ExpertBinding(template_id="tpl-real", sequence_no=1, enabled=True)],
+    )
+    service.register_solution_template(req)
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-over")
+    assert entry.payload["expert_template_ids"] == ["tpl-real"]
+    assert entry.payload["expert_bindings"] == [
+        {"template_id": "tpl-real", "sequence_no": 1, "enabled": True},
+    ]
+
+def test_register_solution_flat_ids_fallback_derives_bindings(service):
+    """仅提供 expert_template_ids 时，应派生默认 bindings（位置顺序、全部启用）。"""
+    service.register_solution_template(_solution(expert_template_ids=["tpl-a", "tpl-b"]))
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["expert_template_ids"] == ["tpl-a", "tpl-b"]
+    assert entry.payload["expert_bindings"] == [
+        {"template_id": "tpl-a", "sequence_no": 1, "enabled": True},
+        {"template_id": "tpl-b", "sequence_no": 2, "enabled": True},
+    ]
+
+def test_expert_binding_sequence_no_must_be_positive():
+    """sequence_no < 1 应被 Pydantic 拒绝（ge=1）。"""
+    with pytest.raises(Exception):
+        ExpertBinding(template_id="tpl-x", sequence_no=0, enabled=True)

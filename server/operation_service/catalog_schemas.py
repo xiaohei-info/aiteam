@@ -13,6 +13,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.contracts.enums import CatalogStatus, CatalogType
 
 
+class ExpertBinding(BaseModel):
+    """方案内单个专家的绑定元信息：排序号（sequence_no）与启用开关（enabled）。
+
+    与下游 Manager SolutionTemplateBinding 实体对齐（02 §10.3），apply 时按此顺序创建和编排专家。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str = Field(min_length=1)
+    sequence_no: int = Field(default=1, ge=1, description="排序号，决定 apply 时专家的创建和编排顺序")
+    enabled: bool = Field(default=True, description="单个专家启用开关")
+
+
 class RegisterExpertTemplateRequest(BaseModel):
     """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。"""
 
@@ -37,6 +50,10 @@ class RegisterSolutionTemplateRequest(BaseModel):
     solution_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     expert_template_ids: list[str] = Field(default_factory=list)
+    expert_bindings: list["ExpertBinding"] = Field(
+        default_factory=list,
+        description="方案内专家绑定列表（含排序号与启用开关）；提供时优先于 expert_template_ids",
+    )
     knowledge_refs: list[str] = Field(default_factory=list)
     skill_refs: list[str] = Field(default_factory=list)
     default_grants: dict | None = Field(default=None)
@@ -92,6 +109,7 @@ class UpdateSolutionTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = None
     expert_template_ids: list[str] | None = None
+    expert_bindings: list["ExpertBinding"] | None = None
     knowledge_refs: list[str] | None = None
     skill_refs: list[str] | None = None
     default_grants: dict | None = None

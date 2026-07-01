@@ -166,7 +166,12 @@ class RecruitService:
         # 3) 逐个专家展开 employee 实例（slug 用 solution 派生，保证可复入幂等可读）。
         expert_results: list[RecruitExpertResult] = []
         expert_employee_ids: list[str] = []
-        for idx, template in enumerate(package.experts):
+        # 按 Operator 声明的 sequence_no 排序展开，并跳过 enabled=False 的专家。
+        ordered_experts = sorted(
+            (t for t in package.experts if t.enabled),
+            key=lambda t: (t.sequence_no, t.template_id),
+        )
+        for idx, template in enumerate(ordered_experts):
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
             # 展开前确保 slug 未被占用（被占则报冲突，由调用方决策换 version / 换 slug）。
             if self._employees.get_by_slug(ctx, employee_slug=slug) is not None:

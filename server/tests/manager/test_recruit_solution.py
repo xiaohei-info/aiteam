@@ -60,6 +60,7 @@ class _FakeEmployeeRepo:
             runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
+            status=kw.get("status", "applied"),
         )
         self._bucket(ctx)[row.employee_id] = row
         return row
@@ -642,3 +643,47 @@ def test_list_and_get_recruit_orders():
     from shared.errors import NotFound
     with pytest.raises(NotFound):
         svc.get_recruit_order(_ctx("t-b"), order_id=o.order_id)
+# ---- Issue #285：方案内专家绑定排序号（sequence_no）与启用开关（enabled）----
+
+def _ordered_solution_package() -> SolutionPackage:
+    """tpl-z 排序号=5（最后展开），tpl-a 排序号=2，tpl-disabled 已禁用。"""
+    return SolutionPackage(
+        solution_id="sol-ord", version="v1", display_name="Ordered",
+        experts=[
+            ExpertTemplateDetail(
+                template_id="tpl-z", version="v1", display_name="专家Z",
+                sequence_no=5, enabled=True,
+            ),
+            ExpertTemplateDetail(
+                template_id="tpl-a", version="v1", display_name="专家A",
+                sequence_no=2, enabled=True,
+            ),
+            ExpertTemplateDetail(
+                template_id="tpl-disabled", version="v1", display_name="专家D",
+                sequence_no=1, enabled=False,
+            ),
+        ],
+    )
+
+
+def test_apply_solution_honors_sequence_order_and_skips_disabled():
+    """展开按 sequence_order 排序，且 enabled=False 的专家不生成 employee。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_ordered_solution_package())
+    svc, emp, _, _, _ = _build_service(catalog)
+
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-ord"))
+
+    # 禁用专家被跳过 → 只展开 2 个
+    assert len(result.experts) == 2
+    expanded_ids = {e.source_template_id for e in result.experts}
+    assert "tpl-disabled" not in expanded_ids
+    assert expanded_ids == {"tpl-a", "tpl-z"}
+    # 方案实例记录的 employee_id 也应为 2 个
+    assert len(result.solution_instance.expert_employee_ids) == 2
+    # 实例中专家的展开顺序应按 sequence_no：tpl-a(2) 在前，tpl-z(5) 在后
+    ordered_employee_ids = result.solution_instance.expert_employee_ids
+    slug_a = emp.get(_ctx("t-a"), employee_id=ordered_employee_ids[0]).employee_slug
+    slug_z = emp.get(_ctx("t-a"), employee_id=ordered_employee_ids[1]).employee_slug
+    assert slug_a.endswith("_e0")
+    assert slug_z.endswith("_e1")
