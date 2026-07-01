@@ -55,6 +55,8 @@ export interface GroupRun {
 export interface DispatchResult {
   triggered_handles: string[];
   runs: GroupRun[];
+  /** 本轮 input 中未被 roster 命中的 @提及（带 @ 前缀，保序）。前端据此给出负向提示。服务端可选字段。 */
+  ignored_handles?: string[];
 }
 
 /** 群聊编排入参（对齐 server routes.py:GroupDispatchRequest）。 */

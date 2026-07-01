@@ -51,7 +51,7 @@ def test_due_loop_fires_and_starts_run_via_gateway():
     run_id = outcomes[0].run_id
     assert run_id is not None
     # run 终态落库（复用 A1 Run 主记录）。
-    assert mainline.get_run(run_id).status is RunStatus.COMPLETED
+    assert mainline.get_run(run_id).status is RunStatus.SUCCEEDED
     # loop 记了一次 fire。
     updated = service.get_loop(loop.id)
     assert updated.fire_count == 1

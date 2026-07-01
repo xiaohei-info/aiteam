@@ -59,10 +59,10 @@ def test_start_run_api_forwards_current_identity_tenant_to_service():
     captured: dict = {}
 
     class _Service:
-        async def start_run(self, conversation_id, *, task_id=None, run_spec=None, tenant_id=None):
+        async def start_run(self, conversation_id, *, task_id=None, run_spec=None, tenant_id=None, trigger_type=None, execution_mode=None):
             captured["conversation_id"] = conversation_id
             captured["tenant_id"] = tenant_id
-            return {"id": "run-1", "conversation_id": conversation_id, "status": "completed"}
+            return {"id": "run-1", "conversation_id": conversation_id, "status": "succeeded"}
 
     def _identity():
         return TokenClaims(user_id="u-1", tenant_id="tenant-from-login", roles=["member"], exp=9999999999)
@@ -110,7 +110,7 @@ def test_run_then_timeline_increment(client):
     cid = _create_conv(client)
     r = client.post(f"/api/agent/conversations/{cid}/runs", json={})
     assert r.status_code == 200
-    assert r.json()["data"]["status"] == "completed"
+    assert r.json()["data"]["status"] == "succeeded"
 
     r = client.get(f"/api/agent/conversations/{cid}/timeline?after=0")
     events = r.json()["data"]

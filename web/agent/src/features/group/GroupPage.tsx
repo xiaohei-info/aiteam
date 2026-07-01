@@ -47,6 +47,7 @@ export function GroupPage() {
   const [roster, setRoster] = useState<GroupExpert[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [lastTriggered, setLastTriggered] = useState<string[] | null>(null);
+  const [lastIgnored, setLastIgnored] = useState<string[] | null>(null);
   // 一轮编排完成后 +1，触发列表刷新 + timeline catchUp（补拉 since highWater 的新事件）。
   const [dispatchSignal, setDispatchSignal] = useState(0);
 
@@ -69,10 +70,12 @@ export function GroupPage() {
   const handleSelect = useCallback((conv: Conversation) => {
     setSelected(conv);
     setLastTriggered(null);
+    setLastIgnored(null);
   }, []);
 
   const handleDispatched = useCallback((result: DispatchResult) => {
     setLastTriggered(result.triggered_handles);
+    setLastIgnored(result.ignored_handles ?? null);
     setDispatchSignal((n) => n + 1);
   }, []);
 
@@ -100,6 +103,11 @@ export function GroupPage() {
               {lastTriggered && lastTriggered.length > 0 && (
                 <div className="text-xs font-semibold text-success" aria-live="polite">
                   本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
+                </div>
+              )}
+              {lastIgnored && lastIgnored.length > 0 && (
+                <div className="text-xs text-danger" aria-live="polite" role="alert">
+                  未识别的专家：{lastIgnored.join(" ")}（请检查 roster 中的展示名）
                 </div>
               )}
             </div>

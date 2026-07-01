@@ -65,7 +65,7 @@ def test_orchestrated_mode_triggers_all_experts_without_mentions():
     assert result.triggered_handles == ["alice", "bob", "carol"]
     # 任务树：根(planner) + 3 子任务
     assert len(result.task_tree) == 4
-    assert all(r.status is RunStatus.COMPLETED for r in result.runs)
+    assert all(r.status is RunStatus.SUCCEEDED for r in result.runs)
 
 
 def test_orchestrated_brief_injected_into_every_run_spec():

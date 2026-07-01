@@ -97,7 +97,7 @@ def test_minimal_mainline_to_timeline_parity():
     run = asyncio.run(svc.start_run(conv.id))
 
     # Run 终态落库：fake completed -> COMPLETED（parity MVP done->completed）。
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     assert run.session_id == "fake-session"
     assert run.usage == {"input_tokens": 10, "output_tokens": 5}
 
@@ -250,7 +250,7 @@ def test_succeeded_run_derives_completed_from_timeline():
     conv = svc.create_conversation()
     run = asyncio.run(svc.start_run(conv.id))
 
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     assert run.session_id == "s1"
     assert run.usage == {"input_tokens": 1, "output_tokens": 1}
     assert svc.read_timeline(conv.id, 0)[-1].type == "run_succeeded"
@@ -280,7 +280,7 @@ def test_finalize_run_falls_back_to_runresult_when_no_terminal_event():
     svc = build_mainline_service(executor=_NoTerminalExecutor(), driver=FakeDriver())
     conv = svc.create_conversation()
     run = asyncio.run(svc.start_run(conv.id))
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
 
 
 def test_retry_run_creates_new_run_in_same_conversation():
@@ -303,13 +303,13 @@ def test_retry_run_creates_new_run_in_same_conversation():
     svc.add_message(conv.id, role=MessageRole.USER, content="hello")
 
     run1 = asyncio.run(svc.start_run(conv.id))
-    assert run1.status == RunStatus.COMPLETED
+    assert run1.status == RunStatus.SUCCEEDED
 
     # Retry in same conversation
     run2 = asyncio.run(svc.retry_run(run1.id))
     assert run1.id != run2.id
     assert run1.conversation_id == run2.conversation_id
-    assert run2.status == RunStatus.COMPLETED
+    assert run2.status == RunStatus.SUCCEEDED
 
     # Both runs exist
     all_runs = svc.list_runs(conv.id)

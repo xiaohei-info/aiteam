@@ -86,7 +86,7 @@ def test_fire_loop_now_starts_run(client):
 
     # run 终态落库（复用 A1 run 端点）。
     r = client.get(f"/api/agent/runs/{run_id}")
-    assert r.json()["data"]["status"] == "completed"
+    assert r.json()["data"]["status"] == "succeeded"
 
     # loop 记了一次 fire。
     r = client.get(f"/api/agent/loops/{loop_id}")

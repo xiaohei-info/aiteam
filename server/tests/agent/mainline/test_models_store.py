@@ -73,10 +73,10 @@ def test_message_repo_list_per_conversation():
 def test_run_repo_finalize():
     repo = InMemoryRunRepository()
     repo.create(Run(id="r1", conversation_id="c1"))
-    assert repo.get("r1").status is RunStatus.RUNNING
-    final = repo.finalize("r1", RunStatus.COMPLETED, session_id="s1",
+    assert repo.get("r1").status is RunStatus.QUEUED
+    final = repo.finalize("r1", RunStatus.SUCCEEDED, session_id="s1",
                           error=None, usage={"input_tokens": 1})
-    assert final.status is RunStatus.COMPLETED
+    assert final.status is RunStatus.SUCCEEDED
     assert final.session_id == "s1"
     assert final.usage == {"input_tokens": 1}
 

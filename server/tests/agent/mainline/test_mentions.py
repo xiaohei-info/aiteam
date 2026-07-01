@@ -7,7 +7,7 @@
 （专家产出不得再触发 @ —— 红线）、大小写/边界。
 """
 
-from agent_service.mainline.mentions import parse_mentions, resolve_mentions
+from agent_service.mainline.mentions import classify_mentions, parse_mentions, resolve_mentions
 from agent_service.mainline.group import GroupExpert
 
 
@@ -68,3 +68,87 @@ def test_resolve_blocks_self_mention_loop():
 def test_resolve_empty_when_only_self():
     roster = _roster()
     assert resolve_mentions("@alice", roster, exclude_handle="alice") == []
+
+
+# ── issue #414 新增 ────────────────────────────────────────────────────────────
+# v1 相对 PR #360 的修复：双 alias（ASCII handle / display_name）+ ignored_handles 提示。
+
+def _roster_with_alias() -> dict[str, GroupExpert]:
+    return {
+        "alice": GroupExpert(handle="alice", system_prompt="你是 Alice", display_name="Alice"),
+        "bob": GroupExpert(handle="bob", system_prompt="你是 Bob", display_name="李四"),
+    }
+
+
+def test_classify_ascii_handle_hits_roster():
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("@alice 你好", roster)
+    assert [getattr(e, "handle", None) for e in known] == ["alice"]
+    assert ignored == []
+
+
+def test_classify_display_name_in_chinese():
+    """中文展示名必须能命中（Layer 2 alias fallback）。"""
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("请 @李四 帮忙", roster)
+    assert [getattr(e, "handle", None) for e in known] == ["bob"]
+    assert ignored == []
+
+
+def test_classify_mixed_ascii_and_alias():
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("请@alice 和 @李四 协作", roster)
+    assert [getattr(e, "handle", None) for e in known] == ["alice", "bob"]
+    assert ignored == []
+
+
+def test_classify_unknown_alias_reports_ignored():
+    """issue #414 验收：未识别专家名须给出可见错误提示信号。"""
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("@不存在的专家 你好", roster)
+    assert known == []
+    assert ignored == ["@不存在的专家"]
+
+
+def test_classify_ascii_handle_unknown_silent_unknown():
+    """ASCII handle 落空仍走 v1 stable 契约（静默忽略，不报 ignored）。
+
+    Layer 2 只对非 ASCII 的 alias 显示 ignored——避免误把"邮件局部/ascii 错字"当 roster 别名错杀。
+    """
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("@xyz 你好", roster)
+    assert known == []
+    assert ignored == []
+
+
+def test_classify_exclude_handle_blocks_self():
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("@alice @bob", roster, exclude_handle="alice")
+    assert [getattr(e, "handle", None) for e in known] == ["bob"]
+
+
+def test_classify_cjk_no_delimiter_treated_as_alias_token():
+    """没有 ASCII 分隔符的 CJK 序列（「@李四和 @王五」）→ 整个 '李四和' 进入 alias 候选。
+
+    fallback 要求 `@{display_name}` 精确匹配；'李四和' != roster 的 '李四' → 进 ignored（而不是被
+    错误起 run 或静默忽略）。这是中文无空格词边界的显式 spec 落地。
+    """
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("群内 @李四和 @王五", roster)
+    # '@李四和' 缺 ASCII 分隔，匹配不上 '李四'；'@王五' 命中成功分隔的 '王五'（除非 roster 没有此 display_name）
+    assert "@李四和" in ignored
+
+
+def test_classify_empty_and_atonly():
+    roster = _roster_with_alias()
+    assert classify_mentions("", roster) == ([], [])
+    assert classify_mentions("@", roster) == ([], [])
+    assert classify_mentions("纯文本无提及", roster) == ([], [])
+
+
+def test_classify_email_not_treated_as_alias():
+    """确保邮箱地址不会被 Layer 2 误抓为 display_name。"""
+    roster = _roster_with_alias()
+    known, ignored = classify_mentions("请回复给我 foo@alice.com", roster)
+    assert known == []
+    assert ignored == []

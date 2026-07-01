@@ -37,7 +37,7 @@ def test_mention_triggers_expected_expert_set():
     # 本轮触发了被 @ 的两个专家，未触发 bob。
     assert sorted(result.triggered_handles) == ["alice", "carol"]
     assert len(result.runs) == 2
-    assert all(r.status is RunStatus.COMPLETED for r in result.runs)
+    assert all(r.status is RunStatus.SUCCEEDED for r in result.runs)
 
 
 def test_multi_run_events_merge_into_one_timeline_monotonic():

@@ -41,7 +41,7 @@ def test_group_dispatch_triggers_mentioned_experts(client):
     data = r.json()["data"]
     assert sorted(data["triggered_handles"]) == ["alice", "bob"]
     assert len(data["runs"]) == 2
-    assert all(run["status"] == "completed" for run in data["runs"])
+    assert all(run["status"] == "succeeded" for run in data["runs"])
 
 
 def test_group_dispatch_merges_into_single_timeline(client):

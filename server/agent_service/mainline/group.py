@@ -39,6 +39,11 @@ class GroupExpert(BaseModel):
     handle: str
     system_prompt: str | None = None
     model: str | None = None
+    display_name: str | None = Field(
+        default=None,
+        description="用于 @ 提及与人机展示的可读名（如中文名「李四」）；ASCII handle 与之不同名。"
+        "为空则仅能用 ASCII handle 被 @到。Layer 2 fallback 的 alias 键。",
+    )
 
     def to_run_spec(self) -> RunSpec:
         return RunSpec(system_prompt=self.system_prompt, model=self.model)
@@ -72,6 +77,11 @@ class DispatchResult(BaseModel):
 
     triggered_handles: list[str] = Field(default_factory=list)
     runs: list[Run] = Field(default_factory=list)
+    ignored_handles: list[str] = Field(
+        default_factory=list,
+        description="本轮 input 中未被 roster 命中的 @token 列表（保序，前缀 @）。"
+        "前端据此给出负向可见提示（issue #414）。",
+    )
     collaboration_mode: str = "free"
     orchestration_brief: str = ""
     default_route_hint: str = "auto"
@@ -164,13 +174,14 @@ class GroupChatService:
         if getattr(conv, "collaboration_mode", "free") == "orchestrated":
             return await self._dispatch_orchestrated(conv, user_text)
 
-        experts = mentions.resolve_mentions(user_text, self._roster)
+        experts, ignored = mentions.classify_mentions(user_text, self._roster)
         runs = await self._run_experts(
             conversation_id, [(_RunKey(e.handle), e.to_run_spec()) for e in experts]
         )
         return DispatchResult(
             triggered_handles=[e.handle for e in experts],
             runs=runs,
+            ignored_handles=list(ignored),
             collaboration_mode="free",
             default_route_hint="auto",
             task_tree=[],
@@ -180,7 +191,7 @@ class GroupChatService:
         self, conversation_id: str, text: str, *, origin_handle: str
     ) -> list[Run]:
         """编排策略按某专家发起下一跳时用（排除发起方自身，防自激回环）。"""
-        experts = mentions.resolve_mentions(text, self._roster, exclude_handle=origin_handle)
+        experts, _ignored = mentions.classify_mentions(text, self._roster, exclude_handle=origin_handle)
         return await self._run_experts(
             conversation_id, [(_RunKey(e.handle), e.to_run_spec()) for e in experts]
         )
