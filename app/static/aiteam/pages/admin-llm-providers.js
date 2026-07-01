@@ -43,7 +43,6 @@ window.aiteam = window.aiteam || {};
       + '<span class="aiteam-tag ' + (p.enabled ? 'aiteam-tag-ok' : 'aiteam-tag-off') + '">'
       + (p.enabled ? '启用' : '停用') + '</span>'
       + '<span class="aiteam-llm-key">' + esc(p.api_key_mask || '') + '</span>'
-      + '<button class="aiteam-btn aiteam-btn--secondary" data-role="llm-edit-provider" data-provider="' + esc(p.provider_id) + '">编辑</button>'
       + '<button class="aiteam-btn aiteam-btn--secondary" data-role="llm-del-provider" data-provider="' + esc(p.provider_id) + '">删除</button>'
       + '</div></div>'
       + '<div class="aiteam-llm-provider-body">'
@@ -56,21 +55,6 @@ window.aiteam = window.aiteam || {};
       + '<label class="aiteam-llm-default"><input type="checkbox" name="is_default" /> 默认</label>'
       + '<button class="aiteam-btn aiteam-btn--secondary" type="submit">添加模型</button>'
       + '</form>'
-      + '<form class="aiteam-llm-form-grid aiteam-llm-edit-form" data-role="llm-edit-provider-form" data-provider="' + esc(p.provider_id) + '" style="display:none;margin-top:12px;">'
-      + '<label class="aiteam-llm-edit-label">编辑 Provider</label>'
-      + '<input type="text" class="aiteam-input" name="display_name" placeholder="显示名" value="' + esc(p.display_name || '') + '" />'
-      + '<input type="text" class="aiteam-input" name="base_url" placeholder="base_url 如 https://x/v1" value="' + esc(p.base_url || '') + '" />'
-      + '<input type="password" class="aiteam-input" name="api_key" placeholder="api_key (留空则不修改)" />'
-      + '<select class="aiteam-input" name="transport">'
-      + '<option value="openai_chat"' + (p.transport === 'openai_chat' ? ' selected' : '') + '>openai_chat</option>'
-      + '<option value="codex_responses"' + (p.transport === 'codex_responses' ? ' selected' : '') + '>codex_responses</option>'
-      + '<option value="anthropic_messages"' + (p.transport === 'anthropic_messages' ? ' selected' : '') + '>anthropic_messages</option>'
-      + '</select>'
-      + '<label class="aiteam-llm-default"><input type="checkbox" name="enabled" value="1"' + (p.enabled ? ' checked' : '') + ' /> 启用</label>'
-      + '<div class="aiteam-llm-edit-actions">'
-      + '<button class="aiteam-btn" type="submit">保存</button>'
-      + '<button class="aiteam-btn aiteam-btn--secondary" type="button" data-role="llm-cancel-edit" data-provider="' + esc(p.provider_id) + '">取消</button>'
-      + '</div></form>'
       + '</div></div>';
   }
 
@@ -207,48 +191,6 @@ window.aiteam = window.aiteam || {};
           });
         });
       });
-      container.querySelectorAll('[data-role="llm-edit-provider"]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          var pid = btn.getAttribute('data-provider');
-          var form = container.querySelector('[data-role="llm-edit-provider-form"][data-provider="' + pid + '"]');
-          if (form) {
-            var wasHidden = form.style.display === 'none';
-            container.querySelectorAll('[data-role="llm-edit-provider-form"]').forEach(function (f) {
-              f.style.display = 'none';
-            });
-            form.style.display = wasHidden ? 'grid' : 'none';
-          }
-        });
-      });
-
-      container.querySelectorAll('[data-role="llm-cancel-edit"]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          var pid = btn.getAttribute('data-provider');
-          var form = container.querySelector('[data-role="llm-edit-provider-form"][data-provider="' + pid + '"]');
-          if (form) { form.style.display = 'none'; }
-        });
-      });
-
-      container.querySelectorAll('[data-role="llm-edit-provider-form"]').forEach(function (form) {
-        form.addEventListener('submit', function (e) {
-          e.preventDefault();
-          var f = e.target;
-          var pid = form.getAttribute('data-provider');
-          var payload = {
-            display_name: f.display_name.value.trim(),
-            base_url: f.base_url.value.trim(),
-            transport: f.transport.value,
-            enabled: f.enabled.checked,
-          };
-          var apiKeyValue = f.api_key.value;
-          if (apiKeyValue) { payload.api_key = apiKeyValue; }
-          ns.api.updateLlmProvider(pid, payload).then(function (res) {
-            if (res && res.ok) { setNotice('Provider 已更新'); load(); }
-            else { setNotice('更新失败: ' + ((res && res.data && res.data.message) || (res && res.error) || '未知错误')); }
-          });
-        });
-      });
-
     }
 
     return { load: load, __state: state };
