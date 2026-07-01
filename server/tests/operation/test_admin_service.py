@@ -13,6 +13,7 @@ from operation_service.admin_service import AdminService
 from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
+from shared.contracts.crosstier import EnterpriseNotifyRequest
 from operation_service.rollup_repository import CrossEnterpriseRollupRepository
 from operation_service.solution_repository import SolutionRepository
 from operation_service.schemas import ProvisionEnterpriseRequest
@@ -24,6 +25,9 @@ from shared.errors import NotFound
 class FakeManagerGateway(ManagerGateway):
     def provision_tenant(self, req, *, idempotency_key): pass
     def sync_owner_bootstrap(self, req, *, idempotency_key): pass
+    notifications: list = []
+    def notify_enterprise(self, req, *, idempotency_key):
+        self.notifications.append((req, idempotency_key))
 
 
 @pytest.fixture
@@ -273,3 +277,34 @@ def test_detail_includes_audit_events(service, enterprise_repo, admin_repo):
     actions = [a["action"] for a in detail["audit_events"]]
     assert "ban" in actions
     assert "notify" in actions
+
+
+# ---- 通知企业（F17 运营通知窄通道）----
+
+def test_notify_dispatches_to_manager_gateway(enterprise_repo, admin_repo, catalog_repo, rollup_repo, solution_repo):
+    """注入 ManagerGateway（F17）：notify 分支应把企业消息经窄通道转给 Manager。"""
+    eid = _provision(enterprise_repo, "NotifyCo")
+    gw = FakeManagerGateway()
+    svc = AdminService(admin_repo, enterprise_repo, catalog_repo, rollup_repo, solution_repo, manager_gateway=gw)
+    result = svc.execute_action(eid, "notify", None, "scheduled maintenance")
+    assert len(gw.notifications) == 1
+    req, key = gw.notifications[0]
+    assert req.org_id == eid
+    assert req.tenant_id == enterprise_repo.get(eid).tenant_id
+    assert req.message == "scheduled maintenance"
+    assert key.startswith(f"notify:{eid}:")
+    assert "dispatched" in result["detail"]
+    audits = admin_repo.list_audit_events(enterprise_id=eid) if hasattr(admin_repo, "list_audit_events") else admin_repo.list_audits(enterprise_id=eid)
+    assert audits[0].action == "notify"
+    assert "scheduled maintenance" in audits[0].detail
+
+
+def test_notify_without_gateway_records_local(enterprise_repo, admin_repo):
+    """未注入 ManagerGateway 时降级为本地记录（不影响审计轨迹，D14 降级）。"""
+    eid = _provision(enterprise_repo, "LocalNotify")
+    svc = AdminService(admin_repo, enterprise_repo, CatalogRepository(), CrossEnterpriseRollupRepository(), SolutionRepository())
+    result = svc.execute_action(eid, "notify", None, "offline msg")
+    assert "offline msg" in result["detail"]
+    audits = admin_repo.list_audits(enterprise_id=eid)
+    assert len(audits) == 1
+    assert audits[0].action == "notify"

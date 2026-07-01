@@ -752,3 +752,17 @@ class UsageLedgerOut(BaseModel):
     occurred_at: datetime | None = None
     created_at: datetime
     created_by: str | None = None
+
+
+class InAppNotificationOut(BaseModel):
+    """运营通知企业站内信出参（F17）。无会话内容字段（D13）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notification_id: str
+    org_id: str
+    message: str
+    notify_type: str
+    severity: str
+    read: bool = False
+    created_at: str = Field(description="ISO8601 时间戳（由 created_at datetime 序列化）")

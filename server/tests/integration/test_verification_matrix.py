@@ -444,7 +444,7 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     from shared.app_factory import create_app
     from shared.config import Settings
     from shared.contracts.auth import TokenClaims
-    from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
+    from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
     from shared.contracts.enums import PlatformRole
     from shared.db import apply_migrations
 
@@ -464,8 +464,10 @@ def test_onboarding_chain_operator_to_manager_to_agent():
         def __init__(self):
             self.provisioned: list[TenantProvisionRequest] = []
             self.bootstraps: list[OwnerBootstrapSync] = []
+            self.notifications: list[EnterpriseNotifyRequest] = []
         def provision_tenant(self, req, *, idempotency_key): self.provisioned.append(req)
         def sync_owner_bootstrap(self, req, *, idempotency_key): self.bootstraps.append(req)
+        def notify_enterprise(self, req, *, idempotency_key): self.notifications.append(req)
 
     fake_gw = _FakeManagerGateway()
     op_app = get_app("operation")

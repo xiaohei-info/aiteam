@@ -61,6 +61,23 @@ class CatalogReleaseNotify(BaseModel):
     visible_scope: dict | None = Field(default=None, description="可见范围定义（可选）")
 
 
+
+class EnterpriseNotifyRequest(BaseModel):
+    """F17 运营通知企业：Operator 通知 Manager 向指定企业发送运营侧消息（站内信）。
+
+    Operator 不写 Manager 租户库——只经窄通道把消息转给 Manager，由 Manager 在租户上下文内
+    落库（in_app_notification，经 TenantContext，红线 04 §6.1.1/D22）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str = Field(description="Manager 侧 tenant_id（RLS 主键来源，Operator 从企业账号映射得来）")
+    org_id: str = Field(description="运营端企业 id（org_id），用于 Manager 侧关联展示/审计")
+    message: str = Field(description="运营通知正文（平台→企业的管理消息）")
+    notify_type: str = Field(default="operation_announcement", description="运营通知分类（如 announcement/maintenance/policy）")
+    severity: str = Field(default="info", description="info | warning | critical")
+
+
 # ---- Manager → Operator（云侧）----
 
 class ExpertTemplateDetail(BaseModel):

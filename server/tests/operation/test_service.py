@@ -11,7 +11,7 @@ from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.schemas import ProvisionEnterpriseRequest
 from operation_service.service import ProvisioningService
-from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
 from shared.errors import Conflict, NotFound
 
 
@@ -21,12 +21,16 @@ class FakeManagerGateway(ManagerGateway):
     def __init__(self) -> None:
         self.provisioned: list[tuple[TenantProvisionRequest, str]] = []
         self.bootstraps: list[tuple[OwnerBootstrapSync, str]] = []
+        self.notifications: list[tuple[EnterpriseNotifyRequest, str]] = []
 
     def provision_tenant(self, req, *, idempotency_key):
         self.provisioned.append((req, idempotency_key))
 
     def sync_owner_bootstrap(self, req, *, idempotency_key):
         self.bootstraps.append((req, idempotency_key))
+
+    def notify_enterprise(self, req, *, idempotency_key):
+        self.notifications.append((req, idempotency_key))
 
 
 @pytest.fixture
