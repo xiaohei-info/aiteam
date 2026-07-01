@@ -3,10 +3,11 @@
  *
  * - Account：派生自当前 session（whoami 投影，无独立端点）；tokenExp 只读展示。
  * - Preferences：客户端本地状态（localStorage），不上传控制面（本地优先 / D3）。
- * - Security：退出登录走 useApp().logout；无独立端点。
+ * - Security：退出登录走 useApp().logout；重新同步走本端 /api/agent/grants/sync（同 tier，红线内）。
  */
 
 import { useCallback, useState } from "react";
+import { ApiError } from "@aiteam/shared/api-client";
 import { useApp } from "../../lib/app-context";
 import type { AccountProfile, PreferencesState } from "./types";
 
@@ -71,4 +72,43 @@ export function usePreferences(): {
 export function useLogout(): { logout: () => void } {
   const { logout } = useApp();
   return { logout: useCallback(() => logout(), [logout]) };
+}
+
+/** 重新同步结果（对齐 /api/agent/grants/sync 响应投影）。 */
+export interface SyncGrantsResult {
+  ok: boolean;
+  upserted: number;
+  revoked: number;
+  error?: string | null;
+}
+
+/** 触发本端 grants 同步（同 tier /api/agent/grants/sync，红线内）。 */
+export function useResync(): {
+  syncing: boolean;
+  result: SyncGrantsResult | null;
+  error: string | null;
+  sync: () => Promise<void>;
+} {
+  const { client, session } = useApp();
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<SyncGrantsResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const sync = useCallback(async () => {
+    if (!session) return;
+    setSyncing(true);
+    setError(null);
+    try {
+      const r = await client.post<SyncGrantsResult>("/api/agent/grants/sync", {
+        body: { tenant_id: session.claims.tenant_id ?? "", member_id: session.claims.user_id },
+      });
+      setResult(r ?? { ok: false, upserted: 0, revoked: 0, error: null });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "同步失败");
+    } finally {
+      setSyncing(false);
+    }
+  }, [client, session]);
+
+  return { syncing, result, error, sync };
 }

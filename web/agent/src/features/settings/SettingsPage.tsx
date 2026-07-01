@@ -5,12 +5,13 @@
  * - 账号/安全 派生自当前 session 与 useApp，无独立后端端点（whoami 投影足矣）；
  * - 偏好 纯客户端本地状态（localStorage），不上传控制面（本地优先 / D3，§12.2）。
  * - 三 Tab 都是只读或客户端操作；修改密码/资料走「我的资料」入口由 Manager 端完成。
+ * - 重新同步：调用本端 /api/agent/grants/sync（同 tier 调用，红线内）；错误体仅展示脱敏消息。
  */
 
 import { useState, type ReactNode } from "react";
 import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
 import { useApp } from "../../lib/app-context";
-import { useAccount, useLogout, usePreferences } from "./useSettingsApi";
+import { useAccount, useLogout, usePreferences, useResync } from "./useSettingsApi";
 import type { SettingsTabId } from "./types";
 
 const tabs: { id: SettingsTabId; labelKey: "agent.settings.tab.account" | "agent.settings.tab.preferences" | "agent.settings.tab.security" }[] = [
@@ -33,6 +34,7 @@ export function SettingsPage(): ReactNode {
   const { profile } = useAccount();
   const { preferences, setPreferences } = usePreferences();
   const { logout } = useLogout();
+  const resync = useResync();
   const [activeTab, setActiveTab] = useState<SettingsTabId>("account");
 
   return (
@@ -70,7 +72,9 @@ export function SettingsPage(): ReactNode {
         {activeTab === "preferences" ? (
           <PreferencesTab preferences={preferences} setPreferences={setPreferences} i18n={i18n} />
         ) : null}
-        {activeTab === "security" ? <SecurityTab profile={profile} logout={logout} i18n={i18n} /> : null}
+        {activeTab === "security" ? (
+          <SecurityTab profile={profile} logout={logout} resync={resync} i18n={i18n} />
+        ) : null}
       </div>
     </section>
   );
@@ -164,10 +168,12 @@ function PreferencesTab({
 function SecurityTab({
   profile,
   logout,
+  resync,
   i18n,
 }: {
   profile: ReturnType<typeof useAccount>["profile"];
   logout: ReturnType<typeof useLogout>["logout"];
+  resync: ReturnType<typeof useResync>;
   i18n: ReturnType<typeof useApp>["i18n"];
 }): ReactNode {
   return (
@@ -186,6 +192,45 @@ function SecurityTab({
             }
           />
         </Field>
+      </GlassPanel>
+
+      <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
+        <h2 className="m-0 text-base font-semibold text-text-primary">
+          {i18n.t("agent.settings.sync.title")}
+        </h2>
+        <p className="m-0 text-sm text-text-secondary">
+          {i18n.t("agent.settings.sync.hint")}
+        </p>
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={resync.sync}
+            disabled={resync.syncing}
+          >
+            {resync.syncing
+              ? i18n.t("agent.settings.sync.syncing")
+              : i18n.t("agent.settings.sync.button")}
+          </Button>
+        </div>
+        {resync.result && (
+          <p className={`m-0 text-sm ${resync.result.ok ? "text-success" : "text-danger"}`}>
+            {resync.result.ok
+              ? i18n.t("agent.settings.sync.result_ok", {
+                  upserted: resync.result.upserted,
+                  revoked: resync.result.revoked,
+                })
+              : i18n.t("agent.settings.sync.result_fail", {
+                  detail: resync.result.error ?? i18n.t("error.unknown"),
+                })}
+          </p>
+        )}
+        {resync.error && (
+          <p className="m-0 text-sm text-danger">
+            {i18n.t("agent.settings.sync.result_fail", { detail: resync.error })}
+          </p>
+        )}
       </GlassPanel>
 
       <GlassPanel className="flex flex-col gap-md rounded-window border border-danger/30 p-lg">
