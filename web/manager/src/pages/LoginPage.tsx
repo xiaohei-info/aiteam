@@ -30,7 +30,7 @@ export function LoginPage(): React.ReactNode {
   const navigate = useNavigate();
   const location = useLocation();
   const [mode, setMode] = useState<"login" | "owner-reset">("login");
-  const [tenantId, setTenantId] = useState("");
+  const [enterprise, setEnterprise] = useState("");
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -47,15 +47,25 @@ export function LoginPage(): React.ReactNode {
   async function handleLogin(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError(null);
-    if (!tenantId.trim() || !account.trim() || !password.trim()) {
+    if (!enterprise.trim() || !account.trim() || !password.trim()) {
       setError(i18n.t("manager.login.required"));
       return;
     }
     setLoading(true);
     try {
       const client = createManagerApiClient({ getToken: () => null });
+      // 先解析企业标识→tenant_id（隐藏 UUID 细节）
+      const resolveResult = await client.post<{ tenant_id: string }>("/api/auth/resolve-tenant", {
+        body: { enterprise: enterprise.trim() },
+      });
+      if (!resolveResult) {
+        setError(i18n.t("manager.login.enterprise_not_found"));
+        return;
+      }
+      const tenantId = resolveResult.tenant_id;
+      // 用 tenant_id 登录
       const result = await client.post<LoginResponse>("/api/auth/login", {
-        body: { tenant_id: tenantId.trim(), account: account.trim(), password: password.trim() },
+        body: { tenant_id: tenantId, account: account.trim(), password: password.trim() },
       });
       if (!result) {
         setError(i18n.t("manager.login.login_failed"));
@@ -66,14 +76,27 @@ export function LoginPage(): React.ReactNode {
       navigate(from, { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
-        setPendingReset({
-          tenantId: tenantId.trim(),
-          account: account.trim(),
-          oldPassword: password.trim(),
-        });
-        setMode("owner-reset");
-        setError(null);
-        return;
+        // 需先 resolve 再传给 reset 流程；403 时已经过 resolve（login 里解析了），
+        // 但前端没留 tenantId，需重新 resolve 或在 catch 前存下来。
+        // 简单起见：再 resolve 一次（冗余但逻辑清晰）。
+        try {
+          const client2 = createManagerApiClient({ getToken: () => null });
+          const resolveResult = await client2.post<{ tenant_id: string }>("/api/auth/resolve-tenant", {
+            body: { enterprise: enterprise.trim() },
+          });
+          if (resolveResult) {
+            setPendingReset({
+              tenantId: resolveResult.tenant_id,
+              account: account.trim(),
+              oldPassword: password.trim(),
+            });
+            setMode("owner-reset");
+            setError(null);
+            return;
+          }
+        } catch {
+          // resolve 失败，fallback 用原 error
+        }
       }
       setError(err instanceof Error ? err.message : i18n.t("manager.login.login_failed"));
     } finally {
@@ -195,13 +218,14 @@ export function LoginPage(): React.ReactNode {
         >
           <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.title")}</h1>
           <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("manager.login.tenant_id")}</span>
+            <span className="text-xs text-text-secondary">{i18n.t("manager.login.enterprise")}</span>
             <input
               className={fieldCls}
               type="text"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
+              value={enterprise}
+              onChange={(e) => setEnterprise(e.target.value)}
               autoComplete="organization"
+              placeholder={i18n.t("manager.login.enterprise_placeholder")}
             />
           </label>
           <label className="flex flex-col gap-xs">
