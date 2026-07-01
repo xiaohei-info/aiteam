@@ -167,7 +167,7 @@ def build_group_mgmt_router(service: GroupMgmtService) -> APIRouter:
         body: GroupMessageIn,
         request: Request,
     ) -> Envelope[GroupMessageOut]:
-        msg = service.send_message(
+        msg = await service.send_message(
             conversation_id=conversation_id,
             content=body.content,
             mentions=body.mentions,

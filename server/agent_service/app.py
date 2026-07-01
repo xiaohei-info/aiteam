@@ -203,7 +203,7 @@ def build_app(
     )
     app.include_router(build_workspace_router(workspace_service))
     # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----
-    group_mgmt_service = build_group_mgmt_service(db=db)
+    group_mgmt_service = build_group_mgmt_service(db=db, mainline=mainline)
     app.include_router(build_group_mgmt_router(group_mgmt_service))
     # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
     mount_frontend(app, settings.tier)

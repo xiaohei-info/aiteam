@@ -1,4 +1,6 @@
-"""群聊生命周期测试——创建/更新/归档/成员/消息（#267）。"""
+"""群聊生命周期测试——创建/更新/归档/成员/消息（#267 + AITEAM-274）。"""
+
+import asyncio
 
 from agent_service.group_mgmt.store import (
     InMemoryGroupConversationRepository,
@@ -99,7 +101,7 @@ class TestGroupArchive:
         svc, _, _, _ = _make_service()
         g = svc.create_group("群A", ["emp-1"])
         svc.archive_group(g.conversation_id)
-        msg = svc.send_message(g.conversation_id, "hello")
+        msg = asyncio.run(svc.send_message(g.conversation_id, "hello"))
         assert msg is None
 
 
@@ -138,7 +140,7 @@ class TestGroupMessages:
     def test_send_message_persists(self):
         svc, _, _, msg_store = _make_service()
         g = svc.create_group("群A", ["emp-1"])
-        msg = svc.send_message(g.conversation_id, "大家好", author_id="emp-1", author_name="Alice")
+        msg = asyncio.run(svc.send_message(g.conversation_id, "大家好", author_id="emp-1", author_name="Alice"))
         assert msg is not None
         assert msg.message_id
         assert msg.content == "大家好"
@@ -153,16 +155,16 @@ class TestGroupMessages:
     def test_send_message_with_mentions(self):
         svc, _, _, _ = _make_service()
         g = svc.create_group("群A", ["emp-1"])
-        msg = svc.send_message(g.conversation_id, "@emp-2 你好", mentions=["emp-2"])
+        msg = asyncio.run(svc.send_message(g.conversation_id, "@emp-2 你好", mentions=["emp-2"]))
         assert msg is not None
         assert msg.mentions == ["emp-2"]
 
     def test_list_messages_returns_in_order(self):
         svc, _, _, _ = _make_service()
         g = svc.create_group("群A", ["emp-1"])
-        svc.send_message(g.conversation_id, "第一条")
-        svc.send_message(g.conversation_id, "第二条")
-        svc.send_message(g.conversation_id, "第三条")
+        asyncio.run(svc.send_message(g.conversation_id, "第一条"))
+        asyncio.run(svc.send_message(g.conversation_id, "第二条"))
+        asyncio.run(svc.send_message(g.conversation_id, "第三条"))
         msgs = svc.list_messages(g.conversation_id, cursor=0)
         assert len(msgs) == 3
         assert [m.content for m in msgs] == ["第一条", "第二条", "第三条"]
@@ -171,7 +173,7 @@ class TestGroupMessages:
         svc, _, _, _ = _make_service()
         g = svc.create_group("群A", ["emp-1"])
         for i in range(5):
-            svc.send_message(g.conversation_id, f"msg{i}")
+            asyncio.run(svc.send_message(g.conversation_id, f"msg{i}"))
         msgs = svc.list_messages(g.conversation_id, cursor=2)
         # InMemory store returns cursor-based slicing
         assert len(msgs) == 3  # 50 limit, cursor=2 skips first 2
