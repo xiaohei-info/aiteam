@@ -15,6 +15,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from shared.contracts.summary import UsageSummary
+from shared.errors import NotFound
 
 from .rollup_repository import (
     CrossEnterpriseRollupRepository,
@@ -99,8 +100,14 @@ class RollupService:
             self._repo.apply_summary(upload.enterprise_id, upload.tenant_id, summary)
 
     def enterprise_rollup(self, enterprise_id: str) -> EnterpriseUsageRollup:
-        """单企业聚合视图。未知企业 → NotFound（404）。"""
-        return _to_view(self._repo.get(enterprise_id))
+        """单企业聚合视图。未知企业 → 全零聚合（run_count=0, token_total=0 等，GH#328）。"""
+        try:
+            row = self._repo.get(enterprise_id)
+        except NotFound:
+            row = None
+        if row is None:
+            return EnterpriseUsageRollup(enterprise_id=enterprise_id, tenant_id="")
+        return _to_view(row)
 
     def cross_enterprise_board(self) -> CrossEnterpriseBoard:
         """跨企业平台看板：全平台合计 + 各企业聚合行（脱敏，无下钻）。"""

@@ -119,10 +119,21 @@ def test_enterprise_rollup_view(client):
     assert r.json()["data"]["token_total"] == 42
 
 
-def test_enterprise_rollup_unknown_404(client):
+def test_enterprise_rollup_unknown_returns_zeroed_200(client):
+    """未知企业返回 200 + 全零聚合而非 404（GH#328）。"""
     r = client.get("/api/operation/rollups/nope", headers=_auth(_OP))
-    assert r.status_code == 404
-    assert r.json()["code"] == "not_found"
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["enterprise_id"] == "nope"
+    assert data["tenant_id"] == ""
+    assert data["run_count"] == 0
+    assert data["token_total"] == 0
+    assert data["cost_total"] == "0"
+    assert data["error_count"] == 0
+    assert data["duration_seconds_total"] == 0
+    assert data["summary_count"] == 0
+    assert data["window_start"] is None
+    assert data["window_end"] is None
 
 
 def test_board_response_has_no_session_or_drilldown_fields(client):
