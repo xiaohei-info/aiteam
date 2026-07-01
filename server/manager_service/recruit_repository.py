@@ -105,6 +105,37 @@ def _row_to_event(row: Any) -> RecruitEventRow:
     )
 
 
+@dataclass(frozen=True)
+class SolutionApplyRecordRow:
+    """方案应用记录（AITEAM-242）。记录 who/when 将哪一版本方案落到本 tenant。"""
+
+    id: str
+    tenant_id: str
+    solution_id: str
+    solution_version: str
+    applied_by: str | None
+    status: str                          # applied | revoked
+    expert_instance_ids: list[str]
+    detail: dict | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+def _row_to_apply_record(row: Any) -> SolutionApplyRecordRow:
+    return SolutionApplyRecordRow(
+        id=str(row[0]),
+        tenant_id=str(row[1]),
+        solution_id=row[2],
+        solution_version=row[3],
+        applied_by=str(row[4]) if row[4] is not None else None,
+        status=row[5],
+        expert_instance_ids=[str(v) for v in (row[6] or [])],
+        detail=row[7],
+        created_at=row[8],
+        updated_at=row[9],
+    )
+
+
 class RecruitRepository:
     """solution_instance + recruit_event 的租户内读写。tenant_id 取自 ctx（D22）。"""
 
@@ -219,3 +250,84 @@ class RecruitRepository:
                 "SELECT " + _EVENT_COLUMNS + " FROM recruit_event ORDER BY created_at"
             ).fetchall()
         return [_row_to_event(r) for r in rows]
+
+
+    # ---- solution_apply_record（方案应用记录，AITEAM-242，issue #286）----
+    def create_solution_apply_record(
+        self,
+        ctx: TenantContext,
+        *,
+        solution_id: str,
+        solution_version: str,
+        applied_by: str | None,
+        expert_instance_ids: list[str],
+        detail: dict | None = None,
+        status: str = "applied",
+    ) -> SolutionApplyRecordRow:
+        """写一条方案应用记录（apply 成功后追加）。幂等：同 (tenant, solution, version) 唯一。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                """
+                INSERT INTO solution_apply_record (
+                    tenant_id, solution_id, solution_version, applied_by, status,
+                    expert_instance_ids, detail
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, solution_id, solution_version) DO UPDATE
+                    SET applied_by = EXCLUDED.applied_by,
+                        status = EXCLUDED.status,
+                        expert_instance_ids = EXCLUDED.expert_instance_ids,
+                        detail = EXCLUDED.detail,
+                        updated_at = now()
+                RETURNING id, tenant_id, solution_id, solution_version, applied_by, status,
+                          expert_instance_ids, detail, created_at, updated_at
+                """,
+                (
+                    ctx.tenant_id, solution_id, solution_version, applied_by,
+                    status, [eid for eid in expert_instance_ids],
+                    json.dumps(detail) if detail is not None else None,
+                ),
+            ).fetchone()
+        return _row_to_apply_record(row)
+
+    def list_solution_apply_records(
+        self,
+        ctx: TenantContext,
+        *,
+        solution_id: str | None = None,
+        status: str | None = None,
+    ) -> list[SolutionApplyRecordRow]:
+        """列本 tenant 方案应用记录（audited history），可按 solution_id / status 过滤。"""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if solution_id:
+            clauses.append("solution_id = %s")
+            params.append(solution_id)
+        if status:
+            clauses.append("status = %s")
+            params.append(status)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT id, tenant_id, solution_id, solution_version, applied_by, status, "
+                "expert_instance_ids, detail, created_at, updated_at "
+                "FROM solution_apply_record "
+                f"{where} ORDER BY created_at DESC",
+                tuple(params),
+            ).fetchall()
+        return [_row_to_apply(r) for r in rows]
+
+    def get_latest_solution_apply_record(
+        self, ctx: TenantContext, *, solution_id: str
+    ) -> SolutionApplyRecordRow | None:
+        """查某方案最新的非 revoked 应用记录（用于反查企业当前专家配置来源）。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT id, tenant_id, solution_id, solution_version, applied_by, status, "
+                "expert_instance_ids, detail, created_at, updated_at "
+                "FROM solution_apply_record "
+                "WHERE solution_id = %s AND status = 'applied' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (solution_id,),
+            ).fetchone()
+        return _row_to_apply_record(row) if row is not None else None
+

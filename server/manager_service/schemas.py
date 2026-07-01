@@ -445,6 +445,22 @@ class RecruitmentOrderOut(BaseModel):
     updated_at: datetime | None = None
 
 
+class SolutionApplyRecordOut(BaseModel):
+    """方案应用记录出参（AITEAM-242，issue #286）。审计口径：who/when/version/status + 落地专家。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="应用记录 id")
+    tenant_id: str = Field(description="本 tenant")
+    solution_id: str = Field(description="Operator 侧方案 id")
+    solution_version: str = Field(description="应用时方案版本")
+    applied_by: str | None = Field(description="应用发起者 user_id")
+    status: str = Field(description="applied | revoked — 方案应用状态")
+    expert_instance_ids: list[str] = Field(default_factory=list, description="应用落到本 tenant 的专家 employee id 列表")
+    detail: dict | None = Field(default=None, description="补充信息（如 solution_instance_id / expert_count）")
+    created_at: datetime | None = Field(default=None, description="首次应用时间 (applied_at)")
+    updated_at: datetime | None = Field(default=None, description="最近更新时间")
+
 # ---- 企业级 usage/audit rollup + 软配额治理（M8，04 §6.5/§6.5.1，D13/D24）----
 #
 # 红线（D13）：本节 schema 只承载**脱敏聚合摘要**——不含会话文本/prompt/token 明文/工具输入输出
