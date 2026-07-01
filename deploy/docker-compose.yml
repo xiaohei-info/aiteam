@@ -21,7 +21,7 @@ services:
       # 避免「app 连 5434 / 容器开 5433」错配）；未注入时回退 5433（对齐 SOP 缺省）。
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - aiteam_pg_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiteam -d aiteam_v1"]
       interval: 5s
@@ -98,5 +98,7 @@ services:
         condition: service_healthy
 
 volumes:
-  aiteam_pg_data:
-    name: aiteam_pg_data
+  # 实际卷名由 ENV 的 POSTGRES_VOLUME 决定（ctl.sh 缺省注入 aiteam_pg_data_<env>，
+  # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 aiteam_pg_data。
+  pgdata:
+    name: ${POSTGRES_VOLUME:-aiteam_pg_data}
