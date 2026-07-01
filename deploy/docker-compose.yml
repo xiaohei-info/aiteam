@@ -1,6 +1,6 @@
 # 单机模拟三端（dev / test / 单机联调，09 §14 / D15）。
 #
-# 三个 service：operation（:8001）manager（:8002）agent（:8003）+ postgres（:5433，对齐 SOP）。
+# 三个 service：operation（:8001）manager（:8002）agent（:8003）+ postgres（主机端口取 ENV 的 POSTGRES_PORT，缺省 5433 对齐 SOP）。
 # 每个 service 用各自 Dockerfile.<tier> 构建——产物在镜像层即按端精简，互不含对方后端/前端。
 #
 # 红线（D15）：agent 服务镜像构建上下文虽是整个仓库，但 Dockerfile.agent 的 COPY 严格限定，
@@ -17,7 +17,9 @@ services:
       POSTGRES_PASSWORD: aiteam_test
       POSTGRES_DB: aiteam_v1
     ports:
-      - "5433:5432"  # 对齐 SOP 的 5433 配置（docs/部署运维/...SOP.md）
+      # 主机端口统一由 ENV 的 POSTGRES_PORT 决定（与 ctl.sh 拼 DB_URL 用的同一来源，
+      # 避免「app 连 5434 / 容器开 5433」错配）；未注入时回退 5433（对齐 SOP 缺省）。
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - aiteam_pg_data:/var/lib/postgresql/data
     healthcheck:
