@@ -33,6 +33,7 @@ from .schemas import (
     RecruitExpertRequest,
     RecruitExpertResult,
     RecruitmentOrderOut,
+    SolutionApplyRecordOut,
     SolutionInstanceOut,
 )
 
@@ -261,6 +262,18 @@ class RecruitService:
             detail={"expert_count": len(expert_employee_ids)},
         )
 
+        # 7) 方案应用记录（AITEAM-242，issue #286）：applied_by / applied_at /
+        # solution_version / status / expert_instances_created。
+        self._recruit.create_solution_apply_record(
+            ctx,
+            solution_id=package.solution_id,
+            solution_version=package.version,
+            applied_by=ctx.user_id,
+            expert_instance_ids=expert_employee_ids,
+            detail={"solution_instance_id": instance.id, "expert_count": len(expert_employee_ids)},
+            status="applied",
+        )
+
         return ApplySolutionResult(
             solution_instance=_solution_out(instance),
             experts=expert_results,
@@ -287,6 +300,25 @@ class RecruitService:
         if row is None:
             raise NotFound("solution instance not found in this tenant")
         return _solution_out(row)
+
+    # ---- 方案应用记录（AITEAM-242，issue #286）----
+    def list_solution_apply_records(
+        self,
+        ctx: TenantContext,
+        *,
+        solution_id: str | None = None,
+        status: str | None = None,
+    ) -> list[SolutionApplyRecordOut]:
+        rows = self._recruit.list_solution_apply_records(ctx, solution_id=solution_id, status=status)
+        return [_apply_record_out(r) for r in rows]
+
+    def get_latest_solution_apply_record(
+        self, ctx: TenantContext, *, solution_id: str
+    ) -> SolutionApplyRecordOut:
+        row = self._recruit.get_latest_solution_apply_record(ctx, solution_id=solution_id)
+        if row is None:
+            raise NotFound("no applied solution record in this tenant")
+        return _apply_record_out(row)
 
 
 def _ensure_can_write(ctx: TenantContext) -> None:
@@ -417,3 +449,18 @@ __all__ = [
     "RecruitService",
     "build_recruit_service",
 ]
+
+
+def _apply_record_out(row) -> SolutionApplyRecordOut:
+    return SolutionApplyRecordOut(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        solution_id=row.solution_id,
+        solution_version=row.solution_version,
+        applied_by=row.applied_by,
+        status=row.status,
+        expert_instance_ids=row.expert_instance_ids,
+        detail=row.detail,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )

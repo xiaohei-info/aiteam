@@ -104,7 +104,7 @@ def test_enable_then_disable_stops_firing():
     out1 = asyncio.run(scheduler.fire_ready(now))
     assert len(out1) == 1 and out1[0].ok
 
-    service.disable(loop.id)
+    service.pause(loop.id)
     out2 = asyncio.run(scheduler.fire_ready(now))
     assert out2 == []  # disabled -> 不触发
     assert service.get_loop(loop.id).fire_count == 1

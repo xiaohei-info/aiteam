@@ -154,9 +154,47 @@ class SqliteProjectionRepository(ProjectionRepository):
 
     @staticmethod
     def _row_to_projection(row) -> LoadedExpertProjection:
+        """由 SQLite 行构造 LoadedExpertProjection。
+
+        新加列（persona/model_policy/runtime_policy/tools/skills/knowledge_refs/
+        connector_refs/memory_policy）在旧库/无 Manager 同步行可能缺失 → 用 Pydantic 默认值；
+        对 JSON 文本列做安全解析（解析失败时回退默认）。
+        """
+        from shared.contracts.grants import LoadedExpertProjection
+        from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+
         data = dict(row)
         data["revoked"] = bool(data["revoked"])
-        return LoadedExpertProjection(**data)
+
+        def _json(value, default):
+            if value is None:
+                return default
+            if isinstance(value, (dict, list)):
+                return value
+            try:
+                return json.loads(value)
+            except Exception:
+                return default
+
+        model_policy = _json(data.get("model_policy"), {})
+        runtime_policy = _json(data.get("runtime_policy"), {})
+        return LoadedExpertProjection(
+            employee_id=str(data["employee_id"]),
+            tenant_id=str(data.get("tenant_id", "")),
+            version=str(data.get("version", "")),
+            display_name=str(data.get("display_name", "")),
+            runtime_binding=data.get("runtime_binding"),
+            persona=data.get("persona"),
+            model_policy=ModelPolicy(**model_policy) if isinstance(model_policy, dict) else ModelPolicy(),
+            runtime_policy=RuntimePolicy(**runtime_policy) if isinstance(runtime_policy, dict) else RuntimePolicy(),
+            tools=_json(data.get("tools"), []),
+            skills=_json(data.get("skills"), []),
+            knowledge_refs=_json(data.get("knowledge_refs"), []),
+            connector_refs=_json(data.get("connector_refs"), []),
+            memory_policy=_json(data.get("memory_policy"), None),
+            synced_at=data.get("synced_at"),
+            revoked=bool(data["revoked"]),
+        )
 
     def upsert(self, projection: LoadedExpertProjection) -> LoadedExpertProjection:
         existing_row = self._db.query_one(
@@ -164,23 +202,37 @@ class SqliteProjectionRepository(ProjectionRepository):
             (projection.employee_id,),
         )
         if existing_row is not None:
-            # 更新既有投影
+            # 更新既有投影（含模板配置字段）
             self._db.execute(
                 "UPDATE loaded_expert_projections SET tenant_id = ?, version = ?, display_name = ?, "
-                "runtime_binding = ?, synced_at = ?, revoked = ? WHERE employee_id = ?",
+                "runtime_binding = ?, persona = ?, model_policy = ?, runtime_policy = ?, "
+                "tools = ?, skills = ?, knowledge_refs = ?, connector_refs = ?, "
+                "memory_policy = ?, synced_at = ?, revoked = ? WHERE employee_id = ?",
                 (projection.tenant_id, projection.version, projection.display_name,
-                 projection.runtime_binding,
+                 projection.runtime_binding, projection.persona,
+                 json.dumps(projection.model_policy.model_dump()),
+                 json.dumps(projection.runtime_policy.model_dump()),
+                 json.dumps(projection.tools), json.dumps(projection.skills),
+                 json.dumps(projection.knowledge_refs), json.dumps(projection.connector_refs),
+                 json.dumps(projection.memory_policy) if projection.memory_policy else None,
                  _iso(projection.synced_at) if projection.synced_at else None,
                  int(projection.revoked), projection.employee_id),
             )
         else:
-            # 新建投影
+            # 新建投影（含模板配置字段）
             self._db.execute(
                 "INSERT INTO loaded_expert_projections "
-                "(employee_id, tenant_id, version, display_name, runtime_binding, synced_at, revoked) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(employee_id, tenant_id, version, display_name, runtime_binding, persona, "
+                "model_policy, runtime_policy, tools, skills, knowledge_refs, connector_refs, "
+                "memory_policy, synced_at, revoked) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (projection.employee_id, projection.tenant_id, projection.version,
-                 projection.display_name, projection.runtime_binding,
+                 projection.display_name, projection.runtime_binding, projection.persona,
+                 json.dumps(projection.model_policy.model_dump()),
+                 json.dumps(projection.runtime_policy.model_dump()),
+                 json.dumps(projection.tools), json.dumps(projection.skills),
+                 json.dumps(projection.knowledge_refs), json.dumps(projection.connector_refs),
+                 json.dumps(projection.memory_policy) if projection.memory_policy else None,
                  _iso(projection.synced_at) if projection.synced_at else None,
                  int(projection.revoked)),
             )

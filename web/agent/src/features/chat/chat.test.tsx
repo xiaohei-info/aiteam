@@ -255,3 +255,152 @@ describe("TimelineStore + createTimelineFetcher loadOlder", () => {
     expect(store.canLoadMore).toBe(false);
   });
 });
+
+// ---- 5. MessageComposer 工具栏 + @提及 + 附件 + 模型切换 ----
+
+function makeConv5(id: string, title: string) {
+  return { id, title, state: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
+}
+
+/**
+ * mock fetch：conversations + timeline + messages + roster。
+ * rosterItems 控制 GET /api/agent/grants/experts 返回的专家列表。
+ */
+function makeChatFetch(
+  convs: ReturnType<typeof makeConv5>[],
+  rosterItems: Array<{ employee_id: string; display_name: string; revoked: boolean }> = [],
+) {
+  return vi.fn(async (url: string | URL, init?: RequestInit) => {
+    const path = typeof url === "string" ? url : url.toString();
+    if (path.includes("/grants/experts")) {
+      return new Response(JSON.stringify({ data: rosterItems, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.includes("/runs") && init?.method === "POST") {
+      return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
+      return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.includes("/timeline")) {
+      return new Response(
+        JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (path.includes("/messages") && init?.method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const msg = { id: "m1", conversation_id: "c1", role: "user", content: body.content, created_at: "2026-01-01T00:00:00Z" };
+      return new Response(envelope(msg), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(envelope(null), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+/** 渲染私聊页并进入第一个会话，等待 MessageComposer 完全装载。 */
+async function renderChatComposer(rosterItems: Array<{ employee_id: string; display_name: string; revoked: boolean }> = []) {
+  loginStorage();
+  const convs = [makeConv5("c1", "会话A")];
+  const fetchImpl = makeChatFetch(convs, rosterItems);
+  globalThis.fetch = fetchImpl;
+
+  render(
+    <MemoryRouter initialEntries={["/chat"]}>
+      <AppProvider>
+        <AppRoutes />
+      </AppProvider>
+    </MemoryRouter>,
+  );
+
+  await waitFor(() => expect(screen.getByText("会话A")).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /会话A/ }));
+
+  await waitFor(() => expect(screen.getByLabelText("消息内容")).toBeInTheDocument());
+  return { fetchImpl };
+}
+
+describe("MessageComposer 工具栏 + @提及 + 附件 + 模型切换", () => {
+  it("渲染工具栏：附件 / @ / 技能 / 截图 / 模型标签", async () => {
+    await renderChatComposer();
+    expect(screen.getByRole("button", { name: "附件上传" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "召唤其他智能体" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "技能市场入口" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "截图工具" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /当前模型：GPT-4o/ })).toBeInTheDocument();
+  });
+
+  it("打开 @提及面板选择专家 -> 插入 @handle 到输入框", async () => {
+    await renderChatComposer([
+      { employee_id: "e1", display_name: "Luna", revoked: false },
+      { employee_id: "e2", display_name: "Nova", revoked: false },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "召唤其他智能体" }));
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    const ta = screen.getByLabelText("消息内容") as HTMLTextAreaElement;
+    await waitFor(() => expect(ta.value).toContain("@Luna"));
+  });
+
+  it("@提及已输入时展示「已 @提及」提示", async () => {
+    await renderChatComposer([
+      { employee_id: "e1", display_name: "Luna", revoked: false },
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "召唤其他智能体" }));
+    await screen.findByRole("button", { name: /Luna/ });
+    // 关闭面板
+    fireEvent.click(document.body);
+
+    fireEvent.change(screen.getByLabelText("消息内容"), { target: { value: "你好 @Luna 请帮忙" } });
+    expect(await screen.findByText(/已 @提及：@Luna/)).toBeInTheDocument();
+  });
+
+  it("技能入口：选择技能 -> 插入 /技能名 到输入框", async () => {
+    await renderChatComposer();
+
+    fireEvent.click(screen.getByRole("button", { name: "技能市场入口" }));
+    const skillBtn = await screen.findByRole("button", { name: /\/写作助手/ });
+    fireEvent.click(skillBtn);
+
+    const ta = screen.getByLabelText("消息内容") as HTMLTextAreaElement;
+    await waitFor(() => expect(ta.value).toContain("/写作助手"));
+  });
+
+  it("模型切换标签：选择更新显示", async () => {
+    await renderChatComposer();
+
+    fireEvent.click(screen.getByRole("button", { name: /当前模型：GPT-4o/ }));
+    const claudeBtn = await screen.findByRole("button", { name: /Claude Sonnet/ });
+    fireEvent.click(claudeBtn);
+
+    expect(screen.getByRole("button", { name: /当前模型：Claude Sonnet/ })).toBeInTheDocument();
+  });
+
+  it("附件上传后发送的消息体包含 [附件: filename]", async () => {
+    const { fetchImpl } = await renderChatComposer();
+
+    const file = new File(["hello"], "spec.txt", { type: "text/plain" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).toBeTruthy();
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    fireEvent.change(screen.getByLabelText("消息内容"), { target: { value: "请查看附件" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
+      const postMsg = calls.find(([u, i]) => u.includes("/messages") && i?.method === "POST");
+      expect(postMsg).toBeTruthy();
+      const body = JSON.parse(String(postMsg?.[1]?.body ?? "{}"));
+      expect(body.content).toContain("请查看附件");
+      expect(body.content).toContain("[附件: spec.txt]");
+    });
+  });
+
+  it("空内容 + 无附件时发送按钮 disabled", async () => {
+    await renderChatComposer();
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeDisabled();
+  });
+});

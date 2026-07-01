@@ -91,6 +91,43 @@ def test_sync_pulls_and_lands_projection():
     assert e1.synced_at is not None and e1.revoked is False
 
 
+def test_sync_inherits_template_config_into_projection():
+    """AITEAM-288：sync 从 Manager 拉取的 skills/knowledge_refs/connector_refs/memory_policy/model_policy
+    应透传到本地投影（而不仅是 display_name/runtime_binding）。"""
+    client = FakeGrantsClient()
+    client.config_response = AuthorizedConfigPullResponse(
+        experts=[
+            {
+                "employee_id": "e1",
+                "version": "v1",
+                "display_name": "专家甲",
+                "runtime_binding": "hermes_acp",
+                "persona": "资深后端",
+                "model_policy": {"model": "gpt-5", "provider_ref": "relay", "thinking_level": "deep"},
+                "runtime_policy": {"runtime_binding": "hermes_acp", "timeout_seconds": 120},
+                "tools": ["search", "code"],
+                "skills": ["code-review", "testing"],
+                "knowledge_refs": ["ks_backend"],
+                "connector_refs": ["slack"],
+                "memory_policy": {"seed": "偏好"},
+            }
+        ]
+    )
+    svc = _service(client)
+    assert svc.sync("t1", "m1").upserted == 1
+    e1 = svc.available_experts()[0]
+    assert e1.persona == "资深后端"
+    assert e1.model_policy.model == "gpt-5"
+    assert e1.model_policy.provider_ref == "relay"
+    assert e1.model_policy.thinking_level == "deep"
+    assert e1.runtime_policy.timeout_seconds == 120
+    assert e1.tools == ["search", "code"]
+    assert e1.skills == ["code-review", "testing"]
+    assert e1.knowledge_refs == ["ks_backend"]
+    assert e1.connector_refs == ["slack"]
+    assert e1.memory_policy == {"seed": "偏好"}
+
+
 def test_sync_revoked_ids_removed_from_available_but_kept_in_all():
     client = FakeGrantsClient()
     client.config_response = AuthorizedConfigPullResponse(

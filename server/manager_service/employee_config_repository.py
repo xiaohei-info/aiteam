@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
+from shared.errors import Conflict
 
 
 @dataclass(frozen=True)
 class EmployeeConfigRow:
-    """employee 配置行（中立字段，runtime 无关）。"""
+    """employee 配置行（中立字段，runtime 无关）+ 生命周期状态。"""
 
     employee_id: str
     employee_slug: str
@@ -33,12 +35,15 @@ class EmployeeConfigRow:
     connector_refs: list[str]
     memory_policy: dict | None
     version: int
+    status: str
+    archive_reason: str | None = None
+    archived_at: datetime | None = None
 
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
     "runtime_binding, timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
-    "memory_policy, version"
+    "memory_policy, version, status, archive_reason, archived_at"
 )
 
 
@@ -59,6 +64,9 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         connector_refs=list(row[12] or []),
         memory_policy=row[13],
         version=row[14],
+        status=row[15],
+        archive_reason=row[16],
+        archived_at=row[17],
     )
 
 
@@ -174,3 +182,48 @@ class EmployeeConfigRepository:
         with self._router.session(ctx) as s:
             rows = s.execute("SELECT " + _CONFIG_COLUMNS + " FROM employee ORDER BY created_at").fetchall()
         return [_row_to_config(r) for r in rows]
+
+    def transition_status(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        from_status: str,
+        to_status: str,
+        archive_reason: str | None = None,
+    ) -> EmployeeConfigRow | None:
+        """行级锁 + 状态机校验，更新 employee 主状态。
+
+        跨 tenant 行 RLS 不可见 → None；from_status 冲突时抛 Conflict 由 service 抛出。
+        """
+        with self._router.session(ctx) as s:
+            # 先锁行取当前状态（FOR UPDATE 防并发竞态）
+            cur = s.execute(
+                "SELECT status FROM employee WHERE id = %s FOR UPDATE",
+                (employee_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            if row[0] != from_status:
+                raise Conflict(
+                    f"employee status conflict: expected={from_status}, actual={row[0]}"
+                )
+            set_parts = ["status = %s"]
+            params: list = [to_status]
+            if to_status == "archived":
+                if archive_reason:
+                    set_parts.append("archive_reason = %s")
+                    params.append(archive_reason)
+                set_parts.append("archived_at = now()")
+            elif row[0] == "archived":
+                # 任何从 archived 出发的落库本不应发生（状态机已拦）；清零归档元数据兜底
+                set_parts.append("archive_reason = NULL")
+                set_parts.append("archived_at = NULL")
+            params.append(employee_id)
+            cur = s.execute(
+                "UPDATE employee SET " + ", ".join(set_parts) + " WHERE id = %s RETURNING " + _CONFIG_COLUMNS,
+                tuple(params),
+            )
+            new_row = cur.fetchone()
+        return _row_to_config(new_row)

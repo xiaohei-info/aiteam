@@ -35,21 +35,21 @@ def test_loop_crud(repo):
     assert retrieved.conversation_id == "c1"
     assert retrieved.cron == "* * * * *"
     assert retrieved.run_spec.system_prompt == "hi"
-    assert retrieved.status is LoopStatus.DISABLED
+    assert retrieved.status is LoopStatus.PAUSED
     assert repo.list() == [retrieved]
 
 
 def test_loop_status_transition(repo):
     """状态切换。"""
     repo.create(Loop(id="l1", conversation_id="c1", cron="* * * * *"))
-    assert repo.get("l1").status is LoopStatus.DISABLED
-    enabled = repo.set_status("l1", LoopStatus.ENABLED)
-    assert enabled.status is LoopStatus.ENABLED
-    assert repo.get("l1").status is LoopStatus.ENABLED
-    assert repo.list_enabled() == [repo.get("l1")]
-    disabled = repo.set_status("l1", LoopStatus.DISABLED)
-    assert disabled.status is LoopStatus.DISABLED
-    assert repo.list_enabled() == []
+    assert repo.get("l1").status is LoopStatus.PAUSED
+    enabled = repo.set_status("l1", LoopStatus.ACTIVE)
+    assert enabled.status is LoopStatus.ACTIVE
+    assert repo.get("l1").status is LoopStatus.ACTIVE
+    assert repo.list_active() == [repo.get("l1")]
+    disabled = repo.set_status("l1", LoopStatus.PAUSED)
+    assert disabled.status is LoopStatus.PAUSED
+    assert repo.list_active() == []
 
 
 def test_loop_record_fire(repo):
@@ -75,7 +75,7 @@ def test_loop_missing_raises_notfound(repo):
     with pytest.raises(NotFound):
         repo.get("nope")
     with pytest.raises(NotFound):
-        repo.set_status("nope", LoopStatus.ENABLED)
+        repo.set_status("nope", LoopStatus.ACTIVE)
     with pytest.raises(NotFound):
         repo.record_fire("nope", run_id="run_x")
 
@@ -84,9 +84,9 @@ def test_loop_persistence(db):
     """重启后数据保持。"""
     repo1 = SqliteLoopRepository(db)
     repo1.create(Loop(id="l1", conversation_id="c1", cron="* * * * *"))
-    repo1.set_status("l1", LoopStatus.ENABLED)
+    repo1.set_status("l1", LoopStatus.ACTIVE)
     # 新建仓储实例，复用同一 db
     repo2 = SqliteLoopRepository(db)
     loop = repo2.get("l1")
     assert loop.id == "l1"
-    assert loop.status is LoopStatus.ENABLED
+    assert loop.status is LoopStatus.ACTIVE

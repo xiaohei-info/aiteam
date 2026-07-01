@@ -16,6 +16,7 @@ from .routes_bootstrap import router as bootstrap_router
 from .routes_capability import build_capability_router
 from .routes_employee import build_employee_router
 from .routes_employee_bindings import build_employee_bindings_router
+from .routes_employee_prompt import build_employee_prompt_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_member import router as member_router
@@ -99,7 +100,9 @@ app.state._operator_catalog = _build_operator_catalog()
 app.include_router(auth_router)
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。
 app.include_router(build_employee_router(_verifier))
-# employee 独立绑定实体（prompt-version / skill / knowledge / memory / connector，AITEAM-234/280）。
+# employee_prompt 版本管理（/api/manager/employees/{id}/prompts[|/history|/rollback]，issue #303）。verifier 由本端持有闭包注入。
+app.include_router(build_employee_prompt_router(_verifier))
+# employee 独立绑定实体（skill / knowledge / memory / connector + prompt-version，AITEAM-234/280）。
 # verifier 由本端持有闭包注入；tenant_id 经 TenantContext（D22），不手写 tenant 过滤。
 app.include_router(build_employee_bindings_router(_verifier))
 # 成员/部门/角色（/api/manager/members/* 等，M1）。

@@ -23,6 +23,9 @@ export interface Conversation {
   id: string;
   title: string | null;
   state: string;
+  // AITEAM-236 阅读状态（parity 后端 Conversation.last_read_at / last_read_message_id）。
+  last_read_at: string | null;
+  last_read_message_id: string | null;
   created_at: string;
   updated_at: string;
 }

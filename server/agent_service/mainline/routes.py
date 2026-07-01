@@ -15,6 +15,8 @@ import contextlib
 import json
 from collections.abc import Callable
 
+from datetime import datetime
+
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,7 +28,7 @@ from shared.contracts.events import BusinessTimelineEvent
 from shared.contracts.runspec import RunSpec
 
 from .group import DispatchResult, GroupChatService, GroupExpert
-from .models import Conversation, Message, MessageRole, Run, Task
+from .models import Conversation, Message, MessageRole, Run, RunTriggerType, RunExecutionMode, Task
 from .service import MainlineService
 from .stream import StreamBroker, StreamFrame
 
@@ -53,6 +55,14 @@ class ConversationCollaborationRequest(BaseModel):
     planner_employee_id: str | None = Field(default=None, description="编排者 handle；传空串清除")
 
 
+class MarkReadRequest(BaseModel):
+    """标记会话已读（parity Manager 侧 ConversationReadState upsert）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    last_read_at: datetime | None = Field(default=None, description="阅读时间戳（未给则取服务端当前时间）")
+    last_read_message_id: str | None = Field(default=None, description="已读锚点消息 id；传空串清除")
+
+
 class CreateMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: MessageRole = Field(default=MessageRole.USER, description="消息角色：user=用户, assistant=AI, system=系统")
@@ -65,7 +75,8 @@ class StartRunRequest(BaseModel):
     # 中立 RunSpec：指定模型 / 切换思考深度 / persona / mcp 等经此下达；未给则用默认（runtime 自解析）。
     run_spec: RunSpec | None = Field(default=None, description="中立运行规格：模型/思考深度/persona/MCP 等；未给则 runtime 自选默认")
 
-
+    trigger_type: str | None = Field(default=None, description="trigger source: private_message|group_message|manual_run|scheduled_job|api_call; inferred when omitted")
+    execution_mode: str | None = Field(default=None, description="execution mode: single_agent|kanban_orchestration|cron_single_agent; inferred when omitted")
 class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, description="任务标题")
@@ -146,6 +157,15 @@ def build_mainline_router(
         )
         return Envelope[Conversation](data=updated)
 
+    @router.put("/conversations/{conversation_id}/read-status", summary="标记会话已读", description="更新阅读时间戳与已读锚点消息（parity Manager 侧 ConversationReadState upsert）。", operation_id="agent_mark_conversation_read")
+    async def mark_read(conversation_id: str, req: MarkReadRequest) -> Envelope[Conversation]:
+        updated = service.mark_read(
+            conversation_id,
+            last_read_at=req.last_read_at,
+            last_read_message_id=req.last_read_message_id,
+        )
+        return Envelope[Conversation](data=updated)
+
     # ---- message ----
 
     @router.post("/conversations/{conversation_id}/messages", summary="发消息", description="向会话追加一条消息。角色支持 user/assistant/system。", operation_id="agent_add_message")
@@ -167,6 +187,8 @@ def build_mainline_router(
             task_id=req.task_id,
             run_spec=req.run_spec,
             tenant_id=claims.tenant_id if claims is not None else None,
+            trigger_type=RunTriggerType(req.trigger_type) if req.trigger_type else None,
+            execution_mode=RunExecutionMode(req.execution_mode) if req.execution_mode else None,
         )
         return Envelope[Run](data=run)
 

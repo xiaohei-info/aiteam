@@ -73,6 +73,11 @@ class ExpertTemplateDetail(BaseModel):
     display_name: str
     persona: str | None = None
     recommended_config: dict = Field(default_factory=dict, description="推荐配置键值对（招募时预填充）")
+    default_model_json: dict = Field(default_factory=dict, description="默认模型配置（provider/model/temperature/max_tokens）；Operator 预设，Manager 招募时继承")
+    default_binding_json: dict = Field(default_factory=dict, description="默认运行时绑定（skills/knowledge_bases/memory 等）；Operator 预设，Manager 招募时继承")
+    prompt_pack_json: dict = Field(default_factory=dict, description="提示词包（system_prompt/behavior_rules/opening_message 等）；Operator 预设，Manager 招募时继承")
+    category_code: str = Field(default="", description="专家分类码（用于目录筛选）；Operator 预设")
+    role_name: str = Field(default="", description="角色名称（如技术专家、销售顾问）；Operator 预设")
 
 
 class SolutionPackage(BaseModel):

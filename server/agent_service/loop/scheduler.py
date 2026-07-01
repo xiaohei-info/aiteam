@@ -1,24 +1,27 @@
-"""Loop 本地调度器（A3 / 06 §7.6 / D19）。
+"""Loop 本地调度器（A3 / 06 7.6 / D19）。
 
 职责（runtime 无关）：
-- 持有 enabled loop 的 cron 触发配置
+- 持有 active loop 的触发配置（cron + recurrence）
 - 运行期到点构造 RunSpec（从 loop.run_spec 模板复制一份）经 Gateway 执行
   （复用 A1 MainlineService.start_run：事件并入 conversation timeline、终态落 Run 主记录）
-- 记一次触发（fire_count + last_run_id）
+- 记一次触发（fire_count + last_run_id）、按失败重试策略记失败（达 max_retries 迁至 error）
 
-红线（06 §7.6 / CLAUDE/AGENTS §8）：
+红线（06 7.6 / CLAUDE/AGENTS 8）：
 - **仅运行期执行**：调度靠 asyncio 后台 task 驱动，start() 起 / stop() 停；进程关停即不跑，
   **不做服务端常驻代跑**。运行期判定状态只在进程内，不落库。
 - **不依赖 hermes cron**：判定用本模块 cron.py，不经 runtime cron、不经外部调度服务。
-- **不直调 runtime CLI**：触发即调 MainlineService.start_run，run 全程经 Gateway（06 §7.5）。
+- **不直调 runtime CLI**：触发即调 MainlineService.start_run，run 全程经 Gateway（06 7.5）。
 - **展示态不落库**：loop 自身主状态用 LoopStatus，run 的展示态（streaming/resolved）只在
   broker 流里，与 loop 主状态正交。
 
-判定策略：每 tick 把"当前分钟"对每个 enabled loop 做 match_cron 判定。tick 频率默认 60s；
+判定策略：每 tick 把"当前分钟"对每个 active loop 做 match_cron 判定。tick 频率默认 60s；
 测试用 await fire_ready(now) 直接驱动（不依赖真实睡眠）。
 
 幂等：同一分钟内只触发一次——调度器记录已触发分钟键（loop_id -> (y,m,d,H,M)）；同一分钟
 重复 tick 不再触发。
+
+复用 ScheduledJob 失败重试策略（AITEAM-244 / GitHub #289）：触发失败由泳道 /fire 经
+``service.record_failure()`` 累计 ``retry_count``；达到 ``max_retries`` 自动迁至 error 并停跑。
 """
 
 from __future__ import annotations
@@ -52,8 +55,8 @@ class FireOutcome:
 class LoopScheduler:
     """本地 Loop 调度器（runtime 无关、仅运行期执行）。
 
-    持一个 LoopRepository（读 enabled loop）+ 一个 MainlineService（触发即起 run 经 Gateway）。
-    不在内部缓存 loop（每次 tick 读仓储最新态：用户 disable 后下一 tick 即停触发）。
+    持一个 LoopRepository（读 active loop）+ 一个 MainlineService（触发即起 run 经 Gateway）。
+    不在内部缓存 loop（每次 tick 读仓储最新态：用户 pause 后下一 tick 即停触发）。
     """
 
     def __init__(
@@ -99,13 +102,13 @@ class LoopScheduler:
     # ---- 核心：到点触发（可 await 直接驱动，便于测试）----
 
     async def fire_ready(self, now: datetime) -> list[FireOutcome]:
-        """对当前时刻 `now` 触发所有命中且 enabled 的 loop。
+        """对当前时刻 `now` 触发所有命中且 active 的 loop。
 
         返回每个被尝试触发的 loop 的结果（成功/失败）。同一分钟内的同一 loop 只触发一次。
         """
         minute_key = (now.year, now.month, now.day, now.hour, now.minute)
         outcomes: list[FireOutcome] = []
-        for loop in self._loops.list_enabled():
+        for loop in self._loops.list_active():
             if self._fired_minute.get(loop.id) == minute_key:
                 continue  # 本分钟已触发，幂等跳过
             if not self._is_due(loop, now):
@@ -125,15 +128,17 @@ class LoopScheduler:
         return cron_mod.match_cron(parsed, now)
 
     async def _fire(self, loop: Loop) -> FireOutcome:
-        """到点触发：复制 loop.run_spec 模板 -> MainlineService.start_run -> 记 fire。"""
+        """到点触发：复制 loop.run_spec 模板 -> MainlineService.start_run -> 记 fire/重试。"""
         try:
             run = await self._mainline.start_run(
                 loop.conversation_id, run_spec=_copy_spec(loop.run_spec)
             )
         except Exception as exc:  # noqa: BLE001
             _logger.exception("loop %s fire failed", loop.id)
+            self._loops.record_failure(loop.id)
             return FireOutcome(loop_id=loop.id, run_id=None, ok=False, error=str(exc))
         self._loops.record_fire(loop.id, run_id=run.id)
+        self._loops.record_success(loop.id)
         return FireOutcome(loop_id=loop.id, run_id=run.id, ok=True)
 
     # ---- 后台循环 ----

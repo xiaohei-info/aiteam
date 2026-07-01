@@ -289,3 +289,95 @@ def test_pull_solution_package_includes_orchestration_fields(client):
     assert data["default_skill_bundle"] == {"skills": ["search"]}
     assert data["default_collaboration_template_ref"] == "collab-001"
     assert data["tags"] == ["ai", "agent"]
+
+
+# ---- Issue #279：专家模板模型/绑定/提示词包/分类/角色字段透传 ----
+
+def _register_expert_with_full_config(client):
+    """辅助：注册并发布带完整模型/绑定/提示词包/分类/角色字段的专家模板。"""
+    from shared.contracts.enums import PlatformRole
+
+    def _token(role: str) -> str:
+        from operation_service.app import _auth
+        from shared.contracts.auth import TokenClaims
+        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+
+    def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
+        return {"Authorization": f"Bearer {_token(role)}"}
+
+    client.post(
+        "/api/operation/catalog/expert-templates",
+        json={
+            "template_id": "tpl-full",
+            "display_name": "Full Config Expert",
+            "persona": "marketing leader",
+            "recommended_config": {"model": "gpt-5"},
+            "default_model_json": {"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048},
+            "default_binding_json": {"skills": ["web_search"], "knowledge_bases": ["kb_general"]},
+            "prompt_pack_json": {"system_prompt": "You are CMO", "opening_message": "Hi"},
+            "category_code": "marketing",
+            "role_name": "CMO",
+        },
+        headers=_auth_header(),
+    )
+    client.post(
+        "/api/operation/catalog/expert_template/tpl-full/publish",
+        json={},
+        headers=_auth_header(),
+    )
+
+
+def test_pull_expert_template_includes_full_config(client):
+    """F06：拉取已发布专家模板详情时透传模型/绑定/提示词包/分类/角色字段（issue #279 验收）。"""
+    _register_expert_with_full_config(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/expert-templates/tpl-full",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["template_id"] == "tpl-full"
+    assert data["display_name"] == "Full Config Expert"
+    assert data["persona"] == "marketing leader"
+    assert data["recommended_config"] == {"model": "gpt-5"}
+    assert data["default_model_json"] == {"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048}
+    assert data["default_binding_json"] == {"skills": ["web_search"], "knowledge_bases": ["kb_general"]}
+    assert data["prompt_pack_json"] == {"system_prompt": "You are CMO", "opening_message": "Hi"}
+    assert data["category_code"] == "marketing"
+    assert data["role_name"] == "CMO"
+
+
+def test_pull_expert_template_defaults_when_unset(client):
+    """F06：未设置新字段时，拉取返回默认值（空 dict/string），不 500。"""
+    _register_and_publish_expert(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/expert-templates/tpl-cmo",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["default_model_json"] == {}
+    assert data["default_binding_json"] == {}
+    assert data["prompt_pack_json"] == {}
+    assert data["category_code"] == ""
+    assert data["role_name"] == ""
+
+
+def test_list_expert_templates_include_full_config(client):
+    """F06：列举可招募专家模板时透传完整配置字段（issue #279 验收）。"""
+    _register_expert_with_full_config(client)
+
+    r = client.get(
+        "/api/operation/catalog/pull/expert-templates",
+        headers=_service_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    item = next(i for i in data if i["template_id"] == "tpl-full")
+    assert item["default_model_json"] == {"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048}
+    assert item["default_binding_json"] == {"skills": ["web_search"], "knowledge_bases": ["kb_general"]}
+    assert item["prompt_pack_json"] == {"system_prompt": "You are CMO", "opening_message": "Hi"}
+    assert item["category_code"] == "marketing"
+    assert item["role_name"] == "CMO"

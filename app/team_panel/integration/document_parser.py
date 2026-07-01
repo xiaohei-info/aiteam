@@ -72,3 +72,33 @@ def _extract_docx(p: Path) -> str:
     text = "\n".join(paragraphs)
     # 折叠多余空行。
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+# ── HTML import support (URL ingestion) ──────────────────────────────────
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def html_to_text(html: str) -> str:
+    """Strip HTML tags/comments and normalize whitespace (no external deps).
+
+    Mirrors ``server/agent_service/workspace/ingest.html_to_text`` so the URL
+    import path produces the same text shape. Returns "" for falsy input.
+    """
+    if not html:
+        return ""
+    title = _HTML_TITLE_RE.search(html)
+    text = _HTML_COMMENT_RE.sub(" ", html)
+    text = _HTML_TAG_RE.sub(" ", text)
+    # Decode a few common entities inline to keep output readable.
+    text = (text.replace("&nbsp;", " ").replace("&amp;", "&")
+                .replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", '"').replace("&#39;", "'"))
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if title:
+        t = _HTML_TAG_RE.sub(" ", title.group(1))
+        t = re.sub(r"\s+", " ", t).strip()
+        if t:
+            text = f"{t}\n\n{text}"
+    return text

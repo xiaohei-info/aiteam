@@ -14,6 +14,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+
 
 class MemberGrant(BaseModel):
     """成员级授权映射（写端 Manager tenant data space）。"""
@@ -39,5 +41,13 @@ class LoadedExpertProjection(BaseModel):
     version: str = Field(description="配置版本/etag，用于增量 sync")
     display_name: str = ""
     runtime_binding: str | None = Field(default=None, description="runtime 标识符（hermes_acp/claude_code_json_stream 等）")
+    persona: str | None = Field(default=None, description="中立 persona 文本（不写 SOUL.md，D16）")
+    model_policy: ModelPolicy = Field(default_factory=ModelPolicy, description="模型配置（中立 model/provider/thinking）")
+    runtime_policy: RuntimePolicy = Field(default_factory=RuntimePolicy, description="runtime 配置（中立 runtime_binding/timeout）")
+    tools: list[str] = Field(default_factory=list, description="工具引用列表")
+    skills: list[str] = Field(default_factory=list, description="技能引用列表")
+    knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
+    connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
+    memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
     synced_at: datetime | None = Field(default=None, description="最后同步时间（UTC）")
     revoked: bool = Field(default=False, description="授权撤销后置 true 并从可用列表移除")

@@ -73,11 +73,14 @@ def _is_neutral_runtime_binding(value: str) -> bool:
 
 
 class EmployeeConfigOut(EmployeeConfig):
-    """读取响应体。带 employee 身份与版本（供增量 sync / 快照冻结）。"""
+    """读取响应体。带 employee 身份、版本与生命周期状态（供增量 sync / 快照冻结 / 运行前检查）。"""
 
     employee_id: str
     employee_slug: str
     version: int = Field(description="配置版本；每次配置变更单调递增")
+    status: str = Field(description="employee 主状态（EmployeeStatus 枚举值：draft/provisioning/active/paused/provisioning_failed/archived）")
+    archive_reason: str | None = Field(default=None, description="仅 archived 状态存在：归档原因")
+    archived_at: datetime | None = Field(default=None, description="仅 archived 状态存在：归档时间（UTC）")
 
 
 # ---- 成员/部门/角色 + member_grant 授权（issue #35；03 §9.7；04 §6.1，D12）----
@@ -442,6 +445,22 @@ class RecruitmentOrderOut(BaseModel):
     updated_at: datetime | None = None
 
 
+class SolutionApplyRecordOut(BaseModel):
+    """方案应用记录出参（AITEAM-242，issue #286）。审计口径：who/when/version/status + 落地专家。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="应用记录 id")
+    tenant_id: str = Field(description="本 tenant")
+    solution_id: str = Field(description="Operator 侧方案 id")
+    solution_version: str = Field(description="应用时方案版本")
+    applied_by: str | None = Field(description="应用发起者 user_id")
+    status: str = Field(description="applied | revoked — 方案应用状态")
+    expert_instance_ids: list[str] = Field(default_factory=list, description="应用落到本 tenant 的专家 employee id 列表")
+    detail: dict | None = Field(default=None, description="补充信息（如 solution_instance_id / expert_count）")
+    created_at: datetime | None = Field(default=None, description="首次应用时间 (applied_at)")
+    updated_at: datetime | None = Field(default=None, description="最近更新时间")
+
 # ---- 企业级 usage/audit rollup + 软配额治理（M8，04 §6.5/§6.5.1，D13/D24）----
 #
 # 红线（D13）：本节 schema 只承载**脱敏聚合摘要**——不含会话文本/prompt/token 明文/工具输入输出
@@ -552,6 +571,84 @@ class QuotaEnforcementActionOut(BaseModel):
     )
     severity: str = Field(default="info", description="info | warn | alert")
     detail: str | None = None
+
+# ---- employee_prompt 版本管理 + 历史追踪（issue #303 gap，06 §7.6，D16/D22）----
+#
+# 红线：
+#   - 只承载中立 system_prompt / behavior_rules_json / opening_message；不写 runtime 原生片段，
+#     不配置 runtime 启动参数/路径（06 §7.5.3）。
+#   - 所有 creator/tenant_id 经 TenantContext，不接受手写 tenant 过滤（D22）。
+# version_no：版本号；update 单调 +1，rollback 基于历史版本产生新 version_no（不回退）。
+# source_template_version：追溯 prompt 是从哪个 template version 继承的。
+
+
+class EmployeePromptBase(BaseModel):
+    """employee prompt 可编辑字段（中立字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    system_prompt: str = Field(default="", description="中立 prompt 文本（不写 SOUL.md）")
+    behavior_rules_json: dict = Field(
+        default_factory=dict,
+        description="行为约束 JSON（中立结构；如{max_turns, forbid_topics,...}，runtime 端 Driver 翻译）",
+    )
+    opening_message: str | None = Field(
+        default=None, description="对话开场白（中立文本；runtime 端 Driver 注入）"
+    )
+    source_template_version: str | None = Field(
+        default=None,
+        description="来源模板版本（追溯 prompt 的模板来源；非 manager 版本号）",
+    )
+
+
+class EmployeePromptIn(EmployeePromptBase):
+    """创建/更新请求体。"""
+
+    change_reason: str | None = Field(
+        default=None, description="本次变更原因（写入历史追溯）"
+    )
+
+
+class EmployeePromptOut(BaseModel):
+    """employee_prompt head 出参（中立字段，D16）。由 manager 产出，供用户端装载。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str = Field(description="归属 employee")
+    system_prompt: str = ""
+    behavior_rules_json: dict = Field(default_factory=dict)
+    opening_message: str | None = None
+    version_no: int = Field(description="当前版本号（update 单调 +1）")
+    source_template_version: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class EmployeePromptHistoryOut(BaseModel):
+    """employee_prompt_history 历史版本出参（append-only）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    history_id: str = Field(description="历史记录 id")
+    employee_id: str = Field(description="归属 employee")
+    system_prompt: str = ""
+    behavior_rules_json: dict = Field(default_factory=dict)
+    opening_message: str | None = None
+    version_no: int = Field(description="该历史快照的版本号")
+    source_template_version: str | None = None
+    change_reason: str | None = None
+    changed_by: str | None = None
+    created_at: datetime
+
+
+class EmployeePromptRollbackIn(BaseModel):
+    """回滚请求体：回滚到指定历史版本并以此写为新 head。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_version_no: int = Field(description="要回滚到的历史版本号")
+    change_reason: str | None = Field(default=None, description="回滚原因（写入历史追溯）")
+
 
 # ---- run_event：运行事件明细（runtime 归一事件脱敏归档）----
 #

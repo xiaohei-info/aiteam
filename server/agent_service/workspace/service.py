@@ -48,6 +48,38 @@ def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _safe_str_list(items):
+    """把未知 JSON 列表安全地转成去空字符串列表。"""
+    if not isinstance(items, list):
+        return []
+    return [str(x) for x in items if x is not None and str(x) != ""]
+
+
+def _build_model_policy_from_template(template) -> "ModelPolicy":
+    """把 MarketTemplate 模型信息转成 ModelPolicy。
+
+    template.model_name 可能直接是 "gpt-5" 或 "provider::model_id" 形；
+    这里只做简单切分，无法切分时全当 model。
+    """
+    from shared.contracts.snapshot import ModelPolicy
+    model_name = getattr(template, "model_name", "") or ""
+    if "::" in model_name:
+        provider, _, model = model_name.partition("::")
+        return ModelPolicy(model=model or None, provider_ref=provider or None)
+    return ModelPolicy(model=model_name or None)
+
+
+def _build_memory_policy_from_initial_memories(initial_memories) -> dict | None:
+    """把 MarketTemplate.initial_memories 转成 memory_policy dict（仅 экспорт purpose）。
+
+    无初始记忆时返回 None，避免空对象落进投影。
+    """
+    items = _safe_str_list([m.get("text") or m.get("content") if isinstance(m, dict) else m
+                            for m in (initial_memories or [])])
+    if not items:
+        return None
+    return {"initial_memories": items}
+
 # ---- 市场模板（本地缓存） ----
 
 @dataclass
@@ -209,9 +241,12 @@ class WorkspaceService:
         """从市场模板招募专家——创建本地 employee 投影。
 
         先在本地 projections 里查是否已招募（按 display_name 模糊匹配），
-        已存在则返回既有 employee_id；否则新创建投影条目。
+        已存在则返回既有 employee_id；否则新创建投影条目。新建时把模板全部配置
+        （skills/knowledge_refs/connector_refs/memory_policy/model_policy）
+        一并落进投影，使新专家自动继承模板能力（AITEAM-288）。
         """
         from shared.contracts.grants import LoadedExpertProjection
+        from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
 
         template = self._market_templates.get(template_id)
         if template is None:
@@ -227,14 +262,25 @@ class WorkspaceService:
                     message="该专家已招募",
                 )
 
-        # 创建新 employee 投影
+        # 创建新 employee 投影（含模板全部能力配置）
         employee_id = str(uuid4())
+        skills = [str(s.get("code") or s.get("name") or s) for s in (template.skills or [])]
+        knowledge_refs = [str(k.get("kb_id") or k.get("id") or k) for k in (template.knowledge_bases or [])]
+        memory_policy = _build_memory_policy_from_initial_memories(template.initial_memories)
         projection = LoadedExpertProjection(
             employee_id=employee_id,
             tenant_id="",  # 本地仓不依赖 tenant_id，后续 sync 会刷新
             version="1",
             display_name=template.display_name,
             runtime_binding=None,
+            persona=template.persona or None,
+            model_policy=_build_model_policy_from_template(template),
+            runtime_policy=RuntimePolicy(),
+            tools=[],
+            skills=[s for s in skills if s],
+            knowledge_refs=[k for k in knowledge_refs if k],
+            connector_refs=[],
+            memory_policy=memory_policy,
             synced_at=_now_dt(),
             revoked=False,
         )

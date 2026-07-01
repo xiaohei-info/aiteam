@@ -26,6 +26,7 @@ from .schemas import (
     RecruitExpertRequest,
     RecruitExpertResult,
     RecruitmentOrderOut,
+    SolutionApplyRecordOut,
     SolutionInstanceOut,
 )
 
@@ -166,5 +167,22 @@ def build_recruit_router(verifier) -> APIRouter:
             data=svc.get_recruit_order(tenant_context_from(claims), order_id=order_id)
         )
 
+    @router.get(
+        "/solutions/{solution_id}/apply-records", description="请查看接口名称了解用途",
+        summary="列本租户某方案的应用记录（审计追溯 who/when/version + 落地专家，AITEAM-242）",
+        operation_id="manager_list_solution_apply_records",
+    )
+    async def list_solution_apply_records(
+        solution_id: str,
+        request: Request,
+        status: str | None = None,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[SolutionApplyRecordOut]:
+        svc = _service(request)
+        return ListEnvelope[SolutionApplyRecordOut](
+            data=svc.list_solution_apply_records(
+                tenant_context_from(claims), solution_id=solution_id, status=status,
+            )
+        )
 
     return router

@@ -14,6 +14,10 @@ class CollaborationTemplateOut(BaseModel):
     routing_prompt: str = ""
     handoff_prompt: str = ""
     max_replies_per_message: int = 3
+    planner_prompt: str = ""
+    subtask_prompt: str = ""
+    aggregate_prompt: str = ""
+    is_default: bool = True
     updated_at: datetime
 
 
@@ -23,6 +27,10 @@ class CollaborationTemplateIn(BaseModel):
     routing_prompt: str | None = None
     handoff_prompt: str | None = None
     max_replies_per_message: int | None = None
+    planner_prompt: str | None = None
+    subtask_prompt: str | None = None
+    aggregate_prompt: str | None = None
+    is_default: bool | None = None
 
 
 class AuditEventOut(BaseModel):

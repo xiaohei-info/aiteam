@@ -64,6 +64,48 @@ afterEach(() => {
 });
 
 describe("MarketplacePage", () => {
+  it("标题栏含「发布需求」和「上架我的智能体」两个入口按钮", async () => {
+    loginStorage();
+    globalThis.fetch = mockFetch((url) => {
+      if (url.includes("/marketplace/templates")) return listEnvelope([]);
+      return listEnvelope([]);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("人才市场")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "发布需求" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /上架我的智能体/ })).toBeInTheDocument();
+  });
+
+  it("点击「发布需求」→ 展示入口提示，模板列表仍渲染", async () => {
+    loginStorage();
+    globalThis.fetch = mockFetch((url) => {
+      if (url.includes("/marketplace/templates")) return listEnvelope([tplA]);
+      return listEnvelope([]);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "发布需求" }));
+    await waitFor(() => expect(screen.getByText(/发布需求功能/)).toBeInTheDocument());
+    // 列表不被整页错误覆盖
+    expect(screen.getByText("营销专家A")).toBeInTheDocument();
+  });
+
+  it("点击「上架我的智能体」→ 展示入口提示，模板列表仍渲染", async () => {
+    loginStorage();
+    globalThis.fetch = mockFetch((url) => {
+      if (url.includes("/marketplace/templates")) return listEnvelope([tplA]);
+      return listEnvelope([]);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /上架我的智能体/ }));
+    await waitFor(() => expect(screen.getByText(/发布你的智能体/)).toBeInTheDocument());
+    expect(screen.getByText("营销专家A")).toBeInTheDocument();
+  });
+
   it("渲染模板列表（含已招募标记）", async () => {
     loginStorage();
     globalThis.fetch = mockFetch((url) => {

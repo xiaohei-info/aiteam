@@ -17,7 +17,7 @@ from shared.contracts.enums import ConversationState
 from shared.errors import NotFound
 
 from ..local_db import LocalDb
-from .models import Conversation, Message, Run, RunStatus, Task, TaskStatus
+from .models import (Conversation, Message, Run, RunStatus, RunTriggerType, RunExecutionMode, Task, TaskStatus)
 
 
 def _now() -> datetime:
@@ -44,6 +44,15 @@ class ConversationRepository(ABC):
         planner_employee_id: str | None = None,
     ) -> Conversation: ...
 
+    @abstractmethod
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation: ...
+
 
 class MessageRepository(ABC):
     @abstractmethod
@@ -61,7 +70,12 @@ class RunRepository(ABC):
     def list(self, conversation_id: str) -> list[Run]: ...
     @abstractmethod
     def finalize(self, run_id: str, status: RunStatus, *,
-                 session_id: str | None, error: str | None, usage: dict | None) -> Run: ...
+                 session_id: str | None, error: str | None, usage: dict | None,
+                 trigger_type: "RunTriggerType | None" = None,
+                 execution_mode: "RunExecutionMode | None" = None) -> Run: ...
+
+    @abstractmethod
+    def update_status(self, run_id: str, run: Run) -> Run: ...
 
 
 class TaskRepository(ABC):
@@ -128,6 +142,25 @@ class InMemoryConversationRepository(ConversationRepository):
         self._items[conversation_id] = updated
         return updated
 
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation:
+        item = self.get(conversation_id)
+        data = item.model_dump()
+        if last_read_at is not None:
+            data["last_read_at"] = last_read_at
+        if last_read_message_id is not None:
+            value = None if (isinstance(last_read_message_id, str) and not last_read_message_id.strip()) else last_read_message_id
+            data["last_read_message_id"] = value
+        data["updated_at"] = _now()
+        updated = Conversation(**data)
+        self._items[conversation_id] = updated
+        return updated
+
 
 class InMemoryMessageRepository(MessageRepository):
     def __init__(self) -> None:
@@ -162,13 +195,28 @@ class InMemoryRunRepository(RunRepository):
         )
 
     def finalize(self, run_id: str, status: RunStatus, *,
-                 session_id: str | None, error: str | None, usage: dict | None) -> Run:
+                 session_id: str | None, error: str | None, usage: dict | None,
+                 trigger_type: RunTriggerType | None = None,
+                 execution_mode: RunExecutionMode | None = None) -> Run:
         item = self.get(run_id)
         updated = item.model_copy(update={
             "status": status,
             "session_id": session_id,
             "error": error,
             "usage": usage,
+            **({"trigger_type": trigger_type} if trigger_type is not None else {}),
+            **({"execution_mode": execution_mode} if execution_mode is not None else {}),
+            "updated_at": _now(),
+        })
+        self._items[run_id] = updated
+        return updated
+
+    def update_status(self, run_id: str, run: Run) -> Run:
+        item = self.get(run_id)
+        updated = item.model_copy(update={
+            "status": run.status,
+            "trigger_type": run.trigger_type,
+            "execution_mode": run.execution_mode,
             "updated_at": _now(),
         })
         self._items[run_id] = updated
@@ -219,11 +267,13 @@ class SqliteConversationRepository(ConversationRepository):
         self._db.execute(
             "INSERT INTO conversations "
             "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "last_read_at, last_read_message_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (conversation.id, conversation.title, conversation.state.value,
              conversation.collaboration_mode, conversation.orchestration_brief,
              conversation.planner_employee_id,
+             _iso(conversation.last_read_at) if conversation.last_read_at is not None else None,
+             conversation.last_read_message_id,
              _iso(conversation.created_at), _iso(conversation.updated_at)),
         )
         return conversation
@@ -232,20 +282,28 @@ class SqliteConversationRepository(ConversationRepository):
         row = self._db.query_one(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
-            "created_at, updated_at FROM conversations WHERE id = ?",
+            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations WHERE id = ?",
             (conversation_id,),
         )
         if row is None:
             raise NotFound(f"conversation {conversation_id} not found")
-        return Conversation(**dict(row))
+        row = dict(row)
+        row["last_read_at"] = datetime.fromisoformat(row["last_read_at"]) if row.get("last_read_at") else None
+        return Conversation(**row)
 
     def list(self) -> list[Conversation]:
         rows = self._db.query(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
-            "created_at, updated_at FROM conversations ORDER BY created_at, rowid"
+            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations "
+            "ORDER BY created_at, rowid"
         )
-        return [Conversation(**dict(r)) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["last_read_at"] = datetime.fromisoformat(d["last_read_at"]) if d.get("last_read_at") else None
+            result.append(Conversation(**d))
+        return result
 
     def set_state(self, conversation_id: str, state: ConversationState) -> Conversation:
         self.get(conversation_id)  # 存在性校验 -> NotFound
@@ -287,6 +345,28 @@ class SqliteConversationRepository(ConversationRepository):
         )
         return self.get(conversation_id)
 
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation:
+        """更新会话阅读状态（last_read_at / last_read_message_id）；空串 message_id 视为 None 清除。"""
+        self.get(conversation_id)  # 存在性校验 -> NotFound
+        if last_read_at is not None:
+            self._db.execute(
+                "UPDATE conversations SET last_read_at = ?, updated_at = ? WHERE id = ?",
+                (_iso(last_read_at), _iso(_now()), conversation_id),
+            )
+        if last_read_message_id is not None:
+            value = None if (isinstance(last_read_message_id, str) and not last_read_message_id.strip()) else last_read_message_id
+            self._db.execute(
+                "UPDATE conversations SET last_read_message_id = ?, updated_at = ? WHERE id = ?",
+                (value, _iso(_now()), conversation_id),
+            )
+        return self.get(conversation_id)
+
 
 class SqliteMessageRepository(MessageRepository):
     def __init__(self, db: LocalDb) -> None:
@@ -317,13 +397,17 @@ class SqliteRunRepository(RunRepository):
     def _row_to_run(row) -> Run:
         data = dict(row)
         data["usage"] = json.loads(data["usage"]) if data["usage"] is not None else None
+        data.setdefault("trigger_type", "manual_run")
+        data.setdefault("execution_mode", "single_agent")
         return Run(**data)
 
     def create(self, run: Run) -> Run:
         self._db.execute(
-            "INSERT INTO runs (id, conversation_id, status, session_id, error, usage, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (run.id, run.conversation_id, run.status.value, run.session_id, run.error,
+            "INSERT INTO runs (id, conversation_id, status, trigger_type, execution_mode, "
+            "session_id, error, usage, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (run.id, run.conversation_id, run.status.value, run.trigger_type.value,
+             run.execution_mode.value, run.session_id, run.error,
              json.dumps(run.usage) if run.usage is not None else None,
              _iso(run.created_at), _iso(run.updated_at)),
         )
@@ -343,13 +427,30 @@ class SqliteRunRepository(RunRepository):
         return [self._row_to_run(r) for r in rows]
 
     def finalize(self, run_id: str, status: RunStatus, *,
-                 session_id: str | None, error: str | None, usage: dict | None) -> Run:
+                 session_id: str | None, error: str | None, usage: dict | None,
+                 trigger_type: RunTriggerType | None = None,
+                 execution_mode: RunExecutionMode | None = None) -> Run:
         self.get(run_id)  # 存在性校验 -> NotFound
         self._db.execute(
-            "UPDATE runs SET status = ?, session_id = ?, error = ?, usage = ?, updated_at = ? "
+            "UPDATE runs SET status = ?, trigger_type = COALESCE(?, trigger_type), "
+            "execution_mode = COALESCE(?, execution_mode), "
+            "session_id = ?, error = ?, usage = ?, updated_at = ? "
             "WHERE id = ?",
-            (status.value, session_id, error,
+            (status.value,
+             trigger_type.value if trigger_type is not None else None,
+             execution_mode.value if execution_mode is not None else None,
+             session_id, error,
              json.dumps(usage) if usage is not None else None, _iso(_now()), run_id),
+        )
+        return self.get(run_id)
+
+    def update_status(self, run_id: str, run: Run) -> Run:
+        self.get(run_id)  # 存在性校验 -> NotFound
+        self._db.execute(
+            "UPDATE runs SET status = ?, trigger_type = ?, execution_mode = ?, updated_at = ? "
+            "WHERE id = ?",
+            (run.status.value, run.trigger_type.value, run.execution_mode.value,
+             _iso(_now()), run_id),
         )
         return self.get(run_id)
 

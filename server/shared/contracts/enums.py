@@ -86,3 +86,22 @@ class IsolationLevel(str, Enum):
     L1_SHARED_RLS = "l1_shared_rls"
     L2_SCHEMA_PER_TENANT = "l2_schema_per_tenant"
     L3_DB_PER_TENANT = "l3_db_per_tenant"
+
+
+class EmployeeStatus(str, Enum):
+    """employee 主状态（issue #281，领域 §5.1）。
+
+    流转口径：draft → provisioning → active ↔ paused → archived
+                                   ↓
+                           provisioning_failed（可重试）
+
+    下游持久化与 API 值均用枚举 value（禁止重新声明）。
+    """
+
+    DRAFT = "draft"
+    PROVISIONING = "provisioning"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    PROVISIONING_FAILED = "provisioning_failed"
+    ARCHIVED = "archived"
+

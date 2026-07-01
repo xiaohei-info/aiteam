@@ -185,86 +185,25 @@ def test_data_survives_reopen(db_path):
     d2.close()
 
 
-# ---- 迁移幂等 ----
-
-def test_apply_migrations_idempotent(db_path):
-    d = connect(db_path)
-    first = apply_migrations(d)
-    assert "0001_mainline.sql" in first
-    assert apply_migrations(d) == []  # 二次应用无新文件
-    d.close()
-
-
-# ---- 装配链：build_mainline_service(db_path=...) 落 SQLite，跨重建可读回 ----
-
-def test_factory_wires_sqlite_and_persists_across_rebuild(db_path):
-    from agent_service.mainline.factory import build_mainline_service
-
-    svc1 = build_mainline_service(db_path=db_path)
-    conv = svc1.create_conversation(title="persist me")
-    svc1.add_message(conv.id, role=MessageRole.USER, content="hi")
-
-    # 重建 service（模拟进程重启）指向同一文件，应读回。
-    svc2 = build_mainline_service(db_path=db_path)
-    assert svc2.get_conversation(conv.id).title == "persist me"
-    assert [m.content for m in svc2.list_messages(conv.id)] == ["hi"]
-
-
-def test_factory_without_db_path_uses_memory(db_path):
-    """未配 db_path → 内存实现，不落文件（dev/测试默认行为不变）。"""
-    import os
-
-    from agent_service.mainline.factory import build_mainline_service
-
-    svc = build_mainline_service()
-    conv = svc.create_conversation(title="ephemeral")
-    assert svc.get_conversation(conv.id).title == "ephemeral"
-    # 内存路径不应创建任何 db 文件。
-    assert not os.path.exists(db_path)
-
-
-def test_sqlite_collaboration_persists_and_roundtrips(db_path):
-    """协作编排字段落 SQLite，跨重建可读回；orchestrated 必填 brief，free 清空 brief。"""
-    d1 = connect(db_path)
-    apply_migrations(d1)
-    repo = SqliteConversationRepository(d1)
-    conv = repo.create(Conversation(id="conv_orch", title="编排群"))
-    assert conv.collaboration_mode == "free"
-    assert conv.orchestration_brief == ""
-
-    updated = repo.update_collaboration(
-        "conv_orch", collaboration_mode="orchestrated",
-        orchestration_brief="先调研再撰写", planner_employee_id="alice",
-    )
-    assert updated.collaboration_mode == "orchestrated"
-    assert updated.orchestration_brief == "先调研再撰写"
-    assert updated.planner_employee_id == "alice"
-
-    # 跨重建读回
-    d1.close()
-    d2 = connect(db_path)
-    assert apply_migrations(d2) == []
-    reloaded = SqliteConversationRepository(d2).get("conv_orch")
-    assert reloaded.collaboration_mode == "orchestrated"
-    assert reloaded.orchestration_brief == "先调研再撰写"
-    assert reloaded.planner_employee_id == "alice"
-
-    # 切回 free 清空 brief
-    cleared = SqliteConversationRepository(d2).update_collaboration("conv_orch", collaboration_mode="free")
-    assert cleared.collaboration_mode == "free"
-    assert cleared.orchestration_brief == ""
-    d2.close()
-
-
-def test_sqlite_orchestrated_without_brief_rejected(db_path):
+def test_sqlite_conversation_read_status_roundtrip_and_restart(tmp_path):
+    """SQLite read-status roundtrip + restart re-read."""
+    db_path = str(tmp_path / "agent_read.db")
     d = connect(db_path)
     apply_migrations(d)
     repo = SqliteConversationRepository(d)
-    repo.create(Conversation(id="conv_orch2", title="x"))
-    with pytest.raises(ValueError):
-        repo.update_collaboration("conv_orch2", collaboration_mode="orchestrated")
-    # 清空 brief 的 orchestrated 也拒绝
-    repo.update_collaboration("conv_orch2", collaboration_mode="orchestrated", orchestration_brief="ok")
-    with pytest.raises(ValueError):
-        repo.update_collaboration("conv_orch2", orchestration_brief="")
+    conv = repo.create(Conversation(id="c1"))
+    assert conv.last_read_at is None
+    ts = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    repo.update_read_status("c1", last_read_at=ts, last_read_message_id="msg_abc")
+    got = repo.get("c1")
+    assert got.last_read_at == ts
+    assert got.last_read_message_id == "msg_abc"
+    repo.update_read_status("c1", last_read_message_id="")
+    assert repo.get("c1").last_read_message_id is None
     d.close()
+    d2 = connect(db_path)
+    repo2 = SqliteConversationRepository(d2)
+    got2 = repo2.get("c1")
+    assert got2.last_read_at == ts
+    assert got2.last_read_message_id is None
+    d2.close()

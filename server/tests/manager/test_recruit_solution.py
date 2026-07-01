@@ -29,6 +29,7 @@ from manager_service.operator_catalog import (
 from manager_service.recruit_order_repository import RecruitmentOrderRow, RecruitOrderRepository
 from manager_service.recruit_repository import (
     RecruitEventRow,
+    SolutionApplyRecordRow,
     SolutionInstanceRow,
 )
 from manager_service.recruit_service import RecruitService
@@ -98,6 +99,9 @@ class _FakeRecruitRepo:
     def __init__(self):
         self._solutions: dict[str, dict[str, SolutionInstanceRow]] = {}
         self._events: dict[str, list[RecruitEventRow]] = {}
+        # AITEAM-242 — 方案应用记录
+        self._apply_records: dict[str, dict[str, SolutionApplyRecordRow]] = {}
+        self._apply_seq: int = 0
 
     def create_solution_instance(self, ctx, **kw):
         row = SolutionInstanceRow(
@@ -140,6 +144,52 @@ class _FakeRecruitRepo:
 
     def list_recruit_events(self, ctx):
         return list(self._events.get(ctx.tenant_id, []))
+
+    # ---- 方案应用记录伪实现（AITEAM-242）----
+    def create_solution_apply_record(self, ctx, **kw):
+        import uuid as _uuid
+        record_id = str(_uuid.uuid4())
+        row = SolutionApplyRecordRow(
+            id=record_id,
+            tenant_id=ctx.tenant_id,
+            solution_id=kw["solution_id"],
+            solution_version=kw["solution_version"],
+            applied_by=kw.get("applied_by"),
+            status=kw.get("status", "applied"),
+            expert_instance_ids=list(kw.get("expert_instance_ids") or []),
+            detail=kw.get("detail"),
+            created_at=self._apply_seq,
+            updated_at=self._apply_seq,
+        )
+        self._apply_seq += 1
+        # Enforce unique (tenant, solution, solution_version) by overwriting the previous row.
+        bucket = self._apply_records.setdefault(ctx.tenant_id, {})
+        existing = next(
+            (k for k, v in bucket.items()
+             if v.solution_id == kw["solution_id"] and v.solution_version == kw["solution_version"]),
+            None,
+        )
+        if existing is not None:
+            record_id = existing
+        bucket[record_id] = row
+        return row
+
+    def list_solution_apply_records(self, ctx, *, solution_id=None, status=None):
+        rows = list(self._apply_records.get(ctx.tenant_id, {}).values())
+        if solution_id:
+            rows = [r for r in rows if r.solution_id == solution_id]
+        if status:
+            rows = [r for r in rows if r.status == status]
+        rows.sort(key=lambda r: (r.created_at is None, r.created_at or 0), reverse=True)
+        return rows
+
+    def get_latest_solution_apply_record(self, ctx, *, solution_id):
+        rows = [r for r in self._apply_records.get(ctx.tenant_id, {}).values()
+                if r.solution_id == solution_id and r.status == "applied"]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: r.id, reverse=True)
+        return rows[0]
 
 
 class _FakeOrderRepo(RecruitOrderRepository):

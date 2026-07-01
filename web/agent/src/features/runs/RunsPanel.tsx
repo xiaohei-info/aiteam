@@ -12,8 +12,10 @@ import { listRuns, listTasks, cancelRun, retryRun, type Run, type Task } from ".
 interface Props { client: AgentApiClient; conversationId: string; refreshSignal?: number; }
 
 function statusColor(s: string): string {
-  if (s === "completed") return "text-success";
-  if (s === "running") return "text-gold";
+  if (s === "succeeded" || s === "completed") return "text-success";
+  if (s === "running" || s === "submitting") return "text-gold";
+  if (s === "queued" || s === "routing") return "text-text-secondary";
+  if (s === "waiting_human") return "text-gold-soft";
   if (s === "failed") return "text-danger";
   if (s === "cancelled") return "text-text-muted";
   return "text-text-secondary";
@@ -47,13 +49,20 @@ export function RunsPanel({ client, conversationId, refreshSignal = 0 }: Props):
               {runs.map((r) => (
                 <tr key={r.id}>
                   <td><code className="text-xs text-gold-bright">{r.id.slice(-8)}</code></td>
-                  <td><span className={statusColor(r.status)}>{r.status}</span></td>
+                  <td>
+                    <div className="flex flex-col">
+                      <span className={statusColor(r.status)}>{r.status}</span>
+                      {(r.trigger_type || r.execution_mode) && (
+                        <span className="text-xs text-text-muted">{r.trigger_type}/{r.execution_mode}</span>
+                      )}
+                    </div>
+                  </td>
                   <td>
                     <div className="flex gap-xs">
                       {r.status === "running" && (
                         <Button type="button" variant="ghost" size="sm" onClick={async () => { await cancelRun(client, r.id); void load(); }}>取消</Button>
                       )}
-                      {(r.status === "completed" || r.status === "failed" || r.status === "cancelled") && (
+                      {(r.status === "succeeded" || r.status === "completed" || r.status === "failed" || r.status === "cancelled") && (
                         <Button type="button" variant="ghost" size="sm" onClick={async () => { await retryRun(client, r.id); void load(); }}>重试</Button>
                       )}
                     </div>

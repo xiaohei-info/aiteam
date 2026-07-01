@@ -1,4 +1,4 @@
-/** P03 人才市场页 — 专家模板浏览 + 招募。 */
+/** P03 人才市场页 — 专家浏览/招募 + 发布需求/上架智能体入口（demo 对齐：AI-Team-Demo.html:1265-1266）。 */
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
@@ -16,6 +16,7 @@ export function MarketplacePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionInfo, setActionInfo] = useState<string | null>(null);
   const [recruiting, setRecruiting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -33,9 +34,25 @@ export function MarketplacePage() {
     try { await recruit(client, templateId); await load(); } catch (errRecruit) { setActionError(errRecruit instanceof ApiError ? errRecruit.message : "招募失败"); } finally { setRecruiting(null); }
   }, [client, load]);
 
+  const handlePublishRequirement = useCallback(() => {
+    setActionError(null);
+    setActionInfo(i18n.t("agent.marketplace.publish_requirement_hint"));
+  }, [i18n]);
+
+  const handleListMyAgent = useCallback(() => {
+    setActionError(null);
+    setActionInfo(i18n.t("agent.marketplace.list_my_agent_hint"));
+  }, [i18n]);
+
   return (
     <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">人才市场</h1>
+      <div className="flex items-start justify-between gap-sm">
+        <h1 className="m-0 text-xl font-bold text-text-primary">人才市场</h1>
+        <div className="flex gap-sm">
+          <Button variant="ghost" onClick={() => void handlePublishRequirement()}>{i18n.t("agent.marketplace.publish_requirement")}</Button>
+          <Button variant="metal" onClick={() => void handleListMyAgent()}>{i18n.t("agent.marketplace.list_my_agent")}</Button>
+        </div>
+      </div>
 
       <div className="flex gap-sm">
         <Input placeholder="搜索专家名称、技能…" value={keyword} onChange={(e) => setKeyword((e.target as HTMLInputElement).value)} className="flex-1" />
@@ -49,6 +66,7 @@ export function MarketplacePage() {
       </div>
 
       {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
+      {actionInfo && <p className="m-0 rounded-md border border-info/30 bg-info/10 px-sm py-sm text-sm text-info">{actionInfo}</p>}
 
       {loading ? <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel> :
         error ? <GlassPanel className="rounded-window border border-danger/30 p-lg text-sm text-danger">{error}</GlassPanel> :
