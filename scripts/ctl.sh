@@ -168,6 +168,29 @@ parse_args() {
   fi
 }
 
+# 解析 docker compose 命令：优先 v2 插件（docker compose），回退 v1（docker-compose）。
+# 探测一次并缓存，兼容两种安装形态。
+COMPOSE_CMD=()
+resolve_compose_cmd() {
+  if (( ${#COMPOSE_CMD[@]} )); then
+    return 0
+  fi
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker-compose)
+  else
+    echo "[ctl] Neither 'docker compose' (v2) nor 'docker-compose' (v1) is available" >&2
+    exit 127
+  fi
+}
+
+# 统一的 compose 调用入口，替代硬编码的 docker-compose。
+dc() {
+  resolve_compose_cmd
+  "${COMPOSE_CMD[@]}" "$@"
+}
+
 # Docker Compose 操作
 docker_compose_cmd() {
   local action="$1"
@@ -178,40 +201,40 @@ docker_compose_cmd() {
   case "${action}" in
     start)
       if [[ "${SERVER}" == "all" ]]; then
-        docker-compose up -d
+        dc up -d
         echo "[ctl] Started all services (docker)"
       elif [[ "${SERVER}" == "postgres" ]]; then
-        docker-compose up -d postgres
+        dc up -d postgres
         echo "[ctl] Started postgres (docker)"
       else
-        docker-compose up -d postgres "${SERVER}"
+        dc up -d postgres "${SERVER}"
         echo "[ctl] Started ${SERVER} (docker)"
       fi
       ;;
     stop)
       if [[ "${SERVER}" == "all" ]]; then
-        docker-compose down
+        dc down
         echo "[ctl] Stopped all services (docker)"
       else
-        docker-compose stop "${SERVER}"
+        dc stop "${SERVER}"
         echo "[ctl] Stopped ${SERVER} (docker)"
       fi
       ;;
     status)
-      docker-compose ps
+      dc ps
       ;;
     logs)
       if [[ "${SERVER}" == "all" ]]; then
         if (( FOLLOW_LOGS )); then
-          docker-compose logs -f
+          dc logs -f
         else
-          docker-compose logs --tail=100
+          dc logs --tail=100
         fi
       else
         if (( FOLLOW_LOGS )); then
-          docker-compose logs -f "${SERVER}"
+          dc logs -f "${SERVER}"
         else
-          docker-compose logs --tail=100 "${SERVER}"
+          dc logs --tail=100 "${SERVER}"
         fi
       fi
       ;;
@@ -293,11 +316,11 @@ start_service_local() {
 
       echo "[ctl] Starting postgres (docker container)..."
       cd "${REPO_ROOT}/deploy"
-      docker-compose up -d postgres
+      dc up -d postgres
       # 等待 postgres 就绪
       echo "[ctl] Waiting for postgres to be ready..."
       for i in {1..30}; do
-        if docker-compose exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
+        if dc exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
           echo "[ctl] Postgres is ready"
           break
         fi
@@ -386,7 +409,7 @@ stop_service_local() {
   if [[ "${service}" == "postgres" ]]; then
     echo "[ctl] Stopping postgres (docker container)..."
     cd "${REPO_ROOT}/deploy"
-    docker-compose stop postgres
+    dc stop postgres
     return 0
   fi
 
