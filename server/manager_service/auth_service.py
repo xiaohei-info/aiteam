@@ -168,7 +168,7 @@ class AuthService:
         """企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。
 
         按 tenant_registry.enterprise_code 或 enterprise_slug 匹配（优先 code，再 slug），
-        404 未找到。返回 tenant_id UUID 供 login/owner-reset 使用。
+        404 未找到。返回 tenant_id UUID 字符串供 login/owner-reset 使用。
         """
         import psycopg
 
@@ -180,7 +180,7 @@ class AuthService:
             ).fetchone()
             if not row:
                 raise NotFound(f"enterprise not found: {enterprise}")
-            return row[0]
+            return str(row[0])  # psycopg 返回 UUID 对象,转 str
 
 
 def record_attempt(audit, ctx, *, provider, external_id, actor, success, detail):
