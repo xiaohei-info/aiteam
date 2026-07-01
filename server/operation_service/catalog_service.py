@@ -41,6 +41,12 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         prompt_pack_json=payload.get("prompt_pack_json", {}),
         category_code=payload.get("category_code", ""),
         role_name=payload.get("role_name", ""),
+        persona=payload.get("persona"),
+        recommended_config=payload.get("recommended_config", {}),
+        expert_bindings=payload.get("expert_bindings"),
+        knowledge_refs=payload.get("knowledge_refs", []),
+        skill_refs=payload.get("skill_refs", []),
+        default_grants=payload.get("default_grants"),
     )
 
 

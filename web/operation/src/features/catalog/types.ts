@@ -21,6 +21,19 @@ export interface CatalogItem {
   display_name: string;
   status: CatalogStatus;
   visible_scope: Record<string, unknown> | null;
+  persona?: string | null;
+  recommended_config?: Record<string, unknown>;
+  expert_bindings?: ExpertBinding[];
+  knowledge_refs?: string[];
+  skill_refs?: string[];
+  default_grants?: Record<string, unknown> | null;
+}
+
+/** 方案内专家绑定（对齐后端 ExpertBinding schema）。 */
+export interface ExpertBinding {
+  template_id: string;
+  sequence_no: number;
+  enabled: boolean;
 }
 
 /** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest）。 */
