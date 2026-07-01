@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from agent_service.mainline.group import GroupChatService, GroupExpert
+from agent_service.mainline.service import MainlineService
+
 from .store import (
     GroupConversation,
     GroupConversationRepository,
@@ -18,7 +21,11 @@ from .store import (
 
 
 class GroupMgmtService:
-    """用户端群聊管理服务。"""
+    """用户端群聊管理服务。
+
+    send_message 在落库后，经 MainlineService 调用 GroupChatService.post_and_dispatch()
+    触发被 @ 专家的 run 编排（修复 AITEAM-274：群聊消息不再只存库不编排）。
+    """
 
     def __init__(
         self,
@@ -26,10 +33,14 @@ class GroupMgmtService:
         conv_store: GroupConversationRepository,
         member_store: GroupMemberRepository,
         msg_store: GroupMessageRepository,
+        mainline: MainlineService | None = None,
     ) -> None:
         self._conv = conv_store
         self._members = member_store
         self._msgs = msg_store
+        self._mainline = mainline
+        # 群聊 conversation_id -> 对应 mainline conversation_id 的映射，保证编排落在同一会话上。
+        self._mainline_convs: dict[str, str] = {}
 
     # ---- 群聊 CRUD ----
 
@@ -38,6 +49,9 @@ class GroupMgmtService:
         created = self._conv.create(conv)
         for eid in employee_ids:
             self._members.add(GroupMember(conversation_id=conv.conversation_id, employee_id=eid))
+        if self._mainline is not None:
+            mainline_conv = self._mainline.create_conversation(title=group_name)
+            self._mainline_convs[created.conversation_id] = mainline_conv.id
         return created
 
     def list_groups(self) -> list[GroupConversation]:
@@ -75,9 +89,9 @@ class GroupMgmtService:
 
     # ---- 消息 ----
 
-    def send_message(self, conversation_id: str, content: str,
-                     author_id: str | None = None, author_name: str | None = None,
-                     mentions: list[str] | None = None) -> GroupMessage | None:
+    async def send_message(self, conversation_id: str, content: str,
+                           author_id: str | None = None, author_name: str | None = None,
+                           mentions: list[str] | None = None) -> GroupMessage | None:
         conv = self._conv.get(conversation_id)
         if conv is None or conv.archived:
             return None
@@ -90,7 +104,25 @@ class GroupMgmtService:
             author_name=author_name,
             mentions=mentions or [],
         )
-        return self._msgs.create(msg)
+        stored = self._msgs.create(msg)
+
+        # 触发专家响应编排：经 MainlineService 调用 GroupChatService.post_and_dispatch()，
+        # 让被 @ 专家起 run 响应（AITEAM-274）。
+        if self._mainline is not None:
+            await self._dispatch(conversation_id, content)
+
+        return stored
+
+    async def _dispatch(self, group_conv_id: str, content: str) -> None:
+        mainline_conv_id = self._mainline_convs.get(group_conv_id)
+        if mainline_conv_id is None or self._mainline is None:
+            return
+        roster = [
+            GroupExpert(handle=member.employee_id)
+            for member in self._members.list_by_conversation(group_conv_id)
+        ]
+        group_chat = GroupChatService(self._mainline, experts=roster)
+        await group_chat.post_and_dispatch(mainline_conv_id, content)
 
     def list_messages(self, conversation_id: str, cursor: int = 0) -> list[GroupMessage]:
         return self._msgs.list_by_conversation(conversation_id, cursor=cursor)
