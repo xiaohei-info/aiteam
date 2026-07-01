@@ -35,6 +35,9 @@ def provision_tenant(
     """
     import json
     import psycopg
+    from psycopg import errors as pg_errors
+
+    from shared.errors import Conflict
 
     dsn = request.app.state.settings.admin_db_url
     if not dsn:
@@ -45,14 +48,22 @@ def provision_tenant(
     # 使用业务连接（app_rw）处理租户作用域数据（quota_policy 有 RLS）
     business_dsn = request.app.state.settings.db_url
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        # 1. 插入 tenant_registry（控制面表，无 RLS，admin 连接）
-        conn.execute(
-            "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code)"
-            " VALUES (%s, %s, %s)"
-            " ON CONFLICT (tenant_id) DO NOTHING",
-            (body.tenant_id, slug, body.enterprise_code),
-        )
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            # 1. 插入 tenant_registry（控制面表，无 RLS，admin 连接）
+            conn.execute(
+                "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code)"
+                " VALUES (%s, %s, %s)"
+                " ON CONFLICT (tenant_id) DO NOTHING",
+                (body.tenant_id, slug, body.enterprise_code),
+            )
+    except pg_errors.UniqueViolation as e:
+        # enterprise_slug 或 enterprise_code 唯一约束冲突 → 409 清晰提示
+        if "enterprise_slug" in str(e):
+            raise Conflict(f"企业标识 '{slug}' 已被占用，请更换企业名称或填写不同的企业代码")
+        if "enterprise_code" in str(e):
+            raise Conflict(f"企业代码 '{body.enterprise_code}' 已被占用，请更换")
+        raise Conflict("企业信息重复，请检查企业名称和代码")
 
     # 2. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
     if body.initial_quota_policy:
