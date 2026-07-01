@@ -46,6 +46,14 @@ class KnowledgeIngestionJobRepo:
         )
         return [self._row_to_entity(r) for r in self.cur.fetchall()]
 
+    def list_by_kb(self, kb_id: str) -> list[KnowledgeIngestionJob]:
+        self.cur.execute(
+            f"SELECT {self._FIELDS} FROM knowledge_ingestion_job "
+            "WHERE knowledge_base_id = %s AND deleted_at IS NULL ORDER BY created_at DESC",
+            (kb_id,),
+        )
+        return [self._row_to_entity(r) for r in self.cur.fetchall()]
+
     def update_state(
         self,
         job_id: str,
