@@ -1,7 +1,7 @@
 /**
  * S04 财务管理页测试。
  *
- * 覆盖：期间切换、指标卡片、loading/error 态、TOP5 消费者。
+ * 覆盖：期间切换、指标卡片、loading/error 态、TOP5 消费者、报表明细面板。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -52,7 +52,23 @@ function makeOverview(overrides: Record<string, unknown> = {}) {
     monthly_trend: [],
     top5_consumers: [
       { name: "企业A", amount: "20000.00" },
-      { name: "企业B", amount: "15000.00" },
+      { name: "企业B", amount: "12000.00" },
+    ],
+    ...overrides,
+  };
+}
+
+function makeReports(overrides: Record<string, unknown> = {}) {
+  return {
+    recharge_details: [
+      { recharge_id: "rchg-1", enterprise_id: "ent-A", amount: "10000.00", created_at: "2026-06-01T00:00:00Z" },
+      { recharge_id: "rchg-2", enterprise_id: "ent-B", amount: "5000.00", created_at: "2026-06-15T00:00:00Z" },
+    ],
+    consumption_details: [
+      { enterprise_id: "ent-A", token_total: 1200000, cost_total: "30000.00", run_count: 150 },
+    ],
+    profit_details: [
+      { total_revenue: "72000.00", total_cost: "65000.00", gross_profit: "7000.00", period: "month" },
     ],
     ...overrides,
   };
@@ -69,13 +85,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mockOverviewResponse(data: unknown) {
-  fetchSpy.mockResolvedValue(
-    new Response(
-      JSON.stringify({ data }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ),
-  );
+/** 按 URL 分发：overview 路径返回 overview，reports 路径返回 reports。 */
+function mockBothEndpoints(overview: unknown, reports: unknown) {
+  fetchSpy.mockImplementation((url: string | URL | Request) => {
+    const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+    const body = u.includes("/finance/reports") ? reports : overview;
+    return Promise.resolve(
+      new Response(JSON.stringify({ data: body }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
 }
 
 function renderPage() {
@@ -94,7 +115,7 @@ function renderPage() {
 
 describe("FinancePage", () => {
   it("渲染标题", async () => {
-    mockOverviewResponse(makeOverview());
+    mockBothEndpoints(makeOverview(), makeReports());
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("财务管理")).toBeInTheDocument();
@@ -102,7 +123,7 @@ describe("FinancePage", () => {
   });
 
   it("渲染期间切换按钮", async () => {
-    mockOverviewResponse(makeOverview());
+    mockBothEndpoints(makeOverview(), makeReports());
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("本月")).toBeInTheDocument();
@@ -113,12 +134,10 @@ describe("FinancePage", () => {
   });
 
   it("渲染财务指标卡片", async () => {
-    mockOverviewResponse(makeOverview({
-      total_recharged: "8888.00",
-      total_tokens_billed: 2500000000, // 2.5B
-      gross_profit: "1200.00",
-      profit_margin: 13.5,
-    }));
+    mockBothEndpoints(
+      makeOverview({ total_recharged: "8888.00", total_tokens_billed: 2500000000, gross_profit: "1200.00", profit_margin: 13.5 }),
+      makeReports(),
+    );
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("总充值金额")).toBeInTheDocument();
@@ -133,12 +152,15 @@ describe("FinancePage", () => {
   });
 
   it("渲染 TOP5 消费企业", async () => {
-    mockOverviewResponse(makeOverview({
-      top5_consumers: [
-        { name: "Alpha", amount: "30000.00" },
-        { name: "Beta", amount: "20000.00" },
-      ],
-    }));
+    mockBothEndpoints(
+      makeOverview({
+        top5_consumers: [
+          { name: "Alpha", amount: "30000.00" },
+          { name: "Beta", amount: "20000.00" },
+        ],
+      }),
+      makeReports(),
+    );
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("TOP 5 消费企业")).toBeInTheDocument();
@@ -162,29 +184,148 @@ describe("FinancePage", () => {
     });
   });
 
-  it("期间切换触发重新加载", async () => {
-    mockOverviewResponse(makeOverview({ period: "month" }));
+  it("期间切换触发重新加载，调用两个端点", async () => {
+    mockBothEndpoints(makeOverview({ period: "month" }), makeReports());
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("本月")).toBeInTheDocument();
     });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const calledUrls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(calledUrls.some((u) => u.includes("/finance/overview"))).toBe(true);
+    expect(calledUrls.some((u) => u.includes("/finance/reports"))).toBe(true);
+  });
+});
 
-    // 切换为本季
-    fetchSpy.mockResolvedValue(
-      new Response(
-        JSON.stringify({ data: makeOverview({ period: "quarter", total_recharged: "99999.00" }) }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+// === reports panel ===
+
+describe("FinancePage 报表明细面板", () => {
+  it("两个端点都被调用", async () => {
+    mockBothEndpoints(makeOverview(), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务管理")).toBeInTheDocument();
+    });
+    const urls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/finance/overview"))).toBe(true);
+    expect(urls.some((u) => u.includes("/finance/reports"))).toBe(true);
+  });
+
+  it("渲染报表明细面板 + 汇总卡", async () => {
+    mockBothEndpoints(makeOverview(), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务报表明细")).toBeInTheDocument();
+    });
+    expect(screen.getByText("充值笔数")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("充值金额")).toBeInTheDocument();
+    expect(screen.getByText("¥15000.00")).toBeInTheDocument();
+    expect(screen.getByText("毛利润")).toBeInTheDocument();
+    expect(screen.getByText("¥7000.00")).toBeInTheDocument();
+  });
+
+  it("三个 tab 都能渲染，默认展示充值明细行", async () => {
+    mockBothEndpoints(makeOverview(), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务报表明细")).toBeInTheDocument();
+    });
+    expect(screen.getByText("充值明细")).toBeInTheDocument();
+    expect(screen.getByText("消耗明细")).toBeInTheDocument();
+    expect(screen.getByText("利润明细")).toBeInTheDocument();
+
+    // 默认 tab = recharge，展示真实行数据
+    expect(screen.getByText("充值单号")).toBeInTheDocument();
+    expect(screen.getByText("rchg-1")).toBeInTheDocument();
+    expect(screen.getByText("ent-A")).toBeInTheDocument();
+  });
+
+  it("tab 切换渲染消耗明细行且不触发 refetch", async () => {
+    mockBothEndpoints(makeOverview(), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务报表明细")).toBeInTheDocument();
+    });
+    const before = fetchSpy.mock.calls.length;
+
+    fireEvent.click(screen.getByText("消耗明细"));
+    await waitFor(() => {
+      expect(screen.getByText("Token 用量")).toBeInTheDocument();
+      expect(screen.getByText("1200000")).toBeInTheDocument();
+    });
+
+    // tab 切换不应再发请求
+    expect(fetchSpy.mock.calls.length).toBe(before);
+  });
+
+  it("tab 切换渲染利润明细行且不触发 refetch", async () => {
+    mockBothEndpoints(makeOverview(), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务报表明细")).toBeInTheDocument();
+    });
+    const before = fetchSpy.mock.calls.length;
+
+    fireEvent.click(screen.getByText("利润明细"));
+    await waitFor(() => {
+      expect(screen.getByText("总收入")).toBeInTheDocument();
+      expect(screen.getByText("72000.00")).toBeInTheDocument();
+    });
+
+    expect(fetchSpy.mock.calls.length).toBe(before);
+  });
+
+  it("reports 为空数组时展示占位而非数字", async () => {
+    mockBothEndpoints(makeOverview(), makeReports({ recharge_details: [], consumption_details: [], profit_details: [] }));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("暂无数据")).toBeInTheDocument();
+    });
+  });
+
+  it("reports 端点返回 null 时不渲染明细面板", async () => {
+    // overview 成功、reports 返回 204 空（client 解析为 null）
+    fetchSpy.mockImplementation((url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (u.includes("/finance/reports")) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: makeOverview() }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("总充值金额")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("财务报表明细")).not.toBeInTheDocument();
+  });
+
+  it("period 切换会重新调用两个端点（带新 period 参数）", async () => {
+    mockBothEndpoints(makeOverview({ period: "month" }), makeReports());
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("财务管理")).toBeInTheDocument();
+    });
+
+    mockBothEndpoints(makeOverview({ period: "quarter", total_recharged: "99999.00" }), makeReports());
     fireEvent.click(screen.getByText("本季"));
 
     await waitFor(() => {
       expect(screen.getByText("¥99999.00")).toBeInTheDocument();
     });
+
+    const allUrls = fetchSpy.mock.calls.map((c) => String(c[0]));
+    const quarterCalls = allUrls.filter((u) => u.includes("period=quarter"));
+    expect(quarterCalls.length).toBeGreaterThanOrEqual(2);
   });
 });
 
-// === error state: real error, not fake success ===
+// === error state ===
 
 describe("FinancePage 错误态", () => {
   it("加载失败不渲染假成功指标", async () => {
@@ -195,5 +336,25 @@ describe("FinancePage 错误态", () => {
     });
     expect(screen.queryByText("总充值金额")).not.toBeInTheDocument();
     expect(screen.queryByText("利润")).not.toBeInTheDocument();
+  });
+
+  it("overview 失败即便 reports 成功也展示错误", async () => {
+    fetchSpy.mockImplementation((url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (u.includes("/finance/overview")) {
+        return Promise.reject(new Error("overview 服务不可用"));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: makeReports() }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("overview 服务不可用")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("财务报表明细")).not.toBeInTheDocument();
   });
 });

@@ -1,8 +1,9 @@
-/** S04 财务管理页 — 总览指标 + 报表。 */
+/** S04 财务管理页 — 总览指标 + 报表明细面板。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useFinanceApi } from "./useFinanceApi.js";
-import type { FinanceOverview } from "./types.js";
+import { FinanceReportsPanel } from "./FinanceReportsPanel.js";
+import type { FinanceOverview, FinanceReport } from "./types.js";
 
 const PERIODS = [
   { key: "month", label: "本月" },
@@ -14,6 +15,7 @@ const PERIODS = [
 export function FinancePage(): ReactNode {
   const api = useFinanceApi();
   const [overview, setOverview] = useState<FinanceOverview | null>(null);
+  const [reports, setReports] = useState<FinanceReport | null>(null);
   const [period, setPeriod] = useState("month");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,12 +23,22 @@ export function FinancePage(): ReactNode {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const nextPeriod = period;
     try {
-      setOverview(await api.getOverview(period));
+      const [ov, rp] = await Promise.all([
+        api.getOverview(nextPeriod).catch((err) => {
+          throw err instanceof Error ? err : new Error("加载失败");
+        }),
+        api.getReports(nextPeriod),
+      ]);
+      if (nextPeriod !== period) return;
+      setOverview(ov);
+      setReports(rp);
     } catch (err) {
+      if (nextPeriod !== period) return;
       setError(err instanceof Error ? err.message : "加载失败");
     } finally {
-      setLoading(false);
+      if (nextPeriod === period) setLoading(false);
     }
   }, [api, period]);
 
@@ -76,6 +88,8 @@ export function FinancePage(): ReactNode {
               ))}
             </GlassPanel>
           )}
+
+          {reports ? <FinanceReportsPanel reports={reports} /> : null}
         </>
       ) : null}
     </section>
