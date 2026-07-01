@@ -11,6 +11,7 @@ from functools import lru_cache
 from .admin_repository import AdminRepository
 from .admin_service import AdminService
 from .catalog_dependencies import get_catalog_repository
+from .health_probes import build_agent_health_probe, build_manager_health_probe
 from .dependencies import get_repository, get_rollup_repository
 from .solution_repository import SolutionRepository
 
@@ -34,4 +35,6 @@ def get_admin_service() -> AdminService:
         catalog_repo=get_catalog_repository(),
         rollup_repo=get_rollup_repository(),
         solution_repo=get_solution_repository(),
+        manager_health=build_manager_health_probe(),
+        agent_health=build_agent_health_probe(),
     )

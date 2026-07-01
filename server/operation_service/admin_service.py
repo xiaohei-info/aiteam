@@ -9,17 +9,22 @@ CatalogRepository（方案统计）+ RollupRepository（用量数据）+ Solutio
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from shared.contracts.enums import CatalogType
 from shared.errors import NotFound
 
+from .health_probes import ServiceHealthProbe
 from .admin_repository import AdminRepository
 from .catalog_repository import CatalogRepository
 from .repository import EnterpriseRepository
 from .rollup_repository import CrossEnterpriseRollupRepository
 from .solution_repository import SolutionRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -32,12 +37,16 @@ class AdminService:
         catalog_repo: CatalogRepository,
         rollup_repo: CrossEnterpriseRollupRepository,
         solution_repo: SolutionRepository | None = None,
+        manager_health: ServiceHealthProbe | None = None,
+        agent_health: ServiceHealthProbe | None = None,
     ):
         self._admin = admin_repo
         self._enterprise = enterprise_repo
         self._catalog = catalog_repo
         self._rollup = rollup_repo
         self._solution = solution_repo or SolutionRepository()
+        self._manager_health = manager_health
+        self._agent_health = agent_health
 
     # ---- 内部：确保 enterprise 有 admin state ----
 
@@ -297,14 +306,28 @@ class AdminService:
     # ---- 系统健康 ----
 
     def get_system_health(self) -> dict:
-        """系统健康：探测本端仓储是否可用（骨架期探测仓库实例）。"""
+        """运营端系统健康：真实探测 Manager / Agent 的 /healthz 端点。
+
+        operation 端自身始终视为 up；上端服务根据探测结果标记 up 或 degraded；
+        任一已探测服务 degraded 则整体 degraded，否则 healthy。
+        """
         now = datetime.now(timezone.utc)
         services: dict[str, str] = {"operation": "up"}
+        degraded = False
 
-        # manager 连通性：骨架期不发起真实 HTTP，标记 degraded。
-        services["manager"] = "degraded"
-        services["agent"] = "local"
-        overall = "healthy"
+        for name, probe in (("manager", self._manager_health), ("agent", self._agent_health)):
+            if probe is None:
+                continue
+            try:
+                status = probe.check()
+            except Exception as exc:  # noqa: BLE001 — 探测异常按 degraded 处理，不扩散
+                logger.warning("health probe failed: %s: %s", name, exc)
+                status = "degraded"
+            services[name] = status
+            if status != "up":
+                degraded = True
+
+        overall = "degraded" if degraded else "healthy"
 
         return {
             "status": overall,

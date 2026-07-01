@@ -38,6 +38,7 @@ class Settings(BaseModel):
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
+    agent_url: str | None = Field(default=None)
     # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
     # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
     service_token: str | None = Field(default=None)
@@ -72,6 +73,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
+        agent_url=os.getenv("AGENT_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
         agent_db_path=os.getenv("AGENT_DB_PATH"),
         agent_runtime=os.getenv("AGENT_RUNTIME"),
