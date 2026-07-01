@@ -24,7 +24,7 @@ import { setConversationState } from "./useChatApi";
 const mockedSetState = vi.mocked(setConversationState);
 
 function makeConv(id: string, state: string) {
-  return { id, title: "会话A", state, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
+  return { id, title: "会话A", state, last_read_at: null, last_read_message_id: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
 }
 
 function makeClient() {
