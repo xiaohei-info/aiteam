@@ -31,6 +31,7 @@ from .routes_memory_items import build_memory_items_router
 from .routes_connector_ops import build_connector_ops_router
 from .routes_org import build_org_router
 from .routes_settings import build_settings_router
+from .routes_in_app_notification import build_in_app_notification_router
 from .routes_collab_audit import build_audit_router, build_collab_router
 from .routes_mfa import (
     oauth_mgmt_router,
@@ -131,6 +132,8 @@ app.include_router(build_snapshot_router(_verifier))
 # F01/F02 控制面收端（Operator→Manager 云侧调用，05 §5.1 D4）。无 token 校验（服务间调用）。
 app.include_router(tenant_router)
 app.include_router(bootstrap_router)
+# F17 运营通知企业收端 + 站内信收件箱（Operator→Manager 窄通道 service-token；GET 受保护端点）。
+app.include_router(build_in_app_notification_router(_verifier))
 # ---- 功能补全：B04/B09 账单工资+充值 ----
 app.include_router(build_billing_router(_verifier))
 # ---- 功能补全：B01 LLM Provider/Model 管理 ----

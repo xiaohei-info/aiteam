@@ -1,13 +1,15 @@
 """运营端 admin 服务编排（S01/S03/S04）。
 
 职责：企业运营管理（列表/详情/操作/统计）、财务总览/报表、行业方案统计、系统健康。
-不执行 Agent、不持会话、不直写 Manager/Agent。
+不执行 Agent、不持会话、不直写 Manager/Agent（F17 运营通知经 ManagerGateway 窄通道转交 Manager）。
 
 编排层：组合 AdminRepository（运营状态）+ EnterpriseRepository（企业账号）+
-CatalogRepository（方案统计）+ RollupRepository（用量数据）+ SolutionRepository（方案应用统计）。
+CatalogRepository（方案统计）+ RollupRepository（用量数据）+ SolutionRepository（方案应用统计）+
+ManagerGateway（F17 运营通知窄通道，可选注入；注入时通知企业）。
 """
 
 from __future__ import annotations
+import hashlib
 
 import logging
 from datetime import datetime, timezone
@@ -19,13 +21,12 @@ from shared.errors import NotFound
 from .health_probes import ServiceHealthProbe
 from .admin_repository import AdminRepository
 from .catalog_repository import CatalogRepository
+from .manager_gateway import ManagerGateway
 from .repository import EnterpriseRepository
 from .rollup_repository import CrossEnterpriseRollupRepository
 from .solution_repository import SolutionRepository
 
-
 logger = logging.getLogger(__name__)
-
 
 class AdminService:
     """运营端管理编排器（无状态）。"""
@@ -37,6 +38,7 @@ class AdminService:
         catalog_repo: CatalogRepository,
         rollup_repo: CrossEnterpriseRollupRepository,
         solution_repo: SolutionRepository | None = None,
+        manager_gateway: ManagerGateway | None = None,
         manager_health: ServiceHealthProbe | None = None,
         agent_health: ServiceHealthProbe | None = None,
     ):
@@ -45,6 +47,7 @@ class AdminService:
         self._catalog = catalog_repo
         self._rollup = rollup_repo
         self._solution = solution_repo or SolutionRepository()
+        self._manager = manager_gateway
         self._manager_health = manager_health
         self._agent_health = agent_health
 
@@ -65,7 +68,34 @@ class AdminService:
                 owner_phone=acct.owner_phone,
             )
 
-    # ---- S01 企业账号管理 ----
+    # ---- 内部：F17 运营通知窄通道（Operator→Manager，不写 Manager 租户库）----
+
+    def _dispatch_notify(self, org_id: str, message: str | None) -> str:
+        """F17：把运营通知经 ManagerGateway 窄通道转给 Manager，返回审计 detail。
+
+        Operator 不写 Manager 租户库——只把消息转交给 Manager；Manager 在租户上下文内
+        落库（in_app_notification，经 TenantContext，红线 04 §6.1.1/D22）。tenant_id 从
+        企业账号（Operator 端已持）映射，连同 org_id 交给 Manager。
+
+        未注入 ManagerGateway 时降级为本地记录（Manager 离线只影响通知送达，D14）。
+        """
+        text = message or ""
+        if self._manager is None:
+            return f"notification recorded (no manager channel): {text or '(no message)'}"
+
+        acct = self._enterprise.get(org_id)
+        from shared.contracts.crosstier import EnterpriseNotifyRequest
+        req = EnterpriseNotifyRequest(
+            tenant_id=acct.tenant_id,
+            org_id=org_id,
+            message=text,
+        )
+        idempotency_key = (
+            f"notify:{org_id}:"
+            + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        )
+        self._manager.notify_enterprise(req, idempotency_key=idempotency_key)
+        return f"notification dispatched to tenant {acct.tenant_id}: {text or '(no message)'}"
 
     def list_enterprises(
         self, *, keyword: str | None = None, status: str | None = None,
@@ -188,7 +218,8 @@ class AdminService:
             self._admin.set_status(org_id, "normal")
             detail = "enterprise unbanned"
         elif action == "notify":
-            detail = f"notification sent: {message or '(no message)'}"
+            # F17：经 ManagerGateway 窄通道把运营通知转给 Manager（不写 Manager 租户库）。
+            detail = self._dispatch_notify(org_id, message)
         elif action == "adjust_quota":
             if amount is not None:
                 self._admin.set_quota(org_id, {"quota": str(amount)})

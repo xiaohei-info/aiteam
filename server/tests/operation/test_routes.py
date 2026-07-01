@@ -14,7 +14,7 @@ from operation_service.service import ProvisioningService
 from run import get_app
 from shared.auth import DevTokenService
 from shared.contracts.auth import TokenClaims
-from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.enums import EnterpriseRole, PlatformRole
 
 
@@ -22,12 +22,16 @@ class FakeManagerGateway(ManagerGateway):
     def __init__(self) -> None:
         self.provisioned: list[TenantProvisionRequest] = []
         self.bootstraps: list[OwnerBootstrapSync] = []
+        self.notifications: list[EnterpriseNotifyRequest] = []
 
     def provision_tenant(self, req, *, idempotency_key):
         self.provisioned.append(req)
 
     def sync_owner_bootstrap(self, req, *, idempotency_key):
         self.bootstraps.append(req)
+
+    def notify_enterprise(self, req, *, idempotency_key):
+        self.notifications.append(req)
 
 
 @pytest.fixture
