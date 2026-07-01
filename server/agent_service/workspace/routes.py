@@ -78,6 +78,12 @@ class RecruitResult(BaseModel):
     message: str = ""
 
 
+class MarketplaceSyncResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synced: int
+    source: str = "provider"
+
+
 # ---- P09 办公室动态 ----
 
 class OfficeSceneOut(BaseModel):
@@ -331,6 +337,11 @@ def build_workspace_router(service: WorkspaceService) -> APIRouter:
             employee_id=result.employee_id,
             message=result.message,
         ))
+
+    @router.post("/marketplace/sync", summary="手动同步人才市场模板", operation_id="agent_marketplace_sync")
+    async def sync_marketplace(request: Request) -> Envelope[MarketplaceSyncResult]:
+        count = service.sync_marketplace_endpoint()
+        return Envelope(data=MarketplaceSyncResult(synced=count, source="provider"))
 
     # ---- P09 办公室动态 ----
 

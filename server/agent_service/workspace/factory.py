@@ -12,6 +12,7 @@ from collections.abc import Callable
 from agent_service.grants.store import ProjectionRepository
 from agent_service.local_db import LocalDb
 
+from .marketplace_provider import FakeMarketplaceProvider, ManagerMarketplaceProvider, MarketplaceProvider
 from .service import WorkspaceService
 from .store import (
     InMemoryKnowledgeBaseRepository,
@@ -37,6 +38,7 @@ def build_workspace_service(
     projections: ProjectionRepository,
     db: LocalDb | None = None,
     upload_dir: str | None = None,
+    marketplace_provider: MarketplaceProvider | None = None,
     unread_counts_provider: Callable[[str], int] | None = None,
 ) -> WorkspaceService:
     """装配本地 workspace 服务。
@@ -45,6 +47,7 @@ def build_workspace_service(
     unread_counts_provider 由装配层注入（主链未读回调）；未注入时工作台未读回退 0，
     不影响现有 dev/测试。
     upload_dir 为空时上传功能不可用——调用方应确保配置。
+    marketplace_provider 未传时默认 FakeMarketplaceProvider（离线兜底，保证 marketplace 非空）。
     """
     workbench_store: WorkbenchStateRepository = (
         SqliteWorkbenchStateRepository(db) if db else InMemoryWorkbenchStateRepository()
@@ -69,5 +72,6 @@ def build_workspace_service(
         ingest_store=ingest_store,
         upload_store=upload_store,
         upload_dir=upload_dir,
+        marketplace_provider=marketplace_provider,
         unread_counts_provider=unread_counts_provider,
     )

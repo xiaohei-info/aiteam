@@ -50,8 +50,9 @@ from agent_service.usage.client import (
 )
 from agent_service.usage.factory import build_run_usage_recorder, build_usage_service
 from agent_service.usage.routes import build_usage_router
-from agent_service.workspace.routes import build_workspace_router
 from agent_service.workspace.factory import build_workspace_service
+from agent_service.workspace.marketplace_provider import ManagerMarketplaceProvider
+from agent_service.workspace.routes import build_workspace_router
 from agent_service.group_mgmt.routes import build_group_mgmt_router
 from agent_service.group_mgmt.factory import build_group_mgmt_service
 from shared.app_factory import create_app, mount_frontend
@@ -144,6 +145,16 @@ def _upload_dir() -> Path:
     return Path.home() / ".aiteam-agent" / "uploads"
 
 
+def _build_marketplace_provider(login_service) -> ManagerMarketplaceProvider:
+    """按 MANAGER_URL 装配人才市场 provider：配置 → Manager pull，否则降级 fake。"""
+    settings = load_settings("agent")
+    client = _manager_service_client(settings) if settings.manager_url else None
+    return ManagerMarketplaceProvider(
+        service_client=client,
+        token_provider=login_service.current_token,
+    )
+
+
 def build_app(
     *,
     manager_client: ManagerLoginClient | None = None,
@@ -198,8 +209,10 @@ def build_app(
     )
     app.include_router(build_grants_router(grants_service))
     # ---- P02-P09 workspace：工作台 + 人才市场 + 办公室 + 知识库 + 组织树 + 文件上传 ----
+    marketplace_provider = _build_marketplace_provider(login_service)
     workspace_service = build_workspace_service(
         projections=projections, db=db, upload_dir=str(_upload_dir()),
+        marketplace_provider=marketplace_provider,
         unread_counts_provider=mainline.unread_count_for_employee,
     )
     app.include_router(build_workspace_router(workspace_service))
