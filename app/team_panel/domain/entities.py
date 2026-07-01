@@ -707,11 +707,7 @@ class RunEvent:
 
 @dataclass
 class AuditEvent:
-    """控制面审计事件 (§6.19). 不可变写入，仅追加。
-
-    Enriched model: severity + result + ip/user-agent give the operation
-    team a complete, queryable audit trail for every control-plane mutation.
-    """
+    """控制面审计事件 (§6.19). 不可变写入，仅追加。"""
     id: str
     enterprise_id: str
     actor_type: str                      # user|employee|system|gateway
@@ -721,10 +717,6 @@ class AuditEvent:
     target_id: str
     request_id: Optional[str] = None
     payload_json: str = "{}"
-    severity: str = "info"               # info|warn|critical
-    result: str = "success"              # success|failure
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
     created_at: str = ""
     created_by: str = ""
 
@@ -777,15 +769,11 @@ class UsageLedger:
 
 @dataclass
 class Enterprise:
-    """企业空间，Team Panel 多租户边界 (§4.1).
-
-    Lifecycle state machine: active → suspended → banned → closed.
-    ``closed`` is terminal; ``reactivate`` recovers from suspended/banned.
-    """
+    """企业空间，Team Panel 多租户边界 (§4.1)."""
     id: str
     slug: str = ""
     name: str = ""
-    status: str = "active"           # active | suspended | banned | closed
+    status: str = "active"           # active | suspended | archived
     owner_user_id: str = ""
     default_workspace_id: Optional[str] = None
     archive_reason: Optional[str] = None
@@ -795,68 +783,23 @@ class Enterprise:
     updated_by: str = ""
     deleted_at: Optional[str] = None
 
-    # ── Lifecycle helpers ────────────────────────────────────────────
-
-    def is_operational(self) -> bool:
-        """Whether the enterprise can provision employees / accept runs."""
-        return self.status == "active"
-
     def can_add_employee(self) -> bool:
         return self.status == "active"
 
-    def _ensure_not_closed(self) -> None:
-        if self.status == "closed":
-            raise ValueError("Cannot transition from closed enterprise")
-
     def suspend(self, reason: str = "") -> None:
-        """Temporarily suspend — recoverable via reactivate()."""
-        self._ensure_not_closed()
-        if self.status == "suspended":
-            return
+        if self.status == "archived":
+            raise ValueError("Cannot suspend archived enterprise")
         self.status = "suspended"
         self.archive_reason = reason or self.archive_reason
 
-    def ban(self, reason: str = "") -> None:
-        """Ban the enterprise — policy violation, recoverable via reactivate()."""
-        self._ensure_not_closed()
-        if self.status == "banned":
-            return
-        self.status = "banned"
-        self.archive_reason = reason or self.archive_reason
-
-    def close(self, reason: str = "") -> None:
-        """Permanently close — terminal state."""
-        if self.status == "closed":
-            return
-        self.status = "closed"
+    def archive(self, reason: str = "") -> None:
+        self.status = "archived"
         self.archive_reason = reason or self.archive_reason
 
     def reactivate(self) -> None:
-        """Recover from suspended or banned back to active."""
-        if self.status not in ("suspended", "banned"):
+        if self.status not in ("suspended",):
             raise ValueError(f"Cannot reactivate from {self.status}")
         self.status = "active"
-
-
-@dataclass
-class EnterpriseQuota:
-    """Enterprise resource quotas (§4.1 companion).
-
-    Drives hard caps on employee count, storage, api rate limits and
-    token budgets. Mutated only by system-admin quota endpoints.
-    """
-    enterprise_id: str
-    employee_quota: int = 50
-    storage_quota_mb: int = 1024
-    api_rate_limit: int = 100
-    token_quota: int = 0
-    created_at: str = ""
-    updated_at: str = ""
-    created_by: str = ""
-    updated_by: str = ""
-
-    def employee_headroom(self, current_count: int) -> int:
-        return max(0, self.employee_quota - current_count)
 
 
 @dataclass

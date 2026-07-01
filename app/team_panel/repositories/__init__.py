@@ -27,7 +27,6 @@ from .team_task_repo import TeamTaskRepo
 from .scheduled_job_repo import ScheduledJobRepo
 from .runtime_binding_repo import RuntimeBindingRepo
 from .run_event_repo import RunEventRepo
-from .enterprise_quota_repo import EnterpriseQuotaRepo
 from .audit_event_repo import AuditEventRepo
 from .memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
 
@@ -60,7 +59,6 @@ __all__ = [
     "ScheduledJobRepo",
     "RuntimeBindingRepo",
     "RunEventRepo",
-    "EnterpriseQuotaRepo",
     "AuditEventRepo",
     "MemoryItemRepo",
     "MemoryReviewDecisionRepo",
