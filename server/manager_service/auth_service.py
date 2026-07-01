@@ -164,6 +164,24 @@ class AuthService:
         """下发用户端的验签材料（公钥/JWKS，9.5）。"""
         return self._keys.jwks(tenant_id)
 
+    def resolve_tenant(self, enterprise: str) -> str:
+        """企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。
+
+        按 tenant_registry.enterprise_code 或 enterprise_slug 匹配（优先 code，再 slug），
+        404 未找到。返回 tenant_id UUID 供 login/owner-reset 使用。
+        """
+        import psycopg
+
+        with psycopg.connect(self.dsn, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT tenant_id FROM tenant_registry "
+                "WHERE enterprise_code = %s OR enterprise_slug = %s LIMIT 1",
+                (enterprise, enterprise),
+            ).fetchone()
+            if not row:
+                raise NotFound(f"enterprise not found: {enterprise}")
+            return row[0]
+
 
 def record_attempt(audit, ctx, *, provider, external_id, actor, success, detail):
     """登录审计落点。audit 未配置 / 写入失败均不影响登录主路径（静默降级）。"""

@@ -1,17 +1,32 @@
 """Manager 认证北向路由（/api/auth/*，02 §10.1 路径前缀 + §10.3 envelope；03 §9.4/§9.6）。
 
-公开端点（无需 token，§9.6）：login / owner-reset / jwks。
+公开端点（无需 token，§9.6）：login / owner-reset / resolve-tenant / jwks。
 凭据校验失败 → 401；首登需重置 → 403；账号已存在 → 409；皆经统一 problem+json。
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
 
 from shared.contracts.envelope import Envelope
 from shared.errors import AppError
 
 from .auth_service import AuthResult, AuthService, LoginInput, OwnerResetInput, build_auth_service
+
+
+class ResolveTenantInput(BaseModel):
+    """企业标识 → tenant_id 解析请求（登录前调用，隐藏 UUID 细节）。"""
+
+    enterprise: str = Field(
+        description="企业代码或企业名称（匹配 tenant_registry.enterprise_code 或 enterprise_slug）"
+    )
+
+
+class ResolveTenantOutput(BaseModel):
+    """解析结果：tenant_id（登录时传给 login/owner-reset）。"""
+
+    tenant_id: str
 
 
 class _ManagerNotConfigured(AppError):
@@ -54,3 +69,11 @@ async def owner_reset(body: OwnerResetInput, svc: AuthService = Depends(_auth_se
 async def jwks(tenant_id: str, svc: AuthService = Depends(_auth_service)) -> dict:
     # JWKS 是公开验签材料（公钥），可下发用户端本地验签（D23）。
     return svc.jwks(tenant_id)
+
+
+@router.post("/resolve-tenant", description="企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。按 enterprise_code 或 enterprise_slug 匹配，404 未找到。", summary="解析企业标识到 tenant_id（公开端点）", operation_id="manager_resolve_tenant")
+async def resolve_tenant(
+    body: ResolveTenantInput, svc: AuthService = Depends(_auth_service)
+) -> Envelope[ResolveTenantOutput]:
+    tenant_id = svc.resolve_tenant(body.enterprise)
+    return Envelope[ResolveTenantOutput](data=ResolveTenantOutput(tenant_id=tenant_id))
