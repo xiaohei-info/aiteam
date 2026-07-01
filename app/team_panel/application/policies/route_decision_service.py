@@ -38,11 +38,7 @@ def decide_route(
         )
 
     if route_hint == "single_agent":
-        if mentioned:
-            return RouteDecision(
-                route_mode="single_agent",
-                target_employee_ids=(mentioned[0],),
-            )
+        target_id = mentioned[0] if mentioned else employee_ids[0]
         return RouteDecision(
             route_mode="single_agent",
             target_employee_ids=(),
@@ -58,7 +54,7 @@ def decide_route(
     if len(mentioned) == 1:
         return RouteDecision(
             route_mode="single_agent",
-            target_employee_ids=(mentioned[0],),
+            target_employee_ids=(),
         )
 
     if _looks_like_collaboration_request(message_text):
@@ -106,76 +102,26 @@ def _normalize_member(member) -> dict[str, str]:
 
 
 def _extract_mentions(text: str, members: list[dict[str, str]]) -> list[str]:
-    """Resolve @mentions in text to a de-duplicated, order-preserving list of employee_ids.
-
-    Two matching layers, both strict about the ``@`` prefix so that email-like
-    tokens (``foo@bar.com``) never produce a spurious mention:
-
-    1. **Handle-tokenization** with the same character set as
-       ``server/agent_service/mainline/mentions.py`` — ``@<word>`` where word is
-       ``[A-Za-z0-9_-]+`` and preceded by a non-word, non-``@`` char (line start ok).
-       The handle is compared (case-insensitively, whitespace-tolerantly) against
-       member aliases (employee_id / display_name / role_name / profile_name).
-    2. **Literal alias check** for multi-byte aliases (e.g. CJK display names like
-       ``张三``) where the handle tokenizer's ASCII-only class wouldn't fire: if
-       ``@{normalized_alias}`` occurs verbatim in the normalized message, the alias
-       is considered mentioned.
-
-    Email-like text such as ``foo@bar.com`` is safe under both layers: layer 1 rejects
-    it via the lookbehind (``foo`` precedes the ``@``), and layer 2 requires the
-    normalized alias to appear as ``@foo`` — which it does not.
-    """
     normalized_text = _normalize_text(text)
-    roster: dict[str, str] = {}
-    literal_aliases: list[tuple[str, str]] = []
+    mentioned: list[str] = []
     for member in members:
         employee_id = member["employee_id"]
         if not employee_id:
             continue
-        for alias in (
-            member.get("employee_id", ""),
+        aliases = {
+            employee_id,
             member.get("display_name", ""),
             member.get("role_name", ""),
             member.get("profile_name", ""),
-        ):
+        }
+        for alias in aliases:
             token = _normalize_text(alias)
-            if token:
-                roster.setdefault(token, employee_id)
-                literal_aliases.append((token, employee_id))
-
-    mentioned: list[str] = []
-    seen: set[str] = set()
-
-    # Layer 1: canonical ASCII-tokenized handles.
-    for handle in _parse_handles(text):
-        employee_id = roster.get(_normalize_text(handle))
-        if employee_id is not None and employee_id not in seen:
-            seen.add(employee_id)
-            mentioned.append(employee_id)
-
-    # Layer 2: literal multi-byte aliases (e.g. CJK names) scanned verbatim
-    # with the @-prefix — deliberately substring-only on `@{alias}` (never bare
-    # `alias in text`, which is what used to cause foo@bar.com matches).
-    if not mentioned:
-        for token, employee_id in literal_aliases:
-            if employee_id in seen:
+            if not token:
                 continue
-            if f"@{token}" in normalized_text:
-                seen.add(employee_id)
+            if f"@{token}" in normalized_text or token in normalized_text:
                 mentioned.append(employee_id)
-
-    return mentioned
-
-
-_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_@])@([A-Za-z0-9_-]+)")
-
-
-def _parse_handles(text: str) -> list[str]:
-    """Pull @handle tokens out of a message, preserving first-seen order and de-duping."""
-    seen: dict[str, None] = {}
-    for m in _MENTION_RE.finditer(text):
-        seen.setdefault(m.group(1), None)
-    return list(seen)
+                break
+    return list(dict.fromkeys(mentioned))
 
 
 def _looks_like_collaboration_request(text: str) -> bool:
