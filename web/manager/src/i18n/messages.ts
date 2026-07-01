@@ -150,6 +150,13 @@ export const managerMessages: LocaleCatalog = {
     "manager.gov.cost_cap": "成本上限（USD）",
     "manager.gov.run_cap": "运行数上限",
     "manager.gov.evaluate": "评估",
+    "manager.org.assign": "分配部门",
+    "manager.org.assign_title": "分配部门",
+    "manager.org.department_pick": "选择部门",
+    "manager.org.assign_submit": "分配",
+    "manager.org.assign_ok": "已分配",
+    "manager.org.assign_error": "分配失败，请重试",
+    "manager.org.assign_pending": "分配中…",
     "manager.gov.delete": "删除",
   },
 };
