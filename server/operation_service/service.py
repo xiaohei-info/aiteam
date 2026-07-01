@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import string
 import uuid
 
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
@@ -27,9 +28,29 @@ from .schemas import (
 )
 
 
+# bootstrap 明文用符号集：JSON/URL/展示安全（不含 " \ / 空格），供 Manager 密码策略的
+# "require symbol" 满足。
+_SECRET_SYMBOLS = "!@#$%^&*-_=+"
+
+
 def _new_bootstrap_secret() -> str:
-    """生成一次性 bootstrap 明文（URL-safe，足够熵）。仅返回当次，不落库。"""
-    return secrets.token_urlsafe(24)
+    """生成一次性 bootstrap 明文，保证满足 Manager 密码策略（小写/大写/数字/符号各≥1，
+    长度 24 足够熵且 > 最小长度）。仅返回当次，不落库。
+
+    原用 secrets.token_urlsafe：字符集 [A-Za-z0-9_-]，约 37% 概率整串无符号 → 过不了
+    Manager 的 "require symbol" 策略，致开通/重置随机失败（"操作失败，请重试"）。
+    改为按类各保证 ≥1 再随机填充、洗牌，稳定合规。
+    """
+    alphabet = string.ascii_lowercase + string.ascii_uppercase + string.digits + _SECRET_SYMBOLS
+    picks = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(_SECRET_SYMBOLS),
+    ]
+    picks += [secrets.choice(alphabet) for _ in range(20)]
+    secrets.SystemRandom().shuffle(picks)
+    return "".join(picks)
 
 
 def _hash_bootstrap_local(secret: str) -> str:

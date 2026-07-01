@@ -43,6 +43,19 @@ def _req():
     return ProvisionEnterpriseRequest(enterprise_name="Acme", owner_phone="13800000000")
 
 
+def test_new_bootstrap_secret_always_satisfies_password_policy():
+    """回归：bootstrap 明文必须满足 Manager 密码策略（小写/大写/数字/符号各≥1 + 长度）。
+
+    原 secrets.token_urlsafe 约 37% 概率无符号 → 开通随机 422（"操作失败，请重试"）。
+    多轮生成实测其"必合规"，防再退化。用 Manager 的真实策略校验（跨端契约的单一真相源）。
+    """
+    from manager_service.auth_password_policy import validate_password_complexity
+    from operation_service.service import _new_bootstrap_secret
+
+    for _ in range(500):
+        validate_password_complexity(_new_bootstrap_secret())  # 不合规则抛 ValidationProblem
+
+
 def test_provision_calls_manager_then_stores(service, manager):
     result = service.provision_enterprise(_req())
 
