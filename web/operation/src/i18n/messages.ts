@@ -30,6 +30,7 @@ export const operationMessages: LocaleCatalog = {
     "operation.enterprise.secret_warning": "此凭据仅显示一次，请立即复制并妥善保存。关闭后将无法再次查看。",
     "operation.enterprise.copy": "复制凭据",
     "operation.enterprise.copied": "已复制",
+    "operation.enterprise.copy_failed": "复制失败，请手动选中下方凭据复制",
     "operation.enterprise.result_tenant_id": "租户 ID",
     "operation.enterprise.result_owner_phone": "负责人手机号",
     "operation.enterprise.result_enterprise_code": "企业代码",
