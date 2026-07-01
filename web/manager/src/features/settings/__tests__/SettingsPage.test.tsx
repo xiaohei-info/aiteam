@@ -30,7 +30,7 @@ function sessionValue(): SessionContextValue {
   return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
 }
 
-const settings = { enterprise_name: "测试企业", logo_url: null, phone: null, wechat: null, invite_code: null, notify_on_task_complete: true, notify_on_system: true, version: "v1.0.0" };
+const settings = { enterprise_name: "测试企业", logo_url: null, phone: null, contact_email: "contact@test.com", default_runtime: "hermes_acp", invite_required: true, member_approval: true, max_employees: 100, features: {}, updated_at: "2026-06-30T10:00:00Z" };
 const invite = { invite_id: "i1", phone: "13800000000", display_name: "管理员A", status: "pending", created_at: "2026-06-30T10:00:00Z" };
 
 function mockApi(overrides: Partial<apiModule.SettingsApi> = {}) {
