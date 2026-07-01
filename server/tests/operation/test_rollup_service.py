@@ -120,8 +120,16 @@ def test_get_enterprise_rollup_single():
     assert row.token_total == 42
 
 
-def test_get_unknown_enterprise_404():
-    from shared.errors import NotFound
-    import pytest
-    with pytest.raises(NotFound):
-        _service().enterprise_rollup("nope")
+def test_get_unknown_enterprise_returns_zeroed_rollup():
+    """未知企业返回全零聚合而非 NotFound/404（GH#328）。"""
+    row = _service().enterprise_rollup("nope")
+    assert row.enterprise_id == "nope"
+    assert row.tenant_id == ""
+    assert row.run_count == 0
+    assert row.token_total == 0
+    assert row.cost_total == Decimal("0")
+    assert row.error_count == 0
+    assert row.duration_seconds_total == 0
+    assert row.summary_count == 0
+    assert row.window_start is None
+    assert row.window_end is None
