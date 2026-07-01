@@ -136,5 +136,38 @@ describe("MembersPage 成员账号", () => {
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
     expect(screen.queryByText("创建成员")).not.toBeInTheDocument();
     expect(screen.queryByText("停用")).not.toBeInTheDocument();
+    expect(screen.queryByText("删除")).not.toBeInTheDocument();
+  });
+
+  it("owner 删除成员：点删除→二次确认→确认调 deleteMember，成功后该行消失", async () => {
+    const api = mockApi({
+      listMembers: vi
+        .fn()
+        .mockResolvedValueOnce([member])
+        .mockResolvedValueOnce([]),
+    });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("删除"));
+    await waitFor(() => expect(screen.getByText("确认删除该成员？删除后不可恢复。")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("确认删除"));
+    await waitFor(() => expect(api.deleteMember).toHaveBeenCalledWith("m1"));
+    await waitFor(() => expect(api.listMembers).toHaveBeenCalledTimes(2));
+  });
+
+  it("删除成员时点取消：不调用 deleteMember，恢复启用/停用按钮", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("删除"));
+    await waitFor(() => expect(screen.getByText("确认删除该成员？删除后不可恢复。")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("取消"));
+    expect(api.deleteMember).not.toHaveBeenCalled();
+    expect(screen.getByText("停用")).toBeInTheDocument();
+    expect(screen.getByText("删除")).toBeInTheDocument();
   });
 });

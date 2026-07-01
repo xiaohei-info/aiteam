@@ -31,6 +31,7 @@ export function MembersPage(): ReactNode {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // 创建成功后一次性展示的凭据（account + 管理员录入的明文）；刷新/再操作即清空。
   const [createdCredential, setCreatedCredential] = useState<{ account: string; password: string } | null>(null);
 
@@ -77,6 +78,20 @@ export function MembersPage(): ReactNode {
       const next = member.status === "active" ? "disabled" : "active";
       try {
         await api.updateMember(member.id, { status: next });
+        await load();
+      } catch (err) {
+        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
+      }
+    },
+    [api, load, i18n],
+  );
+
+  const handleDelete = useCallback(
+    async (member: Member) => {
+      setActionError(null);
+      try {
+        await api.deleteMember(member.id);
+        setConfirmDeleteId(null);
         await load();
       } catch (err) {
         setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
@@ -149,16 +164,48 @@ export function MembersPage(): ReactNode {
                     <td>{m.department_ids.map(deptName).join(", ")}</td>
                     {canWrite && (
                       <td>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => void handleToggleStatus(m)}
-                        >
-                          {m.status === "active"
-                            ? i18n.t("manager.members.disable")
-                            : i18n.t("manager.members.enable")}
-                        </Button>
+                        {confirmDeleteId === m.id ? (
+                          <span className="inline-flex items-center gap-xs text-sm">
+                            <span className="text-text-secondary">{i18n.t("manager.members.delete_confirm")}</span>
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              onClick={() => void handleDelete(m)}
+                            >
+                              {i18n.t("manager.members.delete_confirm_ok")}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setConfirmDeleteId(null)}
+                            >
+                              {i18n.t("manager.members.delete_cancel")}
+                            </Button>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-xs">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void handleToggleStatus(m)}
+                            >
+                              {m.status === "active"
+                                ? i18n.t("manager.members.disable")
+                                : i18n.t("manager.members.enable")}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              onClick={() => setConfirmDeleteId(m.id)}
+                            >
+                              {i18n.t("manager.members.delete")}
+                            </Button>
+                          </span>
+                        )}
                       </td>
                     )}
                   </tr>
