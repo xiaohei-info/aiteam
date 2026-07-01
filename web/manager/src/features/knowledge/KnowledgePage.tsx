@@ -5,6 +5,7 @@ import { createManagerApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import { useKnowledgeApi } from "./useKnowledgeApi";
 import type { KnowledgeBinding, KnowledgeSpace } from "./types";
+import { DocumentsPanel } from "./DocumentsPanel";
 
 interface ResourceOption { id: string; label: string; }
 
@@ -190,7 +191,8 @@ export function KnowledgePage(): ReactNode {
                     <td>{s.knowledge_space_id}</td><td>{s.display_name || "—"}</td><td><code className="text-xs text-gold-bright">{s.workspace}</code></td>
                     {canWrite && (
                       <td className="flex gap-sm">
-                        <Button type="button" variant="ghost" size="sm" onClick={() => void openBindings(s.knowledge_space_id)}>绑定</Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setDocSpaceId(s.knowledge_space_id)}>文档</Button>
+                         <Button type="button" variant="ghost" size="sm" onClick={() => void openBindings(s.knowledge_space_id)}>绑定</Button>
                         <Button type="button" variant="danger" size="sm" onClick={async () => { await api.del(s.knowledge_space_id); void load(); }}>删除</Button>
                       </td>
                     )}
@@ -263,6 +265,14 @@ export function KnowledgePage(): ReactNode {
             </>
           )}
         </GlassPanel>
+      )}
+
+      {docSpaceId && (
+        <DocumentsPanel
+          spaceId={docSpaceId}
+          canWrite={canWrite}
+          onClose={() => setDocSpaceId(null)}
+        />
       )}
     </section>
   );

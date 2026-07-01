@@ -19,6 +19,7 @@ from .routes_employee_bindings import build_employee_bindings_router
 from .routes_employee_prompt import build_employee_prompt_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
+from .routes_knowledge_intake import build_knowledge_intake_router
 from .routes_member import router as member_router
 from .routes_provider import build_provider_credential_router
 from .routes_recruit import build_recruit_router
@@ -119,6 +120,8 @@ app.include_router(member_router)
 app.include_router(grants_router)
 # 知识空间/RAG 管理面（/api/manager/knowledge-spaces/*，M3）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_space_router(_verifier))
+# 知识文档 intake 生命周期 + 索引绑定（/api/manager/knowledge-spaces/{id}/documents/* 与 /ingestions/*，issue #416）。verifier 由本端持有闭包注入。
+app.include_router(build_knowledge_intake_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。

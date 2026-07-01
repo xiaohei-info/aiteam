@@ -240,6 +240,90 @@ class KnowledgeSpaceBindingOut(BaseModel):
     resource_type: str
     resource_id: str
     created_at: datetime | None = None
+
+# ---- 知识文档 intake 生命周期 + 索引绑定（issue #416；04 §6.1.2/§6.6；D21/D22）----
+# 文档挂到 knowledge_space 下；状态机 uploaded → parsing → indexing → ready | failed。
+# 索引绑定完成态走 knowledge_document_binding（employee ↔ document）。
+
+KnowledgeDocumentSource = Literal["file", "url"]
+KnowledgeDocumentStatus = Literal["uploaded", "parsing", "indexing", "ready", "failed"]
+IngestionJobStatus = Literal["parsing", "indexing", "done", "failed"]
+IndexBindingStatus = Literal["pending", "ready", "stale"]
+
+
+class KnowledgeDocumentCreate(BaseModel):
+    """上传/新建文档请求体（multipart 上传走路由层，本 schema 用于 JSON 元数据）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, description="文档展示名")
+    source_type: KnowledgeDocumentSource = Field(description="file=上传；url=URL 导入")
+
+
+class KnowledgeDocumentOut(BaseModel):
+    """文档出参（含 intake 状态）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    knowledge_space_id: str
+    display_name: str
+    source_type: KnowledgeDocumentSource
+    file_name: str
+    file_type: str
+    file_size: int
+    storage_key: str
+    status: KnowledgeDocumentStatus
+    text_chars: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class KnowledgeIngestionJobOut(BaseModel):
+    """intake 任务出参。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    knowledge_space_id: str
+    document_id: str
+    status: IngestionJobStatus
+    error_code: str | None = None
+    error_message: str | None = None
+    chunk_count: int | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class KnowledgeDocumentBindingOut(BaseModel):
+    """文档 ↔ 员工 索引绑定出参。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tenant_id: str
+    knowledge_space_id: str
+    document_id: str
+    employee_id: str
+    rag_document_id: str | None = None
+    status: IndexBindingStatus
+    last_synced_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class KnowledgeDocumentImportUrl(BaseModel):
+    """URL 导入请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1, description="http(s) URL")
+    display_name: str | None = None
+
 # ---- 技能/连接器/记忆策略 目录（issue #38；04 §6.6，D17，D16/D22）----
 # 三者均 tenant 作用域、runtime 中立（D16）：只存管理面真相（目录/可见性/安装绑定策略/凭据授权元数据），
 # 执行态（技能本地执行、连接器对外调用、mem0 记忆读写）归用户端（04 §6.6）。凭据本体归 M5（D18）。
