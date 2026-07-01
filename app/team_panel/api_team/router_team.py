@@ -11,7 +11,6 @@ import json
 import io
 import logging
 import os
-import re
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ from ..domain.entities import (
     EnterpriseSkillInstall,
     KnowledgeBase,
     KnowledgeDocument,
-    KnowledgeIndexBinding,
     KnowledgeIngestionJob,
     MemoryItem,
     MemoryReviewDecision,
@@ -79,7 +77,6 @@ from ..repositories.employee_memory_binding_repo import EmployeeMemoryBindingRep
 from ..repositories.employee_connector_binding_repo import EmployeeConnectorBindingRepo
 from ..repositories.knowledge_base_repo import KnowledgeBaseRepo
 from ..repositories.knowledge_document_repo import KnowledgeDocumentRepo
-from ..repositories.knowledge_index_binding_repo import KnowledgeIndexBindingRepo
 from ..repositories.knowledge_ingestion_job_repo import KnowledgeIngestionJobRepo
 from ..repositories.enterprise_skill_install_repo import EnterpriseSkillInstallRepo
 from ..repositories.memory_item_repo import MemoryItemRepo, MemoryReviewDecisionRepo
@@ -1644,298 +1641,12 @@ def _advance_pending_knowledge_ingestion(conn, kb_id: str | None = None) -> int:
                 error_message=None,
                 chunk_count=chunk_count,
             )
-            try:
-                _propagate_kb_index_bindings(conn, doc,
-                                            rag_document_id=rag_document_id)
-            except Exception as exc:  # noqa: BLE001 — best-effort
-                logger.warning('[kb] index binding propagation failed '
-                               'for %s: %s', doc.id, exc)
             advanced += 1
         if advanced:
             conn.commit()
     finally:
         cur.close()
     return advanced
-
-
-def _fetch_url_text(url: str) -> tuple[str, str, str, str]:
-    """Fetch a URL and extract its visible text.
-
-    Stdlib-only (``urllib``), no external deps. Returns ``(text, filename,
-    html_mime, page_title)`` where ``page_title`` is the raw ``<title>``
-    content when present else ``""``. Raises ``ValueError`` on bad scheme,
-    missing host, empty body or unreachable URL so the import endpoint can
-    surface a clean 400 instead of a 500.
-    """
-    from urllib.parse import urlparse
-    import urllib.request
-
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"unsupported URL scheme: {parsed.scheme or 'empty'}")
-    if not parsed.netloc:
-        raise ValueError(f"invalid URL: missing host: {url}")
-
-    req = urllib.request.Request(url, headers={"User-Agent": "aiteam-knowledge/1.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        mime = (resp.headers.get("Content-Type") or "").split(";", 1)[0].strip()
-        data = resp.read(4 * 1024 * 1024)  # 4 MB cap
-    if not data:
-        raise ValueError("fetched URL returned empty body")
-
-    text = data.decode("utf-8", errors="replace")
-    title = ""
-    tm = re.search(r"<title[^>]*>(.*?)</title>", text[:8192], re.I | re.S)
-    if tm:
-        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", tm.group(1))).strip()
-    if "html" in mime or not mime:
-        from team_panel.integration.document_parser import html_to_text
-        text = html_to_text(text)
-    name = parsed.path.rsplit("/", 1)[-1] or "page.html"
-    return text, name, mime or "text/plain", title
-
-
-def _serialize_knowledge_doc(doc, *, ingestion_job=None) -> dict:
-    return {
-        "document_id": doc.id,
-        "knowledge_base_id": doc.knowledge_base_id,
-        "asset_id": doc.asset_id,
-        "display_name": doc.display_name,
-        "file_name": doc.file_name,
-        "file_type": doc.file_type,
-        "file_size": doc.file_size,
-        "storage_key": doc.storage_key,
-        "status": doc.status,
-        "ingestion_job_id": ingestion_job.id if ingestion_job else doc.ingestion_job_id,
-        "rag_document_id": doc.rag_document_id,
-        "error_code": doc.error_code,
-        "error_message": doc.error_message,
-        "chunk_count": doc.chunk_count,
-        "created_at": doc.created_at,
-    }
-
-
-def _serialize_ingestion(job) -> dict:
-    return {
-        "ingestion_job_id": job.id,
-        "knowledge_base_id": job.knowledge_base_id,
-        "document_id": job.document_id,
-        "status": job.status,
-        "rag_document_id": job.rag_document_id,
-        "error_message": job.error_message,
-        "chunk_count": job.chunk_count,
-        "started_at": job.started_at,
-        "completed_at": job.completed_at,
-        "created_at": job.created_at,
-    }
-
-
-def _propagate_kb_index_bindings(conn, doc, *, rag_document_id: str) -> int:
-    """Ensure every employee bound to the KB has a live index binding for doc.
-
-    Called once ingestion of *doc* succeeds so employee-facing retrieval (the
-    MCP ``knowledge_search`` tool and any direct index query) can resolve the
-    ready rag document. Idempotent: re-running only refreshes stale rows. Never
-    raises — an indexing hiccup must not roll back the ingestion commit.
-    """
-    cur = conn.cursor()
-    n = 0
-    try:
-        ekb_repo = EmployeeKnowledgeBindingRepo(cur)
-        kib_repo = KnowledgeIndexBindingRepo(cur)
-        emp_bindings = ekb_repo.list_by_kb(doc.knowledge_base_id)
-        for ek in emp_bindings:
-            if not getattr(ek, "enabled", True):
-                continue
-            existing = next(
-                (b for b in kib_repo.list_by_employee(ek.employee_id)
-                 if getattr(b, "document_id", None) == doc.id),
-                None,
-            )
-            if existing is None:
-                kib_repo.create(KnowledgeIndexBinding(
-                    id=f"kib_{uuid.uuid4().hex[:12]}",
-                    enterprise_id=doc.enterprise_id,
-                    employee_id=ek.employee_id,
-                    knowledge_base_id=doc.knowledge_base_id,
-                    employee_knowledge_binding_id=ek.id,
-                    document_id=doc.id,
-                    rag_index_id=doc.knowledge_base_id,
-                    rag_document_id=rag_document_id,
-                    scope_mode=ek.scope_mode,
-                    status="ready",
-                    last_synced_at=datetime.now(timezone.utc).isoformat(),
-                    created_by="ingestion",
-                    updated_by="ingestion",
-                ))
-            else:
-                kib_repo.update_state(
-                    existing.id,
-                    status="ready",
-                    rag_document_id=rag_document_id,
-                    last_synced_at=datetime.now(timezone.utc).isoformat(),
-                )
-            n += 1
-    finally:
-        cur.close()
-    return n
-
-
-def _handle_knowledge_documents_list(conn, kb_id: str) -> tuple[int, dict]:
-    """GET /knowledge-bases/{kb_id}/documents — list docs with ingestion state."""
-    _advance_pending_knowledge_ingestion(conn, kb_id)
-    cur = conn.cursor()
-    try:
-        kb = KnowledgeBaseRepo(cur).get_by_id(kb_id)
-        if kb is None:
-            return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND",
-                         "message": f"Knowledge base {kb_id} not found"}
-        docs = KnowledgeDocumentRepo(cur).list_by_kb(kb_id)
-        job_repo = KnowledgeIngestionJobRepo(cur)
-        items = [_serialize_knowledge_doc(d, ingestion_job=job_repo.get_latest_by_document(d.id))
-                 for d in docs]
-        return 200, {"knowledge_base_id": kb.id, "items": items, "total": len(items)}
-    finally:
-        cur.close()
-
-
-def _handle_knowledge_ingestions_list(conn, kb_id: str) -> tuple[int, dict]:
-    """GET /knowledge-bases/{kb_id}/ingestions — all ingestion jobs for a KB."""
-    _advance_pending_knowledge_ingestion(conn, kb_id)
-    cur = conn.cursor()
-    try:
-        kb = KnowledgeBaseRepo(cur).get_by_id(kb_id)
-        if kb is None:
-            return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND",
-                         "message": f"Knowledge base {kb_id} not found"}
-        jobs = KnowledgeIngestionJobRepo(cur).list_by_kb(kb_id)
-        return 200, {"knowledge_base_id": kb_id,
-                     "items": [_serialize_ingestion(j) for j in jobs], "total": len(jobs)}
-    finally:
-        cur.close()
-
-
-def _handle_knowledge_ingestion_get(conn, kb_id: str, doc_id: str) -> tuple[int, dict]:
-    """GET /knowledge-bases/{kb_id}/documents/{doc_id}/ingestion — single job."""
-    _advance_pending_knowledge_ingestion(conn, kb_id)
-    cur = conn.cursor()
-    try:
-        doc = KnowledgeDocumentRepo(cur).get_by_id(doc_id)
-        if doc is None or doc.knowledge_base_id != kb_id:
-            return 404, {"error": "DOCUMENT_NOT_FOUND",
-                         "message": f"Document {doc_id} not found in KB {kb_id}"}
-        job = KnowledgeIngestionJobRepo(cur).get_latest_by_document(doc_id)
-        if job is None:
-            return 404, {"error": "INGESTION_NOT_FOUND",
-                         "message": f"No ingestion job recorded for document {doc_id}"}
-        return 200, {"item": _serialize_ingestion(job)}
-    finally:
-        cur.close()
-
-
-def _handle_knowledge_document_import_url(conn, kb_id: str, body: dict | None) -> tuple[int, dict]:
-    """POST /knowledge-bases/{kb_id}/documents/url — import a remote page."""
-    body = body or {}
-    url = str(body.get("url") or "").strip()
-    if not url:
-        return 400, {"error": "MISSING_URL", "message": "url is required"}
-    try:
-        text, name, mime, title = _fetch_url_text(url)
-    except ValueError as exc:
-        return 400, {"error": "URL_FETCH_FAILED", "message": str(exc)[:300]}
-    except Exception as exc:  # noqa: BLE001 — best-effort fetch
-        logger.warning("[kb] url fetch failed for %s: %s", url, exc)
-        return 502, {"error": "URL_FETCH_FAILED", "message": str(exc)[:300]}
-
-    asset_id = f"ast_{uuid.uuid4().hex[:8]}"
-    # Prefer the HTML <title> as the display name when present (bodies with no
-    # explicit title fall back to the URL-derived filename).
-    display_name = str(body.get("display_name") or title or name or url)
-    file_path = _asset_file_path(asset_id, name)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(text.encode("utf-8"))
-
-    return _persist_knowledge_document(
-        conn, kb_id=kb_id, asset_id=asset_id, display_name=display_name,
-        file_name=name, file_type=mime or "text/plain", file_size=len(text),
-        storage_key=f"aiteam/uploads/{asset_id}/{file_path.name}", body=body,
-    )
-
-
-def _handle_knowledge_document_retry(conn, kb_id: str, doc_id: str, body: dict | None) -> tuple[int, dict]:
-    """POST /knowledge-bases/{kb_id}/documents/{doc_id}/retry — reset & re-ingest."""
-    cur = conn.cursor()
-    try:
-        kb = KnowledgeBaseRepo(cur).get_by_id(kb_id)
-        if kb is None:
-            return 404, {"error": "KNOWLEDGE_BASE_NOT_FOUND",
-                         "message": f"Knowledge base {kb_id} not found"}
-        doc = KnowledgeDocumentRepo(cur).get_by_id(doc_id)
-        if doc is None or doc.knowledge_base_id != kb_id:
-            return 404, {"error": "DOCUMENT_NOT_FOUND",
-                         "message": f"Document {doc_id} not found in KB {kb_id}"}
-        if doc.status not in ("error", "ready", "ingesting"):
-            return 409, {"error": "RETRY_NOT_ALLOWED",
-                         "message": f"cannot retry document in state {doc.status!r}"}
-        job_id = f"ing_{uuid.uuid4().hex[:12]}"
-        # force a clean "uploaded" slate no matter the prior terminal state
-        doc.status = "uploaded"
-        doc.start_ingesting(job_id)
-        doc_repo = KnowledgeDocumentRepo(cur)
-        job_repo = KnowledgeIngestionJobRepo(cur)
-        doc_repo.update_state(doc.id, status=doc.status, ingestion_job_id=job_id,
-                              error_code=None, error_message=None, chunk_count=0)
-        job_repo.create(KnowledgeIngestionJob(
-            id=job_id, knowledge_base_id=kb_id, enterprise_id=doc.enterprise_id,
-            document_id=doc.id, status="parsing",
-            created_by=str((body or {}).get("created_by", "")),
-        ))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-
-    _advance_pending_knowledge_ingestion(conn, kb_id)
-    return _handle_knowledge_ingestion_get(conn, kb_id, doc_id)
-
-
-def _persist_knowledge_document(conn, *, kb_id, asset_id, display_name, file_name,
-                                file_type, file_size, storage_key, body) -> tuple[int, dict]:
-    """Create a KnowledgeDocument + its initial ingestion job (NEW path)."""
-    cur = conn.cursor()
-    try:
-        enterprise_id = _current_enterprise_id(conn)
-        if enterprise_id is None:
-            return 400, {"error": "NO_ENTERPRISE", "message": "No enterprise exists"}
-        doc_repo = KnowledgeDocumentRepo(cur)
-        existing = doc_repo.get_by_asset(kb_id, asset_id)
-        if existing is not None:
-            return 200, _serialize_knowledge_doc(existing)
-
-        doc_id = f"doc_{uuid.uuid4().hex[:12]}"
-        job_id = f"ing_{uuid.uuid4().hex[:12]}"
-        doc = KnowledgeDocument(
-            id=doc_id, knowledge_base_id=kb_id, enterprise_id=enterprise_id,
-            asset_id=asset_id, display_name=display_name, file_name=file_name,
-            file_type=file_type, file_size=file_size, storage_key=storage_key,
-            status="ingesting", ingestion_job_id=job_id,
-            created_by=str((body or {}).get("created_by", "")),
-        )
-        job = KnowledgeIngestionJob(
-            id=job_id, knowledge_base_id=kb_id, enterprise_id=enterprise_id,
-            document_id=doc_id, status="parsing",
-            created_by=str((body or {}).get("created_by", "")),
-        )
-        doc_repo.create(doc)
-        KnowledgeIngestionJobRepo(cur).create(job)
-        KnowledgeBaseRepo(cur).increment_document_count(kb_id, 1)
-        conn.commit()
-    finally:
-        cur.close()
-    _advance_pending_knowledge_ingestion(conn, kb_id)
-    return 201, _serialize_knowledge_doc(doc)
 
 
 def _handle_knowledge_search(conn, _path: str, kb_id: str, query: str) -> tuple[int, dict]:
@@ -6353,38 +6064,6 @@ def handle_team_route(
             kb_id = kb_doc[:-len("/documents")]
             if "/" not in kb_id:
                 route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_document_post(conn, sub, kb_id, body)
-
-    # ── P08 knowledge-bases/{id}/documents (list + import URL) ──
-    if route_handler is None:
-        kb_doc2 = _match_prefix(sub, "/knowledge-bases/")
-        if kb_doc2 is not None and kb_doc2.endswith("/documents") and "/" not in kb_doc2[:-len("/documents")]:
-            kb_id = kb_doc2[:-len("/documents")]
-            if method == "GET":
-                route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_documents_list(conn, kb_id)
-            elif kb_doc2.endswith("/documents/url") and method == "POST":
-                route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_document_import_url(conn, kb_id, body)
-
-    # ── P08 knowledge-bases/{id}/documents/{doc_id}/(ingestion|retry) ──
-    if route_handler is None:
-        kb_doc3 = _match_prefix(sub, "/knowledge-bases/")
-        if kb_doc3 is not None:
-            m_ing = re.match(r"^([^/]+)/documents/([^/]+)/ingestion$", kb_doc3)
-            if m_ing and method == "GET":
-                kb_id, doc_id = m_ing.group(1), m_ing.group(2)
-                route_handler = lambda conn, kb_id=kb_id, doc_id=doc_id: _handle_knowledge_ingestion_get(conn, kb_id, doc_id)
-            if route_handler is None:
-                m_ret = re.match(r"^([^/]+)/documents/([^/]+)/retry$", kb_doc3)
-                if m_ret and method == "POST":
-                    kb_id, doc_id = m_ret.group(1), m_ret.group(2)
-                    route_handler = lambda conn, kb_id=kb_id, doc_id=doc_id: _handle_knowledge_document_retry(conn, kb_id, doc_id, body)
-
-    # ── P08 knowledge-bases/{id}/ingestions ──
-    if route_handler is None:
-        kb_ing = _match_prefix(sub, "/knowledge-bases/")
-        if kb_ing is not None and kb_ing.endswith("/ingestions"):
-            kb_id = kb_ing[:-len("/ingestions")]
-            if "/" not in kb_id and method == "GET":
-                route_handler = lambda conn, kb_id=kb_id: _handle_knowledge_ingestions_list(conn, kb_id)
 
     # ── billing usage overview / records ──
     if route_handler is None and method == "GET" and _match_exact(sub, "/billing/usage/overview"):

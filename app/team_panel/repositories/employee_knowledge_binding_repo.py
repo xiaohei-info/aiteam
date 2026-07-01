@@ -43,18 +43,6 @@ class EmployeeKnowledgeBindingRepo:
         rows = self._cur.fetchall()
         return [self._row_to_entity(r) for r in rows]
 
-    def list_by_kb(self, knowledge_base_id: str) -> list[EmployeeKnowledgeBinding]:
-        self._cur.execute(
-            "SELECT id, enterprise_id, employee_id, knowledge_base_id, scope_mode, "
-            "enabled, binding_version, "
-            "created_at, updated_at, created_by, updated_by, deleted_at "
-            "FROM employee_knowledge_binding WHERE knowledge_base_id = %s AND deleted_at IS NULL "
-            "ORDER BY employee_id",
-            (knowledge_base_id,),
-        )
-        rows = self._cur.fetchall()
-        return [self._row_to_entity(r) for r in rows]
-
     def update(self, b: EmployeeKnowledgeBinding) -> EmployeeKnowledgeBinding:
         self._cur.execute(
             "UPDATE employee_knowledge_binding SET enabled=%s, binding_version=%s, "
