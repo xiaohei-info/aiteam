@@ -45,16 +45,13 @@ BEFORE UPDATE ON recruitment_order
 FOR EACH ROW
 EXECUTE FUNCTION recruitment_order_touch_updated_at();
 
--- RLS：ENABLE + FORCE + 策略 + app_rw 授权（同 0006 口径）。
+-- RLS：ENABLE + FORCE + 策略 + app_rw 授权（同 0001/0006 口径）。
+-- ENABLE/FORCE ROW LEVEL SECURITY 本身幂等（重复执行无害），无需守卫；
+-- 原 pg_tables.forcerowsecurity 守卫引用了不存在的列（pg_tables 无此列），全新库会报错。
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_tables
-        WHERE tablename = 'recruitment_order' AND rowsecurity = true AND forcerowsecurity = true
-    ) THEN
-        EXECUTE 'ALTER TABLE recruitment_order ENABLE ROW LEVEL SECURITY';
-        EXECUTE 'ALTER TABLE recruitment_order FORCE ROW LEVEL SECURITY';
-    END IF;
+    EXECUTE 'ALTER TABLE recruitment_order ENABLE ROW LEVEL SECURITY';
+    EXECUTE 'ALTER TABLE recruitment_order FORCE ROW LEVEL SECURITY';
     EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON recruitment_order';
     EXECUTE format(
         'CREATE POLICY tenant_isolation ON recruitment_order '

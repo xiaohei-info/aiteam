@@ -23,7 +23,9 @@ END
 $$;
 
 -- 业务连接以 app_rw 身份建连后需要 connect 到本库 + 用 public schema。
-GRANT CONNECT ON DATABASE manager_control_db TO app_rw;
+-- CONNECT 授权不在此硬编码库名（全新环境库名可为 aiteam_v1 等，非固定 manager_control_db）：
+-- 由 apply_migrations 跑完所有迁移后用 current_database() 动态 GRANT CONNECT（对齐 operation
+-- 0001_enterprise_account.sql 的做法，「问题2修复」）。此处只授 schema 级权限。
 GRANT USAGE ON SCHEMA public TO app_rw;
 
 -- 扩展：gen_random_uuid()
