@@ -20,15 +20,49 @@ class SettingsService:
             "enterprise_name": row.enterprise_name,
             "logo_url": row.logo_url,
             "phone": row.contact_phone,
+            "contact_email": row.contact_email,
+            "default_runtime": row.default_runtime,
+            "invite_required": row.invite_required,
+            "member_approval": row.member_approval,
+            "max_employees": row.max_employees,
+            "features": row.features,
             "updated_at": row.updated_at,
         }
 
-    def patch_settings(self, ctx: TenantContext, *, enterprise_name: str | None, logo_url: str | None) -> dict:
-        row = self._repo.upsert_settings(ctx, enterprise_name=enterprise_name, logo_url=logo_url)
+    def patch_settings(
+        self, ctx: TenantContext,
+        *, enterprise_name: str | None = None,
+        logo_url: str | None = None,
+        phone: str | None = None,
+        contact_email: str | None = None,
+        default_runtime: str | None = None,
+        invite_required: bool | None = None,
+        member_approval: bool | None = None,
+        max_employees: int | None = None,
+        features: dict | None = None,
+    ) -> dict:
+        row = self._repo.upsert_settings(
+            ctx,
+            enterprise_name=enterprise_name,
+            logo_url=logo_url,
+            contact_phone=phone,
+            contact_email=contact_email,
+            default_runtime=default_runtime,
+            invite_required=invite_required,
+            member_approval=member_approval,
+            max_employees=max_employees,
+            features=features,
+        )
         return {
             "enterprise_name": row.enterprise_name,
             "logo_url": row.logo_url,
             "phone": row.contact_phone,
+            "contact_email": row.contact_email,
+            "default_runtime": row.default_runtime,
+            "invite_required": row.invite_required,
+            "member_approval": row.member_approval,
+            "max_employees": row.max_employees,
+            "features": row.features,
             "updated_at": row.updated_at,
         }
 

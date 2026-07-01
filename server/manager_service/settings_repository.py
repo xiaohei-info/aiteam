@@ -18,8 +18,10 @@ from shared.contracts.tenancy import TenantContext
 class SettingsRow:
     id: str
     enterprise_name: str
+    contact_email: str
     contact_phone: str
     logo_url: str | None
+    default_runtime: str
     invite_required: bool
     member_approval: bool
     max_employees: int
@@ -39,10 +41,11 @@ class AdminInviteRow:
 def _row_to_settings(row: Any) -> SettingsRow:
     return SettingsRow(
         id=str(row[0]), enterprise_name=row[1] or "",
-        contact_phone=row[2] or "", logo_url=row[3],
-        invite_required=bool(row[4]), member_approval=bool(row[5]),
-        max_employees=int(row[6]), features=row[7] or {},
-        updated_at=row[8],
+        contact_email=row[2] or "", contact_phone=row[3] or "",
+        logo_url=row[4], default_runtime=row[5] or "hermes_acp",
+        invite_required=bool(row[6]), member_approval=bool(row[7]),
+        max_employees=int(row[8]), features=row[9] or {},
+        updated_at=row[10],
     )
 
 
@@ -60,15 +63,24 @@ class SettingsRepository:
     def get_settings(self, ctx: TenantContext) -> SettingsRow | None:
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT id, enterprise_name, contact_phone, logo_url, "
-                "invite_required, member_approval, max_employees, features, updated_at "
+                "SELECT id, enterprise_name, contact_email, contact_phone, logo_url, "
+                "default_runtime, invite_required, member_approval, max_employees, "
+                "features, updated_at "
                 "FROM enterprise_settings LIMIT 1",
             ).fetchone()
         return _row_to_settings(row) if row else None
 
     def upsert_settings(
-        self, ctx: TenantContext, *, enterprise_name: str | None = None,
+        self, ctx: TenantContext, *,
+        enterprise_name: str | None = None,
+        contact_email: str | None = None,
+        contact_phone: str | None = None,
         logo_url: str | None = None,
+        default_runtime: str | None = None,
+        invite_required: bool | None = None,
+        member_approval: bool | None = None,
+        max_employees: int | None = None,
+        features: dict | None = None,
     ) -> SettingsRow:
         with self._router.session(ctx) as s:
             existing = s.execute(
@@ -80,9 +92,30 @@ class SettingsRepository:
                 if enterprise_name is not None:
                     fields.append("enterprise_name = %s")
                     params.append(enterprise_name)
+                if contact_email is not None:
+                    fields.append("contact_email = %s")
+                    params.append(contact_email)
+                if contact_phone is not None:
+                    fields.append("contact_phone = %s")
+                    params.append(contact_phone)
                 if logo_url is not None:
                     fields.append("logo_url = %s")
                     params.append(logo_url)
+                if default_runtime is not None:
+                    fields.append("default_runtime = %s")
+                    params.append(default_runtime)
+                if invite_required is not None:
+                    fields.append("invite_required = %s")
+                    params.append(invite_required)
+                if member_approval is not None:
+                    fields.append("member_approval = %s")
+                    params.append(member_approval)
+                if max_employees is not None:
+                    fields.append("max_employees = %s")
+                    params.append(max_employees)
+                if features is not None:
+                    fields.append("features = %s")
+                    params.append(features)
                 if fields:
                     fields.append("updated_at = now()")
                     params.append(str(existing[0]))
@@ -92,13 +125,27 @@ class SettingsRepository:
                     )
             else:
                 s.execute(
-                    "INSERT INTO enterprise_settings (tenant_id, enterprise_name, logo_url) "
-                    "VALUES (%s, %s, %s)",
-                    (ctx.tenant_id, enterprise_name or "", logo_url),
+                    "INSERT INTO enterprise_settings (tenant_id, enterprise_name, contact_email, "
+                    "contact_phone, logo_url, default_runtime, invite_required, member_approval, "
+                    "max_employees, features) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        ctx.tenant_id,
+                        enterprise_name or "",
+                        contact_email or "",
+                        contact_phone or "",
+                        logo_url,
+                        default_runtime or "hermes_acp",
+                        invite_required if invite_required is not None else True,
+                        member_approval if member_approval is not None else True,
+                        max_employees if max_employees is not None else 100,
+                        features if features is not None else {},
+                    ),
                 )
             row = s.execute(
-                "SELECT id, enterprise_name, contact_phone, logo_url, "
-                "invite_required, member_approval, max_employees, features, updated_at "
+                "SELECT id, enterprise_name, contact_email, contact_phone, logo_url, "
+                "default_runtime, invite_required, member_approval, max_employees, "
+                "features, updated_at "
                 "FROM enterprise_settings LIMIT 1",
             ).fetchone()
         return _row_to_settings(row) if row else _empty_settings()
@@ -129,7 +176,7 @@ class SettingsRepository:
 
 def _empty_settings() -> SettingsRow:
     return SettingsRow(
-        id="", enterprise_name="", contact_phone="", logo_url=None,
-        invite_required=True, member_approval=True, max_employees=100,
-        features={}, updated_at=datetime.utcnow(),
+        id="", enterprise_name="", contact_email="", contact_phone="", logo_url=None,
+        default_runtime="hermes_acp", invite_required=True, member_approval=True,
+        max_employees=100, features={}, updated_at=datetime.utcnow(),
     )

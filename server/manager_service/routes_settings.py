@@ -62,7 +62,16 @@ def build_settings_router(verifier) -> APIRouter:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         data = svc.patch_settings(
-            ctx, enterprise_name=body.enterprise_name, logo_url=body.logo_url,
+            ctx,
+            enterprise_name=body.enterprise_name,
+            logo_url=body.logo_url,
+            phone=body.phone,
+            contact_email=body.contact_email,
+            default_runtime=body.default_runtime,
+            invite_required=body.invite_required,
+            member_approval=body.member_approval,
+            max_employees=body.max_employees,
+            features=body.features,
         )
         return Envelope(data=EnterpriseSettingsOut(**data))
 

@@ -102,7 +102,10 @@ def test_llm_provider_create_ok():
 def test_settings_get_ok():
     from manager_service.routes_settings import build_settings_router
     svc = MagicMock()
-    svc.get_settings.return_value = {"enterprise_name": "TestCo", "logo_url": None, "phone": None,
+    svc.get_settings.return_value = {"enterprise_name": "TestCo", "logo_url": None,
+                                      "phone": None, "contact_email": "",
+                                      "default_runtime": "hermes_acp", "invite_required": True,
+                                      "member_approval": True, "max_employees": 100, "features": {},
                                       "updated_at": datetime.utcnow()}
     with patch("manager_service.routes_settings._service", return_value=svc):
         c = _build_app("postgresql://x", build_settings_router)
@@ -112,7 +115,10 @@ def test_settings_get_ok():
 def test_settings_patch_ok():
     from manager_service.routes_settings import build_settings_router
     svc = MagicMock()
-    svc.patch_settings.return_value = {"enterprise_name": "NewName", "logo_url": None, "phone": None,
+    svc.patch_settings.return_value = {"enterprise_name": "NewName", "logo_url": None,
+                                        "phone": None, "contact_email": "",
+                                        "default_runtime": "hermes_acp", "invite_required": True,
+                                        "member_approval": True, "max_employees": 100, "features": {},
                                         "updated_at": datetime.utcnow()}
     with patch("manager_service.routes_settings._service", return_value=svc):
         c = _build_app("postgresql://x", build_settings_router)
@@ -279,7 +285,7 @@ def test_settings_service_get_defaults():
     router.queue(FakeCursor(fetchone=None))  # get_settings SELECT → None
     # upsert_settings 内部: 1) SELECT id check → exists → skipped update; 2) final SELECT
     router.queue(FakeCursor(fetchone=("s-1",)))  # existing check returns id
-    router.queue(FakeCursor(fetchone=("s-1", "DefaultCo", "", None, True, True, 100, {}, datetime.utcnow())))  # final SELECT
+    router.queue(FakeCursor(fetchone=("s-1", "DefaultCo", "", "", None, "hermes_acp", True, True, 100, {}, datetime.utcnow())))  # final SELECT
     svc = SettingsService(SettingsRepository(router))
     result = svc.get_settings(ctx())
     assert result["enterprise_name"] == "DefaultCo"
