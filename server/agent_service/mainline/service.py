@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 from shared.contracts.enums import ConversationState, DisplayState
 from shared.errors import Conflict
@@ -173,6 +174,25 @@ class MainlineService:
             collaboration_mode=collaboration_mode,
             orchestration_brief=orchestration_brief,
             planner_employee_id=planner_employee_id,
+        )
+
+    def mark_read(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None = None,
+    ) -> Conversation:
+        """更新会话阅读状态（parity Manager 侧 ConversationReadState）。
+
+        last_read_at 未给则取 now()；传空串 message_id 清除已读锚点（回退到未读）。
+        """
+        self._conversations.get(conversation_id)  # 存在性校验 -> NotFound
+        effective_at = last_read_at if last_read_at is not None else datetime.now(timezone.utc)
+        return self._conversations.update_read_status(
+            conversation_id,
+            last_read_at=effective_at,
+            last_read_message_id=last_read_message_id,
         )
 
     # ---- message ----

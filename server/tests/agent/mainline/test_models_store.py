@@ -96,3 +96,30 @@ def test_task_repo_status_transition():
 def test_task_repo_missing_raises_notfound():
     with pytest.raises(NotFound):
         InMemoryTaskRepository().get("nope")
+
+def test_conversation_read_status_defaults_to_none():
+    """A1.1 验收：新会话阅读状态默认为未读（None）。"""
+    conv = Conversation(id="c1")
+    assert conv.last_read_at is None
+    assert conv.last_read_message_id is None
+
+
+def test_conversation_mark_read_updates_fields():
+    """A1.1 验收：mark_read 设 last_read_message_id，clear 清回 None。"""
+    from datetime import datetime, timezone
+    repo = InMemoryConversationRepository()
+    repo.create(Conversation(id="c1"))
+    ts = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    updated = repo.update_read_status("c1", last_read_at=ts, last_read_message_id="msg_abc")
+    assert updated.last_read_at == ts
+    assert updated.last_read_message_id == "msg_abc"
+    # clear: 空串 message_id 视为 None
+    cleared = repo.update_read_status("c1", last_read_message_id="")
+    assert cleared.last_read_message_id is None
+    assert cleared.last_read_at == ts  # 未再传则不改变
+
+
+def test_conversation_read_status_missing_raises_notfound():
+    repo = InMemoryConversationRepository()
+    with pytest.raises(NotFound):
+        repo.update_read_status("nope", last_read_message_id="x")

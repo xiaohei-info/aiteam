@@ -44,6 +44,15 @@ class ConversationRepository(ABC):
         planner_employee_id: str | None = None,
     ) -> Conversation: ...
 
+    @abstractmethod
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation: ...
+
 
 class MessageRepository(ABC):
     @abstractmethod
@@ -128,6 +137,25 @@ class InMemoryConversationRepository(ConversationRepository):
         if planner_employee_id is not None:
             value = None if (isinstance(planner_employee_id, str) and not planner_employee_id.strip()) else planner_employee_id
             data["planner_employee_id"] = value
+        data["updated_at"] = _now()
+        updated = Conversation(**data)
+        self._items[conversation_id] = updated
+        return updated
+
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation:
+        item = self.get(conversation_id)
+        data = item.model_dump()
+        if last_read_at is not None:
+            data["last_read_at"] = last_read_at
+        if last_read_message_id is not None:
+            value = None if (isinstance(last_read_message_id, str) and not last_read_message_id.strip()) else last_read_message_id
+            data["last_read_message_id"] = value
         data["updated_at"] = _now()
         updated = Conversation(**data)
         self._items[conversation_id] = updated
@@ -239,11 +267,13 @@ class SqliteConversationRepository(ConversationRepository):
         self._db.execute(
             "INSERT INTO conversations "
             "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "last_read_at, last_read_message_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (conversation.id, conversation.title, conversation.state.value,
              conversation.collaboration_mode, conversation.orchestration_brief,
              conversation.planner_employee_id,
+             _iso(conversation.last_read_at) if conversation.last_read_at is not None else None,
+             conversation.last_read_message_id,
              _iso(conversation.created_at), _iso(conversation.updated_at)),
         )
         return conversation
@@ -252,20 +282,28 @@ class SqliteConversationRepository(ConversationRepository):
         row = self._db.query_one(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
-            "created_at, updated_at FROM conversations WHERE id = ?",
+            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations WHERE id = ?",
             (conversation_id,),
         )
         if row is None:
             raise NotFound(f"conversation {conversation_id} not found")
-        return Conversation(**dict(row))
+        row = dict(row)
+        row["last_read_at"] = datetime.fromisoformat(row["last_read_at"]) if row.get("last_read_at") else None
+        return Conversation(**row)
 
     def list(self) -> list[Conversation]:
         rows = self._db.query(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, "
-            "created_at, updated_at FROM conversations ORDER BY created_at, rowid"
+            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations "
+            "ORDER BY created_at, rowid"
         )
-        return [Conversation(**dict(r)) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["last_read_at"] = datetime.fromisoformat(d["last_read_at"]) if d.get("last_read_at") else None
+            result.append(Conversation(**d))
+        return result
 
     def set_state(self, conversation_id: str, state: ConversationState) -> Conversation:
         self.get(conversation_id)  # 存在性校验 -> NotFound
@@ -305,6 +343,28 @@ class SqliteConversationRepository(ConversationRepository):
             (conv.collaboration_mode, conv.orchestration_brief, conv.planner_employee_id,
              _iso(_now()), conversation_id),
         )
+        return self.get(conversation_id)
+
+    def update_read_status(
+        self,
+        conversation_id: str,
+        *,
+        last_read_at: datetime | None = None,
+        last_read_message_id: str | None | object = None,
+    ) -> Conversation:
+        """更新会话阅读状态（last_read_at / last_read_message_id）；空串 message_id 视为 None 清除。"""
+        self.get(conversation_id)  # 存在性校验 -> NotFound
+        if last_read_at is not None:
+            self._db.execute(
+                "UPDATE conversations SET last_read_at = ?, updated_at = ? WHERE id = ?",
+                (_iso(last_read_at), _iso(_now()), conversation_id),
+            )
+        if last_read_message_id is not None:
+            value = None if (isinstance(last_read_message_id, str) and not last_read_message_id.strip()) else last_read_message_id
+            self._db.execute(
+                "UPDATE conversations SET last_read_message_id = ?, updated_at = ? WHERE id = ?",
+                (value, _iso(_now()), conversation_id),
+            )
         return self.get(conversation_id)
 
 

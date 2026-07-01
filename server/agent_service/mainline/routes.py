@@ -15,6 +15,8 @@ import contextlib
 import json
 from collections.abc import Callable
 
+from datetime import datetime
+
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,6 +53,14 @@ class ConversationCollaborationRequest(BaseModel):
     collaboration_mode: str | None = Field(default=None, description="free | orchestrated")
     orchestration_brief: str | None = Field(default=None, description="orchestrated 必填")
     planner_employee_id: str | None = Field(default=None, description="编排者 handle；传空串清除")
+
+
+class MarkReadRequest(BaseModel):
+    """标记会话已读（parity Manager 侧 ConversationReadState upsert）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    last_read_at: datetime | None = Field(default=None, description="阅读时间戳（未给则取服务端当前时间）")
+    last_read_message_id: str | None = Field(default=None, description="已读锚点消息 id；传空串清除")
 
 
 class CreateMessageRequest(BaseModel):
@@ -144,6 +154,15 @@ def build_mainline_router(
             collaboration_mode=req.collaboration_mode,
             orchestration_brief=req.orchestration_brief,
             planner_employee_id=req.planner_employee_id,
+        )
+        return Envelope[Conversation](data=updated)
+
+    @router.put("/conversations/{conversation_id}/read-status", summary="标记会话已读", description="更新阅读时间戳与已读锚点消息（parity Manager 侧 ConversationReadState upsert）。", operation_id="agent_mark_conversation_read")
+    async def mark_read(conversation_id: str, req: MarkReadRequest) -> Envelope[Conversation]:
+        updated = service.mark_read(
+            conversation_id,
+            last_read_at=req.last_read_at,
+            last_read_message_id=req.last_read_message_id,
         )
         return Envelope[Conversation](data=updated)
 

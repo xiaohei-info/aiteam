@@ -209,3 +209,47 @@ def test_websocket_end_to_end_live_stream(client):
                     break
         assert "run_succeeded" in types
         assert "text_delta" not in types and "completed" not in types
+
+
+def test_read_status_endpoint_marks_read(client):
+    """A1.3 验收：PUT /conversations/{id}/read-status 设已读锚点并在 GET 中反映。"""
+    cid = _create_conv(client)
+    r = client.put(f"/api/agent/conversations/{cid}/read-status",
+                   json={"last_read_message_id": "msg_1"})
+    assert r.status_code == 200
+    assert r.json()["data"]["last_read_message_id"] == "msg_1"
+    assert r.json()["data"]["last_read_at"] is not None
+
+    # GET 中可见
+    r2 = client.get(f"/api/agent/conversations/{cid}")
+    assert r2.json()["data"]["last_read_message_id"] == "msg_1"
+
+
+def test_read_status_clear_via_empty_string(client):
+    """空串 last_read_message_id 清除已读锚点。"""
+    cid = _create_conv(client)
+    client.put(f"/api/agent/conversations/{cid}/read-status",
+               json={"last_read_message_id": "msg_1"})
+    r = client.put(f"/api/agent/conversations/{cid}/read-status",
+                   json={"last_read_message_id": ""})
+    assert r.status_code == 200
+    assert r.json()["data"]["last_read_message_id"] is None
+
+
+def test_read_status_default_timestamp_when_omitted(client):
+    """未传 last_read_at 时服务端取当前时间。"""
+    import datetime as _dt
+    cid = _create_conv(client)
+    before = _dt.datetime.now(_dt.timezone.utc)
+    r = client.put(f"/api/agent/conversations/{cid}/read-status", json={})
+    after = _dt.datetime.now(_dt.timezone.utc)
+    ts = _dt.datetime.fromisoformat(r.json()["data"]["last_read_at"])
+    assert before <= ts <= after
+
+
+def test_read_status_missing_conversation_returns_404(client):
+    """不存在的会话返回 404 problem+json。"""
+    r = client.put("/api/agent/conversations/nope/read-status",
+                   json={"last_read_message_id": "msg_1"})
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/problem+json")

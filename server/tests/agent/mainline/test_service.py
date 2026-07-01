@@ -396,3 +396,49 @@ def test_set_conversation_state_raises_for_missing_conversation():
     svc = _svc()
     with pytest.raises(NotFound):
         svc.set_conversation_state("does-not-exist", ConversationState.ARCHIVED)
+
+
+def test_mark_read_sets_timestamp_and_message_id():
+    """阅读状态：mark_read 设 last_read_at（默认 now）+ last_read_message_id。"""
+    from datetime import datetime, timezone
+
+    svc = _svc()
+    conv = svc.create_conversation()
+    assert conv.last_read_at is None
+    before = datetime.now(timezone.utc)
+    svc.mark_read(conv.id, last_read_message_id="msg_1")
+    after = datetime.now(timezone.utc)
+    got = svc.get_conversation(conv.id)
+    assert got.last_read_at is not None
+    assert before <= got.last_read_at <= after
+    assert got.last_read_message_id == "msg_1"
+
+
+def test_mark_read_clears_message_id_with_empty_string():
+    """传空串 last_read_message_id 清除已读锚点（回退未读）。"""
+    svc = _svc()
+    conv = svc.create_conversation()
+    svc.mark_read(conv.id, last_read_message_id="msg_1")
+    svc.mark_read(conv.id, last_read_message_id="")
+    got = svc.get_conversation(conv.id)
+    assert got.last_read_message_id is None
+
+
+def test_mark_read_uses_supplied_timestamp():
+    """显式 last_read_at 透传，不覆盖。"""
+    from datetime import datetime, timezone
+
+    svc = _svc()
+    conv = svc.create_conversation()
+    ts = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
+    svc.mark_read(conv.id, last_read_at=ts, last_read_message_id="msg_1")
+    got = svc.get_conversation(conv.id)
+    assert got.last_read_at == ts
+
+
+def test_mark_read_raises_for_missing_conversation():
+    from shared.errors import NotFound
+
+    svc = _svc()
+    with pytest.raises(NotFound):
+        svc.mark_read("does-not-exist", last_read_message_id="msg_1")
