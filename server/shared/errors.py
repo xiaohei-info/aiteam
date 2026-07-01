@@ -42,6 +42,11 @@ class NotFound(AppError):
     status, code, title = 404, "not_found", "Not Found"
 
 
+
+class InvalidTransition(AppError):
+    status, code, title = 409, "invalid_transition", "Invalid lifecycle transition"
+
+
 class Conflict(AppError):
     status, code, title = 409, "conflict", "Conflict"
 

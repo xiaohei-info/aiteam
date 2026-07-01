@@ -108,7 +108,7 @@ def test_unban_restores_normal(service, enterprise_repo, admin_repo):
     service.execute_action(eid, "ban", None, None)
     service.execute_action(eid, "unban", None, None)
     state = admin_repo.get_state(eid)
-    assert state.status == "normal"
+    assert state.status == "active"
 
 
 def test_notify_records_audit_without_state_change(service, enterprise_repo, admin_repo):
@@ -124,7 +124,8 @@ def test_adjust_quota_records_quota(service, enterprise_repo, admin_repo):
     eid = _provision(enterprise_repo, "Zeta")
     service.execute_action(eid, "adjust_quota", Decimal("5000"), None)
     state = admin_repo.get_state(eid)
-    assert state.quotas == {"quota": "5000"}
+    q = admin_repo.get_quota(eid)
+    assert q.token_quota_limit == 5000
 
 
 def test_action_on_unknown_enterprise_404(service):
@@ -157,7 +158,7 @@ def test_list_enterprises_returns_real_data(service, enterprise_repo):
     detail = service.get_enterprise_detail(eid)
     assert detail["org_id"] == eid
     assert detail["enterprise_name"] == "ListCo"
-    assert detail["status"] == "normal"
+    assert detail["status"] == "active"
     assert detail["total_recharged"] == Decimal("0")
 
 

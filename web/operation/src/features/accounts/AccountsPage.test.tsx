@@ -50,7 +50,7 @@ function makeEnterprise(overrides: Record<string, unknown> = {}) {
     registered_at: "2026-01-15T00:00:00Z",
     total_recharged: "1000.00",
     token_consumed: 50000,
-    status: "normal",
+    status: "active",
     monthly_active: true,
     ...overrides,
   };
@@ -82,7 +82,11 @@ function mockListResponse(items: unknown[], total = items.length, page = 1, page
     new Response(
       JSON.stringify({
         data: items,
-        page: { page, page_size: pageSize, total, total_pages: Math.ceil(total / pageSize) },
+        page: {
+          next_cursor: page * pageSize < total ? String((page * pageSize)) : null,
+          has_more: page * pageSize < total,
+        },
+        meta: { total },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ),
@@ -130,19 +134,19 @@ describe("AccountsPage", () => {
 
   it("渲染统计卡片", async () => {
     mockListResponse([]);
-    mockStatsResponse(makeStats({ total_enterprises: 10, new_this_month: 3 }));
+    mockStatsResponse(makeStats({ total_enterprises: 10, active_enterprises: 5 }));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("总企业数")).toBeInTheDocument();
       expect(screen.getByText("10")).toBeInTheDocument();
-      expect(screen.getByText("本月新增")).toBeInTheDocument();
-      expect(screen.getByText("3")).toBeInTheDocument();
+      expect(screen.getByText("活跃企业")).toBeInTheDocument();
+      expect(screen.getByText("5")).toBeInTheDocument();
     });
   });
 
   it("渲染企业列表", async () => {
     mockListResponse([
-      makeEnterprise({ org_id: "e1", enterprise_name: "企业A", status: "normal" }),
+      makeEnterprise({ org_id: "e1", enterprise_name: "企业A", status: "active" }),
       makeEnterprise({ org_id: "e2", enterprise_name: "企业B", status: "banned" }),
     ]);
     mockStatsResponse(makeStats());
@@ -153,18 +157,20 @@ describe("AccountsPage", () => {
     });
   });
 
-  it("渲染状态标签（正常/封禁/欠费）", async () => {
+  it("渲染状态标签（正常/暂停/封禁/注销）", async () => {
     mockListResponse([
-      makeEnterprise({ org_id: "e1", status: "normal" }),
-      makeEnterprise({ org_id: "e2", status: "banned" }),
-      makeEnterprise({ org_id: "e3", status: "overdue" }),
+      makeEnterprise({ org_id: "e1", status: "active" }),
+      makeEnterprise({ org_id: "e2", status: "suspended" }),
+      makeEnterprise({ org_id: "e3", status: "banned" }),
+      makeEnterprise({ org_id: "e4", status: "closed" }),
     ]);
     mockStatsResponse(makeStats());
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("正常")).toBeInTheDocument();
+      expect(screen.getByText("暂停")).toBeInTheDocument();
       expect(screen.getByText("封禁")).toBeInTheDocument();
-      expect(screen.getByText("欠费")).toBeInTheDocument();
+      expect(screen.getByText("注销")).toBeInTheDocument();
     });
   });
 
