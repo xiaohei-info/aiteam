@@ -36,7 +36,14 @@ class StreamBroker:
 
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[StreamFrame]]] = {}
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        # Lazy: asyncio.Lock() in 3.9 raises if constructed before a loop exists on the
+        # main thread; all call sites run inside coroutines where a loop is guaranteed.
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def publish_timeline(self, event: BusinessTimelineEvent) -> None:
         await self._fanout(event.conversation_id, StreamFrame(kind="timeline", timeline=event))
@@ -47,19 +54,19 @@ class StreamBroker:
         await self._fanout(conversation_id, StreamFrame(kind="display", display=state, run_id=run_id))
 
     async def _fanout(self, conversation_id: str, frame: StreamFrame) -> None:
-        async with self._lock:
+        async with self._get_lock():
             queues = list(self._subscribers.get(conversation_id, ()))
         for q in queues:
             q.put_nowait(frame)
 
     async def subscribe(self, conversation_id: str) -> "Subscription":
         q: asyncio.Queue[StreamFrame] = asyncio.Queue()
-        async with self._lock:
+        async with self._get_lock():
             self._subscribers.setdefault(conversation_id, set()).add(q)
         return Subscription(self, conversation_id, q)
 
     async def _unsubscribe(self, conversation_id: str, q: asyncio.Queue[StreamFrame]) -> None:
-        async with self._lock:
+        async with self._get_lock():
             subs = self._subscribers.get(conversation_id)
             if subs:
                 subs.discard(q)

@@ -16,7 +16,7 @@ from shared.errors import NotFound
 
 def test_loop_default_disabled():
     loop = Loop(id="l1", conversation_id="c1", cron="* * * * *")
-    assert loop.status is LoopStatus.DISABLED
+    assert loop.status is LoopStatus.PAUSED
     assert loop.fire_count == 0
     assert loop.last_run_id is None
 
@@ -26,7 +26,7 @@ def test_loop_status_is_persistent_enum_not_display():
     display_values = {s.value for s in DisplayState}
     loop_values = {s.value for s in LoopStatus}
     assert not (loop_values & display_values)  # 无交集
-    assert "enabled" in loop_values and "disabled" in loop_values
+    assert "active" in loop_values and "paused" in loop_values and "completed" in loop_values and "error" in loop_values
 
 
 def test_loop_model_carries_no_display_state_field():
@@ -50,11 +50,11 @@ def test_loop_carries_neutral_runspec_only():
 def test_repo_crud_and_status_transition():
     repo = InMemoryLoopRepository()
     repo.create(Loop(id="l1", conversation_id="c1", cron="* * * * *"))
-    assert repo.get("l1").status is LoopStatus.DISABLED
-    enabled = repo.set_status("l1", LoopStatus.ENABLED)
-    assert enabled.status is LoopStatus.ENABLED
-    assert repo.get("l1").status is LoopStatus.ENABLED
-    assert repo.list_enabled() == [repo.get("l1")]
+    assert repo.get("l1").status is LoopStatus.PAUSED
+    enabled = repo.set_status("l1", LoopStatus.ACTIVE)
+    assert enabled.status is LoopStatus.ACTIVE
+    assert repo.get("l1").status is LoopStatus.ACTIVE
+    assert repo.list_active() == [repo.get("l1")]
 
 
 def test_repo_list_sorted_by_created():
@@ -80,6 +80,6 @@ def test_repo_missing_raises_notfound():
     with pytest.raises(NotFound):
         repo.get("nope")
     with pytest.raises(NotFound):
-        repo.set_status("nope", LoopStatus.ENABLED)
+        repo.set_status("nope", LoopStatus.ACTIVE)
     with pytest.raises(NotFound):
         repo.record_fire("nope", run_id="run_x")

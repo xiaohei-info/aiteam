@@ -30,12 +30,24 @@ class LoopRepository(ABC):
     @abstractmethod
     def list(self) -> list[Loop]: ...
     @abstractmethod
-    def list_enabled(self) -> list[Loop]: ...
+    def list_active(self) -> list[Loop]: ...
     @abstractmethod
     def set_status(self, loop_id: str, status: LoopStatus) -> Loop: ...
     @abstractmethod
     def record_fire(self, loop_id: str, *, run_id: str) -> Loop:
         """记一次触发：fire_count+1、last_run_id、last_fired_at。"""
+
+    @abstractmethod
+    def record_failure(self, loop_id: str) -> Loop:
+        """记一次失败：retry_count+1；达 max_retries 且 active 时自迁至 error。"""
+
+    @abstractmethod
+    def record_success(self, loop_id: str) -> Loop:
+        """记一次成功：重置 retry_count。"""
+
+    @abstractmethod
+    def update(self, loop: Loop) -> Loop:
+        """持久化 loop 全字段（含 recurrence/retry 等）。"""
 
 
 class InMemoryLoopRepository(LoopRepository):
@@ -57,8 +69,8 @@ class InMemoryLoopRepository(LoopRepository):
     def list(self) -> list[Loop]:
         return sorted(self._items.values(), key=lambda l: l.created_at)
 
-    def list_enabled(self) -> list[Loop]:
-        return [l for l in self.list() if l.status is LoopStatus.ENABLED]
+    def list_active(self) -> list[Loop]:
+        return [l for l in self.list() if l.status is LoopStatus.ACTIVE]
 
     def set_status(self, loop_id: str, status: LoopStatus) -> Loop:
         item = self.get(loop_id)
@@ -77,11 +89,37 @@ class InMemoryLoopRepository(LoopRepository):
         self._items[loop_id] = updated
         return updated
 
+    def record_failure(self, loop_id: str) -> Loop:
+        item = self.get(loop_id)
+        item.record_failure()
+        item.updated_at = _now()
+        self._items[loop_id] = item
+        return item
+
+    def record_success(self, loop_id: str) -> Loop:
+        item = self.get(loop_id)
+        item.record_success()
+        item.updated_at = _now()
+        self._items[loop_id] = item
+        return item
+
+    def update(self, loop: Loop) -> Loop:
+        loop.updated_at = _now()
+        self._items[loop.id] = loop
+        return loop
+
 
 # ---- SQLite 实现（agent 本地库；与内存实现行为等价，重启不丢）----
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
+
+
+_COLUMNS = (
+    "id, conversation_id, cron, run_spec, title, recurrence_type, "
+    "recurrence_config, input_template, status, max_retries, retry_count, "
+    "fire_count, last_run_id, last_fired_at, created_at, updated_at"
+)
 
 
 class SqliteLoopRepository(LoopRepository):
@@ -94,16 +132,26 @@ class SqliteLoopRepository(LoopRepository):
     def _row_to_loop(row) -> Loop:
         data = dict(row)
         data["run_spec"] = json.loads(data["run_spec"])
+        data["recurrence_config"] = (
+            json.loads(data["recurrence_config"])
+            if data.get("recurrence_config")
+            else None
+        )
         return Loop(**data)
 
     def create(self, loop: Loop) -> Loop:
         self._db.execute(
-            "INSERT INTO loops (id, conversation_id, cron, run_spec, title, status, "
-            "fire_count, last_run_id, last_fired_at, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO loops ("
+            "id, conversation_id, cron, run_spec, title, recurrence_type, "
+            "recurrence_config, input_template, status, max_retries, retry_count, "
+            "fire_count, last_run_id, last_fired_at, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (loop.id, loop.conversation_id, loop.cron, json.dumps(loop.run_spec.model_dump()),
-             loop.title, loop.status.value, loop.fire_count, loop.last_run_id,
-             _iso(loop.last_fired_at), _iso(loop.created_at), _iso(loop.updated_at)),
+             loop.title, loop.recurrence_type.value,
+             json.dumps(loop.recurrence_config) if loop.recurrence_config is not None else None,
+             loop.input_template, loop.status.value, loop.max_retries, loop.retry_count,
+             loop.fire_count, loop.last_run_id, _iso(loop.last_fired_at),
+             _iso(loop.created_at), _iso(loop.updated_at)),
         )
         return loop
 
@@ -117,10 +165,10 @@ class SqliteLoopRepository(LoopRepository):
         rows = self._db.query("SELECT * FROM loops ORDER BY created_at, rowid")
         return [self._row_to_loop(r) for r in rows]
 
-    def list_enabled(self) -> list[Loop]:
+    def list_active(self) -> list[Loop]:
         rows = self._db.query(
             "SELECT * FROM loops WHERE status = ? ORDER BY created_at, rowid",
-            (LoopStatus.ENABLED.value,),
+            (LoopStatus.ACTIVE.value,),
         )
         return [self._row_to_loop(r) for r in rows]
 
@@ -141,3 +189,37 @@ class SqliteLoopRepository(LoopRepository):
             (item.fire_count + 1, run_id, _iso(now), _iso(now), loop_id),
         )
         return self.get(loop_id)
+
+    def record_failure(self, loop_id: str) -> Loop:
+        item = self.get(loop_id)
+        item.record_failure()
+        self._db.execute(
+            "UPDATE loops SET retry_count = ?, status = ?, updated_at = ? WHERE id = ?",
+            (item.retry_count, item.status.value, _iso(_now()), loop_id),
+        )
+        return self.get(loop_id)
+
+    def record_success(self, loop_id: str) -> Loop:
+        item = self.get(loop_id)
+        item.record_success()
+        self._db.execute(
+            "UPDATE loops SET retry_count = ?, updated_at = ? WHERE id = ?",
+            (item.retry_count, _iso(_now()), loop_id),
+        )
+        return self.get(loop_id)
+
+    def update(self, loop: Loop) -> Loop:
+        self.get(loop.id)
+        self._db.execute(
+            "UPDATE loops SET "
+            "conversation_id=?, cron=?, run_spec=?, title=?, recurrence_type=?, "
+            "recurrence_config=?, input_template=?, status=?, max_retries=?, retry_count=?, "
+            "fire_count=?, last_run_id=?, last_fired_at=?, updated_at=? WHERE id=?",
+            (loop.conversation_id, loop.cron, json.dumps(loop.run_spec.model_dump()),
+             loop.title, loop.recurrence_type.value,
+             json.dumps(loop.recurrence_config) if loop.recurrence_config is not None else None,
+             loop.input_template, loop.status.value, loop.max_retries, loop.retry_count,
+             loop.fire_count, loop.last_run_id, _iso(loop.last_fired_at),
+             _iso(_now()), loop.id),
+        )
+        return self.get(loop.id)

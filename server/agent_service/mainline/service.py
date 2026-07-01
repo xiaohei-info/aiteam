@@ -154,7 +154,7 @@ class MainlineService:
         if state not in allowed:
             raise Conflict(
                 f"Cannot transition conversation from {conversation.state.value} to {state.value}; "
-                f"allowed: {[s.value for s in allowed] or "none"}"
+                f"allowed: {[s.value for s in allowed] or 'none'}"
             )
         return self._conversations.set_state(conversation_id, state)
 

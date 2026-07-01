@@ -50,7 +50,7 @@ def test_create_loop_default_disabled(client):
     data = r.json()["data"]
     assert data["conversation_id"] == cid
     assert data["cron"] == "*/5 * * * *"
-    assert data["status"] == "disabled"
+    assert data["status"] == "paused"
     assert data["fire_count"] == 0
 
 
@@ -67,9 +67,9 @@ def test_enable_disable(client):
     cid = _create_conv(client)
     loop_id = _create_loop(client, cid)
     r = client.post(f"/api/agent/loops/{loop_id}/enable")
-    assert r.json()["data"]["status"] == "enabled"
+    assert r.json()["data"]["status"] == "active"
     r = client.post(f"/api/agent/loops/{loop_id}/disable")
-    assert r.json()["data"]["status"] == "disabled"
+    assert r.json()["data"]["status"] == "paused"
 
 
 def test_fire_loop_now_starts_run(client):
