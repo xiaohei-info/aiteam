@@ -44,9 +44,30 @@ CREATE TABLE IF NOT EXISTS enterprise_account (
     owner_bootstrap_hash text NOT NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now(),
-    -- 业务唯一性：enterprise_code 非空时全局唯一（可选字段）。
-    CONSTRAINT uq_enterprise_code UNIQUE NULLS NOT DISTINCT (enterprise_code)
+    -- 业务唯一性：enterprise_code 非空时全局唯一（可选字段）。默认 NULLS DISTINCT：
+    -- 多个未填 code 的企业（NULL）互不相撞；仅非空 code 强制唯一。
+    -- （原 NULLS NOT DISTINCT 会让多个 NULL 视为相等 → 开通第二家不填 code 的企业 409。）
+    CONSTRAINT uq_enterprise_code UNIQUE (enterprise_code)
 );
+
+-- 历史修正（幂等）：既有库若带 NULLS NOT DISTINCT 版本的约束，就地重建为默认 NULLS DISTINCT。
+DO $$
+BEGIN
+    IF EXISTS (
+        -- NULLS NOT DISTINCT 记在底层唯一索引上（pg_index.indnullsnotdistinct，PG15+），
+        -- 不在 pg_constraint；经 conindid 关联到索引判定。
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_index i ON i.indexrelid = c.conindid
+        WHERE t.relname = 'enterprise_account'
+          AND c.conname = 'uq_enterprise_code'
+          AND i.indnullsnotdistinct
+    ) THEN
+        ALTER TABLE enterprise_account DROP CONSTRAINT uq_enterprise_code;
+        ALTER TABLE enterprise_account ADD CONSTRAINT uq_enterprise_code UNIQUE (enterprise_code);
+    END IF;
+END
+$$;
 
 -- 索引：按 tenant_id 查询（跨端对照用）。
 CREATE INDEX IF NOT EXISTS idx_enterprise_account_tenant ON enterprise_account(tenant_id);
