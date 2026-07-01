@@ -11,6 +11,7 @@ from agent_service.workspace.store import (
     InMemoryWorkbenchStateRepository,
     WorkbenchState,
 )
+from agent_service.workspace.marketplace_provider import MarketplaceProvider
 from agent_service.workspace.service import MarketTemplate, WorkspaceService
 from shared.contracts.grants import LoadedExpertProjection
 from shared.contracts.snapshot import ModelPolicy
@@ -54,16 +55,7 @@ def _make_service():
     kb = InMemoryKnowledgeBaseRepository()
     docs = InMemoryKnowledgeDocumentRepository()
     uploads = InMemoryUploadAssetRepository()
-    svc = WorkspaceService(
-        projections=proj,
-        workbench_store=wb,
-        kb_store=kb,
-        doc_store=docs,
-        upload_store=uploads,
-        upload_dir=None,  # will test upload separately
-    )
-    # Pre-populate marketplace cache
-    svc.sync_marketplace([
+    seed_templates = [
         MarketTemplate(
             template_id="tpl-1", display_name="专家A", category="coding",
             model_name="gpt-5", tags=["python"], persona="资深后端",
@@ -73,7 +65,16 @@ def _make_service():
             template_id="tpl-2", display_name="专家B", category="writing",
             tags=["copywriting"],
         ),
-    ])
+    ]
+    svc = WorkspaceService(
+        projections=proj,
+        workbench_store=wb,
+        kb_store=kb,
+        doc_store=docs,
+        upload_store=uploads,
+        upload_dir=None,  # will test upload separately
+        marketplace_provider=StubMarketplaceProvider(seed_templates),
+    )
     return svc, proj, wb
 
 
@@ -221,6 +222,32 @@ class TestRecruit:
         available = proj.available()
         names = [p.display_name for p in available]
         assert names.count("专家A") == 1
+
+
+
+class StubMarketplaceProvider:
+    """测试用 provider：返回固定模板列表，隔离 fake 默认数据。"""
+
+    def __init__(self, templates: list[MarketTemplate]) -> None:
+        self._templates = templates
+
+    def list_templates(self) -> list[MarketTemplate]:
+        return [MarketTemplate(
+            template_id=t.template_id,
+            display_name=t.display_name,
+            category=t.category,
+            model_name=t.model_name,
+            skills_count=t.skills_count,
+            recruit_count=t.recruit_count,
+            is_recruited=t.is_recruited,
+            tags=list(t.tags),
+            avatar_url=t.avatar_url,
+            persona=t.persona,
+            skills=[dict(s) for s in t.skills],
+            knowledge_bases=[dict(k) for k in t.knowledge_bases],
+            initial_memories=[dict(m) for m in t.initial_memories],
+            rating=t.rating,
+        ) for t in self._templates]
 
 
 class TestOffice:

@@ -109,6 +109,11 @@ class LocalLoginService:
             return None
         return self._verify(entry.token, entry.verify_material)
 
+    def current_token(self) -> str | None:
+        """返回当前缓存的用户 token（未登录 → None）。供下游 Manager 目录拉取使用。"""
+        entry = self._cache.load()
+        return entry.token if entry is not None else None
+
     def logout(self) -> None:
         self._cache.clear()
 

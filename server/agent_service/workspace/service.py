@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
+from .marketplace_provider import FakeMarketplaceProvider, MarketTemplate, MarketplaceProvider
 from .store import (
     KnowledgeBase,
     KnowledgeBaseRepository,
@@ -81,25 +82,7 @@ def _build_memory_policy_from_initial_memories(initial_memories) -> dict | None:
         return None
     return {"initial_memories": items}
 
-# ---- 市场模板（本地缓存） ----
-
-@dataclass
-class MarketTemplate:
-    template_id: str
-    display_name: str
-    category: str = ""
-    model_name: str = ""
-    skills_count: int = 0
-    recruit_count: int = 0
-    is_recruited: bool = False
-    tags: list[str] = field(default_factory=list)
-    avatar_url: str | None = None
-    persona: str = ""
-    skills: list[dict] = field(default_factory=list)
-    knowledge_bases: list[dict] = field(default_factory=list)
-    initial_memories: list[dict] = field(default_factory=list)
-    rating: float = 0.0
-
+# ---- 市场模板类型见 .marketplace_provider (MarketTemplate) ----
 
 # ---- 招募结果 ----
 
@@ -172,6 +155,7 @@ class WorkspaceService:
         upload_store: UploadAssetRepository,
         upload_dir: str | None = None,
         http_timeout: float = 15.0,
+        marketplace_provider: MarketplaceProvider | None = None,
         unread_counts_provider: Callable[[str], int] | None = None,
     ) -> None:
         from .store import InMemoryKnowledgeIngestionRepository
@@ -186,6 +170,9 @@ class WorkspaceService:
         self._unread_counts_provider = unread_counts_provider
         # 市场模板本地缓存（由 sync_marketplace 填充）
         self._market_templates: dict[str, MarketTemplate] = {}
+        # 人才市场模板 provider：初始化即自动 sync，保证 marketplace 永不为空
+        self._marketplace_provider = marketplace_provider or FakeMarketplaceProvider()
+        self._sync_marketplace_from_provider()
 
     # ---- P02 工作台 ----
 
@@ -225,6 +212,18 @@ class WorkspaceService:
         for t in templates:
             self._market_templates[t.template_id] = t
         return len(templates)
+
+    def _sync_marketplace_from_provider(self) -> int:
+        """从注入的 provider 拉取模板并填充本地缓存（初始化/手动 sync 时调用）。"""
+        try:
+            templates = self._marketplace_provider.list_templates()
+        except Exception:
+            templates = []
+        return self.sync_marketplace(templates)
+
+    def sync_marketplace_endpoint(self) -> int:
+        """公开：手动触发一次 provider 拉取并刷新缓存（供 /sync 端点调用）。"""
+        return self._sync_marketplace_from_provider()
 
     def list_marketplace(self, *, category: str | None = None,
                          keyword: str | None = None) -> list[MarketTemplate]:
