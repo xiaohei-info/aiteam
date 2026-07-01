@@ -26,8 +26,36 @@ const scene = {
 
 const feedData = {
   events: [
-    { type: "run_completed", summary: "专家A 完成「数据清洗」任务", time: "2026-01-01 10:00" },
-    { type: "employee_recruited", summary: "招募了专家B", time: "2026-01-01 09:30" },
+    {
+      type: "scheduled_job",
+      loop_id: "loop-1",
+      title: "数据清洗",
+      status: "active",
+      conversation_id: "conv-1",
+      recurrence_type: "daily",
+      cron: "0 9 * * *",
+      next_run_at: "2026-01-02T09:00:00Z",
+      fire_count: 3,
+      last_fired_at: "2026-01-01T09:00:00Z",
+      max_retries: 3,
+      retry_count: 0,
+      created_at: "2026-01-01T08:00:00Z",
+    },
+    {
+      type: "scheduled_job",
+      loop_id: "loop-2",
+      title: "文案润色",
+      status: "paused",
+      conversation_id: "conv-2",
+      recurrence_type: "cron",
+      cron: "*/30 * * * *",
+      next_run_at: "2026-01-01T10:30:00Z",
+      fire_count: 0,
+      last_fired_at: null,
+      max_retries: 3,
+      retry_count: 1,
+      created_at: "2026-01-01T08:30:00Z",
+    },
   ],
 };
 
@@ -103,8 +131,9 @@ describe("OfficePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/专家A 完成/)).toBeInTheDocument();
-      expect(screen.getByText(/招募了专家B/)).toBeInTheDocument();
+      expect(screen.getByTestId("office-scheduled-jobs")).toBeInTheDocument();
+      expect(screen.getByText("数据清洗")).toBeInTheDocument();
+      expect(screen.getByText("文案润色")).toBeInTheDocument();
     });
   });
 
@@ -147,6 +176,42 @@ describe("OfficePage", () => {
       expect(screen.getByText(/服务不可用/)).toBeInTheDocument();
     });
     expect(screen.queryByText("专家A")).toBeNull();
+  });
+
+  it("Feed 加载后无定时任务展示空态而非空白", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/office/scene")) return new Response(envelope(scene), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.includes("/office/feed")) return new Response(envelope({ events: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(envelope(null), { status: 200 });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("专家A")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("office-scheduled-jobs-empty")).toBeInTheDocument();
+    });
+  });
+
+  it("Feed 渲染失败重试计数", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/office/scene")) return new Response(envelope(scene), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.includes("/office/feed")) return new Response(envelope(feedData), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(envelope(null), { status: 200 });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("专家A")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/连续失败 1\/3/)).toBeInTheDocument();
+    });
   });
 
   it("空员工列表展示「暂无员工」", async () => {

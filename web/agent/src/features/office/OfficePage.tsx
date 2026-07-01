@@ -1,9 +1,10 @@
-/** P09 办公室动态页 — 工位视图 + 状态摘要 + 动态 Feed。 */
+/** P09 办公室动态页 — 工位视图 + 状态摘要 + 定时任务 Feed。 */
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useApp } from "../../lib/app-context";
 import { getScene, getFeed } from "./useOfficeApi";
+import { ScheduledJobs } from "./ScheduledJobs";
 import type { OfficeScene, OfficeFeed } from "./types";
 
 const STATUS_COLORS: Record<string, string> = { working: "text-warning", ready: "text-success", offline: "text-text-muted", busy: "text-danger" };
@@ -63,7 +64,7 @@ export function OfficePage() {
       {scene.employees.length === 0 && <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">暂无员工</GlassPanel>}
 
       <div className="flex items-center gap-sm">
-        <h2 className="m-0 text-base font-semibold text-text-primary">最近动态</h2>
+        <h2 className="m-0 text-base font-semibold text-text-primary">定时任务</h2>
         <Button variant="ghost" size="sm" disabled={feedLoading} onClick={() => void loadFeed()}>刷新</Button>
       </div>
 
@@ -72,20 +73,7 @@ export function OfficePage() {
       {feedLoading && <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>}
 
       {feed && !feedLoading && (
-        feed.events.length === 0 ? (
-          <GlassPanel className="rounded-window p-lg text-sm text-text-secondary" data-testid="office-feed-empty">暂无动态</GlassPanel>
-        ) : (
-          <GlassPanel className="rounded-window p-md" data-testid="office-feed">
-            <ul className="m-0 list-none p-0 space-y-sm">
-              {feed.events.map((event, idx) => (
-                <li key={idx} className="border-b border-gold/5 pb-sm last:border-b-0">
-                  <p className="m-0 text-sm text-text-primary">{String(event.summary ?? event.type ?? "")}</p>
-                  <p className="m-0 mt-xs text-xs text-text-muted">{String(event.time ?? "")}</p>
-                </li>
-              ))}
-            </ul>
-          </GlassPanel>
-        )
+        <ScheduledJobs jobs={feed.events.filter((e) => e.type === "scheduled_job")} />
       )}
     </section>
   );

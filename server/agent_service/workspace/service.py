@@ -157,6 +157,7 @@ class WorkspaceService:
         http_timeout: float = 15.0,
         marketplace_provider: MarketplaceProvider | None = None,
         unread_counts_provider: Callable[[str], int] | None = None,
+        loop_service: "LoopService | None" = None,
     ) -> None:
         from .store import InMemoryKnowledgeIngestionRepository
         self._projections = projections
@@ -168,6 +169,7 @@ class WorkspaceService:
         self._upload_dir = Path(upload_dir) if upload_dir else None
         self._http_timeout = http_timeout
         self._unread_counts_provider = unread_counts_provider
+        self._loop_service = loop_service
         # 市场模板本地缓存（由 sync_marketplace 填充）
         self._market_templates: dict[str, MarketTemplate] = {}
         # 人才市场模板 provider：初始化即自动 sync，保证 marketplace 永不为空
@@ -318,8 +320,33 @@ class WorkspaceService:
         )
 
     def get_office_feed(self) -> OfficeFeed:
-        """办公室动态摘要（当前从空开始，后续从 mainline/loop 事件派生）。"""
-        return OfficeFeed(events=[])
+        """办公室动态摘要：聚合本地 Loop 为定时任务视图（issue #418）。
+
+        本地优先：直接从本地 Loop 仓储派生，不依赖远端推送。每条 Loop 映射为一个
+        ``scheduled_job`` 事件（状态 / 下次触发 / 关联方案·会话 / fire_count）。
+        仅当装配时注入 loop_service 才聚合；未注入保持空列表（向后兼容旧测试）。
+        """
+        if self._loop_service is None:
+            return OfficeFeed(events=[])
+        events: list[dict] = []
+        for loop in self._loop_service.list_loops():
+            next_run = loop.preview_next_run()
+            events.append({
+                "type": "scheduled_job",
+                "loop_id": loop.id,
+                "title": loop.title or loop.id,
+                "status": loop.status.value,
+                "conversation_id": loop.conversation_id,
+                "recurrence_type": loop.recurrence_type.value,
+                "cron": loop.cron,
+                "next_run_at": next_run.isoformat() if next_run is not None else None,
+                "fire_count": loop.fire_count,
+                "last_fired_at": loop.last_fired_at.isoformat() if loop.last_fired_at else None,
+                "max_retries": loop.max_retries,
+                "retry_count": loop.retry_count,
+                "created_at": loop.created_at.isoformat(),
+            })
+        return OfficeFeed(events=events)
 
     # ---- P08 知识库 ----
 

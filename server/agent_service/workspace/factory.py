@@ -40,6 +40,7 @@ def build_workspace_service(
     upload_dir: str | None = None,
     marketplace_provider: MarketplaceProvider | None = None,
     unread_counts_provider: Callable[[str], int] | None = None,
+    loop_service: "LoopService | None" = None,
 ) -> WorkspaceService:
     """装配本地 workspace 服务。
 
@@ -74,4 +75,5 @@ def build_workspace_service(
         upload_dir=upload_dir,
         marketplace_provider=marketplace_provider,
         unread_counts_provider=unread_counts_provider,
+        loop_service=loop_service,
     )

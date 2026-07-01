@@ -196,6 +196,7 @@ def build_app(
     app.include_router(build_mainline_router(mainline, identity_provider=login_service.current_identity))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline, db=db)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
+    # workspace 在构建时注入 loop_service，供 office feed 聚合 scheduled jobs（issue #418）
     # 生产可配置自启动 loop 调度后台循环（#173）；默认否，dev/测试用手动触发端点。
     if settings.agent_loop_autostart:
         app.router.on_startup.append(_loop_scheduler.start)
@@ -214,6 +215,7 @@ def build_app(
         projections=projections, db=db, upload_dir=str(_upload_dir()),
         marketplace_provider=marketplace_provider,
         unread_counts_provider=mainline.unread_count_for_employee,
+        loop_service=loop_service,
     )
     app.include_router(build_workspace_router(workspace_service))
     # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----
