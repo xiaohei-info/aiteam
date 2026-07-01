@@ -26,7 +26,7 @@ from shared.contracts.events import BusinessTimelineEvent
 from shared.contracts.runspec import RunSpec
 
 from .group import DispatchResult, GroupChatService, GroupExpert
-from .models import Conversation, Message, MessageRole, Run, Task
+from .models import Conversation, Message, MessageRole, Run, RunTriggerType, RunExecutionMode, Task
 from .service import MainlineService
 from .stream import StreamBroker, StreamFrame
 
@@ -65,7 +65,8 @@ class StartRunRequest(BaseModel):
     # 中立 RunSpec：指定模型 / 切换思考深度 / persona / mcp 等经此下达；未给则用默认（runtime 自解析）。
     run_spec: RunSpec | None = Field(default=None, description="中立运行规格：模型/思考深度/persona/MCP 等；未给则 runtime 自选默认")
 
-
+    trigger_type: str | None = Field(default=None, description="trigger source: private_message|group_message|manual_run|scheduled_job|api_call; inferred when omitted")
+    execution_mode: str | None = Field(default=None, description="execution mode: single_agent|kanban_orchestration|cron_single_agent; inferred when omitted")
 class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, description="任务标题")
@@ -167,6 +168,8 @@ def build_mainline_router(
             task_id=req.task_id,
             run_spec=req.run_spec,
             tenant_id=claims.tenant_id if claims is not None else None,
+            trigger_type=RunTriggerType(req.trigger_type) if req.trigger_type else None,
+            execution_mode=RunExecutionMode(req.execution_mode) if req.execution_mode else None,
         )
         return Envelope[Run](data=run)
 

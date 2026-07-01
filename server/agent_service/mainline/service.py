@@ -33,6 +33,8 @@ from .models import (
     MessageRole,
     Run,
     RunStatus,
+    RunTriggerType,
+    RunExecutionMode,
     Task,
     TaskStatus,
 )
@@ -49,7 +51,7 @@ from .timeline import RawEventArchive, TimelineStore
 # 与 event_mapper.TERMINAL_TYPES / timeline._TERMINAL_TYPES 同集合，是终态类型集合的唯一业务
 # 映射点。Run 终态据此反查派生，不再靠 RunResult.error 字符串硬匹配。
 _TERMINAL_RUN_STATUS: dict[str, RunStatus] = {
-    "run_succeeded": RunStatus.COMPLETED,
+    "run_succeeded": RunStatus.SUCCEEDED,
     "run_cancelled": RunStatus.CANCELLED,
     "run_failed": RunStatus.FAILED,
 }
@@ -213,18 +215,32 @@ class MainlineService:
         run_spec: RunSpec | None = None,
         task_id: str | None = None,
         tenant_id: str | None = None,
+        trigger_type: RunTriggerType | None = None,
+        execution_mode: RunExecutionMode | None = None,
     ) -> Run:
         """起一次 run：驱动 runtime，事件归一落 timeline + 推流，终态落 Run。
 
         返回 run 的**最终持久态**（终态已落库）。展示态全程只经 broker，不落库（D6）。
+        #283: 记录 trigger_type / execution_mode，并按 queued->routing->submitting->running->...
+        完整生命周期流转。
         """
         self._conversations.get(conversation_id)
         effective_tenant_id = tenant_id or self._tenant_id
-        run = self._runs.create(Run(id=_new_id("run"), conversation_id=conversation_id))
+        tt = trigger_type or self._infer_trigger_type()
+        em = execution_mode or self._infer_execution_mode()
+        run = self._runs.create(Run(id=_new_id("run"), conversation_id=conversation_id,
+                                    trigger_type=tt, execution_mode=em))
+        # #283 lifecycle: queued -> routing -> submitting -> running
+        run.start_routing()
+        self._runs.update_status(run.id, run)
+        run.submit()
+        self._runs.update_status(run.id, run)
         if task_id is not None:
             self._tasks.set_status(task_id, TaskStatus.RUNNING)
 
         await self._broker.publish_display(conversation_id, DisplayState.STREAMING, run_id=run.id)
+        run.start_running()
+        self._runs.update_status(run.id, run)
 
         request = AgentRunRequest(
             run_id=run.id,
@@ -239,13 +255,23 @@ class MainlineService:
             await self._handle_runtime_event(conversation_id, rt)
 
         result = await self._runner.run(request, on_event)
-        final_run = self._finalize_run(run.id, conversation_id, result)
+        final_run = self._finalize_run(run.id, conversation_id, result,
+                                       trigger_type=run.trigger_type,
+                                       execution_mode=run.execution_mode)
         if task_id is not None:
             self._tasks.set_status(task_id, _task_status_for(final_run.status))
         # 闭环 C：run 终态落库后尽力把用量回流进 outbox（D14：失败不阻断本地 run）。
         self._record_run_usage(final_run, tenant_id=effective_tenant_id)
         await self._broker.publish_display(conversation_id, DisplayState.RESOLVED, run_id=run.id)
         return final_run
+
+    def _infer_trigger_type(self) -> RunTriggerType:
+        """默认触发类型；子类/后续 #312 具体编排可通过参数覆盖。"""  # noqa: E501
+        return RunTriggerType.MANUAL_RUN
+
+    def _infer_execution_mode(self) -> RunExecutionMode:
+        """默认执行模式；群聊编排下覆盖为 kanban_orchestration（#06 §7.6 / D19）。"""  # noqa: E501
+        return RunExecutionMode.SINGLE_AGENT
 
     def _conversation_input_messages(self, conversation_id: str) -> list[dict]:
         """把会话历史消息组装为中立 input_messages（喂给 runtime 的 prompt 上下文）。
@@ -293,7 +319,9 @@ class MainlineService:
         except Exception:  # noqa: BLE001 — D14：outbox 副链失败不阻断本地 run
             pass
 
-    def _finalize_run(self, run_id: str, conversation_id: str, result: RunResult) -> Run:
+    def _finalize_run(self, run_id: str, conversation_id: str, result: RunResult, *,
+                      trigger_type: RunTriggerType | None = None,
+                      execution_mode: RunExecutionMode | None = None) -> Run:
         """据 timeline 终态事件收敛 Run 持久终态（#64 单一真相源）。
 
         Run 终态由**已落 timeline 的终态业务事件**反查派生（run_succeeded->COMPLETED /
@@ -302,17 +330,18 @@ class MainlineService:
         Run=FAILED 而 timeline=run_cancelled 的撕裂）。
 
         兜底：timeline 无终态事件时（契约异常：正常 runtime 必发 completed/cancelled/error），
-        按 RunResult.success 收尾（success->COMPLETED / 否则 FAILED），避免卡死。RunResult 的
+        按 RunResult.success 收尾（success->SUCCEEDED / 否则 FAILED），避免卡死。RunResult 的
         session_id/error/usage 始终作为元数据落库（error 是诊断串，不参与终态判定）。
         """
         terminal = self._timeline.terminal_for_run(conversation_id, run_id)
         if terminal is not None:
             status = _TERMINAL_RUN_STATUS[terminal.type]
         else:
-            status = RunStatus.COMPLETED if result.success else RunStatus.FAILED
+            status = RunStatus.SUCCEEDED if result.success else RunStatus.FAILED
         return self._runs.finalize(
             run_id, status,
             session_id=result.session_id, error=result.error, usage=result.usage,
+            trigger_type=trigger_type, execution_mode=execution_mode,
         )
 
     def get_run(self, run_id: str) -> Run:
@@ -348,8 +377,12 @@ class MainlineService:
 
 def _task_status_for(run_status: RunStatus) -> TaskStatus:
     return {
-        RunStatus.COMPLETED: TaskStatus.DONE,
+        RunStatus.QUEUED: TaskStatus.PENDING,
+        RunStatus.ROUTING: TaskStatus.PENDING,
+        RunStatus.SUBMITTING: TaskStatus.RUNNING,
+        RunStatus.RUNNING: TaskStatus.RUNNING,
+        RunStatus.WAITING_HUMAN: TaskStatus.RUNNING,
+        RunStatus.SUCCEEDED: TaskStatus.DONE,
         RunStatus.CANCELLED: TaskStatus.CANCELLED,
         RunStatus.FAILED: TaskStatus.FAILED,
-        RunStatus.RUNNING: TaskStatus.RUNNING,
     }[run_status]

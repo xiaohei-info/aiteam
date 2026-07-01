@@ -116,8 +116,8 @@ def test_timeline_parity_vs_frozen_baseline():
     r = client.post(f"/api/agent/conversations/{conv_id}/runs", json={})
     assert r.status_code == 200, r.text
     run_id = r.json()["data"]["id"]
-    # FakeExecutor 终态 completed -> run 持久终态 COMPLETED（#64 单一真相源）。
-    assert r.json()["data"]["status"] == "completed"
+    # FakeExecutor 终态 completed -> run 持久终态 succeeded（#283 #64：与 enterprise 侧 team_run 一致）。
+    assert r.json()["data"]["status"] == "succeeded"
 
     # ---- 拉时间线（cursor 增量）----
     r = client.get(f"/api/agent/conversations/{conv_id}/timeline?after=0")

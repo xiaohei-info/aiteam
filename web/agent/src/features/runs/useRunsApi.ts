@@ -1,7 +1,10 @@
 import type { AgentApiClient } from "../../lib/api-client";
 
 export interface Run {
-  id: string; conversation_id: string; status: string;
+  id: string; conversation_id: string;
+  status: string;
+  trigger_type?: string | null;
+  execution_mode?: string | null;
   session_id?: string | null; error?: string | null;
   usage?: Record<string, unknown> | null; created_at: string; updated_at: string;
 }
