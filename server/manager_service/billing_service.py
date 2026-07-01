@@ -1,4 +1,4 @@
-"""Billing 余额查询与充值编排（B04/B09）。"""
+"""Billing 余额查询与充值编排（B04/B09）+ usage overview/records 编排。"""
 
 from __future__ import annotations
 
@@ -63,3 +63,13 @@ class BillingService:
             "token_credited": row.token_credited,
             "created_at": row.created_at,
         }
+
+    def get_usage_overview(self, ctx: TenantContext, *, period: str) -> dict:
+        """按 tenant + period 聚合 usage overview（总消耗 Token / 折合费用 / 消耗最高员工 + 趋势 + 排名）。"""
+        return self._repo.get_usage_overview(ctx, period=period)
+
+    def list_usage_records(
+        self, ctx: TenantContext, *, period: str, employee_id: str | None = None,
+    ) -> list[dict]:
+        """按 tenant + period 列 usage 明细（员工维度用量记录），可选按 employee_id 过滤。"""
+        return self._repo.list_usage_records(ctx, period=period, employee_id=employee_id)
