@@ -5,7 +5,7 @@
  * - 空树展示空态
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -35,6 +35,14 @@ const tree = {
       { id: "e1", type: "employee", name: "张三", parent_id: "d1", status: "online", children: [] },
     ]},
   ],
+};
+const treeNoDept = {
+  id: "root",
+  type: "organization",
+  name: "企业",
+  parent_id: null,
+  status: null,
+  children: [{ id: "e1", type: "employee", name: "张三", parent_id: "root", status: "online", children: [] }],
 };
 
 function mockApi(overrides: Partial<apiModule.OrgApi> = {}) {
@@ -83,5 +91,48 @@ describe("OrgPage 组织架构", () => {
     mockApi({ getTree: vi.fn().mockResolvedValue(null) });
     renderPage();
     await waitFor(() => expect(screen.getByText("暂无数据")).toBeInTheDocument());
+  });
+
+  it("员工节点在有部门时可触发部门分配 → 调 assignDepartment", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("assign-trigger-e1"));
+    await waitFor(() => expect(screen.getByTestId("assign-modal")).toBeInTheDocument());
+
+    const select = screen.getByTestId("assign-department-select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "d1" } });
+    fireEvent.click(screen.getByRole("button", { name: "分配" }));
+
+    await waitFor(() => expect(api.assignDepartment).toHaveBeenCalledWith("e1", "d1"));
+    await waitFor(() => expect(api.getTree).toHaveBeenCalledTimes(2));
+  });
+
+  it("无部门时不显示分配按钮", async () => {
+    mockApi({ getTree: vi.fn().mockResolvedValue(treeNoDept) });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
+    expect(screen.queryByTestId("assign-trigger-e1")).not.toBeInTheDocument();
+  });
+
+  it("分配失败展示错误文案", async () => {
+    mockApi({
+      assignDepartment: vi
+        .fn()
+        .mockRejectedValue(new ApiError("分配失败，请重试", 500, "assign_failed")),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("assign-trigger-e1"));
+    await waitFor(() => expect(screen.getByTestId("assign-modal")).toBeInTheDocument());
+
+    const select = screen.getByTestId("assign-department-select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "d1" } });
+    fireEvent.click(screen.getByRole("button", { name: "分配" }));
+
+    await waitFor(() => expect(screen.getByText("分配失败，请重试")).toBeInTheDocument());
+    expect(screen.queryByTestId("assign-success")).not.toBeInTheDocument();
   });
 });
