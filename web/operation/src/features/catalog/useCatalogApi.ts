@@ -10,7 +10,7 @@
  *   POST /{catalog_type}/{template_id}/unpublish    → 下架
  *   PUT  /{catalog_type}/{template_id}/visibility   → 改可见范围
  */
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ApiError } from "@aiteam/shared";
 import type { ListResult } from "@aiteam/shared";
 import { createOperationApiClient } from "../../api/client";
@@ -22,6 +22,37 @@ import type {
   RegisterSolutionTemplate,
 } from "./types";
 
+/** 编辑请求体——对齐后端 UpdateExpertTemplateRequest | UpdateSolutionTemplateRequest。
+ * 部分更新：调用方只填要改的字段，未出现的字段不参与 PATCH。 */
+export type UpdateExpertTemplateChanges = {
+  display_name?: string;
+  persona?: string | null;
+  recommended_config?: Record<string, unknown>;
+  default_model_json?: Record<string, unknown>;
+  default_binding_json?: Record<string, unknown>;
+  prompt_pack_json?: Record<string, unknown>;
+  category_code?: string;
+  role_name?: string;
+};
+
+export type UpdateSolutionTemplateChanges = {
+  display_name?: string;
+  expert_bindings?: { template_id: string; sequence_no: number; enabled: boolean }[];
+  knowledge_refs?: string[];
+  skill_refs?: string[];
+  default_grants?: Record<string, unknown> | null;
+  planner_prompt?: string;
+  subtask_prompt?: string;
+  aggregate_prompt?: string;
+  default_kb_blueprint?: Record<string, unknown>;
+  default_skill_bundle?: Record<string, unknown>;
+  default_collaboration_template_ref?: string | null;
+  tags?: string[];
+};
+
+export type UpdateCatalogChanges =
+  UpdateExpertTemplateChanges | UpdateSolutionTemplateChanges;
+
 const BASE = "/api/operation/catalog";
 
 export interface CatalogApi {
@@ -32,6 +63,7 @@ export interface CatalogApi {
   publish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   unpublish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   setVisibility: (catalog_type: CatalogItemType, template_id: string, visible_scope: Record<string, unknown>) => Promise<CatalogItem | null>;
+  save: (catalog_type: CatalogItemType, template_id: string, changes: UpdateCatalogChanges) => Promise<CatalogItem | null>;
 }
 
 export function useCatalogApi(): CatalogApi {
@@ -85,8 +117,14 @@ export function useCatalogApi(): CatalogApi {
     [client],
   );
 
+  const save = useCallback(
+    (catalog_type: CatalogItemType, template_id: string, changes: UpdateCatalogChanges): Promise<CatalogItem | null> =>
+      client.patch<CatalogItem>(`${BASE}/${catalog_type}/${template_id}`, { body: changes }),
+    [client],
+  );
+
   return useMemo<CatalogApi>(
-    () => ({ list, get, registerExpert, registerSolution, publish, unpublish, setVisibility }),
-    [list, get, registerExpert, registerSolution, publish, unpublish, setVisibility],
+    () => ({ list, get, registerExpert, registerSolution, publish, unpublish, setVisibility, save }),
+    [list, get, registerExpert, registerSolution, publish, unpublish, setVisibility, save],
   );
 }

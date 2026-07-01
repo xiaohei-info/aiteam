@@ -64,6 +64,18 @@ export const operationMessages: LocaleCatalog = {
     "operation.catalog.statusDraft": "草稿",
     "operation.catalog.backToList": "返回目录",
     "operation.catalog.notFound": "未找到该目录项。",
+    "operation.catalog.edit": "编辑",
+    "operation.catalog.cancelEdit": "取消",
+    "operation.catalog.save": "保存",
+    "operation.catalog.saving": "保存中…",
+    "operation.catalog.editTitle": "编辑目录项",
+    "operation.catalog.fieldPersona": "专家人设",
+    "operation.catalog.fieldRecommendedConfig": "推荐配置",
+    "operation.catalog.fieldExpertBindings": "专家绑定",
+    "operation.catalog.fieldKnowledgeRefs": "知识库引用",
+    "operation.catalog.fieldSkillRefs": "技能引用",
+    "operation.catalog.fieldDefaultGrants": "默认授权",
+    "operation.catalog.editSuccess": "保存成功",
   },
 };
 // ---- 功能补全：账号管理 + 财务 + 系统健康 ----

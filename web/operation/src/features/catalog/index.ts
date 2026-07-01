@@ -7,7 +7,13 @@ export type {
   CatalogItemType,
   CatalogStatus,
   VisibilityLabel,
+  ExpertBinding,
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
   SetVisibilityInput,
 } from "./types";
+export type {
+  UpdateExpertTemplateChanges,
+  UpdateSolutionTemplateChanges,
+  UpdateCatalogChanges,
+} from "./useCatalogApi";

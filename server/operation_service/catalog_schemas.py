@@ -138,3 +138,14 @@ class CatalogEntryResponse(BaseModel):
     prompt_pack_json: dict = Field(default_factory=dict)
     category_code: str = Field(default="")
     role_name: str = Field(default="")
+
+    # 以下为 payload 中可编辑字段的前端投影（对齐 UpdateExpertTemplateRequest /
+    # UpdateSolutionTemplateRequest），便于 CatalogDetailPage 编辑模式预填与回写。
+    persona: str | None = Field(default=None, description="专家人设（仅 expert_template）")
+    recommended_config: dict = Field(default_factory=dict, description="推荐配置（仅 expert_template）")
+    expert_bindings: list["ExpertBinding"] | None = Field(
+        default=None, description="方案内专家绑定列表（仅 solution_template）"
+    )
+    knowledge_refs: list[str] = Field(default_factory=list, description="知识库引用（仅 solution_template）")
+    skill_refs: list[str] = Field(default_factory=list, description="技能引用（仅 solution_template）")
+    default_grants: dict | None = Field(default=None, description="默认授权（仅 solution_template）")

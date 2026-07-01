@@ -596,4 +596,151 @@ describe("详情页", () => {
       expect(screen.getByText("未找到该目录项。")).toBeInTheDocument();
     });
   });
+
+// ---- 8. 详情页编辑模式 ----
+
+describe("详情页编辑模式", () => {
+  function makeExpertItem(overrides: Record<string, unknown> = {}) {
+    return makeCatalogItem({
+      catalog_type: "expert_template",
+      template_id: "exp-1",
+      display_name: "客服专家",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      persona: "你是一名客服专家",
+      recommended_config: { language: "zh" },
+      ...overrides,
+    });
+  }
+
+  it("管理员可见编辑按钮, operator 不可见", async () => {
+    mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
+
+    const adminRendered = renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
+    await waitFor(() => {
+      expect(screen.getByText("编辑")).toBeInTheDocument();
+    });
+    adminRendered.unmount();
+
+    mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
+    const operatorRendered = renderCatalogDetail(makeSystemOperatorSession(), "exp-1", "expert_template");
+    await waitFor(() => {
+      expect(screen.getAllByText("客服专家").length).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.queryByText("编辑")).not.toBeInTheDocument();
+    operatorRendered.unmount();
+  });
+
+  it("点击编辑展示 persona / recommended_config 表单", async () => {
+    mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
+    renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
+
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => {
+      expect(screen.getByText("编辑目录项")).toBeInTheDocument();
+      expect(screen.getByText("保存")).toBeInTheDocument();
+      expect(screen.getByText("取消")).toBeInTheDocument();
+    });
+    const textareas = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
+    );
+    expect(textareas.length).toBeGreaterThanOrEqual(1);
+    expect(textareas[0]).toHaveValue("你是一名客服专家");
+  });
+
+  it("编辑专家模板后调 PATCH 且 body 含 persona + recommended_config", async () => {
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(makeExpertItem()))
+      .mockResolvedValueOnce(
+        singleResponse(makeExpertItem({ persona: "新版人设", recommended_config: { language: "en" } })),
+      );
+
+    renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+    const textboxes = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
+    );
+    fireEvent.change(textboxes[0]!, { target: { value: "新版人设" } });
+    fireEvent.change(textboxes[1]!, { target: { value: "{\"language\":\"en\"}" } });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/exp-1") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.persona).toBe("新版人设");
+      expect(body.recommended_config).toEqual({ language: "en" });
+      expect(body.catalog_type).toBeUndefined();
+    });
+    await waitFor(() => expect(screen.queryByText("保存")).not.toBeInTheDocument());
+  });
+
+  it("编辑方案展示引用类字段并提交 knowledge/skill/default_grants", async () => {
+    const solutionItem = makeCatalogItem({
+      catalog_type: "solution_template",
+      template_id: "sol-1",
+      display_name: "电商方案",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      knowledge_refs: ["kb-1"],
+      skill_refs: ["skill-1"],
+      default_grants: { role: "viewer" },
+      expert_bindings: [{ template_id: "t1", sequence_no: 1, enabled: true }],
+    });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(solutionItem))
+      .mockResolvedValueOnce(singleResponse(solutionItem));
+
+    renderCatalogDetail(makeSystemAdminSession(), "sol-1", "solution_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => expect(screen.getByText("知识库引用")).toBeInTheDocument());
+    expect(screen.getByText("技能引用")).toBeInTheDocument();
+    expect(screen.getByText("默认授权")).toBeInTheDocument();
+    expect(screen.getByText("专家绑定")).toBeInTheDocument();
+
+    const inputs = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "INPUT",
+    );
+    fireEvent.change(inputs[0]!, { target: { value: "kb-1, kb-2" } });
+    fireEvent.change(inputs[1]!, { target: { value: "skill-1, skill-9" } });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/sol-1") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.knowledge_refs).toEqual(["kb-1", "kb-2"]);
+      expect(body.skill_refs).toEqual(["skill-1", "skill-9"]);
+    });
+  });
+
+  it("取消编辑不发送请求并恢复只读", async () => {
+    mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
+    renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+    await waitFor(() => expect(screen.getByText("取消")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("取消"));
+    await waitFor(() => expect(screen.queryByText("保存")).not.toBeInTheDocument());
+    const patchCalls = mockFetch.mock.calls.filter(
+      (c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH",
+    );
+    expect(patchCalls).toHaveLength(0);
+  });
+});
 });
