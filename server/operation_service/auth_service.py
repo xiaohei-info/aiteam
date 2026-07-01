@@ -71,20 +71,48 @@ class OperationAuthService:
         return SystemAuthResult(token=self._signer.sign(claims), claims=claims)
 
 
-def build_operation_auth_service() -> OperationAuthService:
-    """构造 OperationAuthService：启动生成 RSA key（或 env 注入）+ seed 默认 system_admin。
+def _load_or_create_db_signing_key(admin_db_url: str, kid: str) -> str:
+    """从 operation_signing_key 表加载 kid 对应私钥；无则生成并落库，返回私钥 PEM。
 
-    env（可选，生产持久化密钥）：
-    - OPERATION_SIGNING_PRIVATE_KEY / OPERATION_SIGNING_PUBLIC_KEY：固定密钥对（PEM）。
-      未设则启动生成（重启失效，操作员需重新登录——可接受，控制面非高可用长会话场景）。
+    幂等且多实例竞争安全：INSERT ... ON CONFLICT DO NOTHING 后再 SELECT，取到最终落库者，
+    使并发启动的多个实例最终用同一把 key。表由迁移 0002 建（调用方须先跑迁移）。
+    """
+    import psycopg
+
+    with psycopg.connect(admin_db_url, autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT private_pem FROM operation_signing_key WHERE kid = %s", (kid,)
+        ).fetchone()
+        if row:
+            return row[0]
+        priv_pem, pub_pem = generate_rsa_keypair()
+        conn.execute(
+            "INSERT INTO operation_signing_key (kid, private_pem, public_pem) "
+            "VALUES (%s, %s, %s) ON CONFLICT (kid) DO NOTHING",
+            (kid, priv_pem, pub_pem),
+        )
+        row = conn.execute(
+            "SELECT private_pem FROM operation_signing_key WHERE kid = %s", (kid,)
+        ).fetchone()
+        return row[0]
+
+
+def build_operation_auth_service(admin_db_url: str | None = None) -> OperationAuthService:
+    """构造 OperationAuthService：装配签名 key + seed 默认 system_admin。
+
+    签名密钥来源优先级：
+    1. env OPERATION_SIGNING_PRIVATE_KEY/PUBLIC_KEY 显式配置 → 用它（外部密钥管理/固定轮换）。
+    2. admin_db_url 可用 → operation_signing_key 表持久化：有则加载、无则生成并固定
+       （任何环境自动生成，跨重启/多实例稳定，操作员 token 不再因重启失效）。
+    3. 无 DB（骨架/纯契约/单元测试）→ 启动临时生成（行为同旧默认）。
     """
     priv_pem = os.getenv("OPERATION_SIGNING_PRIVATE_KEY")
     pub_pem = os.getenv("OPERATION_SIGNING_PUBLIC_KEY")
     if priv_pem and pub_pem:
-        # 用固定密钥（持久化场景）；kid 固定，重启后旧 token 仍有效
         signer = RS256TokenSigner(priv_pem, kid=KID)
+    elif admin_db_url:
+        signer = RS256TokenSigner(_load_or_create_db_signing_key(admin_db_url, KID), kid=KID)
     else:
-        # 启动生成（dev/默认；重启失效）
         priv_pem, _ = generate_rsa_keypair()
         signer = RS256TokenSigner(priv_pem, kid=KID)
     repo = build_system_account_repository()

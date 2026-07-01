@@ -17,8 +17,18 @@ from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 from .routes_admin import build_admin_router
 
+# 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
+# 从该表加载/落库——故迁移必须先于 build_operation_auth_service 执行（fail-fast；/readyz 绿
+# 时 schema 必已就绪）。无 ADMIN_DB_URL 的骨架/测试态 → 内部 no-op（契约不破）。
+settings = load_settings("operation")
+if settings.admin_db_url:
+    from .repository import apply_migrations as _apply_oper_migrations
+
+    _apply_oper_migrations(settings.admin_db_url, settings.app_rw_password)
+
 # 系统账号认证（§9.2）：Operation 自持系统级 RSA key，自签自验系统 token（D23 RS256）。
-_auth = build_operation_auth_service()
+# 密钥来源优先级：env 显式配置 > DB 持久化（自动生成并固定，重启/多实例稳定）> 临时（无 DB）。
+_auth = build_operation_auth_service(admin_db_url=settings.admin_db_url)
 # 静态 RS256 验签器（Operation 单 key，无需 kid 动态解析）。
 _verifier = RS256TokenVerifier.from_public_pems({_auth.kid: _auth.signer.public_pem()})
 
@@ -35,15 +45,7 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-settings = load_settings("operation")
 app = create_app(settings, router)
-# 启动即应用运营库迁移（fail-fast；/readyz 绿时 schema 必已就绪）。原为首请求经 get_repository
-# 惰性触发——服务"健康"但库空、首个请求才建表；改为启动阶段一次性 provision（幂等，get_repository
-# 的惰性调用仍在，作二次幂等兜底）。无 ADMIN_DB_URL 的骨架/测试态 → 内部 no-op（契约不破）。
-if settings.admin_db_url:
-    from .repository import apply_migrations as _apply_oper_migrations
-
-    _apply_oper_migrations(settings.admin_db_url, settings.app_rw_password)
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth
 app.state._token_verifier = _verifier
