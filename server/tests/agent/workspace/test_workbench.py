@@ -13,19 +13,36 @@ from agent_service.workspace.store import (
 )
 from agent_service.workspace.service import MarketTemplate, WorkspaceService
 from shared.contracts.grants import LoadedExpertProjection
+from shared.contracts.snapshot import ModelPolicy
 
 
 def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _make_projection(employee_id: str, display_name: str) -> LoadedExpertProjection:
+def _make_projection(
+    employee_id: str,
+    display_name: str,
+    *,
+    skills: list[str] | None = None,
+    knowledge_refs: list[str] | None = None,
+    connector_refs: list[str] | None = None,
+    memory_policy: dict | None = None,
+    model_policy: ModelPolicy | None = None,
+    persona: str | None = None,
+) -> LoadedExpertProjection:
     return LoadedExpertProjection(
         employee_id=employee_id,
         tenant_id="t1",
         version="1",
         display_name=display_name,
         runtime_binding=None,
+        persona=persona,
+        model_policy=model_policy or ModelPolicy(),
+        skills=skills or [],
+        knowledge_refs=knowledge_refs or [],
+        connector_refs=connector_refs or [],
+        memory_policy=memory_policy,
         synced_at=_now_dt(),
         revoked=False,
     )
@@ -143,6 +160,22 @@ class TestRecruit:
         p = proj.get(result.employee_id)
         assert p is not None
         assert p.display_name == "专家A"
+
+    def test_recruit_inherits_template_config(self):
+        """AITEAM-288：招募时继承模板全部能力配置（skills/knowledge/model/policy）。"""
+        svc, proj, _ = _make_service()
+        result = svc.recruit("tpl-1")
+        p = proj.get(result.employee_id)
+        assert p is not None
+        # 模板 persona 应落进投影
+        assert p.persona == "资深后端"
+        # 模板 skills -> 投影 skills（MarketTemplate.skills 取 code/name 字段）
+        assert p.skills == ["code-review"]
+        # model_policy 应含模板 model_name
+        assert p.model_policy.model == "gpt-5"
+        # 空 connector_refs / 默认 model_policy 字段未被污染
+        assert p.connector_refs == []
+        assert p.runtime_policy.runtime_binding is None
 
     def test_recruit_nonexistent_template_fails(self):
         svc, _, _ = _make_service()

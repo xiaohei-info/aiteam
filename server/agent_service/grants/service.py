@@ -64,17 +64,40 @@ class SyncResult:
 def _to_projection(tenant_id: str, raw: dict) -> LoadedExpertProjection:
     """把 Manager 投影源 dict 映射为本地只读投影。
 
+    Manager 端 Projection 源即 EmployeeConfigOut.model_dump(mode="json")，已含 skills/
+    knowledge_refs/connector_refs/memory_policy/model_policy/runtime_policy 等中立配置。
+    本函数把这些字段透传到本地投影，确保 Agent 端专家继承模板的全部能力配置（AITEAM-288）。
+
     只读白名单字段构造，缺失字段用契约默认；employee_id/version 必备（投影主键 + 增量键）。
     """
+    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+
+    model_policy_raw = raw.get("model_policy") or {}
+    runtime_policy_raw = raw.get("runtime_policy") or {}
     return LoadedExpertProjection(
         employee_id=str(raw["employee_id"]),
         tenant_id=tenant_id,
         version=str(raw.get("version", "")),
         display_name=str(raw.get("display_name", "")),
         runtime_binding=raw.get("runtime_binding"),
+        persona=raw.get("persona"),
+        model_policy=ModelPolicy(**model_policy_raw) if isinstance(model_policy_raw, dict) else ModelPolicy(),
+        runtime_policy=RuntimePolicy(**runtime_policy_raw) if isinstance(runtime_policy_raw, dict) else RuntimePolicy(),
+        tools=_as_str_list(raw.get("tools")),
+        skills=_as_str_list(raw.get("skills")),
+        knowledge_refs=_as_str_list(raw.get("knowledge_refs")),
+        connector_refs=_as_str_list(raw.get("connector_refs")),
+        memory_policy=raw.get("memory_policy"),
         synced_at=_now(),
         revoked=False,
     )
+
+
+def _as_str_list(value) -> list[str]:
+    """安全地把未知 JSON 值转成 str 列表（None / 非 list 一律返回空列表）。"""
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in value if v is not None and str(v) != ""]
 
 
 class GrantsService:

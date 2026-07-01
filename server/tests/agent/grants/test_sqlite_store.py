@@ -214,3 +214,55 @@ def test_snapshot_persistence(db):
     assert snap.employee_id == "e1"
     assert snap.snapshot_version == "snap1"
 
+
+
+def test_projection_persists_template_config(projection_repo):
+    """AITEAM-288：模板能力配置（skills/knowledge_refs/memory_policy/model_policy）应持久化到 SQLite 投影仓储。"""
+    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+    proj = LoadedExpertProjection(
+        employee_id="e_tpl",
+        tenant_id="t1",
+        version="v1",
+        display_name="模板专家",
+        runtime_binding="hermes_acp",
+        persona="资深后端",
+        model_policy=ModelPolicy(model="gpt-5", provider_ref="relay", thinking_level="deep"),
+        runtime_policy=RuntimePolicy(runtime_binding="hermes_acp", timeout_seconds=120),
+        tools=["search"],
+        skills=["code-review"],
+        knowledge_refs=["ks_backend"],
+        connector_refs=["slack"],
+        memory_policy={"seed": "偏好"},
+    )
+    projection_repo.upsert(proj)
+
+    retrieved = projection_repo.get("e_tpl")
+    assert retrieved.persona == "资深后端"
+    assert retrieved.model_policy.model == "gpt-5"
+    assert retrieved.model_policy.thinking_level == "deep"
+    assert retrieved.runtime_policy.timeout_seconds == 120
+    assert retrieved.tools == ["search"]
+    assert retrieved.skills == ["code-review"]
+    assert retrieved.knowledge_refs == ["ks_backend"]
+    assert retrieved.connector_refs == ["slack"]
+    assert retrieved.memory_policy == {"seed": "偏好"}
+
+
+def test_projection_config_defaults_for_old_rows(projection_repo):
+    """AITEAM-288：对新字段缺失的旧投影（默认为空），读取不报错且走默认值。"""
+    # 直接插入一行不含新字段的内容（模拟迁移前的存量行）
+    projection_repo._db.execute(
+        "INSERT INTO loaded_expert_projections "
+        "(employee_id, tenant_id, version, display_name, runtime_binding, synced_at, revoked) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("e_old", "t1", "v1", "旧专家", "hermes_acp", None, 0),
+    )
+    old = projection_repo.get("e_old")
+    assert old is not None
+    assert old.display_name == "旧专家"
+    assert old.skills == []
+    assert old.knowledge_refs == []
+    assert old.connector_refs == []
+    assert old.memory_policy is None
+    assert old.model_policy.model is None
+    assert old.revoked is False
