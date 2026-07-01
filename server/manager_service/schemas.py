@@ -609,6 +609,47 @@ class EmployeePromptIn(EmployeePromptBase):
     )
 
 
+class EmployeePromptOut(BaseModel):
+    """employee_prompt head 出参（中立字段，D16）。由 manager 产出，供用户端装载。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str = Field(description="归属 employee")
+    system_prompt: str = ""
+    behavior_rules_json: dict = Field(default_factory=dict)
+    opening_message: str | None = None
+    version_no: int = Field(description="当前版本号（update 单调 +1）")
+    source_template_version: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class EmployeePromptHistoryOut(BaseModel):
+    """employee_prompt_history 历史版本出参（append-only）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    history_id: str = Field(description="历史记录 id")
+    employee_id: str = Field(description="归属 employee")
+    system_prompt: str = ""
+    behavior_rules_json: dict = Field(default_factory=dict)
+    opening_message: str | None = None
+    version_no: int = Field(description="该历史快照的版本号")
+    source_template_version: str | None = None
+    change_reason: str | None = None
+    changed_by: str | None = None
+    created_at: datetime
+
+
+class EmployeePromptRollbackIn(BaseModel):
+    """回滚请求体：回滚到指定历史版本并以此写为新 head。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_version_no: int = Field(description="要回滚到的历史版本号")
+    change_reason: str | None = Field(default=None, description="回滚原因（写入历史追溯）")
+
+
 # ---- run_event：运行事件明细（runtime 归一事件脱敏归档）----
 #
 # 红线（D13）：run-event 仅承载脱敏事件元数据（event_type/source/preview/payload），不含会话/
