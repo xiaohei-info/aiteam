@@ -63,6 +63,9 @@ def password_expired(*, password_changed_at, now=None):
     if password_changed_at is None:
         return False
     now = now or time.time()
+    # password_changed_at 从 DB 来时是 datetime 对象(psycopg3 默认),需转 timestamp
+    if hasattr(password_changed_at, "timestamp"):
+        password_changed_at = password_changed_at.timestamp()
     return (now - password_changed_at) / 86400.0 > max_age_days()
 
 
