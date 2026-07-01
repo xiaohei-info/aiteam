@@ -29,4 +29,6 @@ export interface EnterpriseActionBody {
   action: "recharge" | "ban" | "unban" | "notify" | "adjust_quota";
   amount?: number | string;
   message?: string;
+  payment_method?: string;
+  quota?: number | string;
 }
