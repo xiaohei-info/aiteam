@@ -55,6 +55,8 @@ from agent_service.workspace.marketplace_provider import ManagerMarketplaceProvi
 from agent_service.workspace.routes import build_workspace_router
 from agent_service.group_mgmt.routes import build_group_mgmt_router
 from agent_service.group_mgmt.factory import build_group_mgmt_service
+from agent_service.terminal.factory import build_terminal_service as _build_terminal_service
+from agent_service.terminal.routes import build_terminal_router
 from shared.app_factory import create_app, mount_frontend
 from shared.config import load_settings
 from shared.service_client import ServiceClient
@@ -221,6 +223,10 @@ def build_app(
     # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----
     group_mgmt_service = build_group_mgmt_service(db=db, mainline=mainline)
     app.include_router(build_group_mgmt_router(group_mgmt_service))
+    # ---- Terminal / 命令执行能力（issue #415）----
+    terminal_service = _build_terminal_service()
+    app.include_router(build_terminal_router(terminal_service, identity_provider=login_service.current_identity))
+
     # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
     mount_frontend(app, settings.tier)
     return app

@@ -18,6 +18,7 @@ from .executors import (
     JsonStreamCliExecutor,
     PlainCliExecutor,
 )
+from .terminal import TerminalExecutor
 from .runner import GatewayRunner
 from .sandbox import SandboxPolicy
 
@@ -29,6 +30,7 @@ EXECUTOR_FAMILIES: dict[str, type[Executor]] = {
     "json_rpc_stdio": CodexAppServerExecutor,
     "json_stream_cli": JsonStreamCliExecutor,
     "plain_cli": PlainCliExecutor,
+    "terminal": TerminalExecutor,
 }
 
 

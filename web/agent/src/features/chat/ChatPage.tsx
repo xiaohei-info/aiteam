@@ -15,6 +15,7 @@ import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
 import { LoopPanel, RunsPanel } from "../runs";
+import { TerminalPanel } from "../terminal";
 
 export function ChatPage() {
   const { client } = useApp();
@@ -76,6 +77,13 @@ export function ChatPage() {
               <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
             </div>
             <MessageComposer conversationId={selected.id} onSent={handleSent} />
+            <div className="min-h-0 flex-1 px-md pb-md pt-sm">
+              <TerminalPanel
+                client={client}
+                conversationId={selected.id}
+                refreshSignal={sentSignal}
+              />
+            </div>
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-text-muted">
