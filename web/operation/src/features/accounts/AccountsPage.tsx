@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
 import { useAccountsApi } from "./useAccountsApi.js";
 import type { EnterpriseAccount, EnterpriseStats } from "./types.js";
+import { EnterpriseActions } from "./EnterpriseActions.js";
 
 export function AccountsPage(): ReactNode {
   const api = useAccountsApi();
@@ -83,6 +84,7 @@ export function AccountsPage(): ReactNode {
                 <th className="pb-sm">累计充值</th>
                 <th className="pb-sm">Token消耗</th>
                 <th className="pb-sm">状态</th>
+                <th className="pb-sm">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -97,6 +99,9 @@ export function AccountsPage(): ReactNode {
                     <span className={e.status === "normal" ? "text-success" : e.status === "banned" ? "text-danger" : "text-warning"}>
                       {e.status === "normal" ? "正常" : e.status === "banned" ? "封禁" : "欠费"}
                     </span>
+                  </td>
+                  <td className="py-sm">
+                    <EnterpriseActions api={api} enterprise={e} onDone={() => void load()} />
                   </td>
                 </tr>
               ))}
