@@ -9,7 +9,6 @@ from ...transactions.uow import UnitOfWork
 
 _ACTIVE_RUN_STATUSES = {"queued", "routing", "submitting", "running", "waiting_human"}
 _QUEUE_RUN_STATUSES = {"queued", "routing", "submitting"}
-_ACTIVE_JOB_STATUSES = {"enabled", "error"}
 
 
 def _now_iso() -> str:
@@ -47,22 +46,6 @@ def _presence_state(employee_status: str, run_status: str | None, latest_event_t
         if latest_event_type == "message_delta":
             return "streaming"
         return "busy"
-    return "idle"
-
-
-def _job_presence_state(employee_status: str, job_status: str | None, last_run_status: str | None) -> str:
-    if employee_status in {"archived", "provisioning_failed", "draft"}:
-        return "offline"
-    if employee_status == "paused":
-        return "paused"
-    if employee_status == "provisioning":
-        return "provisioning"
-    if job_status == "error":
-        return "error"
-    if last_run_status == "failed":
-        return "error"
-    if job_status == "enabled":
-        return "scheduled"
     return "idle"
 
 
@@ -149,24 +132,14 @@ def get_office_scene(uow: UnitOfWork, enterprise_id: str) -> dict:
     }
 
 
-def _job_preview(job) -> str:
-    name = (job.name or "").strip()
-    goal = (job.goal or "").strip()
-    if name and goal:
-        return f"{name}: {goal}"
-    return name or goal or ""
-
-
 def get_office_feed(uow: UnitOfWork, enterprise_id: str, *, limit: int = 20) -> dict:
     employees = {employee.id: employee for employee in uow.employees().list_by_enterprise(enterprise_id)}
     conversations = {conv.id: conv for conv in uow.conversations().list_by_enterprise(enterprise_id)}
-    runs = uow.team_runs().list_by_enterprise(enterprise_id)
-    jobs = [job for job in uow.scheduled_jobs().list_by_enterprise(enterprise_id) if job.status in _ACTIVE_JOB_STATUSES]
+    runs = uow.team_runs().list_by_enterprise(enterprise_id)[:limit]
 
-    items: list[dict] = []
-    queue: dict[str, int] = {"queued": 0, "running": 0, "waiting_human": 0, "failed": 0}
+    items = []
+    queue = {"queued": 0, "running": 0, "waiting_human": 0, "failed": 0}
     max_event_cursor = 0
-
     for run in runs:
         latest_event = uow.run_events().get_latest_for_run(run.id)
         employee = employees.get(run.entry_employee_id or "")
@@ -182,7 +155,6 @@ def get_office_feed(uow: UnitOfWork, enterprise_id: str, *, limit: int = 20) -> 
             queue[run.status] += 1
         event_cursor = latest_event.cursor_no if latest_event else 0
         max_event_cursor = max(max_event_cursor, event_cursor)
-        event_ts = latest_event.event_ts if latest_event else (run.updated_at or run.created_at or _now_iso())
         items.append(
             {
                 "run_id": run.id,
@@ -193,7 +165,7 @@ def get_office_feed(uow: UnitOfWork, enterprise_id: str, *, limit: int = 20) -> 
                 "employee_display_name": employee.display_name if employee else None,
                 "status": run.status,
                 "event_type": latest_event.event_type if latest_event else "run_status",
-                "event_ts": event_ts,
+                "event_ts": latest_event.event_ts if latest_event else (run.updated_at or run.created_at or _now_iso()),
                 "preview": preview,
                 "display_state": _presence_state(
                     employee.status if employee else "active",
@@ -202,50 +174,8 @@ def get_office_feed(uow: UnitOfWork, enterprise_id: str, *, limit: int = 20) -> 
                 ),
                 "latest_event_cursor": event_cursor,
                 "events_url": f"/api/team/runs/{run.id}/events?cursor={event_cursor}",
-                "source": "run",
-                "_sort_ts": event_ts,
             }
         )
-
-    for job in jobs:
-        employee = employees.get(job.employee_id or "")
-        preview = _job_preview(job)
-        last_run_status = job.last_run_status
-        event_ts = job.last_run_at or job.updated_at or job.created_at or _now_iso()
-        max_event_cursor = max(max_event_cursor, 1 if job.last_run_at else 0)
-        if last_run_status == "failed":
-            queue["failed"] += 1
-        items.append(
-            {
-                "run_id": f"job_{job.id}",
-                "conversation_id": None,
-                "conv_type": "private",
-                "navigation_target": None,
-                "employee_id": job.employee_id,
-                "employee_display_name": employee.display_name if employee else None,
-                "status": last_run_status or job.status,
-                "event_type": f"job_{last_run_status or job.status}",
-                "event_ts": event_ts,
-                "preview": preview,
-                "display_state": _job_presence_state(
-                    employee.status if employee else "active",
-                    job.status,
-                    last_run_status,
-                ),
-                "latest_event_cursor": 1 if job.last_run_at else 0,
-                "events_url": None,
-                "source": "job",
-                "job_id": job.id,
-                "job_name": job.name or "",
-                "job_schedule": job.schedule_expr or "",
-                "_sort_ts": event_ts,
-            }
-        )
-
-    items.sort(key=lambda item: item["_sort_ts"], reverse=True)
-    items = items[:limit]
-    for item in items:
-        item.pop("_sort_ts", None)
 
     return {
         "enterprise_id": enterprise_id,
