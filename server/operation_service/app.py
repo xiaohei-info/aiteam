@@ -37,6 +37,13 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 settings = load_settings("operation")
 app = create_app(settings, router)
+# 启动即应用运营库迁移（fail-fast；/readyz 绿时 schema 必已就绪）。原为首请求经 get_repository
+# 惰性触发——服务"健康"但库空、首个请求才建表；改为启动阶段一次性 provision（幂等，get_repository
+# 的惰性调用仍在，作二次幂等兜底）。无 ADMIN_DB_URL 的骨架/测试态 → 内部 no-op（契约不破）。
+if settings.admin_db_url:
+    from .repository import apply_migrations as _apply_oper_migrations
+
+    _apply_oper_migrations(settings.admin_db_url, settings.app_rw_password)
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth
 app.state._token_verifier = _verifier

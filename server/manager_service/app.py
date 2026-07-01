@@ -92,6 +92,13 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 settings = load_settings("manager")
 app = create_app(settings, router)
+# 启动即应用控制库迁移（fail-fast；/readyz 绿时 schema 必已就绪）。此前 manager 运行时
+# 无任何 apply_migrations 调用，全新部署无法自建控制库（tenant_registry 等表 + app_rw 角色）；
+# 由此在服务启动阶段一次性 provision。无 ADMIN_DB_URL 的骨架/测试态 → 内部 no-op（契约不破）。
+if settings.admin_db_url:
+    from shared.db import apply_migrations as _apply_control_migrations
+
+    _apply_control_migrations(settings.admin_db_url, settings.app_rw_password)
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
 # Operator 目录拉取端口（05 F06/F07，#176）。有 OPERATOR_URL → 真实客户端；无 → Fake。
