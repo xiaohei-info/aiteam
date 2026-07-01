@@ -48,6 +48,30 @@ class RechargeOut(BaseModel):
     created_at: datetime
 
 
+class UsageOverviewOut(BaseModel):
+    """用量总览出参（对齐前端 UsageOverview 契约）。"""
+    model_config = ConfigDict(extra="forbid")
+    period: str
+    total_tokens: int
+    total_cost: Decimal
+    top_employee_id: str | None = None
+    top_employee_tokens: int = 0
+    trend: list[dict] = Field(default_factory=list)
+    ranking: list[dict] = Field(default_factory=list)
+
+
+class UsageRecordOut(BaseModel):
+    """员工维度用量明细出参（对齐前端 UsageRecord 契约）。"""
+    model_config = ConfigDict(extra="forbid")
+    record_id: str
+    employee_id: str
+    employee_name: str
+    date: str | None = None
+    input_tokens: int
+    output_tokens: int
+    cost: Decimal
+
+
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
@@ -97,5 +121,28 @@ def build_billing_router(verifier) -> APIRouter:
         svc = _service(request)
         data = svc.create_recharge(ctx, body.amount, body.payment_method)
         return Envelope(data=RechargeOut(**data))
+
+    @router.get("/usage/overview", summary="查询用量总览", operation_id="manager_billing_usage_overview")
+    async def get_usage_overview(
+        request: Request,
+        period: str = Query(default="month", description="统计周期：month / last_month / all"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[UsageOverviewOut]:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        data = svc.get_usage_overview(ctx, period=period)
+        return Envelope(data=UsageOverviewOut(**data))
+
+    @router.get("/usage/records", summary="查询员工用量明细", operation_id="manager_billing_usage_records")
+    async def list_usage_records(
+        request: Request,
+        period: str = Query(default="month", description="统计周期：month / last_month / all"),
+        employee_id: str | None = Query(default=None, description="可选员工 id 过滤"),
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[UsageRecordOut]:
+        ctx = tenant_context_from(claims)
+        svc = _service(request)
+        items = svc.list_usage_records(ctx, period=period, employee_id=employee_id)
+        return ListEnvelope(data=[UsageRecordOut(**r) for r in items])
 
     return router
