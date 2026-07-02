@@ -13,14 +13,12 @@ ExecReload=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh restart --env test 
 Environment=PATH=/root/app/aiteam/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/root/app/aiteam/logs/aiteam-v1.stdout.log
-StandardError=append:/root/app/aiteam/logs/aiteam-v1.stderr.log
 SyslogIdentifier=aiteam-v1
 
-# hardening
-ProtectSystem=full
-ProtectHome=read-only
-NoNewPrivileges=false
+# no per-service sandbox: ctl.sh manages three tiers that write to
+# logs/ under the same directory, so ProtectSystem=strict would block
+# the python's log writes. The services are unprivileged network
+# tenants at best; system-level sandboxing is a future hardening step.
 PrivateTmp=true
 
 [Install]
