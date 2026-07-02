@@ -3,18 +3,22 @@
 #
 # 简单语义（失败就报错，没有 fallback）：
 #   1) fetch + checkout + pull 指定分支最新代码
-#   2) soft-link 主目录的 .venv 让 ctl.sh 能找 Python 依赖
+#   2) soft-link 主工作树的 .venv 让 ctl.sh 能找到 Python 依赖
 #   3) 调用 scripts/ctl.sh restart --env <env>
 #   4) 对三端 /healthz 冒烟
 #
-# CLI: bash deploy/ci/run.sh --branch <b> --env <e>
-# 参数同时支持 --branch=X 和 --branch X 两种形式。
+# 参数路径：主仓库路径 = deploy/ci/ 往上两级 (aiteam/)，ctl.sh
+# 在 aiteam/scripts/ctl.sh。.venv 用 $VENV_BASE 环境变量（绝对路径）
+# 定位；默认假设 ~/app/aiteam 主部署。
+#
+# CLI: bash deploy/ci/run.sh [--branch X] [--env Y]
 
 set -euo pipefail
 
-BRANCH="feature/v1.0.0"
-ENV_TARGET="test"
+BRANCH="${DEPLOY_BRANCH:-feature/v1.0.0}"
+ENV_TARGET="${DEPLOY_ENV:-test}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VENV_BASE="${VENV_BASE:-/root/app/aiteam}"
 
 while (( $# > 0 )); do
   case "$1" in
@@ -33,7 +37,7 @@ while (( $# > 0 )); do
       fi
       ENV_TARGET="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,14p' "$0"; exit 0 ;;
+      sed -n '2,18p' "$0"; exit 0 ;;
     *)
       echo "[deploy-run][ERR] unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -52,9 +56,13 @@ git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '$BRANCH' f
 HEAD_SHORT="$(git rev-parse --short HEAD)"
 log "code ready @ ${HEAD_SHORT}"
 
-MAIN_VENV="/root/app/aiteam/.venv"
+# 把主工作树的 .venv 软链到当前工作树仓库根，让 ctl.sh 能找到。
+# 默认读 VENV_BASE 环境变量（来自 workflow yaml），不写死。
+MAIN_VENV="${VENV_BASE}/.venv"
 if [[ ! -e "${REPO_ROOT}/.venv" && -d "$MAIN_VENV" ]]; then
   ln -s "$MAIN_VENV" "${REPO_ROOT}/.venv"
+elif [[ ! -e "${REPO_ROOT}/.venv" ]]; then
+  log "WARN: no .venv at ${MAIN_VENV} and none in worktree  --  ctl.sh will use system python"
 fi
 
 log "restarting services (--env ${ENV_TARGET})"

@@ -5,7 +5,7 @@
 #   2) jobs.deploy.runs-on      ← 目标机器的 self-hosted runner label
 #   3) env.ENV_NAME             ← 环境名（对应 .env.<env> + secret ENV_CONTENTS_<ENV>）
 #
-# 共享脚本：scripts/deploy/run.sh —— 任何分支都可复制该 yaml 并改三件套共用。
+# 共享脚本：deploy/ci/run.sh（repo 内的部署调度脚本）
 #
 # 关键技术细节：
 #   - "on" 键必须加引号（YAML 1.1 会把裸 `on:` 解析成布尔值 true）。
@@ -62,8 +62,10 @@ jobs:
           echo "wrote .env.${{ env.DEPLOY_ENV }} ($(wc -l < ".env.${{ env.DEPLOY_ENV }}") lines)"
 
       - name: Deploy (pull + restart + /healthz smoke)
+        env:
+          VENV_BASE: /root/app/aiteam
         shell: bash
         run: |
-          bash scripts/deploy/run.sh \
+          bash deploy/ci/run.sh \
             --branch "${{ env.DEPLOY_BRANCH }}" \
             --env "${{ env.DEPLOY_ENV }}"
