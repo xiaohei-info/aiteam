@@ -34,7 +34,7 @@ env:
 
 jobs:
   deploy:
-    name: deploy (${{ env.DEPLOY_BRANCH }} -> taiyi / .env.${{ env.DEPLOY_ENV }})
+    name: deploy (feature/v1.0.0 -> taiyi)
     # workflow_dispatch runs have no pull_request.merged context,
     # so guard with event_name check; otherwise the job gets skipped.
     if: >-
