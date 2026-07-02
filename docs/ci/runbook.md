@@ -12,7 +12,7 @@ v1 三端微服务代码在 `server/`（后端）+ `web/`（前端）。`app/` �
 | ~~G1 PR Quick~~ | **已裁撤**（2026-07-02 CI 精简：full integration 仅 ~1.5min，快子集无独立价值；`pr_quick` marker 保留供本地快速自检） | `pytest -q -m "integration and pr_quick"`（仅本地） | `server/` |
 | G2 Service Integration Full | `ci.yml:integration`（前序 wave） | `pytest -v -m integration` | `server/` |
 | G3 Browser E2E | `web-ci.yml:playwright-smoke`（前序 wave） | `pnpm e2e`（= chromium gate） | `web/` |
-| G4 广域观察（原 Nightly） | `nightly.yml`，**已改为仅 `workflow_dispatch` 按需触发**（2026-07-02：定时夜跑无人跟进，纯烧分钟数） | 多浏览器 / 大数据 / 性能 | `server/` + `web/` |
+| ~~G4 Nightly~~ | **已删除**（2026-07-02 CI 精简：多浏览器/大数据/性能观察当前阶段完全不需要，连手动触发入口也不留；需要时 git revert 恢复） | — | — |
 | ~~G5 Pre-Deploy~~ | **已裁撤**（2026-07-02：staging smoke 与 G2 完全重复、production URL vars 从未配置；部署职责由 `deploy-feature-v1.0.0.yml`（merge 后自部署 + /healthz 冒烟）承接。将来有独立 staging 环境再恢复） | — | — |
 | G6 文档 | `docs/ci/{troubleshooting,runbook}.md`（Wave3 新增） | `test -f docs/ci/troubleshooting.md && test -f docs/ci/runbook.md` | 仓库根 |
 
