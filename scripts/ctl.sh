@@ -334,7 +334,7 @@ start_service_local() {
       ;;
     manager)
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
-      env \
+      nohup setsid env \
         APP_TIER=manager \
         DB_URL="${DB_URL}" \
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
@@ -345,7 +345,8 @@ start_service_local() {
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
         "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=manager \
           --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}" \
-        > "${LOG_FILE}" 2>&1 &
+        >> "${LOG_FILE}" 2>&1 &
+      disown
       echo $! > "${PID_FILE}"
       sleep 1
       if get_pid "${service}" >/dev/null 2>&1; then
@@ -357,7 +358,7 @@ start_service_local() {
       ;;
     operation)
       echo "[ctl] Starting operation on port ${OPERATION_PORT}..."
-      env \
+      nohup setsid env \
         APP_TIER=operation \
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
@@ -367,7 +368,8 @@ start_service_local() {
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
         "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
           --host="${OPERATION_HOST:-127.0.0.1}" --port="${OPERATION_PORT}" \
-        > "${LOG_FILE}" 2>&1 &
+        >> "${LOG_FILE}" 2>&1 &
+      disown
       echo $! > "${PID_FILE}"
       sleep 1
       if get_pid "${service}" >/dev/null 2>&1; then
@@ -379,7 +381,7 @@ start_service_local() {
       ;;
     agent)
       echo "[ctl] Starting agent on port ${AGENT_PORT}..."
-      env \
+      nohup setsid env \
         APP_TIER=agent \
         DB_URL="${DB_URL}" \
         MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
@@ -393,7 +395,8 @@ start_service_local() {
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
         "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=agent \
           --host="${AGENT_HOST:-127.0.0.1}" --port="${AGENT_PORT}" \
-        > "${LOG_FILE}" 2>&1 &
+        >> "${LOG_FILE}" 2>&1 &
+      disown
       echo $! > "${PID_FILE}"
       sleep 1
       if get_pid "${service}" >/dev/null 2>&1; then
