@@ -41,9 +41,8 @@ jobs:
       - name: "Write .env.${{ env.ENV_NAME }} from GitHub secret"
         shell: bash
         # secret 内容（ENV_CONTENTS_TEST 的全文）会被 GitHub Actions 自动 mask 出 job log。
-        run: {
+        run: |
           printf '%s' "${{ secrets.ENV_CONTENTS_TEST }}" > ".env.${{ env.ENV_NAME }}"
-          }
           if ! grep -q '[^[:space:]]' ".env.${{ env.ENV_NAME }}"; then
             echo "::error::.env.${{ env.ENV_NAME }} is empty — check GitHub secret ENV_CONTENTS_${{ env.ENV_NAME }}"
             exit 1
