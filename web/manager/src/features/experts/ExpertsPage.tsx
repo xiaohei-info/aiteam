@@ -14,6 +14,7 @@ import { useExpertsApi } from "./useExpertsApi";
 import type {
   EmployeeConfig,
   ExpertTemplate,
+  LifecycleOptions,
   SolutionInstance,
   SolutionInstanceUpdateInput,
   SolutionPackage,
@@ -185,6 +186,13 @@ export function ExpertsPage(): ReactNode {
               onSave={(updated) =>
                 runAction(() => api.updateEmployee(emp.employee_id, updated), "manager.experts.save_ok")
               }
+              onTransition={(transition, reason) =>
+                runAction(
+                  () => api.transitionEmployee(emp.employee_id, transition, reason).then(() => undefined),
+                  "manager.experts.transition_ok",
+                )
+              }
+              getLifecycleOptions={api.getLifecycleOptions}
             />
           ))
         )}
@@ -430,6 +438,41 @@ interface InstanceProps {
   employee: EmployeeConfig;
   canWrite: boolean;
   onSave: (updated: EmployeeConfig) => void;
+  onTransition: (transition: string, reason?: string) => void;
+  getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "manager.experts.status_draft",
+  provisioning: "manager.experts.status_provisioning",
+  active: "manager.experts.status_active",
+  paused: "manager.experts.status_paused",
+  provisioning_failed: "manager.experts.status_provisioning_failed",
+  archived: "manager.experts.status_archived",
+};
+
+const STATUS_BADGE_CLS: Record<string, string> = {
+  draft: "bg-text-muted/20 text-text-muted",
+  provisioning: "bg-gold/20 text-gold",
+  active: "bg-success/20 text-success",
+  paused: "bg-warning/20 text-warning",
+  provisioning_failed: "bg-danger/20 text-danger",
+  archived: "bg-text-muted/20 text-text-muted",
+};
+
+function isArchived(status: string): boolean {
+  return status === "archived";
+}
+
+function StatusBadge({ status }: { status: string }): ReactNode {
+  const i18n = useI18n();
+  const labelKey = STATUS_LABELS[status] ?? "manager.experts.status_unknown";
+  const cls = STATUS_BADGE_CLS[status] ?? "bg-text-muted/20 text-text-muted";
+  return (
+    <span className={`text-xs px-sm py-xs rounded-full whitespace-nowrap ${cls}`}>
+      {i18n.t(labelKey)}
+    </span>
+  );
 }
 
 /** 列表/JSON 字段编辑：逗号或换行分隔输入 → 字符串数组。 */
@@ -440,9 +483,21 @@ function parseList(value: string): string[] {
     .filter(Boolean);
 }
 
-function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactNode {
+function EmployeeInstance({ employee, canWrite, onSave, onTransition, getLifecycleOptions }: InstanceProps): ReactNode {
   const i18n = useI18n();
   const [editing, setEditing] = useState(false);
+  const [transitions, setTransitions] = useState<string[]>([]);
+
+  // Fetch allowed transitions from the backend so the UI always reflects the
+  // authoritative state machine rather than a hardcoded mirror that can drift.
+  useEffect(() => {
+    if (!canWrite) return;
+    let cancelled = false;
+    void getLifecycleOptions(employee.employee_id)
+      .then((opts) => { if (!cancelled) setTransitions(opts.allowed_transitions); })
+      .catch(() => { if (!cancelled) setTransitions([]); });
+    return () => { cancelled = true; };
+  }, [employee.employee_id, employee.status, canWrite, getLifecycleOptions]);
   const [displayName, setDisplayName] = useState(employee.display_name);
   const [persona, setPersona] = useState(employee.persona ?? "");
   const [model, setModel] = useState(employee.model_policy.model ?? "");
@@ -484,6 +539,7 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
         <strong className="text-text-primary">{employee.display_name || employee.employee_slug}</strong>
         <code className="text-xs text-gold-bright">{employee.employee_slug}</code>
         <span className="text-xs text-text-muted">· v{employee.version}</span>
+        <StatusBadge status={employee.status} />
       </div>
       {!editing ? (
         <>
@@ -516,16 +572,37 @@ function EmployeeInstance({ employee, canWrite, onSave }: InstanceProps): ReactN
               {employee.memory_policy != null ? JSON.stringify(employee.memory_policy) : "-"}
             </dd>
           </dl>
-          {canWrite && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="self-start"
-              onClick={() => setEditing(true)}
-            >
-              {i18n.t("manager.experts.edit")}
-            </Button>
+          {canWrite && !isArchived(employee.status) && (
+            <div className="flex flex-wrap items-center gap-sm">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setEditing(true)}
+              >
+                {i18n.t("manager.experts.edit")}
+              </Button>
+              {transitions.map((tr) => (
+                <Button
+                  key={tr}
+                  type="button"
+                  variant={tr === "archive" ? "ghost" : "ghost"}
+                  size="sm"
+                  className={tr === "archive" ? "text-danger" : ""}
+                  onClick={() => {
+                    if (tr === "archive") {
+                      const reason = window.prompt(i18n.t("manager.experts.archive_reason_prompt"));
+                      if (!reason?.trim()) return;
+                      onTransition("archive", reason.trim());
+                    } else {
+                      onTransition(tr);
+                    }
+                  }}
+                >
+                  {i18n.t(`manager.experts.transition_${tr}`)}
+                </Button>
+              ))}
+            </div>
           )}
         </>
       ) : (

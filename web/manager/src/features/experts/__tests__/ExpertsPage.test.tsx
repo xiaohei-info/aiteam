@@ -44,6 +44,7 @@ const employee: EmployeeConfig = {
   knowledge_refs: ["ks1"],
   connector_refs: ["slack"],
   memory_policy: { seed: "x" },
+  status: "active",
 };
 
 function mockApi(overrides: Partial<apiModule.ExpertsApi> = {}) {
@@ -58,6 +59,12 @@ function mockApi(overrides: Partial<apiModule.ExpertsApi> = {}) {
     applySolution: vi.fn().mockResolvedValue({}),
     listEmployees: vi.fn().mockResolvedValue([employee]),
     updateEmployee: vi.fn().mockResolvedValue(employee),
+    transitionEmployee: vi.fn().mockResolvedValue(employee),
+    getLifecycleOptions: vi.fn().mockResolvedValue({
+      allowed_transitions: ["pause", "archive"],
+      is_runnable: true,
+      is_provisionable: false,
+    }),
     listSolutionInstances: vi.fn().mockResolvedValue([]),
     updateSolutionInstance: vi.fn().mockResolvedValue(null),
     ...overrides,
@@ -215,6 +222,45 @@ describe("ExpertsPage 招募专家", () => {
     );
   });
 
+  it("生命周期：active 状态显示暂停/归档按钮（来自 getLifecycleOptions）", async () => {
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("暂停")).toBeInTheDocument());
+    expect(screen.getByText("归档")).toBeInTheDocument();
+  });
+
+  it("生命周期：draft 状态显示开始配置/激活/归档按钮", async () => {
+    mockApi({
+      listEmployees: vi.fn().mockResolvedValue([{ ...employee, status: "draft" }]),
+      getLifecycleOptions: vi.fn().mockResolvedValue({
+        allowed_transitions: ["provision", "activate", "archive"],
+        is_runnable: false,
+        is_provisionable: true,
+      }),
+    });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("开始配置")).toBeInTheDocument());
+    expect(screen.getByText("激活")).toBeInTheDocument();
+    expect(screen.getByText("归档")).toBeInTheDocument();
+  });
+
+  it("生命周期：点击暂停 → transitionEmployee(pause)", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("暂停"));
+    await waitFor(() => expect(api.transitionEmployee).toHaveBeenCalledWith("e1", "pause", undefined));
+  });
+
+  it("普通成员不显示生命周期按钮", async () => {
+    mockApi();
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
+    expect(screen.queryByText("暂停")).not.toBeInTheDocument();
+    expect(screen.queryByText("归档")).not.toBeInTheDocument();
+  });
+
   const solutionInstance: SolutionInstance = {
     id: "si-1",
     solution_id: "sol-1",
@@ -275,5 +321,44 @@ describe("ExpertsPage 招募专家", () => {
     renderPage(["member"]);
     await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
     expect(screen.queryByText("编辑配置")).not.toBeInTheDocument();
+  });
+
+  it("操作失败：runAction 捕获异常并显示错误", async () => {
+    mockApi({ listEmployees: vi.fn().mockRejectedValue(new Error("网络错误")) });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+  });
+
+  it("操作失败：action runAction 捕获 ApiError 并显示错误", async () => {
+    mockApi({
+      recruitExpert: vi.fn().mockRejectedValue(new Error("招募失败")),
+    });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("招募")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("实例标识（slug）"), { target: { value: "exp-x" } });
+    fireEvent.click(screen.getByText("招募"));
+    await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
+  });
+
+  it("导出 CSV：handleExport 调用 fetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["x"], { type: "text/csv" }), { status: 200 }),
+    );
+    // Mock URL methods
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn().mockReturnValue("blob:mock");
+    URL.revokeObjectURL = vi.fn();
+
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("导出 CSV")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("导出 CSV"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/manager/employees/export/all", expect.objectContaining({ headers: expect.anything() })));
+
+    fetchMock.mockRestore();
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
   });
 });

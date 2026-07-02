@@ -49,6 +49,16 @@ export interface EmployeeConfig {
   knowledge_refs: string[];
   connector_refs: string[];
   memory_policy: Record<string, unknown> | null;
+  status: string;
+  archive_reason?: string | null;
+  archived_at?: string | null;
+}
+
+/** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */
+export interface LifecycleOptions {
+  allowed_transitions: string[];
+  is_runnable: boolean;
+  is_provisionable: boolean;
 }
 
 /** 招募专家入参（对齐 RecruitExpertRequest）。 */

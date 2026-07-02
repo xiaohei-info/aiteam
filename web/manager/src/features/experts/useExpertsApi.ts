@@ -12,6 +12,7 @@ import type {
   EmployeeConfig,
   ExpertTemplate,
   RecruitExpertInput,
+  LifecycleOptions,
   SolutionInstance,
   SolutionInstanceUpdateInput,
   SolutionPackage,
@@ -24,6 +25,8 @@ export interface ExpertsApi {
   applySolution: (input: ApplySolutionInput) => Promise<unknown>;
   listEmployees: () => Promise<EmployeeConfig[]>;
   updateEmployee: (employeeId: string, config: EmployeeConfig) => Promise<EmployeeConfig | null>;
+  transitionEmployee: (employeeId: string, transition: string, reason?: string) => Promise<EmployeeConfig | null>;
+  getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
   updateSolutionInstance: (
     instanceId: string,
@@ -57,11 +60,28 @@ export function useExpertsApi(): ExpertsApi {
       },
       updateEmployee(employeeId, config) {
         // PUT 全量替换（EmployeeConfigIn）：回传载入的完整配置，仅覆盖被编辑字段，保全其余。
-        const { employee_id, employee_slug, version, ...body } = config;
+        const { employee_id, employee_slug, version, status, archive_reason, archived_at, ...body } = config;
         void employee_id;
         void employee_slug;
         void version;
+        void status;
+        void archive_reason;
+        void archived_at;
         return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body });
+      },
+      transitionEmployee(employeeId, transition, reason) {
+        const body = reason ? { reason } : undefined;
+        return client.post<EmployeeConfig>(
+          `/api/manager/employees/${employeeId}/transitions/${transition}`,
+          body ? { body } : {},
+        );
+      },
+      async getLifecycleOptions(employeeId) {
+        const r = await client.get<LifecycleOptions>(
+          `/api/manager/employees/${employeeId}/transitions`,
+        );
+        if (!r) throw new Error("Failed to load lifecycle options");
+        return r;
       },
       async listSolutionInstances() {
         const r = await client.listGet<SolutionInstance>("/api/manager/recruit/solutions");
