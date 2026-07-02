@@ -194,4 +194,72 @@ describe("LlmPage LLM管理", () => {
     );
     expect(api.deleteProvider).toHaveBeenCalledWith("p1");
   });
+
+  // ---- Model 新增/删除（B01 扩展）----
+  it("新增模型后刷新列表", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("model-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create-model"));
+    fireEvent.change(screen.getByTestId("m-field-uid"), { target: { value: "claude-4" } });
+    fireEvent.change(screen.getByTestId("m-field-name"), { target: { value: "Claude 4" } });
+    fireEvent.change(screen.getByTestId("m-field-ctx"), { target: { value: "200000" } });
+    fireEvent.click(screen.getByTestId("submit-model"));
+
+    await waitFor(() =>
+      expect(api.createModel).toHaveBeenCalledWith("p1", {
+        model_uid: "claude-4",
+        model_name: "Claude 4",
+        context_window: 200000,
+        input_price: undefined,
+        output_price: undefined,
+      }),
+    );
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2));
+  });
+
+  it("新增模型包含 input/output price", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("model-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create-model"));
+    fireEvent.change(screen.getByTestId("m-field-uid"), { target: { value: "gpt-5-mini" } });
+    fireEvent.change(screen.getByTestId("m-field-name"), { target: { value: "GPT-5 mini" } });
+    fireEvent.change(screen.getByTestId("m-field-in-price"), { target: { value: "0.0005" } });
+    fireEvent.change(screen.getByTestId("m-field-out-price"), { target: { value: "0.0015" } });
+    fireEvent.click(screen.getByTestId("submit-model"));
+
+    await waitFor(() =>
+      expect(api.createModel).toHaveBeenCalledWith("p1", {
+        model_uid: "gpt-5-mini",
+        model_name: "GPT-5 mini",
+        context_window: undefined,
+        input_price: "0.0005",
+        output_price: "0.0015",
+      }),
+    );
+  });
+
+  it("删除模型调用 deleteModel 并刷新", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("model-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("delete-model-m1"));
+    await waitFor(() => expect(api.deleteModel).toHaveBeenCalledWith("m1"));
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2));
+  });
+
+  it("删除模型失败展示 actionError", async () => {
+    mockApi({
+      deleteModel: vi.fn().mockRejectedValue(new ApiError("模型不存在", 404, "not_found")),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("model-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("delete-model-m1"));
+    await waitFor(() => expect(screen.getByTestId("action-error")).toHaveTextContent("模型不存在"));
+  });
 });

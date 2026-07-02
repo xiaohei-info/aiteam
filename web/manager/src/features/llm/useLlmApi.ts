@@ -9,7 +9,7 @@ export interface LlmApi {
   patchProvider: (id: string, body: Partial<LlmProvider>) => Promise<LlmProvider | null>;
   deleteProvider: (id: string) => Promise<unknown>;
   listModels: (providerId?: string) => Promise<LlmModel[]>;
-  createModel: (providerId: string, body: { model_uid: string; model_name: string; context_window?: number }) => Promise<LlmModel | null>;
+  createModel: (providerId: string, body: { model_uid: string; model_name: string; context_window?: number; input_price?: string; output_price?: string }) => Promise<LlmModel | null>;
   deleteModel: (id: string) => Promise<unknown>;
 }
 

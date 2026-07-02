@@ -1,11 +1,12 @@
-/** LLM Provider/Model 管理页（B01）：Provider 增删改/启用禁用 + Model 列表。 */
+/** LLM Provider/Model 管理页（B01）：Provider 增删改/启用禁用 + Model 增删查。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
 import { useLlmApi } from "./useLlmApi";
 import type { LlmProvider, LlmModel } from "./types";
 
 type Mode = "idle" | "create" | "edit";
+type ModelMode = "idle" | "create";
 
 export function LlmPage(): ReactNode {
   const api = useLlmApi();
@@ -15,12 +16,22 @@ export function LlmPage(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Provider 表单状态
   const [mode, setMode] = useState<Mode>("idle");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
   const [formKey, setFormKey] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formIsActive, setFormIsActive] = useState(true);
+
+  // Model 表单状态
+  const [mMode, setMMode] = useState<ModelMode>("idle");
+  const [mProviderId, setMProviderId] = useState("");
+  const [mUid, setMUid] = useState("");
+  const [mName, setMName] = useState("");
+  const [mCtx, setMCtx] = useState("");
+  const [mInPrice, setMInPrice] = useState("");
+  const [mOutPrice, setMOutPrice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,10 +106,58 @@ export function LlmPage(): ReactNode {
     }
   }, [api, editingId, resetForm, load]);
 
+  // ---- Model 表单 ----
+  const resetModelForm = useCallback(() => {
+    setMMode("idle");
+    setMProviderId("");
+    setMUid("");
+    setMName("");
+    setMCtx("");
+    setMInPrice("");
+    setMOutPrice("");
+  }, []);
+
+  const openModelCreate = useCallback(() => {
+    resetModelForm();
+    // 默认选中第一个 Provider
+    setMProviderId(providers[0]?.provider_id ?? "");
+    setMMode("create");
+    setActionError(null);
+  }, [providers, resetModelForm]);
+
+  const submitModel = useCallback(async () => {
+    if (!mProviderId || !mUid || !mName) return;
+    setActionError(null);
+    try {
+      await api.createModel(mProviderId, {
+        model_uid: mUid,
+        model_name: mName,
+        context_window: mCtx ? Number(mCtx) : undefined,
+        input_price: mInPrice || undefined,
+        output_price: mOutPrice || undefined,
+      });
+      resetModelForm();
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "模型保存失败，请重试");
+    }
+  }, [api, mProviderId, mUid, mName, mCtx, mInPrice, mOutPrice, resetModelForm, load]);
+
+  const handleDeleteModel = useCallback(async (id: string) => {
+    setActionError(null);
+    try {
+      await api.deleteModel(id);
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "模型删除失败，请重试");
+    }
+  }, [api, load]);
+
   const isActiveLabel = (active: boolean) =>
     active ? <span className="text-success">启用</span> : <span className="text-danger">停用</span>;
 
   const editingProvider = editingId ? providers.find((p) => p.provider_id === editingId) ?? null : null;
+  const providerName = (pid: string) => providers.find((p) => p.provider_id === pid)?.name ?? pid;
 
   return (
     <section className="flex flex-col gap-md">
@@ -180,8 +239,37 @@ export function LlmPage(): ReactNode {
               </table>
             )}
           </GlassPanel>
+
           <GlassPanel className="rounded-window p-md">
-            <h2 className="m-0 mb-sm text-sm font-bold text-text-primary">Models</h2>
+            <div className="mb-sm flex items-center justify-between">
+              <h2 className="m-0 text-sm font-bold text-text-primary">Models</h2>
+              {mMode === "idle" && providers.length > 0 && (
+                <Button variant="metal" size="sm" data-testid="open-create-model" onClick={openModelCreate}>+ 新增模型</Button>
+              )}
+            </div>
+
+            {mMode === "create" && (
+              <div className="mb-md rounded-window border border-gold/15 p-md" data-testid="model-create-form">
+                <h3 className="m-0 mb-sm text-sm font-bold text-text-primary">新增模型</h3>
+                <Field label="关联 Provider">
+                  <Select value={mProviderId} onChange={(e) => setMProviderId((e.target as HTMLSelectElement).value)} data-testid="m-field-provider">
+                    {providers.map((p) => (
+                      <option key={p.provider_id} value={p.provider_id}>{p.name}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Model UID"><Input value={mUid} onChange={(e) => setMUid((e.target as HTMLInputElement).value)} data-testid="m-field-uid" /></Field>
+                <Field label="Model 名称"><Input value={mName} onChange={(e) => setMName((e.target as HTMLInputElement).value)} data-testid="m-field-name" /></Field>
+                <Field label="上下文窗口"><Input value={mCtx} type="number" onChange={(e) => setMCtx((e.target as HTMLInputElement).value)} data-testid="m-field-ctx" /></Field>
+                <Field label="输入价格"><Input value={mInPrice} onChange={(e) => setMInPrice((e.target as HTMLInputElement).value)} data-testid="m-field-in-price" placeholder="如 0.001" /></Field>
+                <Field label="输出价格"><Input value={mOutPrice} onChange={(e) => setMOutPrice((e.target as HTMLInputElement).value)} data-testid="m-field-out-price" placeholder="如 0.002" /></Field>
+                <div className="mt-sm flex gap-sm">
+                  <Button variant="metal" size="sm" data-testid="submit-model" onClick={() => void submitModel()}>创建</Button>
+                  <Button variant="ghost" size="sm" onClick={resetModelForm}>取消</Button>
+                </div>
+              </div>
+            )}
+
             {models.length === 0 ? (
               <p className="text-sm text-text-secondary">暂无模型</p>
             ) : (
@@ -190,7 +278,9 @@ export function LlmPage(): ReactNode {
                   <tr className="border-b border-gold/15 text-left text-xs text-text-muted">
                     <th className="pb-sm">Model UID</th>
                     <th className="pb-sm">名称</th>
+                    <th className="pb-sm">Provider</th>
                     <th className="pb-sm">上下文窗口</th>
+                    <th className="pb-sm">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -198,7 +288,11 @@ export function LlmPage(): ReactNode {
                     <tr key={m.model_id} className="border-b border-gold/5" data-testid="model-row">
                       <td className="py-sm text-text-primary">{m.model_uid}</td>
                       <td className="py-sm text-text-secondary">{m.model_name}</td>
+                      <td className="py-sm text-text-secondary">{providerName(m.provider_id)}</td>
                       <td className="py-sm text-text-secondary">{m.context_window ?? "—"}</td>
+                      <td className="py-sm">
+                        <Button variant="danger" size="sm" data-testid={`delete-model-${m.model_id}`} onClick={() => void handleDeleteModel(m.model_id)}>删除</Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
