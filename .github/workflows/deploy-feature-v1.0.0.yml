@@ -2,14 +2,15 @@
 #
 # 工作原理：
 #   1) actions/checkout 把最新代码拉进 runner workspace
-#   2) workflow step 把代码 rsync 到持久化部署根（/root/app/aiteam）
+#   2) 构建前端产物（cd web && pnpm install && pnpm build）
+#   3) workflow step 把代码同步到持久化部署根（/root/app/aiteam）
 #      同时把 GitHub Secret 写成 $DEPLOY_ROOT/.env.<env>
-#   3) 在部署根调用 deploy/ci/run.sh：
+#   4) 在部署根调用 deploy/ci/run.sh：
 #        git fetch --all + checkout + pull --ff-only 目标分支
 #        → 装 systemd unit 到 /etc/systemd/system/
 #        → systemctl restart aiteam-v1
-#        → /healthz 冒烟
-#   4) 服务由 systemd (PID 1) 托管；runner job 结束时的 orphan clean-up
+#        → /healthz 冒烟 + GET / 返回 HTML
+#   5) 服务由 systemd (PID 1) 托管；runner job 结束时的 orphan clean-up
 #      波及不到 systemd-forked 的 ctl.sh 进程（系统边界），所以服务
 #      会在 job 之后继续存活。
 #
@@ -24,6 +25,9 @@
 #     输入走 `${{ github.event.inputs.* }}`，在 step 内直接引用表达式）。
 #   - actions/checkout 不能 path: 到 workspace 之外；所以用 rsync 把
 #    workspace 内容同步到部署根，而不是让 checkout 直接写部署根。
+#   - 前端产物（web/*/dist）在 .gitignore 中，checkout 不会拉，所以必须
+#     在 rsync 之前用 pnpm build 重新生成——否则 mount_frontend 静默跳过、
+#     `/` 等前端路由全部返回 404。
 
 name: deploy (feature/v1.0.0 -> taiyi)
 
@@ -59,9 +63,25 @@ jobs:
       - name: Checkout codebase into worker workspace
         uses: actions/checkout@v4
 
+      # 构建前端产物：v1 的 SPA 是 pnpm workspace，产出在 web/*/dist。
+      # dist 在 .gitignore 中，checkout 不会生成；不构建直接 rsync 会导致
+      # mount_frontend 找不到 dist 而静默跳过、用户访问任何前端路由全 404。
+      # pnpm 的 cache 复用由 pnpm/action 的 cache lookup 加速。
+      - name: Build frontend distributions
+        id: build
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: |
+            - cwd: web
+              args: [--frozen-lockfile]
+      - run: cd web && pnpm build --parallel
+        shell: bash
+
       # rsync workspace → 持久化部署根（保持 runner workspace 与部署根一致）
       #  --exclude=.venv 避免覆盖已部署机器本地的 large .venv；
       #  --delete 让部署根里多余文件也被清掉（如已删除的模块）。
+      # dist/ 此时已在 workspace 中存在（上一步刚 build）。
       - name: Sync deploy root & write .env
         shell: bash
         env:
@@ -72,7 +92,7 @@ jobs:
           set -euo pipefail
           cd "${{ github.workspace }}"
           mkdir -p "$DEPLOY_ROOT"
-          # rsync 整个仓库到部署根（除 .venv）
+          # rsync 整个仓库到部署根（除 .venv）；包括刚 build 出的 dist/
           rsync -a --delete --exclude='.venv' ./ "$DEPLOY_ROOT/"
           echo "[sync] workspace -> $DEPLOY_ROOT done"
           # 写 .env.<env>（从 GitHub Secret 注入，由 ctl.sh 读取）
@@ -80,7 +100,7 @@ jobs:
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
           if ! grep -q '[^[:space:]]' "$DEPLOY_ROOT/.env.${DEPLOY_ENV}"; then
-            echo "::error::.env.${DEPLOY_ENV} is empty -- check GitHub secret ENV_CONTENTS_${DEPLOY_ENV}"
+            echo "::error::.env.${DEPLOY_ENV} is empty -- check GitHub secret ENV_CONTENTS_${{ env.DEPLOY_ENV }}"
             exit 1
           fi
           echo "[sync] wrote $DEPLOY_ROOT/.env.${DEPLOY_ENV} ($(wc -l < "$DEPLOY_ROOT/.env.${DEPLOY_ENV}") lines)"
@@ -97,10 +117,23 @@ jobs:
             --branch "${{ env.DEPLOY_BRANCH }}" \
             --env "${{ env.DEPLOY_ENV }}"
 
-      - name: Post-deploy status dump
-        if: always()
+      # 冒烟：service status + /healthz + GET / 必须是 HTML（不是 404 JSON）
+      - name: Front-end smoke (GET / returns HTML)
         shell: bash
         run: |
-          systemctl status aiteam-v1 --no-pager || true
-          echo "=== manager.log tail ==="
-          tail -n 30 /root/app/aiteam/logs/manager.log 2>/dev/null || true
+          set -euo pipefail
+          systemctl status aiteam-v1 --no-pager -n 0 || true
+          for tier_port in 8781:operation 8782:manager 8783:agent; do
+            port="${tier_port%%:*}"
+            tier="${tier_port##*:}"
+            # /healthz
+            hz=$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)
+            echo "[${tier}] /healthz -> ${hz:-FAIL}"
+            # / must return HTML (SPA entry), not 404 Problem JSON
+            root_ct=$(curl -fsS -o /dev/null -w '%{content_type}' --max-time 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)
+            if [[ "${root_ct}" != text/html* ]]; then
+              echo "::error::[${tier}] GET / expected text/html, got '${root_ct:-FAIL}' — frontend dist not mounted?"
+              exit 1
+            fi
+            echo "[${tier}] / content-type=${root_ct} (OK)"
+          done
