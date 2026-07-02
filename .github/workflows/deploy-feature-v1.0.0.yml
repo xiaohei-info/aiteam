@@ -1,15 +1,19 @@
 # PR 合并到 feature/v1.0.0 时，自动部署到 taiyi（测试机）。
 #
 # 三件套（切分支时复制本 yaml 并改这三处即可）：
-#   1) on.pull_request.branches   ← 触发 PR merge 的分支名
-#   2) jobs.deploy.runs-on        ← 目标机器的 self-hosted runner label
-#   3) env.ENV_NAME               ← 环境名（对应 .env.<env> + secret ENV_CONTENTS_<ENV>）
+#   1) on.<event>.branches      ← 触发 PR merge 的分支名（必须放在 "on" 块下）
+#   2) jobs.deploy.runs-on      ← 目标机器的 self-hosted runner label
+#   3) env.ENV_NAME             ← 环境名（对应 .env.<env> + secret ENV_CONTENTS_<ENV>）
 #
 # 共享脚本：scripts/deploy/run.sh —— 任何分支都可复制该 yaml 并改三件套共用。
+#
+# 关键技术细节："on" 键必须加引号。某些 PyYAML 1.x 把裸 `on:` 解析成
+# YAML 1.1 布尔值 true，导致整个触发器块丢失，workflow 退化为 push 模式，
+# linter 也无法正确解析 jobs 列表。
 
-name: deploy (feature/v1.0.0 -> taiyi)
+name: deploy (feature/v1.0.0 → taiyi)
 
-on:
+"on":
   pull_request:
     branches: [feature/v1.0.0]
     types: [closed]
@@ -24,7 +28,7 @@ env:
 
 jobs:
   deploy:
-    name: deploy (feature/v1.0.0 -> taiyi / .env.${{ env.ENV_NAME }})
+    name: deploy (feature/v1.0.0 → taiyi / .env.${{ env.ENV_NAME }})
     if: github.event.pull_request.merged == true
     runs-on: taiyi
     timeout-minutes: 10
