@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
 # v1 通用部署脚本：被所有 deploy-*.yml 共用。
 #
-# 语义（简单失败即报错版）：
+# 简单语义（失败就报错，没有 fallback）：
 #   1) fetch + checkout + pull 指定分支最新代码
-#   2) 软链主工作目录的 .venv 让 ctl.sh 能找到 Python 依赖
+#   2) soft-link 主目录的 .venv 让 ctl.sh 能找 Python 依赖
 #   3) 调用 scripts/ctl.sh restart --env <env>
 #   4) 对三端 /healthz 冒烟
 #
-# 网络失败就报错退出，不做任何 fallback。ctl.sh 走 runner worktree。
+# CLI: bash scripts/deploy/run.sh --branch <b> --env <e>
+# 参数同时支持 --branch=X 和 --branch X 两种形式。
 
 set -euo pipefail
 
-BRANCH="main"
+BRANCH="feature/v1.0.0"
 ENV_TARGET="test"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 while (( $# > 0 )); do
   case "$1" in
-    --branch) BRANCH="$2"; shift 2 ;;
-    --env)    ENV_TARGET="$2"; shift 2 ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
-    *) echo "[deploy-run][ERR] unknown arg: $1" >&2; exit 2 ;;
+    --branch=*)
+      BRANCH="${1#*=}"; shift ;;
+    --branch)
+      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
+        echo "[deploy-run][ERR] --branch requires a non-empty value" >&2; exit 2
+      fi
+      BRANCH="$2"; shift 2 ;;
+    --env=*)
+      ENV_TARGET="${1#*=}"; shift ;;
+    --env)
+      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
+        echo "[deploy-run][ERR] --env requires a non-empty value" >&2; exit 2
+      fi
+      ENV_TARGET="$2"; shift 2 ;;
+    -h|--help)
+      sed -n '2,14p' "$0"; exit 0 ;;
+    *)
+      echo "[deploy-run][ERR] unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -29,10 +44,10 @@ fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&
 
 cd "$REPO_ROOT"
 
-log "fetching + pulling latest for '$BRANCH'"
-git fetch --all --prune 2>&1 || fail "git fetch failed (network egress)"
+log "fetch + checkout + pull '$BRANCH'"
+git fetch --all --prune 2>&1 || fail "git fetch failed"
 git checkout "$BRANCH" 2>&1 | tail -1 || fail "checkout '$BRANCH' failed"
-git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only failed"
+git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '$BRANCH' failed"
 
 HEAD_SHORT="$(git rev-parse --short HEAD)"
 log "code ready @ ${HEAD_SHORT}"
