@@ -12,7 +12,9 @@ name: v1-web-ci
 
 on:
   push:
-    branches: ["**"]
+    # 只在集成分支跑 push：worker/PR 分支由 pull_request 事件覆盖，
+    # 否则同一提交 push+PR 双跑、每个短命分支也全量跑（曾致 ~250 run/天）。
+    branches: ["master", "feature/**"]
     paths:
       - "web/**"
       - ".github/workflows/web-ci.yml"
@@ -23,6 +25,11 @@ on:
     paths:
       - "web/**"
       - ".github/workflows/web-ci.yml"
+
+# 同一 PR/分支的旧 run 直接作废——过期提交的结果没有信息量，只烧分钟数。
+concurrency:
+  group: web-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   typecheck-test-build:
@@ -40,6 +47,12 @@ jobs:
       # 与本地/锁文件一致，避免版本漂移导致的 install 差异。
       - name: Enable corepack (pnpm)
         run: corepack enable
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-store-${{ hashFiles('web/pnpm-lock.yaml') }}
 
       - name: Install deps (frozen lockfile)
         working-directory: web
@@ -108,9 +121,22 @@ jobs:
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/pip install -r server/requirements.txt pytest pytest-asyncio pytest-timeout pytest-cov
 
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-store-${{ hashFiles('web/pnpm-lock.yaml') }}
+
       - name: Install web deps
         working-directory: web
         run: pnpm install --frozen-lockfile
+
+      # 浏览器二进制 ~100MB+，每次全新下载是该 job 最大的固定开销；按 lockfile 缓存。
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
 
       - name: Install Playwright Chromium
         working-directory: web
@@ -184,14 +210,25 @@ jobs:
             fi
           done
 
-      - name: 覆盖率 - base master（容忍未 instrumented）
+      # base(master) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
+      # base 全量跑（棘轮 job 原本每个 PR 要跑两遍全量 vitest，这里砍掉恒定的那一半）。
+      - name: 缓存 base 覆盖率（按 base sha）
+        id: base-cov
+        uses: actions/cache@v4
+        with:
+          path: web-base-cov/base.txt
+          key: web-base-cov-${{ github.event.pull_request.base.sha }}
+
+      - name: 覆盖率 - base master（容忍未 instrumented，仅缓存未命中时）
+        if: steps.base-cov.outputs.cache-hit != 'true'
         working-directory: base/web
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/web-base-cov"
           pnpm install --frozen-lockfile
           pnpm --filter @aiteam/shared run build
           pnpm -r exec vitest run --coverage
-          node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<1){process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.RUNNER_TEMP+"/base.txt",pct);console.log("base web 分支覆盖 "+pct+"%");'
+          node -e 'const fs=require("fs");let t=0,c=0,n=0;for(const p of ["shared","operation","manager","agent"]){const f=p+"/coverage/coverage-summary.json";if(!fs.existsSync(f))continue;const b=JSON.parse(fs.readFileSync(f)).total.branches;t+=b.total;c+=b.covered;n++;}if(n<1){process.exit(2);}const pct=(c/t*100).toFixed(2);fs.writeFileSync(process.env.GITHUB_WORKSPACE+"/web-base-cov/base.txt",pct);console.log("base web 分支覆盖 "+pct+"%");'
 
       - name: Setup Python（diff-cover 门）
         uses: actions/setup-python@v5
@@ -212,11 +249,11 @@ jobs:
       - name: 棘轮比对（head ≥ base 否则红灯）
         run: |
           HEAD=$(cat "$RUNNER_TEMP/head.txt")
-          if [ ! -f "$RUNNER_TEMP/base.txt" ]; then
+          if [ ! -f "$GITHUB_WORKSPACE/web-base-cov/base.txt" ]; then
             echo "::notice::base(master) 尚未具备覆盖工具（首次引入），跳过棘轮比对；head=${HEAD}%。合并后 master 即为基线。"
             exit 0
           fi
-          BASE=$(cat "$RUNNER_TEMP/base.txt")
+          BASE=$(cat "$GITHUB_WORKSPACE/web-base-cov/base.txt")
           python3 -c "import sys; h=float('${HEAD}'); b=float('${BASE}'); print(f'base(master) 分支覆盖: {b:.2f}%'); print(f'head(PR)     分支覆盖: {h:.2f}%'); sys.exit(1 if h + 0.01 < b else 0)" || {
             echo "::error::web 分支覆盖回退 ${BASE}% → ${HEAD}%——PR 不得降低 master 总覆盖（补测试后再合）"; exit 1; }
           echo "OK：web 总分支覆盖未退化"

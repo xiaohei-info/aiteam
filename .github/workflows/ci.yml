@@ -12,7 +12,9 @@ name: v1-server-ci
 
 on:
   push:
-    branches: ["**"]
+    # 只在集成分支跑 push：worker/PR 分支由 pull_request 事件覆盖，
+    # 否则同一提交 push+PR 双跑、每个短命分支也全量跑（曾致 ~250 run/天）。
+    branches: ["master", "feature/**"]
     paths:
       - "server/**"
       - ".github/workflows/ci.yml"
@@ -23,6 +25,11 @@ on:
     paths:
       - "server/**"
       - ".github/workflows/ci.yml"
+
+# 同一 PR/分支的旧 run 直接作废——过期提交的结果没有信息量，只烧分钟数。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # 运营端系统管理员凭据：build_system_account_repository() 启动时强制读取
 # OPERATION_SYSTEM_USERNAME/OPERATION_SYSTEM_PASSWORD（无默认值，缺则 ValueError）。
@@ -45,6 +52,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
 
       - name: Install deps
         run: |
@@ -89,6 +98,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
 
       - name: Install deps
         run: |
@@ -144,6 +155,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: head/server/requirements.txt
 
       - name: 覆盖率 - PR head（全量套件 + 分支）
         working-directory: head/server
@@ -161,16 +174,27 @@ jobs:
             --cov=agent_service --cov=agent_gateway --cov=shared \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
-      - name: 覆盖率 - base master（全量套件 + 分支）
+      # base(master) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
+      # base 全量跑（棘轮 job 原本每个 PR 要跑两遍全量套件，这里砍掉恒定的那一半）。
+      - name: 缓存 base 覆盖率（按 base sha）
+        id: base-cov
+        uses: actions/cache@v4
+        with:
+          path: base-cov/base.json
+          key: server-base-cov-${{ github.event.pull_request.base.sha }}
+
+      - name: 覆盖率 - base master（全量套件 + 分支，仅缓存未命中时）
+        if: steps.base-cov.outputs.cache-hit != 'true'
         working-directory: base/server
         # 同上：base 只取覆盖数字，base 套件是否全绿不影响棘轮（对齐 web-ci.yml base 步）。
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/base-cov"
           pip install -r requirements.txt pytest pytest-cov
           python -m pytest -q \
             --cov=operation_service --cov=manager_service \
             --cov=agent_service --cov=agent_gateway --cov=shared \
-            --cov-branch --cov-report=json:"$RUNNER_TEMP/base.json"
+            --cov-branch --cov-report=json:"$GITHUB_WORKSPACE/base-cov/base.json"
 
       - name: 改动分支覆盖门槛（diff-cover ≥90%）
         # F1: skill 要求的 CI 物理层 diff-cover 门——改动行分支覆盖 <90% → CI 红灯。
@@ -188,8 +212,9 @@ jobs:
           python - <<'PY'
           import json, os
           t = os.environ["RUNNER_TEMP"]
+          w = os.environ["GITHUB_WORKSPACE"]
           head = json.load(open(f"{t}/head.json"))["totals"]["percent_covered"]
-          base = json.load(open(f"{t}/base.json"))["totals"]["percent_covered"]
+          base = json.load(open(f"{w}/base-cov/base.json"))["totals"]["percent_covered"]
           print(f"base(master) 分支覆盖: {base:.2f}%")
           print(f"head(PR)     分支覆盖: {head:.2f}%")
           # 0.01% 容差吸收行计数抖动

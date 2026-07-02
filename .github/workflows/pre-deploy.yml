@@ -7,6 +7,8 @@
 # to health/static/metadata surfaces and never writes business data.
 name: pre-deploy
 
+# 仅部署前手动/编排触发：push 触发已移除——staging smoke 的 pr_quick 子集与
+# pr-quick.yml 在每次 push 上完全重复，无增量信息，只翻倍烧分钟数。
 on:
   workflow_dispatch:
     inputs:
@@ -14,12 +16,6 @@ on:
         description: "staging | production | both"
         required: false
         default: "both"
-  push:
-    branches: [feature/v1.0.0]
-    paths:
-      - "server/**"
-      - "web/**"
-      - ".github/workflows/pre-deploy.yml"
 
 permissions:
   contents: read

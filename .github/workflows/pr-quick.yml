@@ -12,7 +12,8 @@ name: pr-quick
 
 on:
   push:
-    branches: ["**"]
+    # 只在集成分支跑 push：worker/PR 分支由 pull_request 事件覆盖（消灭 push+PR 双跑）。
+    branches: ["master", "feature/**"]
     paths:
       - "server/**"
       - ".github/workflows/pr-quick.yml"
@@ -26,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-quick-${{ github.ref }}
+  group: pr-quick-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Operation app assembly requires these at import time (mirrors ci.yml).
