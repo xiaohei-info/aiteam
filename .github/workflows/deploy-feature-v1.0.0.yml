@@ -1,40 +1,26 @@
-# PR 合并到 feature/v1.0.0 时，自动部署到 taiiy（测试机）。
 #
-# 工作原理：
-#   1) actions/checkout 把代码拉到 workflow runner workspace（job 内的所有
-#      后续 step 在 runner 上执行。）
-#   2) workflow step 把 GitHub Secret 写成 $DEPLOY_ROOT/.env.<env>（持久部署根，
-#      通常是独立的 git 仓库目录）
-#   3) 在 $DEPLOY_ROOT 跑 deploy/ci/run.sh：
-#        a. git pull --ff-only 同步目标分支最新代码
-#        b. 如果 web/*/dist 缺失（例如首次部署），现场用 pnpm build 生成
-#        c. 装 systemd unit 到 /etc/systemd/system/
-#        d. systemctl restart 启动服务（systemd PID 1 托管，runner job 退出不影响）
-#        e. /healthz 三端冒烟 + GET / 返回 HTML（验证前端 dist 已挂载）
+# Branch 相关约定
+# ==============
 #
-# 设计选择（为什么不 rsync，为什么不保留 "CI 构建前端"）：
-#   - 部署根本身就是 git 仓库，用 git pull 进最新分支代码是天然的 CI/CD
-#     命令（一个 source of truth，无需从 runner workspace 同步）。
-#   - 前端产物不入库（.gitignore 中已有 web/*/dist），部署根既能 git pull
-#     也能本地 build，且 build 只在前端产物确实缺失时触发（不做无谓重编译）。
-#   - 服务交给 systemd runner job 结束时的 orphan clean-up 波及不到
-#     PID-1 fork 出的 daemon，所以服务能在 job 之后继续存活。
+# PR trigger (自动):
+#   on.pull_request.branches      ← 指定 PR 合入哪个分支才触发 deploy
+#   运行时 pull 的分支            ← github.event.pull_request.base.ref (即目标分支)
 #
-# 切分支/环境：复制本 yaml，改这三处：
-#   1) on.pull_request.branches    ← 触发 PR merge 的目标分支名
-#   2) jobs.deploy.runs-on       ← 目标机器的 self-hosted runner label
-#   3) env.DEPLOY_ROOT          ← 持久化部署根的绝对路径
+# workflow_dispatch (手动):
+#   inputs.branch                 ← 用户必须提供
 #
-# 关键约束：
-#   - "on" 键必须加引号（YAML 1.1 把裸 `on:` 解析成布尔 true）。
-#   - 部署根所在机器需要：node >=22 + pnpm >=11（前端 build 用）+ systemd +
-#     + ssh 私钥有 GitHub 仓库的 pull 权限。
-#   - .env.<env> 内容来自 GitHub Secret，整个 .env.* 文件一律 gitignore。
+# run.sh 里对空 branch 显式 fail: "branch is required: ..."
+# 没有任何 fallback；不传 branch 就是错。
 
 name: deploy (feature/v1.0.0 -> taiyi)
 
 "on":
   workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to deploy (must exist on remote)"
+        required: true
+        type: string
   pull_request:
     branches: [feature/v1.0.0]
     types: [closed]
@@ -43,13 +29,11 @@ permissions:
   contents: read
 
 env:
-  # 分支/环境由 workflow 上下文解析：
-  #   - workflow_dispatch: 走 inputs（手动触发）
-  #   - pull_request:      走 github.event.pull_request.base.ref
-  DEPLOY_BRANCH: ${{ github.event.inputs.branch || github.event.pull_request.base.ref || 'feature/v1.0.0' }}
-  DEPLOY_ENV: ${{ github.event.inputs.env || 'test' }}
-  # 持久化部署根：这是个独立的 git 仓库目录；不需要
-  #   在 runner workspace 上 checkout。
+  # 分支解析：手动触发取自 inputs，PR 触发取自 base.ref。
+  # 显式拒绝任何 fallback 语义；漏填即 fail。
+  DEPLOY_BRANCH: ${{ github.event.inputs.branch || github.event.pull_request.base.ref }}
+  DEPLOY_ENV: "test"
+  # 持久化部署根：这是个独立的 git 仓库目录；不需要在 runner workspace 上 checkout。
   DEPLOY_ROOT: /root/app/aiteam
   UNIT_NAME: aiteam-v1
 
@@ -59,7 +43,7 @@ jobs:
     # workflow_dispatch runs have no pull_request.merged context,
     # so guard with event_name check; otherwise the job gets skipped.
     if: >-
-      (github.event_name == 'workflow_dispatch')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '')
       ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true)
@@ -67,20 +51,20 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # 保持 actions/checkout 走默认（只让 runner 拿到 workflow 自身引用，
-      #    确保 job 能正确运行 deploy/ci/run.sh）。
+      # 让 runner 拿到 workflow 自身引用，确保 job 能正确执行 deploy/ci/run.sh。
       - name: Checkout workflow source
         uses: actions/checkout@v4
 
       # 把 .env.<env> 写到部署根（ctl.sh 从 $DEPLOY_ROOT/.env.<env> 读）
-      #   这步必须在 git pull 之前，否则 pull --ff-only 有可能在
-      #   .env 被覆盖后落后一帧——不过 .env.<env> 是 gitignored，pull 不会动它，
-      #   因此写成先写 .env 再 pull 可以保证两件事独立完成。
+      # 这步必须在 git pull 之前，.env.<env> 是 gitignored，pull 不会动它。
       - name: Write .env.${{ env.DEPLOY_ENV }} from GitHub secret
         shell: bash
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
           set -euo pipefail
+          if [[ -z "${{ env.DEPLOY_BRANCH }}" ]]; then
+            echo "::error::DEPLOY_BRANCH empty; abort."; exit 2
+          fi
           cat > ".env.${{ env.DEPLOY_ENV }}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
@@ -90,7 +74,7 @@ jobs:
           fi
           echo "wrote .env.${{ env.DEPLOY_ENV }} ($(wc -l < ".env.${{ env.DEPLOY_ENV }}") lines)"
 
-      # 部署编排：在部署根跑 run.sh，它会完成 git pull + 条件性装 unit +
+      # 部署编排：在部署根跑 run.sh，它会完成 git pull + 前端 build + 装 unit +
       #   systemctl restart + /healthz smoke。
       - name: Deploy via run.sh
         working-directory: ${{ env.DEPLOY_ROOT }}
@@ -99,22 +83,25 @@ jobs:
           DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
         shell: bash
         run: |
+          set -euo pipefail
+          if [[ -z "${DEPLOY_BRANCH}" ]]; then
+            echo "::error::DEPLOY_BRANCH empty at run.sh time"; exit 2
+          fi
           bash "${{ github.workspace }}/deploy/ci/run.sh" \
-            --branch "${{ env.DEPLOY_BRANCH }}" \
-            --env "${{ env.DEPLOY_ENV }}" \
-            --unit "${{ env.UNIT_NAME }}"
+            --branch "${DEPLOY_BRANCH}" \
+            --env "${DEPLOY_ENV}" \
+            --unit "${UNIT_NAME}"
 
-      # 补救信息（无论 deploy 成功/失败都dump systemd status + tail logs，
-      #   帮助 runner 容器外也能 debug）。
+      # 补救信息（无论 deploy 成功/失败都 dump 日志）。
       - name: Post-deploy debug dump
         if: always()
         shell: bash
         run: |
-          systemctl status aiteam-v1 --no-pager || true
+          systemctl status "$UNIT_NAME" --no-pager -n 0 || true
           echo "---"
-          for f in /root/app/aiteam/logs/manager.log \
-                   /root/app/aiteam/logs/operation.log \
-                   /root/app/aiteam/logs/agent.log; do
+          for f in "$DEPLOY_ROOT/logs/manager.log" \
+                   "$DEPLOY_ROOT/logs/operation.log" \
+                   "$DEPLOY_ROOT/logs/agent.log"; do
             echo "=== $f (tail 15) ==="
             tail -n 15 "$f" 2>/dev/null || true
           done
