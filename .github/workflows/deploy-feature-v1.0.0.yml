@@ -1,0 +1,58 @@
+# PR 合并到 feature/v1.0.0 时，自动部署到 taiyi（测试机）。
+#
+# 三件套（切分支时复制本 yaml 并改这三处即可）：
+#   1) on.pull_request.branches   ← 触发 PR merge 的分支名
+#   2) jobs.deploy.runs-on        ← 目标机器的 self-hosted runner label
+#   3) "Write .env.${{ env.ENV_NAME }}" 里的 ENV_NAME  ← 环境名
+#      ↑ 该步骤会从 GitHub Secret "ENV_CONTENTS_${{ ENV_NAME }}" 读出整份
+#        .env.<env> 全文写到 runner 上，再交给 ctl.sh。
+#
+# 共享逻辑：scripts/deploy/run.sh —— 任何分支都可复制该 yaml 并改三件套共用。
+
+name: deploy (feature/v1.0.0 → taiyi)
+
+on:
+  pull_request:
+    branches: [feature/v1.0.0]
+    types: [closed]
+
+permissions:
+  contents: read
+
+env:
+  ENV_NAME: test
+
+  # 占位：避免 operation app 启动时因 BUILD_SYSTEM_ACCOUNT_* 缺位报错（非 secret）。
+  OPERATION_SYSTEM_USERNAME: sysadmin
+  OPERATION_SYSTEM_PASSWORD: changeme-me
+
+jobs:
+  # 仅 PR 被 merge 后才跑；跳过 "关闭但未合并 的 PR"。
+  deploy:
+    name: deploy (feature/v1.0.0 → taiyi / .env.${{ env.ENV_NAME }})
+    if: github.event.pull_request.merged == true
+    runs-on: taiyi
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout at PR merge commit
+        uses: actions/checkout@v4
+
+      - name: "Write .env.${{ env.ENV_NAME }} from GitHub secret"
+        shell: bash
+        # secret 内容（ENV_CONTENTS_TEST 的全文）会被 GitHub Actions 自动 mask 出 job log。
+        run: {
+          printf '%s' "${{ secrets.ENV_CONTENTS_TEST }}" > ".env.${{ env.ENV_NAME }}"
+          }
+          if ! grep -q '[^[:space:]]' ".env.${{ env.ENV_NAME }}"; then
+            echo "::error::.env.${{ env.ENV_NAME }} is empty — check GitHub secret ENV_CONTENTS_${{ env.ENV_NAME }}"
+            exit 1
+          fi
+          echo "wrote .env.${{ env.ENV_NAME }} ($(wc -l < ".env.${{ env.ENV_NAME }}") lines)"
+
+      - name: Deploy (pull + restart + /healthz smoke)
+        shell: bash
+        run: |
+          bash scripts/deploy/run.sh \
+            --branch "${{ github.event.pull_request.base.ref }}" \
+            --env "${{ env.ENV_NAME }}"
