@@ -470,8 +470,25 @@ class SolutionInstanceOut(BaseModel):
     expert_employee_ids: list[str] = Field(default_factory=list)
     knowledge_refs: list[str] = Field(default_factory=list)
     skill_refs: list[str] = Field(default_factory=list)
+    planner_prompt: str = Field(default="", description="方案级协作编排 planner prompt（空=回退运行时默认）")
+    subtask_prompt: str = Field(default="", description="方案级协作编排 subtask prompt")
+    aggregate_prompt: str = Field(default="", description="方案级协作编排 aggregate prompt")
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class SolutionInstanceUpdate(BaseModel):
+    """方案实例局部更新（AITEAM-288，GH#403）：编辑专家绑定/知识技能引用/协作 prompts。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    expert_employee_ids: list[str] | None = None
+    knowledge_refs: list[str] | None = None
+    skill_refs: list[str] | None = None
+    planner_prompt: str | None = None
+    subtask_prompt: str | None = None
+    aggregate_prompt: str | None = None
 
 
 class RecruitExpertResult(BaseModel):

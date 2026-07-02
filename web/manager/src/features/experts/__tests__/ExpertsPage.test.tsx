@@ -7,7 +7,7 @@
  * - 只读角色（member）不显示招募/应用/编辑入口
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -15,7 +15,7 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { ExpertsPage } from "../ExpertsPage";
 import * as apiModule from "../useExpertsApi";
-import type { EmployeeConfig } from "../types";
+import type { EmployeeConfig, SolutionInstance } from "../types";
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -59,6 +59,7 @@ function mockApi(overrides: Partial<apiModule.ExpertsApi> = {}) {
     listEmployees: vi.fn().mockResolvedValue([employee]),
     updateEmployee: vi.fn().mockResolvedValue(employee),
     listSolutionInstances: vi.fn().mockResolvedValue([]),
+    updateSolutionInstance: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
   vi.spyOn(apiModule, "useExpertsApi").mockReturnValue(api);
@@ -212,5 +213,67 @@ describe("ExpertsPage 招募专家", () => {
       "e1",
       expect.objectContaining({ tools: [] }),
     );
+  });
+
+  const solutionInstance: SolutionInstance = {
+    id: "si-1",
+    solution_id: "sol-1",
+    solution_version: "v1",
+    display_name: "行业方案A",
+    status: "applied",
+    expert_employee_ids: ["emp-1", "emp-2"],
+    knowledge_refs: ["ks-shared"],
+    skill_refs: ["skill-shared"],
+    planner_prompt: "",
+    subtask_prompt: "",
+    aggregate_prompt: "",
+    created_at: null,
+    updated_at: null,
+  };
+
+  it("浏览：已应用方案实例渲染专家绑定与引用", async () => {
+    mockApi({ listSolutionInstances: vi.fn().mockResolvedValue([solutionInstance]) });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
+    expect(screen.getByText("行业方案A")).toBeInTheDocument();
+    expect(screen.getByText("emp-1")).toBeInTheDocument();
+    expect(screen.getByText("emp-2")).toBeInTheDocument();
+  });
+
+  it("编辑方案实例：改专家绑定 + 协作 prompts → updateSolutionInstance 收到正确字段", async () => {
+    const api = mockApi({
+      listSolutionInstances: vi.fn().mockResolvedValue([solutionInstance]),
+    });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
+
+    const card = screen.getByTestId("solution-instance-card");
+    fireEvent.click(within(card).getByText("编辑配置"));
+    await waitFor(() => expect(within(card).getByLabelText("名称")).toBeInTheDocument());
+    fireEvent.change(within(card).getByLabelText("关联专家（employee id）"), {
+      target: { value: "emp-1\nemp-3" },
+    });
+    fireEvent.change(within(card).getByLabelText("协作编排 planner prompt"), {
+      target: { value: "拆分任务" },
+    });
+    fireEvent.click(within(card).getByText("保存"));
+
+    await waitFor(() => expect(api.updateSolutionInstance).toHaveBeenCalledTimes(1));
+    expect(api.updateSolutionInstance).toHaveBeenCalledWith(
+      "si-1",
+      expect.objectContaining({
+        expert_employee_ids: ["emp-1", "emp-3"],
+        planner_prompt: "拆分任务",
+        knowledge_refs: ["ks-shared"],
+        skill_refs: ["skill-shared"],
+      }),
+    );
+  });
+
+  it("普通成员（member）方案实例只读：无编辑配置入口", async () => {
+    mockApi({ listSolutionInstances: vi.fn().mockResolvedValue([solutionInstance]) });
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
+    expect(screen.queryByText("编辑配置")).not.toBeInTheDocument();
   });
 });

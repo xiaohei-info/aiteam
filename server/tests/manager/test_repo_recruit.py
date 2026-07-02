@@ -16,9 +16,11 @@ from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
 def _sol_row(iid="i-1", sid="sol-1", sv="1", name="Plan A", status="applied",
-             exp_ids=None, krefs=None, srefs=None, dmeta=None, tmeta=None, ca=None, ua=None):
+             exp_ids=None, krefs=None, srefs=None,
+             planner="", subtask="", aggregate="",
+             dmeta=None, tmeta=None, ca=None, ua=None):
     return (iid, sid, sv, name, status, exp_ids or ["e-1"], krefs or ["k-1"],
-            srefs or ["s-1"], dmeta, tmeta,
+            srefs or ["s-1"], planner, subtask, aggregate, dmeta, tmeta,
             ca or datetime(2026, 1, 1), ua or datetime(2026, 1, 2))
 
 
@@ -167,3 +169,32 @@ def test_row_to_event_null_target_ids():
     raw[7] = None
     row = _row_to_event(tuple(raw))
     assert row.target_employee_ids == []
+
+
+# ---- update_solution_instance（AITEAM-288）----
+
+
+def test_update_solution_instance_returns_updated_row():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_sol_row(name="Renamed")))
+    row = RecruitRepository(router).update_solution_instance(
+        ctx(), instance_id="i-1", display_name="Renamed",
+    )
+    assert row is not None
+    assert row.display_name == "Renamed"
+
+
+def test_update_solution_instance_not_found():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=None))
+    assert RecruitRepository(router).update_solution_instance(
+        ctx(), instance_id="missing", display_name="x",
+    ) is None
+
+
+def test_update_solution_instance_no_fields_returns_existing():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_sol_row()))
+    row = RecruitRepository(router).update_solution_instance(ctx(), instance_id="i-1")
+    assert row is not None
+    assert row.solution_id == "sol-1"

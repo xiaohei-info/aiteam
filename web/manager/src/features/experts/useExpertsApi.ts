@@ -13,6 +13,7 @@ import type {
   ExpertTemplate,
   RecruitExpertInput,
   SolutionInstance,
+  SolutionInstanceUpdateInput,
   SolutionPackage,
 } from "./types";
 
@@ -24,6 +25,10 @@ export interface ExpertsApi {
   listEmployees: () => Promise<EmployeeConfig[]>;
   updateEmployee: (employeeId: string, config: EmployeeConfig) => Promise<EmployeeConfig | null>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
+  updateSolutionInstance: (
+    instanceId: string,
+    update: SolutionInstanceUpdateInput,
+  ) => Promise<SolutionInstance | null>;
 }
 
 export function useExpertsApi(): ExpertsApi {
@@ -61,6 +66,12 @@ export function useExpertsApi(): ExpertsApi {
       async listSolutionInstances() {
         const r = await client.listGet<SolutionInstance>("/api/manager/recruit/solutions");
         return r.items;
+      },
+      updateSolutionInstance(instanceId, update) {
+        return client.patch<SolutionInstance>(
+          `/api/manager/recruit/solutions/${encodeURIComponent(instanceId)}`,
+          { body: update },
+        );
       },
     };
   }, [token, onUnauthorized]);

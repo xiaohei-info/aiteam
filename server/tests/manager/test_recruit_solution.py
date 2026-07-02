@@ -111,10 +111,32 @@ class _FakeRecruitRepo:
             status=kw.get("status", "applied"),
             expert_employee_ids=list(kw["expert_employee_ids"]),
             knowledge_refs=list(kw["knowledge_refs"]), skill_refs=list(kw["skill_refs"]),
-            default_grants_meta=kw["default_grants_meta"], template_meta=kw["template_meta"],
+            planner_prompt=kw.get("planner_prompt", ""),
+            subtask_prompt=kw.get("subtask_prompt", ""),
+            aggregate_prompt=kw.get("aggregate_prompt", ""),
+            default_grants_meta=kw.get("default_grants_meta"), template_meta=kw.get("template_meta"),
         )
         self._solutions.setdefault(ctx.tenant_id, {})[row.id] = row
         return row
+
+    def update_solution_instance(self, ctx, *, instance_id, **kw):
+        bucket = self._solutions.setdefault(ctx.tenant_id, {})
+        row = bucket.get(instance_id)
+        if row is None:
+            return None
+        import dataclasses
+        updates = {}
+        for field in ("display_name", "expert_employee_ids", "knowledge_refs",
+                      "skill_refs", "planner_prompt", "subtask_prompt",
+                      "aggregate_prompt", "status"):
+            if kw.get(field) is not None:
+                updates[field] = list(kw[field]) if field in (
+                    "expert_employee_ids", "knowledge_refs", "skill_refs",
+                ) else kw[field]
+        # Rebuild frozen dataclass with updates
+        new_row = dataclasses.replace(row, **updates) if updates else row
+        bucket[instance_id] = new_row
+        return new_row
 
     def get_solution_instance(self, ctx, *, instance_id):
         return self._solutions.get(ctx.tenant_id, {}).get(instance_id)
@@ -689,3 +711,122 @@ def test_apply_solution_honors_sequence_order_and_skips_disabled():
     slug_z = emp.get(_ctx("t-a"), employee_id=ordered_employee_ids[1]).employee_slug
     assert slug_a.endswith("_e0")
     assert slug_z.endswith("_e1")
+
+
+# ---- AITEAM-288（GH#403）：方案实例编辑配置 ----
+
+
+def test_update_solution_instance_edits_bindings_and_refs():
+    """编辑专家绑定/知识技能引用：局部更新 expert_employee_ids / knowledge_refs / skill_refs。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, _ = _build_service(catalog)
+    from manager_service.schemas import SolutionInstanceUpdate
+
+    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    inst_id = created.solution_instance.id
+    original_experts = created.solution_instance.expert_employee_ids
+
+    updated = svc.update_solution_instance(
+        _ctx("t-a"), instance_id=inst_id,
+        req=SolutionInstanceUpdate(
+            expert_employee_ids=[original_experts[0]],  # 删掉第二个专家
+            knowledge_refs=["ks-new"],
+            skill_refs=["skill-new", "skill-extra"],
+        ),
+    )
+    assert len(updated.expert_employee_ids) == 1
+    assert updated.knowledge_refs == ["ks-new"]
+    assert updated.skill_refs == ["skill-new", "skill-extra"]
+
+
+def test_update_solution_instance_edits_collab_prompts():
+    """编辑协作编排 prompts：planner / subtask / aggregate。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, _ = _build_service(catalog)
+    from manager_service.schemas import SolutionInstanceUpdate
+
+    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    inst_id = created.solution_instance.id
+
+    updated = svc.update_solution_instance(
+        _ctx("t-a"), instance_id=inst_id,
+        req=SolutionInstanceUpdate(
+            planner_prompt="拆分任务为子步骤",
+            subtask_prompt="执行子任务",
+            aggregate_prompt="汇总专家结果",
+        ),
+    )
+    assert updated.planner_prompt == "拆分任务为子步骤"
+    assert updated.subtask_prompt == "执行子任务"
+    assert updated.aggregate_prompt == "汇总专家结果"
+
+
+def test_update_solution_instance_preserves_unchanged_fields():
+    """局部更新不传的字段保持原值（None = 不写入）。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, _ = _build_service(catalog)
+    from manager_service.schemas import SolutionInstanceUpdate
+
+    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    inst_id = created.solution_instance.id
+    original_kr = created.solution_instance.knowledge_refs
+    original_sr = created.solution_instance.skill_refs
+
+    # 只改 display_name
+    updated = svc.update_solution_instance(
+        _ctx("t-a"), instance_id=inst_id,
+        req=SolutionInstanceUpdate(display_name="重命名方案"),
+    )
+    assert updated.display_name == "重命名方案"
+    assert updated.knowledge_refs == original_kr
+    assert updated.skill_refs == original_sr
+
+
+def test_update_solution_instance_member_forbidden():
+    """编辑方案实例需 owner/enterprise_admin；member → 403。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, _ = _build_service(catalog)
+    from manager_service.schemas import SolutionInstanceUpdate
+
+    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    with pytest.raises(Forbidden):
+        svc.update_solution_instance(
+            _ctx("t-a", roles=["member"]), instance_id=created.solution_instance.id,
+            req=SolutionInstanceUpdate(display_name="x"),
+        )
+
+
+def test_update_solution_instance_not_found_cross_tenant():
+    """跨租户编辑方案实例：t-a 建的，t-b 视角 → 404（D22 + RLS 语义）。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, _, _, _, _ = _build_service(catalog)
+    from manager_service.schemas import SolutionInstanceUpdate
+
+    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    with pytest.raises(NotFound):
+        svc.update_solution_instance(
+            _ctx("t-b"), instance_id=created.solution_instance.id,
+            req=SolutionInstanceUpdate(display_name="x"),
+        )
+
+
+def test_apply_solution_preserves_collab_prompts_from_package():
+    """F07 应用方案时，方案包携带的协作 prompts 落到方案实例。"""
+    catalog = FakeOperatorCatalogClient()
+    pkg = SolutionPackage(
+        solution_id="sol-prompt", version="v1", display_name="方案",
+        experts=[_expert_template()],
+        planner_prompt="plan-p", subtask_prompt="sub-p", aggregate_prompt="agg-p",
+    )
+    catalog.seed_solution(pkg)
+    svc, _, _, _, _ = _build_service(catalog)
+
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-prompt"))
+    assert result.solution_instance.planner_prompt == "plan-p"
+    assert result.solution_instance.subtask_prompt == "sub-p"
+    assert result.solution_instance.aggregate_prompt == "agg-p"
