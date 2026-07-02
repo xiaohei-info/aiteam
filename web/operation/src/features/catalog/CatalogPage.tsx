@@ -10,6 +10,7 @@ import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useCatalogApi } from "./useCatalogApi";
 import { RegisterForm } from "./RegisterForm";
+import { CatalogDetailPage } from "./CatalogDetailPage";
 import type { CatalogItem, CatalogItemType, VisibilityLabel } from "./types";
 import { visibilityLabel, labelToVisibleScope } from "./types";
 

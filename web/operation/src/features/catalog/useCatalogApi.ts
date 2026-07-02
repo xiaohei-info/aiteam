@@ -4,11 +4,12 @@
  * 路径已对齐后端 routes_catalog.py（prefix /api/operation/catalog）：
  *   GET ""                                          → 列表
  *   GET /{catalog_type}/{template_id}               → 详情
- *   POST /expert-templates                          → 注册专家模板
- *   POST /solution-templates                        → 注册行业方案
+ *   POST /expert-templates                          → 注册专家模板（完整 payload）
+ *   POST /solution-templates                        → 注册行业方案（完整 payload）
  *   POST /{catalog_type}/{template_id}/publish      → 发布
  *   POST /{catalog_type}/{template_id}/unpublish    → 下架
  *   PUT  /{catalog_type}/{template_id}/visibility   → 改可见范围
+ *   PATCH /{catalog_type}/{template_id}             → 部分更新（含 payload）
  */
 import { useCallback, useMemo } from "react";
 import { ApiError } from "@aiteam/shared";
@@ -37,6 +38,7 @@ export type UpdateExpertTemplateChanges = {
 
 export type UpdateSolutionTemplateChanges = {
   display_name?: string;
+  expert_template_ids?: string[];
   expert_bindings?: { template_id: string; sequence_no: number; enabled: boolean }[];
   knowledge_refs?: string[];
   skill_refs?: string[];
@@ -60,10 +62,23 @@ export interface CatalogApi {
   get: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   registerExpert: (input: RegisterExpertTemplate) => Promise<CatalogItem | null>;
   registerSolution: (input: RegisterSolutionTemplate) => Promise<CatalogItem | null>;
+  updateEntry: (
+    catalog_type: CatalogItemType,
+    template_id: string,
+    changes: Record<string, unknown>,
+  ) => Promise<CatalogItem | null>;
   publish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   unpublish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
-  setVisibility: (catalog_type: CatalogItemType, template_id: string, visible_scope: Record<string, unknown>) => Promise<CatalogItem | null>;
-  save: (catalog_type: CatalogItemType, template_id: string, changes: UpdateCatalogChanges) => Promise<CatalogItem | null>;
+  setVisibility: (
+    catalog_type: CatalogItemType,
+    template_id: string,
+    visible_scope: Record<string, unknown>,
+  ) => Promise<CatalogItem | null>;
+  save: (
+    catalog_type: CatalogItemType,
+    template_id: string,
+    changes: UpdateCatalogChanges,
+  ) => Promise<CatalogItem | null>;
 }
 
 export function useCatalogApi(): CatalogApi {
@@ -99,6 +114,16 @@ export function useCatalogApi(): CatalogApi {
     [client],
   );
 
+  const updateEntry = useCallback(
+    (
+      catalog_type: CatalogItemType,
+      template_id: string,
+      changes: Record<string, unknown>,
+    ): Promise<CatalogItem | null> =>
+      client.patch<CatalogItem>(`${BASE}/${catalog_type}/${template_id}`, { body: changes }),
+    [client],
+  );
+
   const publish = useCallback(
     (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
       client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, {}),
@@ -112,19 +137,39 @@ export function useCatalogApi(): CatalogApi {
   );
 
   const setVisibility = useCallback(
-    (catalog_type: CatalogItemType, template_id: string, visible_scope: Record<string, unknown>): Promise<CatalogItem | null> =>
-      client.put<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/visibility`, { body: { visible_scope } }),
+    (
+      catalog_type: CatalogItemType,
+      template_id: string,
+      visible_scope: Record<string, unknown>,
+    ): Promise<CatalogItem | null> =>
+      client.put<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/visibility`, {
+        body: { visible_scope },
+      }),
     [client],
   );
 
   const save = useCallback(
-    (catalog_type: CatalogItemType, template_id: string, changes: UpdateCatalogChanges): Promise<CatalogItem | null> =>
+    (
+      catalog_type: CatalogItemType,
+      template_id: string,
+      changes: UpdateCatalogChanges,
+    ): Promise<CatalogItem | null> =>
       client.patch<CatalogItem>(`${BASE}/${catalog_type}/${template_id}`, { body: changes }),
     [client],
   );
 
   return useMemo<CatalogApi>(
-    () => ({ list, get, registerExpert, registerSolution, publish, unpublish, setVisibility, save }),
-    [list, get, registerExpert, registerSolution, publish, unpublish, setVisibility, save],
+    () => ({
+      list,
+      get,
+      registerExpert,
+      registerSolution,
+      updateEntry,
+      publish,
+      unpublish,
+      setVisibility,
+      save,
+    }),
+    [list, get, registerExpert, registerSolution, updateEntry, publish, unpublish, setVisibility, save],
   );
 }

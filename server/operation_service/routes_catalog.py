@@ -15,6 +15,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 
 from .catalog_dependencies import get_catalog_service
 from .catalog_schemas import (
+    CatalogDetailView,
     CatalogEntryResponse,
     PublishTemplateRequest,
     RegisterExpertTemplateRequest,
@@ -126,9 +127,9 @@ async def list_catalog(
     status: CatalogStatus | None = None,
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
-) -> ListEnvelope[CatalogEntryResponse]:
-    return ListEnvelope[CatalogEntryResponse](
-        data=service.list_catalog(catalog_type=catalog_type, status=status)
+) -> ListEnvelope[CatalogDetailView]:
+    return ListEnvelope[CatalogDetailView](
+        data=service.list_entry_details(catalog_type=catalog_type, status=status)
     )
 
 
@@ -142,8 +143,8 @@ async def get_catalog_entry(
     template_id: str,
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
-) -> Envelope[CatalogEntryResponse]:
-    return Envelope[CatalogEntryResponse](data=service.get_entry(catalog_type, template_id))
+) -> Envelope[CatalogDetailView]:
+    return Envelope[CatalogDetailView](data=service.get_entry_detail(catalog_type, template_id))
 
 
 @router.patch(

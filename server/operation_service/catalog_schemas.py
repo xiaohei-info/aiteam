@@ -104,6 +104,7 @@ class UpdateExpertTemplateRequest(BaseModel):
     category_code: str | None = None
     role_name: str | None = None
 
+
 class UpdateSolutionTemplateRequest(BaseModel):
     """编辑行业方案模板（北向请求）。部分更新。"""
     model_config = ConfigDict(extra="forbid")
@@ -139,8 +140,7 @@ class CatalogEntryResponse(BaseModel):
     category_code: str = Field(default="")
     role_name: str = Field(default="")
 
-    # 以下为 payload 中可编辑字段的前端投影（对齐 UpdateExpertTemplateRequest /
-    # UpdateSolutionTemplateRequest），便于 CatalogDetailPage 编辑模式预填与回写。
+    # payload 顶层字段（对齐前端 CatalogItem 编辑模式预填与回写）。
     persona: str | None = Field(default=None, description="专家人设（仅 expert_template）")
     recommended_config: dict = Field(default_factory=dict, description="推荐配置（仅 expert_template）")
     expert_bindings: list["ExpertBinding"] | None = Field(
@@ -149,3 +149,20 @@ class CatalogEntryResponse(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="知识库引用（仅 solution_template）")
     skill_refs: list[str] = Field(default_factory=list, description="技能引用（仅 solution_template）")
     default_grants: dict | None = Field(default=None, description="默认授权（仅 solution_template）")
+
+
+# ---- 详情视图（对齐前端 CatalogItem，返回完整 payload 顶层字段）----
+# 仅在北向 GET 详情 / list 接口内使用；manager-pull 仍用 CatalogEntryResponse。
+class CatalogDetailView(CatalogEntryResponse):
+    """单目录项详情响应（含模板 payload 全量字段）。前端多 section 渲染的来源。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expert_template_ids: list[str] = Field(default_factory=list)
+    planner_prompt: str = Field(default="")
+    subtask_prompt: str = Field(default="")
+    aggregate_prompt: str = Field(default="")
+    default_kb_blueprint: dict = Field(default_factory=dict)
+    default_skill_bundle: dict = Field(default_factory=dict)
+    default_collaboration_template_ref: str | None = Field(default=None)
+    tags: list[str] = Field(default_factory=list)

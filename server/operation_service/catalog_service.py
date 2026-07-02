@@ -66,6 +66,40 @@ def _normalize_expert_bindings(
     ]
 
 
+def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
+    """Construct a CatalogDetailView from a CatalogEntry, populating all payload fields."""
+    from .catalog_schemas import CatalogDetailView
+
+    payload = entry.payload or {}
+    return CatalogDetailView(
+        catalog_type=entry.catalog_type,
+        template_id=entry.template_id,
+        version=entry.version,
+        display_name=entry.display_name,
+        status=entry.status,
+        visible_scope=entry.visible_scope,
+        default_model_json=payload.get("default_model_json", {}),
+        default_binding_json=payload.get("default_binding_json", {}),
+        prompt_pack_json=payload.get("prompt_pack_json", {}),
+        category_code=payload.get("category_code", ""),
+        role_name=payload.get("role_name", ""),
+        persona=payload.get("persona"),
+        recommended_config=payload.get("recommended_config", {}),
+        expert_bindings=payload.get("expert_bindings"),
+        knowledge_refs=payload.get("knowledge_refs", []),
+        skill_refs=payload.get("skill_refs", []),
+        default_grants=payload.get("default_grants"),
+        expert_template_ids=payload.get("expert_template_ids", []),
+        planner_prompt=payload.get("planner_prompt", ""),
+        subtask_prompt=payload.get("subtask_prompt", ""),
+        aggregate_prompt=payload.get("aggregate_prompt", ""),
+        default_kb_blueprint=payload.get("default_kb_blueprint", {}),
+        default_skill_bundle=payload.get("default_skill_bundle", {}),
+        default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
+        tags=payload.get("tags", []),
+    )
+
+
 class CatalogService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
@@ -173,6 +207,16 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         return _to_response(self._repo.get(catalog_type, template_id))
 
+
+    # ---- 详情（含 payload）----
+
+    def get_entry_detail(
+        self, catalog_type: CatalogType, template_id: str
+    ) -> CatalogDetailView:
+        """GET 详情接口返回 payload（响应反哺前端多 section 渲染）。"""
+        entry = self._repo.get(catalog_type, template_id)
+        return _to_detail_view(entry)
+
     def list_catalog(
         self,
         *,
@@ -204,6 +248,18 @@ class CatalogService:
             top_updates['payload'] = new_payload
         updated = self._repo.update(entry, **top_updates)
         return _to_response(updated)
+
+
+    def list_entry_details(
+        self,
+        *,
+        catalog_type: CatalogType | None = None,
+        status: CatalogStatus | None = None,
+    ) -> list[CatalogDetailView]:
+        return [
+            _to_detail_view(e)
+            for e in self._repo.list(catalog_type=catalog_type, status=status)
+        ]
 
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
 
