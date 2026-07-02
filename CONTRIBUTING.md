@@ -193,8 +193,6 @@ pnpm -C agent dev      # 用户端，默认 http://localhost:5173
 - **架构设计**：`docs/v1正式版本/技术设计/概要设计/00-架构总纲与裁决索引.md`（入口）
 - **后端开发**：`server/README.md`（目录结构、运行服务、测试、常见坑）
 - **前端开发**：`web/{operation,manager,agent}/README.md`（各端边界、路由、开发命令）
-- **CI 门禁**：`docs/ci/runbook.md`（本地复现 CI、覆盖率门、artifact 获取）
-- **故障排查**：`docs/ci/troubleshooting.md`（常见 CI 失败根因与处理）
 - **AI 协作指令**：`CLAUDE.md` / `AGENTS.md`（架构约束、技术决策、编码规范）
 
 ## 常见问题（FAQ）
@@ -285,9 +283,7 @@ rm -rf ~/.local/share/pnpm/store
 2. 提交时遵循约定式提交：`feat(scope): 描述` / `fix(scope): 描述`
 3. 确保所有测试通过（见"提交前检查清单"）
 4. 推送分支并创建 Pull Request
-5. **PR 合并前必须 CI 全绿**（当前私有仓 Free 计划无 branch protection，需人工/编排器确认 `gh pr checks` 全绿）
-
-详见 `docs/ci/runbook.md` 的门禁说明和覆盖率要求。
+5. **PR 合并前必须 CI 全绿**（当前私有仓 Free 计划无 branch protection，需人工/编排器确认 `gh pr checks` 全绿）。
 
 ---
 

@@ -3,6 +3,7 @@
 /.serena/
 /.playwright-mcp/
 /.sisyphus/
+/.vscode/
 /app/.serena/
 /tmux
 /.plans/
