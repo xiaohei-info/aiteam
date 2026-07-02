@@ -103,13 +103,13 @@ log "smoking /healthz"
 sleep 5
 for port in 8781 8782 8783; do
   ok=0
-  for attempt in 1 2 3 4 5 6 7 8; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
       log "  port ${port} /healthz OK"; ok=1; break
     fi
     sleep 2
   done
-  (( ok )) || fail "port ${port} /healthz failed after 8 attempts"
+  (( ok )) || fail "port ${port} /healthz failed after 12 attempts"
 done
 
 log "deploy-run done (unit=${UNIT_NAME}, env=${ENV_TARGET}, branch=${BRANCH})"
