@@ -1,117 +1,111 @@
-# deploy/ci —— PR merge 自动部署流水线
+# deploy/ci — v1 自托管部署
 
-## 文件清单
+PR merge 触发、self-hosted runner 执行的自动部署流水线。
 
-| 文件 | 用途 | 何时改 |
-|---|---|---|
-| `deploy/ci/run.sh` | 切分支 + pull --ff-only + `ctl.sh restart` + `/healthz` 冒烟 | **不动**：所有支流共用 |
-| `.github/workflows/deploy-feature-v1.0.0.yml` | `feature/v1.0.0` PR merge → taiyi 的绑定关系 | **仅**创建新支流 / 改路由时复制并改三件套 |
-| `deploy/ci/README.md` | 本手册 | 新手指引 |
+## 文件
 
-## 触发链（单线）
+- `aiteam-v1.service` — systemd unit（`Type=simple`）。由 `run.sh` 装到
+  `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
+- `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；完成
+  git pull → 条件性前端 build → 装 unit → systemctl restart → healthz + HTML smoke。
+- `.github/workflows/deploy-feature-v1.0.0.yml` — GitHub Actions workflow。
+  PR merge 到 `feature/v1.0.0` 或 `workflow_dispatch` 手动触发。
 
-```
-PR merged to feature/v1.0.0
-        │
-        ▼ on.pull_request (base.ref = feature/v1.0.0, merged == true)
-  checkout code @ merge_commit
-  write  GitHub Secret "ENV_CONTENTS_TEST" → .env.test (runner 上)
-  bash deploy/ci/run.sh --branch feature/v1.0.0 --env test
-        │
-        ▼
-  scripts/ctl.sh restart --env test   # 读 .env.test
-  smoke /healthz on 8781 / 8782 / 8783
-```
-
-## 三件套（绑定义）
-
-每个 `deploy-<branch>.yml` 把以下三处**写死**：
+## 工作原理
 
 ```
-on.pull_request.branches      例: [feature/v1.0.0]
-env.ENV_NAME                  例: test → 写 .env.test + 从 secret ENV_CONTENTS_TEST 读
-jobs.deploy.runs-on           例: taiyi (self-hosted runner label)
+PR merge → GitHub Actions → self-hosted runner(taiyi)
+  → checkout workflow source
+  → 写 DEPLOY_ROOT/.env.<env>（从 GitHub Secret 注入）
+  → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
+      → git pull --ff-only 同步部署根
+      → 条件：dist 缺失 → pnpm install && pnpm build
+      → 装 systemd unit（内容变了才 daemon-reload）
+      → systemctl restart aiteam-v1
+      → /healthz 三端冒烟 + GET / 必须是 text/html
+  → CI success
+  → runner 退出
+  → systemd (PID 1) 继续托管三端（runner 的 orphan clean-up 波及不到）
 ```
 
-分支切换就**复制 deploy-feature-v1.0.0.yml → deploy-<新分支>.yml，改这三处 + push**。
+## 新服务器接入清单（一次性）
 
-## 首次配置（每台机器一次）
-
-### 1. 安装 self-hosted runner
-
-在目标机器上（例：taiyi）：
+在作为 `runs-on` 的机器上完成一次：
 
 ```bash
-mkdir -p ~/actions-runner && cd ~/actions-runner
-curl -o actions-runner-linux-x64-<version>.tar.gz -L <url-from-github-ui>
-tar xzf actions-runner-linux-x64-<version>.tar.gz
+# 1. node >= 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
 
-# 去 repo Settings → Actions → New self-hosted runner，拿 URL + token
-./config.sh --url https://github.com/<org>/<repo> --token <REDACTED>
-
-# 让 runner reboot 后自启：
-sudo ./svc.sh install
-sudo ./svc.sh start
-sudo ./svc.sh status   # 应该显示 "Running"
+# 2. pnpm >= 11（通过 corepack，随 node 自带）
+corepack enable
+corepack prepare pnpm@11 --activate
 ```
 
-### 2. 给 runner 打 label
+然后：
 
-Settings → Actions → Runners → 找到你的 runner → Edit labels：
+```bash
+# 3. 部署根 clone 仓库（SSH 形式，origin 设 git@github.com:...）
+#    部署用户需要有 GitHub repo push/pull 权限的 SSH key。
+#    并在 GitHub repo 上添加该 key 为 deploy key。
+git clone git@github.com:OWNER/REPO.git /root/app/aiteam
+cd /root/app/aiteam
+git remote set-url origin git@github.com:OWNER/REPO.git
 
-- `taiyi`     （被 `deploy-feature-v1.0.0.yml` 引用）
-- `self-hosted`（默认）
+# 4. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 
-### 3. 在 GitHub 上配 secret
+# 5. 首跑前端 build（或触发一次 CI，CI 会条件性 build）
+cd web && pnpm install --frozen-lockfile && pnpm build
 
-Settings → Secrets and variables → Actions → New repository Secret：
-
-```
-Name:  ENV_CONTENTS_TEST
-Value: (整个 .env.test 文件的内容，包括换行 —— 原样粘贴)
-```
-
-多配几个就多几个环境的密钥：
-```
-ENV_CONTENTS_TEST   (taiyi 上的 .env.test)
-ENV_CONTENTS_DEV    (machine-a 上的 .env.dev)
-ENV_CONTENTS_ST     (machine-b 上的 .env.st)
-ENV_CONTENTS_PROD   (machine-c 上的 .env.prod)
+# 6. 注册 self-hosted runner（见 GitHub repo Settings → Actions → Runners）
+#    runner 用户在部署根所在机器执行 workflow 步骤，应有不少于部署根的可写权限。
 ```
 
-### 4. 保护规则（关键！避免 PR 合并到任意分支都跑部署）
+## 扩展更多环境/机器
 
-在部署分支的保护规则（Settings → Branches → Branch protection rules）里：
-- Pull request 合并**必须**：
-  - "Require status checks to pass before merging" 加入 `deploy / deploy (feature/v1.0.0 → taiyi / .env.test)`
-  - 这样只有绿色流水线通过后才能合并
+复制 workflow yaml，改三处：
 
-## 新增一台机器 / 新环境
+1. `on.pull_request.branches: [st-xxx/xxx]`
+2. `jobs.deploy.runs-on: <新机器的 label>`
+3. `env.DEPLOY_ROOT: /path/on/new/machine`
 
-1. 在脚本机器装 self-hosted runner + 打 label（如 `next`）
-2. 在 GitHub 上增加 secret：`ENV_CONTENTS_NEXT`
-3. 创建新的 workflow yaml（例：`deploy-next-branch-name.yml`）——复制 `deploy-feature-v1.0.0.yml`，改三件套：
+每个环境对应的 `<env>` 需要有：
 
+- 部署根机器装好 node 22 + pnpm 11 + systemd
+- `~/.ssh/` 下有 GitHub repo 的 SSH key（git pull 走 SSH，HTTPS 不缓存凭证）
+- GitHub Secret `ENV_CONTENTS_<ENV>` = 该环境的完整 `.env.<env>` 内容
+
+## 调试
+
+```bash
+# 部署根内手动跑一次（不触发 CI）
+bash deploy/ci/run.sh --branch feature/v1.0.0 --env test
+
+# 看 daemon 日志
+journalctl -f -u aiteam-v1
+
+# 看三端业务日志
+tail -f logs/{manager,operation,agent}.log
+
+# 强制重新发布（忽略 CI）
+cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh -e test
 ```
-on.pull_request.branches: [next-branch-name]
-env.ENV_NAME:             next → 写 .env.next + 从 ENV_CONTENTS_NEXT 读
-jobs.deploy.runs-on:      next (self-hosted runner label)
-```
 
-4. push。
+## 常见问题
 
-## 故障排查
+- **CI 报 `fatal: could not read Username for 'https://github.com'`**
+  部署根的 origin 走了 HTTPS，runner job 拿不到凭证。改成 SSH：
+  `cd $DEPLOY_ROOT && git remote set-url origin git@github.com:OWNER/REPO.git`
 
-| 现象 | 排查点 |
-|---|---|
-| PR merge 后 workflow 没跑 | 分支保护规则里有没有把 deploy 加入 required status checks？github 上 PR 页面下段 "checks" 栏能看到 |
-| 跑但报 `empty secret` | ENV_CONTENTS_TEST 的 secret 内容是否完整？`\n` 是否保存？`.env.test` 是否有至少一个非空行？ |
-| runner offline | `sudo ./svc.sh status`（在机器上）；UI Settings → Actions → Runners 看状态 |
-| 冒烟失败 | 在 taiyi 上 `bash scripts/ctl.sh logs --env test` 看启动错误；通常是本地 `PGPASSWORD` 与 secret 里的值不匹配（需要修改 .env.test 内容 → 改 GitHub Secret） |
-| 明文 .env 留在 runner 上 | 部署完成后残留的 `.env.{env}` 是明文——这是 runner 自己文件系统的事。若每次部署需要清理可在 run.sh 里加 `trap 'rm -f .env.${ENV_TARGET}' EXIT`；但当前保留它方便下次断电热启动 |
+- **CI 报 `dist missing` 并触发现场 build**
+  部署根被意外删掉 dist。CI 会自动本地 build；也可以提前 `cd web && pnpm build` 预防。
 
-## Secret 安全 FAQ
+- **CI 报 `pnpm not found` / `Node版本不兼容`**
+  部署根机器没装 node ≥22 或 pnpm ≥11。按清单步骤 1–2 装好。
 
-Q: `echo … > .env.xxx` 会让 secret 暴露到 job log 吗？
-
-A: **不会**。GitHub Actions 内置 secret masking：任何在 `${{ secrets.* }}` 出现过的字符串值，在 job log 里都会被 mask 成 `***`。官方声明的 mask 范围包括整个 appearances in the log output —— 所以 `cat .env.xxx` 在 job 里 `echo` 出来仍是 `***`，不会泄漏。
+- **`systemctl status` 显示 `activating (auto-restart) (exit-code 209/STDOUT)`**
+  旧 unit 里 `StandardOutput=append:/.../logs/stdout.log` 指向不存在的文件。
+  已不再使用；如仍遇到，重新 cp `deploy/ci/aiteam-v1.service` → `/etc/systemd/system/` +
+  `systemctl daemon-reload && systemctl restart aiteam-v1`。
