@@ -1,18 +1,11 @@
-# G4 — Nightly gate.
-# Runs nightly (and on dispatch) for broader, slower observation that must NOT
-# block PRs: multi-browser E2E, big-data integration, and performance timing.
-# Every job is `continue-on-error: true` so a nightly red never blocks a PR.
-#
-# Escalation: a failure that persists across 3 consecutive nightly runs is
-# upgraded to P0 and temporarily mirrored into the PR gate until fixed — see
-# docs/ci/runbook.md §"G4 连续失败升级 P0". (Non-goal: never let nightly-only
-# checks become a permanent PR-quick blocker.)
+# G4 — on-demand broad observation (原 nightly).
+# 多浏览器 E2E / 大数据集成 / 性能计时——慢、非阻断,按需手动触发。
+# 定时 cron 已移除(2026-07-02 CI 精简):当前阶段没人每天看夜跑结果,
+# 每晚 3 个重 job 纯烧分钟数;需要验证 firefox/webkit 或性能时手动 dispatch。
+# Every job is `continue-on-error: true` so a red here never blocks a PR.
 name: nightly
 
 on:
-  schedule:
-    # 18:00 UTC daily (off the :00 mark to spread load).
-    - cron: "7 18 * * *"
   workflow_dispatch:
 
 permissions:
