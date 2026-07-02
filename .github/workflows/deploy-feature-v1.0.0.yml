@@ -7,23 +7,15 @@
 #
 # 共享脚本：scripts/deploy/run.sh —— 任何分支都可复制该 yaml 并改三件套共用。
 #
-# 关键技术细节："on" 键必须加引号。某些 PyYAML 1.x 把裸 `on:` 解析成
-# YAML 1.1 布尔值 true，导致整个触发器块丢失，workflow 退化为 push 模式，
-# linter 也无法正确解析 jobs 列表。
-
-name: deploy (feature/v1.0.0 → taiyi)
+# 关键技术细节：
+#   - "on" 键必须加引号（YAML 1.1 会把裸 `on:` 解析成布尔值 true）。
+#   - 用 env.* 传参给 step（`with:` 只传字面量表达式；workflow_dispatch
+#     输入要用 `${{ github.event.inputs.* }}`，在 step 内直接引用表达式）。
+#
+name: deploy (feature/v1.0.0 -> taiyi)
 
 "on":
   workflow_dispatch:
-    inputs:
-      branch:
-        description: "branch to deploy (defaults to feature/v1.0.0)"
-        required: false
-        default: "feature/v1.0.0"
-      env:
-        description: "target env"
-        required: false
-        default: "test"
   pull_request:
     branches: [feature/v1.0.0]
     types: [closed]
@@ -32,15 +24,17 @@ permissions:
   contents: read
 
 env:
-  ENV_NAME: test
+  # runner 发给 run.sh 的分支 / 环境参数：
+  #   - workflow_dispatch: 走 inputs
+  #   - pull_request:      走 github.event.pull_request.base.ref
+  DEPLOY_BRANCH: ${{ github.event.inputs.branch || github.event.pull_request.base.ref || 'feature/v1.0.0' }}
+  DEPLOY_ENV: ${{ github.event.inputs.env || 'test' }}
   OPERATION_SYSTEM_USERNAME: sysadmin
   OPERATION_SYSTEM_PASSWORD: changeme-me
 
 jobs:
   deploy:
-    # ⚠️ job name 禁用 env 上下文——GitHub 会判整个 workflow 文件无效,
-    # 每次 push 产生 "workflow file issue" phantom failure(已两次踩坑:b1ad63b 修过一次)。
-    name: deploy (feature/v1.0.0 → taiyi / .env.test)
+    name: deploy (${{ env.DEPLOY_BRANCH }} -> taiyi / .env.${{ env.DEPLOY_ENV }})
     # workflow_dispatch runs have no pull_request.merged context,
     # so guard with event_name check; otherwise the job gets skipped.
     if: >-
@@ -52,24 +46,24 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout at merge commit
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write .env.${{ env.ENV_NAME }} from GitHub secret
+      - name: Write .env.${{ env.DEPLOY_ENV }} from GitHub secret
         shell: bash
         run: |
-          cat > ".env.${{ env.ENV_NAME }}" << 'ENVEOF'
+          cat > ".env.${{ env.DEPLOY_ENV }}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
-          if ! grep -q '[^[:space:]]' ".env.${{ env.ENV_NAME }}"; then
-            echo "::error::.env.${{ env.ENV_NAME }} is empty -- check GitHub secret ENV_CONTENTS_${{ env.ENV_NAME }}"
+          if ! grep -q '[^[:space:]]' ".env.${{ env.DEPLOY_ENV }}"; then
+            echo "::error::.env.${{ env.DEPLOY_ENV }} is empty -- check GitHub secret ENV_CONTENTS_${{ env.DEPLOY_ENV }}"
             exit 1
           fi
-          echo "wrote .env.${{ env.ENV_NAME }} ($(wc -l < ".env.${{ env.ENV_NAME }}") lines)"
+          echo "wrote .env.${{ env.DEPLOY_ENV }} ($(wc -l < ".env.${{ env.DEPLOY_ENV }}") lines)"
 
       - name: Deploy (pull + restart + /healthz smoke)
         shell: bash
         run: |
           bash scripts/deploy/run.sh \
-            --branch "${{ github.event.pull_request.base.ref }}" \
-            --env "${{ env.ENV_NAME }}"
+            --branch "${{ env.DEPLOY_BRANCH }}" \
+            --env "${{ env.DEPLOY_ENV }}"
