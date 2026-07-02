@@ -1,17 +1,27 @@
 # PR 合并到 feature/v1.0.0 时，自动部署到 taiyi（测试机）。
 #
-# 三件套（切分支时复制本 yaml 并改这三处即可）：
-#   1) on.<event>.branches      ← 触发 PR merge 的分支名（必须放在 "on" 块下）
-#   2) jobs.deploy.runs-on      ← 目标机器的 self-hosted runner label
-#   3) env.ENV_NAME             ← 环境名（对应 .env.<env> + secret ENV_CONTENTS_<ENV>）
+# 工作原理：
+#   1) actions/checkout 把仓库拉进 $DEPLOY_ROOT（持久化部署目录）
+#   2) 把 GitHub Secret 写成 $DEPLOY_ROOT/.env.<env>
+#   3) 调用 deploy/ci/run.sh：
+#        pull 目标分支最新代码 → 装 systemd unit → systemctl restart
+#        → /healthz 冒烟
+#   服务由 systemd (PID 1) 托管；runner job 结束时的 orphan clean-up 波及不到
+#   systemd-forked 的 ctl.sh 进程（系统边界），所以服务会在 job 之后继续存活。
 #
-# 共享脚本：deploy/ci/run.sh（repo 内的部署调度脚本）
+# 切分支/环境：复制本 yaml，改这三处：
+#   1) on.pull_request.branches        ← 触发 PR merge 的目标分支名
+#   2) jobs.deploy.runs-on             ← 目标机器的 self-hosted runner label
+#   3) env.DEPLOY_PATH                 ← 部署落地绝对路径（应与 systemd
+#                                         unit 里的 WorkingDirectory / ExecStart 路径对齐）
 #
 # 关键技术细节：
-#   - "on" 键必须加引号（YAML 1.1 会把裸 `on:` 解析成布尔值 true）。
+#   - "on" 键必须加引号（YAML 1.1 把裸 `on:` 解析成布尔 true）。
 #   - 用 env.* 传参给 step（`with:` 只传字面量表达式；workflow_dispatch
-#     输入要用 `${{ github.event.inputs.* }}`，在 step 内直接引用表达式）。
-#
+#     输入走 `${{ github.event.inputs.* }}`，在 step 内直接引用表达式）。
+#   - DEPLOY_BRANCH 给 run.sh/actions 用；SSH 同步那段在 taiyi 内无意义，
+#     改走 systemd + actions checkout path。
+
 name: deploy (feature/v1.0.0 -> taiyi)
 
 "on":
@@ -24,11 +34,13 @@ permissions:
   contents: read
 
 env:
-  # runner 发给 run.sh 的分支 / 环境参数：
+  # run.sh 走 env 接收分支 / 环境参数：
   #   - workflow_dispatch: 走 inputs
   #   - pull_request:      走 github.event.pull_request.base.ref
   DEPLOY_BRANCH: ${{ github.event.inputs.branch || github.event.pull_request.base.ref || 'feature/v1.0.0' }}
   DEPLOY_ENV: ${{ github.event.inputs.env || 'test' }}
+  # 持久化部署根（~Depot/.ssh 已有 .git + .venv）
+  DEPLOY_PATH: /root/app/aiteam
   OPERATION_SYSTEM_USERNAME: sysadmin
   OPERATION_SYSTEM_PASSWORD: changeme-me
 
@@ -43,14 +55,21 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true)
     runs-on: taiyi
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout
+      # 拉仓库进到持久化部署根（后面 run.sh 与 systemd unit 都以它为规范点）
+      - name: Checkout into deploy root
         uses: actions/checkout@v4
+        with:
+          path: ${{ env.DEPLOY_PATH }}
+          # 完整历史便于 git fetch --all / pull --ff-only 正常工作
+          fetch-depth: 0
 
+      # 把 .env.<env> 写到部署根（ctl.sh 从 $REPO_ROOT/.env.<env> 读）
       - name: Write .env.${{ env.DEPLOY_ENV }} from GitHub secret
         shell: bash
+        working-directory: ${{ env.DEPLOY_PATH }}
         run: |
           cat > ".env.${{ env.DEPLOY_ENV }}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
@@ -61,11 +80,24 @@ jobs:
           fi
           echo "wrote .env.${{ env.DEPLOY_ENV }} ($(wc -l < ".env.${{ env.DEPLOY_ENV }}") lines)"
 
-      - name: Deploy (pull + restart + /healthz smoke)
+      # 部署编排：同步代码 + 装 unit + systemctl restart + healthz smoke
+      - name: Deploy (pull + systemd restart + /healthz smoke)
         env:
-          VENV_BASE: /root/app/aiteam
+          DEPLOY_BRANCH: ${{ env.DEPLOY_BRANCH }}
+          DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
+          DEPLOY_ROOT: ${{ env.DEPLOY_PATH }}
         shell: bash
+        working-directory: ${{ env.DEPLOY_PATH }}
         run: |
           bash deploy/ci/run.sh \
             --branch "${{ env.DEPLOY_BRANCH }}" \
             --env "${{ env.DEPLOY_ENV }}"
+
+      - name: Smoke via systemctl status (post deploy)
+        shell: bash
+        run: |
+          systemctl status aiteam-v1 --no-pager || true
+          echo "---"
+          echo "uptime:"; uptime
+          echo "---"
+          tail -n 60 /root/app/aiteam/logs/manager.log 2>/dev/null || true

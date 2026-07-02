@@ -19,6 +19,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_ENV="dev"
 DEFAULT_DEPLOY="local"
 DEFAULT_SERVER="all"
+DEFAULT_DAEMON=0
 
 usage() {
   cat <<'EOF'
@@ -40,6 +41,7 @@ Options:
   --server <all|manager|operation|agent|postgres>
                              Which server(s) to control (default: all)
   --follow, -f               Follow logs in real-time (for logs command)
+  --daemon                   Stay in foreground watching service PIDs (systemd friendly)
 
 Examples:
   ./scripts/ctl.sh start                              # Start dev env, local mode
@@ -129,6 +131,7 @@ parse_args() {
   DEPLOY_MODE="${DEFAULT_DEPLOY}"
   SERVER="${DEFAULT_SERVER}"
   FOLLOW_LOGS=0
+  DAEMON="${DEFAULT_DAEMON}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -146,6 +149,9 @@ parse_args() {
         ;;
       --follow|-f)
         FOLLOW_LOGS=1
+        ;;
+      --daemon)
+        DAEMON=1
         ;;
       *)
         echo "[ctl] Unknown option: $1" >&2
@@ -545,6 +551,25 @@ logs_local() {
 }
 
 # 主命令分发
+# Daemon mode (systemd Type=simple 用)：启完后 shell 不退，进入 wait-loop
+# 盯三个子进程 PID；任意一个挂了 → stop_local 整体退出；收到 SIGTERM/INT
+# → stop_local 清理后 exit 0，让 systemd 正确感知停止。
+_daemon_wait_loop() {
+  trap 'stop_local 2>/dev/null || true; exit 0' SIGTERM SIGINT
+  while true; do
+    for _svc in manager operation agent; do
+      get_service_paths "${_svc}"
+      _pid="$(cat "${PID_FILE}" 2>/dev/null || echo)"
+      if [[ -n "${_pid}" ]] && ! kill -0 "${_pid}" 2>/dev/null; then
+        echo "[ctl][daemon] ${_svc} (pid ${_pid}) exited unexpectedly — tearing down" >&2
+        stop_local 2>/dev/null || true
+        exit 1
+      fi
+    done
+    sleep 2
+  done
+}
+
 main() {
   local cmd="${1:-}"
   if [[ $# -gt 0 ]]; then
@@ -575,6 +600,7 @@ main() {
       else
         start_local
       fi
+        (( DAEMON )) && _daemon_wait_loop
       ;;
     stop)
       if [[ "${DEPLOY_MODE}" == "docker" ]]; then
@@ -593,6 +619,7 @@ main() {
         sleep 1
         start_local
       fi
+        (( DAEMON )) && _daemon_wait_loop
       ;;
     status)
       if [[ "${DEPLOY_MODE}" == "docker" ]]; then

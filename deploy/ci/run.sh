@@ -1,86 +1,115 @@
 #!/usr/bin/env bash
-# v1 通用部署脚本：被所有 deploy-*.yml 共用。
+# v1 通用部署编排脚本，由 deploy-*.yml workflow 在 self-hosted runner 上调用。
 #
-# 简单语义（失败就报错，没有 fallback）：
-#   1) fetch + checkout + pull 指定分支最新代码
-#   2) soft-link 主工作树的 .venv 让 ctl.sh 能找到 Python 依赖
-#   3) 调用 scripts/ctl.sh restart --env <env>
-#   4) 对三端 /healthz 冒烟
+# 目标：PR merge → 三端常驻部署，runner job 退出不杀服务。
 #
-# 参数路径：主仓库路径 = deploy/ci/ 往上两级 (aiteam/)，ctl.sh
-# 在 aiteam/scripts/ctl.sh。.venv 用 $VENV_BASE 环境变量（绝对路径）
-# 定位；默认假设 ~/app/aiteam 主部署。
+# 机制：
+#   1) workflow 的 actions/checkout 把最新代码 clone 到 $DEPLOY_ROOT；
+#   2) 本脚本在当前目录（$DEPLOY_ROOT）里：
+#      a. git pull 最新目标分支（失败就报错，无 fallback，分支不存在让 git 报）
+#      b. 装 systemd unit 到 /etc/systemd/system/（内容未变则跳过 daemon-reload）
+#      c. systemctl enable --now 引用的 unit
+#      d. /healthz 冒烟（8781/8782/8783）
+#   3) systemd (PID 1) fork 出 ctl.sh → ctl.sh --daemon 盯三端，runner 杀不到。
 #
-# CLI: bash deploy/ci/run.sh [--branch X] [--env Y]
+# 所有"底层执行入口"统一走 scripts/ctl.sh；本脚本只做编排（pull + cp +
+# systemctl + 冒烟），不重复 ctl.sh 的实现。
+#
+# 环境变量（可由 workflow env: 注入）：
+#   DEPLOY_BRANCH  目标分支（默认 feature/v1.0.0）
+#   DEPLOY_ENV     环境（默认 test，对应 .env.<env>）
+#   DEPLOY_ROOT    部署落地（默认 /root/app/aiteam；workflow checkout path 应对齐）
 
 set -euo pipefail
 
 BRANCH="${DEPLOY_BRANCH:-feature/v1.0.0}"
 ENV_TARGET="${DEPLOY_ENV:-test}"
+UNIT_NAME="${UNIT_NAME:-aiteam-v1}"
+DEPLOY_ROOT="${DEPLOY_ROOT:-/root/app/aiteam}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VENV_BASE="${VENV_BASE:-/root/app/aiteam}"
-
-while (( $# > 0 )); do
-  case "$1" in
-    --branch=*)
-      BRANCH="${1#*=}"; shift ;;
-    --branch)
-      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
-        echo "[deploy-run][ERR] --branch requires a non-empty value" >&2; exit 2
-      fi
-      BRANCH="$2"; shift 2 ;;
-    --env=*)
-      ENV_TARGET="${1#*=}"; shift ;;
-    --env)
-      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
-        echo "[deploy-run][ERR] --env requires a non-empty value" >&2; exit 2
-      fi
-      ENV_TARGET="$2"; shift 2 ;;
-    -h|--help)
-      sed -n '2,18p' "$0"; exit 0 ;;
-    *)
-      echo "[deploy-run][ERR] unknown arg: $1" >&2; exit 2 ;;
-  esac
-done
+UNIT_SRC="${REPO_ROOT}/deploy/ci/${UNIT_NAME}.service"
 
 log()  { printf '[deploy-run][%s][%s] %s\n' "$ENV_TARGET" "$BRANCH" "$*"; }
 fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&2; exit 1; }
 
-cd "$REPO_ROOT"
+while (( $# > 0 )); do
+  case "$1" in
+    --branch=*) BRANCH="${1#*=}"; shift ;;
+    --branch)
+      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
+        echo "[deploy-run][ERR] --branch requires a non-empty value" >&2; exit 2
+      fi; BRANCH="$2"; shift 2 ;;
+    --env=*) ENV_TARGET="${1#*=}"; shift ;;
+    --env)
+      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
+        echo "[deploy-run][ERR] --env requires a non-empty value" >&2; exit 2
+      fi; ENV_TARGET="$2"; shift 2 ;;
+    --unit=*) UNIT_NAME="${1#*=}"; shift ;;
+    --unit)
+      if [[ $# -lt 2 || "$2" == -* || -z "$2" ]]; then
+        echo "[deploy-run][ERR] --unit requires a non-empty value" >&2; exit 2
+      fi; UNIT_NAME="$2"; shift 2 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "[deploy-run][ERR] unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
 
-log "fetch + checkout + pull '$BRANCH'"
-git fetch --all --prune 2>&1 || fail "git fetch failed"
-git checkout "$BRANCH" 2>&1 | tail -1 || fail "checkout '$BRANCH' failed"
-git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '$BRANCH' failed"
+log "using unit ${UNIT_NAME} (src=${UNIT_SRC})"
+[[ -f "$UNIT_SRC" ]] || fail "unit file not found: ${UNIT_SRC}"
 
-HEAD_SHORT="$(git rev-parse --short HEAD)"
+# 1) 同步目标分支最新代码
+#    actions/checkout path: $DEPLOY_ROOT 已经把代码拉到这里。
+#    但 workflow 是从 workflow_dispatch 触发时分支可能不是最新；
+#    稳妥起见在部署根做一次 fetch + checkout + pull --ff-only。
+log "fetch + checkout + pull '${BRANCH}' at ${DEPLOY_ROOT}"
+if [[ ! -d "${DEPLOY_ROOT}/.git" ]]; then
+  fail "${DEPLOY_ROOT} is not a git repository — bootstrap it first (see deploy/ci/README.md)"
+fi
+git -C "$DEPLOY_ROOT" fetch --all --prune 2>&1 || fail "git fetch failed (network?)"
+git -C "$DEPLOY_ROOT" checkout "$BRANCH" 2>&1 | tail -1 || fail "checkout '${BRANCH}' failed (branch does not exist on remote)"
+git -C "$DEPLOY_ROOT" pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '${BRANCH}' failed (diverged)"
+HEAD_SHORT="$(git -C "$DEPLOY_ROOT" rev-parse --short HEAD)"
 log "code ready @ ${HEAD_SHORT}"
 
-# 把主工作树的 .venv 软链到当前工作树仓库根，让 ctl.sh 能找到。
-# 默认读 VENV_BASE 环境变量（来自 workflow yaml），不写死。
-MAIN_VENV="${VENV_BASE}/.venv"
-if [[ ! -e "${REPO_ROOT}/.venv" && -d "$MAIN_VENV" ]]; then
-  ln -s "$MAIN_VENV" "${REPO_ROOT}/.venv"
-elif [[ ! -e "${REPO_ROOT}/.venv" ]]; then
-  log "WARN: no .venv at ${MAIN_VENV} and none in worktree  --  ctl.sh will use system python"
+# 2) 确保部署根下的 .venv 可用（ctl.sh 用 ${REPO_ROOT}/.venv 找 python）
+#    actions/checkout 默认只拉工作树，不拉 .venv；.venv 在持久化部署根里原地，
+#    所以只要检查存在即可。
+if [[ ! -e "${DEPLOY_ROOT}/.venv" ]]; then
+  fail ".venv missing at ${DEPLOY_ROOT}/.venv — run the venv bootstrap once (see deploy/ci/README.md)"
+fi
+log ".venv present at ${DEPLOY_ROOT}/.venv"
+
+# 3) 部署 systemd unit（内容变了才 daemon-reload）
+UNIT_DST="/etc/systemd/system/${UNIT_NAME}.service"
+mkdir -p /etc/systemd/system
+if ! cmp -s "$UNIT_SRC" "$UNIT_DST" 2>/dev/null; then
+  cp "$UNIT_SRC" "$UNIT_DST"
+  log "installed ${UNIT_DST} (content changed)"
+  systemctl daemon-reload >/dev/null 2>&1 || fail "systemctl daemon-reload failed"
+else
+  log "${UNIT_DST} content unchanged"
 fi
 
-log "restarting services (--env ${ENV_TARGET})"
-bash scripts/ctl.sh restart --env "$ENV_TARGET"
+# 4) 启动 / 重启 daemon（systemd 接管，runner 退出处置不到它）
+log "restarting ${UNIT_NAME}"
+systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
+if ! systemctl restart "$UNIT_NAME" 2>&1; then
+  systemctl status "$UNIT_NAME" --no-pager >&2 || true
+  fail "systemctl restart ${UNIT_NAME} failed (see status above)"
+fi
 
-log "smoking /healthz on 8781/8782/8783"
-sleep 3
+# 5) /healthz 冒烟（三端）
+log "smoking /healthz"
+sleep 5
 for port in 8781 8782 8783; do
-  for attempt in 1 2 3 4 5; do
-    if curl -fsS --max-time 5 "http://127.0.0.1:${port}/healthz" >/dev/null; then
-      log "  port ${port} /healthz OK"
-      break
-    fi
-    if [[ $attempt -eq 5 ]]; then
-      fail "port ${port} /healthz failed after 5 attempts"
+  ok=0
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+      log "  port ${port} /healthz OK"; ok=1; break
     fi
     sleep 2
   done
+  (( ok )) || fail "port ${port} /healthz failed after 8 attempts"
 done
 
-log "deploy-run done"
+log "deploy-run done (unit=${UNIT_NAME}, env=${ENV_TARGET}, branch=${BRANCH})"

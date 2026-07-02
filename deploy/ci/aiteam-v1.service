@@ -1,0 +1,27 @@
+[Unit]
+Description=aiteam v1 three-tier (operation/manager/agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/app/aiteam
+ExecStart=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh start --env test --daemon
+ExecStop=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh stop --env test
+ExecReload=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh restart --env test --daemon
+Environment=PATH=/root/app/aiteam/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/root/app/aiteam/logs/aiteam-v1.stdout.log
+StandardError=append:/root/app/aiteam/logs/aiteam-v1.stderr.log
+SyslogIdentifier=aiteam-v1
+
+# hardening
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
