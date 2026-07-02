@@ -126,3 +126,5 @@ MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计�
 # e2e test marker 2 (will be reverted after pipeline validated)
 
 # DEPLOY_PIPELINE_TEST_3 20260702T021150Z
+
+# E2E_PIPELINE_TEST_4 20260702T021922Z
