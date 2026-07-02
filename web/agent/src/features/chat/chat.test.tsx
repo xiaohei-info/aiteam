@@ -137,7 +137,7 @@ describe("ConversationList", () => {
     fireEvent.click(screen.getByRole("button", { name: /会话A/ }));
 
     await waitFor(() => {
-      expect(screen.getByRole("log")).toBeInTheDocument(); // chat-timeline role="log"
+      expect(screen.getByRole("log", { name: "对话时间线" })).toBeInTheDocument(); // TerminalPanel 也有 role="log"，按 name 消歧
     });
   });
 });

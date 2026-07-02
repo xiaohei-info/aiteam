@@ -79,7 +79,7 @@ def test_member_crud_with_roles_and_departments(two_tenants, migrated_db, admin_
     from shared.contracts.enums import EnterpriseRole
 
     member = member_svc.create_member(ctx, MemberCreate(
-        account=phone, initial_password="pw123456", display_name="alice",
+        account=phone, initial_password="Pw123456!", display_name="alice",
         roles=[EnterpriseRole.MEMBER], department_ids=[dept.id],
     ))
     assert "member" in member.roles
@@ -116,7 +116,7 @@ def test_grant_create_update_revoke(two_tenants, migrated_db, admin_url):
     from shared.contracts.enums import EnterpriseRole
 
     member = member_svc.create_member(ctx, MemberCreate(
-        account=phone, initial_password="pw123456", roles=[EnterpriseRole.MEMBER],
+        account=phone, initial_password="Pw123456!", roles=[EnterpriseRole.MEMBER],
     ))
 
     # 建授权：expert e1 → 部门 g1 + 成员
@@ -234,7 +234,7 @@ def test_member_cross_tenant_isolation(two_tenants, migrated_db, admin_url):
 
     phone = f"137{uuid.uuid4().hex[:8]}"
     member = member_svc_a.create_member(ctx_a, MemberCreate(
-        account=phone, initial_password="pw123456",
+        account=phone, initial_password="Pw123456!",
         roles=[EnterpriseRole.MEMBER], display_name="a-only",
     ))
 

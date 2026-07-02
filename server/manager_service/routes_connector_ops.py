@@ -65,12 +65,14 @@ def build_connector_ops_router(verifier) -> APIRouter:
     @router.post("/{connector_id}/test", summary="本地校验连接器", operation_id="manager_connector_test")
     async def test_connector(
         connector_id: str,
-        body: ConnectorTestIn,
         request: Request,
+        # body 可省略（字段全可选，默认按已存配置本地校验）——必填会破坏空 POST 契约。
+        body: ConnectorTestIn | None = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorTestResult]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
+        body = body or ConnectorTestIn()
         data = svc.test_connector(
             ctx, connector_id,
             auth_scheme=body.auth_scheme,

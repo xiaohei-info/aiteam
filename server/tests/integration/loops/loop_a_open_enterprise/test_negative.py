@@ -35,7 +35,7 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
         json={
             "tenant_id": fake_tenant_id,
             "owner_phone": "13800001111",
-            "bootstrap_secret": "some-secret",
+            "bootstrap_secret": "Some-secret1",
             "must_reset": True,
         },
         headers=service_token_headers,
@@ -78,7 +78,7 @@ def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
         json={
             "tenant_id": tenant_b,
             "owner_phone": phone,
-            "bootstrap_secret": "cross-secret",
+            "bootstrap_secret": "Cross-secret1",
             "must_reset": True,
         },
         headers=service_token_headers,
@@ -351,7 +351,7 @@ def test_owner_reset_wrong_tenant_id(
             "tenant_id": wrong_tenant,
             "account": phone,
             "old_password": bootstrap_pw,
-            "new_password": "new-pw-123",
+            "new_password": "New-pw-123",
         },
     )
     assert r.status_code == 401, (
@@ -389,7 +389,7 @@ def _provision_for_negative(tenant_scope, service_token_headers):
     assert r1.status_code == 201
 
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_pw = f"boot-{uuid.uuid4().hex[:8]}"
+    bootstrap_pw = f"Boot!1-{uuid.uuid4().hex[:8]}"
     r2 = client.post(
         "/api/manager/owner-bootstrap",
         json={
@@ -436,13 +436,13 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
     assert r1.status_code == 201
 
     phone_a = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bpw_a = f"boot-{uuid.uuid4().hex[:8]}"
+    bpw_a = f"Boot!1-{uuid.uuid4().hex[:8]}"
     client.post(
         "/api/manager/owner-bootstrap",
         json={"tenant_id": tid_a, "owner_phone": phone_a, "bootstrap_secret": bpw_a, "must_reset": True},
         headers=service_token_headers,
     )
-    new_pw_a = f"np-{uuid.uuid4().hex[:8]}"
+    new_pw_a = f"Np!1-{uuid.uuid4().hex[:8]}"
     r_reset = client.post(
         "/api/auth/owner-reset",
         json={"tenant_id": tid_a, "account": phone_a, "old_password": bpw_a, "new_password": new_pw_a},
@@ -467,7 +467,7 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
         headers=service_token_headers,
     )
     phone_b = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bpw_b = f"boot-{uuid.uuid4().hex[:8]}"
+    bpw_b = f"Boot!1-{uuid.uuid4().hex[:8]}"
     client.post(
         "/api/manager/owner-bootstrap",
         json={"tenant_id": tid_b, "owner_phone": phone_b, "bootstrap_secret": bpw_b, "must_reset": True},

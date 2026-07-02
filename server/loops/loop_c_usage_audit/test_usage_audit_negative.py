@@ -49,7 +49,7 @@ def test_outbox_upload_failure_leaves_pending_retry_and_does_not_block_run():
 
     run = asyncio.run(mainline.start_run(conv.id))
     # 本地执行成功——与上报副链解耦。
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     # usage 已入 outbox（pending）。
     assert len(usage_service.pending()) == 1
 
@@ -78,7 +78,7 @@ def test_usage_recorder_exception_does_not_block_local_run():
     conv = mainline.create_conversation()
     mainline.add_message(conv.id, role=MessageRole.USER, content="hi")
     run = asyncio.run(mainline.start_run(conv.id))
-    assert run.status is RunStatus.COMPLETED  # 副链失败不阻断主链
+    assert run.status is RunStatus.SUCCEEDED  # 副链失败不阻断主链
 
 
 # ---- quota soft/hard 不阻断本地 run（D24）----
@@ -114,7 +114,7 @@ def test_quota_soft_default_does_not_block_run():
     mainline = build_mainline_service(executor=FakeExecutor(), driver=FakeDriver(), tenant_id="t-1")
     conv = mainline.create_conversation()
     mainline.add_message(conv.id, role=MessageRole.USER, content="go")
-    assert asyncio.run(mainline.start_run(conv.id)).status is RunStatus.COMPLETED
+    assert asyncio.run(mainline.start_run(conv.id)).status is RunStatus.SUCCEEDED
 
 
 def test_quota_hard_emits_block_suggestion_but_still_no_lease():
@@ -141,7 +141,7 @@ def test_quota_hard_emits_block_suggestion_but_still_no_lease():
     mainline = build_mainline_service(executor=FakeExecutor(), driver=FakeDriver(), tenant_id="t-1")
     conv = mainline.create_conversation()
     mainline.add_message(conv.id, role=MessageRole.USER, content="go")
-    assert asyncio.run(mainline.start_run(conv.id)).status is RunStatus.COMPLETED
+    assert asyncio.run(mainline.start_run(conv.id)).status is RunStatus.SUCCEEDED
 
 
 # ---- D13 红线：消费端拒绝会话内容 ----

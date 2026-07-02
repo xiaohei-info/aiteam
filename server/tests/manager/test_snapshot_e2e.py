@@ -134,7 +134,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     # owner 建配置（owner 用真 app_user id：先建一个 owner 成员，token 主体须 == member_id）
     ctx_a = TenantContext(tenant_id=tid_a, user_id=str(uuid.uuid4()), roles=["owner"])
     owner = member_svc.create_member(ctx_a, MemberCreate(
-        account=f"owner_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
+        account=f"owner_{uuid.uuid4().hex[:8]}", initial_password="Pw123456!",
         display_name="owner", roles=[EnterpriseRole.OWNER],
     ))
     owner_tok = _token(tid_a, ["owner"], user_id=owner.id, admin_url=admin_url)
@@ -168,11 +168,11 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
 
     # 建两个成员：granted（授权该专家）/ ungranted（未授权）
     granted = member_svc.create_member(ctx_a, MemberCreate(
-        account=f"g_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
+        account=f"g_{uuid.uuid4().hex[:8]}", initial_password="Pw123456!",
         display_name="granted", roles=[EnterpriseRole.MEMBER],
     ))
     ungranted = member_svc.create_member(ctx_a, MemberCreate(
-        account=f"u_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
+        account=f"u_{uuid.uuid4().hex[:8]}", initial_password="Pw123456!",
         display_name="ungranted", roles=[EnterpriseRole.MEMBER],
     ))
     grant_svc.create_grant(ctx_a, MemberGrantCreate(
@@ -214,7 +214,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     # 跨租户：t-b owner 拉 t-a 的 employee 快照 → RLS 不可见 → 404
     ctx_b = TenantContext(tenant_id=tid_b, user_id=str(uuid.uuid4()), roles=["owner"])
     owner_b = member_svc.create_member(ctx_b, MemberCreate(
-        account=f"ownerb_{uuid.uuid4().hex[:8]}", initial_password="pw123456",
+        account=f"ownerb_{uuid.uuid4().hex[:8]}", initial_password="Pw123456!",
         display_name="owner-b", roles=[EnterpriseRole.OWNER],
     ))
     owner_b_tok = _token(tid_b, ["owner"], user_id=owner_b.id, admin_url=admin_url)

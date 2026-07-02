@@ -200,7 +200,7 @@ def build_employee_router(verifier) -> APIRouter:
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope["EmployeeLifecycleOptionsOut"]:
+    ) -> Envelope[EmployeeLifecycleOptionsOut]:
         svc = _service(request)
         row = svc.get(tenant_context_from(claims), employee_id=employee_id)
         from shared.contracts.enums import EmployeeStatus

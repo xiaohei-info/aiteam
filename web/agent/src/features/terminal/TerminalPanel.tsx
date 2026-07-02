@@ -83,7 +83,7 @@ export function TerminalPanel({ client, conversationId, refreshSignal = 0 }: Ter
       abortRef.current = controller;
 
       try {
-        const { success, err } = await executeCommand(
+        const { success, error: execError } = await executeCommand(
           {
             command: cmd,
             conversationId,
@@ -101,13 +101,13 @@ export function TerminalPanel({ client, conversationId, refreshSignal = 0 }: Ter
         );
         if (success) {
           setRunState("completed");
-        } else if (err === "cancelled") {
+        } else if (execError === "cancelled") {
           setRunState("cancelled");
           pushLine("system", "(已取消)");
         } else {
           setRunState("error");
-          setError(err ?? "命令执行失败");
-          if (err) pushLine("system", "Error: " + err);
+          setError(execError ?? "命令执行失败");
+          if (execError) pushLine("system", "Error: " + execError);
         }
       } catch (err) {
         if ((err as Error)?.name === "AbortError") {

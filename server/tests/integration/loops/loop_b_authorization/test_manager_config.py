@@ -95,13 +95,13 @@ def test_manager_config_owner_create_employee_and_grant_to_member_then_pull_auth
     # 建 owner 成员（app_user）
     o_phone = f"139{uuid.uuid4().hex[:8]}"
     owner_mem = msvc.create_member(owner_ctx, MemberCreate(
-        account=o_phone, initial_password="pw123456", display_name="owner", roles=[EnterpriseRole.OWNER],
+        account=o_phone, initial_password="Pw123456!", display_name="owner", roles=[EnterpriseRole.OWNER],
         must_reset=False,
     ))
     # 建 member 成员
     m_phone = f"139{uuid.uuid4().hex[:6]}"
     member = msvc.create_member(owner_ctx, MemberCreate(
-        account=m_phone, initial_password="pw123456", display_name="alice", roles=[EnterpriseRole.MEMBER],
+        account=m_phone, initial_password="Pw123456!", display_name="alice", roles=[EnterpriseRole.MEMBER],
         department_ids=[dept.id],
         must_reset=False,
     ))
@@ -359,7 +359,7 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
 
     ctx = _tenant_ctx(tid, ["owner"])
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"139{uuid.uuid4().hex[:8]}", initial_password="pw123456",
+        account=f"139{uuid.uuid4().hex[:8]}", initial_password="Pw123456!",
         display_name="recruiter", roles=[EnterpriseRole.OWNER], must_reset=False,
     ))
 

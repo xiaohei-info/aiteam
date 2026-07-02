@@ -138,7 +138,7 @@ test.describe("ServiceToken 合法访问", () => {
         data: {
           tenant_id: tenantId,
           owner_phone: "13800000001",
-          bootstrap_secret: "test-bootstrap-secret",
+          bootstrap_secret: "Test-bootstrap-secret1",
           must_reset: true,
         },
         headers: svcHeaders(),

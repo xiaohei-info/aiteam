@@ -41,7 +41,7 @@ def _client(db_url):
 
 def _fake_service(**overrides):
     svc = MagicMock()
-    base = dict(employee_id="emp-1", employee_slug="exp-1", version=1, display_name="专家A")
+    base = dict(employee_id="emp-1", employee_slug="exp-1", version=1, display_name="专家A", status="draft")
     base.update(overrides)
     out = EmployeeConfigOut(**base)
     svc.create.return_value = out

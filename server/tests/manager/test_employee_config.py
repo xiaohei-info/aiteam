@@ -78,6 +78,7 @@ class _FakeRepo:
             runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
+            status="draft",
         )
         self._bucket(ctx)[row.employee_id] = row
         return row
@@ -103,7 +104,8 @@ class _FakeRepo:
             runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"],
-            version=old.version + 1,
+            version=old.version + 1, status=old.status,
+            archive_reason=old.archive_reason, archived_at=old.archived_at,
         )
         b[employee_id] = row
         return row

@@ -53,7 +53,7 @@ def _member_writes(svc: MemberDeptService):
         lambda c: svc.create_department(c, DepartmentCreate(department_slug="d", display_name="D")),
         lambda c: svc.update_department(c, "d1", DepartmentUpdate(display_name="X")),
         lambda c: svc.delete_department(c, "d1"),
-        lambda c: svc.create_member(c, MemberCreate(account="13800000000", initial_password="pw123456")),
+        lambda c: svc.create_member(c, MemberCreate(account="13800000000", initial_password="Pw123456!")),
         lambda c: svc.update_member(c, "m1", MemberUpdate(display_name="X")),
         lambda c: svc.delete_member(c, "m1"),
     ]

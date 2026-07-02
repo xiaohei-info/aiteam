@@ -181,7 +181,7 @@ def test_owner_bootstrap_creates_identity(
 
     # F02
     owner_phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_secret = f"bs-{uuid.uuid4().hex[:12]}"
+    bootstrap_secret = f"Bs!1-{uuid.uuid4().hex[:12]}"
     r2 = client.post(
         "/api/manager/owner-bootstrap",
         json={
@@ -230,7 +230,7 @@ def test_owner_bootstrap_idempotent(
 
     # F02 第一次
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bs = f"bs-{uuid.uuid4().hex[:12]}"
+    bs = f"Bs!1-{uuid.uuid4().hex[:12]}"
     r2a = client.post(
         "/api/manager/owner-bootstrap",
         json={"tenant_id": new_tenant_id, "owner_phone": phone, "bootstrap_secret": bs, "must_reset": True},
@@ -301,7 +301,7 @@ def test_full_provision_chain_owner_whoami_returns_correct_tenant(
 
     # F02: bootstrap owner
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_pw = f"boot-{uuid.uuid4().hex[:8]}"
+    bootstrap_pw = f"Boot!1-{uuid.uuid4().hex[:8]}"
     r2 = client.post(
         "/api/manager/owner-bootstrap",
         json={
@@ -320,7 +320,7 @@ def test_full_provision_chain_owner_whoami_returns_correct_tenant(
     with pytest.raises(Forbidden):
         service.login(LoginInput(tenant_id=new_tenant_id, account=phone, password=bootstrap_pw))
 
-    new_pw = f"new-{uuid.uuid4().hex[:8]}"
+    new_pw = f"New!1-{uuid.uuid4().hex[:8]}"
     result = service.owner_reset(
         OwnerResetInput(tenant_id=new_tenant_id, account=phone, old_password=bootstrap_pw, new_password=new_pw)
     )

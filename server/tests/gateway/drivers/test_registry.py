@@ -11,8 +11,11 @@ ALL_DRIVERS = list(DRIVER_REGISTRY.values())
 
 
 def test_registry_covers_first_batch_runtimes():
-    # 06 §7.3 首批 driver 全部登记。
-    assert set(DRIVER_REGISTRY) == {"hermes", "codex", "claude_code", "opencode", "openclaw"}
+    # 06 §7.3 首批 driver + terminal 一次性命令执行（issue #415）
+    # + fake（无真实 runtime 的本地 smoke/演示，d32987b 刻意注册）全部登记。
+    assert set(DRIVER_REGISTRY) == {
+        "hermes", "codex", "claude_code", "opencode", "openclaw", "terminal", "fake",
+    }
 
 
 def test_get_driver_returns_instance():
@@ -57,12 +60,26 @@ def test_all_drivers_filter_capability_bypass_in_custom_args():
 
 
 def test_all_drivers_block_workdir_escape_and_permission_bypass():
-    """红线（§13）：custom_args 不得突破工作目录隔离 / 绕过工具权限收口。"""
+    """红线（§13）：custom_args 不得突破工作目录隔离 / 绕过工具权限收口。
+
+    terminal 除外：其 custom_args[0] 语义是"待执行命令字符串"而非 CLI flag，
+    flag 过滤对它是假安全——隔离由 TerminalExecutor 在进程层兜底
+    （per-run cwd + env 白名单 + 超时看门狗，见 agent_gateway/terminal.py）。
+    """
     escalations = ["--add-dir", "/etc", "--dangerously-skip-permissions", "--allowedTools", "X"]
     for cls in ALL_DRIVERS:
+        if cls.runtime_name == "terminal":
+            continue
         cmd = cls().build_command(RunSpec(custom_args=escalations))
         for danger in ("--add-dir", "/etc", "--dangerously-skip-permissions", "--allowedTools"):
             assert danger not in cmd, (cls.runtime_name, danger)
+
+
+def test_terminal_driver_confines_command_to_bash_argv():
+    """terminal 的隔离契约：命令只作为 bash -c 的单一参数，不拼接、不透传多余 argv。"""
+    d = get_driver("terminal")
+    cmd = d.build_command(RunSpec(custom_args=["echo hi", "--add-dir", "/etc"]))
+    assert cmd == ["/bin/bash", "-c", "echo hi"]
 
 
 def test_codex_blocks_arbitrary_config_override_via_custom_args():

@@ -32,6 +32,8 @@ export function KnowledgePage(): ReactNode {
   const [newId, setNewId] = useState(""); const [newName, setNewName] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 文档管理抽屉：当前打开文档面板的知识空间（null=关闭）。
+  const [docSpaceId, setDocSpaceId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);

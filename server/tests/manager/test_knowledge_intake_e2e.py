@@ -107,7 +107,7 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     assert r.status_code == 404
 
 
-def test_upload_empty_returns_400(migrated_db, admin_url, two_tenants):
+def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id="oa", admin_url=admin_url)
@@ -117,7 +117,8 @@ def test_upload_empty_returns_400(migrated_db, admin_url, two_tenants):
         files={"file": ("empty.txt", b"", "text/plain")},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
-    assert r.status_code == 400, r.text
+    # 统一错误模型（02）：输入校验失败 = 422 validation_error（shared.errors.ValidationProblem）。
+    assert r.status_code == 422, r.text
 
 
 def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):

@@ -68,7 +68,7 @@ def _build_manager_app(db_url: str, admin_url: str) -> TestClient:
 def _create_member(msvc, ctx, phone, display_name, roles, *, must_reset=False):
     from manager_service.schemas import MemberCreate
     return msvc.create_member(ctx, MemberCreate(
-        account=phone, initial_password="pw123456", display_name=display_name,
+        account=phone, initial_password="Pw123456!", display_name=display_name,
         roles=roles, must_reset=must_reset,
     ))
 

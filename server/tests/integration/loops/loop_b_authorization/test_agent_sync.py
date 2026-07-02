@@ -194,7 +194,7 @@ def test_agent_sync_grants_pull_lands_local_projection(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"139{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="alice",
+        account=f"139{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="alice",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -258,7 +258,7 @@ def test_agent_sync_freeze_snapshot_via_manager_http_then_local_loadable(
     ctx = _tenant_ctx(tid, ["owner"])
 
     owner_mem = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="owner",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="owner",
         roles=[EnterpriseRole.OWNER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -318,11 +318,11 @@ def test_agent_sync_local_only_sees_granted_experts(
     ctx = _tenant_ctx(tid, ["owner"])
 
     g_member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="granted",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="granted",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     ug_member = msvc.create_member(ctx, MemberCreate(
-        account=f"139{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="ungranted",
+        account=f"139{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="ungranted",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -374,7 +374,7 @@ def test_agent_sync_offline_degradation_projection_intact(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="m",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="m",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)

@@ -112,7 +112,7 @@ def test_revocation_grants_sync_projection_removed_after_revoke(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="m",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="m",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -165,7 +165,7 @@ def test_revocation_frozen_snapshot_still_loadable_after_revoke(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="m",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="m",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -227,7 +227,7 @@ def test_revocation_new_freeze_rejected_after_revoke(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="m",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="m",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -288,7 +288,7 @@ def test_revocation_regrant_after_employee_update_returns_new_version(
     ctx = _tenant_ctx(tid, ["owner"])
 
     member = msvc.create_member(ctx, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="m",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="m",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)
@@ -304,9 +304,11 @@ def test_revocation_regrant_after_employee_update_returns_new_version(
 
     # 1) 先 sync → 持 version=1
     svc.sync(tid, member.id)
-    # 2) 撤销 + 更新 employee（版本变更）
+    # 2) 撤销 + 更新 employee（版本变更）。注意必须真改值：触发器只在配置列
+    # IS DISTINCT FROM 时推进 version（0014/0017 口径，no-op update 不算变更）。
     gsvc.delete_grant(ctx, g.id)
-    updated = esvc.update(ctx, body, employee_id=e.employee_id)
+    body2 = EmployeeConfigIn(display_name="版本测试v2", model_policy=ModelPolicy(model="m"), runtime_policy=RuntimePolicy())
+    updated = esvc.update(ctx, body2, employee_id=e.employee_id)
     assert str(updated.version) == "2"
     # 3) 重建 grant
     gsvc.create_grant(ctx, MemberGrantCreate(
@@ -352,7 +354,7 @@ def test_revocation_cross_tenant_revoke_only_affects_own_tenant(
     # tenant A: member + employee + grant
     ctx_a = _tenant_ctx(tid_a, ["owner"])
     member_a = msvc.create_member(ctx_a, MemberCreate(
-        account=f"138{uuid.uuid4().hex[:8]}", initial_password="pw123456", display_name="ma",
+        account=f"138{uuid.uuid4().hex[:8]}", initial_password="Pw123456!", display_name="ma",
         roles=[EnterpriseRole.MEMBER], must_reset=False,
     ))
     esvc = build_employee_config_service(router)

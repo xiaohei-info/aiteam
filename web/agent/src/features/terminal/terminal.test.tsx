@@ -7,7 +7,6 @@
  * 3. failure path: non-zero exit -> stderr echoed + error status + Error line
  * 4. cancel path: click cancel -> aborted -> cancelled status
  * 5. unauthenticated guard: no session -> render nothing
- * 6. empty command: execute button disabled
  */
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -18,11 +17,11 @@ import { AgentApiClient } from "../../lib/api-client";
 
 const convId = "conv-terminal-test";
 
-function sseBlock(eventName, data) {
+function sseBlock(eventName: string, data: unknown): string {
   return "event: " + eventName + "\ndata: " + JSON.stringify(data) + "\n\n";
 }
 
-function helloEvents() {
+function helloEvents(): string {
   return [
     sseBlock("terminal.event", { type: "command_started", run_id: "term-x", source: "terminal", timestamp: "x", payload: { command: "echo hi", started_at: "x" } }),
     sseBlock("terminal.event", { type: "command_output", run_id: "term-x", source: "terminal", timestamp: "x", payload: { stream: "stdout", data: "hello world" } }),
@@ -30,7 +29,7 @@ function helloEvents() {
   ].join("");
 }
 
-function failEvents() {
+function failEvents(): string {
   return [
     sseBlock("terminal.event", { type: "command_started", run_id: "term-x", source: "terminal", timestamp: "x", payload: { command: "boom", started_at: "x" } }),
     sseBlock("terminal.event", { type: "command_output", run_id: "term-x", source: "terminal", timestamp: "x", payload: { stream: "stderr", data: "boom" } }),
@@ -38,22 +37,44 @@ function failEvents() {
   ].join("");
 }
 
-function makeReader(body) {
-  const bytes = new TextEncoder().encode(body);
-  let offset = 0;
-  const stream = new ReadableStream({ pull(controller) { if (offset >= bytes.length) { controller.close(); return; } controller.enqueue(bytes.slice(offset)); offset = bytes.length; } });
-  return stream.getReader();
+/**
+ * 构造假 fetch：body 是发完 `body` 文本后（hang=false）关闭、或保持挂起（hang=true）
+ * 的 SSE 流；接到 AbortSignal 时把流置错为 AbortError，模拟真 fetch 的取消语义。
+ */
+function mockFetch(body: string, opts: { hang?: boolean } = {}): typeof fetch {
+  return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const bytes = new TextEncoder().encode(body);
+    let sent = false;
+    let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        ctrl = c;
+      },
+      pull(c) {
+        if (!sent && bytes.length > 0) {
+          c.enqueue(bytes);
+          sent = true;
+          return;
+        }
+        if (!opts.hang) c.close();
+      },
+    });
+    init?.signal?.addEventListener("abort", () => {
+      try {
+        ctrl?.error(new DOMException("The operation was aborted.", "AbortError"));
+      } catch {
+        /* stream already closed */
+      }
+    });
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "Content-Type": "text/event-stream" }),
+      body: stream,
+      json: async () => ({}),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
 }
-
-function mockFetch(reader) {
-  return vi.fn(async (_url, init) => ({
-    ok: true, status: 200,
-    headers: (() => { const h = new Headers(); h.set("Content-Type", "text/event-stream"); return h; })(),
-    body: reader,
-    json: async () => ({}),
-  }));
-}
-
 
 function loginStorage() {
   const claims = { user_id: "u1", tenant_id: "t1", enterprise_id: null, roles: ["member"], exp: 9999999999 };
@@ -66,17 +87,15 @@ function clearStorage() {
   localStorage.removeItem("aiteam.agent.claims");
 }
 
-function renderPanel(opts) {
-  opts = opts || {};
+function renderPanel(opts: { fetchImpl?: typeof fetch } = {}) {
   const client = new AgentApiClient();
-  const fetchImpl = opts.fetchImpl || mockFetch(makeReader(""));
+  vi.stubGlobal("fetch", opts.fetchImpl ?? mockFetch(""));
   const utils = render(
     <AppProvider>
       <MemoryRouter>
         <TerminalPanel client={client} conversationId={convId} />
       </MemoryRouter>
     </AppProvider>,
-    { fetchImpl }
   );
   return Object.assign({}, utils, { client });
 }
@@ -101,8 +120,7 @@ describe("TerminalPanel", () => {
 
   it("main path: echoes stdout and shows completed", async () => {
     loginStorage();
-    const fetchImpl = mockFetch(makeReader(helloEvents()));
-    renderPanel({ fetchImpl });
+    renderPanel({ fetchImpl: mockFetch(helloEvents()) });
     const input = screen.getByLabelText("命令输入");
     fireEvent.change(input, { target: { value: "echo hi" } });
     fireEvent.click(screen.getByRole("button", { name: /执行/i }));
@@ -113,19 +131,19 @@ describe("TerminalPanel", () => {
 
   it("failure path: echoes stderr + error status + error line", async () => {
     loginStorage();
-    const fetchImpl = mockFetch(makeReader(failEvents()));
-    renderPanel({ fetchImpl });
+    renderPanel({ fetchImpl: mockFetch(failEvents()) });
     fireEvent.change(screen.getByLabelText("命令输入"), { target: { value: "boom" } });
     fireEvent.click(screen.getByRole("button", { name: /执行/i }));
     await waitFor(() => expect(screen.getByText("error")).toBeInTheDocument());
-    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    // "$ boom"（命令回显）与 "boom"（stderr）都在——精确断言 stderr 行。
+    expect(screen.getByText("boom")).toBeInTheDocument();
+    // 错误信息出现在系统行 + error 状态区两处，用 AllBy 断言至少一处。
+    expect(screen.getAllByText(/exit code 7/).length).toBeGreaterThan(0);
   });
 
   it("cancel path: abort -> cancelled status", async () => {
     loginStorage();
-    const reader = new ReadableStream({ pull() {} }).getReader();
-    const fetchImpl = mockFetch(reader);
-    renderPanel({ fetchImpl });
+    renderPanel({ fetchImpl: mockFetch("", { hang: true }) });
     fireEvent.change(screen.getByLabelText("命令输入"), { target: { value: "sleep 10" } });
     fireEvent.click(screen.getByRole("button", { name: /执行/i }));
     await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument());

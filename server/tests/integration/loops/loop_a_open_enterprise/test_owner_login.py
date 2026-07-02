@@ -40,7 +40,7 @@ def _provision_owner_for_test(tenant_scope, service_token_headers):
 
     # F02
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_pw = f"boot-{uuid.uuid4().hex[:8]}"
+    bootstrap_pw = f"Boot!1-{uuid.uuid4().hex[:8]}"
     r2 = client.post(
         "/api/manager/owner-bootstrap",
         json={
@@ -104,7 +104,7 @@ def test_owner_reset_then_login_success(
     """
     tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
 
-    new_pw = f"np-{uuid.uuid4().hex[:8]}"
+    new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     r = _client.post(
         "/api/auth/owner-reset",
         json={"tenant_id": tid, "account": phone, "old_password": bootstrap_pw, "new_password": new_pw},
@@ -147,7 +147,7 @@ def test_old_bootstrap_invalid_after_reset(
     """
     tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
 
-    new_pw = f"np-{uuid.uuid4().hex[:8]}"
+    new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     # 重置
     r = _client.post(
         "/api/auth/owner-reset",
@@ -186,7 +186,7 @@ def test_repeated_reset_login_cycle(
 
     current_pw = bootstrap_pw
     for i in range(2):
-        new_pw = f"np-{i}-{uuid.uuid4().hex[:6]}"
+        new_pw = f"Np!1-{i}-{uuid.uuid4().hex[:6]}"
         r = _client.post(
             "/api/auth/owner-reset",
             json={"tenant_id": tid, "account": phone, "old_password": current_pw, "new_password": new_pw},
@@ -231,7 +231,7 @@ def test_owner_whoami_after_login(
     """
     tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
 
-    new_pw = f"np-{uuid.uuid4().hex[:8]}"
+    new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     # 重置
     r = _client.post(
         "/api/auth/owner-reset",
@@ -329,7 +329,7 @@ def test_owner_reset_wrong_old_password_returns_401(tenant_scope, service_token_
             "tenant_id": tid,
             "account": phone,
             "old_password": "wrong-old",
-            "new_password": "new-one-123",
+            "new_password": "New-one-123",
         },
     )
     assert r.status_code == 401

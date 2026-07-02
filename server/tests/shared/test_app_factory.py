@@ -75,8 +75,13 @@ def _dist_dir():
 
 
 def test_mount_frontend_serves_spa(_dist_dir):
-    """有 dist 产物时 mount_frontend 挂载静态资源 + SPA 回退。"""
+    """有 dist 产物时 mount_frontend 挂载静态资源 + SPA 回退。
+
+    不比对固定占位文本：dist 可能是 fixture 造的 stub，也可能是本机真实构建产物。
+    口径 = 回退内容与 dist/index.html 逐字节一致 + assets 下实际文件可达（环境无关）。
+    """
     assert _DIST.exists()
+    index_html = (_DIST / "index.html").read_text(encoding="utf-8")
     app = create_app(_settings(), _empty_router())
     mount_frontend(app, "operation")
     client = TestClient(app)
@@ -84,17 +89,17 @@ def test_mount_frontend_serves_spa(_dist_dir):
     # 根路径 -> index.html
     r = client.get("/")
     assert r.status_code == 200
-    assert "SPA" in r.text
+    assert r.text == index_html
 
     # 任意前端路由 -> SPA 回退 index.html
     r2 = client.get("/some/frontend/route")
     assert r2.status_code == 200
-    assert "SPA" in r2.text
+    assert r2.text == index_html
 
-    # 静态资源
-    r3 = client.get("/assets/app.js")
+    # 静态资源：取 dist/assets 下实际存在的文件
+    asset = next(p for p in (_DIST / "assets").iterdir() if p.is_file())
+    r3 = client.get(f"/assets/{asset.name}")
     assert r3.status_code == 200
-    assert "app" in r3.text
 
     # API / 健康端点仍走具体路由，不被 SPA 回退吞掉
     assert client.get("/healthz").json()["status"] == "ok"

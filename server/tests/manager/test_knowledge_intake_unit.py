@@ -387,8 +387,12 @@ def test_routes_registered() -> None:
 
 
 def test_app_includes_intake_router() -> None:
-    """验证 manager app 已挂载 intake 路由（非空跑——import app 即 assert 已注册）。"""
+    """验证 manager app 已挂载 intake 路由。
+
+    经 openapi() 取路径而非裸遍历 app.routes：FastAPI ≥0.130 的 include_router
+    是惰性注册（_IncludedRouter 占位），启动前 routes 里看不到具体 path。
+    """
     from manager_service import app as manager_app
-    paths = {r.path for r in manager_app.app.routes if hasattr(r, "path")}
+    paths = set(manager_app.app.openapi()["paths"])
     assert "/api/manager/knowledge-spaces/{knowledge_space_id}/documents" in paths
     assert "/api/manager/knowledge-spaces/{knowledge_space_id}/ingestions" in paths

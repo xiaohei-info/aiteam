@@ -47,7 +47,7 @@ def test_runtime_chain_run_completes_and_usage_reaches_outbox():
     run = asyncio.run(mainline.start_run(conv.id))
 
     # 本地执行成功（独立断言，不依赖上报）。
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     assert run.usage == {"input_tokens": 10, "output_tokens": 5}
     # usage 已回流进 outbox（pending，尚未 flush）。
     pending = usage_service.pending()
@@ -66,7 +66,7 @@ def test_runtime_chain_local_success_and_upload_success_asserted_separately():
     result = usage_service.flush()
 
     # 断言一：本地执行成功。
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     # 断言二：摘要上报成功（独立副链）。
     assert result.sent == 1 and result.failed == 0
     assert len(client.uploads) == 1
@@ -89,7 +89,7 @@ def test_runtime_chain_group_dispatch_multi_run_usage_recorded():
 
     # 本地：两个专家各起一个 run，均成功。
     assert sorted(result.triggered_handles) == ["alice", "bob"]
-    assert all(r.status is RunStatus.COMPLETED for r in result.runs)
+    assert all(r.status is RunStatus.SUCCEEDED for r in result.runs)
     assert len(result.runs) == 2
     # 回流：两个 run 的 usage 均回流进 outbox（同 tenant/窗口/employee 聚合为一条 summary）。
     # 计费级精度为非目标；此处断言闭环可达——usage 入 outbox 且 flush 上报成功。
@@ -118,7 +118,7 @@ def test_runtime_chain_loop_scheduler_triggers_run_and_records_usage():
 
     assert len(outcomes) == 1 and outcomes[0].ok
     run = mainline.get_run(outcomes[0].run_id)
-    assert run.status is RunStatus.COMPLETED
+    assert run.status is RunStatus.SUCCEEDED
     # loop 触发的 run 与普通 run 走同一条回流链路。
     assert len(usage_service.pending()) == 1
     flushed = usage_service.flush()

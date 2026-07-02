@@ -96,7 +96,7 @@ def test_hash_single_source_of_truth_no_double_hash():
 
     from manager_service.security import hash_password, verify_password
 
-    plaintext = "bootstrap-plaintext-secret"
+    plaintext = "Bootstrap-plaintext-secret1"
     stored = hash_password(plaintext)  # 模拟 provision_owner 落库值（单次 scrypt）
     # 正链路：明文验过
     assert verify_password(plaintext, stored) is True
@@ -119,7 +119,7 @@ def test_provision_tenant_and_owner_bootstrap_e2e(migrated_db, admin_url):
     tenant_id = str(uuid.uuid4())
     enterprise_id = str(uuid.uuid4())
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_secret = "bootstrap-plaintext-secret-123"  # 明文（TLS 服务间）；Manager 单次 scrypt
+    bootstrap_secret = "Bootstrap-plaintext-secret-123"  # 明文（TLS 服务间）；Manager 单次 scrypt
 
     # F01：建 tenant
     r = client.post("/api/manager/tenants", json={

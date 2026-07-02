@@ -171,7 +171,7 @@ describe("LlmPage LLM管理", () => {
   it("删除 Provider 并移除行", async () => {
     const api = mockApi();
     // mount 时 1 次；删除触发 refresh 后的第 2 次起返回空 → 行消失
-    api.listProviders.mockResolvedValueOnce([provider]).mockResolvedValue([]);
+    vi.mocked(api.listProviders).mockResolvedValueOnce([provider]).mockResolvedValue([]);
     renderPage();
     await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
 

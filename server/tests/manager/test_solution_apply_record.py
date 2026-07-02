@@ -48,7 +48,7 @@ def test_apply_solution_persists_solution_apply_record():
 
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, recruit = _build_service(catalog)
+    svc, _, _, recruit, _ = _build_service(catalog)
 
     result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
     expert_ids = result.solution_instance.expert_employee_ids
@@ -74,7 +74,7 @@ def test_list_solution_apply_records_filters_by_solution_and_status():
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package(solution_id="sol-a", version="v1"))
     catalog.seed_solution(_solution_package(solution_id="sol-b", version="v1"))
-    svc, _, _, recruit = _build_service(catalog)
+    svc, _, _, recruit, _ = _build_service(catalog)
 
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-a"))
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-b"))
@@ -99,7 +99,7 @@ def test_apply_record_is_tenant_isolated():
 
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, _, recruit = _build_service(catalog)
+    svc, _, _, recruit, _ = _build_service(catalog)
 
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
@@ -115,7 +115,7 @@ def test_apply_record_latest_picks_most_recent_applied():
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package(solution_id="sol-1", version="v1"))
     catalog.seed_solution(_solution_package(solution_id="sol-1", version="v2"))
-    svc, _, _, recruit = _build_service(catalog)
+    svc, _, _, recruit, _ = _build_service(catalog)
 
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", solution_version="v1"))
     svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", solution_version="v2"))

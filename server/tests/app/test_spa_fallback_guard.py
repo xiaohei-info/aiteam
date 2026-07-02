@@ -82,7 +82,10 @@ def test_frontend_routes_still_fallback_to_spa(tier_dist):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert f"{tier_dist} SPA" in response.text
+    # fallback 必须原样返回 dist/index.html——不比对固定占位文本：
+    # dist 可能是 fixture 造的 stub，也可能是本机真实构建产物（环境无关）。
+    index_html = (_dist_dir(tier_dist) / "index.html").read_text(encoding="utf-8")
+    assert response.text == index_html
 
 
 def test_get_api_route_registered_before_mount_frontend_is_reachable(tier_dist):
