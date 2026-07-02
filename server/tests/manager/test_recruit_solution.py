@@ -189,7 +189,9 @@ class _FakeRecruitRepo:
                 if r.solution_id == solution_id and r.status == "applied"]
         if not rows:
             return None
-        rows.sort(key=lambda r: r.id, reverse=True)
+        # 对齐真实 repo 的 ORDER BY created_at DESC——fake 的 created_at 是单调 seq；
+        # 按随机 UUID id 排序是非确定性的（CI 曾因此掷骰子失败）。
+        rows.sort(key=lambda r: r.created_at, reverse=True)
         return rows[0]
 
 

@@ -41,7 +41,7 @@ describe("LoginPage", () => {
   it("渲染标题与表单字段", () => {
     renderLogin();
     expect(screen.getByText("AI Team 企业端")).toBeInTheDocument();
-    expect(screen.getByText("企业标识（tenant_id）")).toBeInTheDocument();
+    expect(screen.getByText("企业代码/名称")).toBeInTheDocument();
     expect(screen.getByText("成员账号")).toBeInTheDocument();
     expect(screen.getByText("登录密码")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
@@ -80,12 +80,20 @@ describe("LoginPage", () => {
 
   it("登录成功 signIn + navigate", async () => {
     const signIn = vi.fn();
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: { token: "t1", claims: {} } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    // 两段式登录(2127dab):先 resolve-tenant 再 login,按序 mock 两个响应。
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { tenant_id: "t-uuid-1" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { token: "t1", claims: {} } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
     renderLogin({ signIn });
     const inputs = screen.getAllByRole("textbox");
     fireEvent.change(inputs[0]!, { target: { value: "tenant1" } });
@@ -99,7 +107,14 @@ describe("LoginPage", () => {
   });
 
   it("登录失败 401 显示错误", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { tenant_id: "t-uuid-1" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           type: "about:blank",
@@ -129,7 +144,14 @@ describe("LoginPage", () => {
 
   it("登录 403 触发 owner-reset 模式，重置成功后 signIn + 跳转", async () => {
     const signIn = vi.fn();
+    const resolveResp = () =>
+      new Response(JSON.stringify({ data: { tenant_id: "t-uuid-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    // 序列:resolve → login(403) → 403 分支内再次 resolve → owner-reset
     const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(resolveResp())
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -146,6 +168,7 @@ describe("LoginPage", () => {
           },
         ),
       )
+      .mockResolvedValueOnce(resolveResp())
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ data: { token: "reset-token", claims: {} } }), {
           status: 200,
@@ -163,8 +186,8 @@ describe("LoginPage", () => {
       expect(screen.getByTestId("owner-reset-form")).toBeInTheDocument();
     });
     expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
-    expect(screen.getByText("tenant1 · owner1")).toBeInTheDocument();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("t-uuid-1 · owner1")).toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     const newPasswordInput = screen.getByTestId("new-password") as HTMLInputElement;
     const confirmPasswordInput = screen.getByTestId("confirm-new-password") as HTMLInputElement;
@@ -174,10 +197,10 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(signIn).toHaveBeenCalledWith("reset-token");
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const secondCallBody = JSON.parse(fetchSpy.mock.calls[1]![1]!.body as string);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    const secondCallBody = JSON.parse(fetchSpy.mock.calls[3]![1]!.body as string);
     expect(secondCallBody).toEqual({
-      tenant_id: "tenant1",
+      tenant_id: "t-uuid-1",
       account: "owner1",
       old_password: "bootstrap",
       new_password: "NewPass!234",
