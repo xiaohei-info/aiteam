@@ -201,7 +201,7 @@ docker_compose_cmd() {
   local action="$1"
   shift
 
-  cd "${REPO_ROOT}/deploy"
+  cd "${REPO_ROOT}/deploy/docker"
 
   case "${action}" in
     start)
@@ -320,7 +320,7 @@ start_service_local() {
       fi
 
       echo "[ctl] Starting postgres (docker container)..."
-      cd "${REPO_ROOT}/deploy"
+      cd "${REPO_ROOT}/deploy/docker"
       dc up -d postgres
       # 等待 postgres 就绪
       echo "[ctl] Waiting for postgres to be ready..."
@@ -413,7 +413,7 @@ stop_service_local() {
 
   if [[ "${service}" == "postgres" ]]; then
     echo "[ctl] Stopping postgres (docker container)..."
-    cd "${REPO_ROOT}/deploy"
+    cd "${REPO_ROOT}/deploy/docker"
     dc stop postgres
     return 0
   fi
