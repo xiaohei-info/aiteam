@@ -29,7 +29,8 @@ env:
 jobs:
   # 仅 PR 被 merge 后才跑；跳过 "关闭但未合并 的 PR"。
   deploy:
-    name: deploy (feature/v1.0.0 → taiyi / .env.${{ env.ENV_NAME }})
+    # job name 不能用 env 上下文（GitHub 校验会判整个 workflow 文件无效）,写死环境名。
+    name: deploy (feature/v1.0.0 → taiyi / .env.test)
     if: github.event.pull_request.merged == true
     runs-on: taiyi
     timeout-minutes: 10
