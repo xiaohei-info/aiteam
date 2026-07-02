@@ -28,7 +28,9 @@ env:
 
 jobs:
   deploy:
-    name: deploy (feature/v1.0.0 → taiyi / .env.${{ env.ENV_NAME }})
+    # ⚠️ job name 禁用 env 上下文——GitHub 会判整个 workflow 文件无效,
+    # 每次 push 产生 "workflow file issue" phantom failure(已两次踩坑:b1ad63b 修过一次)。
+    name: deploy (feature/v1.0.0 → taiyi / .env.test)
     if: github.event.pull_request.merged == true
     runs-on: taiyi
     timeout-minutes: 10
