@@ -44,9 +44,9 @@ jobs:
     # workflow_dispatch runs have no pull_request.merged context,
     # so guard with event_name check; otherwise the job gets skipped.
     if: >-
-      github.event_name == 'workflow_dispatch'
-      or
-      (github.event_name == 'pull_request' and
+      (github.event_name == 'workflow_dispatch')
+      ||
+      (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true)
     runs-on: taiyi
     timeout-minutes: 10
