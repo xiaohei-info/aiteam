@@ -120,3 +120,5 @@ MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计�
 3. 读 `CLAUDE.md` / `AGENTS.md`，掌握开发边界与流程约束
 4. 开发时把新能力落在 `server/` + `web/` 的对应端目录，不扩写冻结的 `app/`
 5. 不要把 AI Team 业务逻辑写入 `./.hermes/hermes-agent/`
+
+# e2e test marker (will be reverted after pipeline validated)
