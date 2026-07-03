@@ -1,3 +1,10 @@
+/**
+ * 企业端导航与壳配置（08 §12.2 page-shell）。
+ *
+ * 导航严格对齐旧架构 app/ 的企业后台（admin section）菜单入口：
+ * 员工 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 协作编排 / 费用 / 充值 / 设置。
+ * 角色门控映射旧架构 permission_service 的 manage_employees / manage_connectors / view_billing。
+ */
 import { EnterpriseRole } from "@aiteam/shared";
 import type { NavItem, PageShellConfig } from "@aiteam/shared";
 
@@ -5,25 +12,28 @@ export const managerShellConfig: PageShellConfig = {
   tier: "manager",
   titleKey: "manager.title",
   nav: [
-    { id: "dashboard", labelKey: "manager.nav.dashboard", path: "/", icon: "dashboard" },
+    // manage_employees 门控
     { id: "members", labelKey: "manager.nav.members", path: "/members", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 无角色门控
+    { id: "solutions", labelKey: "manager.nav.solutions", path: "/solutions", icon: "board" },
+    // manage_employees 门控
+    { id: "skills", labelKey: "manager.nav.skills", path: "/capability", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // manage_employees 门控
     { id: "marketplace", labelKey: "manager.nav.marketplace", path: "/marketplace", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    { id: "solutions", labelKey: "manager.nav.solutions", path: "/solutions", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    { id: "experts", labelKey: "manager.nav.experts", path: "/experts", icon: "experts", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    { id: "solution_apply", labelKey: "manager.nav.solution_apply", path: "/solution-apply", icon: "board" },
-    { id: "grants", labelKey: "manager.nav.grants", path: "/grants", icon: "grants", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    { id: "governance", labelKey: "manager.nav.governance", path: "/governance", icon: "governance", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN, EnterpriseRole.FINANCE_ADMIN] },
-    { id: "providers", labelKey: "manager.nav.providers", path: "/providers", icon: "key", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    { id: "knowledge", labelKey: "manager.nav.knowledge", path: "/knowledge", icon: "catalog" },
-    { id: "capability", labelKey: "manager.nav.capability", path: "/capability", icon: "catalog" },
-    { id: "billing", labelKey: "manager.nav.billing", path: "/billing", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN, EnterpriseRole.FINANCE_ADMIN] },
-    { id: "llm", labelKey: "manager.nav.llm", path: "/llm", icon: "key", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 无角色门控
     { id: "memory", labelKey: "manager.nav.memory", path: "/memory", icon: "dashboard" },
-    { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog" },
-    { id: "org", labelKey: "manager.nav.org", path: "/org", icon: "enterprise" },
-    { id: "collaboration", labelKey: "manager.nav.collaboration", path: "/collaboration", icon: "dashboard" },
-    { id: "audit", labelKey: "manager.nav.audit", path: "/audit", icon: "dashboard" },
-    { id: "settings", labelKey: "manager.nav.settings", path: "/settings", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // manage_connectors 门控
+    { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 无角色门控
+    { id: "llm", labelKey: "manager.nav.llm", path: "/llm", icon: "key" },
+    // manage_employees 门控
+    { id: "collaboration", labelKey: "manager.nav.collaboration", path: "/collaboration", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // view_billing 门控
+    { id: "billing", labelKey: "manager.nav.billing", path: "/billing", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN] },
+    // view_billing 门控
+    { id: "recharge", labelKey: "manager.nav.recharge", path: "/recharge", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN] },
+    // 无角色门控
+    { id: "settings", labelKey: "manager.nav.settings", path: "/settings", icon: "dashboard" },
   ],
 };
 
