@@ -1,6 +1,6 @@
 """routes_bootstrap 分支覆盖补齐（无 DB 非集成）：F02 负责人 bootstrap 收端。
 
-verify_service_token 守卫：生产 SERVICE_TOKEN 配置下要求 X-Service-Token 匹配；dev 模式 fail-open。
+verify_service_token 守卫：生产 SERVICE_TOKEN 配置下要求 X-Service-Token 匹配；dev 占位值 fail-open（AITEAM-331 B2：未配置不再 fail-open）。
 _auth_service 缓存 vs build 路径；Conflict → 幂等 200。
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url=None, admin_db_url=None, service_token=None):
+def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder"):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_bootstrap import router as bootstrap_router
@@ -58,9 +58,9 @@ def test_bootstrap_wrong_service_token_in_prod_401():
     assert r.status_code == 401
 
 
-def test_bootstrap_dev_mode_fail_open_succeeds_to_db_check():
-    """dev mode（无 SERVICE_TOKEN）→ fail-open → 进 DB 检查 → 503。"""
-    client = _client(None, admin_db_url=None)  # db_url 未配置
+def test_bootstrap_dev_placeholder_fail_open_succeeds_to_db_check():
+    """dev 占位值 → fail-open → 进 DB 检查 → 503（AITEAM-331 B2：仅占位值 dev profile，未配置不再 fail-open）。"""
+    client = _client(None, admin_db_url=None)  # service_token 默认占位值
     r = client.post("/api/manager/owner-bootstrap", json=_body())
     # 无 DB → 503（service_token 未配置 = dev）
     assert r.status_code == 503

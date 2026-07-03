@@ -17,7 +17,7 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url=None, admin_db_url=None, service_token=None):
+def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder"):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_tenant import router as tenant_router

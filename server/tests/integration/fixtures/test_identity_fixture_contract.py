@@ -65,15 +65,23 @@ def test_service_token_negative_does_not_fail_open():
     )
 
 
-def test_service_token_unconfigured_is_dev_fail_open():
-    """未配置 SERVICE_TOKEN（expected=None）=> dev 模式 fail-open 放行（200）。
+def test_service_token_unconfigured_fail_closed_401():
+    """未配置 SERVICE_TOKEN（expected=None）=> fail-closed 拒绝（AITEAM-331 B2）。
 
-    语义说明（对齐 shared/service_token.verify_service_token）：`_is_dev_mode(None)` 为 True，
-    故"未配置"恒走 dev 分支放行——这是 dev 友好缺省，**不是** prod fail-closed。
-    真正的 prod fail-closed 由上面 test_service_token_negative_does_not_fail_open 用强密钥证明。
+    旧合同：未配置 => `_is_dev_mode(None)=True` => fail-open 放行。修复后 fail-closed：未配置
+    SERVICE_TOKEN 代表生产误配置，必须 401。真正的 dev profile 唯一允许 `dev-service-token-placeholder`
+    （由 build_service_token_probe_app("dev-service-token-placeholder") 显式声明）。
     """
     app = build_service_token_probe_app(None)
     client = TestClient(app, raise_server_exceptions=False)
+    assert client.get("/svc/ping").status_code == 401
+
+
+def test_service_token_dev_placeholder_fail_open():
+    """dev 占位值 `dev-service-token-placeholder` 在显式 dev profile 下 fail-open（AITEAM-331 B2）。"""
+    app = build_service_token_probe_app("dev-service-token-placeholder")
+    client = TestClient(app, raise_server_exceptions=False)
+    # 占位值：无 X-Service-Token → fail-open（日志提醒，不阻断）。
     assert client.get("/svc/ping").status_code == 200
 
 

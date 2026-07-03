@@ -34,6 +34,7 @@ def get_catalog_gateway() -> CatalogManagerGateway:
     client = ServiceClient(
         settings.manager_url or "http://manager.invalid",
         service_identity=settings.service_name,
+        service_token=settings.service_token,
     )
     return HttpCatalogManagerGateway(client)
 

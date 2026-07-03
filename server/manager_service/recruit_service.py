@@ -481,7 +481,7 @@ def build_recruit_service(
 ) -> RecruitService:
     """组装招募服务：Operator 目录端口（编排注入）+ 共用 PgTenantRouter 派生的各 repository。
 
-    catalog 由编排层注入（生产真实实现 / 测试 FakeOperatorCatalogClient）——本卡 Operator 先 mock。
+    catalog 由编排层注入（OPERATOR_URL 缺失时 _build_operator_catalog fail-closed；测试显式注入 FakeOperatorCatalogClient）。
     """
     return RecruitService(
         catalog=catalog,
