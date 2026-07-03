@@ -1,4 +1,4 @@
-"""租户数据底座骨架（04 §6.1.1/§6.1.2/§6.1.3，D20/D21/D22）。
+"""租户数据底座（04 §6.1.1/§6.1.2/§6.1.3，D20/D21/D22）。
 
 统一入口（04 §6.1.1）：
     request -> shared/auth 解析 token -> TenantContext -> TenantRouter.session()
@@ -7,9 +7,10 @@
 铁律（D22）：任何 session/router/rag 都**只从 TenantContext 读 tenant_id**，禁止接受调用方
 手写 tenant 字符串；业务代码不感知 L1/L2/L3 差异，只经 TenantRouter/TenantDataSession。
 
-本文件是**抽象 + 内存 dev 实现**，用于在真实 PG 落地前就锁住"按 tenant 隔离"的接口形状与
-隔离语义测试。**真实 PostgreSQL + RLS + `SET LOCAL app.tenant_id` + 连接池租户边界由 M0 落地**
-（04 §6.1.1）；真实 LightRAG workspace 路由由 ManagerRagService 实现（04 §6.1.2）。
+本文件定义抽象（TenantDataSession / TenantRouter / ManagerRagService）并提供两套实现：
+InMemory* 用于单测/本地 dev；Pg*（PgTenantSession / PgTenantRouter）落地真实 PostgreSQL +
+RLS + `SET LOCAL app.tenant_id` + 连接池租户边界（04 §6.1.1）。真实 LightRAG workspace 路由
+由 ManagerRagService 的具体实现承担（04 §6.1.2）。两套实现接口形状一致，业务代码无感切换。
 """
 
 from __future__ import annotations

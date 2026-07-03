@@ -1,7 +1,8 @@
 """Loop 本地调度仓储（A3）。
 
-接口 + 内存实现。**agent 本地库**（与 mainline 同口径）：用户端单租户本地库，无 tenant
-路由。真实持久化（SQLite/本地 PG）后续替换实现，接口形状不变。
+**agent 本地库**（与 mainline 同口径）：用户端单租户本地库，无 tenant 路由。
+生产 / 持久化路径为 SqliteLoopRepository（按 agent_db_path 注入）；InMemoryLoopRepository 仅作
+单测 / 本地 dev fallback。接口由抽象 LoopRepository 锁定，SQL/内存实现形状一致。
 
 只读不存在的 loop 抛 shared.errors.NotFound（统一 problem+json）。
 """
@@ -51,7 +52,7 @@ class LoopRepository(ABC):
 
 
 class InMemoryLoopRepository(LoopRepository):
-    """内存 loop 仓储（本地库占位；接口稳定，真实持久化后续替换）。"""
+    """InMemory fallback —— 进程内实现，重启即丢。生产 / 持久化路径走 SqliteLoopRepository（按 agent_db_path 注入）。仅用于单测与本地 dev。"""
 
     def __init__(self) -> None:
         self._items: dict[str, Loop] = {}

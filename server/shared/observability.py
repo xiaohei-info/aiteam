@@ -3,7 +3,7 @@
 - request_id / trace_id 注入并贯穿日志；结构化日志强制带 request_id/trace_id/service。
 - 跨端 pull 透传 trace_id（service_client 负责，05）；运行明细不跨端。
 
-OpenTelemetry / Prometheus 接入留各端按需扩展；本骨架提供 request 上下文与最简结构化日志。
+OpenTelemetry / Prometheus 接入留各端按需扩展；本模块提供 request 上下文注入与 request_id / trace_id 贯穿的结构化日志。
 """
 
 from __future__ import annotations
