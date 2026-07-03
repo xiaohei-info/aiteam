@@ -81,7 +81,7 @@ export function RechargePage(): ReactNode {
               </Button>
             ))}
           </div>
-          <Button variant="gold" size="md" disabled={submitting || !amount} onClick={submit}>
+          <Button variant="metal" size="md" disabled={submitting || !amount} onClick={submit}>
             {submitting ? "提交中…" : "立即充值"}
           </Button>
         </div>
