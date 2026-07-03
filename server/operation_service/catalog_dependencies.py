@@ -12,13 +12,19 @@ from shared.config import load_settings
 from shared.service_client import ServiceClient
 
 from .catalog_gateway import CatalogManagerGateway, HttpCatalogManagerGateway
-from .catalog_repository import CatalogRepository
+from .catalog_repository import CatalogRepository, PgCatalogRepository
 from .catalog_service import CatalogService
+from .repository import apply_migrations
 
 
 @lru_cache(maxsize=1)
 def get_catalog_repository() -> CatalogRepository:
-    """单例目录仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
+    """单例目录仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    settings = load_settings("operation")
+    db_url = settings.admin_db_url
+    if db_url:
+        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        return PgCatalogRepository(db_url)
     return CatalogRepository()
 
 

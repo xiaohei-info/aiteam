@@ -1,6 +1,6 @@
 """operation_service/catalog_dependencies.py DI 装配测试。
 
-覆盖 get_catalog_repository, get_catalog_gateway, get_catalog_service。
+覆盖 get_catalog_repository (内存 / PG 双路径), get_catalog_gateway, get_catalog_service。
 """
 
 import pytest
@@ -11,7 +11,7 @@ from operation_service.catalog_dependencies import (
     get_catalog_repository,
     get_catalog_service,
 )
-from operation_service.catalog_repository import CatalogRepository
+from operation_service.catalog_repository import CatalogRepository, PgCatalogRepository
 from operation_service.catalog_service import CatalogService
 
 
@@ -28,11 +28,20 @@ def _env(monkeypatch):
     monkeypatch.setenv("OPERATION_SYSTEM_PASSWORD", "changeme")
 
 
-def test_get_catalog_repository():
+def test_get_catalog_repository_memory(monkeypatch):
+    for k in ("ADMIN_DB_URL", "DB_URL"):
+        monkeypatch.delenv(k, raising=False)
     repo = get_catalog_repository()
     assert isinstance(repo, CatalogRepository)
-    # cached singleton
     assert get_catalog_repository() is repo
+
+
+def test_get_catalog_repository_pg(monkeypatch):
+    monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
+    monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    monkeypatch.setattr(cat_deps, "apply_migrations", lambda *a, **k: None)
+    repo = get_catalog_repository()
+    assert isinstance(repo, PgCatalogRepository)
 
 
 def test_get_catalog_gateway_no_url(monkeypatch):

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from shared.config import load_settings
+
 from .admin_service import AdminService
 from .catalog_dependencies import get_catalog_repository
 from .dependencies import (
@@ -17,12 +19,20 @@ from .dependencies import (
     get_rollup_repository,
 )
 from .health_probes import build_agent_health_probe, build_manager_health_probe
-from .solution_repository import SolutionRepository
+from .repository import apply_migrations
+from .solution_repository import PgSolutionRepository, SolutionRepository
+
 
 @lru_cache(maxsize=1)
 def get_solution_repository() -> SolutionRepository:
-    """单例行业方案统计仓储（骨架进程内）。详设替换为 PG 实现。"""
+    """单例行业方案统计仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    settings = load_settings("operation")
+    db_url = settings.admin_db_url
+    if db_url:
+        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        return PgSolutionRepository(db_url)
     return SolutionRepository()
+
 
 def get_admin_service() -> AdminService:
     return AdminService(
