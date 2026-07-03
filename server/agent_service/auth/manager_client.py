@@ -9,10 +9,10 @@
 
 from __future__ import annotations
 
-from shared.errors import AppError, Unauthorized, ValidationProblem
+from shared.errors import AppError, Forbidden, Unauthorized, ValidationProblem
 from shared.service_client import ServiceClient
 
-from .local_login import LoginRequest, ManagerUnreachable
+from .local_login import LoginRequest, ManagerUnreachable, PasswordResetRequest
 
 
 class UnconfiguredManagerClient:
@@ -23,6 +23,11 @@ class UnconfiguredManagerClient:
     """
 
     def login(self, req: LoginRequest) -> tuple[str, dict]:
+        raise ManagerUnreachable(
+            "manager login client 未配置（A0 骨架）。配置 MANAGER_URL 并注入真实客户端后可用。"
+        )
+
+    def reset_password(self, req: "PasswordResetRequest") -> tuple[str, dict]:
         raise ManagerUnreachable(
             "manager login client 未配置（A0 骨架）。配置 MANAGER_URL 并注入真实客户端后可用。"
         )
@@ -61,7 +66,7 @@ class RealManagerLoginClient:
                     "password": req.password,
                 },
             )
-        except Unauthorized:
+        except (Unauthorized, Forbidden):
             raise
         except (AppError, Exception) as exc:  # noqa: BLE001 网络/上游错误统一降级
             raise ManagerUnreachable(f"manager login unreachable: {exc}") from exc
@@ -81,5 +86,43 @@ class RealManagerLoginClient:
 
         return token, jwks
 
+    def reset_password(self, req: "PasswordResetRequest") -> tuple[str, dict]:
+        """经 Manager `POST /api/auth/owner-reset` 重置密码（公开端点，无需 token）。
 
-__all__ = ["UnconfiguredManagerClient", "RealManagerLoginClient", "Unauthorized"]
+        403（密码仍需重置等）/401（旧凭据错误）透传；其它失败归一为 ManagerUnreachable。
+        成功后领取 JWKS，返回 (token, jwks) 供调用方缓存。
+        """
+        if not req.tenant_hint or not req.tenant_hint.strip():
+            raise ValidationProblem("tenant_hint 必填，请填写企业定位提示（tenant_id）")
+
+        try:
+            resp = self._sc.post(
+                "/api/auth/owner-reset",
+                {
+                    "tenant_id": req.tenant_hint,
+                    "account": req.account,
+                    "old_password": req.password,
+                    "new_password": req.new_password,
+                },
+            )
+        except (Unauthorized, Forbidden):
+            raise
+        except (AppError, Exception) as exc:  # noqa: BLE001
+            raise ManagerUnreachable(f"manager reset_password unreachable: {exc}") from exc
+
+        token = (resp.get("data") or {}).get("token")
+        if not token:
+            raise ManagerUnreachable("manager reset_password response missing token")
+
+        tenant = req.tenant_hint
+        try:
+            jwks = self._sc.get(f"/api/auth/{tenant}/jwks.json")
+        except (Unauthorized, Forbidden):
+            raise
+        except (AppError, Exception) as exc:  # noqa: BLE001
+            raise ManagerUnreachable(f"manager jwks unreachable: {exc}") from exc
+
+        return token, jwks
+
+
+__all__ = ["UnconfiguredManagerClient", "RealManagerLoginClient", "Unauthorized", "Forbidden"]

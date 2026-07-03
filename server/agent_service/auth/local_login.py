@@ -42,6 +42,21 @@ class LoginRequest(BaseModel):
     tenant_hint: str | None = Field(default=None, description="企业定位提示（可选）")
 
 
+class PasswordResetRequest(BaseModel):
+    """密码重置入参（公开端点）。account + 旧密码 + 新密码 + 企业定位。
+
+    对齐 Manager `POST /api/auth/owner-reset` 的 OwnerResetInput 契约：
+    tenant_hint 即定位到的 tenant_id；password 即旧密码（bootstrap/初始密码）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    account: str = Field(description="手机号或用户名")
+    password: str = Field(description="旧密码/初始密码（明文仅在 TLS 内传至 Manager）")
+    new_password: str = Field(description="新密码（需满足 Manager 密码复杂度策略）")
+    tenant_hint: str = Field(description="企业定位提示（tenant_id）")
+
+
 class ManagerLoginClient(Protocol):
     """跨端 Manager 登录端的窄客户端协议（A0：对端用 fake/mock）。
 
@@ -51,6 +66,9 @@ class ManagerLoginClient(Protocol):
     """
 
     def login(self, req: LoginRequest) -> tuple[str, dict]:
+        ...
+
+    def reset_password(self, req: PasswordResetRequest) -> tuple[str, dict]:
         ...
 
 
@@ -94,6 +112,18 @@ class LocalLoginService:
         claims = self._verify(token, jwks)
         if claims is None:
             # Manager 返回的 token 本地验不过 = JWKS 与签发私钥不匹配，属契约异常，不静默吞。
+            raise ManagerUnreachable("token from manager failed local verification")
+        self._cache.store(token, jwks)
+        return LocalSession(token=token, claims=claims)
+
+    def reset_password(self, req: PasswordResetRequest) -> LocalSession:
+        """密码重置：经 Manager owner-reset 校验旧密码 + 设新密码，缓存 token + JWKS。
+
+        与 login 对称：成功后缓存 token + 验签材料，返回本地会话。
+        """
+        token, jwks = self._manager.reset_password(req)
+        claims = self._verify(token, jwks)
+        if claims is None:
             raise ManagerUnreachable("token from manager failed local verification")
         self._cache.store(token, jwks)
         return LocalSession(token=token, claims=claims)

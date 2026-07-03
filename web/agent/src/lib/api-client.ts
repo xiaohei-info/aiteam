@@ -25,6 +25,15 @@ export interface AgentLoginResult {
   claims: TokenClaims;
 }
 
+/** 密码重置入参（对齐 server PasswordResetRequest）。 */
+export interface AgentPasswordResetRequest {
+  account: string;
+  /** 旧密码/初始密码 */
+  password: string;
+  new_password: string;
+  tenant_hint: string;
+}
+
 export interface AgentClientOptions {
   /** 同 origin 部署留空；测试时显式给 origin。 */
   baseUrl?: string;
@@ -58,6 +67,15 @@ export class AgentApiClient extends ApiClient {
     if (result === null) {
       // 不应发生：登录端点约定返回 envelope.data；防御性兜底，消除「null 当结果用」。
       throw new Error("login: empty envelope");
+    }
+    return result;
+  }
+
+  /** 密码重置（对齐 server /api/agent/reset-password，公开端点）。 */
+  async resetPassword(req: AgentPasswordResetRequest): Promise<AgentLoginResult> {
+    const result = await this.post<AgentLoginResult>("/api/agent/reset-password", { body: req });
+    if (result === null) {
+      throw new Error("resetPassword: empty envelope");
     }
     return result;
   }

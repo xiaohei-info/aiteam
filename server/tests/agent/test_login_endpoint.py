@@ -9,11 +9,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_service.auth.local_login import LoginRequest, ManagerUnreachable
+from agent_service.auth.local_login import LoginRequest, ManagerUnreachable, PasswordResetRequest
 from agent_service.app import build_app
 from shared.auth import RS256TokenSigner, generate_rsa_keypair
 from shared.contracts.auth import TokenClaims
-from shared.errors import Unauthorized
+from shared.errors import Forbidden, Unauthorized
 
 
 class _StubManager:
@@ -31,6 +31,19 @@ class _StubManager:
             raise ManagerUnreachable("offline")
         if req.password != "ok":
             raise Unauthorized("bad credentials")
+        claims = TokenClaims(
+            user_id="u-1", tenant_id="t-1", roles=["member"], exp=int(time.time()) + 3600
+        )
+        return self._signer.sign(claims), self._jwks
+
+    def reset_password(self, req):
+        type(self).calls += 1
+        if not self.online:
+            raise ManagerUnreachable("offline")
+        if req.password != "ok":
+            raise Unauthorized("bad credentials")
+        if len(req.new_password) < 6:
+            raise Forbidden("password too weak")
         claims = TokenClaims(
             user_id="u-1", tenant_id="t-1", roles=["member"], exp=int(time.time()) + 3600
         )
@@ -62,3 +75,48 @@ def test_login_bad_credentials_401_problem_json(client):
     assert r.status_code == 401
     assert r.headers["content-type"].startswith("application/problem+json")
     assert r.json()["code"] == "unauthorized"
+
+
+
+def test_reset_password_endpoint_is_public_and_succeeds(client):
+    r = client.post(
+        "/api/agent/reset-password",
+        json={
+            "account": "13800000000",
+            "password": "ok",
+            "new_password": "newpass123",
+            "tenant_hint": "t-1",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()["data"]
+    assert body["claims"]["user_id"] == "u-1"
+    assert body["token"]
+
+
+def test_reset_password_bad_old_credentials_401(client):
+    r = client.post(
+        "/api/agent/reset-password",
+        json={
+            "account": "x",
+            "password": "nope",
+            "new_password": "newpass123",
+            "tenant_hint": "t-1",
+        },
+    )
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("application/problem+json")
+
+
+def test_reset_password_weak_new_password_403(client):
+    r = client.post(
+        "/api/agent/reset-password",
+        json={
+            "account": "13800000000",
+            "password": "ok",
+            "new_password": "123",
+            "tenant_hint": "t-1",
+        },
+    )
+    assert r.status_code == 403
+    assert r.json()["code"] == "forbidden"

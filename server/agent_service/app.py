@@ -20,6 +20,7 @@ from agent_service.auth.local_login import (
     LoginRequest,
     LoginResult,
     ManagerLoginClient,
+    PasswordResetRequest,
 )
 from agent_service.auth.manager_client import (
     RealManagerLoginClient,
@@ -80,6 +81,19 @@ def build_router(login_service: LocalLoginService) -> APIRouter:
     async def login(req: LoginRequest) -> Envelope[LoginResult]:
         # 公开端点（§9.6）：不挂 require_claims。校验在 Manager；用户端只缓存 + 本地验签。
         session = login_service.login(req)
+        return Envelope[LoginResult](
+            data=LoginResult(token=session.token, claims=session.claims)
+        )
+
+    @router.post(
+        "/reset-password",
+        summary="密码重置（首次登录强制重置 / 忘记密码）",
+        operation_id="agent_reset_password",
+    )
+    async def reset_password(req: PasswordResetRequest) -> Envelope[LoginResult]:
+        # 公开端点：不挂 require_claims。经 Manager owner-reset 校验旧密码 + 设新密码，
+        # 缓存 token + JWKS，返回本地会话（与 login 对称）。
+        session = login_service.reset_password(req)
         return Envelope[LoginResult](
             data=LoginResult(token=session.token, claims=session.claims)
         )

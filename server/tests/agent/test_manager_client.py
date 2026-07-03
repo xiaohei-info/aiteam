@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 from agent_service.auth.manager_client import RealManagerLoginClient
-from agent_service.auth.local_login import LoginRequest, ManagerUnreachable
-from shared.errors import Unauthorized, ValidationProblem
+from agent_service.auth.local_login import LoginRequest, ManagerUnreachable, PasswordResetRequest
+from shared.errors import Forbidden, Unauthorized, ValidationProblem
 from shared.service_client import ServiceClient
 
 
@@ -22,6 +22,7 @@ class FakeTransport(httpx.BaseTransport):
         self.requests = []
         self.login_response = None
         self.jwks_response = None
+        self.reset_response = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, str(request.url)))
@@ -63,6 +64,24 @@ class FakeTransport(httpx.BaseTransport):
                     },
                 )
             return self.jwks_response
+
+        if request.url.path == "/api/auth/owner-reset":
+            if self.reset_response is None:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "token": "fake-reset-token",
+                            "claims": {
+                                "tenant_id": "t-1",
+                                "user_id": "u-42",
+                                "roles": ["member"],
+                                "exp": 9999999999,
+                            },
+                        }
+                    },
+                )
+            return self.reset_response
 
         return httpx.Response(404, json={"detail": "not found"})
 
@@ -165,3 +184,92 @@ def test_blank_tenant_hint_fails_fast():
     with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
         client.login(req)
     assert len(transport.requests) == 0
+
+
+def test_forbidden_propagates_on_login():
+    """Manager 返回 403（password reset required）→ Forbidden 透传，不包成 ManagerUnreachable。"""
+    transport = FakeTransport()
+    transport.login_response = httpx.Response(
+        403, json={"status": 403, "code": "forbidden", "detail": "password reset required before login"}
+    )
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = LoginRequest(account="13800000000", password="pass123", tenant_hint="t-1")
+    with pytest.raises(Forbidden, match="password reset required"):
+        client.login(req)
+
+
+def test_reset_password_success():
+    """成功路径：调用 owner-reset + jwks，返回 (token, jwks)。"""
+    transport = FakeTransport()
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = PasswordResetRequest(
+        account="13800000000", password="old123", new_password="new456", tenant_hint="t-1"
+    )
+    token, jwks = client.reset_password(req)
+
+    assert token == "fake-reset-token"
+    assert "keys" in jwks
+    # 验证调用顺序：先 owner-reset，后 jwks
+    assert len(transport.requests) == 2
+    assert transport.requests[0] == ("POST", "http://manager.local/api/auth/owner-reset")
+    assert transport.requests[1] == ("GET", "http://manager.local/api/auth/t-1/jwks.json")
+
+
+def test_reset_password_unauthorized_old_credentials():
+    """旧密码错误 → Unauthorized 透传。"""
+    transport = FakeTransport()
+    transport.reset_response = httpx.Response(
+        401, json={"status": 401, "code": "unauthorized", "detail": "invalid credentials"}
+    )
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = PasswordResetRequest(
+        account="13800000000", password="wrong", new_password="new456", tenant_hint="t-1"
+    )
+    with pytest.raises(Unauthorized):
+        client.reset_password(req)
+
+
+def test_reset_password_empty_tenant_hint_fails_fast():
+    """tenant_hint 为 None 时 fail fast → ValidationProblem。"""
+    transport = FakeTransport()
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = PasswordResetRequest(
+        account="13800000000", password="old123", new_password="new456", tenant_hint=""
+    )
+    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
+        client.reset_password(req)
+    assert len(transport.requests) == 0
+
+
+def test_reset_password_missing_token():
+    """Manager 响应缺失 token → ManagerUnreachable（契约异常）。"""
+    transport = FakeTransport()
+    transport.reset_response = httpx.Response(200, json={"data": {}})
+    sc = ServiceClient("http://manager.local", transport=transport)
+    client = RealManagerLoginClient(sc)
+
+    req = PasswordResetRequest(
+        account="13800000000", password="old123", new_password="new456", tenant_hint="t-1"
+    )
+    with pytest.raises(ManagerUnreachable, match="missing token"):
+        client.reset_password(req)
+
+
+def test_unconfigured_client_reset_password():
+    """未配置 manager_url → reset_password 抛 ManagerUnreachable。"""
+    from agent_service.auth.manager_client import UnconfiguredManagerClient
+
+    client = UnconfiguredManagerClient()
+    req = PasswordResetRequest(
+        account="13800000000", password="old123", new_password="new456", tenant_hint="t-1"
+    )
+    with pytest.raises(ManagerUnreachable):
+        client.reset_password(req)
