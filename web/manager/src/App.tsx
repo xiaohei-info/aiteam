@@ -12,7 +12,7 @@ import { GovernancePage } from "./features/governance";
 import { ProvidersPage } from "./features/providers";
 import { KnowledgePage } from "./features/knowledge";
 import { CapabilityPage } from "./features/capability";
-import { BillingPage } from "./features/billing";
+import { BillingPage, RechargePage } from "./features/billing";
 import { LlmPage } from "./features/llm";
 import { MemoryPage } from "./features/memory-items";
 import { ConnectorsPage } from "./features/connectors";
@@ -38,6 +38,7 @@ export function App(): React.ReactNode {
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
         <Route path="/billing" element={<BillingPage />} />
+        <Route path="/recharge" element={<RechargePage />} />
         <Route path="/llm" element={<LlmPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/connectors" element={<ConnectorsPage />} />
