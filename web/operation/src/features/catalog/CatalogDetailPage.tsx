@@ -86,7 +86,7 @@ export function CatalogDetailPage(): ReactNode {
   const i18n = useI18n();
   const { session } = useSession();
   const api = useCatalogApi();
-  const canWrite = hasRole(session, PlatformRole.SYSTEM_ADMIN);
+  const canWrite = hasRole(session, PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR);
 
   const [item, setItem] = useState<CatalogItem | null>(null);
   const [draft, setDraft] = useState<CatalogItem | null>(null);

@@ -310,12 +310,12 @@ describe("管理员写操作", () => {
     });
   });
 
-  it("operator 看不到注册按钮", async () => {
+  it("operator 可见注册按钮", async () => {
     renderCatalogPage(makeSystemOperatorSession());
     await waitFor(() => {
       expect(screen.getByText("专家")).toBeInTheDocument();
     });
-    expect(screen.queryByText("注册专家模板")).not.toBeInTheDocument();
+    expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
   });
 
   it("管理员点击发布后调 POST publish", async () => {
@@ -394,7 +394,7 @@ describe("管理员写操作", () => {
     });
   });
 
-  it("operator 看不到发布/下架按钮", async () => {
+  it("operator 可见发布按钮", async () => {
     mockFetch.mockResolvedValue(
       listPage([makeCatalogItem({ status: "draft" })]),
     );
@@ -402,9 +402,8 @@ describe("管理员写操作", () => {
     await waitFor(() => {
       expect(screen.getByText("test")).toBeInTheDocument();
     });
-    // operator table should have status but no action buttons
-    expect(screen.queryByText("发布")).not.toBeInTheDocument();
-    expect(screen.queryByText("下架")).not.toBeInTheDocument();
+    // operator has same write access as admin (backend _PLATFORM_ROLES)
+    expect(screen.getByText("发布")).toBeInTheDocument();
   });
 });
 
@@ -736,7 +735,7 @@ describe("详情页编辑模式", () => {
     });
   }
 
-  it("管理员可见编辑按钮, operator 不可见", async () => {
+  it("管理员与 operator 均可见编辑按钮", async () => {
     mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
 
     const adminRendered = renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
@@ -750,7 +749,7 @@ describe("详情页编辑模式", () => {
     await waitFor(() => {
       expect(screen.getAllByText("客服专家").length).toBeGreaterThanOrEqual(1);
     });
-    expect(screen.queryByText("编辑")).not.toBeInTheDocument();
+    expect(screen.getByText("编辑")).toBeInTheDocument();
     operatorRendered.unmount();
   });
 
@@ -1005,7 +1004,7 @@ describe("详情页多 section", () => {
     });
   });
 
-  it("operator 不能进入编辑模式", async () => {
+  it("operator 可进入编辑模式", async () => {
     mockFetch.mockResolvedValue(
       singleResponse(
         makeCatalogItem({
@@ -1020,6 +1019,6 @@ describe("详情页多 section", () => {
     await waitFor(() => {
       expect(screen.getByText("AI 客服")).toBeInTheDocument();
     });
-    expect(screen.queryByText("编辑")).not.toBeInTheDocument();
+    expect(screen.getByText("编辑")).toBeInTheDocument();
   });
 });
