@@ -75,12 +75,12 @@ async def register_solution_template(
 async def publish_catalog_entry(
     catalog_type: CatalogType,
     template_id: str,
-    body: PublishTemplateRequest = Body(default=None),
+    body: PublishTemplateRequest = Body(default_factory=PublishTemplateRequest),
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
     return Envelope[CatalogEntryResponse](
-        data=service.publish_template(catalog_type, template_id, body or PublishTemplateRequest())
+        data=service.publish_template(catalog_type, template_id, body)
     )
 
 
