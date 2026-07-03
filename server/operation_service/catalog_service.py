@@ -400,17 +400,34 @@ class CatalogService:
         """发布/下架/可见范围变更 → 通知 Manager（不写其租户库）。
 
         幂等键随 type/id/version/action 派生：同一次变更可安全重试去重（05 §5.1）。
+
+        通知是 best-effort：Operator 已落本端真相（模板状态/可见范围），Manager 可经
+        F06/F07 按需拉取最新数据。通知失败（Manager 不可达或尚未实现收端）只记日志，
+        不阻断发布/下架操作——否则会导致用户侧操作因对端基础设施问题而整体失败。
         """
-        self._manager.notify_catalog_release(
-            CatalogReleaseNotify(
-                catalog_type=entry.catalog_type.value,
-                template_id=entry.template_id,
-                version=entry.version,
-                action=action,
-                visible_scope=entry.visible_scope,
-            ),
-            idempotency_key=(
-                f"catalog:{entry.catalog_type.value}:{entry.template_id}"
-                f":{entry.version}:{action}"
-            ),
-        )
+        import logging
+
+        logger = logging.getLogger(__name__)
+        try:
+            self._manager.notify_catalog_release(
+                CatalogReleaseNotify(
+                    catalog_type=entry.catalog_type.value,
+                    template_id=entry.template_id,
+                    version=entry.version,
+                    action=action,
+                    visible_scope=entry.visible_scope,
+                ),
+                idempotency_key=(
+                    f"catalog:{entry.catalog_type.value}:{entry.template_id}"
+                    f":{entry.version}:{action}"
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Manager 目录通知失败（best-effort，不影响本端真相）: "
+                "type=%s id=%s action=%s",
+                entry.catalog_type.value,
+                entry.template_id,
+                action,
+                exc_info=True,
+            )

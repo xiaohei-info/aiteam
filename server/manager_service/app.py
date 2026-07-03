@@ -13,6 +13,7 @@ from shared.contracts.envelope import Envelope
 from .keys import TenantKeyStore
 from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
+from .routes_catalog_notify import router as catalog_notify_router
 from .routes_capability import build_capability_router
 from .routes_employee import build_employee_router
 from .routes_employee_bindings import build_employee_bindings_router
@@ -141,6 +142,7 @@ app.include_router(build_snapshot_router(_verifier))
 # F01/F02 控制面收端（Operator→Manager 云侧调用，05 §5.1 D4）。无 token 校验（服务间调用）。
 app.include_router(tenant_router)
 app.include_router(bootstrap_router)
+app.include_router(catalog_notify_router)
 # F17 运营通知企业收端 + 站内信收件箱（Operator→Manager 窄通道 service-token；GET 受保护端点）。
 app.include_router(build_in_app_notification_router(_verifier))
 # ---- 功能补全：B04/B09 账单工资+充值 ----
