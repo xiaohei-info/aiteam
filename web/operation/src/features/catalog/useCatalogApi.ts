@@ -130,13 +130,13 @@ export function useCatalogApi(): CatalogApi {
 
   const publish = useCallback(
     (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, {}),
+      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, { body: {} }),
     [client],
   );
 
   const unpublish = useCallback(
     (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/unpublish`, {}),
+      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/unpublish`, { body: {} }),
     [client],
   );
 

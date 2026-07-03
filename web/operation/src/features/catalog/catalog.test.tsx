@@ -357,6 +357,8 @@ describe("管理员写操作", () => {
         (c[0] as string).includes("/publish"),
       );
       expect(publishCall).toBeDefined();
+      // body must be sent as {} so FastAPI can parse PublishTemplateRequest
+      expect((publishCall![1] as { body?: string }).body).toBeDefined();
     });
   });
 
@@ -383,6 +385,8 @@ describe("管理员写操作", () => {
         (c[0] as string).includes("/unpublish"),
       );
       expect(unpublishCall).toBeDefined();
+      // body must be sent as {} so FastAPI can parse PublishTemplateRequest
+      expect((unpublishCall![1] as { body?: string }).body).toBeDefined();
     });
   });
 
@@ -445,6 +449,8 @@ describe("管理员写操作", () => {
         (c[0] as string).includes("/publish"),
       );
       expect(publishCall).toBeDefined();
+      // body must be sent as {} so FastAPI can parse PublishTemplateRequest
+      expect((publishCall![1] as { body?: string }).body).toBeDefined();
     });
   });
 
