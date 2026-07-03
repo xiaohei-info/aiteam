@@ -1,9 +1,7 @@
-"""Gateway runner 骨架（A0 / 06 §7.2 接入层）。
+"""Gateway 接入层 run 编排器（A0 / 06 §7.2）。
 
 把"选定 Driver + Executor + 一个 AgentRunRequest"编排成一次 run：驱动执行、归一事件回流、
 返回终态。**只编排运行时接入，不定义/不碰业务对象**（06 铁律 + CLAUDE/AGENTS §8）。
-
-A0 用 fake runtime（C0.4）跑通；真实 Driver/Executor 由 Track G 接入，runner 不变。
 """
 
 from __future__ import annotations

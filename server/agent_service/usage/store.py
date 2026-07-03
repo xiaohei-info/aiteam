@@ -8,7 +8,9 @@ outbox 模式：脱敏摘要先落本地待发队列（pending），上报成功
   （#293 要求 pending/retry/failed 三态）。
 
 agent 本地库口径（与 loop/mainline 一致）：用户端单租户本地库；但 outbox 条目仍带 tenant_id
-（摘要 payload 的一部分，上报需要）。接口 + 内存实现，真实持久化后续替换不改形状。
+（摘要 payload 的一部分，上报需要）。SqliteOutboxRepository 承担生产 / 持久化路径
+（按 agent_db_path 注入）；InMemoryOutboxRepository 仅作单测 / 本地 dev fallback；接口由抽象
+OutboxRepository 锁定，SQL/内存实现形状一致。
 """
 
 from __future__ import annotations
@@ -85,7 +87,7 @@ class OutboxRepository(ABC):
 
 
 class InMemoryOutboxRepository(OutboxRepository):
-    """内存 outbox（本地库占位；接口稳定，真实持久化后续替换）。"""
+    """InMemory fallback —— 进程内实现，重启即丢。生产 / 持久化路径走 SqliteOutboxRepository（按 agent_db_path 注入）。仅用于单测与本地 dev。"""
 
     def __init__(self, max_retries: int = 3) -> None:
         self._items: dict[str, OutboxItem] = {}

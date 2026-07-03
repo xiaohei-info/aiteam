@@ -1,6 +1,6 @@
 """端配置（CLAUDE/AGENTS §13 横切·配置；09 §14.2 统一启动器 --tier）。
 
-从环境变量读取，不复用旧 app/.env、不使用 HERMES_WEBUI_*（06 §7.3）。仅最小骨架；
+从环境变量读取，不复用旧 app/.env、不使用 HERMES_WEBUI_*（06 §7.3）。加载与 pydantic 校验完整；各端按需在此入口追加自有配置项（DB、上端地址、密钥引用等）。
 各端按需扩展自己的配置项（DB、上端地址、密钥引用等），但统一经本 Settings 入口读取。
 """
 
@@ -25,7 +25,7 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     db_url: str | None = Field(
         default=None,
-        description="业务连接串：以受约束角色 app_rw（非 superuser/非 BYPASSRLS）身份建连，跑租户 RLS SQL；骨架期可空",
+        description="业务连接串：以受约束角色 app_rw（非 superuser/非 BYPASSRLS）身份建连，跑租户 RLS SQL；dev 模式（未配 db_url）可空，生产须填充业务连接串",
     )
     admin_db_url: str | None = Field(
         default=None,

@@ -1,8 +1,8 @@
-"""用户端 FastAPI 应用骨架（A0）。
+"""用户端（Agent Service）FastAPI 应用（A0）。
 
-本地登录（03 §9.4C）已落地：公开 login 端点经 Manager 校验凭据（A0 对端用 fake/占位），
-缓存 token + 验签材料，此后本地无状态验签（whoami）。业务主链/群聊/Loop/pull 由后续
-Track A 工单（11 §4）填入。
+本地登录（03 §9.4C）：公开 login 端点经 Manager 校验凭据，缓存 token + 验签材料，
+此后本地无状态验签（whoami）。业务主链 / 群聊 / Loop / 用量上报 / 授权 / workspace /
+terminal 等路由均已在此装配注册（各 service 自带 router）。
 
 注意：默认仅 localhost 监听，不暴露非 localhost 入站（00 §4.2.3）；
 用户端只持验签材料，绝不持可签发 token 的密钥（03 §9.5/D23）。

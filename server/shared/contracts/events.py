@@ -61,7 +61,7 @@ class BusinessTimelineEvent(BaseModel):
     """业务时间线事件（RunTimelineEvent，07 §8）。
 
     面向对话页/任务树/工具调用/审计回放；沿用现有 `event: timeline` 协议语义，
-    具体字段/payload 在各端 OpenAPI 重新定稿（本类型为最小稳定骨架）。
+    具体字段/payload 在各端 OpenAPI 重新定稿。事件双层模型（runtime 归 ones vs. 前端 timeline）已完整落地。
     """
 
     model_config = ConfigDict(extra="forbid")
