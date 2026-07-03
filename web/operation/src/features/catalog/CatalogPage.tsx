@@ -26,7 +26,16 @@ function visibilityLabelText(label: VisibilityLabel): string {
   return "隐藏";
 }
 
-export function CatalogPage(): ReactNode {
+export interface CatalogPageProps {
+  /** 只展示该类型的目录项（拆分后专家页传 expert_template，行业方案页传 solution_template）。 */
+  catalogType: CatalogItemType;
+  /** 页面标题 i18n key。 */
+  titleKey: string;
+  /** 注册按钮 i18n key（专家 / 行业方案各自的注册文案）。 */
+  registerKey: string;
+}
+
+export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageProps): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, PlatformRole.SYSTEM_ADMIN);
@@ -45,7 +54,7 @@ export function CatalogPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      const r = await api.list();
+      const r = await api.list(undefined, catalogType);
       setItems(r.items);
       setNextCursor(r.page.next_cursor);
       setHasMore(r.page.has_more);
@@ -54,7 +63,7 @@ export function CatalogPage(): ReactNode {
     } finally {
       setLoading(false);
     }
-  }, [api, i18n]);
+  }, [api, i18n, catalogType]);
 
   useEffect(() => { void loadFirst(); }, [loadFirst]);
 
@@ -62,7 +71,7 @@ export function CatalogPage(): ReactNode {
     if (!hasMore || !nextCursor) return;
     setLoadingMore(true);
     try {
-      const r = await api.list(nextCursor);
+      const r = await api.list(nextCursor, catalogType);
       setItems((prev) => [...prev, ...r.items]);
       setNextCursor(r.page.next_cursor);
       setHasMore(r.page.has_more);
@@ -71,7 +80,7 @@ export function CatalogPage(): ReactNode {
     } finally {
       setLoadingMore(false);
     }
-  }, [api, hasMore, nextCursor, i18n]);
+  }, [api, hasMore, nextCursor, i18n, catalogType]);
 
   const doAction = useCallback(async (fn: () => Promise<unknown>) => {
     setActionError(null);
@@ -95,12 +104,12 @@ export function CatalogPage(): ReactNode {
 
   return (
     <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">目录治理</h1>
+      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t(titleKey)}</h1>
 
       {canWrite && (
         <div>
           <Button type="button" variant="ghost" size="sm" onClick={() => setShowRegister(true)}>
-            {i18n.t("operation.catalog.register")}
+            {i18n.t(registerKey)}
           </Button>
         </div>
       )}
@@ -108,6 +117,7 @@ export function CatalogPage(): ReactNode {
       {showRegister && (
         <RegisterForm
           api={api}
+          catalogType={catalogType}
           onDone={() => { setShowRegister(false); void loadFirst(); }}
           onCancel={() => setShowRegister(false)}
         />
@@ -132,7 +142,7 @@ export function CatalogPage(): ReactNode {
           <Table>
             <thead>
               <tr>
-                <th>名称</th><th>类型</th><th>状态</th><th>可见范围</th>
+                <th>名称</th><th>状态</th><th>可见范围</th>
                 {canWrite && <th>操作</th>}
               </tr>
             </thead>
@@ -149,7 +159,7 @@ export function CatalogPage(): ReactNode {
                         {item.display_name}
                       </Link>
                     </td>
-                    <td>{item.catalog_type === "expert_template" ? "专家模板" : "行业方案"}</td>
+
                     <td><StatusBadge status={item.status} /></td>
                     <td>{visibilityLabelText(vLabel)}</td>
                     {canWrite && (

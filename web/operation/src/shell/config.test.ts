@@ -42,7 +42,8 @@ describe("operation shell config", () => {
       "dashboard",
       "enterprises",
       "accounts",
-      "catalog",
+      "experts",
+      "industry-solutions",
       "solutions",
       "finance",
       "board",
@@ -55,9 +56,9 @@ describe("operation shell config", () => {
     const vm = buildShellViewModel(
       operationShellConfig,
       session([PlatformRole.SYSTEM_OPERATOR]),
-      "/catalog",
+      "/experts",
     );
-    expect(vm.nav.some((n) => n.id === "catalog")).toBe(true);
+    expect(vm.nav.some((n) => n.id === "experts")).toBe(true);
   });
 
   it("未登录：requiresLogin=true 且导航为空", () => {

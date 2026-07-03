@@ -58,7 +58,7 @@ export type UpdateCatalogChanges =
 const BASE = "/api/operation/catalog";
 
 export interface CatalogApi {
-  list: (cursor?: string) => Promise<ListResult<CatalogItem>>;
+  list: (cursor?: string, catalog_type?: CatalogItemType) => Promise<ListResult<CatalogItem>>;
   get: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   registerExpert: (input: RegisterExpertTemplate) => Promise<CatalogItem | null>;
   registerSolution: (input: RegisterSolutionTemplate) => Promise<CatalogItem | null>;
@@ -89,10 +89,14 @@ export function useCatalogApi(): CatalogApi {
   );
 
   const list = useCallback(
-    (cursor?: string): Promise<ListResult<CatalogItem>> =>
-      client.listGet<CatalogItem>(BASE, {
-        query: cursor ? { cursor } : undefined,
-      }),
+    (cursor?: string, catalog_type?: CatalogItemType): Promise<ListResult<CatalogItem>> => {
+      const query: Record<string, string | undefined> = {};
+      if (cursor) query.cursor = cursor;
+      if (catalog_type) query.catalog_type = catalog_type;
+      return client.listGet<CatalogItem>(BASE, {
+        query: Object.keys(query).length ? query : undefined,
+      });
+    },
     [client],
   );
 

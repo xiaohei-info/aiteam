@@ -116,14 +116,25 @@ function makeI18n() {
   return i18n;
 }
 
-function renderCatalogPage(sessionCtx: SessionContextValue) {
+function renderCatalogPage(
+  sessionCtx: SessionContextValue,
+  catalogType: "expert_template" | "solution_template" = "expert_template",
+) {
   const i18n = makeI18n();
+  const titleKey = catalogType === "expert_template"
+    ? "operation.nav.experts"
+    : "operation.nav.industrySolutions";
+  const registerKey = catalogType === "expert_template"
+    ? "operation.catalog.registerExpert"
+    : "operation.catalog.registerSolution";
   return render(
     <I18nContext.Provider value={i18n}>
       <SessionContext.Provider value={sessionCtx}>
         <MemoryRouter initialEntries={["/catalog"]}>
           <Routes>
-            <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/catalog" element={
+              <CatalogPage catalogType={catalogType} titleKey={titleKey} registerKey={registerKey} />
+            } />
             <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
           </Routes>
         </MemoryRouter>
@@ -139,7 +150,7 @@ function renderCatalogDetail(sessionCtx: SessionContextValue, id: string, catalo
       <SessionContext.Provider value={sessionCtx}>
         <MemoryRouter initialEntries={[`/catalog/${catalogType}/${id}`]}>
           <Routes>
-            <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/catalog" element={<CatalogPage catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />} />
             <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
           </Routes>
         </MemoryRouter>
@@ -185,14 +196,14 @@ describe("role-state 门控", () => {
   it("system_admin 可见列表", async () => {
     renderCatalogPage(makeSystemAdminSession());
     await waitFor(() => {
-      expect(screen.getByText("目录治理")).toBeInTheDocument();
+      expect(screen.getByText("专家")).toBeInTheDocument();
     });
   });
 
   it("system_operator 可见列表", async () => {
     renderCatalogPage(makeSystemOperatorSession());
     await waitFor(() => {
-      expect(screen.getByText("目录治理")).toBeInTheDocument();
+      expect(screen.getByText("专家")).toBeInTheDocument();
     });
   });
 });
@@ -295,16 +306,16 @@ describe("管理员写操作", () => {
   it("管理员可见注册按钮", async () => {
     renderCatalogPage(makeSystemAdminSession());
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册专家模板")).toBeInTheDocument();
     });
   });
 
   it("operator 看不到注册按钮", async () => {
     renderCatalogPage(makeSystemOperatorSession());
     await waitFor(() => {
-      expect(screen.getByText("目录治理")).toBeInTheDocument();
+      expect(screen.getByText("专家")).toBeInTheDocument();
     });
-    expect(screen.queryByText("注册模板/方案")).not.toBeInTheDocument();
+    expect(screen.queryByText("注册专家模板")).not.toBeInTheDocument();
   });
 
   it("管理员点击发布后调 POST publish", async () => {
@@ -438,10 +449,10 @@ describe("注册表单", () => {
     renderCatalogPage(makeSystemAdminSession());
 
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册专家模板")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("注册模板/方案"));
+    fireEvent.click(screen.getByText("注册专家模板"));
 
     await waitFor(() => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
@@ -458,10 +469,10 @@ describe("注册表单", () => {
     renderCatalogPage(makeSystemAdminSession());
 
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册专家模板")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("注册模板/方案"));
+    fireEvent.click(screen.getByText("注册专家模板"));
 
     await waitFor(() => {
       expect(
@@ -492,10 +503,10 @@ describe("注册表单", () => {
     renderCatalogPage(makeSystemAdminSession());
 
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册专家模板")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("注册模板/方案"));
+    fireEvent.click(screen.getByText("注册专家模板"));
 
     await waitFor(() => {
       expect(
@@ -533,10 +544,10 @@ describe("注册表单", () => {
     renderCatalogPage(makeSystemAdminSession());
 
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册专家模板")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("注册模板/方案"));
+    fireEvent.click(screen.getByText("注册专家模板"));
 
     await waitFor(() => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
@@ -598,6 +609,7 @@ describe("注册表单", () => {
         status: "published",
       }),
     ];
+    // 行业方案页：首次 list → expert 选项自动拉取 → 注册 → 刷新
     mockFetch
       .mockResolvedValueOnce(listPage(expertItems))
       .mockResolvedValueOnce(listPage(expertItems))
@@ -612,29 +624,23 @@ describe("注册表单", () => {
       )
       .mockResolvedValueOnce(listPage(expertItems));
 
-    renderCatalogPage(makeSystemAdminSession());
+    // 以行业方案页渲染（catalogType 锁定为 solution_template）
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
 
     await waitFor(() => {
-      expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+      expect(screen.getByText("注册行业方案")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("注册模板/方案"));
+    fireEvent.click(screen.getByText("注册行业方案"));
     await waitFor(() => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // 切到"行业方案" → 列表拉取并展示可选专家
-    // RegisterForm 的 select 是唯一包含 "行业方案" option 的 combobox
-    const formSelect = screen.getAllByRole("combobox").find(
-      (el) => !!el.querySelector('option[value="solution_template"]'),
-    )!;
-    fireEvent.change(formSelect, {
-      target: { value: "solution_template" },
-    });
-
+    // 表单锁定为行业方案，自动拉取并展示可选专家模板
+    // （专家名同时出现在列表表格和表单选择器中，故用 getAllByText）
     await waitFor(() => {
-      expect(screen.getByText("客服专家")).toBeInTheDocument();
-      expect(screen.getByText("营销专家")).toBeInTheDocument();
+      expect(screen.getAllByText("客服专家").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("营销专家").length).toBeGreaterThanOrEqual(1);
     });
 
     fireEvent.click(screen.getAllByRole("checkbox")[0]!);

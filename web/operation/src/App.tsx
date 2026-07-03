@@ -20,7 +20,10 @@ export function App(): React.ReactNode {
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePageWired />} />
         <Route path="/accounts" element={<AccountsPage />} />
-        <Route path="/catalog" element={<CatalogPage />} />
+        <Route path="/experts" element={<CatalogPage catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />} />
+        <Route path="/industry-solutions" element={<CatalogPage catalogType="solution_template" titleKey="operation.nav.industrySolutions" registerKey="operation.catalog.registerSolution" />} />
+        {/* 旧 /catalog 列表已拆分为 /experts + /industry-solutions，收藏夹重定向 */}
+        <Route path="/catalog" element={<Navigate to="/experts" replace />} />
         <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/solutions" element={<SolutionsPage />} />

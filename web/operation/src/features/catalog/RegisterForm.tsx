@@ -1,5 +1,5 @@
 import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
-import { type FormEvent, useState, type ReactNode } from "react";
+import { type FormEvent, useEffect, useState, type ReactNode } from "react";
 /**
  * 注册模板/方案表单（F03）。
  *
@@ -39,6 +39,8 @@ const textareaCls =
 
 interface Props {
   api: CatalogApi;
+  /** 锁定注册类型：隐藏类型选择器，表单只注册该类型。 */
+  catalogType: CatalogItemType;
   onDone: () => void;
   onCancel: () => void;
 }
@@ -64,9 +66,9 @@ function parseJsonOrEmpty(value: string): Record<string, unknown> | undefined {
   }
 }
 
-export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
+export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): ReactNode {
   const i18n = useI18n();
-  const [type, setType] = useState<CatalogItemType>("expert_template");
+  // catalogType 锁定后不再可切换，直接用作当前类型。
   const [id, setId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -98,12 +100,9 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
   const [solutionTagsText, setSolutionTagsText] = useState("");
   const [showSolutionAdvanced, setShowSolutionAdvanced] = useState(false);
 
-  function handleTypeChange(next: CatalogItemType) {
-    setType(next);
-    setExpertPicks([]);
-    setValidationError(null);
-    setError(null);
-    if (next === "solution_template" && expertOptions.length === 0) {
+  // 当表单锁定为行业方案（无类型选择器）时，自动拉取可选专家模板。
+  useEffect(() => {
+    if (catalogType === "solution_template" && expertOptions.length === 0) {
       api
         .list()
         .then((res) => {
@@ -111,11 +110,9 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
             res.items.filter((it) => it.catalog_type === "expert_template"),
           );
         })
-        .catch(() => {
-          /* 非阻塞:专家选项仅用于选择,失败时仍可手工填其他字段 */
-        });
+        .catch(() => {});
     }
-  }
+  }, [catalogType, expertOptions.length, api]);
 
   function toggleExpertPick(templateId: string) {
     setExpertPicks((prev) =>
@@ -190,7 +187,7 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
     }
     setLoading(true);
     try {
-      if (type === "expert_template") {
+      if (catalogType === "expert_template") {
         await api.registerExpert(buildExpertPayload());
       } else {
         await api.registerSolution(buildSolutionPayload());
@@ -218,17 +215,11 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
       <h2 className="m-0 text-base font-semibold text-text-primary">注册新模板/方案</h2>
       <form className="flex flex-col gap-md" onSubmit={handleSubmit}>
         <Field label="类型">
-          <Select
-            value={type}
-            onChange={(e) => handleTypeChange(e.target.value as CatalogItemType)}
-          >
-            <option value="expert_template">
-              {i18n.t("operation.catalog.expertTemplate")}
-            </option>
-            <option value="solution_template">
-              {i18n.t("operation.catalog.solutionTemplate")}
-            </option>
-          </Select>
+          <span className="text-sm text-text-secondary">
+            {catalogType === "expert_template"
+              ? i18n.t("operation.catalog.expertTemplate")
+              : i18n.t("operation.catalog.solutionTemplate")}
+          </span>
         </Field>
 
         <Field label="ID">
@@ -236,7 +227,7 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
             type="text"
             value={id}
             onChange={(e) => setId(e.target.value)}
-            placeholder={type === "expert_template" ? "template_id" : "solution_id"}
+            placeholder={catalogType === "expert_template" ? "template_id" : "solution_id"}
             disabled={loading}
           />
         </Field>
@@ -251,7 +242,7 @@ export function RegisterForm({ api, onDone, onCancel }: Props): ReactNode {
           />
         </Field>
 
-        {type === "expert_template" ? (
+        {catalogType === "expert_template" ? (
           <ExpertFields
             persona={persona}
             onPersonaChange={setPersona}
