@@ -78,4 +78,39 @@ describe("MarketplacePage", () => {
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
     expect(screen.queryByText("招募")).not.toBeInTheDocument();
   });
+
+  it("加载失败：listTemplates 报错显示错误信息", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+  });
+
+  it("空状态：无模板时显示空提示", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("暂无可招募模板")).toBeInTheDocument());
+  });
+
+  it("招募成功：显示成功提示并清空 slug 输入", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("实例标识（slug）"), { target: { value: "exp-ok" } });
+    fireEvent.click(screen.getByText("招募"));
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", employee_slug: "exp-ok" }));
+    await waitFor(() => expect(screen.getByText("招募成功")).toBeInTheDocument());
+    expect(screen.getByLabelText("实例标识（slug）")).toHaveValue("");
+  });
+
+  it("招募失败：recruitExpert 报错显示操作失败", async () => {
+    const api = mockApi();
+    (api.recruitExpert as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("实例标识（slug）"), { target: { value: "exp-x" } });
+    fireEvent.click(screen.getByText("招募"));
+    await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
+  });
 });

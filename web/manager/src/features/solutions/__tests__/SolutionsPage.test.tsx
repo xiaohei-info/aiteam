@@ -106,4 +106,61 @@ describe("SolutionsPage", () => {
       expert_employee_ids: ["emp-1", "emp-3"], planner_prompt: "拆分任务",
     }));
   });
+
+  it("加载失败：listSolutions 报错显示错误信息", async () => {
+    const api = mockApi();
+    (api.listSolutions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+  });
+
+  it("空状态：无方案时显示空提示", async () => {
+    const api = mockApi();
+    (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("暂无可应用方案")).toBeInTheDocument());
+  });
+
+  it("应用方案失败：applySolution 报错显示操作失败", async () => {
+    const api = mockApi();
+    (api.applySolution as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("应用方案"));
+    await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
+  });
+
+  it("应用方案成功：显示成功提示", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("应用方案"));
+    await waitFor(() => expect(screen.getByText("方案已应用")).toBeInTheDocument());
+  });
+
+  const inactiveInstance: SolutionInstance = {
+    ...solutionInstance, id: "si-2", status: "inactive",
+    expert_employee_ids: [], knowledge_refs: [], skill_refs: [],
+  };
+
+  it("非 active 状态：实例卡显示非高亮状态标签", async () => {
+    const api = mockApi();
+    (api.listSolutionInstances as ReturnType<typeof vi.fn>).mockResolvedValue([inactiveInstance]);
+    renderPage(["owner"]);
+    const card = await screen.findByTestId("solution-instance-card");
+    expect(within(card).getByText("inactive")).toBeInTheDocument();
+  });
+
+  it("编辑方案实例：取消编辑恢复初始字段", async () => {
+    const api = mockApi();
+    (api.listSolutionInstances as ReturnType<typeof vi.fn>).mockResolvedValue([solutionInstance]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
+    const card = screen.getByTestId("solution-instance-card");
+    fireEvent.click(within(card).getByText("编辑配置"));
+    await waitFor(() => expect(within(card).getByLabelText("名称")).toBeInTheDocument());
+    fireEvent.change(within(card).getByLabelText("名称"), { target: { value: "改坏了" } });
+    fireEvent.click(within(card).getByText("取消"));
+    expect(within(card).getByText("行业方案A")).toBeInTheDocument();
+  });
 });
