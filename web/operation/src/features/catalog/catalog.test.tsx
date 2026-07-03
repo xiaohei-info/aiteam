@@ -333,7 +333,7 @@ describe("管理员写操作", () => {
     await waitFor(() => {
       expect(screen.getByText("专家")).toBeInTheDocument();
     });
-    expect(screen.getByText("注册模板/方案")).toBeInTheDocument();
+    expect(screen.getByText("注册专家模板")).toBeInTheDocument();
   });
 
   it("管理员点击发布后调 POST publish", async () => {
