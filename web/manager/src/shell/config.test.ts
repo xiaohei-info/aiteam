@@ -44,6 +44,8 @@ describe("manager shell config", () => {
     expect(vm.nav.map((n) => n.id)).toEqual([
       "dashboard",
       "members",
+      "marketplace",
+      "solutions",
       "experts",
       "solution_apply",
       "grants",
@@ -72,6 +74,8 @@ describe("manager shell config", () => {
     expect(vm.nav.map((n) => n.id)).toEqual([
       "dashboard",
       "members",
+      "marketplace",
+      "solutions",
       "experts",
       "solution_apply",
       "grants",

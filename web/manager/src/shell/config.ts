@@ -7,6 +7,8 @@ export const managerShellConfig: PageShellConfig = {
   nav: [
     { id: "dashboard", labelKey: "manager.nav.dashboard", path: "/", icon: "dashboard" },
     { id: "members", labelKey: "manager.nav.members", path: "/members", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    { id: "marketplace", labelKey: "manager.nav.marketplace", path: "/marketplace", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    { id: "solutions", labelKey: "manager.nav.solutions", path: "/solutions", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "experts", labelKey: "manager.nav.experts", path: "/experts", icon: "experts", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "solution_apply", labelKey: "manager.nav.solution_apply", path: "/solution-apply", icon: "board" },
     { id: "grants", labelKey: "manager.nav.grants", path: "/grants", icon: "grants", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
