@@ -133,3 +133,54 @@ def test_get_unknown_enterprise_returns_zeroed_rollup():
     assert row.summary_count == 0
     assert row.window_start is None
     assert row.window_end is None
+
+
+# ---- 回归：看板企业数包含已注册但无使用的企业（issue AITEAM-292）----
+
+def test_board_includes_registered_zero_usage_enterprises():
+    """概览/跨企业看板的 enterprise_count 应包含所有已注册企业，含零使用。"""
+    from operation_service.admin_repository import AdminRepository
+
+    admin_repo = AdminRepository()
+    admin_repo.register_enterprise("ent-x", "Enterprise X")
+    admin_repo.register_enterprise("ent-y", "Enterprise Y")
+
+    svc = RollupService(CrossEnterpriseRollupRepository(), admin_repo=admin_repo)
+    board = svc.cross_enterprise_board()
+
+    assert board.enterprise_count == 2
+    ids = {e.enterprise_id for e in board.enterprises}
+    assert ids == {"ent-x", "ent-y"}
+    # 零使用企业的指标应为零
+    for e in board.enterprises:
+        assert e.run_count == 0
+        assert e.token_total == 0
+
+
+def test_board_merges_usage_and_registered():
+    """有使用数据的企业 + 已注册无使用的企业，看板都应显示。"""
+    from operation_service.admin_repository import AdminRepository
+
+    admin_repo = AdminRepository()
+    admin_repo.register_enterprise("ent-registered", "Registered Co")
+
+    repo = CrossEnterpriseRollupRepository()
+    svc = RollupService(repo, admin_repo=admin_repo)
+    svc.ingest(_upload("ent-usage", "t-1", [
+        _summary("s1", "t-1", token_total=100, cost_total=Decimal("1.00")),
+    ]))
+
+    board = svc.cross_enterprise_board()
+    assert board.enterprise_count == 2
+    ids = {e.enterprise_id for e in board.enterprises}
+    assert ids == {"ent-registered", "ent-usage"}
+
+
+def test_board_without_admin_repo_unchanged():
+    """不注入 admin_repo 时行为不变（仅显示有 rollup 数据的企业）。"""
+    svc = _service()
+    svc.ingest(_upload("ent-a", "t-a", [
+        _summary("s1", "t-a", token_total=100, cost_total=Decimal("1.00")),
+    ]))
+    board = svc.cross_enterprise_board()
+    assert board.enterprise_count == 1

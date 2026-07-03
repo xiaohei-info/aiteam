@@ -13,9 +13,13 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from shared.contracts.summary import UsageSummary
 from shared.errors import NotFound
+
+if TYPE_CHECKING:
+    from .admin_repository import AdminRepository
 
 from .rollup_repository import (
     CrossEnterpriseRollupRepository,
@@ -91,8 +95,13 @@ def _zero_metric(metric: RollupMetric) -> int | Decimal:
 class RollupService:
     """无状态编排器；依赖注入跨企业 rollup 仓储。"""
 
-    def __init__(self, repo: CrossEnterpriseRollupRepository):
+    def __init__(
+        self,
+        repo: CrossEnterpriseRollupRepository,
+        admin_repo: AdminRepository | None = None,
+    ):
         self._repo = repo
+        self._admin = admin_repo
 
     def ingest(self, upload: EnterpriseRollupUpload) -> None:
         """消费一次企业级上报：逐条按 summary_id 幂等累加到 cross_enterprise_usage_rollup。"""
@@ -110,16 +119,30 @@ class RollupService:
         return _to_view(row)
 
     def cross_enterprise_board(self) -> CrossEnterpriseBoard:
-        """跨企业平台看板：全平台合计 + 各企业聚合行（脱敏，无下钻）。"""
-        rows = [_to_view(r) for r in self._repo.list_all()]
+        """跨企业平台看板：全平台合计 + 各企业聚合行（脱敏，无下钻）。
+
+        enterprise_count 反映所有已注册企业（含零使用），而非仅有 rollup 数据的企业。
+        """
+        rollup_rows = {r.enterprise_id: r for r in self._repo.list_all()}
+        views = [_to_view(r) for r in rollup_rows.values()]
+
+        # 合并已注册但尚无使用数据的企业（零指标行），使概览/看板企业数完整。
+        if self._admin is not None:
+            for state in self._admin.list_enterprises():
+                if state.enterprise_id not in rollup_rows:
+                    views.append(EnterpriseUsageRollup(
+                        enterprise_id=state.enterprise_id,
+                        tenant_id="",
+                    ))
+
         return CrossEnterpriseBoard(
-            enterprise_count=len(rows),
-            run_count=sum(r.run_count for r in rows),
-            token_total=sum(r.token_total for r in rows),
-            cost_total=sum((r.cost_total for r in rows), Decimal("0")),
-            error_count=sum(r.error_count for r in rows),
-            duration_seconds_total=sum(r.duration_seconds_total for r in rows),
-            enterprises=rows,
+            enterprise_count=len(views),
+            run_count=sum(r.run_count for r in views),
+            token_total=sum(r.token_total for r in views),
+            cost_total=sum((r.cost_total for r in views), Decimal("0")),
+            error_count=sum(r.error_count for r in views),
+            duration_seconds_total=sum(r.duration_seconds_total for r in views),
+            enterprises=views,
         )
 
     # ---- 治理汇总报表：时间桶聚合 / 排名 / 趋势 ----

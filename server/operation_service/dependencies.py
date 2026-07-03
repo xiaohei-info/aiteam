@@ -11,6 +11,7 @@ from functools import lru_cache
 from shared.config import load_settings
 from shared.service_client import ServiceClient
 
+from .admin_repository import AdminRepository
 from .manager_gateway import HttpManagerGateway, ManagerGateway
 from .repository import (
     EnterpriseRepository,
@@ -42,6 +43,12 @@ def get_repository() -> EnterpriseRepository:
 
 
 @lru_cache(maxsize=1)
+def get_admin_repository() -> AdminRepository:
+    """单例 admin 仓储（骨架进程内）。详设替换为 PG 实现。"""
+    return AdminRepository()
+
+
+@lru_cache(maxsize=1)
 def get_rollup_repository() -> CrossEnterpriseRollupRepository:
     """单例跨企业 rollup 仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
     return CrossEnterpriseRollupRepository()
@@ -59,8 +66,12 @@ def get_manager_gateway() -> ManagerGateway:
 
 
 def get_provisioning_service() -> ProvisioningService:
-    return ProvisioningService(get_repository(), get_manager_gateway())
+    return ProvisioningService(
+        get_repository(),
+        get_manager_gateway(),
+        admin_repo=get_admin_repository(),
+    )
 
 
 def get_rollup_service() -> RollupService:
-    return RollupService(get_rollup_repository())
+    return RollupService(get_rollup_repository(), admin_repo=get_admin_repository())

@@ -60,10 +60,15 @@ def service(admin_repo, enterprise_repo, catalog_repo, rollup_repo, solution_rep
     return AdminService(admin_repo, enterprise_repo, catalog_repo, rollup_repo, solution_repo)
 
 
-def _provision(enterprise_repo: InMemoryEnterpriseRepository, name: str = "Acme") -> str:
-    """开通企业并返回 enterprise_id。"""
+def _provision(
+    enterprise_repo: InMemoryEnterpriseRepository,
+    name: str = "Acme",
+    *,
+    admin_repo: AdminRepository | None = None,
+) -> str:
+    """开通企业并返回 enterprise_id。传入 admin_repo 时验证开通即注册。"""
     gateway = FakeManagerGateway()
-    svc = ProvisioningService(enterprise_repo, gateway)
+    svc = ProvisioningService(enterprise_repo, gateway, admin_repo=admin_repo)
     result = svc.provision_enterprise(ProvisionEnterpriseRequest(
         enterprise_name=name, owner_phone="13800000000"
     ))
@@ -309,3 +314,30 @@ def test_notify_without_gateway_records_local(enterprise_repo, admin_repo):
     audits = admin_repo.list_audits(enterprise_id=eid)
     assert len(audits) == 1
     assert audits[0].action == "notify"
+
+
+# ---- 回归：开通后 admin 页面立即可见（issue AITEAM-292）----
+
+def test_provision_registers_in_admin_repo(admin_repo, enterprise_repo):
+    """开通后 AdminRepository 应立即可见，无需先访问详情页触发 _ensure_state。"""
+    eid = _provision(enterprise_repo, admin_repo=admin_repo)
+    state = admin_repo.get_state(eid)
+    assert state.enterprise_name == "Acme"
+    assert state.operation_status == "active"
+
+
+def test_list_enterprises_visible_after_provision(service, admin_repo, enterprise_repo):
+    """账号管理列表在开通后应直接显示新企业。"""
+    _provision(enterprise_repo, admin_repo=admin_repo, name="Beta")
+    rows, total = service.list_enterprises()
+    assert total == 1
+    assert rows[0]["enterprise_name"] == "Beta"
+
+
+def test_stats_count_includes_provisioned(service, admin_repo, enterprise_repo):
+    """概览统计应在开通后立即反映企业数。"""
+    _provision(enterprise_repo, admin_repo=admin_repo, name="Gamma")
+    _provision(enterprise_repo, admin_repo=admin_repo, name="Delta")
+    stats = service.get_stats()
+    assert stats["total_enterprises"] == 2
+    assert stats["active_enterprises"] == 2

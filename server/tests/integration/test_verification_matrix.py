@@ -316,7 +316,7 @@ def test_user_client_build_excludes_control_plane():
       （用户端业务是用户本机的事，控制面镜像不需要）。三端两两校验，钉死"镜像内只见本端"。
     """
     repo_root = pathlib.Path(__file__).resolve().parents[3]  # .../aiteam
-    deploy_dir = repo_root / "deploy"
+    deploy_dir = repo_root / "deploy" / "docker"
 
     # 各端 Dockerfile 允许的 COPY 目标路径白名单（顶级目录）：
     #   - server/{本端模块} + server/shared + server/run.py + server/requirements.txt

@@ -19,6 +19,7 @@ import uuid
 
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
 
+from .admin_repository import AdminRepository
 from .manager_gateway import ManagerGateway
 from .repository import EnterpriseAccount, EnterpriseRepository
 from .schemas import (
@@ -66,9 +67,15 @@ def _hash_bootstrap_local(secret: str) -> str:
 class ProvisioningService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
-    def __init__(self, repo: EnterpriseRepository, manager: ManagerGateway):
+    def __init__(
+        self,
+        repo: EnterpriseRepository,
+        manager: ManagerGateway,
+        admin_repo: AdminRepository | None = None,
+    ):
         self._repo = repo
         self._manager = manager
+        self._admin = admin_repo
 
     def provision_enterprise(self, req: ProvisionEnterpriseRequest) -> EnterpriseProvisioned:
         enterprise_id = str(uuid.uuid4())
@@ -111,6 +118,15 @@ class ProvisioningService:
                 owner_bootstrap_hash=local_hash,
             )
         )
+
+        # 同步注册 admin 状态（概览/账号管理/财务管理等 admin 页面查询 AdminRepository；
+        # 不注册则开通后这些页面看不到新企业）。
+        if self._admin is not None:
+            self._admin.register_enterprise(
+                enterprise_id=enterprise_id,
+                enterprise_name=req.enterprise_name,
+                owner_phone=req.owner_phone,
+            )
 
         return EnterpriseProvisioned(
             enterprise_id=enterprise_id,

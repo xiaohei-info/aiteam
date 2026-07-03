@@ -130,3 +130,28 @@ def test_duplicate_enterprise_code_conflict(manager):
     svc.provision_enterprise(req)
     with pytest.raises(Conflict):
         svc.provision_enterprise(req)
+
+
+# ---- 回归：开通后 admin 注册（issue AITEAM-292）----
+
+def test_provision_registers_in_admin_repo(manager):
+    """开通成功后 AdminRepository 应立即有该企业状态（概览/账号管理可见）。"""
+    from operation_service.admin_repository import AdminRepository
+
+    repo = InMemoryEnterpriseRepository()
+    admin_repo = AdminRepository()
+    svc = ProvisioningService(repo, manager, admin_repo=admin_repo)
+    result = svc.provision_enterprise(_req())
+
+    state = admin_repo.get_state(result.enterprise_id)
+    assert state.enterprise_name == "Acme"
+    assert state.owner_phone == "13800000000"
+    assert state.operation_status == "active"
+
+
+def test_provision_without_admin_repo_still_works(manager):
+    """admin_repo 为 None 时（旧调用方）开通仍正常，不报错。"""
+    repo = InMemoryEnterpriseRepository()
+    svc = ProvisioningService(repo, manager)
+    result = svc.provision_enterprise(_req())
+    assert result.enterprise_name == "Acme"
