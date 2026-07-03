@@ -38,7 +38,7 @@ export interface CatalogPageProps {
 export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageProps): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
-  const canWrite = hasRole(session, PlatformRole.SYSTEM_ADMIN);
+  const canWrite = hasRole(session, PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR);
   const api = useCatalogApi();
 
   const [items, setItems] = useState<CatalogItem[]>([]);

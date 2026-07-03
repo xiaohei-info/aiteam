@@ -239,6 +239,24 @@ describe("列表渲染", () => {
     // "公开" appears in visibility td + select option
     expect(screen.getAllByText("公开").length).toBeGreaterThanOrEqual(1);
   });
+
+  it("显示隐藏可见范围的目录项", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([
+        makeCatalogItem({
+          template_id: "h1",
+          display_name: "隐藏模板",
+          status: "published",
+          visible_scope: { hidden: true },
+        }),
+      ]),
+    );
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => {
+      expect(screen.getByText("隐藏模板")).toBeInTheDocument();
+    });
+    expect(screen.getAllByText("隐藏").length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ---- 3. cursor 翻页 ----
@@ -310,12 +328,12 @@ describe("管理员写操作", () => {
     });
   });
 
-  it("operator 看不到注册按钮", async () => {
+  it("operator 可见注册按钮", async () => {
     renderCatalogPage(makeSystemOperatorSession());
     await waitFor(() => {
       expect(screen.getByText("专家")).toBeInTheDocument();
     });
-    expect(screen.queryByText("注册专家模板")).not.toBeInTheDocument();
+    expect(screen.getByText("注册专家模板")).toBeInTheDocument();
   });
 
   it("管理员点击发布后调 POST publish", async () => {
@@ -394,7 +412,7 @@ describe("管理员写操作", () => {
     });
   });
 
-  it("operator 看不到发布/下架按钮", async () => {
+  it("operator 可见发布按钮", async () => {
     mockFetch.mockResolvedValue(
       listPage([makeCatalogItem({ status: "draft" })]),
     );
@@ -402,9 +420,44 @@ describe("管理员写操作", () => {
     await waitFor(() => {
       expect(screen.getByText("test")).toBeInTheDocument();
     });
-    // operator table should have status but no action buttons
-    expect(screen.queryByText("发布")).not.toBeInTheDocument();
-    expect(screen.queryByText("下架")).not.toBeInTheDocument();
+    // operator has same write access as admin (backend _PLATFORM_ROLES)
+    expect(screen.getByText("发布")).toBeInTheDocument();
+  });
+
+  it("operator 点击发布后调 POST publish", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([makeCatalogItem({ status: "draft" })]),
+      )
+      .mockResolvedValueOnce(singleResponse(null))
+      .mockResolvedValueOnce(listPage([]));
+
+    renderCatalogPage(makeSystemOperatorSession());
+
+    await waitFor(() => {
+      expect(screen.getByText("发布")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("发布"));
+
+    await waitFor(() => {
+      const publishCall = mockFetch.mock.calls.find((c: unknown[]) =>
+        (c[0] as string).includes("/publish"),
+      );
+      expect(publishCall).toBeDefined();
+    });
+  });
+
+  it("operator 可见可见范围下拉", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([makeCatalogItem({ status: "published", visible_scope: null })]),
+    );
+    renderCatalogPage(makeSystemOperatorSession());
+    await waitFor(() => {
+      expect(screen.getByText("test")).toBeInTheDocument();
+    });
+    // operator sees visibility select (enterprise option)
+    expect(screen.getByText("下架")).toBeInTheDocument();
   });
 });
 
@@ -736,7 +789,7 @@ describe("详情页编辑模式", () => {
     });
   }
 
-  it("管理员可见编辑按钮, operator 不可见", async () => {
+  it("管理员与 operator 均可见编辑按钮", async () => {
     mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
 
     const adminRendered = renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
@@ -750,7 +803,7 @@ describe("详情页编辑模式", () => {
     await waitFor(() => {
       expect(screen.getAllByText("客服专家").length).toBeGreaterThanOrEqual(1);
     });
-    expect(screen.queryByText("编辑")).not.toBeInTheDocument();
+    expect(screen.getByText("编辑")).toBeInTheDocument();
     operatorRendered.unmount();
   });
 
@@ -1005,7 +1058,7 @@ describe("详情页多 section", () => {
     });
   });
 
-  it("operator 不能进入编辑模式", async () => {
+  it("operator 可进入编辑模式", async () => {
     mockFetch.mockResolvedValue(
       singleResponse(
         makeCatalogItem({
@@ -1020,6 +1073,47 @@ describe("详情页多 section", () => {
     await waitFor(() => {
       expect(screen.getByText("AI 客服")).toBeInTheDocument();
     });
-    expect(screen.queryByText("编辑")).not.toBeInTheDocument();
+    expect(screen.getByText("编辑")).toBeInTheDocument();
+  });
+
+  it("operator 编辑专家模板后调 PATCH", async () => {
+    function makeExpertItem(overrides: Record<string, unknown> = {}) {
+      return makeCatalogItem({
+        catalog_type: "expert_template",
+        template_id: "exp-op",
+        display_name: "运营专家",
+        status: "draft",
+        visible_scope: null,
+        version: "1",
+        persona: "旧人设",
+        ...overrides,
+      });
+    }
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(makeExpertItem()))
+      .mockResolvedValueOnce(
+        singleResponse(makeExpertItem({ persona: "新人设" })),
+      );
+
+    renderCatalogDetail(makeSystemOperatorSession(), "exp-op", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+    const textareas = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
+    );
+    fireEvent.change(textareas[0]!, { target: { value: "新人设" } });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/exp-op") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.persona).toBe("新人设");
+    });
   });
 });
