@@ -11,7 +11,7 @@ from functools import lru_cache
 from shared.config import load_settings
 from shared.service_client import ServiceClient
 
-from .admin_repository import AdminRepository
+from .admin_repository import AdminRepository, PgAdminRepository
 from .manager_gateway import HttpManagerGateway, ManagerGateway
 from .repository import (
     EnterpriseRepository,
@@ -19,7 +19,7 @@ from .repository import (
     PgEnterpriseRepository,
     apply_migrations,
 )
-from .rollup_repository import CrossEnterpriseRollupRepository
+from .rollup_repository import CrossEnterpriseRollupRepository, PgRollupRepository
 from .rollup_service import RollupService
 from .service import ProvisioningService
 
@@ -44,13 +44,23 @@ def get_repository() -> EnterpriseRepository:
 
 @lru_cache(maxsize=1)
 def get_admin_repository() -> AdminRepository:
-    """单例 admin 仓储（骨架进程内）。详设替换为 PG 实现。"""
+    """单例 admin 仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    settings = load_settings("operation")
+    db_url = settings.admin_db_url
+    if db_url:
+        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        return PgAdminRepository(db_url)
     return AdminRepository()
 
 
 @lru_cache(maxsize=1)
 def get_rollup_repository() -> CrossEnterpriseRollupRepository:
-    """单例跨企业 rollup 仓储（骨架进程内）。详设替换为 DB-backed 实现。"""
+    """单例跨企业 rollup 仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    settings = load_settings("operation")
+    db_url = settings.admin_db_url
+    if db_url:
+        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        return PgRollupRepository(db_url)
     return CrossEnterpriseRollupRepository()
 
 

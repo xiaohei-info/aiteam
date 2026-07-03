@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 
@@ -22,7 +23,17 @@ class _SolutionAgg:
     applied_enterprises: set[str] = field(default_factory=set)
 
 
-class SolutionRepository:
+class SolutionRepositoryBase(ABC):
+    """Common shape for the solution-statistics repository."""
+    @abstractmethod
+    def record_apply(self, *, solution_id, enterprise_id, applied=True): ...
+    @abstractmethod
+    def get_stats(self, solution_id): ...
+    @abstractmethod
+    def list_stats(self): ...
+
+
+class SolutionRepository(SolutionRepositoryBase):
     """行业方案应用统计仓储（骨架进程内）。线程不安全；详设接 PG。"""
 
     def __init__(self) -> None:
@@ -54,3 +65,45 @@ class SolutionRepository:
             }
             for sid, agg in self._by_solution.items()
         }
+
+
+class PgSolutionRepository(SolutionRepositoryBase):
+    """Postgres-backed solution apply-statistics repository (oper library)."""
+
+    def __init__(self, dsn):
+        self._dsn = dsn
+
+    def record_apply(self, *, solution_id, enterprise_id, applied=True):
+        if not applied:
+            return
+        import psycopg
+        with psycopg.connect(self._dsn, autocommit=False) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO solution_stat (solution_id, enterprise_id) VALUES (%s, %s) "
+                    "ON CONFLICT (solution_id, enterprise_id) DO NOTHING",
+                    (solution_id, enterprise_id),
+                )
+            conn.commit()
+
+    def get_stats(self, solution_id):
+        import psycopg
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*), COUNT(DISTINCT enterprise_id) FROM solution_stat WHERE solution_id = %s",
+                    (solution_id,),
+                )
+                row = cur.fetchone()
+        return {"apply_count": int(row[0]), "active_enterprises": int(row[1])}
+
+    def list_stats(self):
+        import psycopg
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT solution_id, COUNT(*), COUNT(DISTINCT enterprise_id) FROM solution_stat "
+                    "GROUP BY solution_id",
+                )
+                rows = cur.fetchall()
+        return {r[0]: {"apply_count": int(r[1]), "active_enterprises": int(r[2])} for r in rows}

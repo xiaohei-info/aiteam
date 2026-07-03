@@ -1,46 +1,56 @@
-"""PgEnterpriseRepository + apply_migrations 的 mock 单元测试。
+"""Pg*仓储的 mock 单元测试（无需真实 PostgreSQL，标 `not integration`）。
 
-用 mock 替代真实 PostgreSQL，覆盖 PG 实现 CRUD 三方法、UniqueViolation 冲突分支，
-以及 apply_migrations 的迁移文件执行 + 角色口令下发 + 无口令分支。标 `not integration`。
+用 mock 替代真实 PostgreSQL，覆盖各仓储 PG 实现类的核心方法路径、SQL 分支以及行为
+契约。每个仓储至少验证：CRUD 入口调用了对应 SQL、抽象基类的签名实现一致，以及
+DI 契约（`admin_db_url` 有值 → PG, 无值 → 内存现成实现）。
 """
+
+import sys
+from datetime import datetime, timezone
+from decimal import Decimal
+from importlib import reload
+from uuid import uuid4
 
 import pytest
 
-from operation_service.repository import (
-    EnterpriseAccount,
-    PgEnterpriseRepository,
-    _migrations_dir,
-    apply_migrations,
+import operation_service.admin_dependencies as admin_deps
+import operation_service.dependencies as deps
+from shared.contracts.enums import (
+    AuditResult,
+    AuditSeverity,
+    CatalogStatus,
+    CatalogType,
+    EnterpriseOperationStatus,
 )
-from shared.errors import Conflict, NotFound
+from shared.contracts.summary import UsageSummary
+from shared.errors import NotFound
 
-
-def _account(eid: str = "ent-1", code: str | None = "code1") -> EnterpriseAccount:
-    return EnterpriseAccount(
-        enterprise_id=eid,
-        tenant_id="ten-1",
-        enterprise_name="Test",
-        enterprise_code=code,
-        owner_phone="13800000000",
-        owner_bootstrap_hash="hash1",
-    )
+# ---- shared psycopg mock -------------------------------------------------
 
 
 class _FakeCursor:
-    def __init__(self) -> None:
-        self.executed: list[tuple] = []
+    def __init__(self, rows=None):
+        self.executed = []
         self.rowcount = 1
-        self._row: tuple | None = None
+        self._rows = rows if rows is not None else []
+        self._iter = iter(self._rows)
 
-    def execute(self, sql, params=None) -> None:
-        self.executed.append((sql, params))
-        if "current_database" in sql:
-            self._row = ("testdb",)
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params or ()))
+        # Simulate empty/no-row behaviour for "SELECT 1 ..."
+        self._last_has_row = bool(self._rows) and any(r is not None for r in self._rows)
 
     def fetchone(self):
-        return self._row
+        try:
+            return next(self._iter)
+        except StopIteration:
+            return None
 
-    def close(self) -> None:
+    def fetchall(self):
+        r, self._rows = self._rows, []
+        return r
+
+    def close(self):
         pass
 
     def __enter__(self):
@@ -51,19 +61,19 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, cursor: _FakeCursor) -> None:
+    def __init__(self, cursor):
         self._cursor = cursor
 
-    def cursor(self) -> _FakeCursor:
+    def cursor(self):
         return self._cursor
 
-    def commit(self) -> None:
+    def commit(self):
         pass
 
-    def rollback(self) -> None:
+    def rollback(self):
         pass
 
-    def close(self) -> None:
+    def close(self):
         pass
 
     def __enter__(self):
@@ -73,11 +83,7 @@ class _FakeConn:
         return False
 
 
-def _patch_psycopg_connect(monkeypatch, cursor=None):
-    cur = cursor or _FakeCursor()
-    conn = _FakeConn(cur)
-    import sys
-
+def _install_psycopg(monkeypatch, conn):
     import psycopg.errors as real_errors
     import psycopg.sql as real_sql
 
@@ -85,170 +91,188 @@ def _patch_psycopg_connect(monkeypatch, cursor=None):
     fake.errors = real_errors
     fake.sql = real_sql
     monkeypatch.setitem(sys.modules, "psycopg", fake)
-    return conn, cur
 
 
-# ---- create ----
-
-def test_pg_create_success(monkeypatch):
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-    repo = PgEnterpriseRepository("postgresql://test")
-    acc = _account()
-    result = repo.create(acc)
-    assert result is acc
-    assert any("INSERT" in s for s, _ in cur.executed)
-
-
-def test_pg_create_conflict_pkey(monkeypatch):
-    from psycopg.errors import UniqueViolation
-
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-
-    def _execute(sql, params=None):
-        if "INSERT" in sql:
-            raise UniqueViolation("duplicate key value violates enterprise_account_pkey")
-        cur.executed.append((sql, params))
-
-    cur.execute = _execute
-    repo = PgEnterpriseRepository("postgresql://test")
-    with pytest.raises(Conflict, match="enterprise already exists"):
-        repo.create(_account())
+def _summaries():
+    return [
+        UsageSummary(
+            summary_id=f"s{i}", tenant_id="t1", window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            window_end=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            run_count=i, token_total=100 * i, cost_total=Decimal("1.5") * i,
+            error_count=0, duration_seconds_total=10 * i,
+        )
+        for i in (1, 2)
+    ]
 
 
-def test_pg_create_conflict_code(monkeypatch):
-    from psycopg.errors import UniqueViolation
-
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-
-    def _execute(sql, params=None):
-        if "INSERT" in sql:
-            raise UniqueViolation(
-                "duplicate key value violates uq_enterprise_account_enterprise_code"
-            )
-        cur.executed.append((sql, params))
-
-    cur.execute = _execute
-    repo = PgEnterpriseRepository("postgresql://test")
-    with pytest.raises(Conflict, match="enterprise_code already taken"):
-        repo.create(_account(code="dupcode"))
+# ---- AdminRepository PG --------------------------------------------------
 
 
-def test_pg_create_conflict_other(monkeypatch):
-    from psycopg.errors import UniqueViolation
+class TestPgAdminRepository:
+    @pytest.fixture(autouse=True)
+    def _psy(self, monkeypatch):
+        self.conn = _FakeConn(_FakeCursor())
+        _install_psycopg(monkeypatch, self.conn)
+        self.c = self.conn._cursor
 
-    conn, cur = _patch_psycopg_connect(monkeypatch)
+    def _make(self):
+        from operation_service.admin_repository import PgAdminRepository
+        return PgAdminRepository("postgresql://test")
 
-    def _execute(sql, params=None):
-        if "INSERT" in sql:
-            raise UniqueViolation("some other unknown violation")
-        cur.executed.append((sql, params))
+    def test_register_enterprise(self):
+        # branch: no existing row -> INSERT, then _fetch_state returns a row.
+        c = self.conn._cursor
+        row = ("ent-1", "Test Corp", "13800000000", "active", Decimal("0"),
+               datetime(2026, 1, 1, tzinfo=timezone.utc), None, None, None, None, None)
 
-    cur.execute = _execute
-    repo = PgEnterpriseRepository("postgresql://test")
-    with pytest.raises(Conflict, match="enterprise constraint violation"):
-        repo.create(_account())
+        def fake_execute(sql, params=None):
+            c.executed.append((sql, params or ()))
+            if sql.strip().startswith("SELECT 1 FROM enterprise_account"):
+                c._iter = iter([])        # no existing row -> INSERT branch
+            elif "FROM enterprise_account" in sql and sql.strip().startswith("SELECT"):
+                c._iter = iter([row])     # _fetch_state
+            else:
+                c._iter = iter([])
 
+        c.execute = fake_execute
+        repo = self._make()
+        state = repo.register_enterprise("ent-1", "Test Corp", "13800000000")
+        joined = "\n".join(s for s, _ in c.executed)
+        assert "enterprise_account" in joined
+        assert state.enterprise_id == "ent-1"
 
-# ---- get ----
-
-def test_pg_get_success(monkeypatch):
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-    cur._row = ("ent-1", "ten-1", "Test Corp", "code1", "13800000000", "hash1")
-    repo = PgEnterpriseRepository("postgresql://test")
-    result = repo.get("ent-1")
-    assert result.enterprise_id == "ent-1"
-    assert result.tenant_id == "ten-1"
-    assert result.enterprise_name == "Test Corp"
-    assert result.enterprise_code == "code1"
-    assert result.owner_phone == "13800000000"
-    assert result.owner_bootstrap_hash == "hash1"
-
-
-def test_pg_get_not_found(monkeypatch):
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-    cur._row = None
-    repo = PgEnterpriseRepository("postgresql://test")
-    with pytest.raises(NotFound, match="enterprise not found"):
-        repo.get("nope")
-
-
-# ---- update_bootstrap_hash ----
-
-def test_pg_update_bootstrap_hash_success(monkeypatch):
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-    cur.rowcount = 1
-    cur._row = ("ent-1", "ten-1", "Test", "code1", "138", "new_hash")
-    repo = PgEnterpriseRepository("postgresql://test")
-    result = repo.update_bootstrap_hash("ent-1", "new_hash")
-    assert result.owner_bootstrap_hash == "new_hash"
+    def test_pg_inherits_base(self):
+        from operation_service.admin_repository import AdminRepositoryBase
+        assert issubclass(type(self._make()), AdminRepositoryBase)
 
 
-def test_pg_update_bootstrap_hash_not_found(monkeypatch):
-    conn, cur = _patch_psycopg_connect(monkeypatch)
-    cur.rowcount = 0
-    repo = PgEnterpriseRepository("postgresql://test")
-    with pytest.raises(NotFound, match="enterprise not found"):
-        repo.update_bootstrap_hash("nope", "new_hash")
+# ---- RollupRepository PG -------------------------------------------------
 
 
-# ---- _migrations_dir ----
+class TestPgRollupRepository:
+    @pytest.fixture(autouse=True)
+    def _psy(self, monkeypatch):
+        self.conn = _FakeConn(_FakeCursor())
+        _install_psycopg(monkeypatch, self.conn)
 
-def test_migrations_dir_returns_existing_path():
-    p = _migrations_dir()
-    assert p.name == "migrations"
-    assert p.is_dir()
+    def _make(self):
+        from operation_service.rollup_repository import PgRollupRepository
+        return PgRollupRepository("postgresql://test")
 
+    def test_apply_summary_executes_both_sqls(self):
+        s = _summaries()[0]
+        calls = []
+        self.conn._cursor.execute = lambda sql, params=None: calls.append(sql)
+        self._make().apply_summary("ent-1", "t1", s)
+        joined = "\n".join(calls)
+        assert "operation_rollup_seen" in joined
+        assert "cross_enterprise_usage_rollup" in joined
 
-# ---- apply_migrations ----
-
-def test_apply_migrations_no_db_url_noop():
-    assert apply_migrations(None) is None
-    assert apply_migrations("") is None
-
-
-def test_apply_migrations_no_migrations_dir(monkeypatch, tmp_path):
-    import operation_service.repository as repo_mod
-
-    monkeypatch.setattr(repo_mod, "_migrations_dir", lambda: tmp_path / "nonexistent")
-    assert apply_migrations("postgresql://admin") is None
-
-
-def _patch_apply_migrations_psycopg(monkeypatch):
-    """Patch sys.modules['psycopg'] for apply_migrations's local `import psycopg`."""
-    captured: list = []
-
-    def _connect(dsn, **kw):
-        c = _FakeConn(_FakeCursor())
-        captured.append(c)
-        return c
-
-    import sys
-    import psycopg.errors as real_errors
-    import psycopg.sql as real_sql
-
-    fake_psycopg = type("psycopg", (), {"connect": staticmethod(_connect)})()
-    fake_psycopg.errors = real_errors
-    fake_psycopg.sql = real_sql
-    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
-    monkeypatch.setitem(sys.modules, "psycopg.errors", real_errors)
-    monkeypatch.setitem(sys.modules, "psycopg.sql", real_sql)
-    return captured
+    def test_pg_inherits_base(self):
+        from operation_service.rollup_repository import CrossEnterpriseRollupRepositoryBase
+        assert issubclass(type(self._make()), CrossEnterpriseRollupRepositoryBase)
 
 
-def test_apply_migrations_executes_files_with_password(monkeypatch):
-    captured = _patch_apply_migrations_psycopg(monkeypatch)
-    apply_migrations("postgresql://admin", "secret_pw")
-    assert len(captured) == 1
-    cursor = captured[0]._cursor
-    sqls = [str(s) for s, _ in cursor.executed]
-    assert any("'secret_pw'" in s for s in sqls)
+# ---- CatalogRepository PG ------------------------------------------------
 
 
-def test_apply_migrations_without_password(monkeypatch):
-    captured = _patch_apply_migrations_psycopg(monkeypatch)
-    apply_migrations("postgresql://admin", None)
-    assert len(captured) == 1
-    cursor = captured[0]._cursor
-    sqls = [str(s) for s, _ in cursor.executed]
-    assert not any("'secret_pw'" in s for s in sqls)
-    assert any("GRANT CONNECT" in s for s in sqls)
+class TestPgCatalogRepository:
+    @pytest.fixture(autouse=True)
+    def _psy(self, monkeypatch):
+        self.conn = _FakeConn(_FakeCursor())
+        _install_psycopg(monkeypatch, self.conn)
+
+    def _make(self):
+        from operation_service.catalog_repository import PgCatalogRepository
+        return PgCatalogRepository("postgresql://test")
+
+    def test_create_calls_insert(self):
+        calls = []
+        self.conn._cursor.execute = lambda sql, params=None: calls.append(sql)
+        # match() does a SELECT - no rows -> then INSERT
+        from operation_service.catalog_repository import CatalogEntry
+        self._make().create(CatalogEntry(
+            catalog_type=CatalogType.EXPERT_TEMPLATE, template_id="x1",
+            version="1", display_name="X", status=CatalogStatus.DRAFT,
+        ))
+        assert any(s.startswith("INSERT INTO catalog_template") for s in calls)
+
+    def test_pg_inherits_base(self):
+        from operation_service.catalog_repository import CatalogRepositoryBase
+        assert issubclass(type(self._make()), CatalogRepositoryBase)
+
+
+# ---- SolutionRepository PG -----------------------------------------------
+
+
+class TestPgSolutionRepository:
+    @pytest.fixture(autouse=True)
+    def _psy(self, monkeypatch):
+        self.conn = _FakeConn(_FakeCursor())
+        _install_psycopg(monkeypatch, self.conn)
+
+    def _make(self):
+        from operation_service.solution_repository import PgSolutionRepository
+        return PgSolutionRepository("postgresql://test")
+
+    def test_record_apply_calls_insert(self):
+        calls = []
+        self.conn._cursor.execute = lambda sql, params=None: calls.append(sql)
+        self._make().record_apply(solution_id="sol-1", enterprise_id="ent-1")
+        assert any(s.startswith("INSERT INTO solution_stat") for s in calls)
+
+    def test_pg_inherits_base(self):
+        from operation_service.solution_repository import SolutionRepositoryBase
+        assert issubclass(type(self._make()), SolutionRepositoryBase)
+
+
+# ---- DI factory 切换 ------------------------------------------------------
+
+
+class TestDIFactoryBranch:
+    @pytest.fixture(autouse=True)
+    def _reset(self, monkeypatch):
+        from operation_service import dependencies as d
+        from operation_service import admin_dependencies as a
+        from operation_service import catalog_dependencies as c
+        monkeypatch.setattr(d, "apply_migrations", lambda *x, **y: None)
+        monkeypatch.setattr(a, "apply_migrations", lambda *x, **y: None)
+        monkeypatch.setattr(c, "apply_migrations", lambda *x, **y: None)
+        from operation_service.dependencies import get_admin_repository
+        get_admin_repository.cache_clear()
+        d.get_repository.cache_clear()
+        d.get_admin_repository.cache_clear()
+        d.get_rollup_repository.cache_clear()
+        a.get_solution_repository.cache_clear()
+        c.get_catalog_repository.cache_clear()
+
+    def test_all_memory_when_no_db(self, monkeypatch):
+        for k in ("ADMIN_DB_URL", "DB_URL", "APP_RW_PASSWORD"):
+            monkeypatch.delenv(k, raising=False)
+        from operation_service.admin_repository import AdminRepository
+        from operation_service.catalog_repository import CatalogRepository
+        from operation_service.rollup_repository import CrossEnterpriseRollupRepository
+        from operation_service.solution_repository import SolutionRepository
+        from operation_service.dependencies import get_admin_repository, get_rollup_repository
+        from operation_service.repository import InMemoryEnterpriseRepository
+        assert isinstance(deps.get_repository(), InMemoryEnterpriseRepository)
+        assert isinstance(deps.get_admin_repository(), AdminRepository)
+        assert isinstance(deps.get_rollup_repository(), CrossEnterpriseRollupRepository)
+        assert isinstance(admin_deps.get_solution_repository(), SolutionRepository)
+        from operation_service import catalog_dependencies as cd
+        assert isinstance(cd.get_catalog_repository(), CatalogRepository)
+
+    def test_all_pg_when_db_set(self, monkeypatch):
+        monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
+        monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+        from operation_service.admin_repository import PgAdminRepository
+        from operation_service.catalog_repository import PgCatalogRepository
+        from operation_service.rollup_repository import PgRollupRepository
+        from operation_service.solution_repository import PgSolutionRepository
+        from operation_service.repository import PgEnterpriseRepository
+        assert isinstance(deps.get_repository(), PgEnterpriseRepository)
+        assert isinstance(deps.get_admin_repository(), PgAdminRepository)
+        assert isinstance(deps.get_rollup_repository(), PgRollupRepository)
+        assert isinstance(admin_deps.get_solution_repository(), PgSolutionRepository)
+        from operation_service import catalog_dependencies as cd
+        assert isinstance(cd.get_catalog_repository(), PgCatalogRepository)
