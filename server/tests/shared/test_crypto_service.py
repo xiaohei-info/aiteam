@@ -61,16 +61,18 @@ class TestCryptoService:
 
 
 class TestLoadKey:
-    """Tests for _load_key env-vs-dev fallback."""
+    """Tests for _load_key env-vs-fail-closed behavior (AITEAM-331 B1)."""
 
     def test_load_key_from_env(self, monkeypatch):
         key = Fernet.generate_key().decode("utf-8")
         monkeypatch.setenv("MANAGER_CREDENTIAL_KEY", key)
         assert _load_key() == key.encode("utf-8")
 
-    def test_load_key_dev_fallback(self, monkeypatch):
+    def test_load_key_fails_closed_when_unset(self, monkeypatch):
+        # AITEAM-331 B1: missing env key must raise (no silent dev fallback).
         monkeypatch.delenv("MANAGER_CREDENTIAL_KEY", raising=False)
-        assert _load_key() == _DEV_KEY
+        with pytest.raises(RuntimeError, match="MANAGER_CREDENTIAL_KEY is not configured"):
+            _load_key()
 
     def test_default_fernet_uses_env_key(self, monkeypatch):
         key = Fernet.generate_key().decode("utf-8")
@@ -82,12 +84,12 @@ class TestLoadKey:
         token = f.encrypt(b"test")
         assert Fernet(key.encode("utf-8")).decrypt(token) == b"test"
 
-    def test_default_fernet_uses_dev_key(self, monkeypatch):
+    def test_default_fernet_fails_closed_without_env(self, monkeypatch):
+        # AITEAM-331 B1: no env key → default Fernet construction must raise.
         monkeypatch.delenv("MANAGER_CREDENTIAL_KEY", raising=False)
         _default_fernet.cache_clear()
-        f = _default_fernet()
-        token = f.encrypt(b"test")
-        assert Fernet(_DEV_KEY).decrypt(token) == b"test"
+        with pytest.raises(RuntimeError, match="MANAGER_CREDENTIAL_KEY is not configured"):
+            _default_fernet()
 
 
 class TestBuildCryptoService:

@@ -40,21 +40,27 @@ from .routes_mfa import (
     passkey_mgmt_router,
     passkey_router,
 )
-from .operator_catalog import FakeOperatorCatalogClient, OperatorCatalogClient
+from .operator_catalog import OperatorCatalogClient
 
 
 def _build_operator_catalog():
     """构造 Operator 目录拉取客户端（05 F06/F07，#176）。
 
     有 operator_url → OperatorCatalogClient（真实 HTTP 客户端）；
-    无 operator_url → FakeOperatorCatalogClient（测试/骨架期内存 fake）。
+    无 operator_url → fail-closed（RuntimeError）：无配置则 Manager 招募路径会写到假数据，静默数据错是
+    生产危险；必须显式配置 OPERATOR_URL 才能启动（AITEAM-331 C1）。FakeOperatorCatalogClient 仅
+    在测试/中显式注入 app.state._operator_catalog，不再作为隐式 fallback。
     """
     settings = load_settings("manager")
     operator_url = settings.operator_url
     if not operator_url:
-        # dev/测试环境未配置 OPERATOR_URL，使用 Fake 客户端
-        return FakeOperatorCatalogClient()
-    # 生产环境，使用真实 HTTP 客户端
+        raise RuntimeError(
+            "OPERATOR_URL is not configured. Manager recruit routes require a real Operator "
+            "to pull expert templates and solution packages. Silently falling back to a "
+            "FakeOperatorCatalogClient would risk writing fake catalog data into the tenant DB "
+            "(silent data corruption). Set OPERATOR_URL to the Operator base URL."
+        )
+    # 生产/测试注入路线统一使用真实 HTTP 客户端。FakeOperatorCatalogClient 仅在测试中显式注入。
     return OperatorCatalogClient(
         base_url=operator_url,
         service_identity=settings.service_name,
@@ -103,7 +109,7 @@ if settings.admin_db_url:
     _apply_control_migrations(settings.admin_db_url, settings.app_rw_password)
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
-# Operator 目录拉取端口（05 F06/F07，#176）。有 OPERATOR_URL → 真实客户端；无 → Fake。
+# Operator 目录拉取端口（05 F06/F07，#176）。OPERATOR_URL 必填，否则 fail-closed（AITEAM-331 C1）。
 app.state._operator_catalog = _build_operator_catalog()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
@@ -126,7 +132,7 @@ app.include_router(build_knowledge_intake_router(_verifier))
 app.include_router(build_capability_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
-# 招募专家/应用方案（/api/manager/recruit/*，M6，F06/F07，D12）。Operator 目录拉取先 mock。
+# 招募专家/应用方案（/api/manager/recruit/*，M6，F06/F07，D12）。
 app.include_router(build_recruit_router(_verifier))
 # usage/audit rollup + 软配额治理（/api/manager/usage/*、/audits、/quota-policies/*，M8）。
 app.include_router(build_usage_audit_quota_router(_verifier))

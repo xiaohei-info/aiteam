@@ -1,7 +1,8 @@
 """服务间共享密钥守卫验收（缺口3 代码层，平面③）。
 
-fail-open（dev 模式未配置/dev 占位值放行）+ fail-closed（生产模式配置后校验 X-Service-Token）。
-生产模式未配置 SERVICE_TOKEN 时 fail-closed（拒绝服务间调用）。
+fail-closed（未配置 / 误配 dev-* 前缀 / 占位值各自对应不同行为）：未配置 SERVICE_TOKEN → fail-closed 401；
+dev-* 前缀视为生产 token 严格校验（AITEAM-331 B2）；仅占位值 `dev-service-token-placeholder` 在明确 dev
+profile 下 fail-open（日志提醒）；其他非空 token → fail-closed 严格校验 X-Service-Token。
 """
 
 from fastapi import Depends, FastAPI
@@ -27,11 +28,12 @@ def _app(service_token: str | None) -> FastAPI:
 # ========== Dev 模式测试（fail-open）==========
 
 
-def test_fail_open_when_unconfigured():
-    """dev 模式未配置 SERVICE_TOKEN：fail-open 放行。"""
+def test_fail_closed_when_unconfigured():
+    """AITEAM-331 B2：未配置 SERVICE_TOKEN → fail-closed 401。"""
     client = TestClient(_app(service_token=None))
     r = client.post("/protected")  # 无 token header
-    assert r.status_code == 200
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("application/problem+json")
 
 
 def test_fail_open_with_dev_placeholder():
@@ -55,10 +57,17 @@ def test_dev_mode_rejects_wrong_token():
     assert r.status_code == 401
 
 
-def test_dev_prefix_token_is_dev_mode():
-    """dev- 开头的 token 视为 dev 模式：fail-open。"""
-    client = TestClient(_app(service_token="dev-test-token"))
-    r = client.post("/protected")  # 无 token header
+def test_dev_prefix_token_is_strict_production():
+    """AITEAM-331 B2：dev-* 前缀不再视为 dev 模式 → fail-closed，必须携带匹配 token。"""
+    client = TestClient(_app(service_token="dev-abc-not-dev-mode"))
+    # 无 token header → 401（dev-* 前缀不再是 fail-open）
+    r = client.post("/protected")
+    assert r.status_code == 401
+
+def test_dev_prefix_accepted_with_matching_token():
+    """AITEAM-331 B2：dev-* 前缀 token 按生产模式严格校验，匹配即放行。"""
+    client = TestClient(_app(service_token="dev-abc-not-dev-mode"))
+    r = client.post("/protected", headers={"X-Service-Token": "dev-abc-not-dev-mode"})
     assert r.status_code == 200
 
 

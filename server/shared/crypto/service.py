@@ -6,12 +6,12 @@ API key）在入库前以 Fernet 对称加密包裹。**密钥不入库、不日
 密钥来源（优先级递减）：
 1. 构造 CryptoService 时显式注入的 Fernet 实例（测试/依赖注入）。
 2. 环境变量 MANAGER_CREDENTIAL_KEY（Fernet-compatible urlsafe base64 key）。
-3. 进程内派生的开发默认 key（仅 dev/测试，绝不用于生产）。
 
-红线：
-- 加密 key 绝不落库（DB 只存密文）。
-- 加密 key 绝不写日志/错误体/响应（02 §11.2）。
-- 解密只在受控面（Manager 内部编排 / 用户端 Driver 最小注入，04 §6.7）发生，本模块不负责调用面。
+> 说明：历史上 `_DEV_KEY` 在 `MANAGER_CREDENTIAL_KEY` 未配置时作为静默 fallback，这等同
+> 于在生产环境用同一份源码可见的固定密钥加密凭据——任意持有源码者即可解密全部凭据。本模块
+> 现已 fail-closed：缺 `MANAGER_CREDENTIAL_KEY` 时直接 `RuntimeError` 拒绝构造默认 Fernet，
+> 启动失败；生产部署必须显式设置该环境变量（`Fernet.generate_key()` 产出的 urlsafe base64）。
+> `_DEV_KEY` 仅保留作为测试中显式注入的固定 key，不再被任何隐式 fallback 路径使用。
 
 > 说明：本模块原为 `shared/crypto.py`，因与 `shared/crypto/` 包同名遮蔽导致 Manager 端
 > ImportError（见 issue #214），迁入包内 `service.py` 并由包 `__init__` 重新导出，
@@ -23,22 +23,35 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-# 开发默认 key：固定值，仅用于 dev/测试（无 MANAGER_CREDENTIAL_KEY 时）。
-# 生产必须设置 MANAGER_CREDENTIAL_KEY（Fernet.generate_key() 产出，base64 urlsafe）。
-_DEV_KEY = b"dZm0m7vQf0eXb6m9k1nQ2rT5uW8xYzAaBcDdEeFfGgI="  # noqa: S105（开发占位，非生产）
+# 测试用固定 key：仅供测试/依赖注入场景显式传入 CryptoService(fernet=Fernet(_DEV_KEY))，
+# 不再作为任何隐式 fallback 使用。缺 MANAGER_CREDENTIAL_KEY 的生产环境必须在构造
+# 默认 Fernet 之前 RuntimeError（fail-closed，AITEAM-331 B1）。
+_DEV_KEY = b"dZm0m7vQf0eXb6m9k1nQ2rT5uW8xYzAaBcDdEeFfGgI="  # noqa: S105（测试占位，非生产）
 
 
 def _load_key() -> bytes:
-    """从 env 取 Fernet key；未设置则回退开发 key（仅 dev/测试，日志绝不打印 key 本身）。"""
+    """从 env 取 Fernet key。
+
+    缺 `MANAGER_CREDENTIAL_KEY` 时 **fail-closed**：直接 RuntimeError 拒绝构造默认 Fernet，
+    防止生产环境在未配置密钥的情况下静默使用源码可见的固定 key 加密凭据（AITEAM-331 B1）。
+    """
     env_key = os.getenv("MANAGER_CREDENTIAL_KEY")
-    if env_key:
-        return env_key.encode("utf-8")
-    return _DEV_KEY
+    if not env_key:
+        raise RuntimeError(
+            "MANAGER_CREDENTIAL_KEY is not configured. "
+            "Credential encryption requires a Fernet-compatible key "
+            "(generate one with `from cryptography.fernet import Fernet; Fernet.generate_key()`). "
+            "Refusing to fall back to a hardcoded dev key in production."
+        )
+    return env_key.encode("utf-8")
 
 
 @lru_cache(maxsize=1)
 def _default_fernet():
-    """进程级默认 Fernet（来自 env key）。lru_cache 保证单进程单实例。"""
+    """进程级默认 Fernet（来自 env key）。lru_cache 保证单进程单实例。
+
+    缺 `MANAGER_CREDENTIAL_KEY` 时 fail-closed（AITEAM-331 B1）。
+    """
     from cryptography.fernet import Fernet
 
     return Fernet(_load_key())

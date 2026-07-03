@@ -24,6 +24,8 @@ def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
     settings = Settings(
         tier="manager", service_name="aiteam-manager-service",
         db_url=db_url, admin_db_url=admin_db_url,
+        # AITEAM-331 B2：未配置 SERVICE_TOKEN 不再 fail-open；显式 dev 占位值维持 dev profile。
+        service_token="dev-service-token-placeholder",
     )
     app = create_app(settings, manager_router)
     app.include_router(tenant_router)

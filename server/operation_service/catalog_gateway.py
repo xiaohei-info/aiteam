@@ -1,7 +1,7 @@
 """Operator → Manager 目录变更通知网关（05 §5.1/§5.4 F03，D4/D14）。
 
 封装一条云侧写调用：目录发布/下架/可见范围变更通知。经 shared/service_client
-（TLS + 服务身份签名占位）发起，写调用必带 `Idempotency-Key`（05 §5.1）。
+（TLS + X-Service-Token 共享密钥鉴权）发起，写调用必带 `Idempotency-Key`（05 §5.1）。
 
 设计要点：
 - Operator **不写 Manager 租户库**——这里只是 service-to-service 通知，Manager 自行缓存

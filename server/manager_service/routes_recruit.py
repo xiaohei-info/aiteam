@@ -3,8 +3,9 @@
 路径：/api/manager/recruit/*。受保护端点（require_claims）；写操作需 owner/enterprise_admin。
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22）。
 
-Operator 目录拉取端口注入：本卡 Operator 侧先 mock——app 持 `FakeOperatorCatalogClient`
-（app.state._operator_catalog），生产接入真实 OperatorCatalogClient 后无侵入替换。
+Operator 目录拉取端口注入：app.state._operator_catalog 由 `manager_service.app` 的
+`_build_operator_catalog` 构造——OPERATOR_URL 缺失则 fail-closed（AITEAM-331 C1），FakeOperatorCatalogClient
+仅在测试中显式注入（app.state._operator_catalog = FakeOperatorCatalogClient()）。
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class _ManagerNotConfigured(AppError):
 def _service(request: Request) -> RecruitService:
     """从端配置构造 RecruitService；未配置业务 DB → 503（不静默，与 employee/auth 路由一致）。
 
-    catalog 从 app.state 取（编排注入 FakeOperatorCatalogClient；生产真实实现）——本卡 Operator 先 mock。
+    catalog 从 app.state 取（OPERATOR_URL 缺失时 _build_operator_catalog fail-closed；测试显式注入 FakeOperatorCatalogClient）。
     """
     dsn = request.app.state.settings.db_url
     if not dsn:

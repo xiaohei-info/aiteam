@@ -15,3 +15,9 @@ if _SERVER_ROOT not in sys.path:
 os.environ.setdefault("OPERATION_SYSTEM_USERNAME", "sysadmin")
 os.environ.setdefault("OPERATION_SYSTEM_PASSWORD", "changeme-me")
 os.environ.setdefault("SERVICE_TOKEN", "test-service-token")
+
+# FAIL-CLOSED downstream dependency: shared/crypto/_default_fernet and
+# manager_service._build_operator_catalog must not fall back to dev keys / fake clients in
+# tests. Tests intentionally proving the fail-closed path must unset these per-test.
+os.environ.setdefault("MANAGER_CREDENTIAL_KEY", "mrykCW-P5krNV2nZgyx9CuuOimy4LA5BOJ0rS4i_JHo=")
+os.environ.setdefault("OPERATOR_URL", "http://test-operator.local:8000")

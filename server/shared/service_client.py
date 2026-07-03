@@ -3,7 +3,8 @@
 统一 base-url 解析、超时、重试、trace 透传、服务身份签名与 problem+json 解码；各端不手写 httpx。
 - 只读 GET 可幂等重试（request-id 去重）；写默认不自动重试，由调用方依 Idempotency-Key 决定（05 §5.1）。
 - 非 2xx 响应按 problem+json 解码为 AppError 子类抛出（02 §11.2）。
-- 服务身份签名为占位（平面③，03 §9.1）；真实密钥建立留详设（09 §14.3）。
+- 服务间鉴权经 `X-Service-Token`（平面③，03 §9.1）：调用方构造 ServiceClient 时传入 service_token，
+  被调端经 `verify_service_token` 校验；占位注释已清理，统一为共享密钥机制（AITEAM-331 B3）。
 
 骨架用同步 httpx.Client（便于无 async 插件测试）；异步变体后续按需补。
 """
@@ -34,7 +35,13 @@ _STATUS_TO_ERROR = {
 
 
 class ServiceClient:
-    """面向单个对端服务的窄通信客户端。"""
+    """面向单个对端服务的窄通信客户端。
+
+    服务间鉴权（平面③，03 §9.1，AITEAM-331 B3）：调用方构造时传入 `service_token`，
+    每次出站请求自动附带 `X-Service-Token` 头；被调端经 `shared.service_token.verify_service_token`
+    校验。这是代码层共享密钥机制（与 mTLS 互补），不再是占位实现。`service_identity`
+    仅用于 `X-Service-Identity` 审计标签（非鉴权决策）。
+    """
 
     def __init__(
         self,
@@ -59,10 +66,11 @@ class ServiceClient:
         if (tid := get_trace_id()):
             headers["X-Trace-ID"] = tid
         if self._service_identity:
-            # 服务身份标识（审计用）。完整服务间鉴权见 X-Service-Token + 被调端守卫（平面③ 代码层）。
+            # 服务身份标识（审计用，非鉴权决策）。
             headers["X-Service-Identity"] = self._service_identity
         if self._service_token:
-            # 服务间共享密钥（平面③ 代码层，03 §9.1）：被调端 verify_service_token 校验。mTLS 留部署层。
+            # 服务间共享密钥（平面③，03 §9.1）：被调端 verify_service_token 校验。
+            # 与 mTLS 互补，非占位实现（AITEAM-331 B3）。
             headers["X-Service-Token"] = self._service_token
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
