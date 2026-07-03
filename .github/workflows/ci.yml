@@ -14,14 +14,14 @@ on:
   push:
     # 只在集成分支跑 push：worker/PR 分支由 pull_request 事件覆盖，
     # 否则同一提交 push+PR 双跑、每个短命分支也全量跑（曾致 ~250 run/天）。
-    branches: ["master", "feature/**"]
+    branches: ["main", "feature/**"]
     paths:
       - "server/**"
       - ".github/workflows/ci.yml"
   pull_request:
-    # master = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
+    # main = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
     # 两者都触发，覆盖棘轮才能在开发期就守住集成分支、不必等大合并。
-    branches: ["master", "feature/**"]
+    branches: ["main", "feature/**"]
     paths:
       - "server/**"
       - ".github/workflows/ci.yml"
@@ -112,11 +112,11 @@ jobs:
         run: python -m pytest -q -m integration
 
   branch-coverage-ratchet:
-    name: 分支覆盖棘轮（PR→master 不退化）
+    name: 分支覆盖棘轮（PR→main 不退化）
     runs-on: ubuntu-latest
-    # 总控门：仅在 PR 时跑（PR→master 与 PR→feature/** 均触发，push 不跑）。
-    # 口径=整仓总分支覆盖「不退化」：PR head 不得低于 base(master)。
-    # master 自身即基线，永远最新、自动随提升上调、能 block 聚合回退——无需维护基线文件。
+    # 总控门：仅在 PR 时跑（PR→main 与 PR→feature/** 均触发，push 不跑）。
+    # 口径=整仓总分支覆盖「不退化」：PR head 不得低于 base(main)。
+    # main 自身即基线，永远最新、自动随提升上调、能 block 聚合回退——无需维护基线文件。
     # 注：per-卡 diff 覆盖硬门槛由 worker/reviewer 本地 diff-cover 把守；CI 侧改动分支
     # 覆盖门（F1, diff-cover --fail-under=90）待 baseline 抬到≥90% 后点亮。
     if: github.event_name == 'pull_request'
@@ -145,7 +145,7 @@ jobs:
           path: head
           fetch-depth: 0
 
-      - name: Checkout base (master)
+      - name: Checkout base (main)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -174,7 +174,7 @@ jobs:
             --cov=agent_service --cov=agent_gateway --cov=shared \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
-      # base(master) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
+      # base(main) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
       # base 全量跑（棘轮 job 原本每个 PR 要跑两遍全量套件，这里砍掉恒定的那一半）。
       - name: 缓存 base 覆盖率（按 base sha）
         id: base-cov
@@ -183,7 +183,7 @@ jobs:
           path: base-cov/base.json
           key: server-base-cov-${{ github.event.pull_request.base.sha }}
 
-      - name: 覆盖率 - base master（全量套件 + 分支，仅缓存未命中时）
+      - name: 覆盖率 - base main（全量套件 + 分支，仅缓存未命中时）
         if: steps.base-cov.outputs.cache-hit != 'true'
         working-directory: base/server
         # 同上：base 只取覆盖数字，base 套件是否全绿不影响棘轮（对齐 web-ci.yml base 步）。
@@ -215,11 +215,11 @@ jobs:
           w = os.environ["GITHUB_WORKSPACE"]
           head = json.load(open(f"{t}/head.json"))["totals"]["percent_covered"]
           base = json.load(open(f"{w}/base-cov/base.json"))["totals"]["percent_covered"]
-          print(f"base(master) 分支覆盖: {base:.2f}%")
+          print(f"base(main) 分支覆盖: {base:.2f}%")
           print(f"head(PR)     分支覆盖: {head:.2f}%")
           # 0.01% 容差吸收行计数抖动
           if head + 0.01 < base:
-              print(f"::error::分支覆盖回退 {base:.2f}% → {head:.2f}%——PR 不得降低 master 总覆盖（补测试或提升覆盖后再合）")
+              print(f"::error::分支覆盖回退 {base:.2f}% → {head:.2f}%——PR 不得降低 main 总覆盖（补测试或提升覆盖后再合）")
               raise SystemExit(1)
           print("OK：总分支覆盖未退化")
           PY

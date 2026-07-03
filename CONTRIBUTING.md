@@ -24,7 +24,7 @@
 ```bash
 git clone https://github.com/xiaohei-info/aiteam.git
 cd aiteam
-git checkout feature/v1.0.0  # 当前主开发分支
+git checkout main  # 当前主开发分支
 ```
 
 ### 2. 设置 Python 后端环境
@@ -279,7 +279,7 @@ rm -rf ~/.local/share/pnpm/store
 
 ## 贡献代码
 
-1. 从 `feature/v1.0.0` 创建你的功能分支：`git checkout -b feat/your-feature`
+1. 从 `main` 创建你的功能分支：`git checkout -b feat/your-feature`
 2. 提交时遵循约定式提交：`feat(scope): 描述` / `fix(scope): 描述`
 3. 确保所有测试通过（见"提交前检查清单"）
 4. 推送分支并创建 Pull Request

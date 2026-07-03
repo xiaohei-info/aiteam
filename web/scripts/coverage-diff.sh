@@ -9,7 +9,7 @@
 # 依赖：pnpm、diff-cover（pip install diff-cover）。
 set -euo pipefail
 
-BRANCH="${1:-origin/master}"
+BRANCH="${1:-origin/main}"
 THRESHOLD="${2:-90}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$SCRIPT_DIR/.."

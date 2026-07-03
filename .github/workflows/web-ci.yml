@@ -14,14 +14,14 @@ on:
   push:
     # 只在集成分支跑 push：worker/PR 分支由 pull_request 事件覆盖，
     # 否则同一提交 push+PR 双跑、每个短命分支也全量跑（曾致 ~250 run/天）。
-    branches: ["master", "feature/**"]
+    branches: ["main", "feature/**"]
     paths:
       - "web/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
-    # master = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
+    # main = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
     # 两者都触发，覆盖棘轮才能在开发期就守住集成分支、不必等大合并。
-    branches: ["master", "feature/**"]
+    branches: ["main", "feature/**"]
     paths:
       - "web/**"
       - ".github/workflows/web-ci.yml"
@@ -167,12 +167,12 @@ jobs:
           if-no-files-found: ignore
 
   branch-coverage-ratchet:
-    name: 分支覆盖棘轮（PR→master 不退化）
+    name: 分支覆盖棘轮（PR→main 不退化）
     runs-on: ubuntu-latest
-    # 总控门：仅在 PR 时跑（PR→master 与 PR→feature/** 均触发，push 不跑）。
+    # 总控门：仅在 PR 时跑（PR→main 与 PR→feature/** 均触发，push 不跑）。
     # 双层：CI 物理层 diff-cover --fail-under=90 改动分支覆盖门 + 棘轮总覆盖不退化兜底。
-    # 引入覆盖能力的首个 PR：base(master) 尚无 @vitest/coverage-v8 → base 跑不出覆盖，
-    # 自动跳过比对（bootstrap）；合并后 master 即基线，后续 PR 起真比对。
+    # 引入覆盖能力的首个 PR：base(main) 尚无 @vitest/coverage-v8 → base 跑不出覆盖，
+    # 自动跳过比对（bootstrap）；合并后 main 即基线，后续 PR 起真比对。
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout PR head
@@ -181,7 +181,7 @@ jobs:
           path: head
           fetch-depth: 0
 
-      - name: Checkout base (master)
+      - name: Checkout base (main)
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -210,7 +210,7 @@ jobs:
             fi
           done
 
-      # base(master) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
+      # base(main) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
       # base 全量跑（棘轮 job 原本每个 PR 要跑两遍全量 vitest，这里砍掉恒定的那一半）。
       - name: 缓存 base 覆盖率（按 base sha）
         id: base-cov
@@ -219,7 +219,7 @@ jobs:
           path: web-base-cov/base.txt
           key: web-base-cov-${{ github.event.pull_request.base.sha }}
 
-      - name: 覆盖率 - base master（容忍未 instrumented，仅缓存未命中时）
+      - name: 覆盖率 - base main（容忍未 instrumented，仅缓存未命中时）
         if: steps.base-cov.outputs.cache-hit != 'true'
         working-directory: base/web
         continue-on-error: true
@@ -250,10 +250,10 @@ jobs:
         run: |
           HEAD=$(cat "$RUNNER_TEMP/head.txt")
           if [ ! -f "$GITHUB_WORKSPACE/web-base-cov/base.txt" ]; then
-            echo "::notice::base(master) 尚未具备覆盖工具（首次引入），跳过棘轮比对；head=${HEAD}%。合并后 master 即为基线。"
+            echo "::notice::base(main) 尚未具备覆盖工具（首次引入），跳过棘轮比对；head=${HEAD}%。合并后 main 即为基线。"
             exit 0
           fi
           BASE=$(cat "$GITHUB_WORKSPACE/web-base-cov/base.txt")
-          python3 -c "import sys; h=float('${HEAD}'); b=float('${BASE}'); print(f'base(master) 分支覆盖: {b:.2f}%'); print(f'head(PR)     分支覆盖: {h:.2f}%'); sys.exit(1 if h + 0.01 < b else 0)" || {
-            echo "::error::web 分支覆盖回退 ${BASE}% → ${HEAD}%——PR 不得降低 master 总覆盖（补测试后再合）"; exit 1; }
+          python3 -c "import sys; h=float('${HEAD}'); b=float('${BASE}'); print(f'base(main) 分支覆盖: {b:.2f}%'); print(f'head(PR)     分支覆盖: {h:.2f}%'); sys.exit(1 if h + 0.01 < b else 0)" || {
+            echo "::error::web 分支覆盖回退 ${BASE}% → ${HEAD}%——PR 不得降低 main 总覆盖（补测试后再合）"; exit 1; }
           echo "OK：web 总分支覆盖未退化"

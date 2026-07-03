@@ -8,8 +8,8 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
   `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
 - `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；完成
   git pull → 条件性前端 build → 装 unit → systemctl restart → healthz + HTML smoke。
-- `.github/workflows/deploy-feature-v1.0.0.yml` — GitHub Actions workflow。
-  PR merge 到 `feature/v1.0.0` 或 `workflow_dispatch` 手动触发。
+- `.github/workflows/deploy-main.yml` — GitHub Actions workflow。
+  PR merge 到 `main` 或 `workflow_dispatch` 手动触发。
 
 ## 工作原理
 
@@ -81,7 +81,7 @@ cd web && pnpm install --frozen-lockfile && pnpm build
 
 ```bash
 # 部署根内手动跑一次（不触发 CI）
-bash deploy/ci/run.sh --branch feature/v1.0.0 --env test
+bash deploy/ci/run.sh --branch main --env test
 
 # 看 daemon 日志
 journalctl -f -u aiteam-v1

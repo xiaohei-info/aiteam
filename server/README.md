@@ -26,7 +26,7 @@
 ### 标准安装命令（克隆后照做）
 
 ```bash
-git clone <repo> && cd aiteam && git checkout feature/v1.0.0
+git clone <repo> && cd aiteam && git checkout main
 
 # 仓库根建 venv（用 ≥3.12 的 python）
 python3.12 -m venv .venv

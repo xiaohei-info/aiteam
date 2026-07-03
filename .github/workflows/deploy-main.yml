@@ -12,7 +12,7 @@
 # run.sh 里对空 branch 显式 fail: "branch is required: ..."
 # 没有任何 fallback；不传 branch 就是错。
 
-name: deploy (feature/v1.0.0 -> taiyi)
+name: deploy (main -> taiyi)
 
 "on":
   workflow_dispatch:
@@ -22,7 +22,7 @@ name: deploy (feature/v1.0.0 -> taiyi)
         required: true
         type: string
   pull_request:
-    branches: [feature/v1.0.0]
+    branches: [main]
     types: [closed]
 
 permissions:
@@ -39,7 +39,7 @@ env:
 
 jobs:
   deploy:
-    name: deploy (feature/v1.0.0 -> taiyi)
+    name: deploy (main -> taiyi)
     # workflow_dispatch runs have no pull_request.merged context,
     # so guard with event_name check; otherwise the job gets skipped.
     if: >-

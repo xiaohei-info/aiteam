@@ -52,7 +52,7 @@ URL 供你核对已真实展开。口令/连接对照（一次性本地测试值
 **注意顺序**：`app_rw` 的 LOGIN 口令是迁移幂等下发的，所以 `DB_URL`（app_rw 身份）只有在
 **第 4 步任一 integration 测试跑过一次后**才能直接连——首次连接由 fixture `migrated_pg` 触发下发。
 
-## 4. 复跑 5 条契约（base = `feature/v1.0.0`）
+## 4. 复跑 5 条契约（base = `main`）
 
 ```bash
 cd server
@@ -75,7 +75,7 @@ python -m pytest -q \
   --cov-branch --cov-report=xml:coverage.xml \
   tests/integration/fixtures/ tests/integration/_foundation_consumers/
 cd ..
-diff-cover server/coverage.xml --compare-branch=origin/feature/v1.0.0 --fail-under=90
+diff-cover server/coverage.xml --compare-branch=origin/main --fail-under=90
 ```
 
 > PG 缺失时 P1-F1/F3 与身份/sibling 的 DB 用例会 `skip`，diff-cover 会因 PG 路径未执行而**低于 90%**——
