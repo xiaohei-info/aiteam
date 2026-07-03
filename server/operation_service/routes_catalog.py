@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
@@ -75,12 +75,12 @@ async def register_solution_template(
 async def publish_catalog_entry(
     catalog_type: CatalogType,
     template_id: str,
-    body: PublishTemplateRequest,
+    body: PublishTemplateRequest = Body(default=None),
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
     return Envelope[CatalogEntryResponse](
-        data=service.publish_template(catalog_type, template_id, body)
+        data=service.publish_template(catalog_type, template_id, body or PublishTemplateRequest())
     )
 
 
