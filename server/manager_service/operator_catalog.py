@@ -129,6 +129,11 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._experts_latest: dict[str, ExpertTemplateDetail] = {}
         self._solutions: dict[tuple[str, str], SolutionPackage] = {}
         self._solutions_latest: dict[str, SolutionPackage] = {}
+        self.invalidated: list[tuple[str, str]] = []
+
+    def invalidate(self, catalog_type: str, template_id: str) -> None:
+        """记录缓存失效请求（fake 无真实缓存，仅用于测试观测）。"""
+        self.invalidated.append((catalog_type, template_id))
 
     # ---- 预置（测试/骨架用，生产不调）----
     def seed_expert(self, detail: ExpertTemplateDetail) -> None:
