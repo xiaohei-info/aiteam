@@ -477,6 +477,44 @@ class TestPgCatalogRepository:
         assert entry.template_id == "t1"
         assert any("INSERT INTO catalog_template" in s for s, _ in self.cursor.calls)
 
+    def test_create_wraps_jsonb_fields(self, repo):
+        """psycopg3 cannot adapt Python dicts; visible_scope/payload must be Json()."""
+        from psycopg.types.json import Json
+        _set_one(self.cursor, None)   # _exists -> absent
+        _noop(self.cursor)            # INSERT
+        repo.create(self._entry())
+        insert_calls = [p for s, p in self.cursor.calls if "INSERT INTO catalog_template" in s]
+        assert insert_calls, "INSERT was not called"
+        params = insert_calls[0]
+        # visible_scope (index 5) and payload (index 6) must be Json instances
+        assert isinstance(params[5], Json), f"visible_scope not Json: {type(params[5])}"
+        assert isinstance(params[6], Json), f"payload not Json: {type(params[6])}"
+
+    def test_create_wraps_none_visible_scope(self, repo):
+        """None visible_scope should be passed as None, not Json(None)."""
+        from operation_service.catalog_repository import CatalogEntry
+        entry = CatalogEntry(
+            catalog_type=CatalogType.EXPERT_TEMPLATE, template_id="t2",
+            version="1", display_name="X", visible_scope=None, payload={"p": 1},
+        )
+        _set_one(self.cursor, None)
+        _noop(self.cursor)
+        repo.create(entry)
+        insert_calls = [p for s, p in self.cursor.calls if "INSERT INTO catalog_template" in s]
+        params = insert_calls[0]
+        assert params[5] is None, f"visible_scope should be None: {params[5]}"
+
+    def test_update_wraps_jsonb_fields(self, repo):
+        """update() must also wrap visible_scope/payload with Json()."""
+        from psycopg.types.json import Json
+        _noop(self.cursor)  # UPDATE
+        repo.update(self._entry(), status=CatalogStatus.PUBLISHED)
+        update_calls = [p for s, p in self.cursor.calls if "UPDATE catalog_template SET" in s]
+        assert update_calls, "UPDATE was not called"
+        params = update_calls[0]
+        assert isinstance(params[3], Json), f"visible_scope not Json: {type(params[3])}"
+        assert isinstance(params[4], Json), f"payload not Json: {type(params[4])}"
+
     def test_create_conflict_when_exists(self, repo):
         from shared.errors import Conflict
         _set_one(self.cursor, (1,))   # _exists -> present
