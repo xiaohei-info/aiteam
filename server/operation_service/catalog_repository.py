@@ -108,6 +108,7 @@ class PgCatalogRepository(CatalogRepositoryBase):
 
     def create(self, entry):
         import psycopg
+        from psycopg.types.json import Json
         if self._exists(entry.catalog_type, entry.template_id):
             raise Conflict(f"catalog entry already exists: {entry.template_id}")
         with psycopg.connect(self._dsn, autocommit=False) as conn:
@@ -116,7 +117,9 @@ class PgCatalogRepository(CatalogRepositoryBase):
                     "INSERT INTO catalog_template (catalog_type, template_id, version, display_name, status, visible_scope, payload) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (entry.catalog_type.value, entry.template_id, entry.version,
-                     entry.display_name, entry.status.value, entry.visible_scope, entry.payload),
+                     entry.display_name, entry.status.value,
+                     Json(entry.visible_scope) if entry.visible_scope else None,
+                     Json(entry.payload)),
                 )
             conn.commit()
         return entry
@@ -137,6 +140,7 @@ class PgCatalogRepository(CatalogRepositoryBase):
 
     def update(self, entry, **changes):
         import psycopg
+        from psycopg.types.json import Json
         updated = replace(entry, **changes)
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -145,7 +149,8 @@ class PgCatalogRepository(CatalogRepositoryBase):
                     "visible_scope = %s, payload = %s, updated_at = now() "
                     "WHERE catalog_type = %s AND template_id = %s",
                     (updated.version, updated.display_name, updated.status.value,
-                     updated.visible_scope, updated.payload,
+                     Json(updated.visible_scope) if updated.visible_scope else None,
+                     Json(updated.payload),
                      updated.catalog_type.value, updated.template_id),
                 )
         return updated
