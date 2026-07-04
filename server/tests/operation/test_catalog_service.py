@@ -127,6 +127,33 @@ def test_publish_already_published_conflict(service):
 
 # ---- 下架 ----
 
+def test_publish_succeeds_when_manager_notify_fails(service):
+    """Manager 通知失败不应阻断发布：Operator 已落本端真相，通知是 best-effort。"""
+    class _FailingGateway(CatalogManagerGateway):
+        def notify_catalog_release(self, notify, *, idempotency_key):
+            raise RuntimeError('Manager unreachable / 405')
+
+    svc = CatalogService(CatalogRepository(), _FailingGateway())
+    svc.register_expert_template(_expert())
+    entry = svc.publish_template(
+        CatalogType.EXPERT_TEMPLATE, 'tpl-cmo', PublishTemplateRequest()
+    )
+    assert entry.status == CatalogStatus.PUBLISHED
+
+
+def test_unpublish_succeeds_when_manager_notify_fails(service):
+    """Manager 通知失败不应阻断下架。"""
+    class _FailingGateway(CatalogManagerGateway):
+        def notify_catalog_release(self, notify, *, idempotency_key):
+            raise RuntimeError('Manager unreachable / 405')
+
+    svc = CatalogService(CatalogRepository(), _FailingGateway())
+    svc.register_expert_template(_expert())
+    svc.publish_template(CatalogType.EXPERT_TEMPLATE, 'tpl-cmo', PublishTemplateRequest())
+    entry = svc.unpublish_template(CatalogType.EXPERT_TEMPLATE, 'tpl-cmo')
+    assert entry.status == CatalogStatus.UNPUBLISHED
+
+
 def test_unpublish_notifies_manager(service, manager):
     service.register_expert_template(_expert())
     service.publish_template(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", PublishTemplateRequest())
