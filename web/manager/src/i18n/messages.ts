@@ -3,6 +3,7 @@ import type { LocaleCatalog } from "@aiteam/shared";
 
 export const managerMessages: LocaleCatalog = {
   "zh-CN": {
+    "manager.common.close": "关闭",
     "manager.title": "AI Team 企业端",
     "manager.nav.dashboard": "企业概览",
     "manager.nav.members": "成员账号",
@@ -118,6 +119,11 @@ export const managerMessages: LocaleCatalog = {
     "manager.experts.aggregate_prompt": "协作编排 aggregate prompt",
     "manager.experts.solution_prompts_hint": "空值 = 回退运行时默认",
     "manager.experts.solution_save_ok": "方案实例已保存",
+    "manager.experts.view_detail": "查看详情",
+    "manager.experts.detail_experts": "包含AI员工",
+    "manager.experts.detail_no_experts": "暂无专家信息",
+    "manager.experts.detail_knowledge_refs": "知识引用",
+    "manager.experts.detail_skill_refs": "技能引用",
     "manager.experts.runtime_binding": "运行时绑定",
     "manager.experts.timeout_seconds": "超时（秒）",
     "manager.experts.tools": "工具",

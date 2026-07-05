@@ -75,18 +75,23 @@ class RecruitService:
             template_id=req.template_id, version=req.template_version
         )
 
-        if self._employees.get_by_slug(ctx, employee_slug=req.employee_slug) is not None:
+        # slug 由前端显式传入或后端按模板 display_name 自动生成（+ 去重后缀）；空=自动生成。
+        slug = req.employee_slug
+        if not slug:
+            slug = self._generate_unique_slug(ctx, template)
+
+        if self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
             raise Conflict("employee slug already exists in this tenant")
 
         # 2) 建招募追踪订单（pending → provisioning）；幂等键 = template+slug。
-        idem = _idempotency_key(template.template_id, req.employee_slug)
+        idem = _idempotency_key(template.template_id, slug)
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
         recommended = template.recommended_config or {}
         try:
             row = self._employees.create(
                 ctx,
-                employee_slug=req.employee_slug,
+                employee_slug=slug,
                 display_name=req.display_name_override or template.display_name,
                 persona=req.persona_override or template.persona,
                 model=recommended.get("model"),
@@ -288,6 +293,34 @@ class RecruitService:
             experts=expert_results,
             grants_applied=grants_applied,
         )
+
+    # ---- slug 自动生成（F06 招募时 employee_slug 未传，由后端派生唯一 slug）----
+    _SLUGIFY_RE = None
+    _SLUG_SPACER_RE = None
+
+    def _generate_unique_slug(self, ctx: TenantContext, template) -> str:
+        """按模板 display_name slugify 后生成租户内唯一 slug（低碰撞、保持可读）。"""
+        import re
+
+        cls = type(self)
+        if cls._SLUGIFY_RE is None:
+            cls._SLUGIFY_RE = re.compile(r"[^\w\s-]", re.UNICODE)
+            cls._SLUG_SPACER_RE = re.compile(r"[\s_-]+")
+
+        base = cls._SLUGIFY_RE.sub("", template.display_name.strip().lower())
+        base = cls._SLUG_SPACER_RE.sub("_", base).strip("_")
+        if not base:
+            base = template.template_id.replace("-", "_").lower().strip("_")
+        base = base[:64]
+
+        candidate = base
+        for i in range(1, 51):
+            if self._employees.get_by_slug(ctx, employee_slug=candidate) is None:
+                return candidate
+            suffix = f"_{i}"
+            candidate = f"{base[:64 - len(suffix)]}{suffix}"
+        import uuid
+        return f"{base[:56]}_{uuid.uuid4().hex[:7]}"
 
     # ---- 招募订单查询 ----
     def list_recruit_orders(self, ctx: TenantContext) -> list[RecruitmentOrderOut]:

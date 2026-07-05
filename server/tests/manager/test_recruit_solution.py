@@ -830,3 +830,121 @@ def test_apply_solution_preserves_collab_prompts_from_package():
     assert result.solution_instance.planner_prompt == "plan-p"
     assert result.solution_instance.subtask_prompt == "sub-p"
     assert result.solution_instance.aggregate_prompt == "agg-p"
+
+
+# ---- 追加测试：F06 未传 employee_slug 时后端自动生成 slug（PRD P03/P04）----
+
+def test_recruit_expert_generates_slug_when_missing():
+    """未传 employee_slug 时后端自动生成 slug（PRD P03/P04：实例标识服务端创建）."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="测试销售专家", persona="销售精英",
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-a", enterprise_id="ent-a", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    assert result.employee_slug, "应自动生成 slug"
+    assert svc._employees.get_by_slug(ctx, employee_slug=result.employee_slug) is not None
+
+
+def test_recruit_expert_generated_slugs_are_unique():
+    """同一 tenant 多次不传 slug 时后端生成唯一 slug."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="销售 专家", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
+    r1 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    r2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    assert r1.employee_slug != r2.employee_slug
+
+
+def test_recruit_expert_explicit_slug_still_works():
+    """向前兼容：显式传 employee_slug 仍按传入值落库（PRD 放宽而非移除）."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="销售专家", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-exp", enterprise_id="ent-exp", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto", employee_slug="my-custom-slug"))
+    assert result.employee_slug == "my-custom-slug"
+
+
+def test_recruit_expert_generated_slug_allowed_chars():
+    """后端生成 slug 遵守 [a-z0-9_] 约束（与 repo unique slug 约定一致）."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-chars", enterprise_id="ent-chars", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    slug = result.employee_slug
+    assert slug and slug == slug.lower(), "slug 全小写"
+    assert all(c.isalnum() or c == "_" for c in slug), "slug 仅允许 [a-z0-9_]"

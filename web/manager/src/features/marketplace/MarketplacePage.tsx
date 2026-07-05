@@ -1,15 +1,18 @@
 /**
  * 人才市场页（AITEAM-290 / GH#404）。
  *
- * 独立的人才招募入口：可招募专家模板浏览 + 招募为 tenant 实例。
+ * 独立的人才招募入口：可招募专家模板浏览 + 一键招募为 tenant 实例。
  *
  * 注意：本入口与旧 /experts 页的招募功能平行；/marketplace 聚焦浏览 + 招募流程，
  * 旧 /experts 保留员工生命周期管理（编辑配置 / 查看状态 / 生命周期流转）。
  * 参照旧架构 admin/templates 人才市场功能形态（仅功能参考，不沿用代码风格）。
+ *
+ * 设计对齐 PRD P03/P04：招募无需手工填写实例标识（slug），服务端按模板自动创建实例；
+ * 招募动作为一个确认弹窗，入参仅 template_id。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Button } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
@@ -69,44 +72,31 @@ export function MarketplacePage(): ReactNode {
           {i18n.t("manager.experts.templates_title")}
         </h2>
         {templates.length === 0 ? (
-          <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
+          <p className="m-0 text-sm text-text-muted">
             {i18n.t("manager.experts.templates_empty")}
-          </GlassPanel>
+          </p>
         ) : (
-          <GlassPanel className="flex flex-col divide-y divide-gold/10 overflow-hidden rounded-window">
+          <ul className="m-0 flex flex-col gap-sm p-0" data-testid="template-list">
             {templates.map((t) => (
-              <div key={`${t.template_id}@${t.version}`} data-testid="template-row"
-                className="flex flex-wrap items-center gap-sm px-lg py-md">
+              <li key={`${t.template_id}@${t.version}`} data-testid="template-row"
+                className="flex flex-wrap items-center gap-sm rounded-md border border-gold/15 px-lg py-md">
                 <span className="font-medium text-text-primary">{t.display_name}</span>
                 <code className="text-xs text-gold-bright">{t.template_id}</code>
+                <span className="ml-auto text-xs text-text-muted">{t.persona ?? ""}</span>
                 {canWrite && (
-                  <RecruitInline onRecruit={(slug) =>
-                    runAction(
-                      () => api.recruitExpert({ template_id: t.template_id, employee_slug: slug }),
+                  <Button type="button" size="sm"
+                    onClick={() => void runAction(
+                      () => api.recruitExpert({ template_id: t.template_id }),
                       "manager.experts.recruit_ok",
-                    )} />
+                    )}>
+                    {i18n.t("manager.experts.recruit")}
+                  </Button>
                 )}
-              </div>
+              </li>
             ))}
-          </GlassPanel>
+          </ul>
         )}
       </div>
     </section>
-  );
-}
-
-function RecruitInline({ onRecruit }: { onRecruit: (slug: string) => void }): ReactNode {
-  const i18n = useI18n();
-  const [slug, setSlug] = useState("");
-  return (
-    <span className="ml-auto flex items-center gap-sm">
-      <Input className="h-8 py-1" aria-label={i18n.t("manager.experts.slug")}
-        placeholder={i18n.t("manager.experts.slug")} value={slug}
-        onChange={(e) => setSlug(e.target.value)} />
-      <Button type="button" size="sm" disabled={!slug.trim()}
-        onClick={() => { onRecruit(slug.trim()); setSlug(""); }}>
-        {i18n.t("manager.experts.recruit")}
-      </Button>
-    </span>
   );
 }

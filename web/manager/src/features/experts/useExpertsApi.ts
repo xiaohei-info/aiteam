@@ -3,6 +3,9 @@
  *
  * 只调本端 /api/manager/recruit/* 与 /api/manager/employees/*（跨端由基类拦截）。
  * 浏览目录是 Operator 只读投影（后端 #118）；招募/应用落本 tenant employee 实例。
+ *
+ * 注意（PRD B06）：新 /solutions 页已移除实例编辑能力，但旧 /experts 页仍保留方案实例局部更新
+ * 入口（向后兼容）；对应后端 PATCH /api/manager/recruit/solutions/{id} 路由不变。
  */
 import { useMemo } from "react";
 import { createManagerApiClient } from "../../api/client";

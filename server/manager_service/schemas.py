@@ -414,7 +414,11 @@ class MemoryPolicyCatalogOut(MemoryPolicyCatalogIn):
 #
 
 class RecruitExpertRequest(BaseModel):
-    """F06 招募专家请求：指定 Operator 侧模板标识 + 本 tenant 落地参数 + 可选授权绑定。"""
+    """F06 招募专家请求：指定 Operator 侧模板标识 + 本 tenant 落地参数 + 可选授权绑定。
+
+    employee_slug 可选：由前端显式传入（兼容旧客户端）或由后端按模板 display_name 自动生成
+    （slugify + 去重后缀），保持 unique(tenant_id, slug) 约束。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -422,7 +426,9 @@ class RecruitExpertRequest(BaseModel):
     template_version: str | None = Field(
         default=None, description="模板版本；空=取 Operator 侧最新"
     )
-    employee_slug: str = Field(description="本 tenant 内 employee 实例 slug，unique(tenant_id, slug)")
+    employee_slug: str | None = Field(
+        default=None, description="本 tenant 内 employee 实例 slug，unique(tenant_id, slug)；空=后端自动生成"
+    )
     display_name_override: str | None = Field(
         default=None, description="覆盖模板 display_name；空=用模板 display_name"
     )
