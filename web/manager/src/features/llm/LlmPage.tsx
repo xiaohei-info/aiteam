@@ -106,17 +106,26 @@ export function LlmPage(): ReactNode {
       if (mode === "create") {
         if (!formKey) return;
         const created = await api.createProvider({ name: formName, provider_key: formKey, base_url: formBaseUrl || undefined });
-        // 创建 Provider 后，使用返回的 provider_id 继续创建初始模型
+        // 创建 Provider 后，使用返回的 provider_id 继续创建初始模型。
+        // 模型创建与 Provider 非原子：模型失败时刷新列表使已创建的 Provider 可见，
+        // 并明确提示“Provider 已创建”，避免用户误以为 Provider 也未创建而重复提交。
         if (created) {
-          for (const draft of initialModels) {
-            if (!draft.uid || !draft.name) continue;
-            await api.createModel(created.provider_id, {
-              model_uid: draft.uid,
-              model_name: draft.name,
-              context_window: draft.ctx ? Number(draft.ctx) : undefined,
-              input_price: draft.inPrice || undefined,
-              output_price: draft.outPrice || undefined,
-            });
+          try {
+            for (const draft of initialModels) {
+              if (!draft.uid || !draft.name) continue;
+              await api.createModel(created.provider_id, {
+                model_uid: draft.uid,
+                model_name: draft.name,
+                context_window: draft.ctx ? Number(draft.ctx) : undefined,
+                input_price: draft.inPrice || undefined,
+                output_price: draft.outPrice || undefined,
+              });
+            }
+          } catch (modelErr) {
+            await load();
+            const msg = modelErr instanceof ApiError ? modelErr.message : "模型创建失败";
+            setActionError(`Provider 已创建，但初始模型创建失败：${msg}`);
+            return;
           }
         }
       } else if (mode === "edit" && editingId) {

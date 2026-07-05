@@ -11,6 +11,7 @@
  * - 创建 Provider 时一并添加初始模型（模型标识 + 名称）
  * - 创建 Provider 时初始模型可选（不填则不调用 createModel）
  * - 创建 Provider 失败时不创建初始模型
+ * - 创建 Provider 成功但初始模型失败：刷新列表 + 明确提示“Provider 已创建”
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -355,5 +356,38 @@ describe("LlmPage LLM管理", () => {
       expect(screen.getByTestId("action-error")).toHaveTextContent("Provider 名称已存在"),
     );
     expect(api.createModel).not.toHaveBeenCalled();
+  });
+
+  // ---- 评审修复：Provider 成功但模型失败的分支 ----
+  it("创建 Provider 成功但初始模型失败时，刷新列表并提示 Provider 已创建", async () => {
+    // 第 1 次 list（mount）返回第 1 个提供者；模型创建失败后再次 load，
+    // 返回 2 个 Provider，断言列表已刷新、出现新的“Anthropic”。
+    const api = mockApi({
+      createModel: vi.fn().mockRejectedValue(new ApiError("模型标识已存在", 409, "model_dup")),
+      listProviders: vi.fn()
+        .mockResolvedValueOnce([provider])
+        .mockResolvedValue([provider, { ...provider, provider_id: "p2", name: "Anthropic", provider_key: "anthropic" }]),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create"));
+    fireEvent.change(screen.getByTestId("field-name"), { target: { value: "Anthropic" } });
+    fireEvent.change(screen.getByTestId("field-key"), { target: { value: "anthropic" } });
+    fireEvent.click(screen.getByTestId("add-initial-model"));
+    fireEvent.change(screen.getByTestId("initial-model-uid-0"), { target: { value: "claude-3" } });
+    fireEvent.change(screen.getByTestId("initial-model-name-0"), { target: { value: "Claude 3" } });
+    fireEvent.click(screen.getByTestId("submit-form"));
+
+    // Provider 创建先成功
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalled());
+    // 模型创建接着被调用但失败
+    await waitFor(() => expect(api.createModel).toHaveBeenCalled());
+    // 失败后应刷新列表（load 被再次调用）
+    await waitFor(() => expect(api.listProviders).toHaveBeenCalledTimes(2));
+    // 错误提示明确含有“Provider 已创建”
+    await waitFor(() =>
+      expect(screen.getByTestId("action-error")).toHaveTextContent("Provider 已创建"),
+    );
   });
 });
