@@ -312,3 +312,76 @@ def test_private_conversation_excludes_from_group_filter():
     assert priv.conversation_type == "private"
     grp = mainline.create_conversation(title="team")
     assert grp.conversation_type == "group"
+
+
+
+
+def test_sqlite_conversation_repository_roundtrip_with_solution_fields():
+    """SqliteConversationRepository: solution_* 字段 + expert_ids JSON 列写读回（覆盖 line 337-362）。"""
+    import tempfile, sqlite3, os
+    from agent_service.local_db import connect
+    from agent_service.mainline.store import SqliteConversationRepository
+    from agent_service.mainline.models import Conversation, ConversationState
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    tmp.close()
+    conn = sqlite3.connect(tmp.name)
+    conn.execute("""CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, title TEXT, state TEXT, collaboration_mode TEXT, orchestration_brief TEXT,
+        planner_employee_id TEXT, entry_employee_id TEXT, last_read_at TEXT, last_read_message_id TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        solution_instance_id TEXT, solution_planner_prompt TEXT, solution_subtask_prompt TEXT,
+        solution_aggregate_prompt TEXT, solution_expert_employee_ids TEXT DEFAULT '[]'
+    )""")
+    conn.commit()
+    db = connect(tmp.name)
+    repo = SqliteConversationRepository(db)
+
+    conv = repo.create(Conversation(
+        id="c1", title="群", state=ConversationState.ACTIVE,
+        collaboration_mode="orchestrated", orchestration_brief="brief",
+        solution_instance_id="si-1", solution_planner_prompt="p", solution_subtask_prompt="s",
+        solution_aggregate_prompt="a", solution_expert_employee_ids=["e1", "e2"],
+    ))
+    got = repo.get("c1")
+    assert got.solution_instance_id == "si-1"
+    assert got.solution_expert_employee_ids == ["e1", "e2"]
+    assert got.solution_planner_prompt == "p"
+
+    listed = repo.list()
+    assert len(listed) == 1
+    conn.close()
+
+
+def test_sqlite_conversation_repo_expert_ids_json_parse_branch():
+    """SqliteConversationRepository.get: solution_expert_employee_ids 异常 JSON → [] 兜底分支 (line 351)。"""
+    import tempfile, sqlite3
+    from agent_service.local_db import connect
+    from agent_service.mainline.store import SqliteConversationRepository
+    from agent_service.mainline.models import Conversation, ConversationState
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    tmp.close()
+    conn = sqlite3.connect(tmp.name)
+    conn.execute("""CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, title TEXT, state TEXT, collaboration_mode TEXT, orchestration_brief TEXT,
+        planner_employee_id TEXT, entry_employee_id TEXT, last_read_at TEXT, last_read_message_id TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        solution_instance_id TEXT, solution_planner_prompt TEXT, solution_subtask_prompt TEXT,
+        solution_aggregate_prompt TEXT, solution_expert_employee_ids TEXT DEFAULT '[]'
+    )""")
+    # 插入一行非法 JSON 到 expert_ids 列，测试 except 分支
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO conversations (id,title,state,created_at,updated_at,collaboration_mode,orchestration_brief,solution_expert_employee_ids) VALUES (?,?,?,?,?,?,?,'NOT_JSON')",
+        ("c1", "x", "active", now, now, "free", ""),
+    )
+    conn.commit()
+    db = connect(tmp.name)
+    repo = SqliteConversationRepository(db)
+    got = repo.get("c1")
+    assert got.solution_expert_employee_ids == []  # JSON 解析失败 → 兜底 []
+    conn.close()
+
+
