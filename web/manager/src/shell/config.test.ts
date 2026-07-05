@@ -54,7 +54,7 @@ describe("manager shell config", () => {
   it("导航严格对齐旧架构 admin section（10 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(11);
+    expect(navIds).toHaveLength(10);
   });
 
   it("owner 可见全部 10 项导航", () => {
