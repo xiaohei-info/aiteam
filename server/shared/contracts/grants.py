@@ -51,3 +51,4 @@ class LoadedExpertProjection(BaseModel):
     memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
     synced_at: datetime | None = Field(default=None, description="最后同步时间（UTC）")
     revoked: bool = Field(default=False, description="授权撤销后置 true 并从可用列表移除")
+    handle: str = Field(default="", description="ASCII 稳定句柄，供 roster / @提及使用；后端未给时回退 employee_id")

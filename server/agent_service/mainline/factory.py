@@ -56,6 +56,7 @@ def build_mainline_service(
     runtime_env_passthrough: tuple[str, ...] = (),
     usage_recorder=None,
     tenant_id: str = "local",
+    solutions: SolutionProjectionRepository | None = None,
 ) -> MainlineService:
     if executor is not None or driver is not None:
         # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。

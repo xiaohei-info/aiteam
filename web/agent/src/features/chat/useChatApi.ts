@@ -27,6 +27,8 @@ export interface Conversation {
   collaboration_mode?: string;
   orchestration_brief?: string;
   planner_employee_id?: string | null;
+  // 私聊归属员工 employee_id（parity 后端 Conversation.entry_employee_id）；群聊/编排会话为 null。
+  entry_employee_id?: string | null;
   // 方案实例绑定（从 Operator 行业方案"创建群聊"入口固定编排时设置）；空=自由创建/私聊。
   solution_instance_id?: string | null;
   // 方案级固定编排三阶段 prompts 快照；空串=回退运行时默认。

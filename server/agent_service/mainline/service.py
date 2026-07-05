@@ -155,6 +155,8 @@ class MainlineService:
         else:
             mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
         brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
+        # 群聊/私聊归类：entry_employee_id 非空 = 私聊（独占会话）；否则群聊。
+        ctype = "private" if (entry_employee_id or "").strip() else "group"
         # Load fixed-orchestration snapshot from local projection (B7: never trust client prompts).
         planner = subtask = aggregate = ""
         expert_ids: list[str] = []
@@ -169,6 +171,7 @@ class MainlineService:
             expert_ids = [str(x) for x in (_snapshot.get("expert_employee_ids") or [])]
         conv = Conversation(
             id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
+            conversation_type=ctype,
             collaboration_mode=mode, orchestration_brief=brief,
             planner_employee_id=(planner_employee_id or None),
             entry_employee_id=entry_employee_id or None,

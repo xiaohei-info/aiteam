@@ -107,6 +107,7 @@ class Conversation(BaseModel):
     id: str
     title: str | None = None
     state: ConversationState = ConversationState.ACTIVE
+    conversation_type: str = Field(default="group", description="group | private；私聊归属员工时设 private，便于群聊页过滤列出与 group-dispatch 边界校验")
     collaboration_mode: str = Field(default="free", description="free | orchestrated")
     orchestration_brief: str = Field(default="", description="orchestrated 模式下的 planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")

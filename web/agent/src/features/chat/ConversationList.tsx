@@ -21,6 +21,8 @@ export interface ConversationListProps {
   refreshSignal?: number;
   /** 列表头部文案（默认"私聊"，群聊页传"群聊"复用同一组件）。 */
   headerLabel?: string;
+  /** 可选过滤谓词（群聊页用于排除私聊会话）。 */
+  filter?: (conversation: Conversation) => boolean;
 }
 
 export function ConversationList({
@@ -29,6 +31,7 @@ export function ConversationList({
   onSelect,
   refreshSignal = 0,
   headerLabel = "私聊",
+  filter,
 }: ConversationListProps) {
   const [items, setItems] = useState<Conversation[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function ConversationList({
     setError(null);
     try {
       const result = await listConversations(client);
-      setItems(result.items);
+      setItems(filter ? result.items.filter(filter) : result.items);
       setNextCursor(result.nextCursor);
       setHasMore(result.hasMore);
     } catch (err) {
@@ -49,7 +52,7 @@ export function ConversationList({
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, filter]);
 
   useEffect(() => {
     void loadFirst();
@@ -61,7 +64,8 @@ export function ConversationList({
     setError(null);
     try {
       const result = await listConversations(client, nextCursor);
-      setItems((prev) => [...prev, ...result.items]);
+      const merged = filter ? result.items.filter(filter) : result.items;
+      setItems((prev) => [...prev, ...merged]);
       setNextCursor(result.nextCursor);
       setHasMore(result.hasMore);
     } catch (err) {

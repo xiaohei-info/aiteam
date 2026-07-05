@@ -273,10 +273,12 @@ class GroupChatService:
                 sub_rule = sol_subtask + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
             else:
                 sub_rule = brief + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
-            spec_by_assignee[assignee] = _inject_brief(
-                self._roster[assignee].to_run_spec() if assignee in self._roster else RunSpec(),
-                sub_rule,
+            # 固定编排不信任客户端 roster 的 system_prompt/model——构造空 RunSpec，
+            # 仅注入方案级 subtask_prompt（本地快照）；自由协作仍用 roster 拼 RunSpec。
+            base_spec = RunSpec() if fixed else (
+                self._roster[assignee].to_run_spec() if assignee in self._roster else RunSpec()
             )
+            spec_by_assignee[assignee] = _inject_brief(base_spec, sub_rule)
             task_nodes.append(TaskNode(
                 task_id=task.id, title=sub.title, assignee=assignee, depends_on=[root_task.id],
             ))

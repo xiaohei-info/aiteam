@@ -56,14 +56,22 @@ class UnconfiguredGrantsClient:
         raise AppError("manager grants client 未配置（A4 骨架）。配置 MANAGER_URL 并注入真实客户端后可用。")
 
 
+import typing
+
+
 class ServiceClientGrantsClient:
     """经 shared.service_client 主动 pull。只读 GET 可幂等重试（service_client 内置）。
 
     响应解包：Manager 统一 envelope（02 §10.3.4），data 字段为契约本体。
+    当 `user_token_provider` 给出时，每个请求附带 ``Authorization: Bearer <token>``，
+    通过 Manager `require_claims` 的用户身份校验；避免 ``ServiceClient`` 默认仅靠 service-token 导致的 401。
     """
 
-    def __init__(self, client: ServiceClient) -> None:
+    def __init__(self, client: ServiceClient, user_token_provider: typing.Callable[[], str | None] | None = None) -> None:
         self._client = client
+        self._token_provider = user_token_provider
+        if user_token_provider is not None:
+            client._user_token_provider = user_token_provider
 
     @staticmethod
     def _unwrap(body: dict) -> dict:

@@ -34,6 +34,7 @@ import { GroupExpertRoster } from "./GroupExpertRoster";
 import { MentionComposer } from "./MentionComposer";
 import {
   createConversationFromSolution,
+  createFreeConversation,
   listLoadedExperts,
   listSolutionInstances,
   type CreateFromSolutionInput,
@@ -75,6 +76,8 @@ export function GroupPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedSolutionId, setSelectedSolutionId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [freeCreating, setFreeCreating] = useState(false);
+  const [freeCreateError, setFreeCreateError] = useState<string | null>(null);
 
   // 拉取真实 roster（GET /api/agent/grants/experts），替代演示用 mock。
   useEffect(() => {
@@ -167,6 +170,22 @@ export function GroupPage() {
     }
   }, [selectedSolutionId, solutions, client]);
 
+  const handleCreateFree = useCallback(async () => {
+    setFreeCreateError(null);
+    setFreeCreating(true);
+    try {
+      const title = window.prompt("自由群聊名称", "自由协作群");
+      if (title === null) return;
+      const conv = await createFreeConversation(client, { title });
+      setDispatchSignal((n) => n + 1);
+      setSelected(conv);
+    } catch (err) {
+      setFreeCreateError(err instanceof Error ? err.message : "创建自由群聊失败");
+    } finally {
+      setFreeCreating(false);
+    }
+  }, [client]);
+
   return (
     <div className="flex h-full min-h-0 gap-md">
       <ConversationList
@@ -175,13 +194,23 @@ export function GroupPage() {
         onSelect={handleSelect}
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
+        // 群聊页只列群会话（排除 entry_employee_id 非空的私聊），防止私聊被当做群聊进入编排。
+        filter={(c) => c.entry_employee_id == null}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-md">
         <div className="flex flex-wrap items-center justify-between gap-sm rounded-window border border-gold/15 bg-surface-raised px-md py-sm">
           <div className="text-sm font-semibold text-text-primary">群聊协作</div>
-          <Button size="sm" variant="metal" onClick={handleOpenCreate}>
-            从解决方案创建群聊
-          </Button>
+          <div className="flex flex-wrap items-center gap-sm">
+            <Button size="sm" variant="metal" onClick={handleOpenCreate}>
+              从解决方案创建群聊
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => void handleCreateFree()} disabled={freeCreating}>
+              {freeCreating ? "创建中…" : "创建自由群聊"}
+            </Button>
+            {freeCreateError && (
+              <span className="text-xs text-danger" role="alert">{freeCreateError}</span>
+            )}
+          </div>
         </div>
       <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
         {selected ? (

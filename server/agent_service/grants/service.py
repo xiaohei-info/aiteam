@@ -75,8 +75,10 @@ def _to_projection(tenant_id: str, raw: dict) -> LoadedExpertProjection:
 
     model_policy_raw = raw.get("model_policy") or {}
     runtime_policy_raw = raw.get("runtime_policy") or {}
+    eid = str(raw["employee_id"])
     return LoadedExpertProjection(
-        employee_id=str(raw["employee_id"]),
+        employee_id=eid,
+        handle=str(raw.get("handle", raw.get("name", ""))) or eid,
         tenant_id=tenant_id,
         version=str(raw.get("version", "")),
         display_name=str(raw.get("display_name", "")),

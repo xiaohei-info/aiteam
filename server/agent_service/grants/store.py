@@ -180,10 +180,12 @@ class SqliteProjectionRepository(ProjectionRepository):
 
         model_policy = _json(data.get("model_policy"), {})
         runtime_policy = _json(data.get("runtime_policy"), {})
+        eid = str(data["employee_id"])
         return LoadedExpertProjection(
-            employee_id=str(data["employee_id"]),
+            employee_id=eid,
             tenant_id=str(data.get("tenant_id", "")),
             version=str(data.get("version", "")),
+            handle=str(data.get("handle", "")) or eid,
             display_name=str(data.get("display_name", "")),
             runtime_binding=data.get("runtime_binding"),
             persona=data.get("persona"),
@@ -378,11 +380,14 @@ def _as_solution_projection(raw: _SolutionProjectionInput) -> SolutionProjection
     eids = raw.get("expert_employee_ids")
     if not isinstance(eids, list):
         eids = []
+    # Manager F10 下发 solution_version/config_version（不再单独下发 version）；
+    # 用二者组合作为增量同步版本键，回退兼容 Manager 若显式下发 version 时直接使用。
+    computed_ver = f"{raw.get('solution_version', '')}:{raw.get('config_version', '')}"
     return SolutionProjection(
         solution_instance_id=str(raw.get("id", raw.get("solution_instance_id", ""))),
         template_solution_id=str(raw.get("solution_id", raw.get("template_solution_id", ""))),
         display_name=str(raw.get("display_name", raw.get("name", ""))),
-        version=str(raw.get("version", "")),
+        version=str(raw.get("version", computed_ver)),
         expert_employee_ids=[str(x) for x in eids],
         planner_prompt=str(raw.get("planner_prompt", "")),
         subtask_prompt=str(raw.get("subtask_prompt", "")),
@@ -447,6 +452,7 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
             eids = []
         return SolutionProjection(
             solution_instance_id=d["solution_id"],
+            template_solution_id=d.get("template_solution_id", ""),
             display_name=d.get("display_name", ""),
             version=d.get("version", ""),
             expert_employee_ids=[str(x) for x in eids],
@@ -459,15 +465,16 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
         p = _as_solution_projection(projection)
         self._db.execute(
             "INSERT INTO solution_projections "
-            "(solution_id, display_name, version, expert_employee_ids, "
+            "(solution_id, display_name, version, expert_employee_ids, template_solution_id, "
             "planner_prompt, subtask_prompt, aggregate_prompt) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(solution_id) DO UPDATE SET display_name=excluded.display_name, "
             "version=excluded.version, expert_employee_ids=excluded.expert_employee_ids, "
+            "template_solution_id=excluded.template_solution_id, "
             "planner_prompt=excluded.planner_prompt, "
             "subtask_prompt=excluded.subtask_prompt, aggregate_prompt=excluded.aggregate_prompt",
             (p.solution_instance_id, p.display_name, p.version, json.dumps(p.expert_employee_ids),
-             p.planner_prompt, p.subtask_prompt, p.aggregate_prompt),
+             p.template_solution_id, p.planner_prompt, p.subtask_prompt, p.aggregate_prompt),
         )
         return p
 

@@ -36,8 +36,11 @@ from agent_service.grants.factory import build_grants_service
 from agent_service.grants.routes import build_grants_router
 from agent_service.grants.store import (
     InMemoryProjectionRepository,
+    InMemorySolutionProjectionRepository,
     ProjectionRepository,
+    SolutionProjectionRepository,
     SqliteProjectionRepository,
+    SqliteSolutionProjectionRepository,
 )
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
@@ -129,12 +132,17 @@ def _build_manager_login_client() -> ManagerLoginClient:
     return RealManagerLoginClient(_manager_service_client(settings))
 
 
-def _build_grants_client() -> ManagerGrantsClient:
-    """配置 MANAGER_URL → ServiceClientGrantsClient，否则占位（#219）。"""
+def _build_grants_client(token_provider=None) -> ManagerGrantsClient:
+    """配置 MANAGER_URL → ServiceClientGrantsClient，否则占位（#219）。
+    当 ``token_provider`` 给出时，pull 请求附带用户 Bearer token，通过 Manager 的
+    ``require_Claims`` 鉴权。
+    """
     settings = load_settings("agent")
     if not settings.manager_url:
         return UnconfiguredGrantsClient()
-    return ServiceClientGrantsClient(_manager_service_client(settings))
+    sc = _manager_service_client(settings)
+    sc._user_token_provider = token_provider
+    return ServiceClientGrantsClient(sc, user_token_provider=token_provider)
 
 
 def _build_usage_client() -> ManagerUsageClient:
@@ -203,11 +211,16 @@ def build_app(
     projections: ProjectionRepository = (
         SqliteProjectionRepository(db) if db else InMemoryProjectionRepository()
     )
+    # B1: grants 与 mainline 共享同一 solution projection 仓储，避免 sync 与 create-conversation 跨 repo 不一致。
+    shared_solutions: SolutionProjectionRepository = (
+        SqliteSolutionProjectionRepository(db) if db else InMemorySolutionProjectionRepository()
+    )
     mainline = mainline_service or build_mainline_service(
         db_path=settings.agent_db_path,
         runtime_selection=settings.agent_runtime,
         runs_root=settings.agent_runs_root,
         runtime_env_passthrough=settings.agent_runtime_env_passthrough,
+        solutions=shared_solutions,
     )
     app.include_router(build_mainline_router(mainline, identity_provider=login_service.current_identity))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline, db=db)
@@ -222,7 +235,8 @@ def build_app(
     _attach_usage_recorder(mainline, usage_service)
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(
-        client=grants_client or _build_grants_client(), db=db, projections=projections,
+        client=grants_client or _build_grants_client(login_service.current_token), db=db, projections=projections,
+        solutions=shared_solutions,
     )
     app.include_router(build_grants_router(grants_service))
     # ---- P02-P09 workspace：工作台 + 人才市场 + 办公室 + 知识库 + 组织树 + 文件上传 ----

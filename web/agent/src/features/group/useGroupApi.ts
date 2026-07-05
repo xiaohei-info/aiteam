@@ -158,3 +158,25 @@ export async function createConversationFromSolution(
   }
   return result;
 }
+
+/**
+ * 创建自由群聊会话（自由协作——由 Planner/协调员决定协作方式；无固定编排规则）。
+ * 不绑定 solution_instance_id；session 创建后用户可自由拉 Agent 进群。
+ */
+export async function createFreeConversation(
+  client: AgentApiClient,
+  input: { title?: string | null },
+): Promise<import("../chat/useChatApi").Conversation> {
+  const result = await client.post<import("../chat/useChatApi").Conversation>(
+    "/api/agent/conversations",
+    {
+      body: {
+        title: input.title ?? null,
+      },
+    },
+  );
+  if (result === null) {
+    throw new Error("createFreeConversation: empty envelope");
+  }
+  return result;
+}

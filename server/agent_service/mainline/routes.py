@@ -26,6 +26,7 @@ from shared.contracts.enums import ConversationState
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.events import BusinessTimelineEvent
 from shared.contracts.runspec import RunSpec
+from shared.errors import Conflict
 
 from .group import DispatchResult, GroupChatService, GroupExpert
 from .models import Conversation, Message, MessageRole, Run, RunTriggerType, RunExecutionMode, Task
@@ -227,7 +228,10 @@ def build_mainline_router(
 
     @router.post("/conversations/{conversation_id}/group-dispatch", summary="群聊一轮编排（@提及触发多专家、多 run 并入同一时间线）", description="@提及生效多专家并行编排。每位专家独立 run，并入同一时间线。", operation_id="agent_group_dispatch")
     async def group_dispatch(conversation_id: str, req: GroupDispatchRequest) -> Envelope[DispatchResult]:
-        service.get_conversation(conversation_id)  # 存在性校验 -> 404
+        conv = service.get_conversation(conversation_id)  # 存在性校验 -> 404
+        # 群聊编排只允许群会话：私聊(entry_employee_id 非空)不可走 group-dispatch，防会话边界串线。
+        if getattr(conv, "entry_employee_id", None):
+            raise Conflict("group-dispatch 仅支持群聊会话；私聊会话不允许多专家群聊编排")
         group = GroupChatService(service, experts=req.experts)
         result = await group.post_and_dispatch(conversation_id, req.text)
         return Envelope[DispatchResult](data=result)
