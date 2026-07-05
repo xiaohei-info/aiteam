@@ -16,6 +16,19 @@
 import type { AgentApiClient } from "../../lib/api-client";
 
 /**
+ * 本端可用的方案实例投影（对齐 server agent_service/grants/store.py:SolutionProjection）。
+ * 供"从解决方案创建群聊"弹窗使用——含三阶段 prompts 快照（不可覆盖，固定编排语义）。
+ */
+export interface SolutionProjection {
+  solution_instance_id: string;
+  display_name: string;
+  version: string;
+  planner_prompt: string;
+  subtask_prompt: string;
+  aggregate_prompt: string;
+}
+
+/**
  * 本地可用专家投影（对齐 server shared/contracts/grants.py:LoadedExpertProjection）。
  * 用于群聊 roster 数据源——替代演示用 mock。
  */
@@ -97,6 +110,52 @@ export async function groupDispatch(
   // 后端约定返回 envelope.data；防御性兜底（与 AgentApiClient.login 同模式）。
   if (result === null) {
     throw new Error("group-dispatch: empty envelope");
+  }
+  return result;
+}
+
+/**
+ * 列出本端可用的方案实例投影（GET /api/agent/grants/solutions）。
+ * 供"从解决方案创建群聊"弹窗选择列表。
+ */
+export async function listSolutionInstances(
+  client: AgentApiClient,
+): Promise<SolutionProjection[]> {
+  const result = await client.listGet<SolutionProjection>("/api/agent/grants/solutions");
+  return result.items;
+}
+
+/**
+ * 从 Operator 行业方案创建群聊会话（固定编排）。
+ * 后端返回 Conversation（collaboration_mode 自动为 orchestrated），后续群聊 stage 走方案自带的三阶段 prompts。
+ */
+export interface CreateFromSolutionInput {
+  solution_instance_id: string;
+  solution_planner_prompt?: string;
+  solution_subtask_prompt?: string;
+  solution_aggregate_prompt?: string;
+  title?: string | null;
+}
+
+export async function createConversationFromSolution(
+  client: AgentApiClient,
+  input: CreateFromSolutionInput,
+): Promise<import("../chat/useChatApi").Conversation> {
+  const result = await client.post<import("../chat/useChatApi").Conversation>(
+    "/api/agent/conversations",
+    {
+      body: {
+        title: input.title ?? null,
+        collaboration_mode: "orchestrated",
+        solution_instance_id: input.solution_instance_id,
+        solution_planner_prompt: input.solution_planner_prompt,
+        solution_subtask_prompt: input.solution_subtask_prompt,
+        solution_aggregate_prompt: input.solution_aggregate_prompt,
+      },
+    },
+  );
+  if (result === null) {
+    throw new Error("createConversationFromSolution: empty envelope");
   }
   return result;
 }

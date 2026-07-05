@@ -197,8 +197,19 @@ class GroupChatService:
         )
 
     async def _dispatch_orchestrated(self, conv, user_text: str) -> DispatchResult:
-        """规则编排：planner 拆解任务树 -> 分专家并行 -> 聚合。"""
+        """规则编排：planner 拆解任务树 -> 分专家并行 -> 聚合。
+
+        两入口：
+        - 自由协作 orchestrated：仅走 brief + 自动 planner（自由拉 agent 的默认行为）。
+        - 固定编排（solution_*_prompt 非空）：读取该会话自带的三阶段 prompts 作为固定编排规则
+          （planner / subtask / aggregate），UI 只读；brief 不再覆盖。
+        """
         brief = (getattr(conv, "orchestration_brief", "") or "").strip()
+        # 固定编排 prompts（由 Operator solution_template 落到会话的快照）。
+        sol_planner = (getattr(conv, "solution_planner_prompt", "") or "").strip()
+        sol_subtask = (getattr(conv, "solution_subtask_prompt", "") or "").strip()
+        sol_aggregate = (getattr(conv, "solution_aggregate_prompt", "") or "").strip()
+        fixed = bool(sol_planner or sol_subtask or sol_aggregate)
         planner_handle = getattr(conv, "planner_employee_id", None) or None
 
         if planner_handle and planner_handle in self._roster:
@@ -206,19 +217,22 @@ class GroupChatService:
             executor_handles = [h for h in self._roster if h != planner_handle]
         else:
             planner_handle = _SYNTHETIC_PLANNER_HANDLE
+            default_prompt = (
+                "你是协作主持人(planner)。请按【编排规则】把用户任务拆解为可并行子任务，"
+                "只输出 JSON: {\"subtasks\":[{\"title\",\"description\",\"assignee\",\"depends_on\":[]}]}"
+            )
+            # 固定编排：syst 级提示词 = 方案自带的 planner prompt；自由协作回退默认。
             planner = GroupExpert(
                 handle=_SYNTHETIC_PLANNER_HANDLE,
-                system_prompt=(
-                    "你是协作主持人(planner)。请按【编排规则】把用户任务拆解为可并行子任务，"
-                    "只输出 JSON: {\"subtasks\":[{\"title\",\"description\",\"assignee\",\"depends_on\":[]}]}"
-                ),
+                system_prompt=sol_planner or default_prompt,
             )
             executor_handles = list(self._roster)
 
-        # 1) planner 拆解（brief + 任务文本注入 planner 提示词）。
+        # 1) planner 拆解：固定编排直接用方案 prompt（叠加用户任务上下文）；自由协作走 brief。
+        planner_rule = sol_planner if fixed else brief
         planner_spec = _inject_brief(
             planner.to_run_spec(),
-            brief + ("\n\n用户任务：" + user_text if user_text else brief),
+            planner_rule + ("\n\n用户任务：" + user_text if user_text else planner_rule),
         )
         planner_run = await self._mainline.start_run(conv.id, run_spec=planner_spec)
         plan_text = self._run_completed_text(planner_run)
@@ -242,9 +256,14 @@ class GroupChatService:
             assignee = sub.assignee or (executor_handles[0] if executor_handles else "")
             task = self._mainline.create_task(conv.id, title=sub.title)
             tasks_by_assignee[assignee] = task
+            # 子任务注入：固定编排用方案级 subtask_prompt；自由协作用 brief + 子任务标题。
+            if fixed:
+                sub_rule = sol_subtask + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
+            else:
+                sub_rule = brief + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
             spec_by_assignee[assignee] = _inject_brief(
                 self._roster[assignee].to_run_spec() if assignee in self._roster else RunSpec(),
-                brief + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip(),
+                sub_rule,
             )
             task_nodes.append(TaskNode(
                 task_id=task.id, title=sub.title, assignee=assignee, depends_on=[root_task.id],
@@ -259,11 +278,12 @@ class GroupChatService:
         if run_items:
             runs.extend(await self._run_experts(conv.id, run_items))
 
-        # 5) 聚合：主持人汇总各专家产出为最终交付。
-        aggregate_spec = _inject_brief(
-            planner.to_run_spec(),
-            brief + "\n\n请汇总下列各成员产出，合并为一个面向用户的最终交付。",
-        )
+        # 5) 聚合：固定编排用方案级 aggregate_prompt；自由协作用 brief + 默认汇总指令。
+        if fixed:
+            aggregate_rule = sol_aggregate
+        else:
+            aggregate_rule = brief + "\n\n请汇总下列各成员产出，合并为一个面向用户的最终交付。"
+        aggregate_spec = _inject_brief(planner.to_run_spec(), aggregate_rule)
         runs.append(await self._mainline.start_run(conv.id, run_spec=aggregate_spec))
 
         return DispatchResult(

@@ -134,14 +134,33 @@ class MainlineService:
         orchestration_brief: str | None = None,
         planner_employee_id: str | None = None,
         entry_employee_id: str | None = None,
+        solution_instance_id: str | None = None,
+        solution_planner_prompt: str | None = None,
+        solution_subtask_prompt: str | None = None,
+        solution_aggregate_prompt: str | None = None,
     ) -> Conversation:
-        mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
+        """建会话。
+
+        两入口：
+        - 自由创建（默认）— collaboration_mode 默认 free；solution_instance_id 为空。
+        - 从解决方案创建 — 传 solution_instance_id + 三阶段 prompts，collaboration_mode 强制
+          orchestrated（固定编排）。planner/aggregate/subtask 直接读取对应 prompt 快照。
+        """
+        bound = bool((solution_instance_id or "").strip())
+        if bound:
+            mode = "orchestrated"
+        else:
+            mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
         brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
         conv = Conversation(
             id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
             collaboration_mode=mode, orchestration_brief=brief,
             planner_employee_id=(planner_employee_id or None),
             entry_employee_id=entry_employee_id or None,
+            solution_instance_id=solution_instance_id or None,
+            solution_planner_prompt=solution_planner_prompt or "",
+            solution_subtask_prompt=solution_subtask_prompt or "",
+            solution_aggregate_prompt=solution_aggregate_prompt or "",
         )
         return self._conversations.create(conv)
 

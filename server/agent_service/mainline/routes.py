@@ -40,6 +40,13 @@ class CreateConversationRequest(BaseModel):
     orchestration_brief: str | None = Field(default=None, description="orchestrated 必填：planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
     entry_employee_id: str | None = Field(default=None, description="私聊归属员工 employee_id")
+    # 固定编排入口：从 Operator 行业方案"创建群聊"时一并传入。传 solution_instance_id 则
+    # collaboration_mode 自动为 orchestrated，prompts 直接作为固定编排规则（不可会话级覆盖）。
+    # 自由创建群聊时全部留 None。
+    solution_instance_id: str | None = Field(default=None, description="绑定的方案实例 id（可选）")
+    solution_planner_prompt: str | None = Field(default=None, description="方案 planner prompt 快照")
+    solution_subtask_prompt: str | None = Field(default=None, description="方案子任务拆解 prompt 快照")
+    solution_aggregate_prompt: str | None = Field(default=None, description="方案聚合汇总 prompt 快照")
 
 
 class SetConversationStateRequest(BaseModel):
@@ -127,7 +134,7 @@ def build_mainline_router(
 
     # ---- conversation ----
 
-    @router.post("/conversations", summary="建会话", description="创建新会话。可指定标题，留空自动生成。会话是对话/run/task 的容器。", operation_id="agent_create_conversation")
+    @router.post("/conversations", summary="建会话", description="创建新会话。可指定标题，留空自动生成。传 solution_instance_id 则从解决方案创建群聊（固定编排，prompts 只读）。", operation_id="agent_create_conversation")
     async def create_conversation(req: CreateConversationRequest) -> Envelope[Conversation]:
         return Envelope[Conversation](data=service.create_conversation(
             title=req.title,
@@ -135,6 +142,10 @@ def build_mainline_router(
             orchestration_brief=req.orchestration_brief,
             planner_employee_id=req.planner_employee_id,
             entry_employee_id=req.entry_employee_id,
+            solution_instance_id=req.solution_instance_id,
+            solution_planner_prompt=req.solution_planner_prompt,
+            solution_subtask_prompt=req.solution_subtask_prompt,
+            solution_aggregate_prompt=req.solution_aggregate_prompt,
         ))
 
     @router.get("/conversations", summary="列会话", description="列出本端所有会话，按创建时间倒序排列。", operation_id="agent_list_conversations")

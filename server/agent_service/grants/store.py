@@ -18,6 +18,8 @@ agent 本地库口径（与 usage/loop/mainline 一致）：接口 + 内存实�
 from __future__ import annotations
 
 import json
+
+from pydantic import BaseModel, ConfigDict, Field
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
@@ -339,3 +341,135 @@ class SqliteSnapshotRepository(SnapshotRepository):
             "SELECT * FROM employee_execution_snapshots ORDER BY employee_id, snapshot_version"
         )
         return [self._row_to_snapshot(r) for r in rows]
+
+
+class SolutionProjection(BaseModel):
+    """本端持有的方案实例投影（只读，供"从解决方案创建群聊"入口使用）。
+
+    来源：Manager authorized config pull（F10）收到的 solutions[]。solution_id 即 Manager
+    侧方案实例 id；三阶段 prompts 是 Operator solution_template 的快照，落会话后不再改。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    solution_id: str = Field(description="方案实例 id（Manager 侧 solution_instance 主键）")
+    display_name: str = Field(description="方案显示名")
+    version: str = Field("", description="方案版本")
+    planner_prompt: str = Field("", description="planner 阶段编排规则")
+    subtask_prompt: str = Field("", description="子任务拆解规则")
+    aggregate_prompt: str = Field("", description="多专家聚合规则")
+
+    def to_dict(self) -> dict:
+        """映射为前端契约字段（solution_id → solution_instance_id）。"""
+        d = self.model_dump(mode="json")
+        d["solution_instance_id"] = d.pop("solution_id")
+        return d
+
+
+_SolutionProjectionInput = dict | SolutionProjection
+
+
+def _as_solution_projection(raw: _SolutionProjectionInput) -> SolutionProjection:
+    if isinstance(raw, SolutionProjection):
+        return raw
+    return SolutionProjection(
+        solution_id=str(raw.get("solution_id", raw.get("id", ""))),
+        display_name=str(raw.get("display_name", raw.get("name", ""))),
+        version=str(raw.get("version", "")),
+        planner_prompt=str(raw.get("planner_prompt", "")),
+        subtask_prompt=str(raw.get("subtask_prompt", "")),
+        aggregate_prompt=str(raw.get("aggregate_prompt", "")),
+    )
+
+
+class SolutionProjectionRepository(ABC):
+    """方案实例本地只读投影仓储（写端 Agent，来源 Manager F10）。"""
+
+    @abstractmethod
+    def upsert(self, projection: _SolutionProjectionInput) -> SolutionProjection: ...
+
+    @abstractmethod
+    def remove(self, solution_id: str) -> SolutionProjection | None: ...
+
+    @abstractmethod
+    def get(self, solution_id: str) -> SolutionProjection | None: ...
+
+    @abstractmethod
+    def available(self) -> list[SolutionProjection]:
+        """可用方案列表（按 solution_id 排序）。"""
+
+    @abstractmethod
+    def list_all(self) -> list[SolutionProjection]: ...
+
+
+class InMemorySolutionProjectionRepository(SolutionProjectionRepository):
+    def __init__(self) -> None:
+        self._items: dict[str, SolutionProjection] = {}
+
+    def upsert(self, projection: _SolutionProjectionInput) -> SolutionProjection:
+        p = _as_solution_projection(projection)
+        self._items[p.solution_id] = p
+        return p
+
+    def remove(self, solution_id: str) -> SolutionProjection | None:
+        return self._items.pop(solution_id, None)
+
+    def get(self, solution_id: str) -> SolutionProjection | None:
+        return self._items.get(solution_id)
+
+    def available(self) -> list[SolutionProjection]:
+        return sorted(self._items.values(), key=lambda p: p.solution_id)
+
+    def list_all(self) -> list[SolutionProjection]:
+        return sorted(self._items.values(), key=lambda p: p.solution_id)
+
+
+class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
+    def __init__(self, db: "LocalDb") -> None:
+        self._db = db
+
+    def _row_to_projection(self, row) -> SolutionProjection:
+        d = dict(row)
+        return SolutionProjection(
+            solution_id=d["solution_id"],
+            display_name=d.get("display_name", ""),
+            version=d.get("version", ""),
+            planner_prompt=d.get("planner_prompt", ""),
+            subtask_prompt=d.get("subtask_prompt", ""),
+            aggregate_prompt=d.get("aggregate_prompt", ""),
+        )
+
+    def upsert(self, projection: _SolutionProjectionInput) -> SolutionProjection:
+        p = _as_solution_projection(projection)
+        self._db.execute(
+            "INSERT INTO solution_projections "
+            "(solution_id, display_name, version, planner_prompt, subtask_prompt, aggregate_prompt) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(solution_id) DO UPDATE SET display_name=excluded.display_name, "
+            "version=excluded.version, planner_prompt=excluded.planner_prompt, "
+            "subtask_prompt=excluded.subtask_prompt, aggregate_prompt=excluded.aggregate_prompt",
+            (p.solution_id, p.display_name, p.version,
+             p.planner_prompt, p.subtask_prompt, p.aggregate_prompt),
+        )
+        return p
+
+    def remove(self, solution_id: str) -> SolutionProjection | None:
+        existing = self.get(solution_id)
+        if existing is None:
+            return None
+        self._db.execute("DELETE FROM solution_projections WHERE solution_id = ?", (solution_id,))
+        return existing
+
+    def get(self, solution_id: str) -> SolutionProjection | None:
+        row = self._db.query_one(
+            "SELECT * FROM solution_projections WHERE solution_id = ?", (solution_id,)
+        )
+        return self._row_to_projection(row) if row else None
+
+    def available(self) -> list[SolutionProjection]:
+        rows = self._db.query("SELECT * FROM solution_projections ORDER BY solution_id")
+        return [self._row_to_projection(r) for r in rows]
+
+    def list_all(self) -> list[SolutionProjection]:
+        rows = self._db.query("SELECT * FROM solution_projections ORDER BY solution_id")
+        return [self._row_to_projection(r) for r in rows]

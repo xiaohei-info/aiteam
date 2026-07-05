@@ -17,18 +17,30 @@
  *
  * roster 点击 -> 输入框追加：用 window CustomEvent（"group:append-mention"）解耦，
  * MentionComposer 内部 useEffect 监听，避免组件间 ref/状态提升耦合。
+ *
+ * 建群入口（"都选方案一" 第四章决策）：固定编排入口位于本页面顶部 header 条，点"从解决方案创建群聊"
+ * 打开 Modal 选择 Operator 行业方案实例——选中后 POST /conversations 走固定编排（solution 自带
+ * 三阶段 prompts，UI 只读展示不覆盖）；自由创建仍为默认行为。
  */
 
 import { useCallback, useEffect, useState } from "react";
 
 import { useApp } from "../../lib/app-context";
-import { GlassPanel } from "@aiteam/shared/ui";
+import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { ConversationList } from "../chat/ConversationList";
 import { TimelineView } from "../chat/TimelineView";
 import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import { MentionComposer } from "./MentionComposer";
-import { listLoadedExperts, type DispatchResult, type GroupExpert } from "./useGroupApi";
+import {
+  createConversationFromSolution,
+  listLoadedExperts,
+  listSolutionInstances,
+  type CreateFromSolutionInput,
+  type DispatchResult,
+  type GroupExpert,
+  type SolutionProjection,
+} from "./useGroupApi";
 
 /**
  * 把 LoadedExpertProjection 投影成群聊编排所需的 GroupExpert。
@@ -50,6 +62,12 @@ export function GroupPage() {
   const [lastIgnored, setLastIgnored] = useState<string[] | null>(null);
   // 一轮编排完成后 +1，触发列表刷新 + timeline catchUp（补拉 since highWater 的新事件）。
   const [dispatchSignal, setDispatchSignal] = useState(0);
+  // "从解决方案创建群聊" 固定编排入口：列表+弹窗状态
+  const [solutions, setSolutions] = useState<SolutionProjection[] | null>(null);
+  const [solutionsError, setSolutionsError] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedSolutionId, setSelectedSolutionId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   // 拉取真实 roster（GET /api/agent/grants/experts），替代演示用 mock。
   useEffect(() => {
@@ -83,6 +101,52 @@ export function GroupPage() {
     window.dispatchEvent(new CustomEvent("group:append-mention", { detail: handle }));
   }, []);
 
+  // 拉取本端可用方案实例（GET /api/agent/grants/solutions）
+  const refreshSolutions = useCallback(async () => {
+    setSolutionsError(null);
+    try {
+      const items = await listSolutionInstances(client);
+      setSolutions(items);
+    } catch (err) {
+      setSolutionsError(err instanceof Error ? err.message : "加载方案列表失败");
+    }
+  }, [client]);
+
+  const handleOpenCreate = useCallback(() => {
+    setSelectedSolutionId(null);
+    setShowCreateModal(true);
+    void refreshSolutions();
+  }, [refreshSolutions]);
+
+  const handleCloseCreate = useCallback(() => {
+    setShowCreateModal(false);
+    setSelectedSolutionId(null);
+  }, []);
+
+  const handleConfirmCreate = useCallback(async () => {
+    if (!selectedSolutionId || !solutions) return;
+    const sol = solutions.find((s) => s.solution_instance_id === selectedSolutionId);
+    if (!sol) return;
+    setCreating(true);
+    try {
+      const input: CreateFromSolutionInput = {
+        solution_instance_id: sol.solution_instance_id,
+        solution_planner_prompt: sol.planner_prompt,
+        solution_subtask_prompt: sol.subtask_prompt,
+        solution_aggregate_prompt: sol.aggregate_prompt,
+        title: sol.display_name || "方案群聊",
+      };
+      const conv = await createConversationFromSolution(client, input);
+      setShowCreateModal(false);
+      setDispatchSignal((n) => n + 1);
+      setSelected(conv);
+    } catch (err) {
+      setSolutionsError(err instanceof Error ? err.message : "创建群聊失败");
+    } finally {
+      setCreating(false);
+    }
+  }, [selectedSolutionId, solutions, client]);
+
   return (
     <div className="flex h-full min-h-0 gap-md">
       <ConversationList
@@ -92,6 +156,13 @@ export function GroupPage() {
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
       />
+      <div className="flex min-w-0 flex-1 flex-col gap-md">
+        <div className="flex flex-wrap items-center justify-between gap-sm rounded-window border border-gold/15 bg-surface-raised px-md py-sm">
+          <div className="text-sm font-semibold text-text-primary">群聊协作</div>
+          <Button size="sm" variant="metal" onClick={handleOpenCreate}>
+            从解决方案创建群聊
+          </Button>
+        </div>
       <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
         {selected ? (
           <>
@@ -128,6 +199,64 @@ export function GroupPage() {
           </div>
         )}
       </GlassPanel>
+      </div>
+
+      {showCreateModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/80 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="从解决方案创建群聊"
+          onClick={handleCloseCreate}
+        >
+          <GlassPanel
+            className="w-full max-w-lg space-y-md p-lg"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-text-primary">从解决方案创建群聊</h2>
+            <p className="text-sm text-text-secondary">
+              选择一个行业方案实例，将以其自带的三阶段固定编排规则（planner / subtask / aggregate）创建群聊。
+              创建后编排规则只读，不可在会话中覆盖。
+            </p>
+            {solutions === null ? (
+              <p className="text-sm text-text-secondary">加载中…</p>
+            ) : solutions.length === 0 ? (
+              <p className="text-sm text-danger">暂无可用方案实例，请先在 Manager 端应用方案后再来建群。</p>
+            ) : (
+              <div className="space-y-xs">
+                <label className="block text-xs font-medium text-text-secondary">选择方案实例</label>
+                <select
+                  className="w-full rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none focus:border-gold/50 focus:ring-2 focus:ring-gold"
+                  value={selectedSolutionId ?? ""}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedSolutionId(e.target.value || null)}
+                >
+                  <option value="">— 请选择 —</option>
+                  {solutions.map((s) => (
+                    <option key={s.solution_instance_id} value={s.solution_instance_id}>
+                      {s.display_name}{s.version ? ` · v${s.version}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {solutionsError && (
+              <p className="text-xs text-danger" aria-live="polite">{solutionsError}</p>
+            )}
+            <div className="flex justify-end gap-sm">
+              <Button variant="ghost" onClick={handleCloseCreate} disabled={creating}>
+                取消
+              </Button>
+              <Button
+                variant="metal"
+                disabled={!selectedSolutionId || !solutions || solutions.length === 0 || creating}
+                onClick={() => void handleConfirmCreate()}
+              >
+                {creating ? "创建中…" : "创建群聊"}
+              </Button>
+            </div>
+          </GlassPanel>
+        </div>
+      )}
     </div>
   );
 }
