@@ -539,9 +539,9 @@ describe("注册表单", () => {
       ).toBeInTheDocument();
     });
 
-    // Fill ID but leave name empty to trigger name validation
-    const idInput = document.querySelector<HTMLInputElement>("input[placeholder=\"template_id\"]")!;
-    fireEvent.change(idInput, { target: { value: "tpl-test" } });
+    // Leave both fields empty to trigger name validation (ID is now server-generated, no input shown).
+    const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
+    expect(nameInput).toBeTruthy();
 
     // Submit form to trigger React synthetic onSubmit in jsdom
     const registerBtn = screen.getByRole("button", { name: "注册" });
@@ -612,11 +612,9 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // 用 placeholder 精准定位 input
-    const idInput = document.querySelector<HTMLInputElement>("input[placeholder=\"template_id\"]")!;
+    // ID 由服务端自动生成（AITEAM-355 问题二），表单不再提供手填 ID 输入框。
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
-    expect(idInput).toBeTruthy();
-    fireEvent.change(idInput, { target: { value: "tpl-new" } });
+    expect(nameInput).toBeTruthy();
     fireEvent.change(nameInput, { target: { value: "新专家" } });
 
     // 填 persona
@@ -640,7 +638,10 @@ describe("注册表单", () => {
     await waitFor(() => {
       expect(capturedBody).toBeTruthy();
     });
-    expect((capturedBody as { template_id: string }).template_id).toBe("tpl-new");
+    // template_id 由服务端自动生成（AITEAM-355 问题二），请求体不再包含 template_id。
+    const body = capturedBody as { template_id?: string; display_name: string };
+    expect(body.template_id).toBeUndefined();
+    expect(body.display_name).toBe("新专家");
     expect((capturedBody as { display_name: string }).display_name).toBe("新专家");
     expect((capturedBody as { persona?: string }).persona).toBe("电商客服");
     expect(
@@ -705,10 +706,9 @@ describe("注册表单", () => {
     fireEvent.click(screen.getAllByRole("checkbox")[0]!);
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);
 
-    // 填 solution_id 与名称
-    const idInput = document.querySelector<HTMLInputElement>("input[placeholder=\"solution_id\"]")!;
-    fireEvent.change(idInput, { target: { value: "sol_a" } });
+    // ID 由服务端自动生成（AITEAM-355 问题二）：表单只暴露 display_name，solution_id 已移除。
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
+    expect(nameInput).toBeTruthy();
     fireEvent.change(nameInput, { target: { value: "全渠道方案" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -721,7 +721,8 @@ describe("注册表单", () => {
       expect(registerCall).toBeTruthy();
       const body = JSON.parse(((registerCall as unknown[])[1] as { body: string }).body);
       expect(body.expert_template_ids.sort()).toEqual(["exp_a", "exp_b"]);
-      expect(body.solution_id).toBe("sol_a");
+      expect(body.solution_id).toBeUndefined();
+      expect(body.display_name).toBe("全渠道方案");
     });
   });
 });

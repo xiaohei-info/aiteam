@@ -31,7 +31,11 @@ class RegisterExpertTemplateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    template_id: str = Field(min_length=1, description="模板稳定标识，租户实例据此招募")
+    template_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="模板稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
+    )
     display_name: str = Field(min_length=1)
     persona: str | None = Field(default=None)
     recommended_config: dict = Field(default_factory=dict)
@@ -47,7 +51,11 @@ class RegisterSolutionTemplateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    solution_id: str = Field(min_length=1)
+    solution_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="方案稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
+    )
     display_name: str = Field(min_length=1)
     expert_template_ids: list[str] = Field(default_factory=list)
     expert_bindings: list["ExpertBinding"] = Field(

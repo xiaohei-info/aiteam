@@ -13,7 +13,7 @@ import { type FormEvent, useEffect, useState, type ReactNode } from "react";
  *     default_kb_blueprint / default_skill_bundle /
  *     default_collaboration_template_ref / tags
  *
- * 表单按"基础 + 能力配置"分层展开;必填只有 id 与 display_name。
+ * 表单按"基础 + 能力配置"分层展开;必填只有 display_name(模板 ID 由服务端自动生成)。
  */
 import { useI18n } from "../../i18n/context";
 import { useCatalogApi } from "./useCatalogApi";
@@ -69,7 +69,7 @@ function parseJsonOrEmpty(value: string): Record<string, unknown> | undefined {
 export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): ReactNode {
   const i18n = useI18n();
   // catalogType 锁定后不再可切换，直接用作当前类型。
-  const [id, setId] = useState("");
+  // ID 由服务端自动生成（slug + 随机后缀），运营端无需手填 #AITEAM-355 问题二。
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -143,7 +143,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
       recommended.default_model_ref = ref;
     }
     return {
-      template_id: id.trim(),
       display_name: displayName.trim(),
       ...(persona.trim() ? { persona: persona.trim() } : {}),
       ...(Object.keys(recommended).length
@@ -154,7 +153,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 
   function buildSolutionPayload(): RegisterSolutionTemplate {
     const payload: RegisterSolutionTemplate = {
-      solution_id: id.trim(),
       display_name: displayName.trim(),
     };
     if (expertPicks.length) payload.expert_template_ids = expertPicks;
@@ -177,10 +175,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
     setValidationError(null);
-    if (!id.trim()) {
-      setValidationError("ID 不能为空");
-      return;
-    }
+    // 名称必填；ID 由服务端自动生成（AITEAM-355 问题二）。
     if (!displayName.trim()) {
       setValidationError("名称不能为空");
       return;
@@ -220,16 +215,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
               ? i18n.t("operation.catalog.expertTemplate")
               : i18n.t("operation.catalog.solutionTemplate")}
           </span>
-        </Field>
-
-        <Field label="ID">
-          <Input
-            type="text"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            placeholder={catalogType === "expert_template" ? "template_id" : "solution_id"}
-            disabled={loading}
-          />
         </Field>
 
         <Field label="名称">

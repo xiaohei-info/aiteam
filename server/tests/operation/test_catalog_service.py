@@ -450,3 +450,65 @@ def test_expert_binding_sequence_no_must_be_positive():
     """sequence_no < 1 应被 Pydantic 拒绝（ge=1）。"""
     with pytest.raises(Exception):
         ExpertBinding(template_id="tpl-x", sequence_no=0, enabled=True)
+
+
+
+# ---- AITEAM-355 问题二：服务端自动生成 ID ----
+
+def _auto_expert(**kw):
+    base = dict(display_name="Auto")
+    base.update(kw)
+    return RegisterExpertTemplateRequest(**base)
+
+
+def _auto_solution(**kw):
+    base = dict(display_name="Auto-Solution")
+    base.update(kw)
+    return RegisterSolutionTemplateRequest(**kw)
+
+
+def test_register_expert_without_id_generates_id(service, manager):
+    """不传 template_id 时服务端必须自动生成非空、URL 安全的 ID（AITEAM-355）。"""
+    entry = service.register_expert_template(_auto_expert(display_name="测试专家"))
+    assert entry.template_id
+    # URL 安全：只含 ASCII 字母/数字/连字符
+    import re
+    assert re.fullmatch(r"[a-z0-9-]+", entry.template_id), entry.template_id
+    assert entry.status == CatalogStatus.DRAFT
+    assert manager.notifications == []  # 草稿不通知 Manager
+
+
+def test_register_solution_without_id_generates_id(service):
+    entry = service.register_solution_template(_auto_solution(display_name="全渠道增长方案"))
+    assert entry.template_id
+    assert entry.status == CatalogStatus.DRAFT
+
+
+def test_register_auto_id_chinese_display_name_falls_back_to_item(service):
+    """全中文/非 ASCII display_name 应回落到可读的 item-<random> 形式。"""
+    entry = service.register_expert_template(_auto_expert(display_name="首席技术官"))
+    assert entry.template_id.startswith("item-")
+
+
+def test_register_auto_id_same_display_name_no_collision(service):
+    """同名注册两次不会冲突，ID 互不相同（随机后缀去重）。"""
+    e1 = service.register_expert_template(_auto_expert(display_name="Sales Rep"))
+    e2 = service.register_expert_template(_auto_expert(display_name="Sales Rep"))
+    assert e1.template_id and e2.template_id
+    assert e1.template_id != e2.template_id
+
+
+def test_register_auto_id_is_persisted_and_fetchable(service):
+    """自动生成的 ID 必须落库且能被后续 GET 命中。"""
+    created = service.register_expert_template(_auto_expert(display_name="Persisted"))
+    fetched = service._repo.get(CatalogType.EXPERT_TEMPLATE, created.template_id)
+    assert fetched.display_name == "Persisted"
+    assert fetched.version == "1"
+
+
+def test_register_explicit_id_still_honored_and_conflicts(service):
+    """显式 ID 必须保留原语义：直接 create、重复 → Conflict（409 路径）。"""
+    first = service.register_expert_template(_auto_expert(display_name="A", template_id="my-explicit"))
+    assert first.template_id == "my-explicit"
+    with pytest.raises(Conflict):
+        service.register_expert_template(_auto_expert(display_name="B", template_id="my-explicit"))

@@ -177,3 +177,47 @@ def test_openapi_exposes_catalog_routes(client):
     assert "/api/operation/catalog/expert-templates" in paths
     assert "/api/operation/catalog/solution-templates" in paths
     assert "/api/operation/catalog/{catalog_type}/{template_id}/publish" in paths
+
+
+
+# ---- AITEAM-355 问题二：北向 HTTP 注册路径服务端自动生成 ID ----
+
+def _assert_url_safe(template_id: str) -> None:
+    import re
+    assert re.fullmatch(r"[a-z0-9-]+", template_id), template_id
+
+
+def test_route_register_expert_without_id_returns_201_with_generated_id(client, manager):
+    """POST /expert-templates 不传 template_id：201 + 响应含自动生成的 ID + 草稿不通知 Manager。"""
+    body = {"display_name": "路由注册-无ID专家"}
+    r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["catalog_type"] == "expert_template"
+    assert data["status"] == "draft"
+    assert data["template_id"]
+    _assert_url_safe(data["template_id"])
+    assert manager.notifications == []
+
+
+def test_route_register_solution_without_id_returns_201_with_generated_id(client):
+    body = {"display_name": "路由注册-无ID方案"}
+    r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["catalog_type"] == "solution_template"
+    assert data["template_id"]
+    _assert_url_safe(data["template_id"])
+
+
+def test_route_register_omitting_name_still_422(client):
+    """display_name 空仍应 422（AITEAM-355 不放松这一契约）。"""
+    r = client.post("/api/operation/catalog/expert-templates", json={"display_name": ""}, headers=_auth())
+    assert r.status_code == 422
+
+
+def test_route_register_empty_string_id_rejected_with_422(client, manager):
+    """template_id 为空字符串 → schema min_length=1 拒绝（422），不入库空串 ID。"""
+    body = {"display_name": "EmptyIdExpert", "template_id": ""}
+    r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert r.status_code == 422, r.text
