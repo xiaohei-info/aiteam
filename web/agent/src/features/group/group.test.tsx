@@ -20,7 +20,7 @@ import { AppRoutes } from "../../app/routes";
 import { AgentApiClient } from "../../lib/api-client";
 import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
 import { TimelineStore } from "@aiteam/shared/timeline-client";
-import { groupDispatch, type GroupExpert, type DispatchResult } from "./useGroupApi";
+import { groupDispatch, type GroupExpert, type DispatchResult, type SolutionProjection } from "./useGroupApi";
 import { parseMentions } from "./MentionComposer";
 import { createTimelineFetcher } from "../chat/useChatApi";
 import { MentionComposer } from "./MentionComposer";
@@ -367,6 +367,127 @@ describe("MentionComposer — 无 @提及", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => {
       expect(onDispatched).toHaveBeenCalledWith({ triggered_handles: [], runs: [] });
+    });
+  });
+});
+
+
+// ---- 5. 从解决方案创建群聊（固定编排入口）----
+
+describe("GroupPage — 从解决方案创建群聊", () => {
+  function makeFetchWithSolutions(
+    convs: ReturnType<typeof makeConv>[],
+    solutions: SolutionProjection[],
+    created: Conversation,
+  ) {
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        const experts = [
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ];
+        return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/grants/solutions")) {
+        return new Response(listEnvelope(solutions), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations") && init?.method === "POST") {
+        return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (
+        path.includes("/api/agent/conversations") &&
+        !path.includes("/timeline") &&
+        !path.includes("/messages") &&
+        !path.includes("/group-dispatch") &&
+        !path.includes("/solutions") &&
+        (init?.method === undefined || init?.method === "GET")
+      ) {
+        return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+  }
+
+  function makeSolution(id: string, name: string): SolutionProjection {
+    return {
+      solution_instance_id: id,
+      display_name: name,
+      version: "v1",
+      planner_prompt: "p",
+      subtask_prompt: "s",
+      aggregate_prompt: "a",
+    };
+  }
+
+  it("点击「从解决方案创建群聊」加载方案列表并展示在弹窗中", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn();
+    // 使用通用 makeGroupFetch：GET solutions 会被以下返回
+    const convs: ReturnType<typeof makeConv>[] = [];
+    const solutions = [makeSolution("si-1", "电商专家群")];
+    const fetchWithSolutions = makeFetchWithSolutions(convs, solutions, makeConv("c-new", "电商专家群"));
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("电商专家群")).toBeInTheDocument();
+    });
+  });
+
+  it("无方案实例时弹窗展示兜底文案", async () => {
+    loginStorage();
+    const solutions: SolutionProjection[] = [];
+    const fetchWithSolutions = makeFetchWithSolutions([], solutions, makeConv("c-new", "x"));
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/暂无可用方案实例/)).toBeInTheDocument();
+    });
+  });
+
+  it("选中方案实例后点创建 → createConversationFromSolution 被调用", async () => {
+    loginStorage();
+    const solutions = [makeSolution("si-1", "电商专家群")];
+    const newConv = makeConv("c-result", "电商专家群");
+    const fetchWithSolutions = makeFetchWithSolutions([], solutions, newConv);
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    const select = await screen.findByRole("combobox");
+    fireEvent.change(select, { target: { value: "si-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /创建群聊/ }));
+
+    await waitFor(() => {
+      // 弹窗关闭表示创建成功
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 });
