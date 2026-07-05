@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock
 
+from manager_service.audit_repository import AuditEventRow
 from manager_service.audit_service import AuditService
 
 
@@ -14,7 +15,7 @@ def _row(**kw):
         detail={}, created_at=datetime.utcnow(),
     )
     base.update(kw)
-    return base
+    return AuditEventRow(**base)
 
 
 def test_list_events_roundtrips_row():
