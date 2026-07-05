@@ -9,6 +9,7 @@
 """
 
 from __future__ import annotations
+from shared.service_client import ServiceClient
 
 import sqlite3
 import tempfile
@@ -186,3 +187,20 @@ def test_sqlite_snapshot_roundtrip():
     assert again is not None
     assert again.snapshot_version == snap.snapshot_version
     assert again is not snap  # SQLite 路径返回新对象（区别于 InMemory 同一引用）
+
+
+def test_service_client_stores_user_token_provider():
+    """ServiceClient.__init__ 的 user_token_provider 参数确实被保留 (覆盖 service_client.py line 82)。"""
+    captured = {}
+
+    def provider():
+        captured["called"] = True
+        return "tok"
+
+    client = ServiceClient("https://upstream.local", user_token_provider=provider)
+    try:
+        assert client._user_token_provider is provider
+        # 该字段会被后续 _headers() 调用
+        assert callable(client._user_token_provider)
+    finally:
+        client.close()
