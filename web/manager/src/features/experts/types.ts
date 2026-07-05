@@ -1,6 +1,7 @@
 /**
- * 招募专家页类型（W-M.3）。
+ * 招募专家共享类型定义（W-M.3）。
  *
+ * 为 /marketplace（浏览+招募）、/solutions（方案目录+应用）与共享 useExpertsApi 提供类型。
  * 与后端契约对齐（不重定义）：
  * - 浏览：/api/manager/recruit/catalog/experts → ExpertTemplateDetail；/catalog/solutions → SolutionPackage
  * - 招募/应用：/api/manager/recruit/experts、/solutions

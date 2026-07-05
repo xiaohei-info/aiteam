@@ -7,7 +7,6 @@ export const managerMessages: LocaleCatalog = {
     "manager.title": "AI Team 企业端",
     "manager.nav.dashboard": "企业概览",
     "manager.nav.members": "成员账号",
-    "manager.nav.experts": "招募专家",
     "manager.nav.marketplace": "人才市场",
     "manager.nav.solutions": "方案目录",
     "manager.nav.skills": "技能管理",

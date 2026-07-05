@@ -1,6 +1,7 @@
 /**
- * 招募专家 API hook（W-M.3）。
+ * 招募 / 应用方案 / 员工生命周期 API hook（W-M.3）。
  *
+ * 为 /marketplace、/solutions 与后续入口提供共享 API。
  * 只调本端 /api/manager/recruit/* 与 /api/manager/employees/*（跨端由基类拦截）。
  * 浏览目录是 Operator 只读投影（后端 #118）；招募/应用落本 tenant employee 实例。
  *

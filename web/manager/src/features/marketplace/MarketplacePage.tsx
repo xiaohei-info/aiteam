@@ -1,14 +1,15 @@
 /**
  * 人才市场页（AITEAM-290 / GH#404）。
  *
- * 独立的人才招募入口：可招募专家模板浏览 + 一键招募为 tenant 实例。
+ * Manager 端唯一的人才招募入口：浏览可招募专家模板 + 一键招募为 tenant 实例。
+ * 招募无需手填实例标识（slug）—— 由后端自动生成（PRD P03/P04，AITEAM-356）。
  *
- * 注意：本入口与旧 /experts 页的招募功能平行；/marketplace 聚焦浏览 + 招募流程，
- * 旧 /experts 保留员工生命周期管理（编辑配置 / 查看状态 / 生命周期流转）。
- * 参照旧架构 admin/templates 人才市场功能形态（仅功能参考，不沿用代码风格）。
+ * 注意：原旧 /experts 页的招募/方案段已迁移拆分：
+ *   - 人才市场（本入口）：仅需 template_id 即可完成招募；
+ *   - 方案目录 /solutions：行业方案「查看详情 + 一键应用」，Manager 不可编辑（PRD B06）。
  *
  * 设计对齐 PRD P03/P04：招募无需手工填写实例标识（slug），服务端按模板自动创建实例；
- * 招募动作为一个确认弹窗，入参仅 template_id。
+ * 招募动作为一键按钮，入参仅 template_id。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
