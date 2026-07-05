@@ -491,3 +491,70 @@ describe("GroupPage — 从解决方案创建群聊", () => {
     });
   });
 });
+
+
+// ---- 6. 专家 roster 加载 + 方案加载异常兜底 ----
+
+describe("GroupPage — roster / 方案异常兜底", () => {
+  it("专家加载失败展示 rosterErrorTip", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        return new Response(JSON.stringify({ detail: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/加载专家失败/)).toBeInTheDocument();
+    });
+  });
+
+  it("加载方案列表失败展示 solutionsError", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        const experts = [
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ];
+        return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/grants/solutions")) {
+        return new Response(JSON.stringify({ detail: "nope" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/加载方案列表失败/)).toBeInTheDocument();
+    });
+  });
+});
