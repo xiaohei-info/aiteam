@@ -23,7 +23,7 @@
  * 三阶段 prompts，UI 只读展示不覆盖）；自由创建仍为默认行为。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 
 import { useApp } from "../../lib/app-context";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
@@ -39,6 +39,7 @@ import {
   type CreateFromSolutionInput,
   type DispatchResult,
   type GroupExpert,
+  type LoadedExpertProjection,
   type SolutionProjection,
 } from "./useGroupApi";
 
