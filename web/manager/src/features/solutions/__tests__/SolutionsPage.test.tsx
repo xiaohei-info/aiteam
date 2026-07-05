@@ -11,7 +11,7 @@ import { useExpertsApi } from "../../experts/useExpertsApi";
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 
 import type { ExpertsApi } from "../../experts/useExpertsApi";
-import type { SolutionInstance } from "../../experts/types";
+import type { SolutionInstance, SolutionPackage } from "../../experts/types";
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -30,7 +30,11 @@ function sessionValue(roles: string[]): SessionContextValue {
 function mockApi(): ExpertsApi {
   const api: ExpertsApi = {
     listTemplates: vi.fn().mockResolvedValue([]),
-    listSolutions: vi.fn().mockResolvedValue([{ solution_id: "sol-1", version: "1", display_name: "测试方案" }]),
+    listSolutions: vi.fn().mockResolvedValue([{
+      solution_id: "sol-1", version: "1", display_name: "测试方案",
+      experts: [{ template_id: "tpl-1", version: "1", display_name: "架构师", persona: "技术架构专家", role_name: "企业架构顾问" }],
+      knowledge_refs: ["ks-shared"], skill_refs: ["skill-a"], tags: ["金融"], planner_prompt: "",
+    } as SolutionPackage]),
     recruitExpert: vi.fn().mockResolvedValue({}),
     applySolution: vi.fn().mockResolvedValue({}),
     listEmployees: vi.fn().mockResolvedValue([]),
@@ -38,7 +42,6 @@ function mockApi(): ExpertsApi {
     listSolutionInstances: vi.fn().mockResolvedValue([]),
     transitionEmployee: vi.fn().mockResolvedValue(null),
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
-    updateSolutionInstance: vi.fn().mockResolvedValue(null),
   };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
   return api;
@@ -82,29 +85,26 @@ describe("SolutionsPage", () => {
     expect(screen.queryByText("应用方案")).not.toBeInTheDocument();
   });
 
-  it("浏览方案实例卡片", async () => {
+  it("查看方案详情：点击查看详情打开抽屉展示专家/知识/技能", async () => {
+    mockApi(); renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("查看详情"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("架构师")).toBeInTheDocument();
+    expect(screen.getByText("ks-shared")).toBeInTheDocument();
+    expect(screen.getByText("skill-a")).toBeInTheDocument();
+    // 关闭
+    fireEvent.click(screen.getByText("✕"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("浏览方案实例卡片（只读，无编辑按钮）", async () => {
     const api = mockApi();
     (api.listSolutionInstances as ReturnType<typeof vi.fn>).mockResolvedValue([solutionInstance]);
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
     expect(screen.getByText("行业方案A")).toBeInTheDocument();
-  });
-
-  it("编辑方案实例：updateSolutionInstance 收到正确字段", async () => {
-    const api = mockApi();
-    (api.listSolutionInstances as ReturnType<typeof vi.fn>).mockResolvedValue([solutionInstance]);
-    renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
-    const card = screen.getByTestId("solution-instance-card");
-    fireEvent.click(within(card).getByText("编辑配置"));
-    await waitFor(() => expect(within(card).getByLabelText("名称")).toBeInTheDocument());
-    fireEvent.change(within(card).getByLabelText("关联专家（employee id）"), { target: { value: "emp-1\nemp-3" } });
-    fireEvent.change(within(card).getByLabelText("协作编排 planner prompt"), { target: { value: "拆分任务" } });
-    fireEvent.click(within(card).getByText("保存"));
-    await waitFor(() => expect(api.updateSolutionInstance).toHaveBeenCalledTimes(1));
-    expect(api.updateSolutionInstance).toHaveBeenCalledWith("si-1", expect.objectContaining({
-      expert_employee_ids: ["emp-1", "emp-3"], planner_prompt: "拆分任务",
-    }));
+    expect(screen.queryByText("编辑配置")).not.toBeInTheDocument();
   });
 
   it("加载失败：listSolutions 报错显示错误信息", async () => {
@@ -149,18 +149,5 @@ describe("SolutionsPage", () => {
     renderPage(["owner"]);
     const card = await screen.findByTestId("solution-instance-card");
     expect(within(card).getByText("inactive")).toBeInTheDocument();
-  });
-
-  it("编辑方案实例：取消编辑恢复初始字段", async () => {
-    const api = mockApi();
-    (api.listSolutionInstances as ReturnType<typeof vi.fn>).mockResolvedValue([solutionInstance]);
-    renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
-    const card = screen.getByTestId("solution-instance-card");
-    fireEvent.click(within(card).getByText("编辑配置"));
-    await waitFor(() => expect(within(card).getByLabelText("名称")).toBeInTheDocument());
-    fireEvent.change(within(card).getByLabelText("名称"), { target: { value: "改坏了" } });
-    fireEvent.click(within(card).getByText("取消"));
-    expect(within(card).getByText("行业方案A")).toBeInTheDocument();
   });
 });

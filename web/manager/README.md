@@ -16,7 +16,8 @@ AI Team v1 **企业端前端**（独立工程 / 独立构建，v1 概要设计 0
 |------|------|----------|
 | 企业概览 | `/` | 登录即可见（含 member） |
 | 成员账号 | `/members` | owner / enterprise_admin |
-| 招募专家 | `/experts` | owner / enterprise_admin |
+| 招募专家 | `/marketplace` | owner / enterprise_admin |
+| 方案目录 | `/solutions` | owner / enterprise_admin |
 | 成员级授权 | `/grants` | owner / enterprise_admin |
 | 企业治理 | `/governance` | owner / enterprise_admin / finance_admin |
 

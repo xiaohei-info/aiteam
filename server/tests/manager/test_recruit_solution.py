@@ -119,25 +119,6 @@ class _FakeRecruitRepo:
         self._solutions.setdefault(ctx.tenant_id, {})[row.id] = row
         return row
 
-    def update_solution_instance(self, ctx, *, instance_id, **kw):
-        bucket = self._solutions.setdefault(ctx.tenant_id, {})
-        row = bucket.get(instance_id)
-        if row is None:
-            return None
-        import dataclasses
-        updates = {}
-        for field in ("display_name", "expert_employee_ids", "knowledge_refs",
-                      "skill_refs", "planner_prompt", "subtask_prompt",
-                      "aggregate_prompt", "status"):
-            if kw.get(field) is not None:
-                updates[field] = list(kw[field]) if field in (
-                    "expert_employee_ids", "knowledge_refs", "skill_refs",
-                ) else kw[field]
-        # Rebuild frozen dataclass with updates
-        new_row = dataclasses.replace(row, **updates) if updates else row
-        bucket[instance_id] = new_row
-        return new_row
-
     def get_solution_instance(self, ctx, *, instance_id):
         return self._solutions.get(ctx.tenant_id, {}).get(instance_id)
 
@@ -713,106 +694,15 @@ def test_apply_solution_honors_sequence_order_and_skips_disabled():
     assert slug_z.endswith("_e1")
 
 
-# ---- AITEAM-288（GH#403）：方案实例编辑配置 ----
+# ---- AITEAM-356：Manager 端不可编辑已应用方案实例（PRD B06） ----
 
 
-def test_update_solution_instance_edits_bindings_and_refs():
-    """编辑专家绑定/知识技能引用：局部更新 expert_employee_ids / knowledge_refs / skill_refs。"""
-    catalog = FakeOperatorCatalogClient()
-    catalog.seed_solution(_solution_package())
-    svc, _, _, _, _ = _build_service(catalog)
-    from manager_service.schemas import SolutionInstanceUpdate
-
-    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
-    inst_id = created.solution_instance.id
-    original_experts = created.solution_instance.expert_employee_ids
-
-    updated = svc.update_solution_instance(
-        _ctx("t-a"), instance_id=inst_id,
-        req=SolutionInstanceUpdate(
-            expert_employee_ids=[original_experts[0]],  # 删掉第二个专家
-            knowledge_refs=["ks-new"],
-            skill_refs=["skill-new", "skill-extra"],
-        ),
+def test_manager_cannot_edit_solution_instance_after_apply():
+    """回归：apply 后方案实例只读；服务层不再暴露 update_solution_instance。"""
+    import manager_service.recruit_service as svc_mod
+    assert not hasattr(svc_mod.RecruitService, "update_solution_instance"), (
+        "AITEAM-356: Manager 端不应提供方案实例编辑能力"
     )
-    assert len(updated.expert_employee_ids) == 1
-    assert updated.knowledge_refs == ["ks-new"]
-    assert updated.skill_refs == ["skill-new", "skill-extra"]
-
-
-def test_update_solution_instance_edits_collab_prompts():
-    """编辑协作编排 prompts：planner / subtask / aggregate。"""
-    catalog = FakeOperatorCatalogClient()
-    catalog.seed_solution(_solution_package())
-    svc, _, _, _, _ = _build_service(catalog)
-    from manager_service.schemas import SolutionInstanceUpdate
-
-    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
-    inst_id = created.solution_instance.id
-
-    updated = svc.update_solution_instance(
-        _ctx("t-a"), instance_id=inst_id,
-        req=SolutionInstanceUpdate(
-            planner_prompt="拆分任务为子步骤",
-            subtask_prompt="执行子任务",
-            aggregate_prompt="汇总专家结果",
-        ),
-    )
-    assert updated.planner_prompt == "拆分任务为子步骤"
-    assert updated.subtask_prompt == "执行子任务"
-    assert updated.aggregate_prompt == "汇总专家结果"
-
-
-def test_update_solution_instance_preserves_unchanged_fields():
-    """局部更新不传的字段保持原值（None = 不写入）。"""
-    catalog = FakeOperatorCatalogClient()
-    catalog.seed_solution(_solution_package())
-    svc, _, _, _, _ = _build_service(catalog)
-    from manager_service.schemas import SolutionInstanceUpdate
-
-    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
-    inst_id = created.solution_instance.id
-    original_kr = created.solution_instance.knowledge_refs
-    original_sr = created.solution_instance.skill_refs
-
-    # 只改 display_name
-    updated = svc.update_solution_instance(
-        _ctx("t-a"), instance_id=inst_id,
-        req=SolutionInstanceUpdate(display_name="重命名方案"),
-    )
-    assert updated.display_name == "重命名方案"
-    assert updated.knowledge_refs == original_kr
-    assert updated.skill_refs == original_sr
-
-
-def test_update_solution_instance_member_forbidden():
-    """编辑方案实例需 owner/enterprise_admin；member → 403。"""
-    catalog = FakeOperatorCatalogClient()
-    catalog.seed_solution(_solution_package())
-    svc, _, _, _, _ = _build_service(catalog)
-    from manager_service.schemas import SolutionInstanceUpdate
-
-    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
-    with pytest.raises(Forbidden):
-        svc.update_solution_instance(
-            _ctx("t-a", roles=["member"]), instance_id=created.solution_instance.id,
-            req=SolutionInstanceUpdate(display_name="x"),
-        )
-
-
-def test_update_solution_instance_not_found_cross_tenant():
-    """跨租户编辑方案实例：t-a 建的，t-b 视角 → 404（D22 + RLS 语义）。"""
-    catalog = FakeOperatorCatalogClient()
-    catalog.seed_solution(_solution_package())
-    svc, _, _, _, _ = _build_service(catalog)
-    from manager_service.schemas import SolutionInstanceUpdate
-
-    created = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
-    with pytest.raises(NotFound):
-        svc.update_solution_instance(
-            _ctx("t-b"), instance_id=created.solution_instance.id,
-            req=SolutionInstanceUpdate(display_name="x"),
-        )
 
 
 def test_apply_solution_preserves_collab_prompts_from_package():
@@ -830,3 +720,156 @@ def test_apply_solution_preserves_collab_prompts_from_package():
     assert result.solution_instance.planner_prompt == "plan-p"
     assert result.solution_instance.subtask_prompt == "sub-p"
     assert result.solution_instance.aggregate_prompt == "agg-p"
+
+
+# ---- 追加测试：F06 未传 employee_slug 时后端自动生成 slug（PRD P03/P04）----
+
+def test_recruit_expert_generates_slug_when_missing():
+    """未传 employee_slug 时后端自动生成 slug（PRD P03/P04：实例标识服务端创建）."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="测试销售专家", persona="销售精英",
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-a", enterprise_id="ent-a", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    assert result.employee_slug, "应自动生成 slug"
+    assert svc._employees.get_by_slug(ctx, employee_slug=result.employee_slug) is not None
+
+
+def test_recruit_expert_generated_slugs_are_unique():
+    """同一 tenant 多次不传 slug 时后端生成唯一 slug."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="销售 专家", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
+    r1 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    r2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    assert r1.employee_slug != r2.employee_slug
+
+
+def test_recruit_expert_explicit_slug_still_works():
+    """向前兼容：显式传 employee_slug 仍按传入值落库（PRD 放宽而非移除）."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="销售专家", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-exp", enterprise_id="ent-exp", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto", employee_slug="my-custom-slug"))
+    assert result.employee_slug == "my-custom-slug"
+
+
+def test_recruit_expert_generated_slug_allowed_chars():
+    """后端生成 slug 遵守 [a-z0-9_] 约束（与 repo unique slug 约定一致）."""
+    # Mix English + CJK chars + punctuation -> CJK/non-ASCII dropped, keeps only [a-z0-9_]
+    template = ExpertTemplateDetail(
+        template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-chars", enterprise_id="ent-chars", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    slug = result.employee_slug
+    assert slug and slug == slug.lower(), "slug 全小写"
+    assert all(c.isalnum() or c == "_" for c in slug), "slug 仅允许 [a-z0-9_]"
+    # ASCII-only 约束下中文不能进入 slug；空后回退到 template_id
+    assert all(ord(c) < 128 for c in slug), "slug 必须 ASCII-only"
+
+
+def test_recruit_expert_generated_slug_handles_ascii_template():
+    """纯 ASCII display_name 场景：字符映射 + 去重正常工作."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-sales", version="1", display_name="Enterprise Sales-Pro v2", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+    assert result.employee_slug == "enterprise_sales_pro_v2"
+    # 重复招募 -> 唯一后缀
+    result2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+    assert result2.employee_slug.startswith("enterprise_sales_pro_v2_")
+    assert result2.employee_slug != result.employee_slug

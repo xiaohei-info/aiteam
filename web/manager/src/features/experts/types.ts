@@ -1,6 +1,7 @@
 /**
- * 招募专家页类型（W-M.3）。
+ * 招募专家共享类型定义（W-M.3）。
  *
+ * 为 /marketplace（浏览+招募）、/solutions（方案目录+应用）与共享 useExpertsApi 提供类型。
  * 与后端契约对齐（不重定义）：
  * - 浏览：/api/manager/recruit/catalog/experts → ExpertTemplateDetail；/catalog/solutions → SolutionPackage
  * - 招募/应用：/api/manager/recruit/experts、/solutions
@@ -15,11 +16,34 @@ export interface ExpertTemplate {
   persona?: string | null;
 }
 
-/** 可应用行业方案包（对齐 SolutionPackage，仅取页面所需字段）。 */
+/** 方案包内专家摘要（对齐 SolutionPackage.experts 的 ExpertTemplateDetail 子集）。 */
+export interface SolutionPackageExpertSummary {
+  template_id: string;
+  version: string;
+  display_name: string;
+  persona?: string | null;
+  role_name?: string;
+  category_code?: string;
+  sequence_no?: number;
+  enabled?: boolean;
+}
+
+/**
+ * 可应用行业方案包（对齐 SolutionPackage）。
+ * 详情字段（experts / knowledge_refs / skill_refs / prompts / tags）后端已通过 catalog 端口返回，
+ * 前端取全量用于「查看方案详情」展示，不再裁剪。
+ */
 export interface SolutionPackage {
   solution_id: string;
   version: string;
   display_name: string;
+  experts?: SolutionPackageExpertSummary[];
+  knowledge_refs?: string[];
+  skill_refs?: string[];
+  tags?: string[];
+  planner_prompt?: string;
+  subtask_prompt?: string;
+  aggregate_prompt?: string;
 }
 
 /** 中立模型策略（对齐 ModelPolicy）。 */
@@ -65,7 +89,8 @@ export interface LifecycleOptions {
 export interface RecruitExpertInput {
   template_id: string;
   template_version?: string | null;
-  employee_slug: string;
+  /** 可选；未传时后端自动生成 slug（PRD P03：实例标识由服务端自动创建）。 */
+  employee_slug?: string | null;
   display_name_override?: string | null;
 }
 
@@ -91,15 +116,4 @@ export interface SolutionInstance {
   aggregate_prompt?: string;
   created_at: string | null;
   updated_at: string | null;
-}
-
-/** 方案实例局部更新（对齐 SolutionInstanceUpdate，AITEAM-288）。 */
-export interface SolutionInstanceUpdateInput {
-  display_name?: string;
-  expert_employee_ids?: string[];
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
 }

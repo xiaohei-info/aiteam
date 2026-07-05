@@ -1,23 +1,18 @@
 /**
  * 方案目录页（AITEAM-290 / GH#404）。
  *
- * 独立的行业方案入口：方案目录浏览 + 应用 + 已应用方案实例查看/编辑配置。
- * 参照旧架构 admin-solutions 行业方案功能形态（仅功能参考）。
+ * 独立的行业方案入口：方案目录浏览 + 查看详情 + 一键应用 + 已应用方案实例只读展示。
  *
- * 注意：本入口与旧 /experts 页的方案段平行；/solutions 专注方案目录 + 应用 + 实例配置，
- * 旧 /experts 仍保留专家招募与员工管理的超集（向后兼容）。
+ * 设计对齐 PRD B06：方案定义在 Operator 端，Manager 端只可查看方案详情与应用方案，
+ * 不能再编辑方案内容（不再提供实例编辑入口）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
-import type { SolutionInstance, SolutionInstanceUpdateInput, SolutionPackage } from "../experts/types";
-
-const textareaCls =
-  "min-h-[80px] rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
-  "outline-none transition placeholder:text-text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold";
+import type { SolutionInstance, SolutionPackage } from "../experts/types";
 
 export function SolutionsPage(): ReactNode {
   const { session } = useSession();
@@ -31,6 +26,7 @@ export function SolutionsPage(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [detailFor, setDetailFor] = useState<SolutionPackage | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,12 +78,17 @@ export function SolutionsPage(): ReactNode {
                 className="flex flex-wrap items-center gap-sm px-lg py-md">
                 <span className="font-medium text-text-primary">{s.display_name}</span>
                 <code className="text-xs text-gold-bright">{s.solution_id}</code>
-                {canWrite && (
-                  <Button type="button" variant="ghost" size="sm" className="ml-auto"
-                    onClick={() => void runAction(() => api.applySolution({ solution_id: s.solution_id }), "manager.experts.apply_ok")}>
-                    {i18n.t("manager.experts.apply")}
+                <span className="ml-auto flex items-center gap-sm">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setDetailFor(s)}>
+                    {i18n.t("manager.experts.view_detail")}
                   </Button>
-                )}
+                  {canWrite && (
+                    <Button type="button" variant="ghost" size="sm"
+                      onClick={() => void runAction(() => api.applySolution({ solution_id: s.solution_id }), "manager.experts.apply_ok")}>
+                      {i18n.t("manager.experts.apply")}
+                    </Button>
+                  )}
+                </span>
               </div>
             ))}
           </GlassPanel>
@@ -100,43 +101,124 @@ export function SolutionsPage(): ReactNode {
           <GlassPanel className="rounded-window p-lg text-sm text-text-muted">{i18n.t("manager.experts.solution_instances_empty")}</GlassPanel>
         ) : (
           solutionInstances.map((si) => (
-            <SolutionInstanceCard key={si.id} instance={si} canWrite={canWrite}
-              onSave={(update) => runAction(() => api.updateSolutionInstance(si.id, update), "manager.experts.solution_save_ok")} />
+            <SolutionInstanceCard key={si.id} instance={si} />
           ))
         )}
       </div>
+
+      {detailFor && (
+        <SolutionDetailOverlay
+          solution={detailFor}
+          onClose={() => setDetailFor(null)}
+        />
+      )}
     </section>
   );
 }
 
-function parseList(value: string): string[] {
-  return value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-}
-
-function SolutionInstanceCard({ instance, canWrite, onSave }: {
-  instance: SolutionInstance; canWrite: boolean; onSave: (update: SolutionInstanceUpdateInput) => void;
+function SolutionDetailOverlay({ solution, onClose }: {
+  solution: SolutionPackage; onClose: () => void;
 }): ReactNode {
   const i18n = useI18n();
-  const [editing, setEditing] = useState(false);
-  const [displayName, setDisplayName] = useState(instance.display_name);
-  const [expertIds, setExpertIds] = useState(instance.expert_employee_ids.join("\n"));
-  const [knowledgeRefs, setKnowledgeRefs] = useState(instance.knowledge_refs.join("\n"));
-  const [skillRefs, setSkillRefs] = useState(instance.skill_refs.join("\n"));
-  const [plannerPrompt, setPlannerPrompt] = useState(instance.planner_prompt ?? "");
-  const [subtaskPrompt, setSubtaskPrompt] = useState(instance.subtask_prompt ?? "");
-  const [aggregatePrompt, setAggregatePrompt] = useState(instance.aggregate_prompt ?? "");
+  const experts = solution.experts ?? [];
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-lg backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
+      <GlassPanel className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-window p-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-lg flex items-start justify-between gap-md">
+          <div>
+            <h2 className="m-0 text-lg font-semibold text-text-primary">{solution.display_name}</h2>
+            <code className="text-xs text-gold-bright">{solution.solution_id}@{solution.version}</code>
+          </div>
+          <button type="button" aria-label={i18n.t("manager.common.close")} onClick={onClose}
+            className="rounded-md px-sm py-xs text-text-muted transition hover:bg-surface hover:text-text-primary">✕</button>
+        </div>
 
-  const resetEditing = useCallback(() => {
-    setDisplayName(instance.display_name);
-    setExpertIds(instance.expert_employee_ids.join("\n"));
-    setKnowledgeRefs(instance.knowledge_refs.join("\n"));
-    setSkillRefs(instance.skill_refs.join("\n"));
-    setPlannerPrompt(instance.planner_prompt ?? "");
-    setSubtaskPrompt(instance.subtask_prompt ?? "");
-    setAggregatePrompt(instance.aggregate_prompt ?? "");
-    setEditing(false);
-  }, [instance]);
+        {solution.tags && solution.tags.length > 0 && (
+          <div className="mb-md flex flex-wrap gap-xs">
+            {solution.tags.map((tag) => (
+              <span key={tag} className="rounded-full bg-gold/15 px-sm py-xs text-xs text-gold-bright">{tag}</span>
+            ))}
+          </div>
+        )}
 
+        {experts.length > 0 && (
+          <div className="mb-lg">
+            <h3 className="mb-sm text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_experts")}</h3>
+            <div className="flex flex-col gap-sm">
+              {experts.map((e) => (
+                <div key={`${e.template_id}@${e.version}`} className="rounded-md border border-gold/15 px-md py-sm">
+                  <div className="flex items-center gap-sm">
+                    <span className="font-medium text-sm text-text-primary">{e.display_name}</span>
+                    {(e.role_name || e.category_code) && (
+                      <span className="text-xs text-text-muted">{e.role_name || e.category_code}</span>
+                    )}
+                  </div>
+                  {e.persona && <p className="m-0 mt-xs text-xs text-text-secondary">{e.persona}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {experts.length === 0 && (
+          <p className="mb-lg text-sm text-text-muted">{i18n.t("manager.experts.detail_no_experts")}</p>
+        )}
+
+        {solution.knowledge_refs && solution.knowledge_refs.length > 0 && (
+          <div className="mb-lg">
+            <h3 className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_knowledge_refs")}</h3>
+            <div className="flex flex-wrap gap-xs">
+              {solution.knowledge_refs.map((k) => (
+                <code key={k} className="rounded bg-surface px-sm py-xs text-xs text-gold-bright">{k}</code>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {solution.skill_refs && solution.skill_refs.length > 0 && (
+          <div className="mb-lg">
+            <h3 className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_skill_refs")}</h3>
+            <div className="flex flex-wrap gap-xs">
+              {solution.skill_refs.map((s) => (
+                <code key={s} className="rounded bg-surface px-sm py-xs text-xs text-gold-bright">{s}</code>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(solution.planner_prompt || solution.subtask_prompt || solution.aggregate_prompt) && (
+          <div className="mb-lg flex flex-col gap-md">
+            <h3 className="text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.planner_prompt")}</h3>
+            {solution.planner_prompt && (
+              <div>
+                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.planner_prompt")}</p>
+                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.planner_prompt}</p>
+              </div>
+            )}
+            {solution.subtask_prompt && (
+              <div>
+                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.subtask_prompt")}</p>
+                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.subtask_prompt}</p>
+              </div>
+            )}
+            {solution.aggregate_prompt && (
+              <div>
+                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.aggregate_prompt")}</p>
+                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.aggregate_prompt}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-sm">
+          <Button type="button" variant="ghost" onClick={onClose}>{i18n.t("manager.common.close")}</Button>
+        </div>
+      </GlassPanel>
+    </div>
+  );
+}
+
+function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): ReactNode {
+  const i18n = useI18n();
   return (
     <GlassPanel data-testid="solution-instance-card" className="rounded-window p-md">
       <div className="flex flex-wrap items-center gap-md mb-sm">
@@ -146,77 +228,21 @@ function SolutionInstanceCard({ instance, canWrite, onSave }: {
           {instance.status}
         </span>
       </div>
-      {!editing ? (
-        <>
-          <div className="text-xs text-text-secondary space-y-xs">
-            <div>{i18n.t("manager.experts.expert_count")}: {instance.expert_employee_ids.length}</div>
-            {instance.expert_employee_ids.length > 0 && (
-              <div className="flex flex-wrap gap-xs">
-                {instance.expert_employee_ids.map((eid) => (
-                  <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
-                ))}
-              </div>
-            )}
-            <div>{i18n.t("manager.experts.solution_knowledge_refs")}: {instance.knowledge_refs.join(", ") || "-"}</div>
-            <div>{i18n.t("manager.experts.solution_skill_refs")}: {instance.skill_refs.join(", ") || "-"}</div>
-            {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
-              <div>{i18n.t("manager.experts.planner_prompt")}: {instance.planner_prompt?.slice(0, 40) || "-"}…</div>
-            )}
+      <div className="text-xs text-text-secondary space-y-xs">
+        <div>{i18n.t("manager.experts.expert_count")}: {instance.expert_employee_ids.length}</div>
+        {instance.expert_employee_ids.length > 0 && (
+          <div className="flex flex-wrap gap-xs">
+            {instance.expert_employee_ids.map((eid) => (
+              <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
+            ))}
           </div>
-          {canWrite && (
-            <Button type="button" variant="ghost" size="sm" className="mt-sm" onClick={() => setEditing(true)}>
-              {i18n.t("manager.experts.edit_solution")}
-            </Button>
-          )}
-        </>
-      ) : (
-        <form className="flex flex-col gap-md" onSubmit={(e) => {
-          e.preventDefault();
-          onSave({
-            display_name: displayName.trim(),
-            expert_employee_ids: parseList(expertIds),
-            knowledge_refs: parseList(knowledgeRefs),
-            skill_refs: parseList(skillRefs),
-            planner_prompt: plannerPrompt,
-            subtask_prompt: subtaskPrompt,
-            aggregate_prompt: aggregatePrompt,
-          });
-          setEditing(false);
-        }}>
-          <fieldset className="flex flex-col gap-md">
-            <legend className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.section_solution")}</legend>
-            <Field label={i18n.t("manager.experts.display_name")}>
-              <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_expert_ids")}>
-              <textarea className={textareaCls} value={expertIds} onChange={(e) => setExpertIds(e.target.value)} rows={3} />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_knowledge_refs")}>
-              <textarea className={textareaCls} value={knowledgeRefs} onChange={(e) => setKnowledgeRefs(e.target.value)} rows={3} />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_skill_refs")}>
-              <textarea className={textareaCls} value={skillRefs} onChange={(e) => setSkillRefs(e.target.value)} rows={3} />
-            </Field>
-          </fieldset>
-          <fieldset className="flex flex-col gap-md">
-            <legend className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.planner_prompt")}</legend>
-            <p className="m-0 text-xs text-text-muted">{i18n.t("manager.experts.solution_prompts_hint")}</p>
-            <Field label={i18n.t("manager.experts.planner_prompt")}>
-              <textarea className={textareaCls} value={plannerPrompt} onChange={(e) => setPlannerPrompt(e.target.value)} rows={3} />
-            </Field>
-            <Field label={i18n.t("manager.experts.subtask_prompt")}>
-              <textarea className={textareaCls} value={subtaskPrompt} onChange={(e) => setSubtaskPrompt(e.target.value)} rows={3} />
-            </Field>
-            <Field label={i18n.t("manager.experts.aggregate_prompt")}>
-              <textarea className={textareaCls} value={aggregatePrompt} onChange={(e) => setAggregatePrompt(e.target.value)} rows={3} />
-            </Field>
-          </fieldset>
-          <div className="flex gap-sm">
-            <Button type="submit" size="sm">{i18n.t("manager.experts.save")}</Button>
-            <Button type="button" variant="ghost" size="sm" onClick={resetEditing}>{i18n.t("manager.experts.cancel")}</Button>
-          </div>
-        </form>
-      )}
+        )}
+        <div>{i18n.t("manager.experts.solution_knowledge_refs")}: {instance.knowledge_refs.join(", ") || "-"}</div>
+        <div>{i18n.t("manager.experts.solution_skill_refs")}: {instance.skill_refs.join(", ") || "-"}</div>
+        {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
+          <div>{i18n.t("manager.experts.planner_prompt")}: {instance.planner_prompt?.slice(0, 40) || "-"}…</div>
+        )}
+      </div>
     </GlassPanel>
   );
 }

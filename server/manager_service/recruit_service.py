@@ -35,7 +35,6 @@ from .schemas import (
     RecruitmentOrderOut,
     SolutionApplyRecordOut,
     SolutionInstanceOut,
-    SolutionInstanceUpdate,
 )
 
 # 招募/应用方案写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
@@ -75,18 +74,23 @@ class RecruitService:
             template_id=req.template_id, version=req.template_version
         )
 
-        if self._employees.get_by_slug(ctx, employee_slug=req.employee_slug) is not None:
+        # slug 由前端显式传入或后端按模板 display_name 自动生成（+ 去重后缀）；空=自动生成。
+        slug = req.employee_slug
+        if not slug:
+            slug = self._generate_unique_slug(ctx, template)
+
+        if self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
             raise Conflict("employee slug already exists in this tenant")
 
         # 2) 建招募追踪订单（pending → provisioning）；幂等键 = template+slug。
-        idem = _idempotency_key(template.template_id, req.employee_slug)
+        idem = _idempotency_key(template.template_id, slug)
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
         recommended = template.recommended_config or {}
         try:
             row = self._employees.create(
                 ctx,
-                employee_slug=req.employee_slug,
+                employee_slug=slug,
                 display_name=req.display_name_override or template.display_name,
                 persona=req.persona_override or template.persona,
                 model=recommended.get("model"),
@@ -289,6 +293,43 @@ class RecruitService:
             grants_applied=grants_applied,
         )
 
+    # ---- slug 自动生成（F06 招募时 employee_slug 未传，由后端派生唯一 slug）----
+    _SLUGIFY_RE = None
+    _SLUG_SPACER_RE = None
+
+    def _generate_unique_slug(self, ctx: TenantContext, template) -> str:
+        """按模板 display_name slugify 后生成租户内唯一 slug（[a-z0-9_]，低碰撞、保持可读）。
+
+        汉字/非 ASCII 字符会被剔除；若剔除后为空则回退到 template_id 派生，再 fallback 到短 uuid。
+        """
+        import re
+        import uuid as _uuid
+
+        cls = type(self)
+        if cls._SLUGIFY_RE is None:
+            # ASCII-only 白名单：只保留 [a-z0-9_-]+ 其它字符（含汉字、全角符号）一律剔除
+            cls._SLUGIFY_RE = re.compile(r"[^a-z0-9\s-]")
+            cls._SLUG_SPACER_RE = re.compile(r"[\s-]+")
+
+        base = cls._SLUGIFY_RE.sub("", template.display_name.strip().lower())
+        base = cls._SLUG_SPACER_RE.sub("_", base).strip("_")
+
+        if not base:
+            # display_name 全为非 ASCII 时回退到 template_id 派生
+            fallback = cls._SLUGIFY_RE.sub("", template.template_id.lower())
+            fallback = cls._SLUG_SPACER_RE.sub("_", fallback).strip("_")
+            base = fallback if fallback else f"emp_{_uuid.uuid4().hex[:8]}"
+
+        base = base[:64]
+
+        candidate = base
+        for i in range(1, 51):
+            if self._employees.get_by_slug(ctx, employee_slug=candidate) is None:
+                return candidate
+            suffix = f"_{i}"
+            candidate = f"{base[:64 - len(suffix)]}{suffix}"
+        return f"{base[:56]}_{_uuid.uuid4().hex[:7]}"
+
     # ---- 招募订单查询 ----
     def list_recruit_orders(self, ctx: TenantContext) -> list[RecruitmentOrderOut]:
         return [_order_out(r) for r in self._orders.list_orders(ctx)]
@@ -308,42 +349,6 @@ class RecruitService:
         row = self._recruit.get_solution_instance(ctx, instance_id=instance_id)
         if row is None:
             raise NotFound("solution instance not found in this tenant")
-        return _solution_out(row)
-
-    def update_solution_instance(
-        self, ctx: TenantContext, *, instance_id: str, req: SolutionInstanceUpdate
-    ) -> SolutionInstanceOut:
-        """编辑已应用方案实例配置（AITEAM-288，GH#403）。
-
-        可改：display_name / expert_employee_ids（增删关联专家）/ knowledge_refs / skill_refs
-        / 协作编排 prompts（planner / subtask / aggregate）。写操作需 owner/enterprise_admin（03 §9.7）。
-        跨 tenant 不可见（RLS）；行不存在 → 404。
-        """
-        _ensure_can_write(ctx)
-        row = self._recruit.update_solution_instance(
-            ctx,
-            instance_id=instance_id,
-            display_name=req.display_name,
-            expert_employee_ids=req.expert_employee_ids,
-            knowledge_refs=req.knowledge_refs,
-            skill_refs=req.skill_refs,
-            planner_prompt=req.planner_prompt,
-            subtask_prompt=req.subtask_prompt,
-            aggregate_prompt=req.aggregate_prompt,
-        )
-        if row is None:
-            raise NotFound("solution instance not found in this tenant")
-        # 审计
-        self._recruit.append_recruit_event(
-            ctx,
-            action="apply_solution",
-            actor_user_id=ctx.user_id,
-            source_solution_id=row.solution_id,
-            source_solution_version=row.solution_version,
-            target_solution_instance_id=row.id,
-            target_employee_ids=list(row.expert_employee_ids),
-            detail={"action": "update_solution_instance"},
-        )
         return _solution_out(row)
 
     # ---- 方案应用记录（AITEAM-242，issue #286）----
