@@ -558,3 +558,71 @@ describe("GroupPage — roster / 方案异常兜底", () => {
     });
   });
 });
+
+
+// ---- 7. 创建自由群聊 ----
+
+describe("GroupPage — 创建自由群聊", () => {
+  function makeFreeFetch(created: Conversation, freeTitle: string = "自由协作群") {
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        return new Response(listEnvelope([
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations") && init?.method === "POST") {
+        return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+  }
+
+  it("点击「创建自由群聊」→ window.prompt 填入名称 → createFreeConversation 被调用", async () => {
+    loginStorage();
+    const created = makeConv("c-free", "我的自由群");
+    const fetchImpl = makeFreeFetch(created);
+    globalThis.fetch = fetchImpl;
+
+    // mock window.prompt 提供标题
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("我的自由群");
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /创建自由群聊/ }));
+    expect(promptSpy).toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("window.prompt 取消 → 不调用 API", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue(null);
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /创建自由群聊/ }));
+    // prompt 返回 null → 不应该发 POST
+    const postCalls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => (c[1] as RequestInit | undefined)?.method === "POST",
+    );
+    expect(postCalls.length).toBe(0);
+    promptSpy.mockRestore();
+  });
+});
