@@ -7,7 +7,7 @@
 import pytest
 
 from operation_service.catalog_gateway import CatalogManagerGateway
-from operation_service.catalog_repository import CatalogRepository
+from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_schemas import (
     PublishTemplateRequest,
     RegisterExpertTemplateRequest,
@@ -450,3 +450,150 @@ def test_expert_binding_sequence_no_must_be_positive():
     """sequence_no < 1 应被 Pydantic 拒绝（ge=1）。"""
     with pytest.raises(Exception):
         ExpertBinding(template_id="tpl-x", sequence_no=0, enabled=True)
+
+
+
+# ---- AITEAM-355 问题二：服务端自动生成 ID ----
+
+def _auto_expert(**kw):
+    base = dict(display_name="Auto")
+    base.update(kw)
+    return RegisterExpertTemplateRequest(**base)
+
+
+def _auto_solution(**kw):
+    base = dict(display_name="Auto-Solution")
+    base.update(kw)
+    return RegisterSolutionTemplateRequest(**kw)
+
+
+def test_register_expert_without_id_generates_id(service, manager):
+    """不传 template_id 时服务端必须自动生成非空、URL 安全的 ID（AITEAM-355）。"""
+    entry = service.register_expert_template(_auto_expert(display_name="测试专家"))
+    assert entry.template_id
+    # URL 安全：只含 ASCII 字母/数字/连字符
+    import re
+    assert re.fullmatch(r"[a-z0-9-]+", entry.template_id), entry.template_id
+    assert entry.status == CatalogStatus.DRAFT
+    assert manager.notifications == []  # 草稿不通知 Manager
+
+
+def test_register_solution_without_id_generates_id(service):
+    entry = service.register_solution_template(_auto_solution(display_name="全渠道增长方案"))
+    assert entry.template_id
+    assert entry.status == CatalogStatus.DRAFT
+
+
+def test_register_auto_id_chinese_display_name_falls_back_to_item(service):
+    """全中文/非 ASCII display_name 应回落到可读的 item-<random> 形式。"""
+    entry = service.register_expert_template(_auto_expert(display_name="首席技术官"))
+    assert entry.template_id.startswith("item-")
+
+
+def test_register_auto_id_same_display_name_no_collision(service):
+    """同名注册两次不会冲突，ID 互不相同（随机后缀去重）。"""
+    e1 = service.register_expert_template(_auto_expert(display_name="Sales Rep"))
+    e2 = service.register_expert_template(_auto_expert(display_name="Sales Rep"))
+    assert e1.template_id and e2.template_id
+    assert e1.template_id != e2.template_id
+
+
+def test_register_auto_id_is_persisted_and_fetchable(service):
+    """自动生成的 ID 必须落库且能被后续 GET 命中。"""
+    created = service.register_expert_template(_auto_expert(display_name="Persisted"))
+    fetched = service._repo.get(CatalogType.EXPERT_TEMPLATE, created.template_id)
+    assert fetched.display_name == "Persisted"
+    assert fetched.version == "1"
+
+
+def test_register_explicit_id_still_honored_and_conflicts(service):
+    """显式 ID 必须保留原语义：直接 create、重复 → Conflict（409 路径）。"""
+    first = service.register_expert_template(_auto_expert(display_name="A", template_id="my-explicit"))
+    assert first.template_id == "my-explicit"
+    with pytest.raises(Conflict):
+        service.register_expert_template(_auto_expert(display_name="B", template_id="my-explicit"))
+
+
+
+# ---- AITEAM-355 问题二：自动生成 ID 的极端路径 ----
+
+class _ConflictThenSucceedRepository(CatalogRepository):
+    """前 N 次 create 抛 Conflict，第 N+1 次成功——强制触发 _with_auto_id 的 except Conflict 重试分支。"""
+
+    def __init__(self, conflicts: int = 2) -> None:
+        super().__init__()
+        self._conflicts = conflicts
+        self._calls = 0
+
+    def create(self, entry):
+        self._calls += 1
+        if self._calls <= self._conflicts:
+            from shared.errors import Conflict
+
+            raise Conflict(f"forced-id-conflict #{self._calls}")
+        return super().create(entry)
+
+
+class _SlugConflictRepository(CatalogRepository):
+    """对所有 slug 派生 ID 抛 Conflict，对 uuid4 兜底 ID(item-*) 成功——强制 _with_auto_id 走完所有派生尝试后回退到 uuid4 兜底分支。"""
+
+    def create(self, entry):
+        from shared.errors import Conflict
+
+        # _derive_id 产生 "{slug}-{4hex}"，_fallback_id 产生 "item-{8hex}"
+        if not entry.template_id.startswith("item-"):
+            raise Conflict("slug-collision")
+        return super().create(entry)
+
+
+def test_with_auto_id_retries_on_conflict_then_succeeds():
+    """repo.create 前几次抛 Conflict 时 _with_auto_id 必须重试并最终成功。"""
+    repo = _ConflictThenSucceedRepository(conflicts=3)
+    from operation_service.catalog_service import _with_auto_id
+
+    def make(candidate):
+        from shared.contracts.enums import CatalogType
+
+        return CatalogEntry(
+            catalog_type=CatalogType.EXPERT_TEMPLATE,
+            template_id=candidate,
+            version="1",
+            display_name="Retry",
+            payload={},
+        )
+
+    entry = _with_auto_id(repo, make, "Retry")
+    assert entry.template_id  # 重试后成功
+    assert repo._calls == 4  # 3 次冲突 + 1 次成功
+
+
+def test_with_auto_id_falls_back_to_uuid4_when_all_attempts_conflict():
+    """所有 slug 派生尝试都冲突时，_with_auto_id 必须回退到 uuid4 兜底 ID。"""
+    repo = _SlugConflictRepository()
+    from operation_service.catalog_service import _with_auto_id
+
+    def make(candidate):
+        from shared.contracts.enums import CatalogType
+
+        return CatalogEntry(
+            catalog_type=CatalogType.EXPERT_TEMPLATE,
+            template_id=candidate,
+            version="1",
+            display_name="Fallback",
+            payload={},
+        )
+
+    entry = _with_auto_id(repo, make, "Fallback")
+    assert entry.template_id.startswith("item-")  # _fallback_id 形式
+    assert len(entry.template_id) == len("item-") + 8
+
+
+def test_slugify_id_empty_and_special_inputs():
+    """全空 / 纯特殊字符输入回落到可读的 "item" 基名（覆盖 base = ... or "item" 分支）。"""
+    from operation_service.catalog_service import _slugify_id
+
+    assert _slugify_id("", random_suffix="x1x2").startswith("item-")
+    assert _slugify_id("   ", random_suffix="x1x2").startswith("item-")
+    assert _slugify_id("测试中文", random_suffix="x1x2").startswith("item-")  # 非 ASCII 回落 item
+    assert _slugify_id("Hello World!", random_suffix="abcd").startswith("hello-world-")
+    assert _slugify_id("__$$%%__", random_suffix="abcd").startswith("item-")

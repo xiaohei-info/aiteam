@@ -20,8 +20,10 @@ export function App(): React.ReactNode {
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/enterprises" element={<EnterprisePageWired />} />
         <Route path="/accounts" element={<AccountsPage />} />
-        <Route path="/experts" element={<CatalogPage catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />} />
-        <Route path="/industry-solutions" element={<CatalogPage catalogType="solution_template" titleKey="operation.nav.industrySolutions" registerKey="operation.catalog.registerSolution" />} />
+        {/* key 按 catalogType 区分，切换专家/行业方案两页时强制 CatalogPage 重挂载，
+            避免注册表单状态（含已填内容）在两个注册流程间串页污染。 */}
+        <Route path="/experts" element={<CatalogPage key="expert_template" catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />} />
+        <Route path="/industry-solutions" element={<CatalogPage key="solution_template" catalogType="solution_template" titleKey="operation.nav.industrySolutions" registerKey="operation.catalog.registerSolution" />} />
         {/* 旧 /catalog 列表已拆分为 /experts + /industry-solutions，收藏夹重定向 */}
         <Route path="/catalog" element={<Navigate to="/experts" replace />} />
         <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />

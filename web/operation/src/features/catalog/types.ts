@@ -85,7 +85,8 @@ export interface CatalogItem {
 
 /** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest）。 */
 export interface RegisterExpertTemplate {
-  template_id: string;
+  /** 可选。不填时服务端按 display_name 自动生成 slug + 随机后缀。 */
+  template_id?: string;
   display_name: string;
   persona?: string;
   recommended_config?: ExpertRecommendedConfig;
@@ -93,7 +94,8 @@ export interface RegisterExpertTemplate {
 
 /** 注册行业方案请求体（对齐 RegisterSolutionTemplateRequest）。 */
 export interface RegisterSolutionTemplate {
-  solution_id: string;
+  /** 可选。不填时服务端按 display_name 自动生成 slug + 随机后缀。 */
+  solution_id?: string;
   display_name: string;
   expert_template_ids?: string[];
   knowledge_refs?: string[];

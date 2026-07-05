@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.enums import CatalogStatus, CatalogType
-from shared.errors import Conflict
+from shared.errors import Conflict, NotFound
 
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
@@ -25,6 +25,43 @@ from .catalog_schemas import (
 )
 
 _INITIAL_VERSION = "1"
+_ID_RANDOM_LENGTH = 4
+_ID_MAX_ATTEMPTS = 8
+
+
+def _slugify_id(display_name: str, *, random_suffix: str) -> str:
+    """ASCII slug 候选：白名单 [a-z0-9]，其余规约为连字符，全空回落 "item"。"""
+    import re
+
+    text = (display_name or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text, flags=re.UNICODE)
+    base = text.strip("-") or "item"
+    return f"{base}-{random_suffix}"
+
+
+def _derive_id(display_name: str) -> str:
+    """可读 slug + 短随机后缀。"""
+    import secrets
+
+    return _slugify_id(display_name, random_suffix=secrets.token_hex(_ID_RANDOM_LENGTH // 2))
+
+
+def _fallback_id() -> str:
+    """uuid4 兜底，与任何 slug 派生不重叠。"""
+    import uuid
+
+    return f"item-{uuid.uuid4().hex[:8]}"
+
+
+def _with_auto_id(repo, make_entry, display_name, *, attempts=_ID_MAX_ATTEMPTS):
+    """自动生成 ID 并创建条目；冲突则重试，极端情况 uuid4 兜底。"""
+    for _ in range(attempts):
+        try:
+            return repo.create(make_entry(_derive_id(display_name)))
+        except Conflict:
+            continue
+    return repo.create(make_entry(_fallback_id()))
+
 
 
 def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
@@ -112,10 +149,10 @@ class CatalogService:
     def register_expert_template(
         self, req: RegisterExpertTemplateRequest
     ) -> CatalogEntryResponse:
-        entry = self._repo.create(
-            CatalogEntry(
+        def make(candidate: str) -> CatalogEntry:
+            return CatalogEntry(
                 catalog_type=CatalogType.EXPERT_TEMPLATE,
-                template_id=req.template_id,
+                template_id=candidate,
                 version=_INITIAL_VERSION,
                 display_name=req.display_name,
                 payload={
@@ -128,17 +165,20 @@ class CatalogService:
                     "role_name": req.role_name,
                 },
             )
-        )
+
+        if req.template_id and req.template_id.strip():
+            return _to_response(self._repo.create(make(req.template_id.strip())))
+        entry = _with_auto_id(self._repo, make, req.display_name)
         return _to_response(entry)
 
     def register_solution_template(
         self, req: RegisterSolutionTemplateRequest
     ) -> CatalogEntryResponse:
-        bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
-        entry = self._repo.create(
-            CatalogEntry(
+        def make(candidate: str) -> CatalogEntry:
+            bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
+            return CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
-                template_id=req.solution_id,
+                template_id=candidate,
                 version=_INITIAL_VERSION,
                 display_name=req.display_name,
                 payload={
@@ -163,7 +203,10 @@ class CatalogService:
                     "tags": req.tags,
                 },
             )
-        )
+
+        if req.solution_id and req.solution_id.strip():
+            return _to_response(self._repo.create(make(req.solution_id.strip())))
+        entry = _with_auto_id(self._repo, make, req.display_name)
         return _to_response(entry)
 
     # ---- 生命周期：发布 / 下架 / 可见范围 ----
