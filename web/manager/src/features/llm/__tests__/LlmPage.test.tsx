@@ -8,6 +8,9 @@
  * - 编辑校验失败展示 actionError
  * - 删除 Provider 并移除行
  * - 删除失败展示 actionError
+ * - 创建 Provider 时一并添加初始模型（模型标识 + 名称）
+ * - 创建 Provider 时初始模型可选（不填则不调用 createModel）
+ * - 创建 Provider 失败时不创建初始模型
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
@@ -106,6 +109,8 @@ describe("LlmPage LLM管理", () => {
     );
     await waitFor(() => expect(api.listProviders).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2));
+    // 未添加初始模型时不应调用 createModel
+    expect(api.createModel).not.toHaveBeenCalled();
   });
 
   it("创建失败展示 actionError", async () => {
@@ -261,5 +266,94 @@ describe("LlmPage LLM管理", () => {
 
     fireEvent.click(screen.getByTestId("delete-model-m1"));
     await waitFor(() => expect(screen.getByTestId("action-error")).toHaveTextContent("模型不存在"));
+  });
+
+  // ---- 创建 Provider 时一并添加初始模型（B01 工作流优化）----
+  it("创建 Provider 时一并添加初始模型，Provider 创建成功后链式创建模型", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create"));
+    fireEvent.change(screen.getByTestId("field-name"), { target: { value: "Anthropic" } });
+    fireEvent.change(screen.getByTestId("field-key"), { target: { value: "anthropic" } });
+
+    // 添加一个初始模型行
+    fireEvent.click(screen.getByTestId("add-initial-model"));
+    fireEvent.change(screen.getByTestId("initial-model-uid-0"), { target: { value: "claude-3-opus" } });
+    fireEvent.change(screen.getByTestId("initial-model-name-0"), { target: { value: "Claude 3 Opus" } });
+    fireEvent.change(screen.getByTestId("initial-model-ctx-0"), { target: { value: "200000" } });
+
+    fireEvent.click(screen.getByTestId("submit-form"));
+
+    await waitFor(() =>
+      expect(api.createProvider).toHaveBeenCalledWith({ name: "Anthropic", provider_key: "anthropic" }),
+    );
+    // Provider 创建成功后，使用返回的 provider_id（= p1）创建初始模型
+    await waitFor(() =>
+      expect(api.createModel).toHaveBeenCalledWith("p1", {
+        model_uid: "claude-3-opus",
+        model_name: "Claude 3 Opus",
+        context_window: 200000,
+        input_price: undefined,
+        output_price: undefined,
+      }),
+    );
+    await waitFor(() => expect(api.listProviders).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2));
+  });
+
+  it("创建 Provider 时不填初始模型行则不调用 createModel", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create"));
+    fireEvent.change(screen.getByTestId("field-name"), { target: { value: "Anthropic" } });
+    fireEvent.change(screen.getByTestId("field-key"), { target: { value: "anthropic" } });
+    // 不添加初始模型行
+    fireEvent.click(screen.getByTestId("submit-form"));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalled());
+    expect(api.createModel).not.toHaveBeenCalled();
+  });
+
+  it("创建 Provider 时初始模型行可动态添加和移除", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create"));
+    fireEvent.click(screen.getByTestId("add-initial-model"));
+    fireEvent.click(screen.getByTestId("add-initial-model"));
+    await waitFor(() => expect(screen.getByTestId("initial-model-row-0")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("initial-model-row-1")).toBeInTheDocument());
+
+    // 移除第二行
+    fireEvent.click(screen.getByTestId("remove-initial-model-1"));
+    await waitFor(() => expect(screen.queryByTestId("initial-model-row-1")).not.toBeInTheDocument());
+    // 第一行仍在
+    expect(screen.getByTestId("initial-model-row-0")).toBeInTheDocument();
+  });
+
+  it("创建 Provider 失败时不创建初始模型", async () => {
+    const api = mockApi({
+      createProvider: vi.fn().mockRejectedValue(new ApiError("Provider 名称已存在", 409, "duplicate")),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("open-create"));
+    fireEvent.change(screen.getByTestId("field-name"), { target: { value: "Dup" } });
+    fireEvent.change(screen.getByTestId("field-key"), { target: { value: "dup" } });
+    fireEvent.click(screen.getByTestId("add-initial-model"));
+    fireEvent.change(screen.getByTestId("initial-model-uid-0"), { target: { value: "gpt-4" } });
+    fireEvent.change(screen.getByTestId("initial-model-name-0"), { target: { value: "GPT-4" } });
+    fireEvent.click(screen.getByTestId("submit-form"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("action-error")).toHaveTextContent("Provider 名称已存在"),
+    );
+    expect(api.createModel).not.toHaveBeenCalled();
   });
 });
