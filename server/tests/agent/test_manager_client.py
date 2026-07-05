@@ -23,9 +23,19 @@ class FakeTransport(httpx.BaseTransport):
         self.login_response = None
         self.jwks_response = None
         self.reset_response = None
+        self.resolve_response = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, str(request.url)))
+
+        if request.url.path == "/api/auth/resolve-tenant-by-account":
+            if self.resolve_response is not None:
+                return self.resolve_response
+            # 默认无匹配（让调用方显式配置行为）
+            return httpx.Response(
+                200,
+                json={"data": {"tenant_id": "t-from-account"}},
+            )
 
         if request.url.path == "/api/auth/login":
             if self.login_response is None:
@@ -156,34 +166,33 @@ def test_jwks_fetch_failure():
         client.login(req)
 
 
-def test_empty_tenant_hint_fails_fast():
-    """tenant_hint 为 None 时 fail fast → ValidationProblem（#258）。
-
-    旧行为：发送 tenant_id=null 给 Manager → Pydantic 422 → 归一为
-    ManagerUnreachable("Request validation failed.")，用户无从得知缺了什么。
-    修复后：前置校验直接抛 ValidationProblem，不发网络请求。
-    """
+def test_empty_tenant_hint_auto_resolves_tenant():
+    """tenant_hint 为 None 时：按员工账号自动解析 tenant（#382）。"""
     transport = FakeTransport()
+    transport.resolve_response = httpx.Response(200, json={"data": {"tenant_id": "t-from-account"}})
     sc = ServiceClient("http://manager.local", transport=transport)
     client = RealManagerLoginClient(sc)
 
     req = LoginRequest(account="13800000000", password="pass123", tenant_hint=None)
-    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
-        client.login(req)
-    # 不应发出任何网络请求
-    assert len(transport.requests) == 0
+    token, jwks = client.login(req)
+    assert token  # 默认 FakeTransport 200 path 返回 fake-jwt-token
+    paths = [(m, p) for (m, p) in transport.requests]
+    assert ("POST", "http://manager.local/api/auth/resolve-tenant-by-account") in paths
+    assert ("GET", "http://manager.local/api/auth/t-from-account/jwks.json") in paths
 
 
-def test_blank_tenant_hint_fails_fast():
-    """tenant_hint 为空白字符串时同样 fail fast（#258）。"""
+def test_blank_tenant_hint_auto_resolves_tenant():
+    """tenant_hint 为空白字符串时同样自动解析（#382）。"""
     transport = FakeTransport()
+    transport.resolve_response = httpx.Response(200, json={"data": {"tenant_id": "t-from-account"}})
     sc = ServiceClient("http://manager.local", transport=transport)
     client = RealManagerLoginClient(sc)
 
     req = LoginRequest(account="13800000000", password="pass123", tenant_hint="  ")
-    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
-        client.login(req)
-    assert len(transport.requests) == 0
+    token, jwks = client.login(req)
+    assert token
+    paths = [(m, p) for (m, p) in transport.requests]
+    assert ("POST", "http://manager.local/api/auth/resolve-tenant-by-account") in paths
 
 
 def test_forbidden_propagates_on_login():
@@ -235,18 +244,21 @@ def test_reset_password_unauthorized_old_credentials():
         client.reset_password(req)
 
 
-def test_reset_password_empty_tenant_hint_fails_fast():
-    """tenant_hint 为 None 时 fail fast → ValidationProblem。"""
+def test_reset_password_empty_tenant_hint_auto_resolves():
+    """reset_password 在 tenant_hint 空缺时同样自动解析 tenant（#382）。"""
     transport = FakeTransport()
+    transport.resolve_response = httpx.Response(200, json={"data": {"tenant_id": "t-from-account"}})
     sc = ServiceClient("http://manager.local", transport=transport)
     client = RealManagerLoginClient(sc)
 
     req = PasswordResetRequest(
         account="13800000000", password="old123", new_password="new456", tenant_hint=""
     )
-    with pytest.raises(ValidationProblem, match="tenant_hint 必填"):
-        client.reset_password(req)
-    assert len(transport.requests) == 0
+    token, jwks = client.reset_password(req)
+    assert token == "fake-reset-token"
+    paths = [(m, p) for (m, p) in transport.requests]
+    assert ("POST", "http://manager.local/api/auth/resolve-tenant-by-account") in paths
+    assert ("GET", "http://manager.local/api/auth/t-from-account/jwks.json") in paths
 
 
 def test_reset_password_missing_token():

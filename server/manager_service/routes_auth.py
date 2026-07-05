@@ -1,6 +1,6 @@
 """Manager 认证北向路由（/api/auth/*，02 §10.1 路径前缀 + §10.3 envelope；03 §9.4/§9.6）。
 
-公开端点（无需 token，§9.6）：login / owner-reset / resolve-tenant / jwks。
+公开端点（无需 token，§9.6）：login / owner-reset / resolve-tenant / resolve-tenant-by-account / jwks。
 凭据校验失败 → 401；首登需重置 → 403；账号已存在 → 409；皆经统一 problem+json。
 """
 
@@ -29,6 +29,20 @@ class ResolveTenantOutput(BaseModel):
     tenant_id: str
 
 
+
+class ResolveTenantByAccountInput(BaseModel):
+    """员工账号 → tenant_id 解析请求（登录前调用，隐藏 UUID 细节）。"""
+
+    account: str = Field(
+        description="员工账号（手机号或用户名，匹配 auth_identity.external_id）"
+    )
+
+
+class ResolveTenantByAccountOutput(BaseModel):
+    """解析结果：tenant_id（供 login / owner-reset 使用）。"""
+
+    tenant_id: str
+
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
@@ -53,6 +67,21 @@ def _auth_service(request: Request) -> AuthService:
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+
+@router.post(
+    "/resolve-tenant-by-account",
+    description="员工账号 → tenant_id 解析（登录前调用，隐藏 UUID 细节；去掉前端手工填企业/租户ID，#382）。"
+              "按 auth_identity.external_id 跨全部租户扫描；未命中 → 404；命中多个 → 409（需明确企业）。",
+    summary="解析员工账号到 tenant_id（公开端点，#382）",
+    operation_id="manager_resolve_tenant_by_account",
+)
+async def resolve_tenant_by_account(
+    body: ResolveTenantByAccountInput, svc: AuthService = Depends(_auth_service)
+) -> Envelope[ResolveTenantByAccountOutput]:
+    tenant_id = svc.resolve_tenant_by_account(body.account)
+    return Envelope[ResolveTenantByAccountOutput](data=ResolveTenantByAccountOutput(tenant_id=tenant_id))
 
 
 @router.post("/login", description="成员或负责人使用凭据登录获取 token。登录成功后返回 JWT access token。", summary="成员/负责人登录（公开端点）", operation_id="manager_login")

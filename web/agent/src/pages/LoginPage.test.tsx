@@ -38,7 +38,7 @@ function mockFetch(): ReturnType<typeof vi.fn> {
 const originalFetch = globalThis.fetch;
 
 describe("LoginPage", () => {
-  it("渲染标题与三个字段", () => {
+  it("渲染标题与两个字段（account/password），不再出现企业提示字段", () => {
     globalThis.fetch = mockFetch() as unknown as typeof fetch;
     try {
       render(
@@ -48,10 +48,10 @@ describe("LoginPage", () => {
           </AppProvider>
         </MemoryRouter>,
       );
-      // 标题与提交按钮文案都含「登录」，按 role=heading 精确取标题
       expect(screen.getByRole("heading", { level: 1, name: "登录" })).toBeInTheDocument();
       expect(screen.getByLabelText("账号（手机号 / 用户名）")).toBeInTheDocument();
       expect(screen.getByLabelText("密码")).toBeInTheDocument();
+      expect(screen.queryByLabelText("企业提示（tenant_id）")).not.toBeInTheDocument();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -72,7 +72,6 @@ describe("LoginPage", () => {
         target: { value: "alice" },
       });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
-      fireEvent.change(screen.getByLabelText("企业提示（tenant_id）"), { target: { value: "t-1" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
       await waitFor(() => {
@@ -80,35 +79,6 @@ describe("LoginPage", () => {
       });
       const calls = (fetchImpl.mock.calls as unknown as [string, RequestInit][]).map((c) => c[0]);
       expect(calls.some((c) => c.endsWith("/api/agent/login"))).toBe(true);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("空 tenant_hint 时显示校验提示且不发请求（#258）", async () => {
-    const fetchImpl = mockFetch();
-    globalThis.fetch = fetchImpl as unknown as typeof fetch;
-    try {
-      render(
-        <MemoryRouter initialEntries={["/login"]}>
-          <AppProvider>
-            <AppRoutes />
-          </AppProvider>
-        </MemoryRouter>,
-      );
-      fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
-        target: { value: "alice" },
-      });
-      fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
-      // tenant_hint 留空
-      fireEvent.click(screen.getByRole("button", { name: "登录" }));
-
-      // 应显示校验提示
-      await waitFor(() => {
-        expect(screen.getByText("请填写企业提示（tenant_id）")).toBeInTheDocument();
-      });
-      // 不应发出任何 fetch 请求
-      expect(fetchImpl).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }

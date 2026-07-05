@@ -16,6 +16,7 @@ import type { TokenClaims } from "@aiteam/shared/contracts";
 export interface AgentLoginRequest {
   account: string;
   password: string;
+  /** 企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）。 */
   tenant_hint?: string | null;
 }
 
@@ -31,7 +32,8 @@ export interface AgentPasswordResetRequest {
   /** 旧密码/初始密码 */
   password: string;
   new_password: string;
-  tenant_hint: string;
+  /** 企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）。 */
+  tenant_hint?: string | null;
 }
 
 export interface AgentClientOptions {
