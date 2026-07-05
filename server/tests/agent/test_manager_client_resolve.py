@@ -136,3 +136,13 @@ def test_reset_password_auto_resolves_tenant_when_hint_absent():
     assert ("POST", "http://manager.local/api/auth/resolve-tenant-by-account") in paths
     assert ("POST", "http://manager.local/api/auth/owner-reset") in paths
     assert ("GET", "http://manager.local/api/auth/t-resolved/jwks.json") in paths
+
+
+def test_resolve_missing_tenant_id_response_unreachable():
+    """Manager 返回空 envelope（缺 tenant_id）→ ManagerUnreachable（契约异常）。"""
+    transport = FakeTransport()
+    transport.resolve_response = httpx.Response(200, json={"data": {}})
+    client = _client(transport)
+
+    with pytest.raises(ManagerUnreachable, match="missing tenant_id"):
+        client.login(LoginRequest(account="13800138000", password="ok"))

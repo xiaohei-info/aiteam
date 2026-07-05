@@ -102,3 +102,67 @@ def test_resolve_prefers_phone_over_password(auth_svc, admin_url):
         )
 
     assert auth_svc.resolve_tenant_by_account("13800000000") == tid
+
+
+# ---------------------------------------------------------------------------
+# Fast unit tests (no PG required): mock psycopg2 to exercise the scan/query path
+# ---------------------------------------------------------------------------
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from manager_service.auth_service import AuthService
+
+
+def _svc():
+    """In-process AuthService with fakes — admin URL not used when psycopg is mocked."""
+    return AuthService(dsn="postgresql://f/f", repo=MagicMock(), keys=MagicMock(), admin_dsn="postgresql://admin/a")
+
+
+def _row(tid):
+    return (MagicMock(__str__=lambda self: tid),)
+
+
+@patch("psycopg.connect")
+def test_unit_resolve_single_hit(mock_connect):
+    """provider IN (...) 命中唯一 tenant → 返回 tenant_id。"""
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [_row("t-1")]
+    mock_connect.return_value.__enter__.return_value = conn
+
+    assert _svc().resolve_tenant_by_account("13800000000") == "t-1"
+    mock_connect.assert_called_once_with("postgresql://admin/a", autocommit=True)
+
+
+@patch("psycopg.connect")
+def test_unit_resolve_phone_and_password_rows_same_tenant_dedup(mock_connect):
+    """同一 tenant 有多条 provider=phone/password 行时应去重为一个 tenant，不会误触 409。"""
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [_row("t-1"), _row("t-1")]
+    mock_connect.return_value.__enter__.return_value = conn
+
+    assert _svc().resolve_tenant_by_account("13800000000") == "t-1"
+
+
+@patch("psycopg.connect")
+def test_unit_resolve_zero_hit_raises_not_found(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = []
+    mock_connect.return_value.__enter__.return_value = conn
+
+    with pytest.raises(Exception) as exc_info:
+        _svc().resolve_tenant_by_account("13800000000")
+    # 404 NotFound
+    assert exc_info.value.status == 404
+
+
+@patch("psycopg.connect")
+def test_unit_resolve_multi_tenant_raises_conflict(mock_connect):
+    """多个不同 tenant 命中同一账号 → 409。"""
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [_row("t-1"), _row("t-2"), _row("t-3")]
+    mock_connect.return_value.__enter__.return_value = conn
+
+    with pytest.raises(Exception) as exc_info:
+        _svc().resolve_tenant_by_account("13800000000")
+    assert exc_info.value.status == 409
