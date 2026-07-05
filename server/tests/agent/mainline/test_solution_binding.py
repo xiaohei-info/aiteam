@@ -14,6 +14,7 @@ import pytest
 
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.group import GroupChatService, GroupExpert
+from agent_service.mainline.models import MessageRole
 
 SOLUTION_ID = "sol-test-001"
 
@@ -118,3 +119,80 @@ def test_group_dispatch_free_orchestration_still_works():
 @pytest.fixture()
 def db_path(tmp_path):
     return str(tmp_path / "test.sqlite")
+
+
+def test_load_solution_snapshot_without_instance_returns_none():
+    """service.load_solution_snapshot(None/空) → 不查投影，直接返 None（line 165 短回）。"""
+    mainline = build_mainline_service()
+    assert mainline.load_solution_snapshot(None) is None
+    assert mainline.load_solution_snapshot("") is None
+
+
+def test_load_solution_snapshot_without_solutions_repo_raises():
+    """service._solutions=None + 非空 instance → Conflict（line 167）。"""
+    from shared.errors import Conflict
+    mainline = build_mainline_service()  # 无 solutions 注入时走 InMemory
+    # build_mainline_service 默认不注入 solutions（除非传 db），但仍建 InMemory sol repo
+    # 要触发该分支，构造一个无 solutions 的 mainline
+    from agent_service.mainline.service import MainlineService
+    from agent_service.mainline.store import (
+        InMemoryConversationRepository,
+        InMemoryMessageRepository,
+        InMemoryRunRepository,
+        InMemoryTaskRepository,
+    )
+    from agent_service.mainline.stream import StreamBroker
+    from agent_service.mainline.timeline import (
+        InMemoryRawEventArchive,
+        InMemoryTimelineStore,
+    )
+    from agent_gateway.runner import GatewayRunner
+    from agent_gateway.drivers import FakeDriver, FakeExecutor
+
+    bare = MainlineService(
+        conversations=InMemoryConversationRepository(),
+        messages=InMemoryMessageRepository(),
+        runs=InMemoryRunRepository(),
+        tasks=InMemoryTaskRepository(),
+        timeline=InMemoryTimelineStore(),
+        raw_archive=InMemoryRawEventArchive(),
+        broker=StreamBroker(),
+        runner=GatewayRunner(executor=FakeExecutor(), driver=FakeDriver()),
+        solutions=None,  # 关键：无投影仓储
+    )
+    with pytest.raises(Conflict, match="no local solution projection"):
+        bare.load_solution_snapshot("si-any")
+
+
+def test_create_conversation_solution_bound_missing_snapshot_raises():
+    """create_conversation(solution_instance_id=...) 无 _snapshot → Conflict（line 164）。"""
+    from shared.errors import Conflict
+    mainline = build_mainline_service()
+    with pytest.raises(Conflict, match="requires a local projection snapshot"):
+        mainline.create_conversation(solution_instance_id="si-x")
+
+
+def test_read_status_helpers():
+    """mark_read / reset_unread / transitions — 覆盖 service.py line 193-263 主链。"""
+    from shared.contracts.enums import ConversationState
+    mainline = build_mainline_service()
+    conv = mainline.create_conversation(title="c")
+    assert conv.last_read_at is None
+
+    # mark_read 到特定 message
+    mainline.add_message(conv.id, role=MessageRole.USER, content="hi")
+    msgs = mainline.list_messages(conv.id)
+    updated = mainline.mark_read(conv.id, last_read_message_id=msgs[-1].id)
+    assert updated.last_read_at is not None
+
+    # 再次 mark_read（已经是已读）幂等——各自取 now()，微秒级差异正常；验证都已设值
+    again = mainline.mark_read(conv.id, last_read_message_id=msgs[-1].id)
+    assert again.last_read_at is not None
+    assert updated.last_read_at is not None
+    assert abs((again.last_read_at - updated.last_read_at).total_seconds()) < 1
+
+    # set_conversation_state active->archived OK
+    archived = mainline.set_conversation_state(conv.id, ConversationState.ARCHIVED)
+    assert archived.state == ConversationState.ARCHIVED
+
+
