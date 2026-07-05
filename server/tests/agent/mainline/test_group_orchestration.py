@@ -162,3 +162,45 @@ def test_orchestrated_with_no_experts_only_planner_and_aggregate():
     assert result.triggered_handles == []
     assert len(result.runs) == 2  # planner + aggregate
     assert len(result.task_tree) == 1  # 仅根
+
+
+def _fixed_snap_no_experts() -> dict:
+    """固定编排 solution snapshot 但没有 roster 专家 → 触发两段 RuntimeError 校验。"""
+    return {
+        "solution_instance_id": "sol-no-exp",
+        "display_name": "无专家方案",
+        "version": "v1",
+        "expert_employee_ids": [],
+        "planner_prompt": "p",
+        "subtask_prompt": "s",
+        "aggregate_prompt": "a",
+    }
+
+
+def _fixed_snap_disjoint_experts() -> dict:
+    """固定编排 roster 与 solution_expert_employee_ids 无交集 → RuntimeError。"""
+    return {
+        "solution_instance_id": "sol-disjoint",
+        "display_name": "脱离方案",
+        "version": "v1",
+        "expert_employee_ids": ["xeno-1", "xeno-2"],  # 与 roster alice/bob/carol 无交集
+        "planner_prompt": "p",
+        "subtask_prompt": "s",
+        "aggregate_prompt": "a",
+    }
+
+
+def test_fixed_orchestration_no_solution_experts_raises():
+    """固定编排 + solution_instance_id 但 expert_employee_ids 空 → RuntimeError。覆盖 group.py 221。"""
+    svc = build_mainline_service()
+    conv = svc.create_conversation(solution_instance_id="sol-no-exp", _snapshot=_fixed_snap_no_experts())
+    with pytest.raises(RuntimeError, match="no expert_employee_ids"):
+        asyncio.run(GroupChatService(svc, experts=_experts()).post_and_dispatch(conv.id, "任务"))
+
+
+def test_fixed_orchestration_roster_disjoint_raises():
+    """固定编排 + solution_expert_employee_ids 与 roster 无交集 → RuntimeError。覆盖 group.py 224。"""
+    svc = build_mainline_service()
+    conv = svc.create_conversation(solution_instance_id="sol-disjoint", _snapshot=_fixed_snap_disjoint_experts())
+    with pytest.raises(RuntimeError, match="no intersection"):
+        asyncio.run(GroupChatService(svc, experts=_experts()).post_and_dispatch(conv.id, "任务"))

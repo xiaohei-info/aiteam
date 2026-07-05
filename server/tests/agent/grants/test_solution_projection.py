@@ -100,3 +100,101 @@ def test_in_memory_repo_remove_and_available():
     assert len(repo.available()) == 1
     assert repo.get("a") is None
     assert repo.get("b") is not None
+
+
+class _FakeClientWithRevoke:
+    """返回 revoked_ids + 空增量 → 覆盖 sync() 的 revoke 分支（line 156/157）+ upsert 后增量。"""
+
+    def __init__(self, *, with_solutions: bool = True):
+        self._with = with_solutions
+        self._first = True
+
+    def pull_authorized_config(self, request):
+        class R:
+            def __init__(self, outer):
+                # 第一轮放 experts+solutions，第二轮把它们当 revoked 返回。
+                if outer._first:
+                    outer._first = False
+                    self.experts = [
+                        {
+                            "employee_id": "e1",
+                            "tenant_id": "t1",
+                            "version": "v1",
+                            "handle": "专家A",
+                            "display_name": "专家A",
+                        },
+                    ]
+                    self.solutions = [
+                        {"id": "si-1", "solution_id": "tpl-1", "display_name": "群A",
+                         "planner_prompt": "p", "subtask_prompt": "s", "aggregate_prompt": "a"},
+                    ] if outer._with else []
+                    self.revoked_ids = []
+                else:
+                    self.experts = []
+                    self.solutions = []
+                    self.revoked_ids = ["e1", "si-1"]  # revoke expert + solution
+
+        return R(self)
+
+    def pull_snapshot(self, request):
+        raise NotImplementedError
+
+
+def test_sync_revokes_expert_and_solution_and_then_upsert():
+    """覆盖 grants/service.py sync() 的 revoke 分支：expert/solution 被 revoke 后不计入 available。"""
+    client = _FakeClientWithRevoke(with_solutions=True)
+    svc = GrantsService(
+        client=client,
+        projections=InMemoryProjectionRepository(),
+        snapshots=InMemorySnapshotRepository(),
+        solutions=InMemorySolutionProjectionRepository(),
+    )
+    first = svc.sync("t1", "m1")
+    assert first.ok is True
+    assert first.upserted == 1  # 1 expert
+    assert first.revoked == 0
+    assert len(svc.available_experts()) == 1
+    assert len(svc.list_available_solutions()) == 1
+
+    second = svc.sync("t1", "m1")
+    assert second.ok is True
+    assert second.upserted == 0
+    assert second.revoked == 2  # e1(projection)+si-1(solution) 都被 revocation 命中
+    assert len(svc.available_experts()) == 0
+
+
+def test_sync_without_solutions_repo_skips_solution_branches():
+    """solutions=None 时 skip 两个 solution 分支（line 157 if + line 161 if）。"""
+    client = _FakeClientWithRevoke(with_solutions=False)
+    svc = GrantsService(
+        client=client,
+        projections=InMemoryProjectionRepository(),
+        snapshots=InMemorySnapshotRepository(),
+        solutions=None,
+    )
+    svc.sync("t1", "m1")
+    # 第二轮 revoke 只命中 expert 分支；solutions 分支整体跳过
+    second = svc.sync("t1", "m1")
+    assert second.revoked == 1
+    assert svc.list_available_solutions() == []
+
+
+def test_sync_offline_returns_ok_false():
+    """Manager 不可达 → ok=False，已落投影不变（D14 降级）。覆盖 line 144。"""
+
+    class _OfflineClient:
+        def pull_authorized_config(self, request):
+            raise ConnectionError("manager down")
+
+        def pull_snapshot(self, request):
+            raise NotImplementedError
+
+    svc = GrantsService(
+        client=_OfflineClient(),
+        projections=InMemoryProjectionRepository(),
+        snapshots=InMemorySnapshotRepository(),
+        solutions=InMemorySolutionProjectionRepository(),
+    )
+    res = svc.sync("t1", "m1")
+    assert res.ok is False
+    assert "manager down" in res.error
