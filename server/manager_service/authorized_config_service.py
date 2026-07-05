@@ -75,8 +75,8 @@ class AuthorizedConfigService:
             if sol_instance.id not in authorized_solution_ids:
                 continue
             known_ver = req.known_versions.get(sol_instance.id)
-            # solution_instance 没有显式 version 字段，使用 solution_version 作为版本标识
-            current_ver = sol_instance.solution_version
+            # Prompt/expert changes are not reflected in solution_version; use config_version so Agent re-syncs.
+            current_ver = f"{sol_instance.solution_version}:{sol_instance.config_version}"
             if known_ver != current_ver:
                 solutions.append({
                     "id": sol_instance.id,
@@ -84,6 +84,7 @@ class AuthorizedConfigService:
                     "solution_version": sol_instance.solution_version,
                     "display_name": sol_instance.display_name,
                     "status": sol_instance.status,
+                    "config_version": sol_instance.config_version,
                     "expert_employee_ids": sol_instance.expert_employee_ids,
                     "knowledge_refs": sol_instance.knowledge_refs,
                     "skill_refs": sol_instance.skill_refs,

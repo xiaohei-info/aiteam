@@ -37,6 +37,8 @@ export interface LoadedExpertProjection {
   employee_id: string;
   tenant_id: string;
   version: string;
+  /** Stable ASCII handle for roster/@提及. Prefer this over display_name for matching. */
+  handle: string;
   display_name: string;
   runtime_binding?: string | null;
   synced_at?: string | null;
@@ -49,6 +51,9 @@ export interface LoadedExpertProjection {
  */
 export interface GroupExpert {
   handle: string;
+  /** Stable employee id; used for solution roster filtering (over display_name reverse lookup). */
+  employee_id?: string;
+  display_name?: string;
   system_prompt?: string | null;
   model?: string | null;
 }
@@ -132,10 +137,6 @@ export async function listSolutionInstances(
  */
 export interface CreateFromSolutionInput {
   solution_instance_id: string;
-  solution_expert_employee_ids?: string[];
-  solution_planner_prompt?: string;
-  solution_subtask_prompt?: string;
-  solution_aggregate_prompt?: string;
   title?: string | null;
 }
 
@@ -148,12 +149,7 @@ export async function createConversationFromSolution(
     {
       body: {
         title: input.title ?? null,
-        collaboration_mode: "orchestrated",
         solution_instance_id: input.solution_instance_id,
-        solution_expert_employee_ids: input.solution_expert_employee_ids,
-        solution_planner_prompt: input.solution_planner_prompt,
-        solution_subtask_prompt: input.solution_subtask_prompt,
-        solution_aggregate_prompt: input.solution_aggregate_prompt,
       },
     },
   );

@@ -107,6 +107,7 @@ class MainlineService:
         raw_archive: RawEventArchive,
         tenant_id: str = "local",
         usage_recorder: UsageRecorder | None = None,
+        solutions: "SolutionProjectionRepository | None" = None,
     ) -> None:
         self._conversations = conversations
         self._messages = messages
@@ -118,6 +119,7 @@ class MainlineService:
         self._raw_archive = raw_archive
         self._tenant_id = tenant_id
         self._usage_recorder = usage_recorder
+        self._solutions = solutions
 
     @property
     def broker(self) -> StreamBroker:
@@ -135,10 +137,9 @@ class MainlineService:
         planner_employee_id: str | None = None,
         entry_employee_id: str | None = None,
         solution_instance_id: str | None = None,
-        solution_planner_prompt: str | None = None,
-        solution_subtask_prompt: str | None = None,
-        solution_aggregate_prompt: str | None = None,
-        solution_expert_employee_ids: list[str] | None = None,
+        # Fixed-orchestration only accepts solution_instance_id; prompts/experts are loaded from
+        # the local SolutionProjection (never from client input) so the orchestration contract holds.
+        _snapshot: dict | None = None,
     ) -> Conversation:
         """建会话。
 
@@ -154,19 +155,49 @@ class MainlineService:
         else:
             mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
         brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
-        expert_ids = list(solution_expert_employee_ids or [])
+        # Load fixed-orchestration snapshot from local projection (B7: never trust client prompts).
+        planner = subtask = aggregate = ""
+        expert_ids: list[str] = []
+        if bound:
+            if not _snapshot:
+                raise Conflict("solution-bound create requires a local projection snapshot")
+            if _snapshot.get("solution_instance_id") != solution_instance_id:
+                raise Conflict("projection snapshot mismatch")
+            planner = str(_snapshot.get("planner_prompt", ""))
+            subtask = str(_snapshot.get("subtask_prompt", ""))
+            aggregate = str(_snapshot.get("aggregate_prompt", ""))
+            expert_ids = [str(x) for x in (_snapshot.get("expert_employee_ids") or [])]
         conv = Conversation(
             id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
             collaboration_mode=mode, orchestration_brief=brief,
             planner_employee_id=(planner_employee_id or None),
             entry_employee_id=entry_employee_id or None,
             solution_instance_id=solution_instance_id or None,
-            solution_planner_prompt=solution_planner_prompt or "",
-            solution_subtask_prompt=solution_subtask_prompt or "",
-            solution_aggregate_prompt=solution_aggregate_prompt or "",
+            solution_planner_prompt=planner,
+            solution_subtask_prompt=subtask,
+            solution_aggregate_prompt=aggregate,
             solution_expert_employee_ids=[str(x) for x in expert_ids],
         )
         return self._conversations.create(conv)
+
+    def load_solution_snapshot(self, solution_instance_id: str | None) -> dict | None:
+        """B7: build fixed-orchestration create payload from the LOCAL projection.
+
+        Returns None when no instance is requested or projection is missing/mismatched.
+        Only verified local projections are permitted (never client-supplied prompts/experts).
+        """
+        if not solution_instance_id:
+            return None
+        if self._solutions is None:
+            raise Conflict(
+                f"cannot bind solution {solution_instance_id!r}: agent has no local solution projection"
+            )
+        proj = self._solutions.get(solution_instance_id)
+        if proj is None:
+            raise Conflict(
+                f"solution instance {solution_instance_id!r} not available in local projection; apply it in Manager first"
+            )
+        return proj.to_dict()
 
     def get_conversation(self, conversation_id: str) -> Conversation:
         return self._conversations.get(conversation_id)
@@ -219,8 +250,16 @@ class MainlineService:
         orchestration_brief: str | None = None,
         planner_employee_id: str | None = None,
     ) -> Conversation:
-        """更新会话协作编排字段（parioty Manager侧 update_group_conversation）。"""
-        self._conversations.get(conversation_id)  # 存在性校验 -> NotFound
+        """更新会话协作编排字段（parioty Manager侧 update_group_conversation）。
+
+        B8: 已绑定 solution 的 fixed 会话不可改为 free。
+        """
+        conv = self._conversations.get(conversation_id)  # 存在性校验 -> NotFound
+        if conv.solution_instance_id:
+            if collaboration_mode is not None and collaboration_mode != "orchestrated":
+                raise Conflict(
+                    "fixed orchestration (solution-bound) cannot be switched to free"
+                )
         return self._conversations.update_collaboration(
             conversation_id,
             collaboration_mode=collaboration_mode,

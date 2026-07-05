@@ -99,8 +99,9 @@ def test_list_solutions_after_sync_exposes_three_stage_prompts(client_with_fake)
     fake.config_response = AuthorizedConfigPullResponse(
         experts=[],
         solutions=[
-            {
-                "solution_id": "sol-1",
+            {   # id=instance id, solution_id=Operator template id
+                "id": "si-1",
+                "solution_id": "tpl-1",
                 "version": "v1",
                 "display_name": "方案A",
                 "planner_prompt": "pa",
@@ -119,7 +120,7 @@ def test_list_solutions_after_sync_exposes_three_stage_prompts(client_with_fake)
     assert r.status_code == 200
     items = r.json()["data"]
     assert len(items) == 1
-    assert items[0]["solution_instance_id"] == "sol-1"
+    assert items[0]["solution_instance_id"] == "si-1"  # instance id, not template id
     assert items[0]["display_name"] == "方案A"
     assert items[0]["planner_prompt"] == "pa"
     assert items[0]["subtask_prompt"] == "sa"

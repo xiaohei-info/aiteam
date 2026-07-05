@@ -206,15 +206,27 @@ class GroupChatService:
         """
         brief = (getattr(conv, "orchestration_brief", "") or "").strip()
         # 固定编排 prompts（由 Operator solution_template 落到会话的快照）。
+        fixed_prompts = bool((getattr(conv, "solution_instance_id", None) or "").strip())
         sol_planner = (getattr(conv, "solution_planner_prompt", "") or "").strip()
         sol_subtask = (getattr(conv, "solution_subtask_prompt", "") or "").strip()
         sol_aggregate = (getattr(conv, "solution_aggregate_prompt", "") or "").strip()
-        fixed = bool(sol_planner or sol_subtask or sol_aggregate)
+        fixed = fixed_prompts and bool(sol_planner or sol_subtask or sol_aggregate)
         planner_handle = getattr(conv, "planner_employee_id", None) or None
 
-        if planner_handle and planner_handle in self._roster:
+        # Fixed orchestration must only dispatch to solution-bound experts (roster ∩ solution_experts).
+        bound_handles: set[str] = set(getattr(conv, "solution_expert_employee_ids", None) or [])
+        roster_handles = set(self._roster)
+        if fixed_prompts:
+            if not bound_handles:
+                raise RuntimeError("solution instance has no expert_employee_ids; cannot run fixed orchestration")
+            allowed_handles = roster_handles & bound_handles
+            if not allowed_handles:
+                raise RuntimeError("roster and solution experts have no intersection; cannot run fixed orchestration")
+        else:
+            allowed_handles = roster_handles
+        if planner_handle and planner_handle in allowed_handles:
             planner = self._roster[planner_handle]
-            executor_handles = [h for h in self._roster if h != planner_handle]
+            executor_handles = [h for h in allowed_handles if h != planner_handle]
         else:
             planner_handle = _SYNTHETIC_PLANNER_HANDLE
             default_prompt = (
@@ -226,7 +238,7 @@ class GroupChatService:
                 handle=_SYNTHETIC_PLANNER_HANDLE,
                 system_prompt=sol_planner or default_prompt,
             )
-            executor_handles = list(self._roster)
+            executor_handles = sorted(allowed_handles)
 
         # 1) planner 拆解：固定编排直接用方案 prompt（叠加用户任务上下文）；自由协作走 brief。
         planner_rule = sol_planner if fixed else brief

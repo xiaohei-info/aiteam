@@ -18,6 +18,25 @@ from agent_service.mainline.group import GroupChatService, GroupExpert
 SOLUTION_ID = "sol-test-001"
 
 
+SOLUTION_EXPERT_IDS = ["alice", "bob"]
+
+
+def _snap():
+    """Inline solution snapshot; prompts/experts now come from projection, not client.
+
+    B6: roster handles must intersect solution_expert_employee_ids; use the same ids as the roster.
+    """
+    return {
+        "solution_instance_id": SOLUTION_ID,
+        "display_name": "测试方案群聊",
+        "version": "v1",
+        "expert_employee_ids": SOLUTION_EXPERT_IDS,
+        "planner_prompt": "planner-instruction",
+        "subtask_prompt": "subtask-instruction",
+        "aggregate_prompt": "aggregate-instruction",
+    }
+
+
 def _experts() -> list[GroupExpert]:
     return [GroupExpert(handle="alice", system_prompt="A"), GroupExpert(handle="bob", system_prompt="B")]
 
@@ -27,18 +46,15 @@ def test_sqlite_create_conversation_from_solution_then_readback(db_path):
     conv = mainline.create_conversation(
         title="固定编排群聊",
         solution_instance_id=SOLUTION_ID,
-        solution_planner_prompt="planner-instruction",
-        solution_subtask_prompt="subtask-instruction",
-        solution_aggregate_prompt="aggregate-instruction",
-        solution_expert_employee_ids=["emp-1", "emp-2"],
+        _snapshot=_snap(),
     )
     got = mainline.get_conversation(conv.id)
     assert got.collaboration_mode == "orchestrated"
     assert got.solution_instance_id == SOLUTION_ID
-    assert got.solution_planner_prompt == "planner-instruction"
+    assert got.solution_planner_prompt == "planner-instruction"  # snapshot-sourced
     assert got.solution_subtask_prompt == "subtask-instruction"
     assert got.solution_aggregate_prompt == "aggregate-instruction"
-    assert got.solution_expert_employee_ids == ["emp-1", "emp-2"]
+    assert got.solution_expert_employee_ids == SOLUTION_EXPERT_IDS
     # 自由创建仍为 free
     free = mainline.create_conversation(title="自由群")
     assert free.collaboration_mode == "free"
@@ -60,7 +76,7 @@ def test_service_create_from_solution_forces_orchestrated_mode():
     mainline = build_mainline_service()
     conv = mainline.create_conversation(
         solution_instance_id=SOLUTION_ID,
-        solution_planner_prompt="p", solution_subtask_prompt="s", solution_aggregate_prompt="a",
+        _snapshot=_snap(),
     )
     assert conv.collaboration_mode == "orchestrated"
     # 回读 SQLite（内存实现同样验证）
@@ -74,7 +90,7 @@ def test_group_dispatch_fixed_orchestration_emits_three_runs():
     mainline = build_mainline_service()
     conv = mainline.create_conversation(
         solution_instance_id=SOLUTION_ID,
-        solution_planner_prompt="p", solution_subtask_prompt="s", solution_aggregate_prompt="a",
+        _snapshot=_snap(),
     )
     grp = GroupChatService(mainline, experts=_experts())
     result = asyncio.run(grp.post_and_dispatch(conv.id, "帮我处理"))

@@ -32,6 +32,11 @@ from .store import (
     SqliteRunRepository,
     SqliteTaskRepository,
 )
+from ..grants.store import (
+    InMemorySolutionProjectionRepository,
+    SolutionProjectionRepository,
+    SqliteSolutionProjectionRepository,
+)
 from .stream import StreamBroker
 from .timeline import (
     InMemoryRawEventArchive,
@@ -72,10 +77,12 @@ def build_mainline_service(
         tasks = SqliteTaskRepository(db)
         timeline = SqliteTimelineStore(db)
         raw_archive = SqliteRawEventArchive(db)
+        solutions = SqliteSolutionProjectionRepository(db)
         # 启动时清理过期归档（保留期默认 7 天）
         raw_archive.cleanup_expired()
     else:
         conversations = InMemoryConversationRepository()
+        solutions = InMemorySolutionProjectionRepository()
         messages = InMemoryMessageRepository()
         runs = InMemoryRunRepository()
         tasks = InMemoryTaskRepository()
@@ -92,4 +99,5 @@ def build_mainline_service(
         raw_archive=raw_archive,
         usage_recorder=usage_recorder,
         tenant_id=tenant_id,
+        solutions=solutions,
     )

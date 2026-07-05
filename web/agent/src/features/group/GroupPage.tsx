@@ -47,9 +47,14 @@ import {
  * 把 LoadedExpertProjection 投影成群聊编排所需的 GroupExpert。
  * handle 用 display_name（@提及入口友好）；persona/model 留待 RunSpec 派生。
  */
-function toGroupExpert(p: { display_name: string; runtime_binding?: string | null }): GroupExpert {
+function toGroupExpert(p: {
+  handle: string;
+  display_name: string;
+  runtime_binding?: string | null;
+}): GroupExpert {
   return {
-    handle: p.display_name,
+    handle: p.handle,
+    display_name: p.display_name,
     ...(p.runtime_binding ? { model: p.runtime_binding } : {}),
   };
 }
@@ -100,18 +105,14 @@ export function GroupPage() {
   );
 
   // 方案绑定会话的 roster 动态过滤：仅展示 solution_expert_employee_ids 中的专家。
-  // 自由群聊/私聊不受影响（使用全部已装载专家）。
+  // 已用 stable handle（backend ASCII / employee_id）直接匹配，不再通过 display_name 反查。
   const rosterForSelected = useMemo(() => {
     const ids = selected?.solution_expert_employee_ids;
     if (!selected || !ids || ids.length === 0) return roster;
     const allowed = new Set(ids);
-    const filtered = roster.filter((e) => {
-      // roster.handle = display_name；需要原始 employee_id 匹配。
-      const proj = experts.find((p) => p.display_name === e.handle);
-      return proj ? allowed.has(proj.employee_id) : false;
-    });
+    const filtered = roster.filter((e) => allowed.has(e.handle));
     return filtered.length > 0 ? filtered : roster;
-  }, [selected, roster, experts]);
+  }, [selected, roster]);
 
   const handleDispatched = useCallback((result: DispatchResult) => {
     setLastTriggered(result.triggered_handles);
@@ -153,10 +154,6 @@ export function GroupPage() {
     try {
       const input: CreateFromSolutionInput = {
         solution_instance_id: sol.solution_instance_id,
-        solution_expert_employee_ids: sol.expert_employee_ids ?? [],
-        solution_planner_prompt: sol.planner_prompt,
-        solution_subtask_prompt: sol.subtask_prompt,
-        solution_aggregate_prompt: sol.aggregate_prompt,
         title: sol.display_name || "方案群聊",
       };
       const conv = await createConversationFromSolution(client, input);

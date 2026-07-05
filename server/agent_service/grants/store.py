@@ -353,7 +353,8 @@ class SolutionProjection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    solution_id: str = Field(description="方案实例 id（Manager 侧 solution_instance 主键）")
+    solution_instance_id: str = Field(description="方案实例 id（Manager 侧 solution_instance 主键）")
+    template_solution_id: str = Field("", description="Operator 目录模板 solution_id（追溯用，不当 instance id）")
     display_name: str = Field(description="方案显示名")
     version: str = Field("", description="方案版本")
     expert_employee_ids: list[str] = Field(default_factory=list, description="方案对应的专家 employee_id 列表")
@@ -364,7 +365,7 @@ class SolutionProjection(BaseModel):
     def to_dict(self) -> dict:
         """映射为前端契约字段（solution_id → solution_instance_id）。"""
         d = self.model_dump(mode="json")
-        d["solution_instance_id"] = d.pop("solution_id")
+        d.pop("template_solution_id", None)
         return d
 
 
@@ -378,7 +379,8 @@ def _as_solution_projection(raw: _SolutionProjectionInput) -> SolutionProjection
     if not isinstance(eids, list):
         eids = []
     return SolutionProjection(
-        solution_id=str(raw.get("solution_id", raw.get("id", ""))),
+        solution_instance_id=str(raw.get("id", raw.get("solution_instance_id", ""))),
+        template_solution_id=str(raw.get("solution_id", raw.get("template_solution_id", ""))),
         display_name=str(raw.get("display_name", raw.get("name", ""))),
         version=str(raw.get("version", "")),
         expert_employee_ids=[str(x) for x in eids],
@@ -414,7 +416,7 @@ class InMemorySolutionProjectionRepository(SolutionProjectionRepository):
 
     def upsert(self, projection: _SolutionProjectionInput) -> SolutionProjection:
         p = _as_solution_projection(projection)
-        self._items[p.solution_id] = p
+        self._items[p.solution_instance_id] = p
         return p
 
     def remove(self, solution_id: str) -> SolutionProjection | None:
@@ -424,10 +426,10 @@ class InMemorySolutionProjectionRepository(SolutionProjectionRepository):
         return self._items.get(solution_id)
 
     def available(self) -> list[SolutionProjection]:
-        return sorted(self._items.values(), key=lambda p: p.solution_id)
+        return sorted(self._items.values(), key=lambda p: p.solution_instance_id)
 
     def list_all(self) -> list[SolutionProjection]:
-        return sorted(self._items.values(), key=lambda p: p.solution_id)
+        return sorted(self._items.values(), key=lambda p: p.solution_instance_id)
 
 
 class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
@@ -444,7 +446,7 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
         if not isinstance(eids, list):
             eids = []
         return SolutionProjection(
-            solution_id=d["solution_id"],
+            solution_instance_id=d["solution_id"],
             display_name=d.get("display_name", ""),
             version=d.get("version", ""),
             expert_employee_ids=[str(x) for x in eids],
@@ -464,7 +466,7 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
             "version=excluded.version, expert_employee_ids=excluded.expert_employee_ids, "
             "planner_prompt=excluded.planner_prompt, "
             "subtask_prompt=excluded.subtask_prompt, aggregate_prompt=excluded.aggregate_prompt",
-            (p.solution_id, p.display_name, p.version, json.dumps(p.expert_employee_ids),
+            (p.solution_instance_id, p.display_name, p.version, json.dumps(p.expert_employee_ids),
              p.planner_prompt, p.subtask_prompt, p.aggregate_prompt),
         )
         return p

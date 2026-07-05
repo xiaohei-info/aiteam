@@ -39,11 +39,13 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
         router_pg = PgTenantRouter(dsn)
         _, grant_svc = _services(request)
         from .member_service import MemberDeptService
+        from .recruit_repository import RecruitRepository
         from .repository_member import MemberDeptRepository
         cache = AuthorizedConfigService(
             config_service=build_employee_config_service(router_pg),
             grant_service=grant_svc,
             member_service=MemberDeptService(repo=MemberDeptRepository(router_pg)),
+            recruit_repository=RecruitRepository(router_pg),
         )
         request.app.state._authorized_config_service = cache
     return cache
