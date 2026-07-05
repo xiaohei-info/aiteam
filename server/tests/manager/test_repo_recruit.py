@@ -169,32 +169,3 @@ def test_row_to_event_null_target_ids():
     raw[7] = None
     row = _row_to_event(tuple(raw))
     assert row.target_employee_ids == []
-
-
-# ---- update_solution_instance（AITEAM-288）----
-
-
-def test_update_solution_instance_returns_updated_row():
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchone=_sol_row(name="Renamed")))
-    row = RecruitRepository(router).update_solution_instance(
-        ctx(), instance_id="i-1", display_name="Renamed",
-    )
-    assert row is not None
-    assert row.display_name == "Renamed"
-
-
-def test_update_solution_instance_not_found():
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchone=None))
-    assert RecruitRepository(router).update_solution_instance(
-        ctx(), instance_id="missing", display_name="x",
-    ) is None
-
-
-def test_update_solution_instance_no_fields_returns_existing():
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchone=_sol_row()))
-    row = RecruitRepository(router).update_solution_instance(ctx(), instance_id="i-1")
-    assert row is not None
-    assert row.solution_id == "sol-1"

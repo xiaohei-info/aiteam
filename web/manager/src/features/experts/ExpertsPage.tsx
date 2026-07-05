@@ -2,8 +2,8 @@
  * 招募专家页（W-M.3，08 §12.1）。
  *
  * 三段：可招募专家模板（浏览 Operator 目录 → 招募为本 tenant 实例）、可应用行业方案（浏览 → 应用）、
- * 已招募专家实例（列出 + 查看/编辑配置：模型/运行时/能力/记忆策略，PUT 全量替换）。owner/enterprise_admin 可写，其余只读（后端鉴权兜底）。
- * 编辑：PUT 全量替换，可改 display_name/persona/模型配置/运行时/能力引用/记忆策略，未改字段保全原值。
+ * 已招募专家实例（列出 + 编辑配置：模型/运行时/能力/记忆策略，PUT 全量替换）、
+ * 已应用方案实例（只读详情，方案定义在 Operator 端完成）。owner/enterprise_admin 可写，其余只读（后端鉴权兜底）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
@@ -16,7 +16,6 @@ import type {
   ExpertTemplate,
   LifecycleOptions,
   SolutionInstance,
-  SolutionInstanceUpdateInput,
   SolutionPackage,
 } from "./types";
 
@@ -209,17 +208,7 @@ export function ExpertsPage(): ReactNode {
           </GlassPanel>
         ) : (
           solutionInstances.map((si) => (
-            <SolutionInstanceCard
-              key={si.id}
-              instance={si}
-              canWrite={canWrite}
-              onSave={(update) =>
-                runAction(
-                  () => api.updateSolutionInstance(si.id, update),
-                  "manager.experts.solution_save_ok",
-                )
-              }
-            />
+            <SolutionInstanceCard key={si.id} instance={si} />
           ))
         )}
       </div>
@@ -227,37 +216,9 @@ export function ExpertsPage(): ReactNode {
   );
 }
 
-/** 方案实例卡片：只读展示 + 编辑配置（专家绑定/知识技能引用/协作 prompts，AITEAM-288）。 */
-function SolutionInstanceCard({
-  instance,
-  canWrite,
-  onSave,
-}: {
-  instance: SolutionInstance;
-  canWrite: boolean;
-  onSave: (update: SolutionInstanceUpdateInput) => void;
-}): ReactNode {
+/** 方案实例卡片：只读展示（PRD B06：方案实例定义在 Operator 端，Manager 不可编辑）。 */
+function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): ReactNode {
   const i18n = useI18n();
-  const [editing, setEditing] = useState(false);
-  const [displayName, setDisplayName] = useState(instance.display_name);
-  const [expertIds, setExpertIds] = useState(instance.expert_employee_ids.join("\n"));
-  const [knowledgeRefs, setKnowledgeRefs] = useState(instance.knowledge_refs.join("\n"));
-  const [skillRefs, setSkillRefs] = useState(instance.skill_refs.join("\n"));
-  const [plannerPrompt, setPlannerPrompt] = useState(instance.planner_prompt ?? "");
-  const [subtaskPrompt, setSubtaskPrompt] = useState(instance.subtask_prompt ?? "");
-  const [aggregatePrompt, setAggregatePrompt] = useState(instance.aggregate_prompt ?? "");
-
-  const resetEditing = useCallback(() => {
-    setDisplayName(instance.display_name);
-    setExpertIds(instance.expert_employee_ids.join("\n"));
-    setKnowledgeRefs(instance.knowledge_refs.join("\n"));
-    setSkillRefs(instance.skill_refs.join("\n"));
-    setPlannerPrompt(instance.planner_prompt ?? "");
-    setSubtaskPrompt(instance.subtask_prompt ?? "");
-    setAggregatePrompt(instance.aggregate_prompt ?? "");
-    setEditing(false);
-  }, [instance]);
-
   return (
     <GlassPanel data-testid="solution-instance-card" className="rounded-window p-md">
       <div className="flex flex-wrap items-center gap-md mb-sm">
@@ -267,118 +228,21 @@ function SolutionInstanceCard({
           {instance.status}
         </span>
       </div>
-      {!editing ? (
-        <>
-          <div className="text-xs text-text-secondary space-y-xs">
-            <div>{i18n.t("manager.experts.expert_count")}: {instance.expert_employee_ids.length}</div>
-            {instance.expert_employee_ids.length > 0 && (
-              <div className="flex flex-wrap gap-xs">
-                {instance.expert_employee_ids.map((eid) => (
-                  <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
-                ))}
-              </div>
-            )}
-            <div>{i18n.t("manager.experts.solution_knowledge_refs")}: {instance.knowledge_refs.join(", ") || "-"}</div>
-            <div>{i18n.t("manager.experts.solution_skill_refs")}: {instance.skill_refs.join(", ") || "-"}</div>
-            {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
-              <div>{i18n.t("manager.experts.planner_prompt")}: {instance.planner_prompt?.slice(0, 40) || "-"}…</div>
-            )}
+      <div className="text-xs text-text-secondary space-y-xs">
+        <div>{i18n.t("manager.experts.expert_count")}: {instance.expert_employee_ids.length}</div>
+        {instance.expert_employee_ids.length > 0 && (
+          <div className="flex flex-wrap gap-xs">
+            {instance.expert_employee_ids.map((eid) => (
+              <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
+            ))}
           </div>
-          {canWrite && (
-            <Button type="button" variant="ghost" size="sm" className="mt-sm" onClick={() => setEditing(true)}>
-              {i18n.t("manager.experts.edit_solution")}
-            </Button>
-          )}
-        </>
-      ) : (
-        <form
-          className="flex flex-col gap-md"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSave({
-              display_name: displayName.trim(),
-              expert_employee_ids: parseList(expertIds),
-              knowledge_refs: parseList(knowledgeRefs),
-              skill_refs: parseList(skillRefs),
-              planner_prompt: plannerPrompt,
-              subtask_prompt: subtaskPrompt,
-              aggregate_prompt: aggregatePrompt,
-            });
-            setEditing(false);
-          }}
-        >
-          <fieldset className="flex flex-col gap-md">
-            <legend className="mb-xs text-xs font-semibold text-text-secondary">
-              {i18n.t("manager.experts.section_solution")}
-            </legend>
-            <Field label={i18n.t("manager.experts.display_name")}>
-              <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_expert_ids")}>
-              <textarea
-                className={textareaCls}
-                value={expertIds}
-                onChange={(e) => setExpertIds(e.target.value)}
-                rows={3}
-              />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_knowledge_refs")}>
-              <textarea
-                className={textareaCls}
-                value={knowledgeRefs}
-                onChange={(e) => setKnowledgeRefs(e.target.value)}
-                rows={3}
-              />
-            </Field>
-            <Field label={i18n.t("manager.experts.solution_skill_refs")}>
-              <textarea
-                className={textareaCls}
-                value={skillRefs}
-                onChange={(e) => setSkillRefs(e.target.value)}
-                rows={3}
-              />
-            </Field>
-          </fieldset>
-          <fieldset className="flex flex-col gap-md">
-            <legend className="mb-xs text-xs font-semibold text-text-secondary">
-              {i18n.t("manager.experts.planner_prompt")}
-            </legend>
-            <p className="m-0 text-xs text-text-muted">{i18n.t("manager.experts.solution_prompts_hint")}</p>
-            <Field label={i18n.t("manager.experts.planner_prompt")}>
-              <textarea
-                className={textareaCls}
-                value={plannerPrompt}
-                onChange={(e) => setPlannerPrompt(e.target.value)}
-                rows={3}
-              />
-            </Field>
-            <Field label={i18n.t("manager.experts.subtask_prompt")}>
-              <textarea
-                className={textareaCls}
-                value={subtaskPrompt}
-                onChange={(e) => setSubtaskPrompt(e.target.value)}
-                rows={3}
-              />
-            </Field>
-            <Field label={i18n.t("manager.experts.aggregate_prompt")}>
-              <textarea
-                className={textareaCls}
-                value={aggregatePrompt}
-                onChange={(e) => setAggregatePrompt(e.target.value)}
-                rows={3}
-              />
-            </Field>
-          </fieldset>
-          <div className="flex gap-sm">
-            <Button type="submit" size="sm">
-              {i18n.t("manager.experts.save")}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={resetEditing}>
-              {i18n.t("manager.experts.cancel")}
-            </Button>
-          </div>
-        </form>
-      )}
+        )}
+        <div>{i18n.t("manager.experts.solution_knowledge_refs")}: {instance.knowledge_refs.join(", ") || "-"}</div>
+        <div>{i18n.t("manager.experts.solution_skill_refs")}: {instance.skill_refs.join(", ") || "-"}</div>
+        {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
+          <div>{i18n.t("manager.experts.planner_prompt")}: {instance.planner_prompt?.slice(0, 40) || "-"}…</div>
+        )}
+      </div>
     </GlassPanel>
   );
 }

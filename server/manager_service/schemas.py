@@ -483,18 +483,6 @@ class SolutionInstanceOut(BaseModel):
     updated_at: datetime | None = None
 
 
-class SolutionInstanceUpdate(BaseModel):
-    """方案实例局部更新（AITEAM-288，GH#403）：编辑专家绑定/知识技能引用/协作 prompts。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    display_name: str | None = None
-    expert_employee_ids: list[str] | None = None
-    knowledge_refs: list[str] | None = None
-    skill_refs: list[str] | None = None
-    planner_prompt: str | None = None
-    subtask_prompt: str | None = None
-    aggregate_prompt: str | None = None
 
 
 class RecruitExpertResult(BaseModel):

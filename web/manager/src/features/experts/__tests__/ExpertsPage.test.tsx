@@ -286,36 +286,6 @@ describe("ExpertsPage 招募专家", () => {
     expect(screen.getByText("emp-2")).toBeInTheDocument();
   });
 
-  it("编辑方案实例：改专家绑定 + 协作 prompts → updateSolutionInstance 收到正确字段", async () => {
-    const api = mockApi({
-      listSolutionInstances: vi.fn().mockResolvedValue([solutionInstance]),
-    });
-    renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByTestId("solution-instance-card")).toBeInTheDocument());
-
-    const card = screen.getByTestId("solution-instance-card");
-    fireEvent.click(within(card).getByText("编辑配置"));
-    await waitFor(() => expect(within(card).getByLabelText("名称")).toBeInTheDocument());
-    fireEvent.change(within(card).getByLabelText("关联专家（employee id）"), {
-      target: { value: "emp-1\nemp-3" },
-    });
-    fireEvent.change(within(card).getByLabelText("协作编排 planner prompt"), {
-      target: { value: "拆分任务" },
-    });
-    fireEvent.click(within(card).getByText("保存"));
-
-    await waitFor(() => expect(api.updateSolutionInstance).toHaveBeenCalledTimes(1));
-    expect(api.updateSolutionInstance).toHaveBeenCalledWith(
-      "si-1",
-      expect.objectContaining({
-        expert_employee_ids: ["emp-1", "emp-3"],
-        planner_prompt: "拆分任务",
-        knowledge_refs: ["ks-shared"],
-        skill_refs: ["skill-shared"],
-      }),
-    );
-  });
-
   it("普通成员（member）方案实例只读：无编辑配置入口", async () => {
     mockApi({ listSolutionInstances: vi.fn().mockResolvedValue([solutionInstance]) });
     renderPage(["member"]);

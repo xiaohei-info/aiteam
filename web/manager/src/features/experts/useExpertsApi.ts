@@ -4,8 +4,7 @@
  * 只调本端 /api/manager/recruit/* 与 /api/manager/employees/*（跨端由基类拦截）。
  * 浏览目录是 Operator 只读投影（后端 #118）；招募/应用落本 tenant employee 实例。
  *
- * 注意（PRD B06）：新 /solutions 页已移除实例编辑能力，但旧 /experts 页仍保留方案实例局部更新
- * 入口（向后兼容）；对应后端 PATCH /api/manager/recruit/solutions/{id} 路由不变。
+ * 注意（PRD B06）：方案实例定义在 Operator 端；Manager 端仅「查看详情 + 应用」，不提供编辑入口。
  */
 import { useMemo } from "react";
 import { createManagerApiClient } from "../../api/client";
@@ -17,7 +16,6 @@ import type {
   RecruitExpertInput,
   LifecycleOptions,
   SolutionInstance,
-  SolutionInstanceUpdateInput,
   SolutionPackage,
 } from "./types";
 
@@ -31,10 +29,6 @@ export interface ExpertsApi {
   transitionEmployee: (employeeId: string, transition: string, reason?: string) => Promise<EmployeeConfig | null>;
   getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
-  updateSolutionInstance: (
-    instanceId: string,
-    update: SolutionInstanceUpdateInput,
-  ) => Promise<SolutionInstance | null>;
 }
 
 export function useExpertsApi(): ExpertsApi {
@@ -89,12 +83,6 @@ export function useExpertsApi(): ExpertsApi {
       async listSolutionInstances() {
         const r = await client.listGet<SolutionInstance>("/api/manager/recruit/solutions");
         return r.items;
-      },
-      updateSolutionInstance(instanceId, update) {
-        return client.patch<SolutionInstance>(
-          `/api/manager/recruit/solutions/${encodeURIComponent(instanceId)}`,
-          { body: update },
-        );
       },
     };
   }, [token, onUnauthorized]);

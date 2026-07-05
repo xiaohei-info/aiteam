@@ -29,7 +29,6 @@ from .schemas import (
     RecruitmentOrderOut,
     SolutionApplyRecordOut,
     SolutionInstanceOut,
-    SolutionInstanceUpdate,
 )
 
 
@@ -135,25 +134,6 @@ def build_recruit_router(verifier) -> APIRouter:
         return Envelope[SolutionInstanceOut](
             data=svc.get_solution_instance(
                 tenant_context_from(claims), instance_id=instance_id
-            )
-        )
-
-    @router.patch(
-        "/solutions/{instance_id}",
-        description="编辑已应用方案实例配置（专家绑定/知识技能引用/协作 prompts），AITEAM-288",
-        summary="编辑方案实例配置（按 tenant 裁剪，需 owner/enterprise_admin）",
-        operation_id="manager_update_solution_instance",
-    )
-    async def update_solution_instance(
-        body: SolutionInstanceUpdate,
-        instance_id: str,
-        request: Request,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[SolutionInstanceOut]:
-        svc = _service(request)
-        return Envelope[SolutionInstanceOut](
-            data=svc.update_solution_instance(
-                tenant_context_from(claims), instance_id=instance_id, req=body,
             )
         )
 

@@ -116,14 +116,3 @@ export interface SolutionInstance {
   created_at: string | null;
   updated_at: string | null;
 }
-
-/** 方案实例局部更新（对齐 SolutionInstanceUpdate，AITEAM-288）。 */
-export interface SolutionInstanceUpdateInput {
-  display_name?: string;
-  expert_employee_ids?: string[];
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
-}

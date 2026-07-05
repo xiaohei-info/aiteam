@@ -35,7 +35,6 @@ from .schemas import (
     RecruitmentOrderOut,
     SolutionApplyRecordOut,
     SolutionInstanceOut,
-    SolutionInstanceUpdate,
 )
 
 # 招募/应用方案写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
@@ -350,42 +349,6 @@ class RecruitService:
         row = self._recruit.get_solution_instance(ctx, instance_id=instance_id)
         if row is None:
             raise NotFound("solution instance not found in this tenant")
-        return _solution_out(row)
-
-    def update_solution_instance(
-        self, ctx: TenantContext, *, instance_id: str, req: SolutionInstanceUpdate
-    ) -> SolutionInstanceOut:
-        """编辑已应用方案实例配置（AITEAM-288，GH#403）。
-
-        可改：display_name / expert_employee_ids（增删关联专家）/ knowledge_refs / skill_refs
-        / 协作编排 prompts（planner / subtask / aggregate）。写操作需 owner/enterprise_admin（03 §9.7）。
-        跨 tenant 不可见（RLS）；行不存在 → 404。
-        """
-        _ensure_can_write(ctx)
-        row = self._recruit.update_solution_instance(
-            ctx,
-            instance_id=instance_id,
-            display_name=req.display_name,
-            expert_employee_ids=req.expert_employee_ids,
-            knowledge_refs=req.knowledge_refs,
-            skill_refs=req.skill_refs,
-            planner_prompt=req.planner_prompt,
-            subtask_prompt=req.subtask_prompt,
-            aggregate_prompt=req.aggregate_prompt,
-        )
-        if row is None:
-            raise NotFound("solution instance not found in this tenant")
-        # 审计
-        self._recruit.append_recruit_event(
-            ctx,
-            action="apply_solution",
-            actor_user_id=ctx.user_id,
-            source_solution_id=row.solution_id,
-            source_solution_version=row.solution_version,
-            target_solution_instance_id=row.id,
-            target_employee_ids=list(row.expert_employee_ids),
-            detail={"action": "update_solution_instance"},
-        )
         return _solution_out(row)
 
     # ---- 方案应用记录（AITEAM-242，issue #286）----
