@@ -9,6 +9,7 @@
 """
 
 from __future__ import annotations
+import httpx
 from shared.service_client import ServiceClient
 
 import sqlite3
@@ -190,17 +191,20 @@ def test_sqlite_snapshot_roundtrip():
 
 
 def test_service_client_stores_user_token_provider():
-    """ServiceClient.__init__ 的 user_token_provider 参数确实被保留 (覆盖 service_client.py line 82)。"""
-    captured = {}
+    """ServiceClient 的 user_token_provider 分支真正产出 Authorization 头 (覆盖 service_client.py line 82)。"""
+    seen = {}
 
-    def provider():
-        captured["called"] = True
-        return "tok"
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"data": {"x": 1}})
 
-    client = ServiceClient("https://upstream.local", user_token_provider=provider)
+    client = ServiceClient(
+        "https://upstream.local",
+        transport=httpx.MockTransport(handler),
+        user_token_provider=lambda: "tok",
+    )
     try:
-        assert client._user_token_provider is provider
-        # 该字段会被后续 _headers() 调用
-        assert callable(client._user_token_provider)
+        client.get("/anything")
+        assert seen["auth"] == "Bearer tok"
     finally:
         client.close()
