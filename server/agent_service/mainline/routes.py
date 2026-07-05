@@ -47,6 +47,7 @@ class CreateConversationRequest(BaseModel):
     solution_planner_prompt: str | None = Field(default=None, description="方案 planner prompt 快照")
     solution_subtask_prompt: str | None = Field(default=None, description="方案子任务拆解 prompt 快照")
     solution_aggregate_prompt: str | None = Field(default=None, description="方案聚合汇总 prompt 快照")
+    solution_expert_employee_ids: list[str] | None = Field(default=None, description="方案对应的专家 employee_id 列表（固定编排 roster 过滤用）")
 
 
 class SetConversationStateRequest(BaseModel):
@@ -146,6 +147,7 @@ def build_mainline_router(
             solution_planner_prompt=req.solution_planner_prompt,
             solution_subtask_prompt=req.solution_subtask_prompt,
             solution_aggregate_prompt=req.solution_aggregate_prompt,
+            solution_expert_employee_ids=req.solution_expert_employee_ids,
         ))
 
     @router.get("/conversations", summary="列会话", description="列出本端所有会话，按创建时间倒序排列。", operation_id="agent_list_conversations")

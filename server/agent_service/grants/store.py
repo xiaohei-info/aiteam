@@ -347,7 +347,8 @@ class SolutionProjection(BaseModel):
     """本端持有的方案实例投影（只读，供"从解决方案创建群聊"入口使用）。
 
     来源：Manager authorized config pull（F10）收到的 solutions[]。solution_id 即 Manager
-    侧方案实例 id；三阶段 prompts 是 Operator solution_template 的快照，落会话后不再改。
+    侧方案实例 id；三阶段 prompts 是 Operator solution_template 的快照，落会话后不再改；
+    expert_employee_ids 是方案对应的专家群（用于建群时过滤 roster）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -355,6 +356,7 @@ class SolutionProjection(BaseModel):
     solution_id: str = Field(description="方案实例 id（Manager 侧 solution_instance 主键）")
     display_name: str = Field(description="方案显示名")
     version: str = Field("", description="方案版本")
+    expert_employee_ids: list[str] = Field(default_factory=list, description="方案对应的专家 employee_id 列表")
     planner_prompt: str = Field("", description="planner 阶段编排规则")
     subtask_prompt: str = Field("", description="子任务拆解规则")
     aggregate_prompt: str = Field("", description="多专家聚合规则")
@@ -372,10 +374,14 @@ _SolutionProjectionInput = dict | SolutionProjection
 def _as_solution_projection(raw: _SolutionProjectionInput) -> SolutionProjection:
     if isinstance(raw, SolutionProjection):
         return raw
+    eids = raw.get("expert_employee_ids")
+    if not isinstance(eids, list):
+        eids = []
     return SolutionProjection(
         solution_id=str(raw.get("solution_id", raw.get("id", ""))),
         display_name=str(raw.get("display_name", raw.get("name", ""))),
         version=str(raw.get("version", "")),
+        expert_employee_ids=[str(x) for x in eids],
         planner_prompt=str(raw.get("planner_prompt", "")),
         subtask_prompt=str(raw.get("subtask_prompt", "")),
         aggregate_prompt=str(raw.get("aggregate_prompt", "")),
@@ -430,10 +436,18 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
 
     def _row_to_projection(self, row) -> SolutionProjection:
         d = dict(row)
+        eids_raw = d.get("expert_employee_ids") or "[]"
+        try:
+            eids = json.loads(eids_raw) if isinstance(eids_raw, str) else list(eids_raw)
+        except (ValueError, TypeError):
+            eids = []
+        if not isinstance(eids, list):
+            eids = []
         return SolutionProjection(
             solution_id=d["solution_id"],
             display_name=d.get("display_name", ""),
             version=d.get("version", ""),
+            expert_employee_ids=[str(x) for x in eids],
             planner_prompt=d.get("planner_prompt", ""),
             subtask_prompt=d.get("subtask_prompt", ""),
             aggregate_prompt=d.get("aggregate_prompt", ""),
@@ -443,12 +457,14 @@ class SqliteSolutionProjectionRepository(SolutionProjectionRepository):
         p = _as_solution_projection(projection)
         self._db.execute(
             "INSERT INTO solution_projections "
-            "(solution_id, display_name, version, planner_prompt, subtask_prompt, aggregate_prompt) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
+            "(solution_id, display_name, version, expert_employee_ids, "
+            "planner_prompt, subtask_prompt, aggregate_prompt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(solution_id) DO UPDATE SET display_name=excluded.display_name, "
-            "version=excluded.version, planner_prompt=excluded.planner_prompt, "
+            "version=excluded.version, expert_employee_ids=excluded.expert_employee_ids, "
+            "planner_prompt=excluded.planner_prompt, "
             "subtask_prompt=excluded.subtask_prompt, aggregate_prompt=excluded.aggregate_prompt",
-            (p.solution_id, p.display_name, p.version,
+            (p.solution_id, p.display_name, p.version, json.dumps(p.expert_employee_ids),
              p.planner_prompt, p.subtask_prompt, p.aggregate_prompt),
         )
         return p

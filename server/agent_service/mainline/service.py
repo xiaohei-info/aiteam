@@ -138,13 +138,15 @@ class MainlineService:
         solution_planner_prompt: str | None = None,
         solution_subtask_prompt: str | None = None,
         solution_aggregate_prompt: str | None = None,
+        solution_expert_employee_ids: list[str] | None = None,
     ) -> Conversation:
         """建会话。
 
         两入口：
         - 自由创建（默认）— collaboration_mode 默认 free；solution_instance_id 为空。
-        - 从解决方案创建 — 传 solution_instance_id + 三阶段 prompts，collaboration_mode 强制
-          orchestrated（固定编排）。planner/aggregate/subtask 直接读取对应 prompt 快照。
+        - 从解决方案创建 — 传 solution_instance_id + 三阶段 prompts + expert_employee_ids，
+          collaboration_mode 强制 orchestrated（固定编排）。planner/aggregate/subtask 直接读取
+          对应 prompt 快照；roster 按 expert_employee_ids 过滤。
         """
         bound = bool((solution_instance_id or "").strip())
         if bound:
@@ -152,6 +154,7 @@ class MainlineService:
         else:
             mode = "orchestrated" if str(collaboration_mode) == "orchestrated" else "free"
         brief = str(orchestration_brief or "").strip() if mode == "orchestrated" else ""
+        expert_ids = list(solution_expert_employee_ids or [])
         conv = Conversation(
             id=_new_id("conv"), title=title, state=ConversationState.ACTIVE,
             collaboration_mode=mode, orchestration_brief=brief,
@@ -161,6 +164,7 @@ class MainlineService:
             solution_planner_prompt=solution_planner_prompt or "",
             solution_subtask_prompt=solution_subtask_prompt or "",
             solution_aggregate_prompt=solution_aggregate_prompt or "",
+            solution_expert_employee_ids=[str(x) for x in expert_ids],
         )
         return self._conversations.create(conv)
 

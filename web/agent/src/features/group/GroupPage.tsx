@@ -56,7 +56,8 @@ function toGroupExpert(p: { display_name: string; runtime_binding?: string | nul
 export function GroupPage() {
   const { client } = useApp();
   const [selected, setSelected] = useState<Conversation | null>(null);
-  const [roster, setRoster] = useState<GroupExpert[]>([]);
+  // 已装载专家原始投影列表（含 employee_id 供方案绑定 roster 过滤）。
+  const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [lastTriggered, setLastTriggered] = useState<string[] | null>(null);
   const [lastIgnored, setLastIgnored] = useState<string[] | null>(null);
@@ -75,7 +76,7 @@ export function GroupPage() {
     listLoadedExperts(client)
       .then((items) => {
         if (cancelled) return;
-        setRoster(items.filter((p) => !p.revoked).map(toGroupExpert));
+        setExperts(items);
         setRosterError(null);
       })
       .catch((err) => {
@@ -90,6 +91,26 @@ export function GroupPage() {
     setLastTriggered(null);
     setLastIgnored(null);
   }, []);
+
+  // 全部已装载专家 -> GroupExpert roster。
+  const roster = useMemo(
+    () => experts.filter((p) => !p.revoked).map(toGroupExpert),
+    [experts],
+  );
+
+  // 方案绑定会话的 roster 动态过滤：仅展示 solution_expert_employee_ids 中的专家。
+  // 自由群聊/私聊不受影响（使用全部已装载专家）。
+  const rosterForSelected = useMemo(() => {
+    const ids = selected?.solution_expert_employee_ids;
+    if (!selected || !ids || ids.length === 0) return roster;
+    const allowed = new Set(ids);
+    const filtered = roster.filter((e) => {
+      // roster.handle = display_name；需要原始 employee_id 匹配。
+      const proj = experts.find((p) => p.display_name === e.handle);
+      return proj ? allowed.has(proj.employee_id) : false;
+    });
+    return filtered.length > 0 ? filtered : roster;
+  }, [selected, roster, experts]);
 
   const handleDispatched = useCallback((result: DispatchResult) => {
     setLastTriggered(result.triggered_handles);
@@ -131,6 +152,7 @@ export function GroupPage() {
     try {
       const input: CreateFromSolutionInput = {
         solution_instance_id: sol.solution_instance_id,
+        solution_expert_employee_ids: sol.expert_employee_ids ?? [],
         solution_planner_prompt: sol.planner_prompt,
         solution_subtask_prompt: sol.subtask_prompt,
         solution_aggregate_prompt: sol.aggregate_prompt,
@@ -167,7 +189,7 @@ export function GroupPage() {
         {selected ? (
           <>
             <div className="flex flex-wrap items-center justify-between gap-md border-b border-gold/15 px-md py-sm">
-              <GroupExpertRoster experts={roster} onPickHandle={handlePickHandle} />
+              <GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />
               {rosterError && (
                 <div className="text-xs text-danger" aria-live="polite">{rosterError}</div>
               )}
@@ -189,7 +211,7 @@ export function GroupPage() {
             />
             <MentionComposer
               conversationId={selected.id}
-              experts={roster}
+              experts={rosterForSelected}
               onDispatched={handleDispatched}
             />
           </>

@@ -121,6 +121,11 @@ class Conversation(BaseModel):
     solution_planner_prompt: str = Field(default="", description="方案 planner prompt 快照")
     solution_subtask_prompt: str = Field(default="", description="方案子任务拆解 prompt 快照")
     solution_aggregate_prompt: str = Field(default="", description="方案聚合汇总 prompt 快照")
+    # 方案对应的专家群 employee_id 快照（建群时绑定，固定编排 roster 过滤用）；自由创建/私聊为空列表。
+    solution_expert_employee_ids: list[str] = Field(
+        default_factory=list,
+        description="绑定的方案对应的专家 employee_id 列表（从解决方案创建群聊时设置）",
+    )
     # 阅读状态（parity Manager 侧 ConversationReadState；本地单用户一列化）。
     last_read_at: datetime | None = Field(default=None, description="本会话最后阅读时间（用户查看时间线时刷新）")
     last_read_message_id: str | None = Field(default=None, description="用户已读的最后一条消息 id；None 表示尚未阅读")

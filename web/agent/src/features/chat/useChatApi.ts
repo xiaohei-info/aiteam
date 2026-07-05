@@ -33,6 +33,8 @@ export interface Conversation {
   solution_planner_prompt?: string;
   solution_subtask_prompt?: string;
   solution_aggregate_prompt?: string;
+  // 方案对应的专家群 employee_id 快照（固定编排 roster 过滤用）；自由创建/私聊为空列表。
+  solution_expert_employee_ids?: string[];
   // AITEAM-236 阅读状态（parity 后端 Conversation.last_read_at / last_read_message_id）。
   last_read_at: string | null;
   last_read_message_id: string | null;

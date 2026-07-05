@@ -30,6 +30,7 @@ def test_sqlite_create_conversation_from_solution_then_readback(db_path):
         solution_planner_prompt="planner-instruction",
         solution_subtask_prompt="subtask-instruction",
         solution_aggregate_prompt="aggregate-instruction",
+        solution_expert_employee_ids=["emp-1", "emp-2"],
     )
     got = mainline.get_conversation(conv.id)
     assert got.collaboration_mode == "orchestrated"
@@ -37,10 +38,12 @@ def test_sqlite_create_conversation_from_solution_then_readback(db_path):
     assert got.solution_planner_prompt == "planner-instruction"
     assert got.solution_subtask_prompt == "subtask-instruction"
     assert got.solution_aggregate_prompt == "aggregate-instruction"
+    assert got.solution_expert_employee_ids == ["emp-1", "emp-2"]
     # 自由创建仍为 free
     free = mainline.create_conversation(title="自由群")
     assert free.collaboration_mode == "free"
     assert free.solution_instance_id is None
+    assert free.solution_expert_employee_ids == []
     assert got.state.value == "active"
 
 

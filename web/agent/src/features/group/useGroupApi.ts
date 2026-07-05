@@ -23,6 +23,7 @@ export interface SolutionProjection {
   solution_instance_id: string;
   display_name: string;
   version: string;
+  expert_employee_ids?: string[];
   planner_prompt: string;
   subtask_prompt: string;
   aggregate_prompt: string;
@@ -131,6 +132,7 @@ export async function listSolutionInstances(
  */
 export interface CreateFromSolutionInput {
   solution_instance_id: string;
+  solution_expert_employee_ids?: string[];
   solution_planner_prompt?: string;
   solution_subtask_prompt?: string;
   solution_aggregate_prompt?: string;
@@ -148,6 +150,7 @@ export async function createConversationFromSolution(
         title: input.title ?? null,
         collaboration_mode: "orchestrated",
         solution_instance_id: input.solution_instance_id,
+        solution_expert_employee_ids: input.solution_expert_employee_ids,
         solution_planner_prompt: input.solution_planner_prompt,
         solution_subtask_prompt: input.solution_subtask_prompt,
         solution_aggregate_prompt: input.solution_aggregate_prompt,
