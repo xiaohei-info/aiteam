@@ -127,6 +127,7 @@ class _FakeClientWithRevoke:
                     self.solutions = [
                         {"id": "si-1", "solution_id": "tpl-1", "display_name": "群A",
                          "planner_prompt": "p", "subtask_prompt": "s", "aggregate_prompt": "a"},
+                        {"display_name": "无ID方案"},
                     ] if outer._with else []
                     self.revoked_ids = []
                 else:
