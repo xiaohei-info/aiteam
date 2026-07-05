@@ -521,7 +521,7 @@ def test_onboarding_chain_operator_to_manager_to_agent():
     })
     assert r.status_code == 403, r.text
 
-    new_pass = f"NewPass-{uuid.uuid4().hex[:6]}"
+    new_pass = f"NewPass-{uuid.uuid4().hex[:5]}{uuid.uuid4().int % 10}"  # 密码策略强制包含数字
     r = mgr_client.post("/api/auth/owner-reset", json={
         "tenant_id": tid, "account": phone,
         "old_password": bootstrap_secret, "new_password": new_pass,
