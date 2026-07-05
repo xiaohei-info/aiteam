@@ -196,3 +196,45 @@ def test_read_status_helpers():
     assert archived.state == ConversationState.ARCHIVED
 
 
+
+
+def test_update_collaboration_returns_sentinel_for_empty_strings():
+    """update_collaboration: 空字符串 sentinel → 字段置 None/[] 分支 (line 147-164)。"""
+    mainline = build_mainline_service()
+    conv = mainline.create_conversation(title="c", planner_employee_id="alice")
+    assert conv.planner_employee_id == "alice"
+    # 空字符串 -> 置 None
+    cleared = mainline.set_conversation_collaboration(
+        conv.id, planner_employee_id=""
+    )
+    assert cleared.planner_employee_id is None
+
+
+def test_inmemory_conversation_repo_solution_fields_roundtrip():
+    """InMemoryConversationRepository.update_collaboration: 全量 solution_* 字段分支（line 147-164）。"""
+    from agent_service.mainline.store import InMemoryConversationRepository
+    from agent_service.mainline.models import Conversation, ConversationState
+
+    repo = InMemoryConversationRepository()
+    conv = repo.create(
+        Conversation(id="c1", title="t", state=ConversationState.ACTIVE)
+    )
+    # 分支1: solution_instance_id 空字符串 -> None
+    upd = repo.update_collaboration("c1", solution_instance_id="  ")
+    assert upd.solution_instance_id is None
+    # 分支2: solution_instance_id 正常值
+    upd = repo.update_collaboration("c1", solution_instance_id="sol-x")
+    assert upd.solution_instance_id == "sol-x"
+    # 分支3: prompts str coerce
+    upd = repo.update_collaboration("c1", solution_planner_prompt="p", solution_subtask_prompt="s", solution_aggregate_prompt="a")
+    assert upd.solution_planner_prompt == "p"
+    # 分支4: expert_ids 首次绑定
+    upd = repo.update_collaboration("c1", solution_expert_employee_ids=["a", "b"])
+    assert upd.solution_expert_employee_ids == ["a", "b"]
+    # 分支5: expert_ids 重绑不同列表 -> Conflict
+    from shared.errors import Conflict
+    with pytest.raises(Conflict, match="cannot rebind"):
+        repo.update_collaboration("c1", solution_expert_employee_ids=["c"])
+    # 分支6: expert_ids 重绑相同列表 -> OK
+    upd = repo.update_collaboration("c1", solution_expert_employee_ids=["a", "b"])
+    assert upd.solution_expert_employee_ids == ["a", "b"]
