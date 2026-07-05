@@ -35,6 +35,28 @@ function mockFetch(): ReturnType<typeof vi.fn> {
   }) as unknown as ReturnType<typeof vi.fn>;
 }
 
+// mock fetch：/api/agent/login 返回 403 problem+json（must_reset → 重置模式）
+function mockFetchForbidden(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string | URL, _init?: RequestInit) => {
+    const path = typeof url === "string" ? url : url.toString();
+    if (path.endsWith("/api/agent/login")) {
+      return new Response(
+        JSON.stringify({
+          code: "agent_must_reset",
+          title: "Must reset password",
+          detail: "首次登录，请设置新密码",
+          status: 403,
+        }),
+        {
+          status: 403,
+          headers: { "Content-Type": "application/problem+json" },
+        },
+      );
+    }
+    return new Response(JSON.stringify({ data: null }), { status: 200 });
+  }) as unknown as ReturnType<typeof vi.fn>;
+}
+
 const originalFetch = globalThis.fetch;
 
 describe("LoginPage", () => {
@@ -79,6 +101,36 @@ describe("LoginPage", () => {
       });
       const calls = (fetchImpl.mock.calls as unknown as [string, RequestInit][]).map((c) => c[0]);
       expect(calls.some((c) => c.endsWith("/api/agent/login"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("登录返回 403 时切到重置模式并显示账号（覆盖 reset shell {account} 段落）", async () => {
+    globalThis.fetch = mockFetchForbidden() as unknown as typeof fetch;
+    try {
+      render(
+        <MemoryRouter initialEntries={["/login"]}>
+          <AppProvider>
+            <AppRoutes />
+          </AppProvider>
+        </MemoryRouter>,
+      );
+      const account = "alice";
+      fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
+        target: { value: account },
+      });
+      fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
+      fireEvent.click(screen.getByRole("button", { name: "登录" }));
+
+      // 403 → 切换 reset 模式，重绘为重置表单（reset_heading 出现）。
+      await waitFor(() => {
+        expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
+      });
+      // reset shell 内显示账号的段落——对应 LoginPage.tsx 第 97 行新增 {account} 段落。
+      const accountParagraph = screen.getByText(account);
+      expect(accountParagraph).toBeInTheDocument();
+      expect(accountParagraph.tagName).toBe("P");
     } finally {
       globalThis.fetch = originalFetch;
     }
