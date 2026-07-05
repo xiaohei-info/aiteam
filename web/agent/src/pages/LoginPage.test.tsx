@@ -35,10 +35,32 @@ function mockFetch(): ReturnType<typeof vi.fn> {
   }) as unknown as ReturnType<typeof vi.fn>;
 }
 
+// mock fetch：/api/agent/login 返回 403 problem+json（must_reset → 重置模式）
+function mockFetchForbidden(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string | URL, _init?: RequestInit) => {
+    const path = typeof url === "string" ? url : url.toString();
+    if (path.endsWith("/api/agent/login")) {
+      return new Response(
+        JSON.stringify({
+          code: "agent_must_reset",
+          title: "Must reset password",
+          detail: "首次登录，请设置新密码",
+          status: 403,
+        }),
+        {
+          status: 403,
+          headers: { "Content-Type": "application/problem+json" },
+        },
+      );
+    }
+    return new Response(JSON.stringify({ data: null }), { status: 200 });
+  }) as unknown as ReturnType<typeof vi.fn>;
+}
+
 const originalFetch = globalThis.fetch;
 
 describe("LoginPage", () => {
-  it("渲染标题与三个字段", () => {
+  it("渲染标题与两个字段（account/password），不再出现企业提示字段", () => {
     globalThis.fetch = mockFetch() as unknown as typeof fetch;
     try {
       render(
@@ -48,10 +70,10 @@ describe("LoginPage", () => {
           </AppProvider>
         </MemoryRouter>,
       );
-      // 标题与提交按钮文案都含「登录」，按 role=heading 精确取标题
       expect(screen.getByRole("heading", { level: 1, name: "登录" })).toBeInTheDocument();
       expect(screen.getByLabelText("账号（手机号 / 用户名）")).toBeInTheDocument();
       expect(screen.getByLabelText("密码")).toBeInTheDocument();
+      expect(screen.queryByLabelText("企业提示（tenant_id）")).not.toBeInTheDocument();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -72,7 +94,6 @@ describe("LoginPage", () => {
         target: { value: "alice" },
       });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
-      fireEvent.change(screen.getByLabelText("企业提示（tenant_id）"), { target: { value: "t-1" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
       await waitFor(() => {
@@ -85,9 +106,8 @@ describe("LoginPage", () => {
     }
   });
 
-  it("空 tenant_hint 时显示校验提示且不发请求（#258）", async () => {
-    const fetchImpl = mockFetch();
-    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+  it("登录返回 403 时切到重置模式并显示账号（覆盖 reset shell {account} 段落）", async () => {
+    globalThis.fetch = mockFetchForbidden() as unknown as typeof fetch;
     try {
       render(
         <MemoryRouter initialEntries={["/login"]}>
@@ -96,19 +116,21 @@ describe("LoginPage", () => {
           </AppProvider>
         </MemoryRouter>,
       );
+      const account = "alice";
       fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
-        target: { value: "alice" },
+        target: { value: account },
       });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
-      // tenant_hint 留空
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
-      // 应显示校验提示
+      // 403 → 切换 reset 模式，重绘为重置表单（reset_heading 出现）。
       await waitFor(() => {
-        expect(screen.getByText("请填写企业提示（tenant_id）")).toBeInTheDocument();
+        expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
       });
-      // 不应发出任何 fetch 请求
-      expect(fetchImpl).not.toHaveBeenCalled();
+      // reset shell 内显示账号的段落——对应 LoginPage.tsx 第 97 行新增 {account} 段落。
+      const accountParagraph = screen.getByText(account);
+      expect(accountParagraph).toBeInTheDocument();
+      expect(accountParagraph.tagName).toBe("P");
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -21,8 +21,6 @@ const agentMessages = {
     "agent.login.title": "登录",
     "agent.login.account": "账号（手机号 / 用户名）",
     "agent.login.password": "密码",
-    "agent.login.tenant_hint": "企业提示（tenant_id）",
-    "agent.login.tenant_hint_required": "请填写企业提示（tenant_id）",
     "agent.login.submit": "登录",
     "agent.login.loading": "登录中…",
     "agent.login.failed": "登录失败：{detail}",

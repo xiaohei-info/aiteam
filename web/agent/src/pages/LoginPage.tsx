@@ -20,24 +20,15 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [tenantHint, setTenantHint] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!tenantHint.trim()) {
-      setError(i18n.t("agent.login.tenant_hint_required"));
-      return;
-    }
     setSubmitting(true);
     setError(null);
     try {
-      const result = await client.login({
-        account,
-        password,
-        tenant_hint: tenantHint.trim() || null,
-      });
+      const result = await client.login({ account, password });
       if (!result) {
         setError(i18n.t("error.unknown"));
         return;
@@ -60,10 +51,6 @@ export function LoginPage() {
   async function handleReset(event: FormEvent): Promise<void> {
     event.preventDefault();
     setError(null);
-    if (!tenantHint.trim()) {
-      setError(i18n.t("agent.login.tenant_hint_required"));
-      return;
-    }
     if (!newPassword.trim() || !confirmPassword.trim()) {
       setError(i18n.t("agent.login.reset_failed"));
       return;
@@ -78,7 +65,6 @@ export function LoginPage() {
         account,
         password,
         new_password: newPassword.trim(),
-        tenant_hint: tenantHint.trim(),
       });
       if (!result) {
         setError(i18n.t("agent.login.reset_failed"));
@@ -108,9 +94,7 @@ export function LoginPage() {
             <h1 className="m-0 text-xl font-bold text-text-primary">
               {i18n.t("agent.login.reset_heading")}
             </h1>
-            <p className="m-0 text-xs text-text-secondary">
-              {`${tenantHint} · ${account}`}
-            </p>
+            <p className="m-0 text-xs text-text-secondary">{account}</p>
             <label className="flex flex-col gap-xs">
               <span className="text-xs text-text-secondary">{i18n.t("agent.login.new_password")}</span>
               <input
@@ -175,15 +159,6 @@ export function LoginPage() {
               autoComplete="current-password"
               onChange={(e) => setPassword(e.target.value)}
               required
-            />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("agent.login.tenant_hint")}</span>
-            <input
-              className={fieldCls}
-              type="text"
-              value={tenantHint}
-              onChange={(e) => setTenantHint(e.target.value)}
             />
           </label>
           {error ? <div className="text-xs text-danger">{error}</div> : null}

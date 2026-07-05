@@ -39,7 +39,7 @@ class LoginRequest(BaseModel):
 
     account: str = Field(description="手机号或用户名（按 Manager authenticator 解析）")
     password: str = Field(description="密码/初始密码；明文仅在 TLS 内传至 Manager，不落用户端日志")
-    tenant_hint: str | None = Field(default=None, description="企业定位提示（可选）")
+    tenant_hint: str | None = Field(default=None, description="企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）")
 
 
 class PasswordResetRequest(BaseModel):
@@ -54,7 +54,7 @@ class PasswordResetRequest(BaseModel):
     account: str = Field(description="手机号或用户名")
     password: str = Field(description="旧密码/初始密码（明文仅在 TLS 内传至 Manager）")
     new_password: str = Field(description="新密码（需满足 Manager 密码复杂度策略）")
-    tenant_hint: str = Field(description="企业定位提示（tenant_id）")
+    tenant_hint: str | None = Field(default=None, description="企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）")
 
 
 class ManagerLoginClient(Protocol):

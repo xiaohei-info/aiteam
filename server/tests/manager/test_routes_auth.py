@@ -122,3 +122,29 @@ def test_jwks_happy():
         r = c.get("/api/auth/t1/jwks.json")
         assert r.status_code == 200
         assert "keys" in r.json()
+
+
+def test_resolve_tenant_by_account_happy():
+    """新端点：员工账号 → tenant_id，穿透 envelope。"""
+    fake = _fake_auth_svc()
+    fake.resolve_tenant_by_account.return_value = "t-resolved"
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
+        assert r.status_code == 200
+        assert r.json()["data"]["tenant_id"] == "t-resolved"
+        fake.resolve_tenant_by_account.assert_called_once_with("13800138000")
+
+
+def test_resolve_tenant_by_account_no_db_503():
+    """DB 缺 → 503（不静默放行）。"""
+    c = _client(None, admin_db_url=None)
+    r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
+    assert r.status_code == 503
+
+
+def test_resolve_tenant_by_account_422_missing_account():
+    """account 缺 → 422（body 校验失败），不回显其他字段。"""
+    c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+    r = c.post("/api/auth/resolve-tenant-by-account", json={})
+    assert r.status_code == 422

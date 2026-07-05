@@ -13,6 +13,7 @@
 - 密码强度 / 过期策略（密码策略）。
 - 每次登录（成功/失败）记登录审计（login_attempt，脱敏）。
 - passkey、OAuth 作为新 Authenticator 接入同一出口（9.3 零改 user/token 层）。
+- 自动关联：员工账号 → tenant_id 解析（去掉 Agent 端手工填 tenant_id/企业提示，#382）。
 """
 
 from __future__ import annotations
@@ -67,12 +68,14 @@ class AuthResult(BaseModel):
 class AuthService:
     """编排凭据校验 + token 签发。tenant_id 全程经 TenantContext / 显式入参，不手写过滤。"""
 
-    def __init__(self, *, dsn, repo, keys, audit=None):
+    def __init__(self, *, dsn, repo, keys, audit=None, admin_dsn=None):
         # dsn：业务连接串（app_rw 身份，跑租户 RLS SQL）。管理连接（签名私钥读写）在 keys 内。
         self.dsn = dsn
         self._repo = repo
         self._keys = keys
         self._audit = audit
+        # admin_dsn：管理连接串（超管/BYPASSRLS）——仅在跨租户账号解析时需要；未给定时回落 dsn。
+        self._admin_dsn = admin_dsn or dsn
 
     # ---- 账号开通（控制面/负责人侧调用）----
     def provision_owner(self, tenant_id, *, phone, bootstrap_password):
@@ -182,6 +185,33 @@ class AuthService:
                 raise NotFound(f"enterprise not found: {enterprise}")
             return str(row[0])  # psycopg 返回 UUID 对象,转 str
 
+    def resolve_tenant_by_account(self, account: str) -> str:
+        """员工账号 → tenant_id 解析（跨租户，无需前端手工填 tenant_id/企业提示，#382）。
+
+        按 auth_identity.external_id 匹配手机号/用户名（provider=phone 优先，再 password），
+        跨全部租户扫描。命中唯一个 tenant → 返回；未命中 → 404；命中多个 → 409（需明确企业）。
+
+        跨租户查询绕过 RLS（需管理连接 / superuser / BYPASSRLS），委托调用方注入 admin_dsn。
+        """
+        import psycopg
+
+        with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
+            rows = conn.execute(
+                "SELECT tenant_id FROM auth_identity "
+                "WHERE provider IN ('phone', 'password') AND external_id = %s "
+                "ORDER BY provider = 'phone' DESC, created_at DESC",
+                (account,),
+            ).fetchall()
+        if not rows:
+            raise NotFound(f"account not bound to any tenant: {account}")
+        tenant_ids = list({str(r[0]) for r in rows})
+        if len(tenant_ids) > 1:
+            raise Conflict(
+                f"account belongs to multiple tenants, enterprise must be specified: {account}"
+            )
+        return tenant_ids[0]
+
+
 
 def record_attempt(audit, ctx, *, provider, external_id, actor, success, detail):
     """登录审计落点。audit 未配置 / 写入失败均不影响登录主路径（静默降级）。"""
@@ -207,4 +237,5 @@ def build_auth_service(dsn, admin_dsn=None, *, audit_dsn=None):
     router = PgTenantRouter(dsn)
     keys = TenantKeyStore(admin_dsn or dsn)
     audit = LoginAuditRepository(PgTenantRouter(audit_dsn or dsn)) if (audit_dsn or dsn) else None
-    return AuthService(dsn=dsn, repo=TenantAuthRepository(router), keys=keys, audit=audit)
+    return AuthService(dsn=dsn, repo=TenantAuthRepository(router), keys=keys, audit=audit,
+                       admin_dsn=admin_dsn or dsn)
