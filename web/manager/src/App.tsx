@@ -16,7 +16,6 @@ import { LlmPage } from "./features/llm";
 import { MemoryPage } from "./features/memory-items";
 import { ConnectorsPage } from "./features/connectors";
 import { OrgPage } from "./features/org";
-import { CollaborationPage } from "./features/collaboration";
 import { AuditPage } from "./features/audit";
 import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
@@ -41,7 +40,6 @@ export function App(): React.ReactNode {
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/connectors" element={<ConnectorsPage />} />
         <Route path="/org" element={<OrgPage />} />
-        <Route path="/collaboration" element={<CollaborationPage />} />
         <Route path="/audit" element={<AuditPage />} />
         <Route path="/solution-apply" element={<SolutionApplyHistoryPage />} />
         <Route path="/settings" element={<SettingsPage />} />

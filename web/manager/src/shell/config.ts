@@ -1,8 +1,9 @@
 /**
- * 企业端导航与壳配置（08 §12.2 page-shell）。
+ * Manager 企业端导航与壳配置（page-shell）。
  *
  * 导航严格对齐旧架构 app/ 的企业后台（admin section）菜单入口：
- * 员工 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 协作编排 / 费用 / 充值 / 设置。
+ * 员工 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 费用 / 充值 / 设置。
+ * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  * 角色门控映射旧架构 permission_service 的 manage_employees / manage_connectors / view_billing。
  */
 import { EnterpriseRole } from "@aiteam/shared";
@@ -26,8 +27,6 @@ export const managerShellConfig: PageShellConfig = {
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控
     { id: "llm", labelKey: "manager.nav.llm", path: "/llm", icon: "key" },
-    // manage_employees 门控
-    { id: "collaboration", labelKey: "manager.nav.collaboration", path: "/collaboration", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // view_billing 门控
     { id: "billing", labelKey: "manager.nav.billing", path: "/billing", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN] },
     // view_billing 门控
