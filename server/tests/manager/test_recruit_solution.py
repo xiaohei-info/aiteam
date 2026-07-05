@@ -922,6 +922,7 @@ def test_recruit_expert_explicit_slug_still_works():
 
 def test_recruit_expert_generated_slug_allowed_chars():
     """后端生成 slug 遵守 [a-z0-9_] 约束（与 repo unique slug 约定一致）."""
+    # Mix English + CJK chars + punctuation -> CJK/non-ASCII dropped, keeps only [a-z0-9_]
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None,
     )
@@ -948,3 +949,37 @@ def test_recruit_expert_generated_slug_allowed_chars():
     slug = result.employee_slug
     assert slug and slug == slug.lower(), "slug 全小写"
     assert all(c.isalnum() or c == "_" for c in slug), "slug 仅允许 [a-z0-9_]"
+    # ASCII-only 约束下中文不能进入 slug；空后回退到 template_id
+    assert all(ord(c) < 128 for c in slug), "slug 必须 ASCII-only"
+
+
+def test_recruit_expert_generated_slug_handles_ascii_template():
+    """纯 ASCII display_name 场景：字符映射 + 去重正常工作."""
+    template = ExpertTemplateDetail(
+        template_id="tpl-sales", version="1", display_name="Enterprise Sales-Pro v2", persona=None,
+    )
+
+    class FakeCat:
+        def pull_expert_template(self, template_id, version=None):
+            return template
+        def pull_solution_package(self, solution_id, version=None):
+            raise NotImplementedError
+        def list_expert_templates(self):
+            return [template]
+        def list_solution_packages(self):
+            return []
+
+    svc = RecruitService(
+        catalog=FakeCat(),
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+    )
+    ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+    assert result.employee_slug == "enterprise_sales_pro_v2"
+    # 重复招募 -> 唯一后缀
+    result2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+    assert result2.employee_slug.startswith("enterprise_sales_pro_v2_")
+    assert result2.employee_slug != result.employee_slug

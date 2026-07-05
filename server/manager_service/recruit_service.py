@@ -299,18 +299,28 @@ class RecruitService:
     _SLUG_SPACER_RE = None
 
     def _generate_unique_slug(self, ctx: TenantContext, template) -> str:
-        """按模板 display_name slugify 后生成租户内唯一 slug（低碰撞、保持可读）。"""
+        """按模板 display_name slugify 后生成租户内唯一 slug（[a-z0-9_]，低碰撞、保持可读）。
+
+        汉字/非 ASCII 字符会被剔除；若剔除后为空则回退到 template_id 派生，再 fallback 到短 uuid。
+        """
         import re
+        import uuid as _uuid
 
         cls = type(self)
         if cls._SLUGIFY_RE is None:
-            cls._SLUGIFY_RE = re.compile(r"[^\w\s-]", re.UNICODE)
-            cls._SLUG_SPACER_RE = re.compile(r"[\s_-]+")
+            # ASCII-only 白名单：只保留 [a-z0-9_-]+ 其它字符（含汉字、全角符号）一律剔除
+            cls._SLUGIFY_RE = re.compile(r"[^a-z0-9\s-]")
+            cls._SLUG_SPACER_RE = re.compile(r"[\s-]+")
 
         base = cls._SLUGIFY_RE.sub("", template.display_name.strip().lower())
         base = cls._SLUG_SPACER_RE.sub("_", base).strip("_")
+
         if not base:
-            base = template.template_id.replace("-", "_").lower().strip("_")
+            # display_name 全为非 ASCII 时回退到 template_id 派生
+            fallback = cls._SLUGIFY_RE.sub("", template.template_id.lower())
+            fallback = cls._SLUG_SPACER_RE.sub("_", fallback).strip("_")
+            base = fallback if fallback else f"emp_{_uuid.uuid4().hex[:8]}"
+
         base = base[:64]
 
         candidate = base
@@ -319,8 +329,7 @@ class RecruitService:
                 return candidate
             suffix = f"_{i}"
             candidate = f"{base[:64 - len(suffix)]}{suffix}"
-        import uuid
-        return f"{base[:56]}_{uuid.uuid4().hex[:7]}"
+        return f"{base[:56]}_{_uuid.uuid4().hex[:7]}"
 
     # ---- 招募订单查询 ----
     def list_recruit_orders(self, ctx: TenantContext) -> list[RecruitmentOrderOut]:
