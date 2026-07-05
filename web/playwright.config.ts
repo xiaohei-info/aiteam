@@ -20,6 +20,7 @@ const SERVICE_TOKEN = process.env.SERVICE_TOKEN ?? "test-service-token";
 const OPERATION_SYSTEM_USERNAME = process.env.OPERATION_SYSTEM_USERNAME ?? "sysadmin";
 const OPERATION_SYSTEM_PASSWORD = process.env.OPERATION_SYSTEM_PASSWORD ?? "changeme-me";
 const MANAGER_URL = process.env.MANAGER_URL ?? "http://127.0.0.1:8001";
+const OPERATOR_URL = process.env.OPERATOR_URL ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -71,7 +72,7 @@ export default defineConfig({
     },
     {
       command:
-        `cd .. && DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} .venv/bin/python server/run.py --tier manager --host 127.0.0.1 --port 8001`,
+        `cd .. && DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} OPERATOR_URL=${OPERATOR_URL} .venv/bin/python server/run.py --tier manager --host 127.0.0.1 --port 8001`,
       url: "http://127.0.0.1:8001/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,

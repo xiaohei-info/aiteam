@@ -8,6 +8,14 @@ import type { LlmProvider, LlmModel } from "./types";
 type Mode = "idle" | "create" | "edit";
 type ModelMode = "idle" | "create";
 
+interface ModelDraft {
+  uid: string;
+  name: string;
+  ctx: string;
+  inPrice: string;
+  outPrice: string;
+}
+
 export function LlmPage(): ReactNode {
   const api = useLlmApi();
   const [providers, setProviders] = useState<LlmProvider[]>([]);
@@ -23,6 +31,7 @@ export function LlmPage(): ReactNode {
   const [formKey, setFormKey] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formIsActive, setFormIsActive] = useState(true);
+  const [initialModels, setInitialModels] = useState<ModelDraft[]>([]);
 
   // Model 表单状态
   const [mMode, setMMode] = useState<ModelMode>("idle");
@@ -56,6 +65,7 @@ export function LlmPage(): ReactNode {
     setFormKey("");
     setFormBaseUrl("");
     setFormIsActive(true);
+    setInitialModels([]);
     setMode("idle");
     setEditingId(null);
   }, []);
@@ -71,9 +81,22 @@ export function LlmPage(): ReactNode {
     setFormKey(p.provider_key); // 仅展示，提交时不改动
     setFormBaseUrl(p.base_url ?? "");
     setFormIsActive(p.is_active);
+    setInitialModels([]);
     setEditingId(p.provider_id);
     setMode("edit");
     setActionError(null);
+  }, []);
+
+  const addInitialModel = useCallback(() => {
+    setInitialModels((prev) => [...prev, { uid: "", name: "", ctx: "", inPrice: "", outPrice: "" }]);
+  }, []);
+
+  const updateInitialModel = useCallback((index: number, patch: Partial<ModelDraft>) => {
+    setInitialModels((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)));
+  }, []);
+
+  const removeInitialModel = useCallback((index: number) => {
+    setInitialModels((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   const submit = useCallback(async () => {
@@ -82,7 +105,29 @@ export function LlmPage(): ReactNode {
     try {
       if (mode === "create") {
         if (!formKey) return;
-        await api.createProvider({ name: formName, provider_key: formKey, base_url: formBaseUrl || undefined });
+        const created = await api.createProvider({ name: formName, provider_key: formKey, base_url: formBaseUrl || undefined });
+        // 创建 Provider 后，使用返回的 provider_id 继续创建初始模型。
+        // 模型创建与 Provider 非原子：模型失败时刷新列表使已创建的 Provider 可见，
+        // 并明确提示“Provider 已创建”，避免用户误以为 Provider 也未创建而重复提交。
+        if (created) {
+          try {
+            for (const draft of initialModels) {
+              if (!draft.uid || !draft.name) continue;
+              await api.createModel(created.provider_id, {
+                model_uid: draft.uid,
+                model_name: draft.name,
+                context_window: draft.ctx ? Number(draft.ctx) : undefined,
+                input_price: draft.inPrice || undefined,
+                output_price: draft.outPrice || undefined,
+              });
+            }
+          } catch (modelErr) {
+            await load();
+            const msg = modelErr instanceof ApiError ? modelErr.message : "模型创建失败";
+            setActionError(`Provider 已创建，但初始模型创建失败：${msg}`);
+            return;
+          }
+        }
       } else if (mode === "edit" && editingId) {
         await api.patchProvider(editingId, { name: formName, base_url: formBaseUrl || undefined, is_active: formIsActive });
       } else {
@@ -93,7 +138,7 @@ export function LlmPage(): ReactNode {
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "保存失败，请重试");
     }
-  }, [api, mode, editingId, formName, formKey, formBaseUrl, formIsActive, resetForm, load]);
+  }, [api, mode, editingId, formName, formKey, formBaseUrl, formIsActive, initialModels, resetForm, load]);
 
   const handleDelete = useCallback(async (id: string) => {
     setActionError(null);
@@ -189,6 +234,58 @@ export function LlmPage(): ReactNode {
               </label>
             </Field>
           )}
+
+          {/* 新增 Provider 时，可在同表单内一并添加初始模型 */}
+          {mode === "create" && (
+            <div className="mt-md flex flex-col gap-sm rounded-window border border-gold/15 p-md">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-text-primary">初始模型（可选）</span>
+                <Button type="button" variant="ghost" size="sm" data-testid="add-initial-model" onClick={addInitialModel}>+ 添加模型</Button>
+              </div>
+              {initialModels.length === 0 ? (
+                <p className="m-0 text-xs text-text-muted">可在创建 Provider 时一并添加模型，创建后也可在下方继续新增。</p>
+              ) : (
+                initialModels.map((draft, idx) => (
+                  <div key={idx} className="flex flex-col gap-sm rounded-window border border-gold/10 p-sm" data-testid={`initial-model-row-${idx}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-text-muted">模型 {idx + 1}</span>
+                      <Button type="button" variant="danger" size="sm" data-testid={`remove-initial-model-${idx}`} onClick={() => removeInitialModel(idx)}>移除</Button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-sm">
+                      <Field label="模型标识">
+                        <Input
+                          value={draft.uid}
+                          onChange={(e) => updateInitialModel(idx, { uid: (e.target as HTMLInputElement).value })}
+                          data-testid={`initial-model-uid-${idx}`}
+                          placeholder="如 gpt-4、claude-3-opus"
+                        />
+                      </Field>
+                      <Field label="模型名称">
+                        <Input
+                          value={draft.name}
+                          onChange={(e) => updateInitialModel(idx, { name: (e.target as HTMLInputElement).value })}
+                          data-testid={`initial-model-name-${idx}`}
+                          placeholder="如 GPT-4"
+                        />
+                      </Field>
+                    </div>
+                    <div className="grid grid-cols-3 gap-sm">
+                      <Field label="上下文窗口">
+                        <Input value={draft.ctx} type="number" onChange={(e) => updateInitialModel(idx, { ctx: (e.target as HTMLInputElement).value })} data-testid={`initial-model-ctx-${idx}`} placeholder="128000" />
+                      </Field>
+                      <Field label="输入价格">
+                        <Input value={draft.inPrice} onChange={(e) => updateInitialModel(idx, { inPrice: (e.target as HTMLInputElement).value })} data-testid={`initial-model-in-price-${idx}`} placeholder="0.001" />
+                      </Field>
+                      <Field label="输出价格">
+                        <Input value={draft.outPrice} onChange={(e) => updateInitialModel(idx, { outPrice: (e.target as HTMLInputElement).value })} data-testid={`initial-model-out-price-${idx}`} placeholder="0.002" />
+                      </Field>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
           <div className="mt-sm flex gap-sm">
             <Button variant="metal" size="sm" data-testid="submit-form" onClick={() => void submit()}>{mode === "create" ? "创建" : "保存"}</Button>
             <Button variant="ghost" size="sm" onClick={resetForm}>取消</Button>
@@ -258,9 +355,9 @@ export function LlmPage(): ReactNode {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Model UID"><Input value={mUid} onChange={(e) => setMUid((e.target as HTMLInputElement).value)} data-testid="m-field-uid" /></Field>
-                <Field label="Model 名称"><Input value={mName} onChange={(e) => setMName((e.target as HTMLInputElement).value)} data-testid="m-field-name" /></Field>
-                <Field label="上下文窗口"><Input value={mCtx} type="number" onChange={(e) => setMCtx((e.target as HTMLInputElement).value)} data-testid="m-field-ctx" /></Field>
+                <Field label="模型标识"><Input value={mUid} onChange={(e) => setMUid((e.target as HTMLInputElement).value)} data-testid="m-field-uid" placeholder="如 gpt-4、claude-3-opus" /></Field>
+                <Field label="模型名称"><Input value={mName} onChange={(e) => setMName((e.target as HTMLInputElement).value)} data-testid="m-field-name" placeholder="如 GPT-4" /></Field>
+                <Field label="上下文窗口"><Input value={mCtx} type="number" onChange={(e) => setMCtx((e.target as HTMLInputElement).value)} data-testid="m-field-ctx" placeholder="128000" /></Field>
                 <Field label="输入价格"><Input value={mInPrice} onChange={(e) => setMInPrice((e.target as HTMLInputElement).value)} data-testid="m-field-in-price" placeholder="如 0.001" /></Field>
                 <Field label="输出价格"><Input value={mOutPrice} onChange={(e) => setMOutPrice((e.target as HTMLInputElement).value)} data-testid="m-field-out-price" placeholder="如 0.002" /></Field>
                 <div className="mt-sm flex gap-sm">
@@ -276,7 +373,7 @@ export function LlmPage(): ReactNode {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gold/15 text-left text-xs text-text-muted">
-                    <th className="pb-sm">Model UID</th>
+                    <th className="pb-sm">模型标识</th>
                     <th className="pb-sm">名称</th>
                     <th className="pb-sm">Provider</th>
                     <th className="pb-sm">上下文窗口</th>
