@@ -4,7 +4,6 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
-import { ExpertsPage } from "./features/experts";
 import { MarketplacePage } from "./features/marketplace";
 import { SolutionsPage } from "./features/solutions";
 import { GrantsPage } from "./features/grants";
@@ -31,7 +30,6 @@ export function App(): React.ReactNode {
         <Route path="/members" element={<MembersPage />} />
         <Route path="/marketplace" element={<MarketplacePage />} />
         <Route path="/solutions" element={<SolutionsPage />} />
-        <Route path="/experts" element={<ExpertsPage />} />
         <Route path="/grants" element={<GrantsPage />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/providers" element={<ProvidersPage />} />

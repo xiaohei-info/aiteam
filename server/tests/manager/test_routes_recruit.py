@@ -110,11 +110,15 @@ def test_list_solution_instances_no_db_503():
 
 # ---- 422 ----
 
-def test_recruit_expert_missing_fields_422():
-    client = _client("postgresql://fake/fake")
-    r = client.post("/api/manager/recruit/experts",
-                    json={"template_id": "tpl"}, headers=_hdr())  # 缺 employee_slug
+
+def test_recruit_expert_missing_template_id_422():
+    """必填字段 template_id 缺失 → 422（employee_slug 可选：未传由后端自动生成）。"""
+    client = _client('postgresql://fake/fake')
+    r = client.post('/api/manager/recruit/experts',
+                    json={'employee_slug': 'exp'}, headers=_hdr())
     assert r.status_code == 422
+
+
 
 
 def test_recruit_expert_extra_field_422():
