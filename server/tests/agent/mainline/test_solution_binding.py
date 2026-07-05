@@ -238,3 +238,25 @@ def test_inmemory_conversation_repo_solution_fields_roundtrip():
     # 分支6: expert_ids 重绑相同列表 -> OK
     upd = repo.update_collaboration("c1", solution_expert_employee_ids=["a", "b"])
     assert upd.solution_expert_employee_ids == ["a", "b"]
+
+
+def test_inmemory_conversation_update_orchestrated_requires_brief():
+    """update_collaboration: 切到 orchestrated 必须带 brief（line 152-153 ValueError 分支）。"""
+    from agent_service.mainline.store import InMemoryConversationRepository
+    from agent_service.mainline.models import Conversation, ConversationState
+
+    repo = InMemoryConversationRepository()
+    repo.create(Conversation(id="c1", title="t", state=ConversationState.ACTIVE, collaboration_mode="free"))
+    # 切到 orchestrated 无 brief → ValueError（line 152）
+    import pytest
+    with pytest.raises(ValueError, match="orchestration_brief is required"):
+        repo.update_collaboration("c1", collaboration_mode="orchestrated")
+    # 带 brief 分支 (line 147-152)
+    ok = repo.update_collaboration("c1", collaboration_mode="orchestrated", orchestration_brief="handle it")
+    assert ok.collaboration_mode == "orchestrated"
+    assert ok.orchestration_brief.strip() == "handle it"
+    # free 模式 → orchestration_brief 被清空 (line 154-155)
+    ok2 = repo.update_collaboration("c1", collaboration_mode="free")
+    assert ok2.collaboration_mode == "free"
+    assert ok2.orchestration_brief == ""
+
