@@ -299,3 +299,65 @@ def test_sqlite_solution_projection_column_exists(db_path):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(solution_projections)")}
     conn.close()
     assert "template_solution_id" in cols
+
+
+# ── Blocker 1 / A: build_app() shares one solution repo between grants and mainline ──
+
+def test_build_app_shares_solution_repo_and_allows_sync_then_create():
+    """Reviewer Blocker 1 / handoff Bloker A: sync 后同 app 内 create solution conversation 应 200。"""
+    import asyncio
+    from httpx import ASGITransport, AsyncClient
+    from agent_service.app import build_app
+    from agent_service.grants.client import ManagerGrantsClient
+
+    class _FC:
+        def pull_authorized_config(self, req):
+            class R:
+                experts = []
+                solutions = [
+                    {"id": "si-1", "solution_id": "tpl-1", "display_name": "电商",
+                     "solution_version": "v1", "config_version": 1,
+                     "expert_employee_ids": ["e1"],
+                     "planner_prompt": "p", "subtask_prompt": "s", "aggregate_prompt": "a"},
+                ]
+                revoked_ids = []
+            return R()
+        def pull_snapshot(self, req):
+            raise NotImplementedError
+
+    app = build_app(grants_client=_FC())
+
+    async def run():
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post("/api/agent/grants/sync", json={"tenant_id": "t1", "member_id": "m1"})
+            assert r.status_code == 200, r.status_code
+            # solutions visible after sync
+            sols = (await ac.get("/api/agent/grants/solutions")).json()["data"]
+            assert any(s["solution_instance_id"] == "si-1" for s in sols), sols
+            # create solution conversation through same app (shared repo) — must succeed
+            created = (await ac.post(
+                "/api/agent/conversations",
+                json={"solution_instance_id": "si-1", "title": "电商群聊"},
+            )).json()["data"]
+            assert created["solution_instance_id"] == "si-1", created
+            assert created["collaboration_mode"] == "orchestrated", created
+
+    asyncio.run(run())
+
+
+# ── Blocker 3 / C: LoadedExpertProjection backend/API exposes handle ──
+
+def test_contracts_expert_projection_includes_handle():
+    """Reviewer Blocker 3 / handoff Bloker C: 后端 /experts 响应契约含 handle 字段。"""
+    from shared.contracts.grants import LoadedExpertProjection
+    p = LoadedExpertProjection(
+        employee_id="e1", tenant_id="t1", version="v1", display_name="专家A",
+        handle="expert-a",
+    )
+    d = p.model_dump(mode="json")
+    assert "handle" in d, d
+    assert d["handle"] == "expert-a"
+    # default falls back to empty string (SQLite row without handle column)
+    p2 = LoadedExpertProjection(employee_id="e2", tenant_id="t1", version="v1")
+    assert p2.handle == ""

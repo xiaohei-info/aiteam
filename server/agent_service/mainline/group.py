@@ -226,7 +226,8 @@ class GroupChatService:
             allowed_handles = roster_handles
         if planner_handle and planner_handle in allowed_handles:
             planner = self._roster[planner_handle]
-            executor_handles = [h for h in allowed_handles if h != planner_handle]
+            # 排序保证自由协作 roster 迭代顺序确定性（set 迭代受 hash seed 影响会不稳定）。
+            executor_handles = sorted(h for h in allowed_handles if h != planner_handle)
         else:
             planner_handle = _SYNTHETIC_PLANNER_HANDLE
             default_prompt = (

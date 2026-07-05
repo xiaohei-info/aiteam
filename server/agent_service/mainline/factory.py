@@ -78,12 +78,14 @@ def build_mainline_service(
         tasks = SqliteTaskRepository(db)
         timeline = SqliteTimelineStore(db)
         raw_archive = SqliteRawEventArchive(db)
-        solutions = SqliteSolutionProjectionRepository(db)
+        if solutions is None:
+            solutions = SqliteSolutionProjectionRepository(db)
         # 启动时清理过期归档（保留期默认 7 天）
         raw_archive.cleanup_expired()
     else:
         conversations = InMemoryConversationRepository()
-        solutions = InMemorySolutionProjectionRepository()
+        if solutions is None:
+            solutions = InMemorySolutionProjectionRepository()
         messages = InMemoryMessageRepository()
         runs = InMemoryRunRepository()
         tasks = InMemoryTaskRepository()
