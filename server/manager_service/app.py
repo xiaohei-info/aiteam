@@ -34,7 +34,7 @@ from .routes_connector_ops import build_connector_ops_router
 from .routes_org import build_org_router
 from .routes_settings import build_settings_router
 from .routes_in_app_notification import build_in_app_notification_router
-from .routes_collab_audit import build_audit_router, build_collab_router
+from .routes_collab_audit import build_audit_router
 from .routes_mfa import (
     oauth_mgmt_router,
     oauth_router,
@@ -157,8 +157,7 @@ app.include_router(build_connector_ops_router(_verifier))
 app.include_router(build_org_router(_verifier))
 # ---- 功能补全：B08 企业设置/子管理员邀请 ----
 app.include_router(build_settings_router(_verifier))
-# ---- 功能补全：协作模板 + 审计事件 ----
-app.include_router(build_collab_router(_verifier))
+# ---- 功能补全：审计事件 ----
 app.include_router(build_audit_router(_verifier))
 app.include_router(passkey_router)
 app.include_router(passkey_mgmt_router)

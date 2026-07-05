@@ -181,21 +181,6 @@ def test_org_tree_ok():
         r = c.get("/api/manager/org/tree", headers=_hdr())
     assert r.status_code == 200
 
-# ---- collab routes ----
-
-def test_collab_template_get_ok():
-    from manager_service.routes_collab_audit import build_collab_router
-    svc = MagicMock()
-    svc.get_template.return_value = {"template_id": "t-1", "name": "默认协作模板", "routing_prompt": "",
-                                      "handoff_prompt": "", "max_replies_per_message": 3,
-                                      "planner_prompt": "规划提示词", "subtask_prompt": "子任务",
-                                      "aggregate_prompt": "汇总提示词", "is_default": True,
-                                      "updated_at": datetime.utcnow()}
-    with patch("manager_service.routes_collab_audit._service", return_value=svc):
-        c = _build_app("postgresql://x", build_collab_router)
-        r = c.get("/api/manager/collaboration-template", headers=_hdr())
-    assert r.status_code == 200
-
 # ---- audit routes ----
 
 def test_audit_events_list_ok():

@@ -20,7 +20,6 @@ export const managerMessages: LocaleCatalog = {
     "manager.nav.memory": "记忆管理",
     "manager.nav.connectors": "连接器",
     "manager.nav.org": "组织架构",
-    "manager.nav.collaboration": "协作模板",
     "manager.nav.audit": "审计事件",
     "manager.nav.solution_apply": "方案应用记录",
     "manager.nav.recharge": "充值",
