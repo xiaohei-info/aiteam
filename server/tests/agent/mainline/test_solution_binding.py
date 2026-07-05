@@ -260,3 +260,55 @@ def test_inmemory_conversation_update_orchestrated_requires_brief():
     assert ok2.collaboration_mode == "free"
     assert ok2.orchestration_brief == ""
 
+
+
+def test_load_solution_snapshot_projection_missing_raises():
+    """load_solution_snapshot: instance 不在本地投影 → Conflict (line 167)。"""
+    from shared.errors import Conflict
+    mainline = build_mainline_service()
+    with pytest.raises(Conflict, match="not available in local projection"):
+        mainline.load_solution_snapshot("si-missing")
+
+
+def test_set_conversation_state_invalid_transition_raises():
+    """set_conversation_state: 非法状态转换 → Conflict (line 262-263)。"""
+    from shared.errors import Conflict
+    from shared.contracts.enums import ConversationState
+    mainline = build_mainline_service()
+    conv = mainline.create_conversation(title="c")
+    # active → archived 转一次合法
+    mainline.set_conversation_state(conv.id, ConversationState.ARCHIVED)
+    # archived → active 不允许
+    with pytest.raises(Conflict, match="Cannot transition"):
+        mainline.set_conversation_state(conv.id, ConversationState.ACTIVE)
+
+
+def test_set_conversation_collaboration_fixed_cannot_switch_to_free():
+    """set_conversation_collaboration: 固定编排会话不可改 free（B8，line 269-274）。"""
+    from shared.errors import Conflict
+    mainline = build_mainline_service()
+    # 创建自由会话，通过底层 update_collaboration 写入 solution_instance_id 以模拟已固定编排
+    from agent_service.mainline.store import ConversationState
+    conv = mainline.create_conversation(title="c")
+    mainline._conversations.update_collaboration(conv.id, solution_instance_id="sol-1")
+    with pytest.raises(Conflict, match="cannot be switched to free"):
+        mainline.set_conversation_collaboration(conv.id, collaboration_mode="free")
+
+
+def test_unread_count_helpers():
+    """unread_count_for_employee + _conversation_for_employee 主链覆盖。"""
+    mainline = build_mainline_service()
+    # 没有会话
+    assert mainline.unread_count_for_employee("any") == 0
+    # 有私聊 + 未读
+    mainline.create_conversation(title="p", entry_employee_id="emp-1")
+    assert mainline.unread_count_for_employee("emp-1") == 0  # 无消息 → 0
+
+
+def test_private_conversation_excludes_from_group_filter():
+    """create_conversation(entry_employee_id=...) → conversation_type private；覆盖 171 区域。"""
+    mainline = build_mainline_service()
+    priv = mainline.create_conversation(title="dm", entry_employee_id="emp-1")
+    assert priv.conversation_type == "private"
+    grp = mainline.create_conversation(title="team")
+    assert grp.conversation_type == "group"
