@@ -62,6 +62,8 @@ def _solution(**kw):
         display_name="Growth",
         description="growth solution",
         expert_template_ids=["tpl-cmo"],
+        planner_template_id="tpl-cmo",
+        planner_prompt="Plan the campaign",
     )
     base.update(kw)
     return RegisterSolutionTemplateRequest(**base)
@@ -72,6 +74,8 @@ def _multi_solution(**kw):
         solution_id="sol-multi",
         display_name="Multi",
         description="multi solution",
+        planner_template_id="tpl-ceo",
+        planner_prompt="Plan the multi campaign",
         expert_bindings=[
             ExpertBinding(template_id="tpl-cmo", sequence_no=2, enabled=False),
             ExpertBinding(template_id="tpl-ceo", sequence_no=1, enabled=True),
@@ -315,10 +319,11 @@ def test_register_solution_with_orchestration_fields(service):
 
 def test_register_solution_default_orchestration_fields(service):
     """注册方案时不带编排字段，应落默认值（空字符串/空 list）；
-    必填字段（description / expert_template_ids）由 schema 校验并落库。"""
+    必填字段（description / expert_template_ids / planner_template_id / planner_prompt）
+    由 schema + 服务端校验并落库。"""
     service.register_solution_template(_solution())
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
-    assert entry.payload["planner_prompt"] == ""
+    assert entry.payload["planner_prompt"] == "Plan the campaign"
     assert entry.payload["subtask_prompt"] == ""
     assert entry.payload["aggregate_prompt"] == ""
     assert entry.payload["description"] == "growth solution"
@@ -451,6 +456,8 @@ def test_register_solution_expert_bindings_overrides_flat_ids(service):
         display_name="Over",
         description="over",
         expert_template_ids=["tpl-ignored"],
+        planner_template_id="tpl-real",
+        planner_prompt="Plan override",
         expert_bindings=[ExpertBinding(template_id="tpl-real", sequence_no=1, enabled=True)],
     )
     service.register_solution_template(req)
@@ -462,7 +469,7 @@ def test_register_solution_expert_bindings_overrides_flat_ids(service):
 
 def test_register_solution_flat_ids_fallback_derives_bindings(service):
     """仅提供 expert_template_ids 时，应派生默认 bindings（位置顺序、全部启用）。"""
-    service.register_solution_template(_solution(expert_template_ids=["tpl-a", "tpl-b"]))
+    service.register_solution_template(_solution(expert_template_ids=["tpl-a", "tpl-b"], planner_template_id="tpl-a"))
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload["expert_template_ids"] == ["tpl-a", "tpl-b"]
     assert entry.payload["expert_bindings"] == [
@@ -494,7 +501,7 @@ def _auto_expert(**kw):
 
 
 def _auto_solution(**kw):
-    base = dict(display_name="Auto-Solution", description="d", expert_template_ids=["tpl-cmo"])
+    base = dict(display_name="Auto-Solution", description="d", expert_template_ids=["tpl-cmo"], planner_template_id="tpl-cmo", planner_prompt="Auto plan")
     base.update(kw)
     return RegisterSolutionTemplateRequest(**base)
 def test_register_expert_without_id_generates_id(service, manager):
@@ -627,3 +634,205 @@ def test_slugify_id_empty_and_special_inputs():
     assert _slugify_id("测试中文", random_suffix="x1x2").startswith("item-")  # 非 ASCII 回落 item
     assert _slugify_id("Hello World!", random_suffix="abcd").startswith("hello-world-")
     assert _slugify_id("__$$%%__", random_suffix="abcd").startswith("item-")
+
+
+# ---- AITEAM-677：方案注册必须指定 planner 角色 + 编排规则提示词 ----
+
+def test_register_solution_persists_planner_template_id(service):
+    """注册方案时 planner_template_id 应持久化到 payload。"""
+    service.register_solution_template(
+        _solution(planner_template_id="tpl-cmo")
+    )
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_template_id"] == "tpl-cmo"
+
+
+def test_register_solution_missing_planner_rejected(service):
+    """不指定 planner_template_id 时应拒绝注册（必填）。"""
+    from shared.errors import ValidationProblem
+
+    req = RegisterSolutionTemplateRequest(
+        solution_id="sol-noplanner",
+        display_name="NoPlanner",
+        description="d",
+        expert_template_ids=["tpl-cmo"],
+    )
+    with pytest.raises(ValidationProblem):
+        service.register_solution_template(req)
+
+
+def test_register_solution_planner_not_in_experts_rejected(service):
+    """planner_template_id 不在绑定的专家中时应拒绝。"""
+    from shared.errors import ValidationProblem
+
+    req = RegisterSolutionTemplateRequest(
+        solution_id="sol-badplanner",
+        display_name="BadPlanner",
+        description="d",
+        expert_template_ids=["tpl-cmo"],
+        planner_template_id="tpl-ghost",
+    )
+    with pytest.raises(ValidationProblem):
+        service.register_solution_template(req)
+
+
+def test_register_solution_multi_expert_planner(service):
+    """多专家方案中指定其中一个为 planner，应持久化正确值。"""
+    service.register_solution_template(_multi_solution())
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-multi")
+    assert entry.payload["planner_template_id"] == "tpl-ceo"
+
+
+def test_detail_view_includes_planner_template_id(service):
+    """CatalogDetailView 应返回 planner_template_id。"""
+    service.register_solution_template(_solution())
+    detail = service.get_entry_detail(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert detail.planner_template_id == "tpl-cmo"
+
+
+def test_pull_solution_package_includes_planner_template_id(service):
+    """Manager 拉取方案包时应包含 planner_template_id。"""
+    service.register_expert_template(_expert())
+    service.register_solution_template(_solution())
+    service.publish_template(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", PublishTemplateRequest())
+    service.publish_template(CatalogType.SOLUTION_TEMPLATE, "sol-growth", PublishTemplateRequest())
+    pkg = service.pull_solution_package(solution_id="sol-growth")
+    assert pkg.planner_template_id == "tpl-cmo"
+
+
+def test_update_solution_planner_template_id(service):
+    """PATCH 方案模板可更新 planner_template_id。"""
+    service.register_solution_template(_solution())
+    service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {"planner_template_id": "tpl-cmo"},
+    )
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_template_id"] == "tpl-cmo"
+
+
+# ---- AITEAM-677 评审 blocker：服务端强制 planner_prompt 必填 + PATCH 校验 ----
+
+def test_register_solution_missing_planner_prompt_rejected(service):
+    """服务端必须强制 planner_prompt 非空（评审 blocker：前端拦截不够）。"""
+    from shared.errors import ValidationProblem
+
+    req = RegisterSolutionTemplateRequest(
+        solution_id="sol-blank-prompt",
+        display_name="BlankPrompt",
+        description="d",
+        expert_template_ids=["tpl-cmo"],
+        planner_template_id="tpl-cmo",
+        planner_prompt="",
+    )
+    with pytest.raises(ValidationProblem):
+        service.register_solution_template(req)
+
+
+def test_register_solution_whitespace_planner_prompt_rejected(service):
+    """纯空白 planner_prompt 也应拒绝（strip 校验）。"""
+    from shared.errors import ValidationProblem
+
+    req = RegisterSolutionTemplateRequest(
+        solution_id="sol-ws-prompt",
+        display_name="WsPrompt",
+        description="d",
+        expert_template_ids=["tpl-cmo"],
+        planner_template_id="tpl-cmo",
+        planner_prompt="   ",
+    )
+    with pytest.raises(ValidationProblem):
+        service.register_solution_template(req)
+
+
+def test_update_solution_empty_planner_rejected(service):
+    """PATCH 把 planner_template_id 清空应拒绝。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_template_id": ""},
+        )
+
+
+def test_update_solution_invalid_planner_rejected(service):
+    """PATCH 把 planner_template_id 改成不在专家列表中的值应拒绝。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_template_id": "tpl-ghost"},
+        )
+
+
+def test_update_solution_valid_planner_accepted(service):
+    """PATCH 把 planner_template_id 改成合法绑定专家应成功。"""
+    from operation_service.catalog_schemas import ExpertBinding
+
+    service.register_solution_template(
+        _solution(
+            expert_template_ids=["tpl-cmo", "tpl-cto"],
+            planner_template_id="tpl-cmo",
+        )
+    )
+    updated = service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {"planner_template_id": "tpl-cto"},
+    )
+    assert updated is not None
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_template_id"] == "tpl-cto"
+
+
+# ---- AITEAM-677 评审二轮：PATCH 清空 planner_prompt / 清空专家列表 ----
+
+def test_update_solution_empty_planner_prompt_rejected(service):
+    """PATCH 清空 planner_prompt 应拒绝（评审二轮 blocker）。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_prompt": ""},
+        )
+
+
+def test_update_solution_whitespace_planner_prompt_rejected(service):
+    """PATCH 把 planner_prompt 改成纯空白应拒绝。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_prompt": "   "},
+        )
+
+
+def test_update_solution_empty_experts_rejected(service):
+    """PATCH 把专家列表清空应拒绝（评审二轮 blocker）。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"expert_template_ids": [], "expert_bindings": []},
+        )
+
+
+def test_update_solution_valid_planner_prompt_accepted(service):
+    """PATCH 把 planner_prompt 改成合法非空值应成功。"""
+    service.register_solution_template(_solution())
+    updated = service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {"planner_prompt": "New orchestration plan"},
+    )
+    assert updated is not None
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_prompt"] == "New orchestration plan"
