@@ -59,7 +59,34 @@ export async function listConversations(
   const result = await client.listGet<Conversation>("/api/agent/conversations", {
     query: cursor ? { cursor } : undefined,
   });
-  return { items: result.items, nextCursor: result.page.next_cursor, hasMore: result.page.has_more };
+ return { items: result.items, nextCursor: result.page.next_cursor, hasMore: result.page.has_more };
+}
+
+/** 建会话入参（对齐 server routes.py:CreateConversationRequest）。 */
+export interface CreateConversationInput {
+  /** 会话标题（可选；未给则自动生成）。 */
+  title?: string | null;
+  /** 协作模式：free（私聊默认）| orchestrated（规则编排，群聊可选）。 */
+  collaboration_mode?: "free" | "orchestrated" | null;
+  /** 私聊归属员工 employee_id（对齐 server models.py:Conversation.entry_employee_id）。 */
+  entry_employee_id?: string | null;
+}
+
+/**
+ * 建会话（POST /api/agent/conversations）。
+ * 私聊页传 entry_employee_id 把会话绑定到招募到的专家；群聊页可不传。
+ */
+export async function createConversation(
+  client: AgentApiClient,
+  input: CreateConversationInput,
+): Promise<Conversation | null> {
+  return client.post<Conversation>("/api/agent/conversations", {
+    body: {
+      ...(input.title !== undefined && input.title !== null ? { title: input.title } : {}),
+      ...(input.collaboration_mode ? { collaboration_mode: input.collaboration_mode } : {}),
+      ...(input.entry_employee_id ? { entry_employee_id: input.entry_employee_id } : {}),
+    },
+  });
 }
 
 /**
