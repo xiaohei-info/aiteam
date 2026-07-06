@@ -26,6 +26,7 @@ from manager_service.operator_catalog import (
     FakeOperatorCatalogClient,
     OperatorCatalogPort,
 )
+from manager_service.provider_credential_repository import ProviderCredentialRow
 from manager_service.recruit_order_repository import RecruitmentOrderRow, RecruitOrderRepository
 from manager_service.recruit_repository import (
     RecruitEventRow,
@@ -92,6 +93,48 @@ class _FakeGrantRepo:
         )
         self._bucket(ctx)[key] = row
         return row
+
+
+class _FakeProviderRepo:
+    """内存伪 ProviderCredentialRepository（仅实现 resolver 需要的查询能力，避免重复写逻辑）。"""
+
+    def __init__(self):
+        self._by_ref: dict[str, ProviderCredentialRow] = {}
+        self._all: list[ProviderCredentialRow] = []
+
+    def seed(
+        self,
+        provider_ref: str,
+        supported_models: list[dict] | None = None,
+    ) -> ProviderCredentialRow:
+        row = ProviderCredentialRow(
+            credential_id=str(uuid.uuid4()),
+            provider_ref=provider_ref,
+            display_name=provider_ref,
+            mode="relay",
+            endpoint=None,
+            encrypted_secret=b"",
+            visibility="tenant",
+            allowed_member_ids=[],
+            supported_models=list(supported_models or []),
+            model_catalog_source="manual",
+            version=1,
+        )
+        self._by_ref[provider_ref] = row
+        self._all.append(row)
+        return row
+
+    def get_by_ref(self, ctx, *, provider_ref: str) -> ProviderCredentialRow | None:
+        return self._by_ref.get(provider_ref)
+
+    def list_providers_supporting_model(self, ctx, *, model: str) -> list[ProviderCredentialRow]:
+        out: list[ProviderCredentialRow] = []
+        for row in self._all:
+            for cap in row.supported_models:
+                if cap.get("model") == model and cap.get("enabled", True):
+                    out.append(row)
+                    break
+        return out
 
 
 class _FakeRecruitRepo:
@@ -240,7 +283,13 @@ def _build_service(catalog: OperatorCatalogPort):
     grant = _FakeGrantRepo()
     recruit = _FakeRecruitRepo()
     orders = _FakeOrderRepo()
-    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+    providers = _FakeProviderRepo()
+    # 默认 seed 一个与 _expert_template 中 explicit provider_ref="relay-default" 匹配的 provider，
+    # 保证既有测试走 explicit 路径通过（AITEAM-682 不改变 explicit 语义）。
+    providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = RecruitService(
+        catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, providers=providers,
+    )
     return svc, emp, grant, recruit, orders
 
 
@@ -746,6 +795,7 @@ def test_recruit_expert_generates_slug_when_missing():
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
         orders=_FakeOrderRepo(),
+        providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-a", enterprise_id="ent-a", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
@@ -775,6 +825,7 @@ def test_recruit_expert_generated_slugs_are_unique():
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
         orders=_FakeOrderRepo(),
+        providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
     r1 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
@@ -804,6 +855,7 @@ def test_recruit_expert_explicit_slug_still_works():
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
         orders=_FakeOrderRepo(),
+        providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-exp", enterprise_id="ent-exp", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto", employee_slug="my-custom-slug"))
@@ -833,6 +885,7 @@ def test_recruit_expert_generated_slug_allowed_chars():
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
         orders=_FakeOrderRepo(),
+        providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-chars", enterprise_id="ent-chars", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
@@ -865,6 +918,7 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
         orders=_FakeOrderRepo(),
+        providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
@@ -873,3 +927,231 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
     result2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
     assert result2.employee_slug.startswith("enterprise_sales_pro_v2_")
     assert result2.employee_slug != result.employee_slug
+
+
+# ---- AITEAM-682：recruit/apply 时 default_model 自动匹配 provider_ref（resolver 验收）----
+
+
+def _service_with_providers(
+    catalog: OperatorCatalogPort, providers: "_FakeProviderRepo"
+):
+    svc = RecruitService(
+        catalog=catalog,
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=_FakeOrderRepo(),
+        providers=providers,
+    )
+    return svc
+
+
+# ---- explicit 路径 ----
+
+
+def test_resolve_explicit_provider_ref_exists_sets_explicit_and_writes_ref():
+    """recommended.provider_ref 有值且本 tenant 存在 → explicit，employee 写入该 ref。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())  # recommended_config.provider_ref="relay-default"
+    providers = _FakeProviderRepo()
+    providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = _service_with_providers(catalog, providers)
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
+    )
+    assert result.provider_match_status == "explicit"
+    assert result.provider_match_candidates == ["relay-default"]
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref == "relay-default"
+    assert row.model == "claude-opus-4-8"
+
+
+def test_resolve_explicit_provider_ref_missing_raises_conflict_409():
+    """recommended.provider_ref 有值但本 tenant 不存在 → V1 抛 409，避免落错误引用。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())  # provider_ref="relay-default" 未 seed
+    svc = _service_with_providers(catalog, _FakeProviderRepo())
+
+    with pytest.raises(Conflict):
+        svc.recruit_expert(
+            _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
+        )
+
+
+# ---- model 自动匹配路径（无 provider_ref）----
+
+
+def _template_with_model_only(
+    template_id="tpl-m", version="v1", display_name="M专家", model="claude-opus-4-8"
+) -> ExpertTemplateDetail:
+    return ExpertTemplateDetail(
+        template_id=template_id, version=version, display_name=display_name,
+        persona="p", recommended_config={"model": model},
+    )
+
+
+def test_resolve_model_single_match_sets_matched_and_writes_ref():
+    """有 model、恰好 1 个 provider 支持且 enabled → matched，employee 自动写入 provider_ref + model。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
+    providers = _FakeProviderRepo()
+    providers.seed("only-one", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = _service_with_providers(catalog, providers)
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-m"),
+    )
+    assert result.provider_match_status == "matched"
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref == "only-one"
+    assert row.model == "claude-opus-4-8"
+    assert result.provider_match_candidates == ["only-one"]
+
+
+def test_resolve_model_no_match_creates_with_provider_ref_none_status_none():
+    """有 model、本 tenant 无 provider 支持 → 仍创建 employee，provider_ref=None，status=none(待配置)。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
+    svc = _service_with_providers(catalog, _FakeProviderRepo())  # 未 seed 任何 provider
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-none"),
+    )
+    assert result.provider_match_status == "none"
+    assert result.provider_match_candidates == []
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref is None
+    assert row.model == "claude-opus-4-8"
+
+
+def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
+    """有 model、多个 provider 支持 → ambiguous，不随机选择，provider_ref=None，保留 candidates。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
+    providers = _FakeProviderRepo()
+    providers.seed("p-a", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    providers.seed("p-b", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = _service_with_providers(catalog, providers)
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-amb"),
+    )
+    assert result.provider_match_status == "ambiguous"
+    assert set(result.provider_match_candidates) == {"p-a", "p-b"}
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref is None  # 不静默随机
+    assert row.model == "claude-opus-4-8"
+
+
+def test_resolve_ignores_disabled_provider_model():
+    """provider 声明了该 model 但 enabled=False → 不参与匹配。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
+    providers = _FakeProviderRepo()
+    providers.seed("off", supported_models=[{"model": "claude-opus-4-8", "enabled": False}])
+    svc = _service_with_providers(catalog, providers)
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-off"),
+    )
+    assert result.provider_match_status == "none"
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref is None
+
+
+def test_resolve_no_provider_ref_and_no_model_status_none():
+    """无 provider_ref 且无 model → status=none，不查 provider。"""
+    catalog = FakeOperatorCatalogClient()
+    tpl = ExpertTemplateDetail(
+        template_id="tpl-x", version="v1", display_name="X", persona="p",
+        recommended_config={},
+    )
+    catalog.seed_expert(tpl)
+    svc = _service_with_providers(catalog, _FakeProviderRepo())
+
+    result = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-x", employee_slug="exp-x"),
+    )
+    assert result.provider_match_status == "none"
+    row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
+    assert row.provider_ref is None
+    assert row.model is None
+
+
+# ---- 审计：recruit_event.detail 记录脱敏匹配决策 ----
+
+
+def test_resolve_audit_detail_records_match_decision_no_secret():
+    """recruit_event.detail 记录 default_model / provider_match_status / matched_provider_ref / candidates，不记 secret。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
+    providers = _FakeProviderRepo()
+    providers.seed("only-one", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = _service_with_providers(catalog, providers)
+
+    svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-audit"),
+    )
+    events = svc._recruit.list_recruit_events(_ctx("t-a"))
+    assert len(events) == 1
+    detail = events[0].detail
+    assert detail["default_model"] == "claude-opus-4-8"
+    assert detail["provider_match_status"] == "matched"
+    assert detail["matched_provider_ref"] == "only-one"
+    assert detail["candidate_provider_refs"] == ["only-one"]
+    # 红线：不得记录 secret / 密文
+    assert "secret" not in detail
+    assert "encrypted_secret" not in detail
+
+
+# ---- 两条路径共用同一个 resolver（apply_solution 逐专家匹配）----
+
+
+def _mixed_solution_package() -> SolutionPackage:
+    """一个方案含两个专家：一个单匹配、一个无匹配，验证逐专家独立匹配。"""
+    return SolutionPackage(
+        solution_id="sol-mix", version="v1", display_name="混合方案",
+        experts=[
+            ExpertTemplateDetail(
+                template_id="tpl-hit", version="v1", display_name="有匹配",
+                persona="p", recommended_config={"model": "claude-opus-4-8"},
+            ),
+            ExpertTemplateDetail(
+                template_id="tpl-miss", version="v1", display_name="无匹配",
+                persona="p", recommended_config={"model": "gpt-4o"},
+            ),
+        ],
+    )
+
+
+def test_apply_solution_each_expert_owns_provider_match():
+    """apply_solution 展开多个专家时，每个专家独立走同一 resolver；单匹配写 ref，无匹配保留 None。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_mixed_solution_package())
+    providers = _FakeProviderRepo()
+    providers.seed("only-claude", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = _service_with_providers(catalog, providers)
+
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-mix"))
+    assert len(result.experts) == 2
+    by_template = {e.source_template_id: e for e in result.experts}
+
+    hit = by_template["tpl-hit"]
+    assert hit.provider_match_status == "matched"
+    hit_row = svc._employees.get(_ctx("t-a"), employee_id=hit.employee_id)
+    assert hit_row.provider_ref == "only-claude"
+    assert hit_row.model == "claude-opus-4-8"
+
+    miss = by_template["tpl-miss"]
+    assert miss.provider_match_status == "none"
+    miss_row = svc._employees.get(_ctx("t-a"), employee_id=miss.employee_id)
+    assert miss_row.provider_ref is None
+    assert miss_row.model == "gpt-4o"
+
+    # 方案级审计也含逐专家 match_audits
+    events = svc._recruit.list_recruit_events(_ctx("t-a"))
+    assert len(events) == 1
+    assert events[0].action == "apply_solution"
+    assert len(events[0].detail["match_audits"]) == 2
+    assert "secret" not in events[0].detail
