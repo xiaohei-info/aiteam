@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
@@ -24,7 +26,8 @@ from shared.errors import Conflict, Forbidden, NotFound
 
 from .employee_config_repository import EmployeeConfigRepository
 from .operator_catalog import OperatorCatalogPort
-from .recruit_order_repository import RecruitOrderRepository
+from .provider_credential_repository import ProviderCredentialRepository
+from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
 from .recruit_repository import RecruitRepository, SolutionInstanceRow
 from .repository_member import GrantRepository
 from .schemas import (
@@ -44,6 +47,97 @@ _RECRUIT_WRITE_ROLES = [
 ]
 
 
+@dataclass(frozen=True)
+class ProviderMatchResult:
+    """provider 自动匹配结果（AITEAM-682）。resolver 输出；service 据此写 employee + 审计。
+
+    status 取值：
+    - explicit  ：recommended.provider_ref 有值且在本 tenant 校验通过；provider_ref 即该显式引用。
+    - matched   ：recommended 只有 model → 本 tenant 恰好 1 个 provider 支持该 model 且 enabled。
+    - ambiguous：recommended 只有 model → 本 tenant 多个 provider 支持该 model 且 enabled；需前端让用户选择。
+    - none      ：无 provider_ref 且无 model，或有 model 但本 tenant 无 provider 支持；provider_ref=None。
+    """
+
+    provider_ref: str | None
+    status: str
+    candidates: list[str]
+    reason: str
+
+
+class ProviderResolver:
+    """recruit/apply 共用的小型 resolver：根据本 tenant provider 能力目录解析 recommended_config → provider_ref。
+
+    输入：TenantContext + recommended_config(dict)。
+    语义（AITEAM-682）：
+      - recommended.provider_ref 有值 → 校验存在；存在则 explicit；不存在则 V1 抛 Conflict(409)，避免落错误引用。
+      - 无 provider_ref 且无 model → none。
+      - 有 model → 查本租户 provider supported_models[].model==model && enabled；
+          1 个=matched；0 个=none(仍创建 employee，前端提示待配置)；多个=ambiguous(保留 candidates)。
+    两条路径（recruit_expert / apply_solution）必须走同一个 resolver，避免匹配口径不一致。
+    """
+
+    def __init__(self, providers: ProviderCredentialRepository):
+        self._providers = providers
+
+    def resolve(self, ctx: TenantContext, recommended: dict) -> ProviderMatchResult:
+        explicit_ref = recommended.get("provider_ref") or None
+        if explicit_ref:
+            row = self._providers.get_by_ref(ctx, provider_ref=explicit_ref)
+            if row is not None:
+                return ProviderMatchResult(
+                    provider_ref=explicit_ref,
+                    status="explicit",
+                    candidates=[explicit_ref],
+                    reason=f"explicit provider_ref '{explicit_ref}' exists in tenant",
+                )
+            # V1：避免落错误引用 → 409（不静默写入悬空 provider_ref）。
+            raise Conflict(
+                f"recommended provider_ref '{explicit_ref}' does not exist in this tenant"
+            )
+
+        model = recommended.get("model") or None
+        if not model:
+            return ProviderMatchResult(
+                provider_ref=None,
+                status="none",
+                candidates=[],
+                reason="no provider_ref and no model in recommended config",
+            )
+
+        matches = self._providers.list_providers_supporting_model(ctx, model=model)
+        refs = [r.provider_ref for r in matches]
+        if len(refs) == 1:
+            return ProviderMatchResult(
+                provider_ref=refs[0],
+                status="matched",
+                candidates=refs,
+                reason=f"single provider supports model '{model}'",
+            )
+        if not refs:
+            return ProviderMatchResult(
+                provider_ref=None,
+                status="none",
+                candidates=[],
+                reason=f"no enabled provider supports model '{model}' in tenant",
+            )
+        return ProviderMatchResult(
+            provider_ref=None,
+            status="ambiguous",
+            candidates=refs,
+            reason=f"multiple providers ({len(refs)}) support model '{model}'",
+        )
+
+
+def _match_detail(recommended: dict, match: ProviderMatchResult) -> dict:
+    """recruit_event.detail 中的脱敏匹配审计字段（AITEAM-682；不记 secret）。"""
+    return {
+        "default_model": recommended.get("model") or None,
+        "provider_match_status": match.status,
+        "matched_provider_ref": match.provider_ref,
+        "candidate_provider_refs": list(match.candidates),
+    }
+
+
 class RecruitService:
     """招募专家 + 应用方案编排。tenant_id 全程取自 TenantContext，不手写过滤（D22）。"""
 
@@ -55,12 +149,15 @@ class RecruitService:
         grants: GrantRepository,
         recruit: RecruitRepository,
         orders: RecruitOrderRepository,
+        providers: ProviderCredentialRepository,
     ):
         self._catalog = catalog
         self._employees = employees
         self._grants = grants
         self._recruit = recruit
         self._orders = orders
+        self._providers = providers
+        self._resolver = ProviderResolver(providers)
 
     # ---- F06 招募专家 ----
     def recruit_expert(
@@ -87,6 +184,7 @@ class RecruitService:
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
         recommended = template.recommended_config or {}
+        match = self._resolver.resolve(ctx, recommended)
         try:
             row = self._employees.create(
                 ctx,
@@ -94,7 +192,7 @@ class RecruitService:
                 display_name=req.display_name_override or template.display_name,
                 persona=req.persona_override or template.persona,
                 model=recommended.get("model"),
-                provider_ref=recommended.get("provider_ref"),
+                provider_ref=match.provider_ref,
                 thinking_level=recommended.get("thinking_level"),
                 runtime_binding=recommended.get("runtime_binding"),
                 timeout_seconds=recommended.get("timeout_seconds"),
@@ -116,6 +214,7 @@ class RecruitService:
                 grants_applied = True
 
             # 4) 审计（F06/F07 审计口径，04 §6.1.3；不记会话内容）。
+            # AITEAM-682：在 detail 中追加脱敏匹配审计（default_model / provider_match_status / 匹配结果；不记 secret）。
             self._recruit.append_recruit_event(
             ctx,
             action="recruit_expert",
@@ -123,7 +222,7 @@ class RecruitService:
             source_template_id=template.template_id,
             source_template_version=template.version,
             target_employee_ids=[row.employee_id],
-            detail={"employee_slug": row.employee_slug},
+            detail={"employee_slug": row.employee_slug, **_match_detail(recommended, match)},
         )
         except Exception as exc:
             failed = order.mark_failed(
@@ -145,6 +244,8 @@ class RecruitService:
             source_template_version=template.version,
             grants_applied=grants_applied,
             order=_order_out(completed),
+            provider_match_status=match.status,
+            provider_match_candidates=list(match.candidates),
         )
 
     # ---- F07 应用方案 ----
@@ -167,6 +268,7 @@ class RecruitService:
 
         # 逐个专家的招募追踪订单（apply_solution 粒度）。
         orders: list[RecruitmentOrderOut] = []
+        _match_audits: list[dict] = []
 
         # 3) 逐个专家展开 employee 实例（slug 用 solution 派生，保证可复入幂等可读）。
         expert_results: list[RecruitExpertResult] = []
@@ -188,6 +290,7 @@ class RecruitService:
                 solution_id=package.solution_id,
             )
             recommended = (template.recommended_config or {})
+            match = self._resolver.resolve(ctx, recommended)
             try:
                 row = self._employees.create(
                     ctx,
@@ -195,7 +298,7 @@ class RecruitService:
                     display_name=template.display_name,
                     persona=template.persona,
                     model=recommended.get("model"),
-                    provider_ref=recommended.get("provider_ref"),
+                    provider_ref=match.provider_ref,
                     thinking_level=recommended.get("thinking_level"),
                     runtime_binding=recommended.get("runtime_binding"),
                     timeout_seconds=recommended.get("timeout_seconds"),
@@ -217,6 +320,8 @@ class RecruitService:
             self._orders.update(ctx, done)
             fin = _order_out(done)
             orders.append(fin)
+            # AITEAM-682：逐专家记录匹配审计，供方案级 audit 还原。
+            _match_audits.append(_match_detail(recommended, match))
 
             expert_results.append(
                 RecruitExpertResult(
@@ -228,6 +333,8 @@ class RecruitService:
                     source_template_version=template.version,
                     grants_applied=False,
                     order=fin,
+                    provider_match_status=match.status,
+                    provider_match_candidates=list(match.candidates),
                 )
             )
 
@@ -272,7 +379,7 @@ class RecruitService:
             source_solution_version=package.version,
             target_employee_ids=expert_employee_ids,
             target_solution_instance_id=instance.id,
-            detail={"expert_count": len(expert_employee_ids)},
+            detail={"expert_count": len(expert_employee_ids), "match_audits": _match_audits},
         )
 
         # 7) 方案应用记录（AITEAM-242，issue #286）：applied_by / applied_at /
@@ -494,6 +601,7 @@ def build_recruit_service(
         grants=GrantRepository(router),
         recruit=RecruitRepository(router),
         orders=RecruitOrderRepository(router),
+        providers=ProviderCredentialRepository(router),
     )
 
 
