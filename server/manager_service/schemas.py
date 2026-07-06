@@ -330,6 +330,17 @@ class KnowledgeDocumentImportUrl(BaseModel):
 
 # 枚举取值与迁移 0004 CHECK 约束严格对齐（禁止漂移）。
 SkillInstallPolicy = Literal["on_demand", "pre_install", "pinned"]
+
+
+class SkillFileIn(BaseModel):
+    """单个技能文件请求体（M2：Manager 持有的技能真相，相对路径 + 内容）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md）")
+    content: str = Field(default="", description="文件文本内容（utf-8）")
+
+
 SkillBindingPolicy = Literal["opt_in", "auto_bind", "disabled"]
 CatalogVisibility = Literal["private", "tenant", "public"]
 ConnectorGrantScope = Literal["tenant_wide", "department_scoped", "member_scoped", "disabled"]
@@ -347,6 +358,9 @@ class SkillCatalogIn(BaseModel):
     binding_policy: SkillBindingPolicy = Field(default="opt_in", description="绑定策略")
     visibility: CatalogVisibility = Field(default="private")
     config: dict = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）")
+    # M2：技能真相（文件列表 + 包级内容哈希）；供 Agent 端 cache 按 version/hash 判定更新。
+    files: list[SkillFileIn] = Field(default_factory=list, description="技能文件列表（含 SKILL.md）")
+    content_hash: str = Field(default="", description="包级内容指纹（SkillPackage 同步 key）")
 
 
 class SkillCatalogOut(SkillCatalogIn):

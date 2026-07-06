@@ -263,7 +263,7 @@ class CodexAppServerExecutor(Executor):
 
     family = "json_rpc_stdio"
 
-    def __init__(self, *, sandbox: SandboxPolicy | None = None) -> None:
+    def __init__(self, *, sandbox: SandboxPolicy | None = None, skill_cache=None) -> None:
         self._sandbox = sandbox
         # run_id -> (client, thread_id, turn_id) 供 cancel 透传。
         self._active: dict[str, tuple[_JsonRpcStdio, str, str | None]] = {}

@@ -19,6 +19,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden
 
 from .authorized_config_service import AuthorizedConfigService
+from .capability_catalog_service import CapabilityCatalogService, build_capability_catalog_service
 from .employee_config_service import build_employee_config_service
 from .routes_member import _services, _token_claims
 from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate
@@ -41,11 +42,13 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
         from .member_service import MemberDeptService
         from .recruit_repository import RecruitRepository
         from .repository_member import MemberDeptRepository
+        capability_catalog = build_capability_catalog_service(router_pg)
         cache = AuthorizedConfigService(
             config_service=build_employee_config_service(router_pg),
             grant_service=grant_svc,
             member_service=MemberDeptService(repo=MemberDeptRepository(router_pg)),
             recruit_repository=RecruitRepository(router_pg),
+            capability_catalog=capability_catalog,
         )
         request.app.state._authorized_config_service = cache
     return cache

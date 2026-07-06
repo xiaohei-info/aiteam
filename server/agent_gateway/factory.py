@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from shared.contracts.gateway import Executor
 
+from agent_service.capabilities.skill_cache import SkillCache
 from .acp_executor import AcpClientExecutor
 from .codex_executor import CodexAppServerExecutor
 from .drivers import get_driver
@@ -34,17 +35,17 @@ EXECUTOR_FAMILIES: dict[str, type[Executor]] = {
 }
 
 
-def build_executor(family: str, *, sandbox: SandboxPolicy | None = None) -> Executor:
+def build_executor(family: str, *, sandbox: SandboxPolicy | None = None, skill_cache: SkillCache | None = None) -> Executor:
     """按协议族实例化 Executor（注入沙箱）。未知族显式报错，不静默降级。"""
     executor_cls = EXECUTOR_FAMILIES.get(family)
     if executor_cls is None:
         raise ValueError(
             f"unknown executor_family: {family!r}; known: {sorted(EXECUTOR_FAMILIES)}"
         )
-    return executor_cls(sandbox=sandbox)  # type: ignore[call-arg]
+    return executor_cls(sandbox=sandbox, skill_cache=skill_cache)  # type: ignore[call-arg]
 
 
-def build_runner(runtime_selection: str, *, sandbox: SandboxPolicy | None = None) -> GatewayRunner:
+def build_runner(runtime_selection: str, *, sandbox: SandboxPolicy | None = None, skill_cache: SkillCache | None = None) -> GatewayRunner:
     """按 runtime_selection 装配真实 (Executor, Driver) → GatewayRunner。
 
     未知 runtime_selection 由 get_driver 抛 ValueError（§7.6 不静默切换）。
@@ -53,5 +54,5 @@ def build_runner(runtime_selection: str, *, sandbox: SandboxPolicy | None = None
     family = getattr(driver, "executor_family", None)
     if not family:
         raise ValueError(f"driver {runtime_selection!r} declares no executor_family")
-    executor = build_executor(family, sandbox=sandbox)
+    executor = build_executor(family, sandbox=sandbox, skill_cache=skill_cache)
     return GatewayRunner(executor=executor, driver=driver)

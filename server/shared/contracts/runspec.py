@@ -62,3 +62,10 @@ class AgentRunRequest(BaseModel):
         default_factory=dict,
         description="按 provider_ref 解析出的最小 env 注入（名/值）；仅沙箱 env 使用，不落库/不日志（D18）",
     )
+    # M2：run 准备期间由 Executor 投影的 per-run skill —— skill_refs 是 workDir native 的 skill 投影；
+    # skill_env_overrides 是投影所需的额外环境覆盖（如 codex 的 CODEX_HOME）。缺失 skill 由 Executor 报错。
+    skill_refs: list[str] = Field(default_factory=list, description="run 需要的技能 id 列表（来自 snapshot.skills）")
+    skill_env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description="skill 投影需要的额外 env 覆盖（相对 workDir 的路径已绝对化），运行时合并进子进程 env",
+    )

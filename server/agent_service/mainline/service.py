@@ -461,6 +461,7 @@ class MainlineService:
             run_spec=prepared_spec or RunSpec(),
             input_messages=self._conversation_input_messages(conversation_id),
             provider_env=provider_env,
+            skill_refs=prepared_binding.skill_refs if prepared_binding is not None else [],
         )
 
         async def on_event(rt: AgentRuntimeEvent) -> None:

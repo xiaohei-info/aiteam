@@ -37,6 +37,9 @@ from shared.contracts.runspec import AgentRunRequest
 
 from .sandbox import SandboxPolicy, build_env, prepare_run_dir
 
+from agent_service.capabilities.skill_cache import SkillCache as _SkillCache
+from agent_service.capabilities.skill_projector import SkillProjector as _SkillProjector
+
 # 进程优雅退出 → 强杀的等待窗口（取消/超时清理用）。
 _TERM_GRACE_SECONDS = 5.0
 
@@ -79,6 +82,16 @@ class _RunHandle:
         self.cancelled = False
 
 
+class _SkillSpawnError(RuntimeError):
+    """技能投影失败的终态错误（M2 #5）。携带缺失 skill 清单供 Executor 归一为 error 终态。"""
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = list(missing)
+        super().__init__(
+            f"missing skills for run (投影失败/未授权)：{self.missing}。请检查 Manager 授权或重新同步。"
+        )
+
+
 class _SubprocessExecutor(Executor):
     """协议族执行器的通用基类：拥有整段子进程生命周期。
 
@@ -92,10 +105,11 @@ class _SubprocessExecutor(Executor):
     #: idle watchdog 默认窗口（秒）：防 runtime 卡死无输出。None=禁用。
     default_idle_seconds: float | None = None
 
-    def __init__(self, *, sandbox: SandboxPolicy | None = None) -> None:
+    def __init__(self, *, sandbox: SandboxPolicy | None = None, skill_cache: _SkillCache | None = None) -> None:
         self._runs: dict[str, _RunHandle] = {}
         # 沙箱为可选：生产装配注入（§13 隔离）；None=继承当前进程 cwd/env（dev/测试默认）。
         self._sandbox = sandbox
+        self._skill_projector = _SkillProjector(skill_cache) if skill_cache is not None else None
 
     # ---- 子类钩子 ------------------------------------------------------
 
@@ -181,20 +195,64 @@ class _SubprocessExecutor(Executor):
             # M4：把按 provider_ref 解析出的最小 env 注入子进程；仅此处合并，不落盘/不日志（D18）。
             if request.provider_env:
                 env.update(request.provider_env)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=env,
-            )
-        except (OSError, ValueError) as exc:
-            await self._emit(on_event, run_id, "error", {"message": f"spawn failed: {exc}"}, seq)
-            return None
+            try:
+                # M2：运行前把授权的 skill 投影到 per-run workDir（仅 workDir，不写共享 profile，D16）；
+                # 缺失 skill 直接报错终态（M2 #5），绝不回退到未知配置。
+                if self._skill_projector is not None:
+                    skill_env_missing = self._project_skills(cwd, request, env)
+                    if skill_env_missing:
+                        raise _SkillSpawnError(skill_env_missing)
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
+            except _SkillSpawnError as exc:
+                await self._emit(on_event, run_id, "error", {"message": str(exc), "missing_skills": exc.missing}, seq)
+                return None
+            except (OSError, ValueError) as exc:
+                await self._emit(on_event, run_id, "error", {"message": f"spawn failed: {exc}"}, seq)
+                return None
+        else:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
+            except (OSError, ValueError) as exc:
+                await self._emit(on_event, run_id, "error", {"message": f"spawn failed: {exc}"}, seq)
+                return None
         await self._feed_stdin(proc, request)
         return proc
+
+    def _project_skills(self, cwd: str, request, env: dict) -> list[str]:
+        """运行前投影技能到 workDir。返回缺失的 skill_id 列表（空=全部命中）。
+
+        投影成功时把 projection env 覆盖（如 CODEX_HOME）合并进 env；
+        失败时返回 missing 列表由 spawn 翻译为明确的 spawn 错误（M2 #5）。
+        """
+        if self._skill_projector is None or not request.skill_refs:
+            return []
+        try:
+            result = self._skill_projector.project(
+                run_id=request.run_id,
+                work_dir=cwd,
+                runtime=getattr(request, "runtime_selection", None) or "",
+                skill_refs=list(request.skill_refs),
+                fail_on_missing=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — 投影异常视为全部缺失，明确报错
+            return list(request.skill_refs)
+        if result.env_overrides:
+            env.update(result.env_overrides)
+        return list(result.missing)
 
     async def _finalize(
         self, proc, request, on_event, run_id, seq, *,

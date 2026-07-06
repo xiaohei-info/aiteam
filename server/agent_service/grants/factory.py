@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from agent_service.local_db import LocalDb
 
+from ..capabilities.skill_cache import SkillCache
 from .client import ManagerGrantsClient, UnconfiguredGrantsClient
 from .service import GrantsService
 from .store import (
@@ -30,6 +31,7 @@ def build_grants_service(
     db: LocalDb | None = None,
     projections: ProjectionRepository | None = None,
     solutions: SolutionProjectionRepository | None = None,
+    skill_cache: SkillCache | None = None,
 ) -> GrantsService:
     """装配本地 grants 服务。
 
@@ -54,4 +56,5 @@ def build_grants_service(
         projections=_projections,
         snapshots=snapshots,
         solutions=_solutions,
+        skill_cache=skill_cache,
     )

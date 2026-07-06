@@ -52,6 +52,7 @@ class CapabilityCatalogService:
             ctx, skill_id=body.skill_id, display_name=body.display_name, version=body.version,
             install_policy=body.install_policy, binding_policy=body.binding_policy,
             visibility=body.visibility, config=body.config,
+            files=[f.model_dump(mode="json") for f in body.files], content_hash=body.content_hash,
         )
         return _skill_to_out(row)
 
@@ -180,11 +181,21 @@ def _ensure_can_write(ctx: TenantContext) -> None:
 
 
 def _skill_to_out(row: SkillCatalogRow) -> SkillCatalogOut:
+    files_in = [_to_skill_file_in(f, default_version=row.version) for f in (getattr(row, "files", None) or [])]
     return SkillCatalogOut(
         catalog_id=row.catalog_id, skill_id=row.skill_id, display_name=row.display_name,
         version=row.version, install_policy=row.install_policy, binding_policy=row.binding_policy,
-        visibility=row.visibility, config=row.config, catalog_version=row.catalog_version,
+        visibility=row.visibility, config=row.config, files=files_in,
+        content_hash=getattr(row, "content_hash", "") or "", catalog_version=row.catalog_version,
     )
+
+
+def _to_skill_file_in(raw, default_version: str) -> SkillFileIn:
+    if isinstance(raw, SkillFileIn):
+        return raw
+    if isinstance(raw, dict):
+        return SkillFileIn(path=str(raw.get("path", "")), content=str(raw.get("content", "")))
+    return SkillFileIn(path="", content="")
 
 
 def _connector_to_out(row: ConnectorCatalogRow) -> ConnectorCatalogOut:
