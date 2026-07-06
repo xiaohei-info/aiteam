@@ -176,6 +176,44 @@ describe("MarketplacePage", () => {
     expect(screen.getByText("营销专家A")).toBeInTheDocument();
   });
 
+  it("分类栏来自后端真实模板分类（不再写死）", async () => {
+    loginStorage();
+    const tplA2 = { ...tplA, template_id: "t3", display_name: "电商专家C", category: "电商运营" };
+    globalThis.fetch = mockFetch((url) => {
+      if (url.includes("/marketplace/templates")) return listEnvelope([tplA, tplA2, tplRecruited]);
+      return listEnvelope([]);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("电商专家C")).toBeInTheDocument());
+    // 真实分类：市场营销、技术研发、电商运营，全部来自模板数据
+    expect(screen.getByRole("button", { name: "市场营销" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "技术研发" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "电商运营" })).toBeInTheDocument();
+    // 写死的默认分类不再出现
+    expect(screen.queryByRole("button", { name: "财务分析" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "人力资源" })).toBeNull();
+  });
+
+  it("点击真实分类按钮触发带 category 参数的请求", async () => {
+    loginStorage();
+    const calls: string[] = [];
+    globalThis.fetch = mockFetch((url) => {
+      calls.push(url);
+      if (url.includes("/marketplace/templates")) return listEnvelope([tplA]);
+      return listEnvelope([]);
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "市场营销" }));
+
+    await waitFor(() => {
+      const filtered = calls.filter((u) => u.includes("category="));
+      expect(filtered.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   it("加载失败展示错误面板（替换页面内容）", async () => {
     loginStorage();
     globalThis.fetch = vi.fn(async () =>
