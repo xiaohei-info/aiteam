@@ -66,6 +66,11 @@ function makeFetch(
     if (path.includes("/runs") && init?.method === "POST") {
       return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
     }
+    if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && init?.method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const created = { id: "c-new", title: body.title ?? null, state: "active", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" };
+      return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
       return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -278,6 +283,11 @@ function makeChatFetch(
     if (path.includes("/runs") && init?.method === "POST") {
       return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
     }
+    if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && init?.method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const created = { id: "c-new", title: body.title ?? null, state: "active", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" };
+      return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
       return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -402,5 +412,193 @@ describe("MessageComposer 工具栏 + @提及 + 附件 + 模型切换", () => {
     await renderChatComposer();
     const send = screen.getByRole("button", { name: "发送" });
     expect(send).toBeDisabled();
+  });
+});
+
+// ---- 6. 新建对话：RosterPicker -> createConversation ----
+
+describe("ChatPage — 新建私聊会话", () => {
+  it("空态显示「新建对话」入口", async () => {
+    loginStorage();
+    const convs: ReturnType<typeof makeConv5>[] = [];
+    globalThis.fetch = makeChatFetch(convs);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: /新建对话/ })).toBeInTheDocument();
+  });
+
+  it("列表头部显示「＋ 新建」入口", async () => {
+    loginStorage();
+    const convs = [makeConv5("c1", "会话A")];
+    globalThis.fetch = makeChatFetch(convs);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByRole("button", { name: /新建/ }))[0]!).toBeInTheDocument();
+  });
+
+  it("点击新建 -> 选择专家 -> 建会话并进入聊天", async () => {
+    loginStorage();
+    const convs = [makeConv5("c1", "会话A")];
+    const fetchImpl = makeChatFetch(convs, [
+      { employee_id: "e1", display_name: "Luna", revoked: false },
+      { employee_id: "e2", display_name: "Nova", revoked: false },
+    ]);
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("会话A")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: /新建/ })[0]!);
+
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    // 建会话 POST /api/agent/conversations
+    await waitFor(() => {
+      const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
+      const create = calls.find(([u, i]) => u.endsWith("/api/agent/conversations") && i?.method === "POST");
+      expect(create).toBeTruthy();
+      const body = JSON.parse(String(create![1].body));
+      expect(body.title).toBe("Luna");
+      expect(body.entry_employee_id).toBe("e1");
+      expect(body.collaboration_mode).toBe("free");
+    });
+
+    // 选中进入聊天：渲染 TimelineView（role="log"）
+    await waitFor(() => expect(screen.getByRole("log", { name: "对话时间线" })).toBeInTheDocument());
+  });
+
+  it("roster 无专家时显示提示文案", async () => {
+    loginStorage();
+    const convs = [makeConv5("c1", "会话A")];
+    globalThis.fetch = makeChatFetch(convs, []);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("会话A")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: /新建/ })[0]!);
+
+    expect(await screen.findByText(/暂无可私聊的专家/)).toBeInTheDocument();
+  });
+});
+
+// ---- 7. 私聊新建：取消 / 失败 / 返回空（覆盖 handleCancelCreate + handlePick 分支）----
+
+function chatFetchWithCreate(createImpl: (init?: RequestInit) => Response, roster: Array<{ employee_id: string; display_name: string; revoked: boolean }> = []) {
+  return vi.fn(async (url: string | URL, init?: RequestInit) => {
+    const path = typeof url === "string" ? url : url.toString();
+    if (path.includes("/api/agent/grants/experts")) {
+      return new Response(JSON.stringify({ data: roster, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
+      return createImpl(init);
+    }
+    if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
+      return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.includes("/timeline")) {
+      return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: null }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+describe("ChatPage — 新建私聊会话（失败分支）", () => {
+  it("取消弹层（Esc）关闭并回到空态", async () => {
+    loginStorage();
+    globalThis.fetch = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ data: { id: "c-new", title: "x", state: "active", created_at: "", updated_at: "" } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // Esc 关闭弹层
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("建会话返回空时展示错误提示", async () => {
+    loginStorage();
+    const fetchImpl = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ data: null }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    // 错误提示以 role=alert 形式展示（文案走 i18n useApiError）
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+
+  it("建会话接口异常时展示错误提示", async () => {
+    loginStorage();
+    const fetchImpl = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ type: "err", title: "boom", status: 500, code: "server_error" }), { status: 500, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    // 错误提示应出现在弹层内
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 });

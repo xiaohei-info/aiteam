@@ -98,6 +98,7 @@ class TestWorkbench:
             doc_store=svc._docs,
             upload_store=svc._uploads,
             upload_dir=None,
+            marketplace_provider=StubMarketplaceProvider([]),
             unread_counts_provider=provider,
         )
         view = svc_with_provider.get_workbench()

@@ -170,7 +170,13 @@ def _upload_dir() -> Path:
 
 
 def _build_marketplace_provider(login_service) -> ManagerMarketplaceProvider:
-    """按 MANAGER_URL 装配人才市场 provider：配置 → Manager pull，否则降级 fake。"""
+    """按 MANAGER_URL 装配人才市场 provider：配置 → Manager pull（AITEAM-672）。
+
+    未配置 MANAGER_URL 时仍返回 provider，但 list_templates 会抛
+    MarketplaceProviderError，表面真实部署配置错误而非静默降级假数据。
+    模板列表端点 /marketplace/templates 会在每次请求前尝试一次 login 后的 sync，
+    登录成功后才加载真实 Manager 目录。
+    """
     settings = load_settings("agent")
     client = _manager_service_client(settings) if settings.manager_url else None
     return ManagerMarketplaceProvider(

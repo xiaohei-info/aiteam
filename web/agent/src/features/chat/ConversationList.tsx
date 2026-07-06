@@ -23,6 +23,8 @@ export interface ConversationListProps {
   headerLabel?: string;
   /** 可选过滤谓词（群聊页用于排除私聊会话）。 */
   filter?: (conversation: Conversation) => boolean;
+  /** "新建对话"入口回调（传了才渲染 + 按钮，对齐私聊/群聊页各自的创建语义）。 */
+  onCreate?: () => void;
 }
 
 export function ConversationList({
@@ -32,6 +34,7 @@ export function ConversationList({
   refreshSignal = 0,
   headerLabel = "私聊",
   filter,
+  onCreate,
 }: ConversationListProps) {
   const [items, setItems] = useState<Conversation[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -83,9 +86,20 @@ export function ConversationList({
     >
       <div
         data-testid="conv-list-header"
-        className="border-b border-gold/15 px-md py-sm text-sm font-semibold text-text-primary"
+        className="flex items-center justify-between border-b border-gold/15 px-md py-sm"
       >
-        {headerLabel}
+        <span data-testid="conv-list-header-label" className="text-sm font-semibold text-text-primary">{headerLabel}</span>
+        {onCreate && (
+          <button
+            type="button"
+            className="rounded-md px-sm py-0.5 text-xs text-gold transition hover:bg-surface-raised"
+            onClick={() => onCreate()}
+            aria-label={`新建${headerLabel}会话`}
+            title={`新建${headerLabel}会话`}
+          >
+            ＋ 新建
+          </button>
+        )}
       </div>
       {loading && items.length === 0 && (
         <div className="px-md py-sm text-sm text-text-secondary">加载中…</div>

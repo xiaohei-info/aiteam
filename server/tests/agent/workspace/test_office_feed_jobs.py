@@ -14,7 +14,7 @@ from agent_service.grants.store import InMemoryProjectionRepository
 from agent_service.loop.models import Loop, LoopStatus, RecurrenceType
 from agent_service.loop.service import LoopService
 from agent_service.loop.store import InMemoryLoopRepository
-from agent_service.workspace.marketplace_provider import FakeMarketplaceProvider
+from tests.agent.workspace._stub_provider import StubMarketplaceProvider
 from agent_service.workspace.service import WorkspaceService
 from agent_service.workspace.store import (
     InMemoryKnowledgeBaseRepository,
@@ -32,7 +32,7 @@ def _make_workspace(*, loop_service: LoopService | None = None) -> WorkspaceServ
         doc_store=InMemoryKnowledgeDocumentRepository(),
         upload_store=InMemoryUploadAssetRepository(),
         upload_dir=None,
-        marketplace_provider=FakeMarketplaceProvider(),
+        marketplace_provider=StubMarketplaceProvider(),
         loop_service=loop_service,
     )
 

@@ -4,16 +4,15 @@
  * 组合（最大化复用 chat 模块）：
  *   左：ConversationList（复用，headerLabel="群聊"）
  *   右：TimelineView（复用——TimelineStore 按 cursor 归并，多 run 事件天然并入同一时间线）
- *       + GroupExpertRoster（演示用 mock roster）
+ *       + GroupExpertRoster（拉取真实 roster）
  *       + MentionComposer（@提及 -> group-dispatch）
  *       + triggered_handles 展示（"@提及触发了哪些专家"）
  *
- * 展示态不入持久化主状态（D6）：selected / roster / lastTriggered / dispatchSignal
- * 均为本组件局部运行态，不写入 store、不落库。
+ * 展示态不入持久化主状态（D6）：selected / roster / lastTriggered / lastIgnored /
+ * dispatchSignal 均为本组件局部运行态，不写入 store、不落库。
  *
- * roster 说明：后端无"列出会话已装载专家"端点，group-dispatch 按请求体携带 experts 编排
- *（后端 group.py 注释明确"本卡按请求携带即可端到端验证"）。真实来源是 pull 装载的 employee
- *  快照（留详设），本卡用 mock roster 端到端验证 @提及编排链路。
+ * roster 说明：真实来源是 pull 装载的 employee 快照（GET /api/agent/grants/experts），
+ * 本卡直接取用。
  *
  * roster 点击 -> 输入框追加：用 window CustomEvent（"group:append-mention"）解耦，
  * MentionComposer 内部 useEffect 监听，避免组件间 ref/状态提升耦合。

@@ -72,8 +72,8 @@ function makeGroupFetch(
   timelineEvents: BusinessTimelineEvent[] = [],
   dispatchResult: DispatchResult = { triggered_handles: [], runs: [] },
 ) {
-  return vi.fn(async (url: string | URL, init?: RequestInit) => {
-    const path = typeof url === "string" ? url : url.toString();
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = typeof url === "string" ? url : url.toString();
     // 列本地可用专家（GET /api/agent/grants/experts）
     if (path.includes("/api/agent/grants/experts")) {
       const experts = [
@@ -82,12 +82,24 @@ function makeGroupFetch(
       ];
       return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
     }
-    // 列会话（GET /api/agent/conversations，排除 timeline/messages/group-dispatch 子路径）
+    // 群聊编排（POST .../group-dispatch）
+    if (path.includes("/group-dispatch") && init?.method === "POST") {
+      return new Response(envelope(dispatchResult), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    // 建会话（POST /api/agent/conversations）
+    if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const created = { id: "c-new", title: body.title ?? null, state: "active", created_at: "2026-01-02T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" };
+      return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    // 列会话（GET /api/agent/conversations，排除 timeline/messages 子路径）
     if (
       path.includes("/api/agent/conversations") &&
       !path.includes("/timeline") &&
       !path.includes("/messages") &&
-      !path.includes("/group-dispatch") &&
       (init?.method === undefined || init?.method === "GET")
     ) {
       return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -98,13 +110,6 @@ function makeGroupFetch(
         JSON.stringify({ data: timelineEvents, page: { next_cursor: null, has_more: false } }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
-    }
-    // 群聊编排（POST .../group-dispatch）
-    if (path.includes("/group-dispatch") && init?.method === "POST") {
-      return new Response(envelope(dispatchResult), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
     }
     return new Response(envelope(null), { status: 200 });
   }) as unknown as typeof fetch;
@@ -137,11 +142,13 @@ describe("GroupPage — 渲染", () => {
       expect(screen.getByText("群聊A")).toBeInTheDocument();
       expect(screen.getByText("群聊B")).toBeInTheDocument();
     });
-    // 列表头部文案是「群聊」（区别于私聊页的「私聊」）——用 testid 精确定位 header，
-    // 避免与 PageShell 侧边栏 NavLink 的"群聊"导航项撞文本。
+   // 列表头部文案是「群聊」（区别于私聊页的「私聊」）——用 testid 精确定位 header，
+    // 避免与 PageShell 侧边栏 NavLink 的"群聊"导航项撞文本。headerLabel 单独落到
+    // testid=conv-list-header-label 的 span 上（header 里还有「新建」按钮）。
     const headers = screen.getAllByTestId("conv-list-header");
     expect(headers.length).toBeGreaterThan(0);
-    expect(headers[0]!.textContent).toBe("群聊");
+    const label = headers[0]!.querySelector('[data-testid="conv-list-header-label"]');
+    expect(label?.textContent).toBe("群聊");
   });
 
   it("选中会话后渲染时间线 + roster + 输入器", async () => {
@@ -592,6 +599,7 @@ describe("GroupPage — 创建自由群聊", () => {
     // mock window.prompt 提供标题
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("我的自由群");
 
+
     render(
       <MemoryRouter initialEntries={["/group"]}>
         <AppProvider>
@@ -628,3 +636,4 @@ describe("GroupPage — 创建自由群聊", () => {
     promptSpy.mockRestore();
   });
 });
+
