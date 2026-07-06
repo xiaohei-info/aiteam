@@ -873,6 +873,67 @@ describe("注册表单", () => {
       expect(screen.getByText("请指定一个专家为 Planner 角色（编排者）")).toBeInTheDocument();
     });
   });
+
+  it("注册行业方案时未选择专家则前端校验拦截", async () => {
+    mockFetch
+      .mockResolvedValueOnce(listPage([]))
+      .mockResolvedValueOnce(listPage([]));
+
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
+
+    await waitFor(() => {
+      expect(screen.getByText("注册行业方案")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("注册行业方案"));
+    await waitFor(() => {
+      expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
+    });
+
+    const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
+    fireEvent.change(nameInput, { target: { value: "测试方案" } });
+
+    fireEvent.submit(screen.getByRole("button", { name: "注册" }).closest("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("请至少选择一个专家模板")).toBeInTheDocument();
+    });
+  });
+
+  it("注册行业方案时未填写 Planner 提示词则前端校验拦截", async () => {
+    const expertItems = [
+      makeCatalogItem({
+        catalog_type: "expert_template",
+        template_id: "exp_a",
+        display_name: "客服专家",
+        status: "published",
+      }),
+    ];
+    mockFetch
+      .mockResolvedValueOnce(listPage(expertItems))
+      .mockResolvedValueOnce(listPage(expertItems));
+
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
+
+    await waitFor(() => {
+      expect(screen.getByText("注册行业方案")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("注册行业方案"));
+    await waitFor(() => {
+      expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
+    });
+
+    // 选专家并指定 planner，但不填 planner_prompt
+    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
+    fireEvent.change(nameInput, { target: { value: "测试方案" } });
+
+    fireEvent.submit(screen.getByRole("button", { name: "注册" }).closest("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("请填写 Planner 编排规则提示词")).toBeInTheDocument();
+    });
+  });
 });
 
 // ---- 7. 详情页 ----
@@ -1099,6 +1160,48 @@ describe("详情页编辑模式", () => {
       expect(body.subtask_prompt).toBe("新 subtask");
       expect(body.aggregate_prompt).toBe("新 aggregate");
       expect(body.tags).toEqual(["零售", "电商"]);
+    });
+  });
+
+  it("编辑方案 planner_template_id 并提交 PATCH", async () => {
+    const solutionItem = makeCatalogItem({
+      catalog_type: "solution_template",
+      template_id: "sol-planner",
+      display_name: "协作方案",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      planner_template_id: "exp_old",
+      planner_prompt: "旧 planner",
+      default_grants: { role: "viewer" },
+    });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(solutionItem))
+      .mockResolvedValueOnce(singleResponse(solutionItem));
+
+    renderCatalogDetail(makeSystemAdminSession(), "sol-planner", "solution_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+
+    // planner_template_id input (inside Planner 角色 section)
+    const plannerInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="被指定为 Planner 的专家模板 id"]',
+    )!;
+    expect(plannerInput).toBeTruthy();
+    expect(plannerInput).toHaveValue("exp_old");
+    fireEvent.change(plannerInput, { target: { value: "exp_new" } });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/sol-planner") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.planner_template_id).toBe("exp_new");
     });
   });
 
