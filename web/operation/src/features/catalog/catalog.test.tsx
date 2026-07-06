@@ -627,18 +627,86 @@ describe("注册表单", () => {
     )!;
     fireEvent.change(modelInput, { target: { value: "gpt-5" } });
 
+    // Fill all PRD required fields so the always-send payload is complete.
+    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "ecommerce" } });
+    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://example.com/a.png" } });
+    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "淘宝电商客服" } });
+
+    // Expand advanced config and fill skills/tags/memories/sort to cover that branch.
+    fireEvent.click(screen.getByText("展开能力配置(技能 / 标签 / 记忆 / 排序) ▼"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)"), { target: { value: "chat\nrefund" } });
+    fireEvent.change(screen.getByLabelText("搜索标签 (tags, 每行或逗号分隔)"), { target: { value: "电商\n客服" } });
+    fireEvent.change(screen.getByLabelText("排序权重 (sort_order, 数值越小越靠前)"), { target: { value: "10" } });
+
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     await waitFor(() => {
       expect(capturedBody).toBeTruthy();
     });
-    const body = capturedBody as { template_id?: string; display_name: string; system_prompt?: string; default_model?: string };
+    const body = capturedBody as {
+      template_id?: string;
+      display_name: string;
+      category?: string;
+      avatar_url?: string;
+      system_prompt?: string;
+      default_model?: string;
+      description?: string;
+      skill_ids?: string[];
+      tags?: string[];
+      sort_order?: number;
+    };
     expect(body.template_id).toBeUndefined();
     expect(body.display_name).toBe("新专家");
+    expect(body.category).toBe("ecommerce");
+    expect(body.avatar_url).toBe("https://example.com/a.png");
     expect(body.system_prompt).toBe("电商客服");
     expect(body.default_model).toBe("gpt-5");
+    expect(body.description).toBe("淘宝电商客服");
+    expect(body.skill_ids).toEqual(["chat", "refund"]);
+    expect(body.tags).toEqual(["电商", "客服"]);
+    expect(body.sort_order).toBe(10);
     await waitFor(() => {
       expect(screen.queryByText("注册新模板/方案")).not.toBeInTheDocument();
+    });
+  });
+
+  it("注册专家模板时 initial_memories 填非法 JSON 不报错并提交", async () => {
+    let capturedBody: unknown = null;
+    mockFetch
+      .mockResolvedValueOnce(envOk())
+      .mockImplementationOnce(async (url: unknown, init: unknown) => {
+        if (String(url).includes("expert-templates")) {
+          const i = init as { body?: string } | undefined;
+          capturedBody = i?.body ? JSON.parse(i.body) : null;
+        }
+        return singleResponse(makeCatalogItem({ id: "x", display_name: "X" }));
+      })
+      .mockResolvedValueOnce(envOk());
+
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => expect(screen.getByText("注册专家模板")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("注册专家模板"));
+    await waitFor(() => expect(screen.getByText("注册新模板/方案")).toBeInTheDocument());
+
+    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "X专家" } });
+    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "tech" } });
+    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
+    fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
+    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
+    fireEvent.click(screen.getByText("展开能力配置(技能 / 标签 / 记忆 / 排序) ▼"));
+    await waitFor(() => expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)"), { target: { value: "s1" } });
+    // invalid JSON → parseJsonArray catch branch returns undefined → sent as []
+    fireEvent.change(screen.getByLabelText("预置记忆 (initial_memories, JSON 数组)"), { target: { value: "{not-json" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    await waitFor(() => {
+      expect((capturedBody as { initial_memories?: unknown[] })?.initial_memories).toEqual([]);
     });
   });
 
@@ -897,6 +965,51 @@ describe("详情页编辑模式", () => {
     });
   });
 
+  it("编辑方案协作编排 prompts + tags 并提交 PATCH", async () => {
+    const solutionItem = makeCatalogItem({
+      catalog_type: "solution_template",
+      template_id: "sol-prompt",
+      display_name: "协作方案",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      planner_prompt: "旧 planner",
+      subtask_prompt: "旧 subtask",
+      aggregate_prompt: "旧 aggregate",
+      tags: ["零售"],
+      default_grants: { role: "viewer" },
+    });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(solutionItem))
+      .mockResolvedValueOnce(singleResponse(solutionItem));
+
+    renderCatalogDetail(makeSystemAdminSession(), "sol-prompt", "solution_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+
+    // planner/subtask/aggregate prompts + tags are editable textareas
+    fireEvent.change(screen.getByLabelText("planner_prompt"), { target: { value: "新 planner" } });
+    fireEvent.change(screen.getByLabelText("subtask_prompt"), { target: { value: "新 subtask" } });
+    fireEvent.change(screen.getByLabelText("aggregate_prompt"), { target: { value: "新 aggregate" } });
+    fireEvent.change(screen.getByLabelText("方案标签 (每行或逗号)"), { target: { value: "零售\n电商" } });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/sol-prompt") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.planner_prompt).toBe("新 planner");
+      expect(body.subtask_prompt).toBe("新 subtask");
+      expect(body.aggregate_prompt).toBe("新 aggregate");
+      expect(body.tags).toEqual(["零售", "电商"]);
+    });
+  });
+
   it("取消编辑不发送请求并恢复只读", async () => {
     mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
     renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
@@ -1050,6 +1163,74 @@ describe("详情页多 section", () => {
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新 system_prompt");
       expect(body.default_model).toBe("claude-sonnet");
+    });
+  });
+
+  it("编辑专家分类/头像/描述/技能/标签/记忆并提交 PATCH", async () => {
+    const expertItem = makeCatalogItem({
+      catalog_type: "expert_template",
+      template_id: "exp-full",
+      display_name: "全字段专家",
+      status: "draft",
+      visible_scope: null,
+      version: "1",
+      category: "support",
+      avatar_url: "https://old.png",
+      system_prompt: "你是客服",
+      default_model: "gpt-4o",
+      description: "旧描述",
+      skill_ids: ["skill_a"],
+      tags: ["旧标签"],
+      initial_memories: [{ role: "user", content: "旧记忆" }],
+    });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(expertItem))
+      .mockResolvedValueOnce(singleResponse(expertItem));
+
+    renderCatalogDetail(makeSystemAdminSession(), "exp-full", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+
+    // category + avatar_url (Inputs wrapped in Field)
+    fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
+    fireEvent.change(screen.getByLabelText("avatar_url"), { target: { value: "https://new.png" } });
+    // description textarea (bare textarea inside DetailSection, find by current value)
+    const allTextareas = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
+    );
+    const descTa = allTextareas.find((t) => (t as HTMLTextAreaElement).value === "旧描述");
+    expect(descTa).toBeTruthy();
+    fireEvent.change(descTa!, { target: { value: "新描述" } });
+    // skill_ids + tags (textareas wrapped in Field)
+    fireEvent.change(screen.getByLabelText("skill_ids (每行或逗号)"), { target: { value: "skill_a\nskill_b" } });
+    fireEvent.change(screen.getByLabelText("tags (每行或逗号)"), { target: { value: "财务\n分析" } });
+    // initial_memories (bare textarea inside DetailSection, find by current JSON value)
+    const memTa = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
+    ).find((t) => (t as HTMLTextAreaElement).value.includes("旧记忆"));
+    expect(memTa).toBeTruthy();
+    // invalid JSON → parseJsonArray catch branch (returns undefined, no state update)
+    fireEvent.change(memTa!, { target: { value: "{bad-json" } });
+    // valid JSON → parseJsonArray success path
+    fireEvent.change(memTa!, {
+      target: { value: '[{"role":"user","content":"新记忆"}]' },
+    });
+
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find(
+        (c: unknown[]) => (c[0] as string).includes("/exp-full") && c[1] && (c[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.category).toBe("finance");
+      expect(body.avatar_url).toBe("https://new.png");
+      expect(body.description).toBe("新描述");
+      expect(body.skill_ids).toEqual(["skill_a", "skill_b"]);
+      expect(body.tags).toEqual(["财务", "分析"]);
+      expect(body.initial_memories).toEqual([{ role: "user", content: "新记忆" }]);
     });
   });
 

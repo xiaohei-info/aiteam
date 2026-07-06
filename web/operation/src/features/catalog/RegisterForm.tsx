@@ -117,25 +117,19 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
   }
 
   function buildExpertPayload(): RegisterExpertTemplate {
-    const skills = parseList(defaultSkillsText);
-    const tags = parseList(tagsText);
-    const parsedSort = sortOrder.trim() ? Number(sortOrder.trim()) : undefined;
-    const parsedMemories = parseJsonArray(initialMemoriesText);
+    // Always send the editable payload so server-side required-field validation
+    // runs consistently (omitting a field would mask a 422 for required PRD fields).
     return {
       display_name: displayName.trim(),
-      ...(category.trim() ? { category: category.trim() } : {}),
-      ...(avatarUrl.trim() ? { avatar_url: avatarUrl.trim() } : {}),
-      ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
-      ...(defaultModel.trim() ? { default_model: defaultModel.trim() } : {}),
-      ...(skills.length ? { skill_ids: skills } : {}),
-      ...(description.trim() ? { description: description.trim() } : {}),
-      ...(tags.length ? { tags } : {}),
-      ...(parsedSort !== undefined && Number.isFinite(parsedSort)
-        ? { sort_order: parsedSort }
-        : {}),
-      ...(parsedMemories && parsedMemories.length
-        ? { initial_memories: parsedMemories }
-        : {}),
+      category: category.trim(),
+      avatar_url: avatarUrl.trim(),
+      system_prompt: systemPrompt.trim(),
+      default_model: defaultModel.trim(),
+      skill_ids: parseList(defaultSkillsText),
+      description: description.trim(),
+      tags: parseList(tagsText),
+      sort_order: sortOrder.trim() ? Number(sortOrder.trim()) : 0,
+      initial_memories: parseJsonArray(initialMemoriesText) ?? [],
     };
   }
 
@@ -152,26 +146,21 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
   }
 
   function buildSolutionPayload(): RegisterSolutionTemplate {
-    const payload: RegisterSolutionTemplate = {
+    // Always send the editable payload so server-side required-field validation
+    // (description / expert_template_ids) runs consistently.
+    return {
       display_name: displayName.trim(),
+      description: solutionDescription.trim(),
+      icon: icon.trim(),
+      expert_template_ids: expertPicks,
+      knowledge_refs: parseList(knowledgeRefsText),
+      skill_refs: parseList(skillRefsText),
+      planner_prompt: plannerPrompt.trim(),
+      subtask_prompt: subtaskPrompt.trim(),
+      aggregate_prompt: aggregatePrompt.trim(),
+      default_grants: parseJsonOrEmpty(defaultGrantsText) ?? null,
+      tags: parseList(solutionTagsText),
     };
-    if (solutionDescription.trim()) payload.description = solutionDescription.trim();
-    if (icon.trim()) payload.icon = icon.trim();
-    if (expertPicks.length) payload.expert_template_ids = expertPicks;
-    const kRefs = parseList(knowledgeRefsText);
-    if (kRefs.length) payload.knowledge_refs = kRefs;
-    const sRefs = parseList(skillRefsText);
-    if (sRefs.length) payload.skill_refs = sRefs;
-    if (plannerPrompt.trim()) payload.planner_prompt = plannerPrompt.trim();
-    if (subtaskPrompt.trim()) payload.subtask_prompt = subtaskPrompt.trim();
-    if (aggregatePrompt.trim()) payload.aggregate_prompt = aggregatePrompt.trim();
-    if (defaultGrantsText.trim()) {
-      const parsed = parseJsonOrEmpty(defaultGrantsText);
-      if (parsed) payload.default_grants = parsed;
-    }
-    const tags = parseList(solutionTagsText);
-    if (tags.length) payload.tags = tags;
-    return payload;
   }
 
   async function handleSubmit(e: FormEvent): Promise<void> {
