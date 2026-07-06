@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import itertools
 import json
+import shutil
+import subprocess
 import tempfile
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from shared.contracts.events import AgentRuntimeEvent, RuntimeEventType
-from shared.contracts.gateway import Driver
+from shared.contracts.gateway import Driver, RuntimeHealth
 from shared.contracts.runspec import McpServerConfig
 
 # 全 Driver 通用的 custom_args denylist：禁止透传足以破坏协议族/越权的 flag。
@@ -89,6 +91,46 @@ class _BaseDriver(Driver):
             out.append(arg)
             i += 1
         return out
+
+    # ---- 运行时自检（AITEAM-688 M0）----
+
+    def runtime_health(self) -> RuntimeHealth:
+        """带 CLI 探测的自检：shutil.which 找 CLI → ready；找不到 → not_ready。
+
+        版本号 best-effort 调 ``<cli> --version``（超时/失败为 None，不阻断判断）。
+        """
+        caps = self.capabilities()
+        cli_path = getattr(self, "cli_path", None)
+        found = shutil.which(cli_path) if cli_path else None
+        available = bool(found)
+        version = self._probe_cli_version(cli_path) if available else None
+        return RuntimeHealth(
+            status="ready" if available else "not_ready",
+            runtime=caps.runtime,
+            cli_path=cli_path,
+            cli_available=available,
+            cli_version=version,
+            capabilities=caps,
+            reason=None if available else f"runtime CLI {cli_path!r} not found in PATH",
+        )
+
+    @staticmethod
+    def _probe_cli_version(cli_path: str | None) -> str | None:
+        """best-effort 取 ``<cli> --version`` 首行文本；失败/超时返回 None。"""
+        if not cli_path:
+            return None
+        try:
+            out = subprocess.run(
+                [cli_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        line = (out.stdout or out.stderr or "").strip().splitlines()
+        return line[0] if line else None
 
     # ---- 事件归一（统一包装，子类只给净荷）----
 

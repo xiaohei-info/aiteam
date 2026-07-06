@@ -43,6 +43,26 @@ class RuntimeCapability(BaseModel):
     )
 
 
+class RuntimeHealth(BaseModel):
+    """Driver 运行时自检结果（AITEAM-688 M0）：CLI 可用性、版本、能力、依赖状态。
+
+    供启动校验与 /agent/health 端点判断 runtime readiness。status=not_ready 时 reason 必填。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(description="ready | not_ready")
+    runtime: str
+    cli_path: str | None = Field(default=None, description="runtime CLI 路径（无 CLI 的 runtime 为 None）")
+    cli_available: bool = Field(default=False, description="CLI 是否在 PATH/指定路径中可找到")
+    cli_version: str | None = Field(default=None, description="CLI 版本号（best-effort，探测失败为 None）")
+    capabilities: RuntimeCapability | None = Field(default=None, description="本 runtime 能力声明")
+    dependencies: dict[str, str] = Field(
+        default_factory=dict, description="依赖状态：name -> ok|missing 等（A 类能力运行时探测）"
+    )
+    reason: str | None = Field(default=None, description="not_ready 原因；ready 时为 None")
+
+
 class RunResult(BaseModel):
     """一次 run 的终态汇总（由 Executor 返回）。"""
 
@@ -77,6 +97,19 @@ class Driver(ABC):
     @abstractmethod
     def extract_usage(self, raw: object) -> dict | None:
         """提取 usage（token/成本）。"""
+
+    def runtime_health(self) -> RuntimeHealth:
+        """运行时自检（AITEAM-688 M0）：默认实现仅透出能力声明，不探测 CLI。
+
+        有 CLI 的 runtime 在 ``_BaseDriver``/具体 Driver 覆盖此方法做 ``shutil.which`` 探测。
+        无 CLI 概念的 runtime（如 fake）覆盖为直接返回 ready。
+        """
+        caps = self.capabilities()
+        return RuntimeHealth(
+            status="ready",
+            runtime=caps.runtime,
+            capabilities=caps,
+        )
 
 
 class Executor(ABC):

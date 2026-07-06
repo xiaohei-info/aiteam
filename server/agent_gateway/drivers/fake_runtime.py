@@ -12,7 +12,7 @@ from __future__ import annotations
 import itertools
 
 from shared.contracts.events import AgentRuntimeEvent
-from shared.contracts.gateway import Driver, EventSink, Executor, RunResult, RuntimeCapability
+from shared.contracts.gateway import Driver, EventSink, Executor, RunResult, RuntimeCapability, RuntimeHealth
 from shared.contracts.runspec import AgentRunRequest, RunSpec
 
 # 固定时间戳：契约脚本不依赖真实时钟（保持可复现）。
@@ -37,6 +37,14 @@ class FakeDriver(Driver):
 
     def build_command(self, run_spec: RunSpec) -> list[str]:
         return ["fake-runtime", "--model", run_spec.model or "default"]
+
+    def runtime_health(self) -> RuntimeHealth:
+        """Fake runtime 无真实 CLI，恒 ready（仅供 dev/测试，生产禁用——见 readiness 校验）。"""
+        return RuntimeHealth(
+            status="ready",
+            runtime=self.runtime_name,
+            capabilities=self.capabilities(),
+        )
 
     def parse_event(self, raw: object) -> AgentRuntimeEvent | None:
         return raw if isinstance(raw, AgentRuntimeEvent) else None

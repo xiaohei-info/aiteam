@@ -56,7 +56,15 @@ class Settings(BaseModel):
     # provider 凭据（如 *_API_KEY）须经此显式 allowlist 从宿主 env 注入，否则 runtime 无法鉴权。
     # 仅传变量名，值从宿主 os.environ 取，不内联明文（D18）。provider_ref 全量解析见后续。
     agent_runtime_env_passthrough: tuple[str, ...] = Field(default=())
+    # 部署环境标记（AITEAM-688 M0）：production 时禁止 Fake runtime 回退，缺 runtime 必须 fail fast。
+    # 取值 dev | test | production；未配置按 dev 处理（允许 Fake，dev/测试默认）。
+    aiteam_env: str | None = Field(default=None, description="部署环境：dev | test | production；未配置=dev")
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
+
+    @property
+    def is_production(self) -> bool:
+        """是否生产部署：AITEAM_ENV=production（runtime 必须真实，禁止 Fake）。"""
+        return self.aiteam_env == "production"
 
 
 def load_settings(tier: Tier | None = None) -> Settings:
@@ -80,6 +88,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
         agent_runs_root=os.getenv("AGENT_RUNS_ROOT"),
         agent_loop_autostart=os.getenv("AGENT_LOOP_AUTOSTART", "0") not in ("0", "false", "False"),
         agent_runtime_env_passthrough=_csv(os.getenv("AGENT_RUNTIME_ENV_PASSTHROUGH")),
+        aiteam_env=os.getenv("AITEAM_ENV"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )
 

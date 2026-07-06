@@ -63,3 +63,50 @@ def test_no_loop_autostart_by_default(monkeypatch):
     monkeypatch.delenv("AGENT_LOOP_AUTOSTART", raising=False)
     app = build_app()
     assert app.router.on_startup == []
+
+
+# ── AITEAM-688 M0：生产 Fake 禁用 + 缺 runtime fail-fast ──────────────────────
+
+def test_production_no_runtime_raises(tmp_path):
+    """生产模式未配置 AGENT_RUNTIME → build_mainline_service fail-fast（禁止静默 Fake）。"""
+    import pytest
+    with pytest.raises(ValueError, match="AGENT_RUNTIME"):
+        build_mainline_service(production=True, runs_root=str(tmp_path))
+
+
+def test_production_explicit_fake_raises(tmp_path):
+    """生产模式显式选 fake runtime → fail-fast。"""
+    import pytest
+    with pytest.raises(ValueError, match="[Ff]ake"):
+        build_mainline_service(runtime_selection="fake", production=True, runs_root=str(tmp_path))
+
+
+def test_production_unknown_runtime_raises(tmp_path):
+    """生产模式未知 runtime → fail-fast（get_driver 已报错，生产模式下同样拒绝）。"""
+    import pytest
+    with pytest.raises(ValueError):
+        build_mainline_service(runtime_selection="nope", production=True, runs_root=str(tmp_path))
+
+
+def test_production_real_runtime_builds_runner(tmp_path, monkeypatch):
+    """生产模式配真实 runtime（CLI 探测允许通过）→ 正常装配真实 runner，不回退 Fake。"""
+    import agent_gateway.drivers.base as base_mod
+    monkeypatch.setattr(base_mod.shutil, "which", lambda _p: "/usr/local/bin/hermes")
+    svc = build_mainline_service(runtime_selection="hermes", production=True, runs_root=str(tmp_path))
+    from agent_gateway.drivers.hermes import HermesAcpDriver
+    assert isinstance(svc._runner._driver, HermesAcpDriver)
+
+
+def test_production_real_runtime_cli_missing_raises(tmp_path, monkeypatch):
+    """生产模式配真实 runtime 但 CLI 不在 PATH → fail-fast（启动期 CLI 校验）。"""
+    import pytest
+    import agent_gateway.drivers.base as base_mod
+    monkeypatch.setattr(base_mod.shutil, "which", lambda _p: None)
+    with pytest.raises(ValueError, match="CLI|not found|runtime_not_ready"):
+        build_mainline_service(runtime_selection="hermes", production=True, runs_root=str(tmp_path))
+
+
+def test_dev_no_runtime_still_fake_by_default():
+    """dev/test 未配 runtime 仍回退 Fake（行为不变，验收矩阵：dev 允许 Fake）。"""
+    svc = build_mainline_service()
+    assert isinstance(svc._runner._driver, FakeDriver)
