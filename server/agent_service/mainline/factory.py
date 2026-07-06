@@ -150,3 +150,35 @@ def build_execution_orchestrator(
         grants=grants, projections=projections,
         tenant_id=tenant_id, member_id=member_id,
     )
+
+
+def build_capability_registry() -> "CapabilityRegistry":
+    """构造 Agent 本地 capability registry（AITEAM-692 / M3）。
+
+    当前实现：使用默认本地模板（LightRAG / mem0 / 预设 connector）。
+    生产可经环境变量 / 服务端下发扩展（留明细）。
+    """
+    from agent_service.capabilities import CapabilityRegistry
+    return CapabilityRegistry.default()
+
+
+def build_execution_orchestrator_with_capabilities(
+    *,
+    grants: "GrantsService",
+    projections: "ProjectionRepository",
+    tenant_id: str = "local",
+    member_id: str = "local",
+    capability_registry: "CapabilityRegistry | None" = None,
+) -> "ExecutionOrchestrator":
+    """装配带 M3 能力校验的统一执行编排（AITEAM-689 M1 + AITEAM-692 M3）。
+
+    未注入 registry 时回退到不带能力校验的编排（兼容无快照能力 / 测试）。
+    """
+    from agent_service.capabilities import CapabilityRegistry
+    from .execution_orchestrator import ExecutionOrchestrator
+    registry = capability_registry or CapabilityRegistry.default()
+    return ExecutionOrchestrator(
+        grants=grants, projections=projections,
+        tenant_id=tenant_id, member_id=member_id,
+        capability_registry=registry,
+    )
