@@ -18,7 +18,7 @@ import re
 
 from datetime import datetime, timezone
 from shared.contracts.events import AgentRuntimeEvent
-from shared.contracts.gateway import Driver, RuntimeCapability
+from shared.contracts.gateway import Driver, RuntimeCapability, RuntimeHealth
 from shared.contracts.runspec import RunSpec
 
 
@@ -57,6 +57,19 @@ class TerminalDriver(Driver):
             system_prompt_injection="unsupported",
             model_catalog_mode="static",
             thinking_level_injection="unsupported",
+        )
+
+    def runtime_health(self) -> RuntimeHealth:
+        """Terminal runtime 依赖 /bin/bash；存在即 ready。"""
+        import os
+        bash_ok = os.path.exists("/bin/bash")
+        return RuntimeHealth(
+            status="ready" if bash_ok else "not_ready",
+            runtime=self.runtime_name,
+            cli_path="/bin/bash",
+            cli_available=bash_ok,
+            capabilities=self.capabilities(),
+            reason=None if bash_ok else "/bin/bash not found",
         )
 
     def build_command(self, run_spec: RunSpec) -> list[str]:

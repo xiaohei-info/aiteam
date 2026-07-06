@@ -3,7 +3,9 @@
  *
  * 工具栏（对齐 demo AI-Team-Demo.html:1166-1171 + #307 验收）：
  *   📎 附件  ·  @ @提及（召唤智能体） ·  / 技能市场入口 ·  📷 截图工具
- * 右侧：模型切换标签（显示当前模型如 GPT-4o） · 发送。
+ * 右侧：发送。
+ *
+ * AITEAM-688：runtime/model 是部署级配置，前端不再提供模型选择入口。
  *
  * 复用工种：
  *   - 群聊 MentionComposer.parseMentions 解析已输入 @提及（口径与后端一致）。
@@ -16,12 +18,6 @@ import { useApiError, useApp } from "../../lib/app-context";
 import { sendMessage, startRun } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
-
-const MODEL_OPTIONS = [
-  { id: "gpt-4o", label: "GPT-4o" },
-  { id: "claude-sonnet", label: "Claude Sonnet" },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-] as const;
 
 const SKILL_OPTIONS = [
   { id: "writer", label: "写作助手" },
@@ -47,13 +43,10 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   const [roster, setRoster] = useState<LoadedExpertProjection[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
-  const [modelOpen, setModelOpen] = useState(false);
-  const [currentModel, setCurrentModel] = useState<string>(MODEL_OPTIONS[0].id);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionAnchorRef = useRef<HTMLDivElement>(null);
   const skillAnchorRef = useRef<HTMLDivElement>(null);
-  const modelAnchorRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // roster 真实数据源（grants/experts：本地已装载/已授权专家投影）。
@@ -82,22 +75,20 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
 
   // 关闭 popover 当点击外部（Esc 由 button toggle / 浏览器默认处理）。
   useEffect(() => {
-    if (!mentionOpen && !skillOpen && !modelOpen) return;
+    if (!mentionOpen && !skillOpen) return;
     function onDocMouseDown(ev: MouseEvent) {
       const target = ev.target as Node;
       if (
         (mentionOpen && mentionAnchorRef.current && !mentionAnchorRef.current.contains(target)) ||
-        (skillOpen && skillAnchorRef.current && !skillAnchorRef.current.contains(target)) ||
-        (modelOpen && modelAnchorRef.current && !modelAnchorRef.current.contains(target))
+        (skillOpen && skillAnchorRef.current && !skillAnchorRef.current.contains(target))
       ) {
         setMentionOpen(false);
         setSkillOpen(false);
-        setModelOpen(false);
       }
     }
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [mentionOpen, skillOpen, modelOpen]);
+  }, [mentionOpen, skillOpen]);
 
   const visibleHandles = useMemo(() => new Set(footerHandles(roster)), [roster]);
   const mentioned = useMemo(() => parseMentions(content, visibleHandles), [content, visibleHandles]);
@@ -176,9 +167,6 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       setSending(false);
     }
   }
-
-  const currentLabel =
-    MODEL_OPTIONS.find((m) => m.id === currentModel)?.label ?? MODEL_OPTIONS[0].label;
 
   return (
     <form className="flex flex-col gap-xs border-t border-gold/15 p-md" onSubmit={handleSubmit}>
@@ -287,46 +275,6 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         </Button>
 
         <span className="flex-1" />
-
-        <div ref={modelAnchorRef} className="relative">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-label={`当前模型：${currentLabel}`}
-            title="切换模型"
-            aria-expanded={modelOpen}
-            onClick={() => setModelOpen((v) => !v)}
-            disabled={sending}
-            className="gap-xs text-xs text-text-secondary"
-          >
-            🤖 <span>{currentLabel}</span>
-          </Button>
-          {modelOpen && (
-            <Popover>
-              <ul className="flex flex-col">
-                {MODEL_OPTIONS.map((m) => (
-                  <li key={m.id}>
-                    <button
-                      type="button"
-                      className={cn(
-                        "flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm hover:bg-surface-raised",
-                        m.id === currentModel ? "text-gold-bright" : "text-text-primary",
-                      )}
-                      onClick={() => {
-                        setCurrentModel(m.id);
-                        setModelOpen(false);
-                      }}
-                    >
-                      <span>{m.label}</span>
-                      {m.id === currentModel && <span className="text-xs">使用中</span>}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </Popover>
-          )}
-        </div>
       </div>
 
       <textarea

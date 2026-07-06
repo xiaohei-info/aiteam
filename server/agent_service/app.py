@@ -13,7 +13,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 
 from agent_service.auth.local_login import (
     LocalLoginService,
@@ -44,6 +44,7 @@ from agent_service.grants.store import (
 )
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
+from agent_gateway.runtime_readiness import check_runtime_readiness
 from agent_service.mainline.factory import build_mainline_service
 from agent_service.mainline.routes import build_mainline_router
 from agent_service.mainline.service import MainlineService
@@ -79,6 +80,20 @@ def build_router(login_service: LocalLoginService) -> APIRouter:
     @router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="agent_ping")
     async def ping() -> Envelope[dict]:
         return Envelope[dict](data={"pong": True})
+
+    @router.get(
+        "/health",
+        summary="runtime readiness（AITEAM-688）",
+        description="返回当前部署 runtime 的就绪状态、CLI/capabilities；runtime_not_ready 时附原因。",
+        operation_id="agent_health",
+    )
+    async def health(request: Request) -> Envelope[dict]:
+        # 读 build_app 时冻结的 settings（app.state.settings），避免请求期 env 漂移。
+        _s = getattr(request.app.state, "settings", None) or load_settings("agent")
+        readiness = check_runtime_readiness(
+            _s.agent_runtime, production=_s.is_production
+        )
+        return Envelope[dict](data=readiness.model_dump(mode="json"))
 
     @router.post("/login", summary="本地登录（首次在线取 token）", operation_id="agent_login")
     async def login(req: LoginRequest) -> Envelope[LoginResult]:
@@ -231,6 +246,7 @@ def build_app(
         runtime_selection=settings.agent_runtime,
         runs_root=settings.agent_runs_root,
         runtime_env_passthrough=settings.agent_runtime_env_passthrough,
+        production=settings.is_production,
         solutions=shared_solutions,
     )
     app.include_router(build_mainline_router(mainline, identity_provider=login_service.current_identity))

@@ -261,7 +261,7 @@ describe("TimelineStore + createTimelineFetcher loadOlder", () => {
   });
 });
 
-// ---- 5. MessageComposer 工具栏 + @提及 + 附件 + 模型切换 ----
+// ---- 5. MessageComposer 工具栏 + @提及 + 附件 ----
 
 function makeConv5(id: string, title: string) {
   return { id, title, state: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
@@ -328,14 +328,15 @@ async function renderChatComposer(rosterItems: Array<{ employee_id: string; disp
   return { fetchImpl };
 }
 
-describe("MessageComposer 工具栏 + @提及 + 附件 + 模型切换", () => {
-  it("渲染工具栏：附件 / @ / 技能 / 截图 / 模型标签", async () => {
+describe("MessageComposer 工具栏 + @提及 + 附件", () => {
+  it("渲染工具栏：附件 / @ / 技能 / 截图", async () => {
     await renderChatComposer();
     expect(screen.getByRole("button", { name: "附件上传" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "召唤其他智能体" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "技能市场入口" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "截图工具" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /当前模型：GPT-4o/ })).toBeInTheDocument();
+    // AITEAM-688：runtime/model 是部署级配置，私聊不再提供模型选择入口。
+    expect(screen.queryByRole("button", { name: /当前模型/ })).toBeNull();
   });
 
   it("打开 @提及面板选择专家 -> 插入 @handle 到输入框", async () => {
@@ -375,16 +376,6 @@ describe("MessageComposer 工具栏 + @提及 + 附件 + 模型切换", () => {
 
     const ta = screen.getByLabelText("消息内容") as HTMLTextAreaElement;
     await waitFor(() => expect(ta.value).toContain("/写作助手"));
-  });
-
-  it("模型切换标签：选择更新显示", async () => {
-    await renderChatComposer();
-
-    fireEvent.click(screen.getByRole("button", { name: /当前模型：GPT-4o/ }));
-    const claudeBtn = await screen.findByRole("button", { name: /Claude Sonnet/ });
-    fireEvent.click(claudeBtn);
-
-    expect(screen.getByRole("button", { name: /当前模型：Claude Sonnet/ })).toBeInTheDocument();
   });
 
   it("附件上传后发送的消息体包含 [附件: filename]", async () => {
