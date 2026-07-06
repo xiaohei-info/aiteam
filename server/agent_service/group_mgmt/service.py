@@ -8,6 +8,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from agent_service.mainline.group import GroupChatService, GroupExpert
+from agent_service.mainline.execution_orchestrator import ExecutionOrchestrator
 from agent_service.mainline.service import MainlineService
 
 from .store import (
@@ -34,11 +35,15 @@ class GroupMgmtService:
         member_store: GroupMemberRepository,
         msg_store: GroupMessageRepository,
         mainline: MainlineService | None = None,
+        orchestrator: ExecutionOrchestrator | None = None,
+        tenant_id: str = "local",
     ) -> None:
         self._conv = conv_store
         self._members = member_store
         self._msgs = msg_store
         self._mainline = mainline
+        self._orchestrator = orchestrator
+        self._tenant_id = tenant_id
         # 群聊 conversation_id -> 对应 mainline conversation_id 的映射，保证编排落在同一会话上。
         self._mainline_convs: dict[str, str] = {}
 
@@ -118,10 +123,13 @@ class GroupMgmtService:
         if mainline_conv_id is None or self._mainline is None:
             return
         roster = [
-            GroupExpert(handle=member.employee_id)
+            GroupExpert(handle=member.employee_id, employee_id=member.employee_id)
             for member in self._members.list_by_conversation(group_conv_id)
         ]
-        group_chat = GroupChatService(self._mainline, experts=roster)
+        group_chat = GroupChatService(
+            self._mainline, experts=roster,
+            orchestrator=self._orchestrator, tenant_id=self._tenant_id,
+        )
         await group_chat.post_and_dispatch(mainline_conv_id, content)
 
     def list_messages(self, conversation_id: str, cursor: int = 0) -> list[GroupMessage]:

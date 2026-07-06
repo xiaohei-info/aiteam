@@ -494,17 +494,36 @@ class SqliteRunRepository(RunRepository):
         data["usage"] = json.loads(data["usage"]) if data["usage"] is not None else None
         data.setdefault("trigger_type", "manual_run")
         data.setdefault("execution_mode", "single_agent")
+        # AITEAM-689 (M1)：快照绑定列；旧库无列时 get() 不会返回这些键，用安全默认回填。
+        data.setdefault("snapshot_version", None)
+        data.setdefault("snapshot_source", "none")
+        data.setdefault("employee_id", None)
+        data.setdefault("runtime", None)
+        data.setdefault("provider_ref", None)
+        skill_raw = data.get("skill_refs")
+        if skill_raw is None:
+            data["skill_refs"] = []
+        elif isinstance(skill_raw, str):
+            try:
+                parsed = json.loads(skill_raw)
+                data["skill_refs"] = list(parsed) if isinstance(parsed, list) else []
+            except (ValueError, TypeError):
+                data["skill_refs"] = []
         return Run(**data)
 
     def create(self, run: Run) -> Run:
         self._db.execute(
             "INSERT INTO runs (id, conversation_id, status, trigger_type, execution_mode, "
-            "session_id, error, usage, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "session_id, error, usage, created_at, updated_at, "
+            "snapshot_version, snapshot_source, employee_id, runtime, provider_ref, skill_refs) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (run.id, run.conversation_id, run.status.value, run.trigger_type.value,
              run.execution_mode.value, run.session_id, run.error,
              json.dumps(run.usage) if run.usage is not None else None,
-             _iso(run.created_at), _iso(run.updated_at)),
+             _iso(run.created_at), _iso(run.updated_at),
+             run.snapshot_version, getattr(run, "snapshot_source", "none"),
+             run.employee_id, run.runtime, run.provider_ref,
+             json.dumps(run.skill_refs)),
         )
         return run
 

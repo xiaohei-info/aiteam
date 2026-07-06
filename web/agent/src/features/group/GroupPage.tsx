@@ -50,12 +50,15 @@ import {
 function toGroupExpert(p: {
   handle: string;
   display_name: string;
+  employee_id?: string | null;
   runtime_binding?: string | null;
 }): GroupExpert {
+  // M1：不再把 runtime_binding 塞进 model（前端 model 不作为权威配置）；
+  // 后端按 employee_id 从专家快照派生 RunSpec。
   return {
     handle: p.handle,
     display_name: p.display_name,
-    ...(p.runtime_binding ? { model: p.runtime_binding } : {}),
+    ...(p.employee_id ? { employee_id: p.employee_id } : {}),
   };
 }
 
