@@ -3,6 +3,7 @@
 验：
 - owner HTTP 全链路 CRUD（201/200/200/204），统一 envelope（02 §10.3.4）。
 - 明文加密存储：DB 列为 bytea 密文，HTTP 响应无明文/无密文（红线断言）。
+- 能力目录：supported_models / model_catalog_source 全链路透传；更新 supported_models 后 version 递增。
 - member 读可、写 403（03 §9.7）。
 - 跨租户：t-a 的凭据在 t-b 视角 404（RLS 强制，D22）。
 - version 自增：每次 PUT 配置变更 +1。
@@ -59,6 +60,11 @@ def _token(
 
 _PLAINTEXT_SECRET = "sk-relay-integration-超机密-9876543210"
 
+_DEFAULT_MODELS = [
+    {"model": "gpt-4o", "display_name": "GPT-4o", "enabled": True, "capabilities": {"context_window": 128000}},
+    {"model": "claude-3-5-sonnet", "display_name": "", "enabled": True, "capabilities": {}},
+]
+
 
 def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     migrated_db, admin_url, two_tenants
@@ -74,6 +80,8 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
         "endpoint": "https://relay.example.local/v1",
         "visibility": "tenant",
         "secret": _PLAINTEXT_SECRET,
+        "supported_models": _DEFAULT_MODELS,
+        "model_catalog_source": "manual",
     }
 
     # create
@@ -86,6 +94,11 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     assert created["provider_ref"] == "relay-default"
     assert created["mode"] == "relay"
     assert created["version"] == 1
+    # 能力目录透传
+    assert len(created["supported_models"]) == 2
+    assert created["supported_models"][0]["model"] == "gpt-4o"
+    assert created["supported_models"][0]["capabilities"] == {"context_window": 128000}
+    assert created["model_catalog_source"] == "manual"
     # 红线：响应无明文/密文
     assert "secret" not in created
     assert "encrypted_secret" not in created
@@ -97,39 +110,54 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     with psycopg.connect(admin_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT encrypted_secret FROM provider_credential WHERE id = %s", (cid,)
+                "SELECT encrypted_secret, supported_models FROM provider_credential WHERE id = %s", (cid,)
             )
-            db_secret = bytes(cur.fetchone()[0])
+            db_secret, db_models = cur.fetchone()
+    db_secret = bytes(db_secret)
     assert db_secret != _PLAINTEXT_SECRET.encode()
     assert _PLAINTEXT_SECRET not in db_secret.decode("utf-8", errors="ignore")
+    assert len(db_models) == 2
+    assert db_models[0]["model"] == "gpt-4o"
 
     # get
     r = client.get(f"/api/manager/provider-credentials/{cid}", headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 200
+    got = r.json()["data"]
+    assert len(got["supported_models"]) == 2
+    assert got["model_catalog_source"] == "manual"
     assert _PLAINTEXT_SECRET not in r.text
 
     # list
     r = client.get("/api/manager/provider-credentials", headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 200
-    assert len(r.json()["data"]) == 1
+    items = r.json()["data"]
+    assert len(items) == 1
+    assert len(items[0]["supported_models"]) == 2
+    assert "encrypted_secret" not in items[0]
     assert _PLAINTEXT_SECRET not in r.text
 
-    # update -> version 自增。PUT body 用 ProviderCredentialUpdate 口径：provider_ref 不可改、
-    # 不入改写体（Update schema extra=forbid，带 provider_ref 会 422）。
+    # update supported_models -> version 应自增（触发器 BEFORE UPDATE OF 含 supported_models）
     update_body = {
         "display_name": "改名",
         "mode": "direct",
         "endpoint": "https://api.openai.example/v1",
         "visibility": "tenant",
         "secret": "sk-new-plain-int-777",
+        "supported_models": [
+            {"model": "gpt-4o-mini", "display_name": "GPT-4o mini", "enabled": True, "capabilities": {}},
+        ],
+        "model_catalog_source": "manual",
     }
     r = client.put(
         f"/api/manager/provider-credentials/{cid}",
         json=update_body, headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200
-    assert r.json()["data"]["display_name"] == "改名"
-    assert r.json()["data"]["version"] == 2
+    updated = r.json()["data"]
+    assert updated["display_name"] == "改名"
+    assert updated["version"] == 2
+    assert len(updated["supported_models"]) == 1
+    assert updated["supported_models"][0]["model"] == "gpt-4o-mini"
     assert "sk-new-plain-int-777" not in r.text
 
     # 跨租户：t-b owner 看不到 t-a 的凭据（RLS 强制）

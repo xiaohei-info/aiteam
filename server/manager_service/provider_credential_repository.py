@@ -29,12 +29,14 @@ class ProviderCredentialRow:
     encrypted_secret: bytes  # 密文，绝不下发明文
     visibility: str
     allowed_member_ids: list[str]
+    supported_models: list[dict[str, Any]]  # 能力目录（model 等非敏感声明）
+    model_catalog_source: str  # 能力目录来源（manual | discovery）
     version: int
 
 
 _COLUMNS = (
     "id, provider_ref, display_name, mode, endpoint, encrypted_secret, "
-    "visibility, allowed_member_ids, version"
+    "visibility, allowed_member_ids, supported_models, model_catalog_source, version"
 )
 
 
@@ -48,8 +50,15 @@ def _row_to_credential(row: Any) -> ProviderCredentialRow:
         encrypted_secret=bytes(row[5]) if row[5] is not None else b"",
         visibility=row[6],
         allowed_member_ids=list(row[7] or []),
-        version=row[8],
+        supported_models=list(row[8] or []),
+        model_catalog_source=row[9] or "manual",
+        version=row[10],
     )
+
+
+def _dump_supported_models(supported_models: list[dict[str, Any]]) -> str:
+    """将能力目录序列化为 jsonb .payload（保序、去 None 键由调用方保证）。"""
+    return json.dumps(supported_models, ensure_ascii=False)
 
 
 class ProviderCredentialRepository:
@@ -69,6 +78,8 @@ class ProviderCredentialRepository:
         encrypted_secret: bytes,
         visibility: str,
         allowed_member_ids: list[str],
+        supported_models: list[dict[str, Any]],
+        model_catalog_source: str,
     ) -> ProviderCredentialRow:
         """在本 tenant 建 provider 凭据行。tenant_id 取自 ctx（D22，RLS WITH CHECK 兜底）。"""
         with self._router.session(ctx) as s:
@@ -76,14 +87,16 @@ class ProviderCredentialRepository:
                 """
                 INSERT INTO provider_credential (
                     tenant_id, provider_ref, display_name, mode, endpoint,
-                    encrypted_secret, visibility, allowed_member_ids
+                    encrypted_secret, visibility, allowed_member_ids,
+                    supported_models, model_catalog_source
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING """ + _COLUMNS,
                 (
                     ctx.tenant_id, provider_ref, display_name, mode, endpoint,
                     encrypted_secret, visibility, json.dumps(allowed_member_ids),
+                    _dump_supported_models(supported_models), model_catalog_source,
                 ),
             ).fetchone()
         return _row_to_credential(row)
@@ -116,6 +129,8 @@ class ProviderCredentialRepository:
         encrypted_secret: bytes,
         visibility: str,
         allowed_member_ids: list[str],
+        supported_models: list[dict[str, Any]],
+        model_catalog_source: str,
     ) -> ProviderCredentialRow | None:
         """改写本 tenant 内凭据（version 由触发器自增）。跨 tenant 行 RLS 不可见。"""
         with self._router.session(ctx) as s:
@@ -123,12 +138,14 @@ class ProviderCredentialRepository:
                 """
                 UPDATE provider_credential SET
                     display_name = %s, mode = %s, endpoint = %s,
-                    encrypted_secret = %s, visibility = %s, allowed_member_ids = %s
+                    encrypted_secret = %s, visibility = %s, allowed_member_ids = %s,
+                    supported_models = %s, model_catalog_source = %s
                 WHERE id = %s
                 RETURNING """ + _COLUMNS,
                 (
                     display_name, mode, endpoint, encrypted_secret, visibility,
-                    json.dumps(allowed_member_ids), credential_id,
+                    json.dumps(allowed_member_ids), _dump_supported_models(supported_models),
+                    model_catalog_source, credential_id,
                 ),
             ).fetchone()
         return _row_to_credential(row) if row is not None else None
@@ -146,5 +163,48 @@ class ProviderCredentialRepository:
         with self._router.session(ctx) as s:
             rows = s.execute(
                 "SELECT " + _COLUMNS + " FROM provider_credential ORDER BY created_at"
+            ).fetchall()
+        return [_row_to_credential(r) for r in rows]
+
+    def list_models_by_tenant(self, ctx: TenantContext) -> list[dict[str, Any]]:
+        """列本 tenant 全部 provider 的能力目录（含 provider_ref 关联）。"""
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                """
+                SELECT provider_ref, supported_models, model_catalog_source
+                FROM provider_credential
+                ORDER BY created_at
+                """
+            ).fetchall()
+        return [
+            {
+                "provider_ref": r[0],
+                "supported_models": list(r[1] or []),
+                "model_catalog_source": r[2] or "manual",
+            }
+            for r in rows
+        ]
+
+    def list_providers_supporting_model(
+        self, ctx: TenantContext, *, model: str
+    ) -> list[ProviderCredentialRow]:
+        """返回本 tenant 内 enabled 且支持指定 model 的 provider 列表（供招募自动匹配 provider_ref）。
+
+        匹配语义：supported_models 数组中存在 enabled=true 且 model=<model> 的条目。
+        使用 jsonb_path_exists（jsonpath）做索引友好查询；无匹配返回 []。
+        """
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                """
+                SELECT """ + _COLUMNS + """
+                FROM provider_credential
+                WHERE jsonb_path_exists(
+                    supported_models,
+                    '$[*] ? (@.model == $model && @.enabled == true)',
+                    %s::jsonb
+                )
+                ORDER BY created_at
+                """,
+                (json.dumps({"model": model}),),
             ).fetchall()
         return [_row_to_credential(r) for r in rows]
