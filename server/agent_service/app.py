@@ -179,6 +179,11 @@ def _build_marketplace_provider(login_service) -> ManagerMarketplaceProvider:
     """
     settings = load_settings("agent")
     client = _manager_service_client(settings) if settings.manager_url else None
+    # 与 grants client 同一模式：把 user_token_provider 挂到 ServiceClient 上，
+    # 让 _headers() 自动附加 Authorization: Bearer <token>（AITEAM-672）。
+    # ManagerMarketplaceProvider 只用 token_provider 做未登录→空列表判断，不再手传 headers。
+    if client is not None:
+        client._user_token_provider = login_service.current_token
     return ManagerMarketplaceProvider(
         service_client=client,
         token_provider=login_service.current_token,

@@ -95,8 +95,9 @@ class ManagerMarketplaceProvider:
             # 用户未登录：不是错误，只是当前没有可用数据，回空列表让前端展示登录引导。
             return []
         try:
-            headers = {"Authorization": f"Bearer {token}"}
-            body = self._client.get("/api/manager/recruit/catalog/experts", headers=headers)
+            # Authorization 头由 ServiceClient 的 user_token_provider 自动附加，
+            # 这里不再手动传 headers（ServiceClient.get 只接受 path，AITEAM-672）。
+            body = self._client.get("/api/manager/recruit/catalog/experts")
         except Exception as e:
             # Manager 不可达 / 网络错误：把真实原因带上去，不要静默吞掉。
             raise MarketplaceProviderError(
