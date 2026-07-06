@@ -396,12 +396,14 @@ describe("GroupPage — 从解决方案创建群聊", () => {
       }
       if (
         path.includes("/api/agent/conversations") &&
-        !path.includes("/timeline") &&
         !path.includes("/messages") &&
         !path.includes("/group-dispatch") &&
         !path.includes("/solutions") &&
         (init?.method === undefined || init?.method === "GET")
       ) {
+        if (path.includes("/timeline")) {
+          return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
         return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       return new Response(envelope(null), { status: 200 });
