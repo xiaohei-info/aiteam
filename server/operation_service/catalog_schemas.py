@@ -35,6 +35,8 @@ class RegisterExpertTemplateRequest(BaseModel):
 
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
     default_model / skill_ids / tags / description / initial_memories / sort_order。
+    PRD 必填字段（category / avatar_url / system_prompt / default_model / skill_ids / description）
+    在 schema 层做 min_length 校验，注册即草稿（is_published 不在本请求中）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -44,14 +46,15 @@ class RegisterExpertTemplateRequest(BaseModel):
         min_length=1,
         description="模板稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
     )
+    # is_published 不在注册请求中；注册即草稿，发布由单独发布动作完成（05 F03）。
     display_name: str = Field(min_length=1, description="专家名称（PRD: name）")
-    category: str = Field(default="", description="分类（市场营销/财务分析/…）(PRD: category)")
-    avatar_url: str = Field(default="", description="头像图片 URL (PRD: avatar_url)")
-    system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）(PRD: system_prompt)")
-    default_model: str = Field(default="", description="默认使用的大模型（PRD: default_model）")
-    skill_ids: list[str] = Field(default_factory=list, description="预配置技能列表 (PRD: skill_ids)")
+    category: str = Field(min_length=1, description="分类（市场营销/财务分析/…）(PRD: category, 必填)")
+    avatar_url: str = Field(min_length=1, description="头像图片 URL (PRD: avatar_url, 必填)")
+    system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
+    default_model: str = Field(min_length=1, description="默认使用的大模型（PRD: default_model, 必填）")
+    skill_ids: list[str] = Field(min_length=1, default_factory=list, description="预配置技能列表 (PRD: skill_ids, 必填)")
     tags: list[str] = Field(default_factory=list, description="搜索标签 (PRD: tags)")
-    description: str = Field(default="", description="用户可见职位描述（≤200字）(PRD: description)")
+    description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
     initial_memories: list[dict] = Field(
         default_factory=list, description="预置记忆条目 (PRD: initial_memories)"
     )
@@ -76,9 +79,11 @@ class RegisterSolutionTemplateRequest(BaseModel):
         description="方案稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
     )
     display_name: str = Field(min_length=1, description="方案名称")
-    description: str = Field(default="", description="方案描述 (PRD: description)")
+    description: str = Field(min_length=1, description="方案描述 (PRD: description, 必填)")
     icon: str = Field(default="", description="方案图标 (PRD: icon)")
-    expert_template_ids: list[str] = Field(default_factory=list, description="包含的专家模板 ID 列表")
+    expert_template_ids: list[str] = Field(
+        min_length=1, default_factory=list, description="包含的专家模板 ID 列表 (必填)"
+    )
     expert_bindings: list["ExpertBinding"] = Field(
         default_factory=list,
         description="方案内专家绑定列表（含排序号与启用开关）；提供时优先于 expert_template_ids",

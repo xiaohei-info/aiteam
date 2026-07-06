@@ -51,7 +51,7 @@ def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
     return {"Authorization": f"Bearer {_token(role)}"}
 
 
-_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "system_prompt": "lead"}
+_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "lead", "default_model": "gpt-5", "skill_ids": ["seo"], "description": "CMO"}
 
 
 def _register_expert(client, body=None):
@@ -89,7 +89,7 @@ def test_register_expert_envelope(client, manager):
 
 
 def test_register_solution_envelope(client):
-    body = {"solution_id": "sol-x", "display_name": "X", "expert_template_ids": ["tpl-cmo"]}
+    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"]}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201
     assert r.json()["data"]["catalog_type"] == "solution_template"
@@ -189,7 +189,7 @@ def _assert_url_safe(template_id: str) -> None:
 
 def test_route_register_expert_without_id_returns_201_with_generated_id(client, manager):
     """POST /expert-templates 不传 template_id：201 + 响应含自动生成的 ID + 草稿不通知 Manager。"""
-    body = {"display_name": "路由注册-无ID专家"}
+    body = {"display_name": "路由注册-无ID专家", "category": "m", "avatar_url": "h", "system_prompt": "s", "default_model": "g", "skill_ids": ["sk"], "description": "d"}
     r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]
@@ -201,7 +201,7 @@ def test_route_register_expert_without_id_returns_201_with_generated_id(client, 
 
 
 def test_route_register_solution_without_id_returns_201_with_generated_id(client):
-    body = {"display_name": "路由注册-无ID方案"}
+    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"]}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]
@@ -218,6 +218,6 @@ def test_route_register_omitting_name_still_422(client):
 
 def test_route_register_empty_string_id_rejected_with_422(client, manager):
     """template_id 为空字符串 → schema min_length=1 拒绝（422），不入库空串 ID。"""
-    body = {"display_name": "EmptyIdExpert", "template_id": ""}
+    body = {"display_name": "EmptyIdExpert", "template_id": "", "category": "m", "avatar_url": "h", "system_prompt": "s", "default_model": "g", "skill_ids": ["sk"], "description": "d"}
     r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
     assert r.status_code == 422, r.text

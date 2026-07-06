@@ -42,7 +42,16 @@ def service(manager):
 
 
 def _expert(**kw):
-    base = dict(template_id="tpl-cmo", display_name="CMO", system_prompt="market lead")
+    base = dict(
+        template_id="tpl-cmo",
+        display_name="CMO",
+        category="marketing",
+        avatar_url="https://example.com/cmo.png",
+        system_prompt="market lead",
+        default_model="gpt-5",
+        skill_ids=["seo", "analytics"],
+        description="CMO expert",
+    )
     base.update(kw)
     return RegisterExpertTemplateRequest(**base)
 
@@ -51,6 +60,7 @@ def _solution(**kw):
     base = dict(
         solution_id="sol-growth",
         display_name="Growth",
+        description="growth solution",
         expert_template_ids=["tpl-cmo"],
     )
     base.update(kw)
@@ -61,6 +71,7 @@ def _multi_solution(**kw):
     base = dict(
         solution_id="sol-multi",
         display_name="Multi",
+        description="multi solution",
         expert_bindings=[
             ExpertBinding(template_id="tpl-cmo", sequence_no=2, enabled=False),
             ExpertBinding(template_id="tpl-ceo", sequence_no=1, enabled=True),
@@ -303,13 +314,15 @@ def test_register_solution_with_orchestration_fields(service):
 
 
 def test_register_solution_default_orchestration_fields(service):
-    """注册方案时不带编排字段，应落默认值（空字符串/空 list）。"""
+    """注册方案时不带编排字段，应落默认值（空字符串/空 list）；
+    必填字段（description / expert_template_ids）由 schema 校验并落库。"""
     service.register_solution_template(_solution())
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload["planner_prompt"] == ""
     assert entry.payload["subtask_prompt"] == ""
     assert entry.payload["aggregate_prompt"] == ""
-    assert entry.payload["description"] == ""
+    assert entry.payload["description"] == "growth solution"
+    assert entry.payload["expert_template_ids"] == ["tpl-cmo"]
     assert entry.payload["icon"] == ""
     assert entry.payload["tags"] == []
 
@@ -364,16 +377,17 @@ def test_register_expert_stores_flat_fields(service):
 
 
 def test_register_expert_default_fields(service):
-    """注册专家模板时不带新字段，应落默认值（空/string/0/list）。"""
-    service.register_expert_template(_expert(system_prompt=""))
+    """注册专家模板时不带可选项 tags/initial_memories/sort_order,应落默认值（空 list/0）。
+    必填字段（category/avatar_url/system_prompt/default_model/skill_ids/description）由 schema 校验。"""
+    service.register_expert_template(_expert())
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry.payload["category"] == ""
-    assert entry.payload["avatar_url"] == ""
-    assert entry.payload["system_prompt"] == ""
-    assert entry.payload["default_model"] == ""
-    assert entry.payload["skill_ids"] == []
+    assert entry.payload["category"] == "marketing"
+    assert entry.payload["avatar_url"] == "https://example.com/cmo.png"
+    assert entry.payload["system_prompt"] == "market lead"
+    assert entry.payload["default_model"] == "gpt-5"
+    assert entry.payload["skill_ids"] == ["seo", "analytics"]
+    assert entry.payload["description"] == "CMO expert"
     assert entry.payload["tags"] == []
-    assert entry.payload["description"] == ""
     assert entry.payload["initial_memories"] == []
     assert entry.payload["sort_order"] == 0
 
@@ -435,6 +449,7 @@ def test_register_solution_expert_bindings_overrides_flat_ids(service):
     req = RegisterSolutionTemplateRequest(
         solution_id="sol-over",
         display_name="Over",
+        description="over",
         expert_template_ids=["tpl-ignored"],
         expert_bindings=[ExpertBinding(template_id="tpl-real", sequence_no=1, enabled=True)],
     )
@@ -465,17 +480,23 @@ def test_expert_binding_sequence_no_must_be_positive():
 # ---- AITEAM-355 问题二：服务端自动生成 ID ----
 
 def _auto_expert(**kw):
-    base = dict(display_name="Auto")
+    base = dict(
+        display_name="Auto",
+        category="x",
+        avatar_url="h",
+        system_prompt="s",
+        default_model="g",
+        skill_ids=["sk"],
+        description="d",
+    )
     base.update(kw)
     return RegisterExpertTemplateRequest(**base)
 
 
 def _auto_solution(**kw):
-    base = dict(display_name="Auto-Solution")
+    base = dict(display_name="Auto-Solution", description="d", expert_template_ids=["tpl-cmo"])
     base.update(kw)
-    return RegisterSolutionTemplateRequest(**kw)
-
-
+    return RegisterSolutionTemplateRequest(**base)
 def test_register_expert_without_id_generates_id(service, manager):
     """不传 template_id 时服务端必须自动生成非空、URL 安全的 ID（AITEAM-355）。"""
     entry = service.register_expert_template(_auto_expert(display_name="测试专家"))

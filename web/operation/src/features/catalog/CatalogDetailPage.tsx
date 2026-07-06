@@ -153,29 +153,31 @@ export function CatalogDetailPage(): ReactNode {
     setEditError(null);
     try {
       const isExpert = draft.catalog_type === "expert_template";
-      const changes: Record<string, unknown> = {};
-      changes.display_name = draft.display_name;
+      // Always send the full editable payload so that clearing a field (to empty /
+      // empty array / null) is reflected — do not use truthy guards which would keep
+      // stale server values when the user empties a field.
+      const changes: Record<string, unknown> = { display_name: draft.display_name };
       if (isExpert) {
         changes.system_prompt = draft.system_prompt ?? "";
         changes.default_model = draft.default_model ?? "";
         changes.category = draft.category ?? "";
         changes.avatar_url = draft.avatar_url ?? "";
-        if (draft.skill_ids) changes.skill_ids = draft.skill_ids;
-        if (draft.tags) changes.tags = draft.tags;
-        if (draft.description) changes.description = draft.description;
-        if (draft.sort_order !== undefined) changes.sort_order = draft.sort_order;
-        if (draft.initial_memories) changes.initial_memories = draft.initial_memories;
+        changes.description = draft.description ?? "";
+        changes.skill_ids = draft.skill_ids ?? [];
+        changes.tags = draft.tags ?? [];
+        changes.initial_memories = draft.initial_memories ?? [];
+        changes.sort_order = draft.sort_order ?? 0;
       } else {
-        if (draft.expert_template_ids) changes.expert_template_ids = draft.expert_template_ids;
-        if (draft.description) changes.description = draft.description;
-        if (draft.icon) changes.icon = draft.icon;
-        if (draft.knowledge_refs) changes.knowledge_refs = draft.knowledge_refs;
-        if (draft.skill_refs) changes.skill_refs = draft.skill_refs;
-        if (draft.planner_prompt) changes.planner_prompt = draft.planner_prompt;
-        if (draft.subtask_prompt) changes.subtask_prompt = draft.subtask_prompt;
-        if (draft.aggregate_prompt) changes.aggregate_prompt = draft.aggregate_prompt;
-        if (draft.default_grants) changes.default_grants = draft.default_grants;
-        if (draft.tags) changes.tags = draft.tags;
+        changes.description = draft.description ?? "";
+        changes.icon = draft.icon ?? "";
+        changes.expert_template_ids = draft.expert_template_ids ?? [];
+        changes.knowledge_refs = draft.knowledge_refs ?? [];
+        changes.skill_refs = draft.skill_refs ?? [];
+        changes.planner_prompt = draft.planner_prompt ?? "";
+        changes.subtask_prompt = draft.subtask_prompt ?? "";
+        changes.aggregate_prompt = draft.aggregate_prompt ?? "";
+        changes.default_grants = draft.default_grants ?? null;
+        changes.tags = draft.tags ?? [];
       }
       const updated = await api.updateEntry(
         catalog_type as CatalogItemType,
