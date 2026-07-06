@@ -4,14 +4,11 @@
  * 对齐后端 GET /api/operation/catalog/{catalog_type}/{template_id}
  * 并对管理员暴露 PATCH 部分更新。
  *
- * 详情显示 payload 顶层字段:
- *   - 专家: persona / recommended_config.{prompt_pack,
- *     default_model_ref, default_binding, default_skill_bundle,
- *     default_skills, knowledge_bindings, memory_config, role_name,
- *     category_code}
+ * 详情显示 payload 扁平字段（PRD-v2）:
+ *   - 专家: display_name / category / avatar_url / system_prompt /
+ *     default_model / skill_ids / tags / description / initial_memories / sort_order
  *   - 行业方案: expert_template_ids / knowledge_refs / skill_refs /
- *     planner_prompt / subtask_prompt / aggregate_prompt /
- *     default_grants / tags / default_kb_blueprint / default_skill_bundle
+ *     planner_prompt / subtask_prompt / aggregate_prompt / default_grants / tags
  */
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useParams, Link } from "react-router-dom";
@@ -33,8 +30,6 @@ import {
 import type {
   CatalogItem,
   CatalogItemType,
-  ExpertRecommendedConfig,
-  ModelRef,
 } from "./types";
 
 const textareaCls =
@@ -72,6 +67,18 @@ function parseJsonObject(value: string): Record<string, unknown> | undefined {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJsonArray(value: string): Record<string, unknown>[] | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
     return undefined;
   } catch {
     return undefined;
@@ -149,12 +156,19 @@ export function CatalogDetailPage(): ReactNode {
       const changes: Record<string, unknown> = {};
       changes.display_name = draft.display_name;
       if (isExpert) {
-        changes.persona = draft.persona ?? "";
-        if (draft.recommended_config) {
-          changes.recommended_config = draft.recommended_config;
-        }
+        changes.system_prompt = draft.system_prompt ?? "";
+        changes.default_model = draft.default_model ?? "";
+        changes.category = draft.category ?? "";
+        changes.avatar_url = draft.avatar_url ?? "";
+        if (draft.skill_ids) changes.skill_ids = draft.skill_ids;
+        if (draft.tags) changes.tags = draft.tags;
+        if (draft.description) changes.description = draft.description;
+        if (draft.sort_order !== undefined) changes.sort_order = draft.sort_order;
+        if (draft.initial_memories) changes.initial_memories = draft.initial_memories;
       } else {
         if (draft.expert_template_ids) changes.expert_template_ids = draft.expert_template_ids;
+        if (draft.description) changes.description = draft.description;
+        if (draft.icon) changes.icon = draft.icon;
         if (draft.knowledge_refs) changes.knowledge_refs = draft.knowledge_refs;
         if (draft.skill_refs) changes.skill_refs = draft.skill_refs;
         if (draft.planner_prompt) changes.planner_prompt = draft.planner_prompt;
@@ -212,16 +226,14 @@ export function CatalogDetailPage(): ReactNode {
 
   const vLabel = visibilityLabel(item.visible_scope);
   const isExpert = item.catalog_type === "expert_template";
-  const recommended = (draft.recommended_config ?? {}) as ExpertRecommendedConfig;
-  const modelRef: ModelRef = recommended?.default_model_ref ?? {};
-  const skillsText = (recommended?.default_skills ?? []).join("\n");
-  const kbText = (recommended?.knowledge_bindings ?? []).join("\n");
+  const skillIdsText = (draft.skill_ids ?? []).join("\n");
+  const tagsText = (draft.tags ?? []).join("\n");
+  const description = draft.description ?? "";
+  const initialMemoriesText = safeJson(draft.initial_memories ?? []);
   const kbRefsText = (draft.knowledge_refs ?? []).join("\n");
   const skillRefsText = (draft.skill_refs ?? []).join("\n");
   const solutionTagsText = (draft.tags ?? []).join("\n");
   const expertPicksText = (draft.expert_template_ids ?? []).join("\n");
-  const promptPackText = safeJson(recommended?.prompt_pack ?? {});
-  const memoryText = safeJson(recommended?.memory_config ?? {});
   const grantsText = safeJson(draft.default_grants ?? {});
 
   return (
@@ -302,12 +314,10 @@ export function CatalogDetailPage(): ReactNode {
           <ExpertDetailSections
             draft={draft}
             onChange={setDraft}
-            modelRef={modelRef}
-            skillsText={skillsText}
-            kbText={kbText}
-            promptPackText={promptPackText}
-            memoryText={memoryText}
-            recommended={recommended}
+            skillIdsText={skillIdsText}
+            tagsText={tagsText}
+            description={description}
+            initialMemoriesText={initialMemoriesText}
             editing={editing}
           />
         ) : (
@@ -362,203 +372,142 @@ export function CatalogDetailPage(): ReactNode {
 interface ExpertDetailProps {
   draft: CatalogItem;
   onChange: (next: CatalogItem) => void;
-  modelRef: ModelRef;
-  skillsText: string;
-  kbText: string;
-  promptPackText: string;
-  memoryText: string;
-  recommended?: ExpertRecommendedConfig;
+  skillIdsText: string;
+  tagsText: string;
+  description: string;
+  initialMemoriesText: string;
   editing: boolean;
 }
 
 function ExpertDetailSections(p: ExpertDetailProps): ReactNode {
   return (
     <>
-      <DetailSection title="人设(persona)">
-        {p.editing ? (
-          <textarea
-            className={textareaCls}
-            value={p.draft.persona ?? ""}
-            onChange={(e) =>
-              p.onChange({ ...p.draft, persona: e.target.value })
-            }
-          />
-        ) : (
-          <ReadonlyText value={p.draft.persona} />
-        )}
-      </DetailSection>
-
-      <DetailSection title="岗位 / 类别">
+      <DetailSection title="分类 / 头像">
         <div className="grid grid-cols-2 gap-sm">
           {p.editing ? (
             <>
-              <Field label="role_name">
+              <Field label="category">
                 <Input
                   className={inputCls}
-                  value={p.recommended?.role_name ?? ""}
+                  value={p.draft.category ?? ""}
                   onChange={(e) =>
-                    p.onChange({
-                      ...p.draft,
-                      recommended_config: {
-                        ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                        role_name: e.target.value,
-                      },
-                    })
+                    p.onChange({ ...p.draft, category: e.target.value })
                   }
                 />
               </Field>
-              <Field label="category_code">
+              <Field label="avatar_url">
                 <Input
                   className={inputCls}
-                  value={p.recommended?.category_code ?? ""}
+                  value={p.draft.avatar_url ?? ""}
                   onChange={(e) =>
-                    p.onChange({
-                      ...p.draft,
-                      recommended_config: {
-                        ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                        category_code: e.target.value,
-                      },
-                    })
+                    p.onChange({ ...p.draft, avatar_url: e.target.value })
                   }
                 />
               </Field>
             </>
           ) : (
             <>
-              <ReadonlyRow label="role_name" value={p.recommended?.role_name} />
-              <ReadonlyRow label="category_code" value={p.recommended?.category_code} />
+              <ReadonlyRow label="category" value={p.draft.category} />
+              <ReadonlyRow label="avatar_url" value={p.draft.avatar_url} />
             </>
           )}
         </div>
       </DetailSection>
 
-      <DetailSection title="推荐模型 (default_model_ref)">
-        {p.editing ? (
-          <div className="grid grid-cols-2 gap-sm">
-            <Field label="provider_key">
-              <Input
-                className={inputCls}
-                value={p.modelRef.provider_key ?? ""}
-                onChange={(e) =>
-                  p.onChange({
-                    ...p.draft,
-                    recommended_config: {
-                      ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                      default_model_ref: {
-                        ...((p.draft.recommended_config as ExpertRecommendedConfig)?.default_model_ref ?? {}),
-                        provider_key: e.target.value,
-                      },
-                    },
-                  })
-                }
-              />
-            </Field>
-            <Field label="model_id">
-              <Input
-                className={inputCls}
-                value={p.modelRef.model_id ?? ""}
-                onChange={(e) =>
-                  p.onChange({
-                    ...p.draft,
-                    recommended_config: {
-                      ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                      default_model_ref: {
-                        ...((p.draft.recommended_config as ExpertRecommendedConfig)?.default_model_ref ?? {}),
-                        model_id: e.target.value,
-                      },
-                    },
-                  })
-                }
-              />
-            </Field>
-          </div>
-        ) : (
-          <ReadonlyJson value={p.modelRef} />
-        )}
-      </DetailSection>
-
-      <DetailSection title="默认技能 / 知识绑定 / Prompt Pack">
-        {p.editing ? (
-          <div className="flex flex-col gap-md">
-            <Field label="默认技能 (每行或逗号)">
-              <textarea
-                className={textareaCls}
-                value={p.skillsText}
-                onChange={(e) => {
-                  const skills = parseList(e.target.value);
-                  p.onChange({
-                    ...p.draft,
-                    recommended_config: {
-                      ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                      default_skills: skills,
-                    },
-                  });
-                }}
-              />
-            </Field>
-            <Field label="知识库 (每行或逗号)">
-              <textarea
-                className={textareaCls}
-                value={p.kbText}
-                onChange={(e) => {
-                  const kb = parseList(e.target.value);
-                  p.onChange({
-                    ...p.draft,
-                    recommended_config: {
-                      ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                      knowledge_bindings: kb,
-                    },
-                  });
-                }}
-              />
-            </Field>
-            <Field label="Prompt Pack (JSON)">
-              <textarea
-                className={textareaCls}
-                value={p.promptPackText}
-                onChange={(e) => {
-                  const parsed = parseJsonObject(e.target.value);
-                  if (!parsed) return;
-                  p.onChange({
-                    ...p.draft,
-                    recommended_config: {
-                      ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                      prompt_pack: parsed,
-                    },
-                  });
-                }}
-              />
-            </Field>
-          </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-md">
-            <ReadonlyJson title="default_skills" value={p.recommended?.default_skills} />
-            <ReadonlyJson title="knowledge_bindings" value={p.recommended?.knowledge_bindings} />
-            <ReadonlyJson title="prompt_pack" value={p.recommended?.prompt_pack} />
-          </div>
-        )}
-      </DetailSection>
-
-      <DetailSection title="初始记忆 (memory_config)">
+      <DetailSection title="系统提示词 (system_prompt)">
         {p.editing ? (
           <textarea
             className={textareaCls}
-            value={p.memoryText}
+            placeholder="岗位描述系统提示词（纯文本）"
+            value={p.draft.system_prompt ?? ""}
+            onChange={(e) =>
+              p.onChange({ ...p.draft, system_prompt: e.target.value })
+            }
+          />
+        ) : (
+          <ReadonlyText value={p.draft.system_prompt} />
+        )}
+      </DetailSection>
+
+      <DetailSection title="默认模型 (default_model)">
+        {p.editing ? (
+          <Input
+            type="text"
+            className={inputCls}
+            value={p.draft.default_model ?? ""}
+            onChange={(e) =>
+              p.onChange({ ...p.draft, default_model: e.target.value })
+            }
+          />
+        ) : (
+          <ReadonlyText value={p.draft.default_model} />
+        )}
+      </DetailSection>
+
+      <DetailSection title="岗位描述 (description)">
+        {p.editing ? (
+          <textarea
+            className={textareaCls}
+            value={p.description}
+            onChange={(e) =>
+              p.onChange({ ...p.draft, description: e.target.value })
+            }
+          />
+        ) : (
+          <ReadonlyText value={p.draft.description} />
+        )}
+      </DetailSection>
+
+      <DetailSection title="技能 / 标签">
+        {p.editing ? (
+          <div className="flex flex-col gap-md">
+            <Field label="skill_ids (每行或逗号)">
+              <textarea
+                className={textareaCls}
+                value={p.skillIdsText}
+                onChange={(e) => {
+                  const skills = parseList(e.target.value);
+                  p.onChange({ ...p.draft, skill_ids: skills });
+                }}
+              />
+            </Field>
+            <Field label="tags (每行或逗号)">
+              <textarea
+                className={textareaCls}
+                value={p.tagsText}
+                onChange={(e) => {
+                  const tags = parseList(e.target.value);
+                  p.onChange({ ...p.draft, tags });
+                }}
+              />
+            </Field>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-md">
+            <ReadonlyJson title="skill_ids" value={p.draft.skill_ids} />
+            <ReadonlyJson title="tags" value={p.draft.tags} />
+          </div>
+        )}
+      </DetailSection>
+
+      <DetailSection title="预置记忆 (initial_memories)">
+        {p.editing ? (
+          <textarea
+            className={textareaCls}
+            value={p.initialMemoriesText}
             onChange={(e) => {
-              const parsed = parseJsonObject(e.target.value);
+              const parsed = parseJsonArray(e.target.value);
               if (!parsed) return;
-              p.onChange({
-                ...p.draft,
-                recommended_config: {
-                  ...(p.draft.recommended_config as ExpertRecommendedConfig ?? {}),
-                  memory_config: parsed,
-                },
-              });
+              p.onChange({ ...p.draft, initial_memories: parsed });
             }}
           />
         ) : (
-          <ReadonlyJson value={p.recommended?.memory_config} />
+          <ReadonlyJson value={p.draft.initial_memories} />
         )}
+      </DetailSection>
+
+      <DetailSection title="排序 (sort_order)">
+        <ReadonlyText value={p.draft.sort_order?.toString()} />
       </DetailSection>
     </>
   );

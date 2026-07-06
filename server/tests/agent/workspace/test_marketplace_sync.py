@@ -107,12 +107,12 @@ class TestManagerMarketplaceProvider:
                 {
                     "template_id": "mgr-1",
                     "display_name": "Manager Expert",
-                    "category_code": "marketing",
-                    "persona": "marketing leader",
-                    "default_model_json": {"provider": "openai", "model": "gpt-5"},
-                    "default_binding_json": {"skills": ["web_search"], "knowledge_bases": ["kb_general"]},
-                    "tags": ["ai"],
-                    "role_name": "CMO",
+                    "category": "marketing",
+                    "system_prompt": "marketing leader",
+                    "default_model": "gpt-5",
+                    "skill_ids": ["web_search"],
+                    "knowledge_refs": ["kb_general"],
+                    "tags": ["ai", "cmo"],
                 }
             ]
         }
@@ -126,9 +126,9 @@ class TestManagerMarketplaceProvider:
         assert t.template_id == "mgr-1"
         assert t.display_name == "Manager Expert"
         assert t.category == "marketing"
-        assert t.model_name == "openai::gpt-5"
+        assert t.model_name == "gpt-5"
         assert "web_search" in [s.get("code") for s in t.skills]
-        assert "CMO" in t.tags
+        assert "cmo" in t.tags
 
     def test_manager_failure_falls_back_to_fake(self):
         """Manager 调用异常时降级到 fake。"""

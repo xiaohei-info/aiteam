@@ -80,32 +80,47 @@ class EnterpriseNotifyRequest(BaseModel):
 # ---- Manager → Operator（云侧）----
 
 class ExpertTemplateDetail(BaseModel):
-    """F06 招募专家：Manager 向 Operator 拉专家模板详情（响应）。Operator 持模板真相，不写 Manager 库。"""
+    """F06 招募专家：Manager 向 Operator 拉专家模板详情（响应）。Operator 持模板真相，不写 Manager 库。
+
+    字段对齐 PRD-v2 S02 + 保留 Manager apply 路径消费的 persona/recommended_config。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     template_id: str
     version: str
     display_name: str
-    persona: str | None = None
-    recommended_config: dict = Field(default_factory=dict, description="推荐配置键值对（招募时预填充）")
-    default_model_json: dict = Field(default_factory=dict, description="默认模型配置（provider/model/temperature/max_tokens）；Operator 预设，Manager 招募时继承")
-    default_binding_json: dict = Field(default_factory=dict, description="默认运行时绑定（skills/knowledge_bases/memory 等）；Operator 预设，Manager 招募时继承")
-    prompt_pack_json: dict = Field(default_factory=dict, description="提示词包（system_prompt/behavior_rules/opening_message 等）；Operator 预设，Manager 招募时继承")
-    category_code: str = Field(default="", description="专家分类码（用于目录筛选）；Operator 预设")
-    role_name: str = Field(default="", description="角色名称（如技术专家、销售顾问）；Operator 预设")
+    persona: str | None = Field(default=None, description="内部人设/系统提示词影子（backfill from system_prompt）")
+    recommended_config: dict = Field(
+        default_factory=dict,
+        description="推荐配置（Manager 招募时预填充 model/skills/knowledge_refs 等）；backfill from flat 字段",
+    )
+    category: str = Field(default="", description="分类（市场营销/财务分析/…）")
+    avatar_url: str = Field(default="", description="头像图片 URL")
+    system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）")
+    default_model: str = Field(default="", description="默认使用的大模型")
+    skill_ids: list[str] = Field(default_factory=list, description="预配置技能列表")
+    description: str = Field(default="", description="用户可见职位描述（≤200字）")
+    initial_memories: list[dict] = Field(default_factory=list, description="预置记忆条目")
+    sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）")
     sequence_no: int = Field(default=1, ge=1, description="方案内专家绑定排序号，决定 apply 时专家的创建和编排顺序")
     enabled: bool = Field(default=True, description="单个专家启用开关；false 时方案内该专家不参与 apply")
 
 
 class SolutionPackage(BaseModel):
-    """F07 应用方案：Manager 向 Operator 拉行业方案包（响应）。在本 tenant 展开为 solution instance。"""
+    """F07 应用方案：Manager 向 Operator 拉行业方案包（响应）。在本 tenant 展开为 solution instance。
+
+    字段对齐 PRD-v2 S03 + 下游 apply/建群业务流程。default_kb_blueprint /
+    default_skill_bundle / default_collaboration_template_ref 已删除——跨端契约历史占位，下游无消费。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     solution_id: str
     version: str
     display_name: str
+    description: str = Field(default="", description="方案描述")
+    icon: str = Field(default="", description="方案图标")
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
     skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
@@ -113,9 +128,6 @@ class SolutionPackage(BaseModel):
     planner_prompt: str = Field(default="", description="方案级协作编排规则：planner prompt；空=回退运行时默认")
     subtask_prompt: str = Field(default="", description="方案级协作编排规则：子任务拆解 prompt")
     aggregate_prompt: str = Field(default="", description="方案级协作编排规则：多专家结果聚合 prompt")
-    default_kb_blueprint: dict = Field(default_factory=dict, description="默认知识库蓝图（apply 时下发）")
-    default_skill_bundle: dict = Field(default_factory=dict, description="默认技能包（apply 时下发）")
-    default_collaboration_template_ref: str | None = Field(default=None, description="默认协作模板引用（可选）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 

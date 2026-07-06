@@ -8,9 +8,12 @@
  *     UpdateSolutionTemplateRequest / CatalogEntryResponse /
  *     CatalogDetailView)
  *
- * 涉及运营端"专家 / 行业方案"的完整配置能力对齐:
- *   - 专家: persona / 推荐模型 / prompt_pack / skills / knowledge / memory / tags
- *   - 行业方案: expert_picks / knowledge_refs / skill_refs / prompts / grants / kb / skills
+ * 字段对齐 PRD-v2 S02/S03：
+ *   - 专家: display_name / category / avatar_url / system_prompt /
+ *     default_model / skill_ids / tags / description / initial_memories / sort_order
+ *   - 行业方案: display_name / description / icon / expert_template_ids /
+ *     expert_bindings / knowledge_refs / skill_refs / planner_prompt /
+ *     subtask_prompt / aggregate_prompt / default_grants / tags
  */
 
 /** 模板/方案类型（对齐 CatalogType enum）。 */
@@ -21,29 +24,6 @@ export type CatalogStatus = "draft" | "published" | "unpublished";
 
 /** 前端可见范围简化表示（visible_scope dict 的前端投影）。 */
 export type VisibilityLabel = "public" | "enterprise" | "hidden";
-
-/** 推荐模型引用（对齐 recommended_config.default_model_ref 片段）。 */
-export interface ModelRef {
-  provider_key?: string;
-  model_id?: string;
-  model_name?: string;
-  provider_name?: string;
-  model_uid?: string;
-}
-
-/** 专家模板中 persona + 复杂配置的统一容器(对齐 recommended_config)。 */
-export interface ExpertRecommendedConfig {
-  prompt_pack?: Record<string, unknown>;
-  default_model_ref?: ModelRef;
-  default_binding?: Record<string, unknown>;
-  default_skill_bundle?: Record<string, unknown>;
-  default_skills?: string[];
-  knowledge_bindings?: string[];
-  connector_requirements?: unknown[];
-  memory_config?: Record<string, unknown>;
-  role_name?: string;
-  category_code?: string;
-}
 
 /** 方案内专家绑定（对齐后端 ExpertBinding schema）。 */
 export interface ExpertBinding {
@@ -61,14 +41,19 @@ export interface CatalogItem {
   status: CatalogStatus;
   visible_scope: Record<string, unknown> | null;
 
-  // ---- payload 顶层字段（对齐后端 CatalogEntryResponse + CatalogDetailView）----
-  default_model_json?: Record<string, unknown>;
-  default_binding_json?: Record<string, unknown>;
-  prompt_pack_json?: Record<string, unknown>;
-  category_code?: string;
-  role_name?: string;
-  persona?: string | null;
-  recommended_config?: ExpertRecommendedConfig | Record<string, unknown> | null;
+  // ---- 专家模板 PRD-v2 扁平字段 ----
+  category?: string;
+  avatar_url?: string;
+  system_prompt?: string;
+  default_model?: string;
+  skill_ids?: string[];
+  tags?: string[];
+  description?: string;
+  initial_memories?: Record<string, unknown>[];
+  sort_order?: number;
+
+  // ---- 行业方案字段 ----
+  icon?: string;
   expert_bindings?: ExpertBinding[];
   expert_template_ids?: string[];
   knowledge_refs?: string[];
@@ -77,19 +62,22 @@ export interface CatalogItem {
   planner_prompt?: string;
   subtask_prompt?: string;
   aggregate_prompt?: string;
-  default_kb_blueprint?: Record<string, unknown>;
-  default_skill_bundle?: Record<string, unknown>;
-  default_collaboration_template_ref?: string | null;
-  tags?: string[];
 }
 
-/** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest）。 */
+/** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest, PRD-v2 S02）。 */
 export interface RegisterExpertTemplate {
   /** 可选。不填时服务端按 display_name 自动生成 slug + 随机后缀。 */
   template_id?: string;
   display_name: string;
-  persona?: string;
-  recommended_config?: ExpertRecommendedConfig;
+  category?: string;
+  avatar_url?: string;
+  system_prompt?: string;
+  default_model?: string;
+  skill_ids?: string[];
+  tags?: string[];
+  description?: string;
+  initial_memories?: Record<string, unknown>[];
+  sort_order?: number;
 }
 
 /** 注册行业方案请求体（对齐 RegisterSolutionTemplateRequest）。 */
@@ -97,16 +85,16 @@ export interface RegisterSolutionTemplate {
   /** 可选。不填时服务端按 display_name 自动生成 slug + 随机后缀。 */
   solution_id?: string;
   display_name: string;
+  description?: string;
+  icon?: string;
   expert_template_ids?: string[];
+  expert_bindings?: ExpertBinding[];
   knowledge_refs?: string[];
   skill_refs?: string[];
   default_grants?: Record<string, unknown> | null;
   planner_prompt?: string;
   subtask_prompt?: string;
   aggregate_prompt?: string;
-  default_kb_blueprint?: Record<string, unknown>;
-  default_skill_bundle?: Record<string, unknown>;
-  default_collaboration_template_ref?: string | null;
   tags?: string[];
 }
 

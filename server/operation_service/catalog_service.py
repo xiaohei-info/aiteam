@@ -73,13 +73,15 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         display_name=entry.display_name,
         status=entry.status,
         visible_scope=entry.visible_scope,
-        default_model_json=payload.get("default_model_json", {}),
-        default_binding_json=payload.get("default_binding_json", {}),
-        prompt_pack_json=payload.get("prompt_pack_json", {}),
-        category_code=payload.get("category_code", ""),
-        role_name=payload.get("role_name", ""),
-        persona=payload.get("persona"),
-        recommended_config=payload.get("recommended_config", {}),
+        category=payload.get("category", ""),
+        avatar_url=payload.get("avatar_url", ""),
+        system_prompt=payload.get("system_prompt", ""),
+        default_model=payload.get("default_model", ""),
+        skill_ids=payload.get("skill_ids", []),
+        tags=payload.get("tags", []),
+        description=payload.get("description", ""),
+        initial_memories=payload.get("initial_memories", []),
+        sort_order=payload.get("sort_order", 0),
         expert_bindings=payload.get("expert_bindings"),
         knowledge_refs=payload.get("knowledge_refs", []),
         skill_refs=payload.get("skill_refs", []),
@@ -115,13 +117,15 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         display_name=entry.display_name,
         status=entry.status,
         visible_scope=entry.visible_scope,
-        default_model_json=payload.get("default_model_json", {}),
-        default_binding_json=payload.get("default_binding_json", {}),
-        prompt_pack_json=payload.get("prompt_pack_json", {}),
-        category_code=payload.get("category_code", ""),
-        role_name=payload.get("role_name", ""),
-        persona=payload.get("persona"),
-        recommended_config=payload.get("recommended_config", {}),
+        category=payload.get("category", ""),
+        avatar_url=payload.get("avatar_url", ""),
+        system_prompt=payload.get("system_prompt", ""),
+        default_model=payload.get("default_model", ""),
+        skill_ids=payload.get("skill_ids", []),
+        tags=payload.get("tags", []),
+        description=payload.get("description", ""),
+        initial_memories=payload.get("initial_memories", []),
+        sort_order=payload.get("sort_order", 0),
         expert_bindings=payload.get("expert_bindings"),
         knowledge_refs=payload.get("knowledge_refs", []),
         skill_refs=payload.get("skill_refs", []),
@@ -130,10 +134,6 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         planner_prompt=payload.get("planner_prompt", ""),
         subtask_prompt=payload.get("subtask_prompt", ""),
         aggregate_prompt=payload.get("aggregate_prompt", ""),
-        default_kb_blueprint=payload.get("default_kb_blueprint", {}),
-        default_skill_bundle=payload.get("default_skill_bundle", {}),
-        default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
-        tags=payload.get("tags", []),
     )
 
 
@@ -156,13 +156,15 @@ class CatalogService:
                 version=_INITIAL_VERSION,
                 display_name=req.display_name,
                 payload={
-                    "persona": req.persona,
-                    "recommended_config": req.recommended_config,
-                    "default_model_json": req.default_model_json,
-                    "default_binding_json": req.default_binding_json,
-                    "prompt_pack_json": req.prompt_pack_json,
-                    "category_code": req.category_code,
-                    "role_name": req.role_name,
+                    "category": req.category,
+                    "avatar_url": req.avatar_url,
+                    "system_prompt": req.system_prompt,
+                    "default_model": req.default_model,
+                    "skill_ids": req.skill_ids,
+                    "tags": req.tags,
+                    "description": req.description,
+                    "initial_memories": req.initial_memories,
+                    "sort_order": req.sort_order,
                 },
             )
 
@@ -182,6 +184,8 @@ class CatalogService:
                 version=_INITIAL_VERSION,
                 display_name=req.display_name,
                 payload={
+                    "description": req.description,
+                    "icon": req.icon,
                     "expert_template_ids": [b.template_id for b in bindings],
                     "expert_bindings": [
                         {
@@ -197,9 +201,6 @@ class CatalogService:
                     "planner_prompt": req.planner_prompt,
                     "subtask_prompt": req.subtask_prompt,
                     "aggregate_prompt": req.aggregate_prompt,
-                    "default_kb_blueprint": req.default_kb_blueprint,
-                    "default_skill_bundle": req.default_skill_bundle,
-                    "default_collaboration_template_ref": req.default_collaboration_template_ref,
                     "tags": req.tags,
                 },
             )
@@ -304,6 +305,28 @@ class CatalogService:
             for e in self._repo.list(catalog_type=catalog_type, status=status)
         ]
 
+    @staticmethod
+    def _backfill_expert(payload: dict) -> tuple[str | None, dict]:
+        """从 PRD-v2 平铺字段回填 Manager 招募路径消费的 persona / recommended_config。
+
+        Manager recruit 读 template.persona 与 template.recommended_config.{model,skills,knowledge_refs,…}。
+        注册端已改为 flat 字段后，跨端 pull 时把 system_prompt → persona、
+        default_model → recommended_config.model、skill_ids → recommended_config.skills 等同步回去，
+        避免联动 manager 侧。
+        """
+        if not payload:
+            return None, {}
+        persona = payload.get("system_prompt") or None
+        recommended: dict = {}
+        if payload.get("default_model"):
+            recommended["model"] = payload["default_model"]
+        skills = payload.get("skill_ids") or []
+        if skills:
+            recommended["skills"] = list(skills)
+        # 知识引用：行业方案包级 knowledge_refs 叠加由 apply_solution 处理；
+        # 模板级无独立 knowledge_refs 字段，留空。
+        return persona, recommended
+
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
 
     def pull_expert_template_detail(
@@ -323,17 +346,21 @@ class CatalogService:
             raise NotFound(f"expert template version mismatch: {template_id}@{version}")
 
         payload = entry.payload or {}
+        persona, recommended = self._backfill_expert(payload)
         return ExpertTemplateDetail(
             template_id=entry.template_id,
             version=entry.version,
             display_name=entry.display_name,
-            persona=payload.get("persona"),
-            recommended_config=payload.get("recommended_config", {}),
-            default_model_json=payload.get("default_model_json", {}),
-            default_binding_json=payload.get("default_binding_json", {}),
-            prompt_pack_json=payload.get("prompt_pack_json", {}),
-            category_code=payload.get("category_code", ""),
-            role_name=payload.get("role_name", ""),
+            persona=persona,
+            recommended_config=recommended,
+            category=payload.get("category", ""),
+            avatar_url=payload.get("avatar_url", ""),
+            system_prompt=payload.get("system_prompt", ""),
+            default_model=payload.get("default_model", ""),
+            skill_ids=payload.get("skill_ids", []),
+            description=payload.get("description", ""),
+            initial_memories=payload.get("initial_memories", []),
+            sort_order=payload.get("sort_order", 0),
         )
 
     def pull_solution_package(
@@ -381,6 +408,8 @@ class CatalogService:
             solution_id=entry.template_id,
             version=entry.version,
             display_name=entry.display_name,
+            description=payload.get("description", ""),
+            icon=payload.get("icon", ""),
             experts=experts,
             knowledge_refs=payload.get("knowledge_refs", []),
             skill_refs=payload.get("skill_refs", []),
@@ -388,9 +417,6 @@ class CatalogService:
             planner_prompt=payload.get("planner_prompt", ""),
             subtask_prompt=payload.get("subtask_prompt", ""),
             aggregate_prompt=payload.get("aggregate_prompt", ""),
-            default_kb_blueprint=payload.get("default_kb_blueprint", {}),
-            default_skill_bundle=payload.get("default_skill_bundle", {}),
-            default_collaboration_template_ref=payload.get("default_collaboration_template_ref"),
             tags=payload.get("tags", []),
         )
 
@@ -404,18 +430,22 @@ class CatalogService:
         results: list[ExpertTemplateDetail] = []
         for entry in entries:
             payload = entry.payload or {}
+            persona, recommended = self._backfill_expert(payload)
             results.append(
                 ExpertTemplateDetail(
                     template_id=entry.template_id,
                     version=entry.version,
                     display_name=entry.display_name,
-                    persona=payload.get("persona"),
-                    recommended_config=payload.get("recommended_config", {}),
-                    default_model_json=payload.get("default_model_json", {}),
-                    default_binding_json=payload.get("default_binding_json", {}),
-                    prompt_pack_json=payload.get("prompt_pack_json", {}),
-                    category_code=payload.get("category_code", ""),
-                    role_name=payload.get("role_name", ""),
+                    persona=persona,
+                    recommended_config=recommended,
+                    category=payload.get("category", ""),
+                    avatar_url=payload.get("avatar_url", ""),
+                    system_prompt=payload.get("system_prompt", ""),
+                    default_model=payload.get("default_model", ""),
+                    skill_ids=payload.get("skill_ids", []),
+                    description=payload.get("description", ""),
+                    initial_memories=payload.get("initial_memories", []),
+                    sort_order=payload.get("sort_order", 0),
                 )
             )
         return results

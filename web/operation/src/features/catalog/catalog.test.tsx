@@ -582,7 +582,7 @@ describe("注册表单", () => {
     });
   });
 
-  it("注册专家模板成功关闭表单并带回 persona + 推荐模型", async () => {
+  it("注册专家模板成功提交 system_prompt + default_model", async () => {
     let capturedBody: unknown = null;
     mockFetch
       .mockResolvedValueOnce(envOk())
@@ -594,7 +594,8 @@ describe("注册表单", () => {
           makeCatalogItem({
             id: "new-id",
             display_name: "新专家",
-            persona: "电商客服",
+            system_prompt: "电商客服",
+            default_model: "gpt-5",
           }),
         );
       })
@@ -612,43 +613,30 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // ID 由服务端自动生成（AITEAM-355 问题二），表单不再提供手填 ID 输入框。
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
     expect(nameInput).toBeTruthy();
     fireEvent.change(nameInput, { target: { value: "新专家" } });
 
-    // 填 persona
-    const persona = document.querySelector<HTMLTextAreaElement>(
-      "textarea[placeholder=\"专家人设描述(可选)\"]",
+    const systemPrompt = document.querySelector<HTMLTextAreaElement>(
+      "textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]",
     )!;
-    fireEvent.change(persona, { target: { value: "电商客服" } });
+    fireEvent.change(systemPrompt, { target: { value: "电商客服" } });
 
-    // 展开能力配置并填推荐模型
-    fireEvent.click(screen.getByText("展开能力配置(技能 / 知识 / 记忆 / Prompt / 标签) ▼"));
-    await waitFor(() => {
-      expect(screen.getByText("推荐模型")).toBeInTheDocument();
-    });
-    const providerInputs = document.querySelectorAll<HTMLInputElement>(
-      "input[placeholder=\"provider_key (可选)\"]",
-    );
-    fireEvent.change(providerInputs[0]!, { target: { value: "openai" } });
+    const modelInput = document.querySelector<HTMLInputElement>(
+      "input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]",
+    )!;
+    fireEvent.change(modelInput, { target: { value: "gpt-5" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     await waitFor(() => {
       expect(capturedBody).toBeTruthy();
     });
-    // template_id 由服务端自动生成（AITEAM-355 问题二），请求体不再包含 template_id。
-    const body = capturedBody as { template_id?: string; display_name: string };
+    const body = capturedBody as { template_id?: string; display_name: string; system_prompt?: string; default_model?: string };
     expect(body.template_id).toBeUndefined();
     expect(body.display_name).toBe("新专家");
-    expect((capturedBody as { display_name: string }).display_name).toBe("新专家");
-    expect((capturedBody as { persona?: string }).persona).toBe("电商客服");
-    expect(
-      (capturedBody as { recommended_config?: { default_model_ref?: { provider_key?: string } } })
-        .recommended_config?.default_model_ref?.provider_key,
-    ).toBe("openai");
-    // 表单已关闭
+    expect(body.system_prompt).toBe("电商客服");
+    expect(body.default_model).toBe("gpt-5");
     await waitFor(() => {
       expect(screen.queryByText("注册新模板/方案")).not.toBeInTheDocument();
     });
@@ -790,8 +778,8 @@ describe("详情页编辑模式", () => {
       status: "draft",
       visible_scope: null,
       version: "1",
-      persona: "你是一名客服专家",
-      recommended_config: { language: "zh" },
+      system_prompt: "你是一名客服专家",
+      default_model: "gpt-5",
       ...overrides,
     });
   }
@@ -814,7 +802,7 @@ describe("详情页编辑模式", () => {
     operatorRendered.unmount();
   });
 
-  it("点击编辑展示 persona 表单 + 保存/取消按钮", async () => {
+  it("点击编辑展示 system_prompt 表单 + 保存/取消按钮", async () => {
     mockFetch.mockResolvedValue(singleResponse(makeExpertItem()));
     renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
 
@@ -825,29 +813,32 @@ describe("详情页编辑模式", () => {
       expect(screen.getByText("保存")).toBeInTheDocument();
       expect(screen.getByText("取消")).toBeInTheDocument();
     });
-    // Persona textarea should show the existing value in edit mode
-    const textareas = screen.getAllByRole("textbox").filter(
-      (el) => el.tagName === "TEXTAREA",
-    );
-    expect(textareas.length).toBeGreaterThanOrEqual(1);
-    expect(textareas[0]).toHaveValue("你是一名客服专家");
+    const systemPrompt = document.querySelector<HTMLTextAreaElement>(
+      "textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]",
+    )!;
+    expect(systemPrompt).toHaveValue("你是一名客服专家");
   });
 
-  it("编辑专家模板后调 PATCH 且 body 含 persona", async () => {
+  it("编辑专家模板后调 PATCH 且 body 含 system_prompt", async () => {
     mockFetch
       .mockResolvedValueOnce(singleResponse(makeExpertItem()))
       .mockResolvedValueOnce(
-        singleResponse(makeExpertItem({ persona: "新版人设" })),
+        singleResponse(makeExpertItem({ system_prompt: "新版人设" })),
       );
 
     renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
     await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
     fireEvent.click(screen.getByText("编辑"));
 
-    await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
+    await waitFor(() => {
+      expect(
+        document.querySelector<HTMLTextAreaElement>("textarea"),
+      ).toBeTruthy();
+    });
     const textareas = screen.getAllByRole("textbox").filter(
       (el) => el.tagName === "TEXTAREA",
     );
+    expect(textareas[0]).toHaveValue("你是一名客服专家");
     fireEvent.change(textareas[0]!, { target: { value: "新版人设" } });
 
     fireEvent.click(screen.getByText("保存"));
@@ -858,7 +849,7 @@ describe("详情页编辑模式", () => {
       );
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
-      expect(body.persona).toBe("新版人设");
+      expect(body.system_prompt).toBe("新版人设");
     });
     await waitFor(() => expect(screen.queryByText("保存")).not.toBeInTheDocument());
   });
@@ -925,23 +916,21 @@ describe("详情页编辑模式", () => {
 // ---- 8. 详情页多 section 渲染 + 编辑 ----
 
 describe("详情页多 section", () => {
-  it("渲染专家专家全部能力 section", async () => {
+  it("渲染专家全部能力 section", async () => {
     mockFetch.mockResolvedValue(
       singleResponse(
         makeCatalogItem({
           catalog_type: "expert_template",
           template_id: "exp_a",
           display_name: "AI 客服",
-          persona: "友善客服",
-          recommended_config: {
-            prompt_pack: { system: "你是客服" },
-            default_model_ref: { provider_key: "openai", model_id: "gpt-4o" },
-            default_skills: ["skill_a"],
-            knowledge_bindings: ["kb_orders"],
-            memory_config: { type: "buffer", max_tokens: 4096 },
-            role_name: "customer_success",
-            category_code: "support",
-          },
+          system_prompt: "你是客服",
+          category: "support",
+          avatar_url: "https://example.com/a.png",
+          default_model: "gpt-4o",
+          skill_ids: ["skill_a"],
+          tags: ["客服"],
+          description: "客服专家",
+          initial_memories: [{ type: "buffer", max_tokens: 4096 }],
         }),
       ),
     );
@@ -951,16 +940,16 @@ describe("详情页多 section", () => {
     await waitFor(() => {
       expect(screen.getByText("AI 客服")).toBeInTheDocument();
     });
-    expect(screen.getByText("人设(persona)")).toBeInTheDocument();
-    expect(screen.getByText("友善客服")).toBeInTheDocument();
-    expect(screen.getByText("岗位 / 类别")).toBeInTheDocument();
-    expect(screen.getByText("推荐模型 (default_model_ref)")).toBeInTheDocument();
-    expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("openai")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("gpt-4o")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("默认技能 / 知识绑定 / Prompt Pack")).toBeInTheDocument();
+    expect(screen.getByText("系统提示词 (system_prompt)")).toBeInTheDocument();
+    expect(screen.getByText("你是客服")).toBeInTheDocument();
+    expect(screen.getByText("默认模型 (default_model)")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("分类 / 头像")).toBeInTheDocument();
+    expect(screen.getByText("岗位描述 (description)")).toBeInTheDocument();
+    expect(screen.getByText("客服专家")).toBeInTheDocument();
+    expect(screen.getByText("技能 / 标签")).toBeInTheDocument();
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("skill_a")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("kb_orders")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("初始记忆 (memory_config)")).toBeInTheDocument();
+    expect(screen.getByText("预置记忆 (initial_memories)")).toBeInTheDocument();
   });
 
   it("渲染行业方案的多 section 内容", async () => {
@@ -998,7 +987,7 @@ describe("详情页多 section", () => {
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("零售")).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("管理员在详情页进入编辑模式修改 persona + 推荐模型,并调 PATCH", async () => {
+  it("管理员在详情页进入编辑模式修改 system_prompt + default_model,并调 PATCH", async () => {
     mockFetch
       .mockResolvedValueOnce(
         singleResponse(
@@ -1006,10 +995,8 @@ describe("详情页多 section", () => {
             catalog_type: "expert_template",
             template_id: "exp_a",
             display_name: "AI 客服",
-            persona: "旧 persona",
-            recommended_config: {
-              default_model_ref: { provider_key: "openai", model_id: "gpt-4o" },
-            },
+            system_prompt: "旧 system_prompt",
+            default_model: "gpt-4o",
           }),
         ),
       )
@@ -1019,10 +1006,8 @@ describe("详情页多 section", () => {
             catalog_type: "expert_template",
             template_id: "exp_a",
             display_name: "AI 客服",
-            persona: "新 persona",
-            recommended_config: {
-              default_model_ref: { provider_key: "anthropic", model_id: "sonnet" },
-            },
+            system_prompt: "新 system_prompt",
+            default_model: "claude-sonnet",
           }),
         ),
       );
@@ -1030,7 +1015,7 @@ describe("详情页多 section", () => {
     renderCatalogDetail(makeSystemAdminSession(), "exp_a", "expert_template");
 
     await waitFor(() => {
-      expect(screen.getByText("旧 persona")).toBeInTheDocument();
+      expect(screen.getByText("旧 system_prompt")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("编辑"));
@@ -1039,17 +1024,20 @@ describe("详情页多 section", () => {
       expect(screen.getByText("保存")).toBeInTheDocument();
     });
 
-    const persona = document.querySelector<HTMLTextAreaElement>(
-      "textarea",
-    )!;
-    fireEvent.change(persona, { target: { value: "新 persona" } });
-    // In edit mode, find the provider_key input by its surrounding label
-    const allInputs = document.querySelectorAll<HTMLInputElement>("input");
-    const providerInput = Array.from(allInputs).find(
-      (el) => el.value === "openai",
+    await waitFor(() => {
+      expect(
+        document.querySelector<HTMLTextAreaElement>("textarea"),
+      ).toBeTruthy();
+    });
+    const textareas = screen.getAllByRole("textbox").filter(
+      (el) => el.tagName === "TEXTAREA",
     );
-    expect(providerInput).toBeTruthy();
-    fireEvent.change(providerInput!, { target: { value: "anthropic" } });
+    expect(textareas[0]).toHaveValue("旧 system_prompt");
+    fireEvent.change(textareas[0]!, { target: { value: "新 system_prompt" } });
+    const allInputs = document.querySelectorAll<HTMLInputElement>("input");
+    const modelInput = Array.from(allInputs).find((el) => el.value === "gpt-4o");
+    expect(modelInput).toBeTruthy();
+    fireEvent.change(modelInput!, { target: { value: "claude-sonnet" } });
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -1060,8 +1048,8 @@ describe("详情页多 section", () => {
       }) as unknown[] | undefined;
       expect(patchCall).toBeTruthy();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
-      expect(body.persona).toBe("新 persona");
-      expect(body.recommended_config.default_model_ref.provider_key).toBe("anthropic");
+      expect(body.system_prompt).toBe("新 system_prompt");
+      expect(body.default_model).toBe("claude-sonnet");
     });
   });
 
@@ -1092,14 +1080,14 @@ describe("详情页多 section", () => {
         status: "draft",
         visible_scope: null,
         version: "1",
-        persona: "旧人设",
+        system_prompt: "旧人设",
         ...overrides,
       });
     }
     mockFetch
       .mockResolvedValueOnce(singleResponse(makeExpertItem()))
       .mockResolvedValueOnce(
-        singleResponse(makeExpertItem({ persona: "新人设" })),
+        singleResponse(makeExpertItem({ system_prompt: "新人设" })),
       );
 
     renderCatalogDetail(makeSystemOperatorSession(), "exp-op", "expert_template");
@@ -1107,10 +1095,10 @@ describe("详情页多 section", () => {
     fireEvent.click(screen.getByText("编辑"));
 
     await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
-    const textareas = screen.getAllByRole("textbox").filter(
-      (el) => el.tagName === "TEXTAREA",
-    );
-    fireEvent.change(textareas[0]!, { target: { value: "新人设" } });
+    const systemPrompt = document.querySelector<HTMLTextAreaElement>(
+      "textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]",
+    )!;
+    fireEvent.change(systemPrompt, { target: { value: "新人设" } });
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -1120,7 +1108,7 @@ describe("详情页多 section", () => {
       );
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
-      expect(body.persona).toBe("新人设");
+      expect(body.system_prompt).toBe("新人设");
     });
   });
 });

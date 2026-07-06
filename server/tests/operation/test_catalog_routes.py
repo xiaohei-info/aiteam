@@ -51,7 +51,7 @@ def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
     return {"Authorization": f"Bearer {_token(role)}"}
 
 
-_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "persona": "lead"}
+_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "system_prompt": "lead"}
 
 
 def _register_expert(client, body=None):

@@ -42,7 +42,7 @@ def service(manager):
 
 
 def _expert(**kw):
-    base = dict(template_id="tpl-cmo", display_name="CMO", persona="market lead")
+    base = dict(template_id="tpl-cmo", display_name="CMO", system_prompt="market lead")
     base.update(kw)
     return RegisterExpertTemplateRequest(**base)
 
@@ -238,17 +238,16 @@ def test_update_entry_top_level_field(service):
 
 
 def test_update_entry_payload_field_no_type_error(service):
-    """PATCH 写入非顶层字段（persona）应合并进 payload，不抛 TypeError。
+    """PATCH 写入非顶层字段（system_prompt）应合并进 payload，不抛 TypeError。
     这是 issue #266 的核心回归点：dataclasses.replace 不接受未定义的字段名。
     """
     service.register_expert_template(_expert())
     updated = service.update_entry(
-        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"persona": "chief marketing"}
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"system_prompt": "chief marketing"}
     )
     assert updated.display_name == "CMO"  # 不变
-    # 验证 payload 已更新
     entry = service.get_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry is not None
+    assert entry.system_prompt == "chief marketing"
 
 
 def test_update_entry_mixed_fields(service):
@@ -256,14 +255,12 @@ def test_update_entry_mixed_fields(service):
     service.register_expert_template(_expert())
     updated = service.update_entry(
         CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
-        {"display_name": "CMO v2", "persona": "vp marketing", "recommended_config": {"temp": 0.9}},
+        {"display_name": "CMO v2", "system_prompt": "vp marketing", "category": "marketing"},
     )
     assert updated.display_name == "CMO v2"
-    # 再读回验证 payload 正确合并
-    from operation_service.catalog_repository import CatalogRepository
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry.payload.get("persona") == "vp marketing"
-    assert entry.payload.get("recommended_config") == {"temp": 0.9}
+    assert entry.payload.get("system_prompt") == "vp marketing"
+    assert entry.payload.get("category") == "marketing"
 
 
 def test_update_entry_unknown_404(service):
@@ -286,14 +283,13 @@ def test_update_solution_template_mixed_fields(service, manager):
 # ---- Issue #278：方案模板编排规则/蓝图字段 ----
 
 def test_register_solution_with_orchestration_fields(service):
-    """注册方案时携带编排规则 + 蓝图字段，应存入 payload。"""
+    """注册方案时携带编排规则字段（planner/subtask/aggregate prompt + tags），应存入 payload。"""
     req = _solution(
         planner_prompt="Plan the campaign",
         subtask_prompt="Break into steps",
         aggregate_prompt="Summarize outputs",
-        default_kb_blueprint={"graph": "knowledge_graph_v1"},
-        default_skill_bundle={"skills": ["seo", "analytics"]},
-        default_collaboration_template_ref="collab-tpl-001",
+        description="增长方案描述",
+        icon="icon-growth",
         tags=["marketing", "growth"],
     )
     service.register_solution_template(req)
@@ -301,114 +297,127 @@ def test_register_solution_with_orchestration_fields(service):
     assert entry.payload["planner_prompt"] == "Plan the campaign"
     assert entry.payload["subtask_prompt"] == "Break into steps"
     assert entry.payload["aggregate_prompt"] == "Summarize outputs"
-    assert entry.payload["default_kb_blueprint"] == {"graph": "knowledge_graph_v1"}
-    assert entry.payload["default_skill_bundle"] == {"skills": ["seo", "analytics"]}
-    assert entry.payload["default_collaboration_template_ref"] == "collab-tpl-001"
+    assert entry.payload["description"] == "增长方案描述"
+    assert entry.payload["icon"] == "icon-growth"
     assert entry.payload["tags"] == ["marketing", "growth"]
 
 
 def test_register_solution_default_orchestration_fields(service):
-    """注册方案时不带编排字段，应落默认值（空字符串/空 dict/空 list/None）。"""
+    """注册方案时不带编排字段，应落默认值（空字符串/空 list）。"""
     service.register_solution_template(_solution())
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload["planner_prompt"] == ""
     assert entry.payload["subtask_prompt"] == ""
     assert entry.payload["aggregate_prompt"] == ""
-    assert entry.payload["default_kb_blueprint"] == {}
-    assert entry.payload["default_skill_bundle"] == {}
-    assert entry.payload["default_collaboration_template_ref"] is None
+    assert entry.payload["description"] == ""
+    assert entry.payload["icon"] == ""
     assert entry.payload["tags"] == []
 
 
 def test_update_solution_orchestration_fields(service):
-    """PATCH 方案模板可更新编排字段。"""
+    """PATCH 方案模板可更新编排字段（含新增的 description/icon）。"""
     service.register_solution_template(_solution())
     service.update_entry(
         CatalogType.SOLUTION_TEMPLATE, "sol-growth",
         {
             "planner_prompt": "New planner",
             "tags": ["updated"],
-            "default_kb_blueprint": {"new": True},
+            "description": "desc",
+            "icon": "icon-new",
         },
     )
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload["planner_prompt"] == "New planner"
     assert entry.payload["tags"] == ["updated"]
-    assert entry.payload["default_kb_blueprint"] == {"new": True}
+    assert entry.payload["description"] == "desc"
+    assert entry.payload["icon"] == "icon-new"
     # 未更新字段保持原默认值
     assert entry.payload["subtask_prompt"] == ""
-    assert entry.payload["default_collaboration_template_ref"] is None
 
 
 # ---- Issue #279：专家模板模型/绑定/提示词包/分类/角色字段 ----
 
-def test_register_expert_stores_model_binding_prompt_fields(service):
-    """注册专家模板时携带 default_model_json/default_binding_json/prompt_pack_json/category_code/role_name，应存入 payload。"""
+def test_register_expert_stores_flat_fields(service):
+    """注册专家模板时携带 PRD-v2 扁平字段，应存入 payload。"""
     req = _expert(
-        default_model_json={"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048},
-        default_binding_json={"skills": ["web_search"], "knowledge_bases": ["kb_general"], "memory": {"mode": "builtin"}},
-        prompt_pack_json={"system_prompt": "You are CMO", "behavior_rules": {"tone": "pro"}, "opening_message": "Hi"},
-        category_code="marketing",
-        role_name="CMO",
+        category="marketing",
+        avatar_url="https://example.com/avatar.png",
+        system_prompt="You are CMO",
+        default_model="gpt-5",
+        skill_ids=["web_search", "seo"],
+        tags=["cmo"],
+        description="营销高管",
+        initial_memories=[{"role": "user", "content": "hi"}],
+        sort_order=2,
     )
     service.register_expert_template(req)
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry.payload["default_model_json"] == {"provider": "openai", "model": "gpt-5", "temperature": 0.7, "max_tokens": 2048}
-    assert entry.payload["default_binding_json"]["skills"] == ["web_search"]
-    assert entry.payload["prompt_pack_json"]["system_prompt"] == "You are CMO"
-    assert entry.payload["category_code"] == "marketing"
-    assert entry.payload["role_name"] == "CMO"
+    assert entry.payload["category"] == "marketing"
+    assert entry.payload["avatar_url"] == "https://example.com/avatar.png"
+    assert entry.payload["system_prompt"] == "You are CMO"
+    assert entry.payload["default_model"] == "gpt-5"
+    assert entry.payload["skill_ids"] == ["web_search", "seo"]
+    assert entry.payload["tags"] == ["cmo"]
+    assert entry.payload["description"] == "营销高管"
+    assert entry.payload["initial_memories"] == [{"role": "user", "content": "hi"}]
+    assert entry.payload["sort_order"] == 2
 
 
-def test_register_expert_default_model_binding_prompt_fields(service):
-    """注册专家模板时不带新字段，应落默认值（空 dict/string）。"""
-    service.register_expert_template(_expert())
+def test_register_expert_default_fields(service):
+    """注册专家模板时不带新字段，应落默认值（空/string/0/list）。"""
+    service.register_expert_template(_expert(system_prompt=""))
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry.payload["default_model_json"] == {}
-    assert entry.payload["default_binding_json"] == {}
-    assert entry.payload["prompt_pack_json"] == {}
-    assert entry.payload["category_code"] == ""
-    assert entry.payload["role_name"] == ""
+    assert entry.payload["category"] == ""
+    assert entry.payload["avatar_url"] == ""
+    assert entry.payload["system_prompt"] == ""
+    assert entry.payload["default_model"] == ""
+    assert entry.payload["skill_ids"] == []
+    assert entry.payload["tags"] == []
+    assert entry.payload["description"] == ""
+    assert entry.payload["initial_memories"] == []
+    assert entry.payload["sort_order"] == 0
 
 
-def test_update_expert_model_binding_prompt_fields(service):
-    """PATCH 专家模板可更新模型/绑定/提示词/分类/角色字段。"""
+def test_update_expert_flat_fields(service):
+    """PATCH 专家模板可更新 PRD-v2 扁平字段。"""
     service.register_expert_template(_expert())
     service.update_entry(
         CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
         {
-            "default_model_json": {"provider": "relay", "model": "claude-opus-4-8", "temperature": 0.5, "max_tokens": 4096},
-            "default_binding_json": {"skills": ["seo"]},
-            "prompt_pack_json": {"system_prompt": "Updated"},
-            "category_code": "growth",
-            "role_name": "Growth Lead",
+            "system_prompt": "Updated system prompt",
+            "default_model": "claude-opus-4-8",
+            "category": "growth",
+            "skill_ids": ["seo"],
         },
     )
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
-    assert entry.payload["default_model_json"] == {"provider": "relay", "model": "claude-opus-4-8", "temperature": 0.5, "max_tokens": 4096}
-    assert entry.payload["default_binding_json"] == {"skills": ["seo"]}
-    assert entry.payload["prompt_pack_json"] == {"system_prompt": "Updated"}
-    assert entry.payload["category_code"] == "growth"
-    assert entry.payload["role_name"] == "Growth Lead"
+    assert entry.payload["system_prompt"] == "Updated system prompt"
+    assert entry.payload["default_model"] == "claude-opus-4-8"
+    assert entry.payload["category"] == "growth"
+    assert entry.payload["skill_ids"] == ["seo"]
 
 
 def test_list_includes_full_config(service):
-    """GET 目录列表时 CatalogEntryResponse 应返回完整模板配置（issue #279 验收）。"""
+    """GET 目录列表时 CatalogEntryResponse 应返回完整模板配置（PRD-v2 扁平字段验收）。"""
     service.register_expert_template(
         _expert(
-            default_model_json={"model": "gpt-5"},
-            prompt_pack_json={"system_prompt": "x"},
-            category_code="marketing",
-            role_name="CMO",
+            system_prompt="x",
+            default_model="gpt-5",
+            category="marketing",
+            skill_ids=["code"],
+            tags=["cmo"],
+            description="desc",
         )
     )
     items = service.list_catalog(catalog_type=CatalogType.EXPERT_TEMPLATE)
     assert len(items) == 1
     out = items[0]
-    assert out.default_model_json == {"model": "gpt-5"}
-    assert out.prompt_pack_json == {"system_prompt": "x"}
-    assert out.category_code == "marketing"
-    assert out.role_name == "CMO"
+    assert out.system_prompt == "x"
+    assert out.default_model == "gpt-5"
+    assert out.category == "marketing"
+    assert out.skill_ids == ["code"]
+    assert out.tags == ["cmo"]
+    assert out.description == "desc"
 # ---- Issue #285：方案内专家绑定排序（sequence_no）与启用开关（enabled）----
 
 def test_register_solution_expert_bindings_persisted(service):

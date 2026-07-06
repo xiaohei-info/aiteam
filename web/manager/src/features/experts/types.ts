@@ -16,14 +16,18 @@ export interface ExpertTemplate {
   persona?: string | null;
 }
 
-/** 方案包内专家摘要（对齐 SolutionPackage.experts 的 ExpertTemplateDetail 子集）。 */
+/** 方案包内专家摘要（对齐 SolutionPackage.experts 的 ExpertTemplateDetail）。 */
 export interface SolutionPackageExpertSummary {
   template_id: string;
   version: string;
   display_name: string;
   persona?: string | null;
-  role_name?: string;
-  category_code?: string;
+  category?: string;
+  avatar_url?: string;
+  system_prompt?: string;
+  default_model?: string;
+  skill_ids?: string[];
+  description?: string;
   sequence_no?: number;
   enabled?: boolean;
 }
