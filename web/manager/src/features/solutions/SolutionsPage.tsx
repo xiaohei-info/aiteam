@@ -2,11 +2,13 @@
  * 方案目录页（AITEAM-290 / GH#404）。
  *
  * 独立的行业方案入口：方案目录浏览 + 查看详情 + 一键应用 + 已应用方案实例只读展示。
+ * 应用方案后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  *
  * 设计对齐 PRD B06：方案定义在 Operator 端，Manager 端只可查看方案详情与应用方案，
  * 不能再编辑方案内容（不再提供实例编辑入口）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
@@ -62,7 +64,14 @@ export function SolutionsPage(): ReactNode {
   return (
     <section className="flex flex-col gap-lg">
       <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.solutions")}</h1>
-      {notice && <p className="m-0 text-sm text-success" role="status">{notice}</p>}
+      {notice && (
+        <p className="m-0 flex flex-wrap items-center gap-sm text-sm text-success" role="status">
+          <span>{notice}</span>
+          <Link to="/experts" className="text-gold-bright underline" data-testid="goto-experts">
+            {i18n.t("manager.experts.edit_config")}
+          </Link>
+        </p>
+      )}
       {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
       {error && <p className="m-0 text-sm text-danger">{error}</p>}
       {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.experts.loading")}</p>}

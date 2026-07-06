@@ -13,6 +13,7 @@ import { useSession } from "../../auth/session";
 import type {
   ApplySolutionInput,
   EmployeeConfig,
+  EmployeeConfigIn,
   ExpertTemplate,
   RecruitExpertInput,
   LifecycleOptions,
@@ -26,7 +27,7 @@ export interface ExpertsApi {
   recruitExpert: (input: RecruitExpertInput) => Promise<unknown>;
   applySolution: (input: ApplySolutionInput) => Promise<unknown>;
   listEmployees: () => Promise<EmployeeConfig[]>;
-  updateEmployee: (employeeId: string, config: EmployeeConfig) => Promise<EmployeeConfig | null>;
+  updateEmployee: (employeeId: string, config: EmployeeConfigIn) => Promise<EmployeeConfig | null>;
   transitionEmployee: (employeeId: string, transition: string, reason?: string) => Promise<EmployeeConfig | null>;
   getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
@@ -58,14 +59,7 @@ export function useExpertsApi(): ExpertsApi {
       },
       updateEmployee(employeeId, config) {
         // PUT 全量替换（EmployeeConfigIn）：回传载入的完整配置，仅覆盖被编辑字段，保全其余。
-        const { employee_id, employee_slug, version, status, archive_reason, archived_at, ...body } = config;
-        void employee_id;
-        void employee_slug;
-        void version;
-        void status;
-        void archive_reason;
-        void archived_at;
-        return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body });
+        return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body: config });
       },
       transitionEmployee(employeeId, transition, reason) {
         const body = reason ? { reason } : undefined;

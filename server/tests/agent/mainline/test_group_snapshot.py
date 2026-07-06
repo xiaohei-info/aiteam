@@ -58,7 +58,7 @@ def test_group_dispatch_derives_from_snapshot_when_orchestrator_present():
     )
     snap_bob = _snapshot(
         employee_id="emp-bob", version="v1", snapshot_version="snap-b",
-        persona="你是 Bob，前端专家", model="gpt-5", provider_ref="direct",
+        persona="你是 Bob，前端专家", model="gpt-5", provider_ref="anthropic",
         thinking_level="basic", timeout=60, skills=("testing",),
     )
     gs.client.snapshots["emp-alice"] = snap_alice
@@ -80,7 +80,11 @@ def test_group_dispatch_derives_from_snapshot_when_orchestrator_present():
     svc = build_mainline_service(orchestrator=orch)
     grp = GroupChatService(svc, experts=roster, orchestrator=orch)
     conv = svc.create_conversation(title="群聊")
-    with mock.patch.dict(os.environ, {"AI_RELAY_TOKEN": "test-relay-token"}):
+    # AITEAM-690 后 start_run 经 gateway provider_resolver 按 provider_ref 解析 host env（D18 fail-fast）。
+    # 使用已注册的 provider_ref 并补齐对应 env，聚焦验证快照派生与调度语义本身。
+    with mock.patch.dict(
+        os.environ, {"AI_RELAY_TOKEN": "relay-tok", "ANTHROPIC_API_KEY": "sk-anthropic-x"}
+    ):
         result = asyncio.run(grp.post_and_dispatch(conv.id, "@alice @carol 请协作"))
     # carol 不在 roster → 不触发；alice 触发。
     assert result.triggered_handles == ["alice"]

@@ -500,7 +500,7 @@ class SolutionInstanceOut(BaseModel):
 
 
 class RecruitExpertResult(BaseModel):
-    """F06 招募结果：落地的 employee 实例 + 来源模板标识 + 是否落了授权。"""
+    """F06 招募结果：落地的 employee 实例 + 来源模板标识 + 是否落了授权 + provider 匹配审计（AITEAM-682）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -515,6 +515,14 @@ class RecruitExpertResult(BaseModel):
     )
     order: RecruitmentOrderOut | None = Field(
         default=None, description="本次招募对应的追踪订单（AITEAM-243；失败/幂等追踪）"
+    )
+    provider_match_status: str = Field(
+        default="",
+        description="provider 自动匹配状态：explicit | matched | ambiguous | none（空=未参与匹配）",
+    )
+    provider_match_candidates: list[str] = Field(
+        default_factory=list,
+        description="provider 匹配候选（ambiguous 时不为空，供前端让用户选择）",
     )
 
 
