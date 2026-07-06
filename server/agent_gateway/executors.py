@@ -178,6 +178,9 @@ class _SubprocessExecutor(Executor):
         if self._sandbox is not None:
             cwd = prepare_run_dir(self._sandbox, run_id)
             env = build_env(self._sandbox)
+            # M4：把按 provider_ref 解析出的最小 env 注入子进程；仅此处合并，不落盘/不日志（D18）。
+            if request.provider_env:
+                env.update(request.provider_env)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *command,

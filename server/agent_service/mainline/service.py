@@ -24,6 +24,7 @@ from shared.errors import Conflict
 from shared.contracts.events import AgentRuntimeEvent
 from shared.contracts.runspec import AgentRunRequest, RunSpec
 from shared.contracts.gateway import RunResult
+from agent_gateway.provider_resolver import resolve_provider_env
 
 from agent_gateway.runner import GatewayRunner
 
@@ -340,6 +341,9 @@ class MainlineService:
         """
         self._conversations.get(conversation_id)
         effective_tenant_id = tenant_id or self._tenant_id
+        # M4: provider_ref 解析 + fail fast 必须在 run 落库/流转前完成，
+        # 避免产生无凭据的孤儿 run（禁止回退未知 provider）。
+        provider_env = resolve_provider_env((run_spec or RunSpec()).provider_ref)
         tt = trigger_type or self._infer_trigger_type()
         em = execution_mode or self._infer_execution_mode()
         run = self._runs.create(Run(id=_new_id("run"), conversation_id=conversation_id,
@@ -363,6 +367,7 @@ class MainlineService:
             task_id=task_id,
             run_spec=run_spec or RunSpec(),
             input_messages=self._conversation_input_messages(conversation_id),
+            provider_env=provider_env,
         )
 
         async def on_event(rt: AgentRuntimeEvent) -> None:
