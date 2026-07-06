@@ -90,7 +90,7 @@ export function GroupPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setRosterError(err instanceof Error ? err.message : "加载专家失败");
+        setRosterError("加载专家失败");
       });
     return () => { cancelled = true; };
   }, [client]);
@@ -134,7 +134,7 @@ export function GroupPage() {
       const items = await listSolutionInstances(client);
       setSolutions(items);
     } catch (err) {
-      setSolutionsError(err instanceof Error ? err.message : "加载方案列表失败");
+      setSolutionsError("加载方案列表失败");
     }
   }, [client]);
 
@@ -164,7 +164,7 @@ export function GroupPage() {
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
     } catch (err) {
-      setSolutionsError(err instanceof Error ? err.message : "创建群聊失败");
+      setSolutionsError("创建群聊失败");
     } finally {
       setCreating(false);
     }
@@ -180,7 +180,7 @@ export function GroupPage() {
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
     } catch (err) {
-      setFreeCreateError(err instanceof Error ? err.message : "创建自由群聊失败");
+      setFreeCreateError("创建自由群聊失败");
     } finally {
       setFreeCreating(false);
     }

@@ -439,7 +439,7 @@ describe("GroupPage — 从解决方案创建群聊", () => {
     fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
 
     await waitFor(() => {
-      expect(screen.getByText("电商专家群")).toBeInTheDocument();
+      expect(screen.getByText(/电商专家群/)).toBeInTheDocument();
     });
   });
 
@@ -483,7 +483,7 @@ describe("GroupPage — 从解决方案创建群聊", () => {
 
     const select = await screen.findByRole("combobox");
     fireEvent.change(select, { target: { value: "si-1" } });
-    fireEvent.click(screen.getByRole("button", { name: /创建群聊/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^创建群聊$/ }));
 
     await waitFor(() => {
       // 弹窗关闭表示创建成功
