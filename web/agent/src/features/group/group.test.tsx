@@ -22,7 +22,7 @@ import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
 import { TimelineStore } from "@aiteam/shared/timeline-client";
 import { groupDispatch, type GroupExpert, type DispatchResult, type SolutionProjection } from "./useGroupApi";
 import { parseMentions } from "./MentionComposer";
-import { createTimelineFetcher } from "../chat/useChatApi";
+import { createTimelineFetcher, type Conversation } from "../chat/useChatApi";
 import { MentionComposer } from "./MentionComposer";
 
 // ---- 通用 helper ----
@@ -36,7 +36,7 @@ function envelope<T>(data: T): string {
 }
 
 function makeConv(id: string, title: string) {
-  return { id, title, state: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
+  return { id, title, state: "active", last_read_at: null, last_read_message_id: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
 }
 
 /** 构造 timeline event；可指定 run_id 以验证多 run 归并。 */
