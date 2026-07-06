@@ -5,6 +5,7 @@ AITEAM-672 后契约变更：
 - ManagerMarketplaceProvider 不再假数据兜底：Manager 不可达抛 MarketplaceProviderError；
   无 token 时返回空列表（引导登录）；空 Manager 目录返回空列表（前端展示无数据）。
 - GET /marketplace/templates 每次请求前执行一次实时同步。
+- sync_marketplace 改为全量替换，Manager 变空时本地缓存也清空（AITEAM-672 回归）。
 """
 
 from unittest.mock import MagicMock
@@ -44,6 +45,23 @@ def _make_service(*, provider: MarketplaceProvider):
         upload_dir=None,
         marketplace_provider=provider,
     )
+
+
+def _sequence(pages: list[list[MarketTemplate]]):
+    """构造按次返回下一页的 provider（每次 list_templates 返回下一页并推进）。
+
+    注意：WorkspaceService.__init__ 会消耗第一次调用（初始化同步），所以第一页
+    对应 init 自检，后面几页对应显式调用 list_templates 的返回。
+    """
+    state = {"pages": list(pages), "i": 0}
+
+    class SeqProvider:
+        def list_templates(self) -> list[MarketTemplate]:
+            page = state["pages"][min(state["i"], len(state["pages"]) - 1)]
+            state["i"] += 1
+            return list(page)
+
+    return SeqProvider()
 
 
 class TestWorkspaceServiceRequiresProvider:
@@ -189,3 +207,73 @@ class TestSyncEndpoint:
         assert r.status_code == 503
         body = r.json()
         assert "Manager 不可达" in body.get("detail", "")
+
+
+class TestSyncIsFullReplacement:
+    """AITEAM-672 回归：全量替换同步语义，避免 Manager 目录变空时旧缓存残留。"""
+
+    def test_sync_empty_clears_previous_templates(self):
+        """第一次同步非空后，第二次同步空列表，本地缓存应被清空。"""
+        _init = MarketTemplate(template_id="init-1", display_name="init")
+        _real = MarketTemplate(template_id="real-1", display_name="专家A")
+        svc = _make_service(provider=_sequence([
+            [_init],
+            [_real],
+            [],
+        ]))
+        # init 自检消耗了 init-1
+        assert any(t.template_id == "init-1" for t in svc.list_marketplace())
+        # 第一次显式同步拉回真实模板
+        assert svc.sync_marketplace_endpoint() == 1
+        ids = [t.template_id for t in svc.list_marketplace()]
+        assert ids == ["real-1"]
+        # 第二次 Manager 返回空 -> 缓存应清空
+        assert svc.sync_marketplace_endpoint() == 0
+        assert svc.list_marketplace() == []
+
+    def test_no_token_clears_stale_cache(self):
+        """有 token 时同步真实数据，token 过期/为空后应拉空而非保留旧缓存。"""
+        client = MagicMock()
+        client.get.return_value = {"data": [
+            {"template_id": "real-1", "display_name": "专家A"},
+        ]}
+        token_state = {"value": "ok"}
+        provider = ManagerMarketplaceProvider(
+            service_client=client,
+            token_provider=lambda: token_state["value"],
+        )
+        svc = _make_service(provider=provider)
+        # init 自检时 token 已有值，拿到真实数据
+        assert [t.template_id for t in svc.list_marketplace()] == ["real-1"]
+
+        # token 过期 / 为空：provider 返回空列表，不应再看到旧模板
+        token_state["value"] = None
+        assert svc.sync_marketplace_endpoint() == 0
+        assert svc.list_marketplace() == []
+
+    def test_http_list_endpoint_mirrors_full_replacement(self):
+        """GET /marketplace/templates 全量替换：真实 -> 空 -> 真实，每次都反映最新一次 provider 视图。"""
+        svc = _make_service(provider=_sequence([
+            [MarketTemplate(template_id="init-1", display_name="init")],
+            [MarketTemplate(template_id="real-1", display_name="专家A")],
+            [],
+            [MarketTemplate(template_id="real-2", display_name="专家B")],
+        ]))
+        from fastapi import FastAPI
+
+        from agent_service.workspace.routes import build_workspace_router
+        from shared.errors import install_exception_handlers
+
+        app = FastAPI()
+        install_exception_handlers(app)
+        app.include_router(build_workspace_router(svc))
+        client = TestClient(app)
+
+        r1 = client.get("/api/agent/marketplace/templates")
+        assert {t["template_id"] for t in r1.json()["data"]} == {"real-1"}
+
+        r2 = client.get("/api/agent/marketplace/templates")
+        assert r2.json()["data"] == []
+
+        r3 = client.get("/api/agent/marketplace/templates")
+        assert {t["template_id"] for t in r3.json()["data"]} == {"real-2"}

@@ -215,9 +215,12 @@ class WorkspaceService:
     # ---- P03 人才市场 ----
 
     def sync_marketplace(self, templates: list[MarketTemplate]) -> int:
-        """批量刷新人才市场本地缓存（从 Manager catalog pull 结果填充）。"""
-        for t in templates:
-            self._market_templates[t.template_id] = t
+        """全量刷新人才市场本地缓存：用最新一次 provider 本地视图替换原位。
+
+        全量替换而非增量 upsert，保证 Manager 端删除/下架的模板不会残留在本地缓存里；
+        与“没有数据就显示没有数据”的验收口径一致。
+        """
+        self._market_templates = {t.template_id: t for t in templates}
         return len(templates)
 
     def _sync_marketplace_from_provider(self, *, raise_on_error: bool = False) -> int:
@@ -240,8 +243,9 @@ class WorkspaceService:
     def sync_marketplace_endpoint(self) -> int:
         """公开：手动触发一次 provider 拉取并刷新缓存（供 /sync 端点调用）。
 
-        Manager 不可达或无 token 时抛 MarketplaceProviderError，由 FastAPI
-        AppError handler 转成 application/problem+json 返回真实错误原因。
+        Manager 不可达时抛 MarketplaceProviderError，由 FastAPI
+        AppError handler 转成 application/problem+json 返回真实错误原因；
+        Manager 可达但无用户 token 时返回 0（前端展示登录引导），不抛错。
         """
         return self._sync_marketplace_from_provider(raise_on_error=True)
 
