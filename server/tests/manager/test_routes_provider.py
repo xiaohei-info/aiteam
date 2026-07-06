@@ -12,7 +12,10 @@ from fastapi.testclient import TestClient
 from shared.config import Settings
 from shared.errors import Forbidden, NotFound
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
-from manager_service.schemas_provider import ProviderCredentialOut
+from manager_service.schemas_provider import (
+    ProviderCredentialOut,
+    ProviderModelCapability,
+)
 
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
@@ -35,10 +38,21 @@ def _client(db_url):
     return TestClient(app)
 
 
+def _cap(model="gpt-4o", display_name="", enabled=True, capabilities=None):
+    return {
+        "model": model,
+        "display_name": display_name,
+        "enabled": enabled,
+        "capabilities": capabilities or {},
+    }
+
+
 def _out(**kw):
     base = dict(credential_id="c-1", provider_ref="relay", display_name="AI Relay",
                 mode="relay", endpoint="https://r", visibility="tenant",
-                allowed_member_ids=[], version=1)
+                allowed_member_ids=[],
+                supported_models=[_cap()], model_catalog_source="manual",
+                version=1)
     base.update(kw)
     return ProviderCredentialOut(**base)
 
@@ -51,6 +65,7 @@ def _fake_svc():
     svc.get.return_value = o
     svc.update.return_value = _out(version=2)
     svc.delete.return_value = None
+    svc.list_providers_supporting_model.return_value = [o]
     return svc
 
 
@@ -96,6 +111,20 @@ def test_create_extra_field_422():
     assert r.status_code == 422
 
 
+def test_create_supported_models_422_on_bad_item():
+    """supported_models 条目缺少必填 model 字段应 422。"""
+    client = _client("postgresql://fake/fake")
+    r = client.post(
+        "/api/manager/provider-credentials",
+        json={
+            "provider_ref": "r", "secret": "s",
+            "supported_models": [{"display_name": "x", "enabled": True}],
+        },
+        headers=_hdr(),
+    )
+    assert r.status_code == 422
+
+
 def test_happy_with_preinjected_crypto_covers_branch():
     """crypto 已预存时覆盖 43->46 False 分支（无 build_crypto_service 重复构建）。"""
     fake = _fake_svc()
@@ -121,6 +150,71 @@ def test_happy_multistep():
         assert r.status_code == 200 and r.json()["data"]["version"] == 2
         r = c.delete("/api/manager/provider-credentials/c-1", headers=_hdr())
         assert r.status_code == 204
+
+
+def test_create_passes_supported_models_through():
+    """create 应把 supported_models 原样回显（由 service→Out 透传）。"""
+    cap = _cap(model="claude-3-5-sonnet", display_name="Claude 3.5", capabilities={"context_window": 200000})
+    fake = _fake_svc()
+    fake.create.return_value = _out(supported_models=[cap], model_catalog_source="manual")
+    with patch("manager_service.routes_provider.build_provider_credential_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        r = c.post(
+            "/api/manager/provider-credentials",
+            json={
+                "provider_ref": "r", "secret": "s",
+                "supported_models": [{
+                    "model": "claude-3-5-sonnet",
+                    "display_name": "Claude 3.5",
+                    "enabled": True,
+                    "capabilities": {"context_window": 200000},
+                }],
+            },
+            headers=_hdr(),
+        )
+        assert r.status_code == 201
+        data = r.json()["data"]
+        assert data["supported_models"][0]["model"] == "claude-3-5-sonnet"
+        assert data["supported_models"][0]["capabilities"] == {"context_window": 200000}
+        assert data["model_catalog_source"] == "manual"
+
+
+def test_list_contains_supported_models():
+    """list 返回的每个 provider 都带 supported_models 数组。"""
+    fake = _fake_svc()
+    with patch("manager_service.routes_provider.build_provider_credential_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        r = c.get("/api/manager/provider-credentials", headers=_hdr())
+        assert r.status_code == 200
+        item = r.json()["data"][0]
+        assert isinstance(item["supported_models"], list)
+        assert item["supported_models"][0]["model"] == "gpt-4o"
+        assert "secret" not in item
+        assert "encrypted_secret" not in item
+
+
+def test_update_supported_models_pass_through():
+    """PUT 改写 supported_models 后回显新值（version 自增）。"""
+    fake = _fake_svc()
+    fake.update.return_value = _out(
+        version=2,
+        supported_models=[_cap(model="gpt-4o-mini")],
+        model_catalog_source="manual",
+    )
+    with patch("manager_service.routes_provider.build_provider_credential_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        r = c.put(
+            "/api/manager/provider-credentials/c-1",
+            json={
+                "secret": "s2",
+                "supported_models": [{"model": "gpt-4o-mini", "enabled": True}],
+            },
+            headers=_hdr(),
+        )
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["version"] == 2
+        assert data["supported_models"][0]["model"] == "gpt-4o-mini"
 
 
 def test_get_not_found_404():

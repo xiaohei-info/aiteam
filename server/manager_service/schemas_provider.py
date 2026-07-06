@@ -8,9 +8,27 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class ProviderModelCapability(BaseModel):
+    """provider 支持的单个模型能力声明（非敏感，允许回显）。
+
+    供后续招募按 model 自动匹配 provider_ref 复用（AITEAM-676/681）。
+    capabilities 为扩展键值（如 context_window、supports_vision），本卡不做严格校验。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(description="模型标识（如 gpt-4o、claude-3-5-sonnet）")
+    display_name: str = Field(default="", description="面向用户的展示名（可空，UI 回退到 model）")
+    enabled: bool = Field(default=True, description="该模型是否启用（未启用的模型不参与自动匹配）")
+    capabilities: dict[str, Any] = Field(
+        default_factory=dict,
+        description="能力扩展键值（如 context_window、supports_vision）；本卡不做严格校验",
+    )
 
 
 class ProviderCredentialBase(BaseModel):
@@ -27,6 +45,16 @@ class ProviderCredentialBase(BaseModel):
     visibility: Literal["tenant", "members"] = Field(default="tenant")
     # 成员级授权真相态：visibility=members 时生效（app_user.id 列表）。
     allowed_member_ids: list[str] = Field(default_factory=list)
+    # 能力目录：provider 支持的模型清单（非敏感，允许回显；供招募自动匹配 provider_ref）。
+    supported_models: list[ProviderModelCapability] = Field(
+        default_factory=list,
+        description="provider 支持的模型能力目录（非敏感）；为后续 discovery 预留 model_catalog_source",
+    )
+    # 能力目录来源：manual（默认，人工维护）| discovery（预留：后续动态调用 provider /v1/models）。
+    model_catalog_source: Literal["manual", "discovery"] = Field(
+        default="manual",
+        description="能力目录来源（manual | discovery）；本卡仅 manual，discovery 为后续预留",
+    )
 
     @model_validator(mode="after")
     def _members_requires_ids(self) -> "ProviderCredentialBase":
@@ -52,7 +80,7 @@ class ProviderCredentialUpdate(ProviderCredentialBase):
 class ProviderCredentialOut(BaseModel):
     """读取响应体。**绝不含明文 secret / 密文**（红线：不下发明文 key）。
 
-    只回 provider_ref + 非敏感元数据（endpoint/可见性/version），供配置管理 UI 与增量 sync。
+    只回 provider_ref + 非敏感元数据（endpoint/可见性/version/能力目录），供配置管理 UI 与增量 sync。
     用户端 pull 已授权 provider 配置时，由独立的受控 pull 通道下发（解密由 Driver 最小注入），
     本 CRUD 出参面向管理面，不下发任何形态的凭据。
     """
@@ -66,4 +94,12 @@ class ProviderCredentialOut(BaseModel):
     endpoint: str | None
     visibility: str
     allowed_member_ids: list[str] = Field(default_factory=list)
+    supported_models: list[ProviderModelCapability] = Field(
+        default_factory=list,
+        description="provider 支持的模型能力目录（非敏感，允许回显）",
+    )
+    model_catalog_source: str = Field(
+        default="manual",
+        description="能力目录来源（manual | discovery）",
+    )
     version: int = Field(description="配置版本；每次变更单调递增")

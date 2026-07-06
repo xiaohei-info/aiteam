@@ -3,7 +3,7 @@
 编排 repository（租户隔离）+ CryptoService（明文加密）+ 冲突/缺失判定 + 可见性授权语义。
 
 核心红线（04 §6.7，D18）：
-- 对外响应只回 provider_ref + 非敏感元数据（endpoint/可见性/version），**绝不回明文 key/令牌**，
+- 对外响应只回 provider_ref + 非敏感元数据（endpoint/可见性/version/能力目录），**绝不回明文 key/令牌**，
   也绝不回密文（密文亦非下发对象，防密钥泄露后重放）。
 - 明文凭据在 service 层经 CryptoService.encrypt 加密后入 repository；service 内部按需解密给
   受控编排面（如 pull 已授权 provider 配置到用户端 local_capability_cache，由 Driver 最小注入）。
@@ -13,6 +13,8 @@
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
@@ -25,6 +27,7 @@ from .schemas_provider import (
     ProviderCredentialCreate,
     ProviderCredentialOut,
     ProviderCredentialUpdate,
+    ProviderModelCapability,
 )
 
 # 配置写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
@@ -32,6 +35,26 @@ _CRED_WRITE_ROLES = [
     EnterpriseRole.OWNER.value,
     EnterpriseRole.ENTERPRISE_ADMIN.value,
 ]
+
+
+def _capability_to_dict(cap: ProviderModelCapability) -> dict[str, Any]:
+    """能力声明 → 可 JSON 序列化的 dict（入库 jsonb 用）。"""
+    return {
+        "model": cap.model,
+        "display_name": cap.display_name,
+        "enabled": cap.enabled,
+        "capabilities": dict(cap.capabilities) if cap.capabilities else {},
+    }
+
+
+def _capability_from_dict(raw: dict[str, Any]) -> ProviderModelCapability:
+    """jsonb 条目 → 能力声明（容忍缺失字段，回退到 schema 默认值）。"""
+    return ProviderModelCapability(
+        model=raw.get("model", ""),
+        display_name=raw.get("display_name", "") or "",
+        enabled=bool(raw.get("enabled", True)),
+        capabilities=dict(raw.get("capabilities") or {}),
+    )
 
 
 class ProviderCredentialService:
@@ -56,6 +79,8 @@ class ProviderCredentialService:
             encrypted_secret=encrypted,
             visibility=body.visibility,
             allowed_member_ids=body.allowed_member_ids,
+            supported_models=[_capability_to_dict(c) for c in body.supported_models],
+            model_catalog_source=body.model_catalog_source,
         )
         return _to_out(row)
 
@@ -84,6 +109,8 @@ class ProviderCredentialService:
             encrypted_secret=encrypted,
             visibility=body.visibility,
             allowed_member_ids=body.allowed_member_ids,
+            supported_models=[_capability_to_dict(c) for c in body.supported_models],
+            model_catalog_source=body.model_catalog_source,
         )
         if row is None:  # 双保险：RLS 下跨 tenant 删除/不可见
             raise NotFound("provider credential not found in this tenant")
@@ -96,6 +123,12 @@ class ProviderCredentialService:
 
     def list_all(self, ctx: TenantContext) -> list[ProviderCredentialOut]:
         return [_to_out(r) for r in self._repo.list_all(ctx)]
+
+    def list_providers_supporting_model(
+        self, ctx: TenantContext, *, model: str
+    ) -> list[ProviderCredentialOut]:
+        """返回本 tenant 内 enabled 且支持指定 model 的 provider 列表（供招募自动匹配 provider_ref）。"""
+        return [_to_out(r) for r in self._repo.list_providers_supporting_model(ctx, model=model)]
 
     def _require(self, ctx: TenantContext, credential_id: str) -> ProviderCredentialRow:
         row = self._repo.get(ctx, credential_id=credential_id)
@@ -126,6 +159,8 @@ def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:
         endpoint=row.endpoint,
         visibility=row.visibility,
         allowed_member_ids=row.allowed_member_ids,
+        supported_models=[_capability_from_dict(c) for c in row.supported_models],
+        model_catalog_source=row.model_catalog_source,
         version=row.version,
     )
 
