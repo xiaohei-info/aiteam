@@ -199,7 +199,12 @@ export function GroupPage() {
       />
       <div className="flex min-w-0 flex-1 flex-col gap-md">
         <div className="flex flex-wrap items-center justify-between gap-sm rounded-window border border-gold/15 bg-surface-raised px-md py-sm">
-          <div className="text-sm font-semibold text-text-primary">群聊协作</div>
+          <div className="flex flex-wrap items-center gap-sm">
+            <span className="text-sm font-semibold text-text-primary">群聊协作</span>
+            {rosterError && (
+              <span className="text-xs text-danger" role="alert" aria-live="polite">{rosterError}</span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-sm">
             <Button size="sm" variant="metal" onClick={handleOpenCreate}>
               从解决方案创建群聊
@@ -217,9 +222,6 @@ export function GroupPage() {
           <>
             <div className="flex flex-wrap items-center justify-between gap-md border-b border-gold/15 px-md py-sm">
               <GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />
-              {rosterError && (
-                <div className="text-xs text-danger" aria-live="polite">{rosterError}</div>
-              )}
               {lastTriggered && lastTriggered.length > 0 && (
                 <div className="text-xs font-semibold text-success" aria-live="polite">
                   本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
