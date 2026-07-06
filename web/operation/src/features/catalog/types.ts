@@ -56,6 +56,7 @@ export interface CatalogItem {
   icon?: string;
   expert_bindings?: ExpertBinding[];
   expert_template_ids?: string[];
+  planner_template_id?: string;
   knowledge_refs?: string[];
   skill_refs?: string[];
   default_grants?: Record<string, unknown> | null;
@@ -89,6 +90,7 @@ export interface RegisterSolutionTemplate {
   icon?: string;
   expert_template_ids?: string[];
   expert_bindings?: ExpertBinding[];
+  planner_template_id?: string;
   knowledge_refs?: string[];
   skill_refs?: string[];
   default_grants?: Record<string, unknown> | null;

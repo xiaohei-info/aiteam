@@ -105,6 +105,30 @@ def _normalize_expert_bindings(
     ]
 
 
+def _resolve_planner_template_id(
+    planner_template_id: str,
+    bindings: list[ExpertBinding],
+) -> str:
+    """校验并归一化 planner 指定。
+
+    注册行业方案时必须指定方案内某一专家为 planner 角色（AITEAM-677）。
+    planner_template_id 必须非空且存在于已绑定的专家中，否则拒绝注册。
+    """
+    from shared.errors import ValidationProblem
+
+    pid = (planner_template_id or "").strip()
+    if not pid:
+        raise ValidationProblem(
+            "planner_template_id is required: designate one expert as the planner"
+        )
+    bound = {b.template_id for b in bindings}
+    if pid not in bound:
+        raise ValidationProblem(
+            f"planner_template_id {pid!r} is not among the bound experts: {sorted(bound)}"
+        )
+    return pid
+
+
 def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
     """Construct a CatalogDetailView from a CatalogEntry, populating all payload fields."""
     from .catalog_schemas import CatalogDetailView
@@ -131,6 +155,7 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         skill_refs=payload.get("skill_refs", []),
         default_grants=payload.get("default_grants"),
         expert_template_ids=payload.get("expert_template_ids", []),
+        planner_template_id=payload.get("planner_template_id", ""),
         planner_prompt=payload.get("planner_prompt", ""),
         subtask_prompt=payload.get("subtask_prompt", ""),
         aggregate_prompt=payload.get("aggregate_prompt", ""),
@@ -178,6 +203,7 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         def make(candidate: str) -> CatalogEntry:
             bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
+            planner_id = _resolve_planner_template_id(req.planner_template_id, bindings)
             return CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
                 template_id=candidate,
@@ -195,6 +221,7 @@ class CatalogService:
                         }
                         for b in bindings
                     ],
+                    "planner_template_id": planner_id,
                     "knowledge_refs": req.knowledge_refs,
                     "skill_refs": req.skill_refs,
                     "default_grants": req.default_grants,
@@ -410,6 +437,7 @@ class CatalogService:
             display_name=entry.display_name,
             description=payload.get("description", ""),
             icon=payload.get("icon", ""),
+            planner_template_id=payload.get("planner_template_id", ""),
             experts=experts,
             knowledge_refs=payload.get("knowledge_refs", []),
             skill_refs=payload.get("skill_refs", []),

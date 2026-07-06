@@ -88,6 +88,10 @@ class RegisterSolutionTemplateRequest(BaseModel):
         default_factory=list,
         description="方案内专家绑定列表（含排序号与启用开关）；提供时优先于 expert_template_ids",
     )
+    planner_template_id: str = Field(
+        default="",
+        description="Planner 角色：必须指定方案内某一专家模板为编排者（planner）；空由服务端拒绝",
+    )
     knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
     skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
     default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
@@ -144,6 +148,7 @@ class UpdateSolutionTemplateRequest(BaseModel):
     icon: str | None = None
     expert_template_ids: list[str] | None = None
     expert_bindings: list["ExpertBinding"] | None = None
+    planner_template_id: str | None = None
     knowledge_refs: list[str] | None = None
     skill_refs: list[str] | None = None
     default_grants: dict | None = None
@@ -191,6 +196,7 @@ class CatalogDetailView(CatalogEntryResponse):
     model_config = ConfigDict(extra="forbid")
 
     expert_template_ids: list[str] = Field(default_factory=list)
+    planner_template_id: str = Field(default="", description="方案内被指定为 planner 的专家模板 id")
     planner_prompt: str = Field(default="")
     subtask_prompt: str = Field(default="")
     aggregate_prompt: str = Field(default="")

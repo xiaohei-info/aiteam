@@ -805,10 +805,18 @@ describe("注册表单", () => {
     fireEvent.click(screen.getAllByRole("checkbox")[0]!);
     fireEvent.click(screen.getAllByRole("checkbox")[1]!);
 
+    // AITEAM-677：必须指定一个专家为 Planner 角色
+    const plannerRadios = screen.getAllByRole("radio");
+    fireEvent.click(plannerRadios[0]!);
+
     // ID 由服务端自动生成（AITEAM-355 问题二）：表单只暴露 display_name，solution_id 已移除。
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
     expect(nameInput).toBeTruthy();
     fireEvent.change(nameInput, { target: { value: "全渠道方案" } });
+
+    // AITEAM-677：planner_prompt 必填
+    const plannerPromptTa = screen.getByLabelText("Planner 编排规则提示词 (planner_prompt, 必填)");
+    fireEvent.change(plannerPromptTa, { target: { value: "组织各专家协作" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
@@ -820,8 +828,49 @@ describe("注册表单", () => {
       expect(registerCall).toBeTruthy();
       const body = JSON.parse(((registerCall as unknown[])[1] as { body: string }).body);
       expect(body.expert_template_ids.sort()).toEqual(["exp_a", "exp_b"]);
+      expect(body.planner_template_id).toBe("exp_a");
+      expect(body.planner_prompt).toBe("组织各专家协作");
       expect(body.solution_id).toBeUndefined();
       expect(body.display_name).toBe("全渠道方案");
+    });
+  });
+
+  it("注册行业方案时未指定 Planner 则前端校验拦截", async () => {
+    const expertItems = [
+      makeCatalogItem({
+        catalog_type: "expert_template",
+        template_id: "exp_a",
+        display_name: "客服专家",
+        status: "published",
+      }),
+    ];
+    mockFetch
+      .mockResolvedValueOnce(listPage(expertItems))
+      .mockResolvedValueOnce(listPage(expertItems));
+
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
+
+    await waitFor(() => {
+      expect(screen.getByText("注册行业方案")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("注册行业方案"));
+    await waitFor(() => {
+      expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
+    });
+
+    // 选专家但不指定 planner
+    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+    const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
+    fireEvent.change(nameInput, { target: { value: "测试方案" } });
+    fireEvent.change(
+      screen.getByLabelText("Planner 编排规则提示词 (planner_prompt, 必填)"),
+      { target: { value: "编排规则" } },
+    );
+
+    fireEvent.submit(screen.getByRole("button", { name: "注册" }).closest("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByText("请指定一个专家为 Planner 角色（编排者）")).toBeInTheDocument();
     });
   });
 });
@@ -1116,6 +1165,7 @@ describe("详情页多 section", () => {
           template_id: "sol_a",
           display_name: "零售方案",
           expert_template_ids: ["exp_a", "exp_b"],
+          planner_template_id: "exp_a",
           knowledge_refs: ["kb_retail"],
           skill_refs: ["skill_a"],
           planner_prompt: "零售 planner",
@@ -1135,6 +1185,7 @@ describe("详情页多 section", () => {
     expect(screen.getByText("配置专家 (expert_template_ids)")).toBeInTheDocument();
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("exp_a")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("exp_b")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Planner 角色 (planner_template_id)")).toBeInTheDocument();
     expect(screen.getByText("知识 / 技能引用")).toBeInTheDocument();
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("kb_retail")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("协作编排规则 (prompts)")).toBeInTheDocument();

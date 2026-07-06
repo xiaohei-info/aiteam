@@ -121,6 +121,7 @@ class SolutionPackage(BaseModel):
     display_name: str
     description: str = Field(default="", description="方案描述")
     icon: str = Field(default="", description="方案图标")
+    planner_template_id: str = Field(default="", description="方案内被指定为 planner 的专家模板 id；空=运行时自动选择")
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
     skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")

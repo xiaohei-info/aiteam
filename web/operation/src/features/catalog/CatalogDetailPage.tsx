@@ -171,6 +171,7 @@ export function CatalogDetailPage(): ReactNode {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";
         changes.expert_template_ids = draft.expert_template_ids ?? [];
+        changes.planner_template_id = draft.planner_template_id ?? "";
         changes.knowledge_refs = draft.knowledge_refs ?? [];
         changes.skill_refs = draft.skill_refs ?? [];
         changes.planner_prompt = draft.planner_prompt ?? "";
@@ -576,6 +577,24 @@ function SolutionDetailSections(p: SolutionDetailProps): ReactNode {
             <ReadonlyJson title="knowledge_refs" value={p.draft.knowledge_refs} />
             <ReadonlyJson title="skill_refs" value={p.draft.skill_refs} />
           </div>
+        )}
+      </DetailSection>
+
+      <DetailSection title="Planner 角色 (planner_template_id)">
+        {p.editing ? (
+          <Input
+            className={inputCls}
+            value={p.draft.planner_template_id ?? ""}
+            onChange={(e) =>
+              p.onChange({ ...p.draft, planner_template_id: e.target.value })
+            }
+            placeholder="被指定为 Planner 的专家模板 id"
+          />
+        ) : (
+          <ReadonlyRow
+            label="planner_template_id"
+            value={p.draft.planner_template_id}
+          />
         )}
       </DetailSection>
 

@@ -95,6 +95,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 
   // 行业方案配置（PRD-v2 S03 + 编排规则）
   const [expertPicks, setExpertPicks] = useState<string[]>([]);
+  const [plannerTemplateId, setPlannerTemplateId] = useState("");
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
   const [expertSearch, setExpertSearch] = useState("");
   const [solutionDescription, setSolutionDescription] = useState("");
@@ -127,6 +128,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
         ? prev.filter((x) => x !== templateId)
         : [...prev, templateId],
     );
+    setPlannerTemplateId((prev) => (prev === templateId ? "" : prev));
   }
 
   function handleCreateCategory(name: string): void {
@@ -173,6 +175,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
       description: solutionDescription.trim(),
       icon: icon.trim(),
       expert_template_ids: expertPicks,
+      planner_template_id: plannerTemplateId.trim(),
       knowledge_refs: parseList(knowledgeRefsText),
       skill_refs: parseList(skillRefsText),
       planner_prompt: plannerPrompt.trim(),
@@ -189,6 +192,20 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
     if (!displayName.trim()) {
       setValidationError("名称不能为空");
       return;
+    }
+    if (catalogType === "solution_template") {
+      if (expertPicks.length === 0) {
+        setValidationError("请至少选择一个专家模板");
+        return;
+      }
+      if (!plannerTemplateId.trim()) {
+        setValidationError("请指定一个专家为 Planner 角色（编排者）");
+        return;
+      }
+      if (!plannerPrompt.trim()) {
+        setValidationError("请填写 Planner 编排规则提示词");
+        return;
+      }
     }
     setLoading(true);
     try {
@@ -267,6 +284,8 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
           <SolutionFields
             picks={expertPicks}
             onTogglePick={toggleExpertPick}
+            plannerTemplateId={plannerTemplateId}
+            onPlannerSelect={setPlannerTemplateId}
             options={filteredExpertOptions}
             search={expertSearch}
             onSearchChange={setExpertSearch}
@@ -556,6 +575,8 @@ interface SolutionFormProps {
   onSkillRefsChange: (v: string) => void;
   planner: string;
   onPlannerChange: (v: string) => void;
+  plannerTemplateId: string;
+  onPlannerSelect: (v: string) => void;
   subtask: string;
   onSubtaskChange: (v: string) => void;
   aggregate: string;
@@ -608,32 +629,49 @@ function SolutionFields(p: SolutionFormProps): ReactNode {
               暂无可选项(请先在「专家模板」中创建并发布)。
             </p>
           ) : (
-            <div className="flex max-h-[200px] flex-col gap-xs overflow-auto">
+            <div className="flex max-h-[240px] flex-col gap-xs overflow-auto">
               {p.options.map((opt) => {
                 const checked = p.picks.includes(opt.template_id);
+                const isPlanner = p.plannerTemplateId === opt.template_id;
                 return (
-                  <label
+                  <div
                     key={opt.template_id}
-                    className="flex items-center gap-sm rounded px-sm py-xs hover:bg-gold/5"
+                    className={`flex items-center gap-sm rounded px-sm py-xs hover:bg-gold/5 ${
+                      checked ? "bg-gold/5" : ""
+                    }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => p.onTogglePick(opt.template_id)}
-                      disabled={p.disabled}
-                    />
-                    <span className="text-sm text-text-primary">{opt.display_name}</span>
-                    <span className="text-xs text-text-muted">#{opt.template_id}</span>
-                    <span
-                      className={
-                        opt.status === "published"
-                          ? "text-xs text-success"
-                          : "text-xs text-warning"
-                      }
-                    >
-                      {opt.status}
-                    </span>
-                  </label>
+                    <label className="flex items-center gap-sm">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => p.onTogglePick(opt.template_id)}
+                        disabled={p.disabled}
+                      />
+                      <span className="text-sm text-text-primary">{opt.display_name}</span>
+                      <span className="text-xs text-text-muted">#{opt.template_id}</span>
+                      <span
+                        className={
+                          opt.status === "published"
+                            ? "text-xs text-success"
+                            : "text-xs text-warning"
+                        }
+                      >
+                        {opt.status}
+                      </span>
+                    </label>
+                    {checked && (
+                      <label className="ml-auto flex items-center gap-xs">
+                        <input
+                          type="radio"
+                          name="planner"
+                          checked={isPlanner}
+                          onChange={() => p.onPlannerSelect(opt.template_id)}
+                          disabled={p.disabled}
+                        />
+                        <span className="text-xs font-medium text-gold">Planner</span>
+                      </label>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -660,26 +698,27 @@ function SolutionFields(p: SolutionFormProps): ReactNode {
         />
       </Field>
 
+      <Field label="Planner 编排规则提示词 (planner_prompt, 必填)">
+        <textarea
+          className={textareaCls}
+          value={p.planner}
+          onChange={(e) => p.onPlannerChange(e.target.value)}
+          placeholder="方案级协作编排规则：planner 阶段 prompt。群聊开始时注入给 planner，决定如何组织各专家协作。"
+          disabled={p.disabled}
+        />
+      </Field>
+
       <Button
         type="button"
         variant="ghost"
         size="sm"
         onClick={p.onToggleAdvanced}
       >
-        {p.showAdvanced ? "收起协作编排配置 ▲" : "展开协作编排配置(Prompt / Grants / Tags) ▼"}
+        {p.showAdvanced ? "收起高级配置 ▲" : "展开高级配置(Subtask / Aggregate / Grants / Tags) ▼"}
       </Button>
 
       {p.showAdvanced && (
         <div className="flex flex-col gap-md rounded-md border border-gold/10 p-md">
-          <Field label="Planner Prompt">
-            <textarea
-              className={textareaCls}
-              value={p.planner}
-              onChange={(e) => p.onPlannerChange(e.target.value)}
-              placeholder="方案级协作编排规则:planner 阶段 prompt"
-              disabled={p.disabled}
-            />
-          </Field>
           <Field label="Subtask Prompt">
             <textarea
               className={textareaCls}
