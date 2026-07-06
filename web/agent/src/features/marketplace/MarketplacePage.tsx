@@ -6,11 +6,10 @@ import { useApp } from "../../lib/app-context";
 import { listTemplates, recruit } from "./useMarketplaceApi";
 import type { MarketTemplate } from "./types";
 
-const CATEGORIES = ["全部", "市场营销", "财务分析", "技术研发", "客户服务", "人力资源"];
-
 export function MarketplacePage() {
   const { client, i18n } = useApp();
   const [templates, setTemplates] = useState<MarketTemplate[]>([]);
+  const [categories, setCategories] = useState<string[]>(["全部"]);
   const [keyword, setKeyword] = useState("");
   const [category, setCategory] = useState("全部");
   const [loading, setLoading] = useState(false);
@@ -22,7 +21,14 @@ export function MarketplacePage() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      setTemplates(await listTemplates(client, { keyword: keyword || undefined, category: category !== "全部" ? category : undefined }));
+      const list = await listTemplates(client, { keyword: keyword || undefined, category: category !== "全部" ? category : undefined });
+      setTemplates(list);
+      // 分类来自后端真实模板（Manager 端招募到的专家分类），不再写死。
+      // 仅在全量视图（无分类、无关键字过滤）刷新分类栏，保证选中某分类后栏位稳定。
+      if (category === "全部" && !keyword) {
+        const cats = Array.from(new Set(list.map((t) => t.category).filter(Boolean)));
+        setCategories(["全部", ...cats]);
+      }
     } catch (err) { setError(err instanceof ApiError ? err.message : i18n.t("agent.workspace.load_error")); }
     finally { setLoading(false); }
   }, [client, i18n, keyword, category]);
@@ -59,8 +65,8 @@ export function MarketplacePage() {
         <Button variant="ghost" onClick={() => void load()}>搜索</Button>
       </div>
 
-      <div className="flex gap-xs">
-        {CATEGORIES.map((c) => (
+      <div className="flex flex-wrap gap-xs">
+        {categories.map((c) => (
           <Button key={c} variant={category === c ? "metal" : "ghost"} size="sm" onClick={() => setCategory(c)}>{c}</Button>
         ))}
       </div>
