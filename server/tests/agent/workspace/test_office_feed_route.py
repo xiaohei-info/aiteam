@@ -36,14 +36,14 @@ def test_office_feed_endpoint_aggregates_scheduled_jobs() -> None:
         InMemoryKnowledgeBaseRepository, InMemoryKnowledgeDocumentRepository,
         InMemoryUploadAssetRepository, InMemoryWorkbenchStateRepository,
     )
-    from agent_service.workspace.marketplace_provider import FakeMarketplaceProvider
+    from tests.agent.workspace._stub_provider import StubMarketplaceProvider
     ws = WS(
         projections=projections,
         workbench_store=InMemoryWorkbenchStateRepository(),
         kb_store=InMemoryKnowledgeBaseRepository(),
         doc_store=InMemoryKnowledgeDocumentRepository(),
         upload_store=InMemoryUploadAssetRepository(),
-        marketplace_provider=FakeMarketplaceProvider(),
+        marketplace_provider=StubMarketplaceProvider(),
         loop_service=loop_svc,
     )
 

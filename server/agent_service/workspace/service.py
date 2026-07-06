@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
-from .marketplace_provider import FakeMarketplaceProvider, MarketTemplate, MarketplaceProvider
+from .marketplace_provider import MarketTemplate, MarketplaceProvider
 from .store import (
     KnowledgeBase,
     KnowledgeBaseRepository,
@@ -172,8 +172,13 @@ class WorkspaceService:
         self._loop_service = loop_service
         # 市场模板本地缓存（由 sync_marketplace 填充）
         self._market_templates: dict[str, MarketTemplate] = {}
-        # 人才市场模板 provider：初始化即自动 sync，保证 marketplace 永不为空
-        self._marketplace_provider = marketplace_provider or FakeMarketplaceProvider()
+        # 人才市场模板 provider：初始化即自动 sync；无数据时返回空列表（不再用假模板兜底）
+        if marketplace_provider is None:
+            raise ValueError(
+                "WorkspaceService 需要一个真实的 MarketplaceProvider，"
+                "不再提供 FakeMarketplaceProvider 兜底（参见 AITEAM-672）。"
+            )
+        self._marketplace_provider = marketplace_provider
         self._sync_marketplace_from_provider()
 
     # ---- P02 工作台 ----
@@ -215,17 +220,30 @@ class WorkspaceService:
             self._market_templates[t.template_id] = t
         return len(templates)
 
-    def _sync_marketplace_from_provider(self) -> int:
-        """从注入的 provider 拉取模板并填充本地缓存（初始化/手动 sync 时调用）。"""
+    def _sync_marketplace_from_provider(self, *, raise_on_error: bool = False) -> int:
+        """从注入的 provider 拉取模板并填充本地缓存。
+
+        - ``raise_on_error=False``（初始化场景）：Manager 不可达/无数据时静默返回 0，
+          保证 Agent 端在 Manager 未就绪时仍能启动；首次同步仅用户登录后才有真实数据，
+          前端会引导登录。
+        - ``raise_on_error=True``（HTTP endpoint 场景）：真实错误向上传播，
+          由路由层转成 problem+json 返回给用户，避免假数据掩盖真实故障。
+        """
         try:
             templates = self._marketplace_provider.list_templates()
         except Exception:
-            templates = []
+            if raise_on_error:
+                raise
+            return 0
         return self.sync_marketplace(templates)
 
     def sync_marketplace_endpoint(self) -> int:
-        """公开：手动触发一次 provider 拉取并刷新缓存（供 /sync 端点调用）。"""
-        return self._sync_marketplace_from_provider()
+        """公开：手动触发一次 provider 拉取并刷新缓存（供 /sync 端点调用）。
+
+        Manager 不可达或无 token 时抛 MarketplaceProviderError，由 FastAPI
+        AppError handler 转成 application/problem+json 返回真实错误原因。
+        """
+        return self._sync_marketplace_from_provider(raise_on_error=True)
 
     def list_marketplace(self, *, category: str | None = None,
                          keyword: str | None = None) -> list[MarketTemplate]:

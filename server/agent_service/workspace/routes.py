@@ -313,6 +313,10 @@ def build_workspace_router(service: WorkspaceService) -> APIRouter:
         keyword: str | None = Query(default=None),
         page: int = Query(default=1, ge=1),
     ) -> ListEnvelope[MarketTemplateOut]:
+        # 每次拉取列表前先尝试实时同步（AITEAM-672）：已登录用户立刻看到 Manager 真目录；
+        # Manager 不可达时抛 MarketplaceProviderError，由 AppError handler 转成 problem+json
+        # 回传给前端，避免假数据掩盖真实故障。无 token 时静默返回本地缓存（空列表 + 未登录引导）。
+        service.sync_marketplace_endpoint()
         templates = service.list_marketplace(category=category, keyword=keyword)
         return ListEnvelope(data=[_map_template(t) for t in templates])
 

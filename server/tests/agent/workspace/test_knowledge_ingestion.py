@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from agent_service.grants.store import InMemoryProjectionRepository
 from agent_service.workspace.routes import build_workspace_router
 from agent_service.workspace.service import WorkspaceService
+from tests.agent.workspace._stub_provider import StubMarketplaceProvider
+
 from agent_service.workspace.store import (
     DOCUMENT_STATUSES,
     INGESTION_STATUSES,
@@ -34,6 +36,7 @@ def _make_service(*, upload_dir=None):
         ingest_store=InMemoryKnowledgeIngestionRepository(),
         upload_store=InMemoryUploadAssetRepository(),
         upload_dir=upload_dir,
+        marketplace_provider=StubMarketplaceProvider(),
     )
 
 
