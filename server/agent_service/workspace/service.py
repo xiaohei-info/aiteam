@@ -297,6 +297,7 @@ class WorkspaceService:
         memory_policy = _build_memory_policy_from_initial_memories(template.initial_memories)
         projection = LoadedExpertProjection(
             employee_id=employee_id,
+            handle=employee_id,  # 本地仓 ASCII 句柄回退 employee_id
             tenant_id="",  # 本地仓不依赖 tenant_id，后续 sync 会刷新
             version="1",
             display_name=template.display_name,

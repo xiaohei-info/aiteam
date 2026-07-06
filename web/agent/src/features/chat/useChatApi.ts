@@ -23,6 +23,20 @@ export interface Conversation {
   id: string;
   title: string | null;
   state: string;
+  // 协作编排字段（parity 后端 Conversation）。
+  collaboration_mode?: string;
+  orchestration_brief?: string;
+  planner_employee_id?: string | null;
+  // 私聊归属员工 employee_id（parity 后端 Conversation.entry_employee_id）；群聊/编排会话为 null。
+  entry_employee_id?: string | null;
+  // 方案实例绑定（从 Operator 行业方案"创建群聊"入口固定编排时设置）；空=自由创建/私聊。
+  solution_instance_id?: string | null;
+  // 方案级固定编排三阶段 prompts 快照；空串=回退运行时默认。
+  solution_planner_prompt?: string;
+  solution_subtask_prompt?: string;
+  solution_aggregate_prompt?: string;
+  // 方案对应的专家群 employee_id 快照（固定编排 roster 过滤用）；自由创建/私聊为空列表。
+  solution_expert_employee_ids?: string[];
   // AITEAM-236 阅读状态（parity 后端 Conversation.last_read_at / last_read_message_id）。
   last_read_at: string | null;
   last_read_message_id: string | null;

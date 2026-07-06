@@ -60,6 +60,14 @@ def build_grants_router(service: GrantsService) -> APIRouter:
             data=items, page=Page(next_cursor=next_cursor, has_more=False)
         )
 
+    @router.get("/grants/solutions", summary="列本会话可绑定的方案实例（含三阶段 prompts 快照）",
+                description="列出本端当前可用的方案实例投影。供【从解决方案创建群聊】前端入口使用——每个方案含 planner/subtask/aggregate 三阶段 prompt，传回 create_conversation 即可固定编排。",
+                operation_id="agent_list_solution_instances")
+    async def list_solution_instances() -> ListEnvelope[dict]:
+        items = service.list_available_solutions()
+        next_cursor = str(len(items)) if items else None
+        return ListEnvelope[dict](data=items, page=Page(next_cursor=next_cursor, has_more=False))
+
     @router.get("/grants/snapshots", summary="列已冻结执行快照（观测）",
                 description="列出本端已冻结的执行快照。快照在授权有效时冻结，授权撤销后仍可查阅。",
                 operation_id="agent_list_frozen_snapshots")

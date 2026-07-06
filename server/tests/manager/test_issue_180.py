@@ -140,7 +140,7 @@ class TestSolutionsTrimming:
         # known_versions 包含 solution 当前版本 → 不回
         resp = svc.pull(ctx, AuthorizedConfigPullRequest(
             tenant_id="t-a", member_id="admin-1",
-            known_versions={"sol-1": "v1"},  # sol.solution_version == "v1"
+            known_versions={"sol-1": "v1:1"},  # matches composite(solution_version, config_version) -> skip
         ))
         assert not any(s["id"] == "sol-1" for s in resp.solutions)
 
@@ -152,7 +152,7 @@ class TestSolutionsTrimming:
         ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
         resp = svc.pull(ctx, AuthorizedConfigPullRequest(
             tenant_id="t-a", member_id="admin-1",
-            known_versions={"sol-1": "v0"},  # 过时版本 → 返回增量
+            known_versions={"sol-1": "v1:0"},  # 旧 config_version → 返回增量
         ))
         assert any(s["id"] == "sol-1" for s in resp.solutions)
 

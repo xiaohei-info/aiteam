@@ -26,6 +26,7 @@ from shared.contracts.enums import ConversationState
 from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.events import BusinessTimelineEvent
 from shared.contracts.runspec import RunSpec
+from shared.errors import Conflict
 
 from .group import DispatchResult, GroupChatService, GroupExpert
 from .models import Conversation, Message, MessageRole, Run, RunTriggerType, RunExecutionMode, Task
@@ -40,6 +41,10 @@ class CreateConversationRequest(BaseModel):
     orchestration_brief: str | None = Field(default=None, description="orchestrated 必填：planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
     entry_employee_id: str | None = Field(default=None, description="私聊归属员工 employee_id")
+    # 固定编排入口：从 Operator 行业方案"创建群聊"时一并传入。传 solution_instance_id 则
+    # collaboration_mode 自动为 orchestrated，prompts 直接作为固定编排规则（不可会话级覆盖）。
+    # 自由创建群聊时全部留 None。
+    solution_instance_id: str | None = Field(default=None, description="绑定的方案实例 id（可选）；传到则后端从本地投影加载 prompts/experts， **不接受客户端传入的 prompts/expert ids**")
 
 
 class SetConversationStateRequest(BaseModel):
@@ -127,14 +132,17 @@ def build_mainline_router(
 
     # ---- conversation ----
 
-    @router.post("/conversations", summary="建会话", description="创建新会话。可指定标题，留空自动生成。会话是对话/run/task 的容器。", operation_id="agent_create_conversation")
+    @router.post("/conversations", summary="建会话", description="创建新会话。传 solution_instance_id 则后端从本地投影加载固定编排 prompts/experts（不信任客户端传入）", operation_id="agent_create_conversation")
     async def create_conversation(req: CreateConversationRequest) -> Envelope[Conversation]:
+        snapshot = service.load_solution_snapshot(req.solution_instance_id) if req.solution_instance_id else None
         return Envelope[Conversation](data=service.create_conversation(
             title=req.title,
             collaboration_mode=req.collaboration_mode,
             orchestration_brief=req.orchestration_brief,
             planner_employee_id=req.planner_employee_id,
             entry_employee_id=req.entry_employee_id,
+            solution_instance_id=req.solution_instance_id,
+            _snapshot=snapshot,
         ))
 
     @router.get("/conversations", summary="列会话", description="列出本端所有会话，按创建时间倒序排列。", operation_id="agent_list_conversations")
@@ -220,7 +228,10 @@ def build_mainline_router(
 
     @router.post("/conversations/{conversation_id}/group-dispatch", summary="群聊一轮编排（@提及触发多专家、多 run 并入同一时间线）", description="@提及生效多专家并行编排。每位专家独立 run，并入同一时间线。", operation_id="agent_group_dispatch")
     async def group_dispatch(conversation_id: str, req: GroupDispatchRequest) -> Envelope[DispatchResult]:
-        service.get_conversation(conversation_id)  # 存在性校验 -> 404
+        conv = service.get_conversation(conversation_id)  # 存在性校验 -> 404
+        # 群聊编排只允许群会话：私聊(entry_employee_id 非空)不可走 group-dispatch，防会话边界串线。
+        if getattr(conv, "entry_employee_id", None):
+            raise Conflict("group-dispatch 仅支持群聊会话；私聊会话不允许多专家群聊编排")
         group = GroupChatService(service, experts=req.experts)
         result = await group.post_and_dispatch(conversation_id, req.text)
         return Envelope[DispatchResult](data=result)

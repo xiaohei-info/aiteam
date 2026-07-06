@@ -32,6 +32,11 @@ from .store import (
     SqliteRunRepository,
     SqliteTaskRepository,
 )
+from ..grants.store import (
+    InMemorySolutionProjectionRepository,
+    SolutionProjectionRepository,
+    SqliteSolutionProjectionRepository,
+)
 from .stream import StreamBroker
 from .timeline import (
     InMemoryRawEventArchive,
@@ -51,6 +56,7 @@ def build_mainline_service(
     runtime_env_passthrough: tuple[str, ...] = (),
     usage_recorder=None,
     tenant_id: str = "local",
+    solutions: SolutionProjectionRepository | None = None,
 ) -> MainlineService:
     if executor is not None or driver is not None:
         # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。
@@ -72,10 +78,14 @@ def build_mainline_service(
         tasks = SqliteTaskRepository(db)
         timeline = SqliteTimelineStore(db)
         raw_archive = SqliteRawEventArchive(db)
+        if solutions is None:
+            solutions = SqliteSolutionProjectionRepository(db)
         # 启动时清理过期归档（保留期默认 7 天）
         raw_archive.cleanup_expired()
     else:
         conversations = InMemoryConversationRepository()
+        if solutions is None:
+            solutions = InMemorySolutionProjectionRepository()
         messages = InMemoryMessageRepository()
         runs = InMemoryRunRepository()
         tasks = InMemoryTaskRepository()
@@ -92,4 +102,5 @@ def build_mainline_service(
         raw_archive=raw_archive,
         usage_recorder=usage_recorder,
         tenant_id=tenant_id,
+        solutions=solutions,
     )

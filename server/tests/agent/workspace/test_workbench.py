@@ -36,6 +36,7 @@ def _make_projection(
         employee_id=employee_id,
         tenant_id="t1",
         version="1",
+        handle=employee_id,
         display_name=display_name,
         runtime_binding=None,
         persona=persona,

@@ -41,6 +41,7 @@ class SolutionInstanceRow:
     aggregate_prompt: str = ""
     default_grants_meta: dict | None = None
     template_meta: dict | None = None
+    config_version: int = 1
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -65,7 +66,7 @@ class RecruitEventRow:
 _SOLUTION_COLUMNS = (
     "id, solution_id, solution_version, display_name, status, expert_employee_ids, "
     "knowledge_refs, skill_refs, planner_prompt, subtask_prompt, aggregate_prompt, "
-    "default_grants_meta, template_meta, created_at, updated_at"
+    "default_grants_meta, template_meta, config_version, created_at, updated_at"
 )
 
 
@@ -84,8 +85,9 @@ def _row_to_solution(row: Any) -> SolutionInstanceRow:
         aggregate_prompt=row[10] or "",
         default_grants_meta=row[11],
         template_meta=row[12],
-        created_at=row[13],
-        updated_at=row[14],
+        config_version=int(row[13] or 1),
+        created_at=row[14],
+        updated_at=row[15],
     )
 
 
@@ -175,9 +177,9 @@ class RecruitRepository:
                     tenant_id, solution_id, solution_version, display_name, status,
                     expert_employee_ids, knowledge_refs, skill_refs,
                     planner_prompt, subtask_prompt, aggregate_prompt,
-                    default_grants_meta, template_meta
+                    default_grants_meta, template_meta, config_version
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING """ + _SOLUTION_COLUMNS,
                 (
@@ -187,6 +189,7 @@ class RecruitRepository:
                     planner_prompt, subtask_prompt, aggregate_prompt,
                     json.dumps(default_grants_meta) if default_grants_meta is not None else None,
                     json.dumps(template_meta) if template_meta is not None else None,
+                    1,
                 ),
             ).fetchone()
         return _row_to_solution(row)
@@ -217,6 +220,63 @@ class RecruitRepository:
                 "SELECT " + _SOLUTION_COLUMNS + " FROM solution_instance ORDER BY created_at"
             ).fetchall()
         return [_row_to_solution(r) for r in rows]
+
+    def update_solution_instance(
+        self,
+        ctx: TenantContext,
+        *,
+        instance_id: str,
+        display_name: str | None = None,
+        expert_employee_ids: list[str] | None = None,
+        knowledge_refs: list[str] | None = None,
+        skill_refs: list[str] | None = None,
+        planner_prompt: str | None = None,
+        subtask_prompt: str | None = None,
+        aggregate_prompt: str | None = None,
+        status: str | None = None,
+    ) -> SolutionInstanceRow | None:
+        """局部更新方案实例（仅传字段被写入；tenant_id 取自 ctx，D22）。
+
+        None 字段不写入（保持原值）。返回更新后的行；行不存在 → None（跨 tenant RLS 不可见）。
+        """
+        sets: list[str] = []
+        params: list[Any] = []
+        if display_name is not None:
+            sets.append("display_name = %s")
+            params.append(display_name)
+        if expert_employee_ids is not None:
+            sets.append("expert_employee_ids = %s")
+            params.append([str(e) for e in expert_employee_ids])
+        if knowledge_refs is not None:
+            sets.append("knowledge_refs = %s")
+            params.append(json.dumps(knowledge_refs))
+        if skill_refs is not None:
+            sets.append("skill_refs = %s")
+            params.append(json.dumps(skill_refs))
+        if planner_prompt is not None:
+            sets.append("planner_prompt = %s")
+            params.append(planner_prompt)
+        if subtask_prompt is not None:
+            sets.append("subtask_prompt = %s")
+            params.append(subtask_prompt)
+        if aggregate_prompt is not None:
+            sets.append("aggregate_prompt = %s")
+            params.append(aggregate_prompt)
+        if status is not None:
+            sets.append("status = %s")
+            params.append(status)
+        if not sets:
+            return self.get_solution_instance(ctx, instance_id=instance_id)
+        sets.append("updated_at = now()")
+        sets.append("config_version = config_version + 1")
+        params.append(instance_id)
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "UPDATE solution_instance SET " + ", ".join(sets)
+                + " WHERE id = %s RETURNING " + _SOLUTION_COLUMNS,
+                tuple(params),
+            ).fetchone()
+        return _row_to_solution(row) if row is not None else None
 
     # ---- recruit_event（审计，只追加）----
     def append_recruit_event(

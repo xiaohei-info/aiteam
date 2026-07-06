@@ -1,5 +1,6 @@
 """A4 验收：grants 北向路由（触发 sync + 列投影 + 列冻结快照）。
 
+
 经 TestClient 验证端点装配与 envelope 形状；用 fake grants_client 注入，不真连 Manager。
 含离线降级端点行为（sync 返回 ok=False，不返回 5xx、不崩）。
 """
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 from agent_service.app import build_app
 from agent_service.grants.factory import build_grants_service
 from agent_service.grants.routes import build_grants_router
+import pytest
+
 from shared.contracts.crosstier import (
     AuthorizedConfigPullRequest,
     AuthorizedConfigPullResponse,
@@ -78,3 +81,57 @@ def test_default_app_wires_grants_routes():
     snaps = http.get("/api/agent/grants/snapshots")
     assert snaps.status_code == 200
     assert snaps.json()["data"] == []
+
+
+def test_list_solutions_empty_when_no_pull(client_with_fake):
+    """未 sync 时列方案实例返回空列表（不 5xx）。"""
+    client, _ = client_with_fake
+    r = client.get("/api/agent/grants/solutions")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["data"] == []
+    assert data["page"]["has_more"] is False
+
+
+def test_list_solutions_after_sync_exposes_three_stage_prompts(client_with_fake):
+    """sync 后 /grants/solutions 返回三阶段 prompts，字段对齐前端契约（solution_instance_id）。"""
+    client, fake = client_with_fake
+    fake.config_response = AuthorizedConfigPullResponse(
+        experts=[],
+        solutions=[
+            {   # id=instance id, solution_id=Operator template id
+                "id": "si-1",
+                "solution_id": "tpl-1",
+                "version": "v1",
+                "display_name": "方案A",
+                "planner_prompt": "pa",
+                "subtask_prompt": "sa",
+                "aggregate_prompt": "aa",
+            },
+        ],
+        revoked_ids=[],
+    )
+    # trigger sync
+    r = client.post("/api/agent/grants/sync", json={"tenant_id": "t1", "member_id": "m1"})
+    assert r.status_code == 200
+    assert r.json()["data"]["ok"] is True
+
+    r = client.get("/api/agent/grants/solutions")
+    assert r.status_code == 200
+    items = r.json()["data"]
+    assert len(items) == 1
+    assert items[0]["solution_instance_id"] == "si-1"  # instance id, not template id
+    assert items[0]["display_name"] == "方案A"
+    assert items[0]["planner_prompt"] == "pa"
+    assert items[0]["subtask_prompt"] == "sa"
+    assert items[0]["aggregate_prompt"] == "aa"
+
+
+@pytest.fixture()
+def client_with_fake():
+    fake = FakeGrantsClient()
+    svc = build_grants_service(client=fake)
+    app = FastAPI()
+    from fastapi.testclient import TestClient
+    app.include_router(build_grants_router(svc))
+    return TestClient(app), fake

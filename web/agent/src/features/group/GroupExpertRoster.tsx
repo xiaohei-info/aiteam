@@ -37,9 +37,9 @@ export function GroupExpertRoster({ experts, onPickHandle }: GroupExpertRosterPr
               type="button"
               className="rounded-sm border border-gold/25 bg-surface px-sm py-0.5 text-xs text-gold transition hover:bg-surface-raised"
               onClick={() => onPickHandle?.(expert.handle)}
-              aria-label={`@提及 ${expert.handle}`}
+              aria-label={`@提及 ${expert.display_name || expert.handle}`}
             >
-              @{expert.handle}
+              @{expert.display_name || expert.handle}
             </button>
             {expert.model && <span className="text-[10px] text-text-muted">{expert.model}</span>}
           </li>

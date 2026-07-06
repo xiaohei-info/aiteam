@@ -5,6 +5,7 @@
   sync（F10/D12）：
     本地投影版本 → AuthorizedConfigPullRequest(known_versions)
     → client.pull_authorized_config → 增量 experts 落投影 + revoked_ids 失效移除
+    + solutions 落方案实例投影（供"从解决方案创建群聊"入口使用）
 
   freeze_snapshot（F11/D5）：
     employee_id(+version) → SnapshotPullRequest → client.pull_snapshot
@@ -28,7 +29,7 @@ from shared.contracts.grants import LoadedExpertProjection
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 
 from .client import ManagerGrantsClient
-from .store import ProjectionRepository, SnapshotRepository
+from .store import ProjectionRepository, SnapshotRepository, SolutionProjectionRepository
 
 
 def _now() -> datetime:
@@ -74,8 +75,10 @@ def _to_projection(tenant_id: str, raw: dict) -> LoadedExpertProjection:
 
     model_policy_raw = raw.get("model_policy") or {}
     runtime_policy_raw = raw.get("runtime_policy") or {}
+    eid = str(raw["employee_id"])
     return LoadedExpertProjection(
-        employee_id=str(raw["employee_id"]),
+        employee_id=eid,
+        handle=str(raw.get("handle", raw.get("name", ""))) or eid,
         tenant_id=tenant_id,
         version=str(raw.get("version", "")),
         display_name=str(raw.get("display_name", "")),
@@ -109,10 +112,12 @@ class GrantsService:
         client: ManagerGrantsClient,
         projections: ProjectionRepository,
         snapshots: SnapshotRepository,
+        solutions: SolutionProjectionRepository | None = None,
     ) -> None:
         self._client = client
         self._projections = projections
         self._snapshots = snapshots
+        self._solutions = solutions
 
     # ---- F10 授权配置 sync（D12：主动 pull，绝不接受推送）----
 
@@ -121,12 +126,17 @@ class GrantsService:
 
         失败（Manager 不可达）→ ok=False，已有投影保持不变继续可用。
         """
+        known_versions: dict[str, str] = {
+            p.employee_id: p.version for p in self._projections.list_all()
+        }
+        if self._solutions is not None:
+            known_versions.update(
+                {p.solution_instance_id: p.version for p in self._solutions.list_all()}
+            )
         request = AuthorizedConfigPullRequest(
             tenant_id=tenant_id,
             member_id=member_id,
-            known_versions={
-                p.employee_id: p.version for p in self._projections.list_all()
-            },
+            known_versions=known_versions,
         )
         try:
             response = self._client.pull_authorized_config(request)
@@ -139,15 +149,36 @@ class GrantsService:
             upserted += 1
 
         revoked = 0
-        for employee_id in response.revoked_ids:
-            if self._projections.revoke(employee_id) is not None:
+        for revoked_id in response.revoked_ids:
+            if self._projections.revoke(revoked_id) is not None:
                 revoked += 1
+            if self._solutions is not None and self._solutions.remove(revoked_id) is not None:
+                revoked += 1
+
+        # 方案实例投影（可选仓储；未配则跳过——pull 响应中的 solutions[] 暂不落库）。
+        if self._solutions is not None:
+            seen: set[str] = set()
+            for raw in response.solutions:
+                sid = str(raw.get("id", raw.get("solution_instance_id", "")))
+                if not sid:
+                    continue
+                self._solutions.upsert(raw)
+                seen.add(sid)
 
         return SyncResult(ok=True, upserted=upserted, revoked=revoked)
 
     def available_experts(self) -> list[LoadedExpertProjection]:
         """对话/装载路径可用专家（已授权未撤销）。只读本地投影，不跨端。"""
         return self._projections.available()
+
+    def list_available_solutions(self) -> list[dict]:
+        """列出本端当前可用的方案实例投影（含三阶段 prompts 快照）。
+
+        供"从解决方案创建群聊"前端入口使用。未配置方案仓储时返回空列表（降级）。
+        """
+        if self._solutions is None:
+            return []
+        return [p.to_dict() for p in self._solutions.available()]
 
     # ---- F11 执行快照冻结（D5：装载/提交 run 时拉取并冻结）----
 

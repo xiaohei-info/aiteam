@@ -16,6 +16,20 @@
 import type { AgentApiClient } from "../../lib/api-client";
 
 /**
+ * 本端可用的方案实例投影（对齐 server agent_service/grants/store.py:SolutionProjection）。
+ * 供"从解决方案创建群聊"弹窗使用——含三阶段 prompts 快照（不可覆盖，固定编排语义）。
+ */
+export interface SolutionProjection {
+  solution_instance_id: string;
+  display_name: string;
+  version: string;
+  expert_employee_ids?: string[];
+  planner_prompt: string;
+  subtask_prompt: string;
+  aggregate_prompt: string;
+}
+
+/**
  * 本地可用专家投影（对齐 server shared/contracts/grants.py:LoadedExpertProjection）。
  * 用于群聊 roster 数据源——替代演示用 mock。
  */
@@ -23,6 +37,8 @@ export interface LoadedExpertProjection {
   employee_id: string;
   tenant_id: string;
   version: string;
+  /** Stable ASCII handle for roster/@提及. Prefer this over display_name for matching. */
+  handle: string;
   display_name: string;
   runtime_binding?: string | null;
   synced_at?: string | null;
@@ -35,6 +51,9 @@ export interface LoadedExpertProjection {
  */
 export interface GroupExpert {
   handle: string;
+  /** Stable employee id; used for solution roster filtering (over display_name reverse lookup). */
+  employee_id?: string;
+  display_name?: string;
   system_prompt?: string | null;
   model?: string | null;
 }
@@ -97,6 +116,67 @@ export async function groupDispatch(
   // 后端约定返回 envelope.data；防御性兜底（与 AgentApiClient.login 同模式）。
   if (result === null) {
     throw new Error("group-dispatch: empty envelope");
+  }
+  return result;
+}
+
+/**
+ * 列出本端可用的方案实例投影（GET /api/agent/grants/solutions）。
+ * 供"从解决方案创建群聊"弹窗选择列表。
+ */
+export async function listSolutionInstances(
+  client: AgentApiClient,
+): Promise<SolutionProjection[]> {
+  const result = await client.listGet<SolutionProjection>("/api/agent/grants/solutions");
+  return result.items;
+}
+
+/**
+ * 从 Operator 行业方案创建群聊会话（固定编排）。
+ * 后端返回 Conversation（collaboration_mode 自动为 orchestrated），后续群聊 stage 走方案自带的三阶段 prompts。
+ */
+export interface CreateFromSolutionInput {
+  solution_instance_id: string;
+  title?: string | null;
+}
+
+export async function createConversationFromSolution(
+  client: AgentApiClient,
+  input: CreateFromSolutionInput,
+): Promise<import("../chat/useChatApi").Conversation> {
+  const result = await client.post<import("../chat/useChatApi").Conversation>(
+    "/api/agent/conversations",
+    {
+      body: {
+        title: input.title ?? null,
+        solution_instance_id: input.solution_instance_id,
+      },
+    },
+  );
+  if (result === null) {
+    throw new Error("createConversationFromSolution: empty envelope");
+  }
+  return result;
+}
+
+/**
+ * 创建自由群聊会话（自由协作——由 Planner/协调员决定协作方式；无固定编排规则）。
+ * 不绑定 solution_instance_id；session 创建后用户可自由拉 Agent 进群。
+ */
+export async function createFreeConversation(
+  client: AgentApiClient,
+  input: { title?: string | null },
+): Promise<import("../chat/useChatApi").Conversation> {
+  const result = await client.post<import("../chat/useChatApi").Conversation>(
+    "/api/agent/conversations",
+    {
+      body: {
+        title: input.title ?? null,
+      },
+    },
+  );
+  if (result === null) {
+    throw new Error("createFreeConversation: empty envelope");
   }
   return result;
 }

@@ -29,3 +29,8 @@ __pycache__/
 logs/
 .coverage
 server/.coverage
+
+# Coverage artifacts (local CI measurement)
+server/.coverage
+server/coverage.json
+server/coverage.xml

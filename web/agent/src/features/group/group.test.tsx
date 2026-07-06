@@ -20,9 +20,9 @@ import { AppRoutes } from "../../app/routes";
 import { AgentApiClient } from "../../lib/api-client";
 import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
 import { TimelineStore } from "@aiteam/shared/timeline-client";
-import { groupDispatch, type GroupExpert, type DispatchResult } from "./useGroupApi";
+import { groupDispatch, type GroupExpert, type DispatchResult, type SolutionProjection } from "./useGroupApi";
 import { parseMentions } from "./MentionComposer";
-import { createTimelineFetcher } from "../chat/useChatApi";
+import { createTimelineFetcher, type Conversation } from "../chat/useChatApi";
 import { MentionComposer } from "./MentionComposer";
 
 // ---- 通用 helper ----
@@ -36,7 +36,7 @@ function envelope<T>(data: T): string {
 }
 
 function makeConv(id: string, title: string) {
-  return { id, title, state: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
+  return { id, title, state: "active", last_read_at: null, last_read_message_id: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" };
 }
 
 /** 构造 timeline event；可指定 run_id 以验证多 run 归并。 */
@@ -77,8 +77,8 @@ function makeGroupFetch(
     // 列本地可用专家（GET /api/agent/grants/experts）
     if (path.includes("/api/agent/grants/experts")) {
       const experts = [
-        { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
-        { employee_id: "e2", tenant_id: "t1", version: "v1", display_name: "专家B", runtime_binding: "claude-sonnet", synced_at: null, revoked: false },
+        { employee_id: "e1", tenant_id: "t1", version: "v1", handle: "专家A", display_name: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        { employee_id: "e2", tenant_id: "t1", version: "v1", handle: "专家B", display_name: "专家B", runtime_binding: "claude-sonnet", synced_at: null, revoked: false },
       ];
       return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -378,160 +378,142 @@ describe("MentionComposer — 无 @提及", () => {
   });
 });
 
-// ---- 新建群聊会话入口 ----
 
-describe("GroupPage — 新建群聊会话", () => {
-  it("空态显示「新建群聊」入口", async () => {
-    loginStorage();
-    const convs = [makeConv("c1", "群聊A")];
-    globalThis.fetch = makeGroupFetch(convs);
+// ---- 5. 从解决方案创建群聊（固定编排入口）----
 
-    render(
-      <MemoryRouter initialEntries={["/group"]}>
-        <AppProvider>
-          <AppRoutes />
-        </AppProvider>
-      </MemoryRouter>,
-    );
-
-    // 列表头部也有「新建群聊会话」入口（aria-label），两个按钮都匹配 /新建群聊/；取第一个即可。
-    expect((await screen.findAllByRole("button", { name: /新建群聊/ }))[0]).toBeInTheDocument();
-  });
-
-  it("点击「新建群聊」头部入口 -> POST /api/agent/conversations -> 进入聊天", async () => {
-    loginStorage();
-    const convs = [makeConv("c1", "群聊A")];
-    const fetchImpl = makeGroupFetch(convs);
-    globalThis.fetch = fetchImpl;
-
-    render(
-      <MemoryRouter initialEntries={["/group"]}>
-        <AppProvider>
-          <AppRoutes />
-        </AppProvider>
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => expect(screen.getByText("群聊A")).toBeInTheDocument());
-    // 列表头部「＋ 新建」入口
-    const createBtns = screen.getAllByRole("button", { name: /新建/ });
-    fireEvent.click(createBtns[0]!);
-
-    await waitFor(() => {
-      const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
-      const create = calls.find(([u, i]) => u.endsWith("/api/agent/conversations") && i?.method === "POST");
-      expect(create).toBeTruthy();
-      const body = JSON.parse(String(create![1].body));
-      expect(body.collaboration_mode).toBe("free");
-      expect(body.title).toBeTruthy();
-    });
-
-    // 选中进入聊天：渲染 MentionComposer
-    await waitFor(() => expect(screen.getByLabelText("群聊消息内容")).toBeInTheDocument());
-  });
-});
-
-// ---- 新建群聊会话（失败分支：返回空 / 接口异常 / 在已选会话视图内报错）----
-
-function groupFetchWithCreate(createImpl: (init?: RequestInit) => Response) {
-  return vi.fn(async (url: string | URL, init?: RequestInit) => {
-    const path = typeof url === "string" ? url : url.toString();
-    if (path.includes("/api/agent/grants/experts")) {
-      const experts = [
-        { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
-        { employee_id: "e2", tenant_id: "t1", version: "v1", display_name: "专家B", runtime_binding: "claude-sonnet", synced_at: null, revoked: false },
-      ];
-      return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
-    }
-    if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
-      return createImpl(init);
-    }
-    if (
-      path.includes("/api/agent/conversations") &&
-      !path.includes("/timeline") &&
-      !path.includes("/messages") &&
-      !path.includes("/group-dispatch") &&
-      (init?.method === undefined || init?.method === "GET")
-    ) {
-      return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
-    }
-    if (path.includes("/timeline")) {
-      return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
-    }
-    return new Response(envelope(null), { status: 200 });
-  }) as unknown as typeof fetch;
-}
-
-describe("GroupPage — 新建群聊会话（失败分支）", () => {
-  it("建群返回空时展示错误提示（空态视图）", async () => {
-    loginStorage();
-    globalThis.fetch = groupFetchWithCreate(
-      () => new Response(JSON.stringify({ data: null }), { status: 200, headers: { "Content-Type": "application/json" } }),
-    );
-
-    render(
-      <MemoryRouter initialEntries={["/group"]}>
-        <AppProvider>
-          <AppRoutes />
-        </AppProvider>
-      </MemoryRouter>,
-    );
-
-    // 空态「＋ 新建群聊」按钮（区别于列表头部「＋ 新建」aria-label「新建群聊会话」）
-    const allNew = await screen.findAllByRole("button", { name: /新建群聊/ });
-    fireEvent.click(allNew[allNew.length - 1]!);
-
-    // 错误提示以 role=alert 形式展示（文案走 i18n useApiError）
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-  });
-
-  it("建群接口异常时展示错误提示", async () => {
-    loginStorage();
-    globalThis.fetch = groupFetchWithCreate(
-      () => new Response(JSON.stringify({ type: "err", title: "boom", status: 500, code: "server_error" }), { status: 500, headers: { "Content-Type": "application/json" } }),
-    );
-
-    render(
-      <MemoryRouter initialEntries={["/group"]}>
-        <AppProvider>
-          <AppRoutes />
-        </AppProvider>
-      </MemoryRouter>,
-    );
-
-    // 空态「＋ 新建群聊」按钮（区别于列表头部「＋ 新建」aria-label「新建群聊会话」）
-    const allNew = await screen.findAllByRole("button", { name: /新建群聊/ });
-    fireEvent.click(allNew[allNew.length - 1]!);
-
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-  });
-});
-
-  it("建群异常时错误提示显示在已选会话视图内", async () => {
-    loginStorage();
-    // 需要列表中有会话可选（GET 返回一个会话），且建群接口抛错
-    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+describe("GroupPage — 从解决方案创建群聊", () => {
+  function makeFetchWithSolutions(
+    convs: ReturnType<typeof makeConv>[],
+    solutions: SolutionProjection[],
+    created: Conversation,
+  ) {
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = typeof url === "string" ? url : url.toString();
       if (path.includes("/api/agent/grants/experts")) {
-        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+        const experts = [
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ];
+        return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
-        return new Response(JSON.stringify({ type: "err", title: "boom", status: 500, code: "server_error" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      if (path.includes("/api/agent/grants/solutions")) {
+        return new Response(listEnvelope(solutions), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations") && init?.method === "POST") {
+        return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       if (
         path.includes("/api/agent/conversations") &&
-        !path.includes("/timeline") &&
         !path.includes("/messages") &&
         !path.includes("/group-dispatch") &&
+        !path.includes("/solutions") &&
         (init?.method === undefined || init?.method === "GET")
       ) {
-        // 列会话：返回两个会话
-        return new Response(listEnvelope([
-          { id: "c1", title: "群聊A", state: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
-        ]), { status: 200, headers: { "Content-Type": "application/json" } });
+        if (path.includes("/timeline")) {
+          return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(listEnvelope(convs), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      if (path.includes("/timeline")) {
-        return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+  }
+
+  function makeSolution(id: string, name: string): SolutionProjection {
+    return {
+      solution_instance_id: id,
+      display_name: name,
+      version: "v1",
+      planner_prompt: "p",
+      subtask_prompt: "s",
+      aggregate_prompt: "a",
+    };
+  }
+
+  it("点击「从解决方案创建群聊」加载方案列表并展示在弹窗中", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn();
+    // 使用通用 makeGroupFetch：GET solutions 会被以下返回
+    const convs: ReturnType<typeof makeConv>[] = [];
+    const solutions = [makeSolution("si-1", "电商专家群")];
+    const fetchWithSolutions = makeFetchWithSolutions(convs, solutions, makeConv("c-new", "电商专家群"));
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/电商专家群/)).toBeInTheDocument();
+    });
+  });
+
+  it("无方案实例时弹窗展示兜底文案", async () => {
+    loginStorage();
+    const solutions: SolutionProjection[] = [];
+    const fetchWithSolutions = makeFetchWithSolutions([], solutions, makeConv("c-new", "x"));
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/暂无可用方案实例/)).toBeInTheDocument();
+    });
+  });
+
+  it("选中方案实例后点创建 → createConversationFromSolution 被调用", async () => {
+    loginStorage();
+    const solutions = [makeSolution("si-1", "电商专家群")];
+    const newConv = makeConv("c-result", "电商专家群");
+    const fetchWithSolutions = makeFetchWithSolutions([], solutions, newConv);
+    globalThis.fetch = fetchWithSolutions;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    const select = await screen.findByRole("combobox");
+    fireEvent.change(select, { target: { value: "si-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /^创建群聊$/ }));
+
+    await waitFor(() => {
+      // 弹窗关闭表示创建成功
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+});
+
+
+// ---- 6. 专家 roster 加载 + 方案加载异常兜底 ----
+
+describe("GroupPage — roster / 方案异常兜底", () => {
+  it("专家加载失败展示 rosterErrorTip", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        return new Response(JSON.stringify({ detail: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       return new Response(envelope(null), { status: 200 });
     }) as unknown as typeof fetch;
@@ -545,14 +527,113 @@ describe("GroupPage — 新建群聊会话（失败分支）", () => {
       </MemoryRouter>,
     );
 
-    // 先选择一个会话（进入已选视图）
-    fireEvent.click(await screen.findByRole("button", { name: /群聊A/ }));
-    await waitFor(() => expect(screen.getByRole("log")).toBeInTheDocument());
-
-    // 列表头部「＋ 新建」入口（aria-label 新建群聊会话）→ 建群失败
-    const newBtn = screen.getByRole("button", { name: "新建群聊会话" });
-    fireEvent.click(newBtn);
-
-    // 错误提示在该视图 header 中以 role=alert 出现
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    await waitFor(() => {
+      expect(screen.getByText(/加载专家失败/)).toBeInTheDocument();
+    });
   });
+
+  it("加载方案列表失败展示 solutionsError", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        const experts = [
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ];
+        return new Response(listEnvelope(experts), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/grants/solutions")) {
+        return new Response(JSON.stringify({ detail: "nope" }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/加载方案列表失败/)).toBeInTheDocument();
+    });
+  });
+});
+
+
+// ---- 7. 创建自由群聊 ----
+
+describe("GroupPage — 创建自由群聊", () => {
+  function makeFreeFetch(created: Conversation, freeTitle: string = "自由协作群") {
+    return vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = typeof url === "string" ? url : url.toString();
+      if (path.includes("/api/agent/grants/experts")) {
+        return new Response(listEnvelope([
+          { employee_id: "e1", tenant_id: "t1", version: "v1", display_name: "专家A", handle: "专家A", runtime_binding: "gpt-5", synced_at: null, revoked: false },
+        ]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations") && init?.method === "POST") {
+        return new Response(envelope(created), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.includes("/api/agent/conversations")) {
+        return new Response(listEnvelope([]), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(envelope(null), { status: 200 });
+    }) as unknown as typeof fetch;
+  }
+
+  it("点击「创建自由群聊」→ window.prompt 填入名称 → createFreeConversation 被调用", async () => {
+    loginStorage();
+    const created = makeConv("c-free", "我的自由群");
+    const fetchImpl = makeFreeFetch(created);
+    globalThis.fetch = fetchImpl;
+
+    // mock window.prompt 提供标题
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("我的自由群");
+
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /创建自由群聊/ }));
+    expect(promptSpy).toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it("window.prompt 取消 → 不调用 API", async () => {
+    loginStorage();
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue(null);
+
+    render(
+      <MemoryRouter initialEntries={["/group"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /创建自由群聊/ }));
+    // prompt 返回 null → 不应该发 POST
+    const postCalls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => (c[1] as RequestInit | undefined)?.method === "POST",
+    );
+    expect(postCalls.length).toBe(0);
+    promptSpy.mockRestore();
+  });
+});
+

@@ -9,7 +9,7 @@ from shared.contracts.snapshot import EmployeeExecutionSnapshot
 
 
 def _proj(employee_id: str, version: str = "v1") -> LoadedExpertProjection:
-    return LoadedExpertProjection(employee_id=employee_id, tenant_id="t1", version=version)
+    return LoadedExpertProjection(employee_id=employee_id, tenant_id="t1", version=version, handle=employee_id)
 
 
 def _snap(employee_id: str, snap_version: str) -> EmployeeExecutionSnapshot:

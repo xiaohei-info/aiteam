@@ -76,6 +76,119 @@ def connect(db_path: str) -> LocalDb:
     return LocalDb(conn)
 
 
+def _split_statements(script: str):
+    """Split a SQL script into statements, respecting parens/quotes/newlines so
+    multi-line CREATE TABLE(...) / DO-blocks stay intact."""
+    stmts: list[str] = []
+    buf: list[str] = []
+    in_single = in_double = in_line_comment = in_block_comment = False
+    prev = ""
+    i = 0
+    n = len(script)
+    while i < n:
+        c = script[i]
+        two = c + script[i + 1] if i + 1 < n else c
+        if in_line_comment:
+            buf.append(c)
+            if c == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        if in_block_comment:
+            buf.append(c)
+            if two == "*/":
+                buf.append(script[i + 1])
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if in_single:
+            buf.append(c)
+            if c == "\\":
+                if i + 1 < n:
+                    buf.append(script[i + 1])
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if c == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            buf.append(c)
+            if c == '"':
+                in_double = False
+            i += 1
+            continue
+        if two == "--":
+            in_line_comment = True
+            buf.append(two)
+            i += 2
+            continue
+        if two == "/*":
+            in_block_comment = True
+            buf.append(two)
+            i += 2
+            continue
+        if c == "'":
+            in_single = True
+            buf.append(c)
+            i += 1
+            continue
+        if c == '"':
+            in_double = True
+            buf.append(c)
+            i += 1
+            continue
+        if c == ";" and not in_single and not in_double:
+            stmts.append("".join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        stmts.append(tail)
+    return [st for st in stmts if st]
+
+
+def _apply_one_migration(db: LocalDb, script: str) -> None:
+    """Apply a single migration defensively so re-running a half-applied script is safe.
+
+    Splits the script into statements (respecting parens/quotes), then runs each one. For the
+    common ALTER TABLE ADD COLUMN case we PRAGMA-check first; any statement that fails with the
+    benign "duplicate column name" / already-exists error is skipped so partial re-runs recover.
+    """
+    import re
+    import sqlite3
+    con = db._conn
+    statements = _split_statements(script)
+    with db._lock:
+        for stmt in statements:
+            alter_match = re.match(r"^\s*ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\b\w+)\b", stmt, re.IGNORECASE)
+            if alter_match:
+                tbl, col = alter_match.group(1), alter_match.group(2)
+                existing = con.execute(f"PRAGMA table_info({tbl})").fetchall()
+                if any(row["name"] == col for row in existing):
+                    continue
+            try:
+                con.execute(stmt)
+            except sqlite3.OperationalError as exc:
+                # Skip benign duplicate-column errors (idempotent re-run).
+                msg = str(exc)
+                if "duplicate column name" in msg or "already exists" in msg:
+                    continue
+                raise
+        con.commit()
+
+
+def _list_columns(con, table: str) -> set[str]:
+    return {row["name"] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def apply_migrations(db: LocalDb, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """按文件名顺序应用未应用的 `*.sql`，返回本次新应用的文件名。
 
@@ -94,7 +207,7 @@ def apply_migrations(db: LocalDb, migrations_dir: Path = MIGRATIONS_DIR) -> list
     for path in sorted(migrations_dir.glob("*.sql")):
         if path.name in applied:
             continue
-        db.executescript(path.read_text(encoding="utf-8"))
+        _apply_one_migration(db, path.read_text(encoding="utf-8"))
         db.execute("INSERT INTO schema_migrations(name) VALUES (?)", (path.name,))
         newly.append(path.name)
     return newly

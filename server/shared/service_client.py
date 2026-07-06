@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import typing
+
 import httpx
 
 from shared.errors import (
@@ -51,8 +53,10 @@ class ServiceClient:
         service_token: str | None = None,
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        user_token_provider: typing.Callable[[], str | None] | None = None,
     ):
         self._base_url = base_url.rstrip("/")
+        self._user_token_provider = user_token_provider
         self._service_identity = service_identity
         self._service_token = service_token
         self._client = httpx.Client(
@@ -74,6 +78,8 @@ class ServiceClient:
             headers["X-Service-Token"] = self._service_token
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        if self._user_token_provider is not None and (tok := self._user_token_provider()):
+            headers["Authorization"] = f"Bearer {tok}"
         return headers
 
     def _decode(self, resp: httpx.Response) -> dict:

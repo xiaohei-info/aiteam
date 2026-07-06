@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
 from shared.contracts.enums import ConversationState
-from shared.errors import NotFound
+from shared.errors import Conflict, NotFound
 
 from ..local_db import LocalDb
 from .models import (Conversation, Message, Run, RunStatus, RunTriggerType, RunExecutionMode, Task, TaskStatus)
@@ -42,6 +42,11 @@ class ConversationRepository(ABC):
         collaboration_mode: str | None = None,
         orchestration_brief: str | None = None,
         planner_employee_id: str | None = None,
+        solution_instance_id: str | None | object = None,
+        solution_planner_prompt: str | None = None,
+        solution_subtask_prompt: str | None = None,
+        solution_aggregate_prompt: str | None = None,
+        solution_expert_employee_ids: list[str] | None | object = None,
     ) -> Conversation: ...
 
     @abstractmethod
@@ -120,7 +125,12 @@ class InMemoryConversationRepository(ConversationRepository):
         *,
         collaboration_mode: str | None = None,
         orchestration_brief: str | None = None,
-        planner_employee_id: str | None = None,
+        planner_employee_id: str | None | object = None,
+        solution_instance_id: str | None | object = None,
+        solution_planner_prompt: str | None = None,
+        solution_subtask_prompt: str | None = None,
+        solution_aggregate_prompt: str | None = None,
+        solution_expert_employee_ids: list[str] | None | object = None,
     ) -> Conversation:
         item = self.get(conversation_id)
         data = item.model_dump()
@@ -137,6 +147,24 @@ class InMemoryConversationRepository(ConversationRepository):
         if planner_employee_id is not None:
             value = None if (isinstance(planner_employee_id, str) and not planner_employee_id.strip()) else planner_employee_id
             data["planner_employee_id"] = value
+        # 方案实例绑定：仅允许一次（创建时设置，不通过 PATCH 路径覆盖，固定编排语义）。
+        if solution_instance_id is not None:
+            value = None if (isinstance(solution_instance_id, str) and not solution_instance_id.strip()) else solution_instance_id
+            data["solution_instance_id"] = value
+        if solution_planner_prompt is not None:
+            data["solution_planner_prompt"] = str(solution_planner_prompt)
+        if solution_subtask_prompt is not None:
+            data["solution_subtask_prompt"] = str(solution_subtask_prompt)
+        if solution_aggregate_prompt is not None:
+            data["solution_aggregate_prompt"] = str(solution_aggregate_prompt)
+        if solution_expert_employee_ids is not None:
+            ids = solution_expert_employee_ids if isinstance(solution_expert_employee_ids, list) else []
+            prev_ids = data.get("solution_expert_employee_ids")
+            if prev_ids and ids and list(prev_ids) != list(ids):
+                raise Conflict(
+                    f"solution_expert_employee_ids already bound to {list(prev_ids)!r}; cannot rebind"
+                )
+            data["solution_expert_employee_ids"] = [str(x) for x in ids]
         data["updated_at"] = _now()
         updated = Conversation(**data)
         self._items[conversation_id] = updated
@@ -267,15 +295,22 @@ class SqliteConversationRepository(ConversationRepository):
         self._db.execute(
             "INSERT INTO conversations "
             "(id, title, state, collaboration_mode, orchestration_brief, planner_employee_id, entry_employee_id, "
-            "last_read_at, last_read_message_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "last_read_at, last_read_message_id, created_at, updated_at, "
+            "solution_instance_id, solution_planner_prompt, solution_subtask_prompt, solution_aggregate_prompt, "
+            "solution_expert_employee_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (conversation.id, conversation.title, conversation.state.value,
              conversation.collaboration_mode, conversation.orchestration_brief,
              conversation.planner_employee_id,
              conversation.entry_employee_id,
              _iso(conversation.last_read_at) if conversation.last_read_at is not None else None,
              conversation.last_read_message_id,
-             _iso(conversation.created_at), _iso(conversation.updated_at)),
+             _iso(conversation.created_at), _iso(conversation.updated_at),
+             conversation.solution_instance_id,
+             conversation.solution_planner_prompt,
+             conversation.solution_subtask_prompt,
+             conversation.solution_aggregate_prompt,
+             json.dumps(conversation.solution_expert_employee_ids)),
         )
         return conversation
 
@@ -283,26 +318,49 @@ class SqliteConversationRepository(ConversationRepository):
         row = self._db.query_one(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, entry_employee_id, "
-            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations WHERE id = ?",
+            "last_read_at, last_read_message_id, created_at, updated_at, "
+            "solution_instance_id, "
+            "COALESCE(solution_planner_prompt, '') AS solution_planner_prompt, "
+            "COALESCE(solution_subtask_prompt, '') AS solution_subtask_prompt, "
+            "COALESCE(solution_aggregate_prompt, '') AS solution_aggregate_prompt, "
+            "COALESCE(solution_expert_employee_ids, '[]') AS solution_expert_employee_ids "
+            "FROM conversations WHERE id = ?",
             (conversation_id,),
         )
         if row is None:
             raise NotFound(f"conversation {conversation_id} not found")
         row = dict(row)
         row["last_read_at"] = datetime.fromisoformat(row["last_read_at"]) if row.get("last_read_at") else None
+        eids_raw = row.get("solution_expert_employee_ids") or "[]"
+        try:
+            ids = json.loads(eids_raw) if isinstance(eids_raw, str) else list(eids_raw)
+        except (ValueError, TypeError):
+            ids = []
+        row["solution_expert_employee_ids"] = [str(x) for x in ids if x]
         return Conversation(**row)
 
     def list(self) -> list[Conversation]:
         rows = self._db.query(
             "SELECT id, title, state, COALESCE(collaboration_mode, 'free') AS collaboration_mode, "
             "COALESCE(orchestration_brief, '') AS orchestration_brief, planner_employee_id, entry_employee_id, "
-            "last_read_at, last_read_message_id, created_at, updated_at FROM conversations "
-            "ORDER BY created_at, rowid"
+            "last_read_at, last_read_message_id, created_at, updated_at, "
+            "solution_instance_id, "
+            "COALESCE(solution_planner_prompt, '') AS solution_planner_prompt, "
+            "COALESCE(solution_subtask_prompt, '') AS solution_subtask_prompt, "
+            "COALESCE(solution_aggregate_prompt, '') AS solution_aggregate_prompt, "
+            "COALESCE(solution_expert_employee_ids, '[]') AS solution_expert_employee_ids "
+            "FROM conversations ORDER BY created_at, rowid"
         )
         result = []
         for r in rows:
             d = dict(r)
             d["last_read_at"] = datetime.fromisoformat(d["last_read_at"]) if d.get("last_read_at") else None
+            eids_raw = d.get("solution_expert_employee_ids") or "[]"
+            try:
+                ids = json.loads(eids_raw) if isinstance(eids_raw, str) else list(eids_raw)
+            except (ValueError, TypeError):
+                ids = []
+            d["solution_expert_employee_ids"] = [str(x) for x in ids if x]
             result.append(Conversation(**d))
         return result
 
@@ -321,8 +379,16 @@ class SqliteConversationRepository(ConversationRepository):
         collaboration_mode: str | None = None,
         orchestration_brief: str | None = None,
         planner_employee_id: str | None | object = None,
+        solution_instance_id: str | None | object = None,
+        solution_planner_prompt: str | None = None,
+        solution_subtask_prompt: str | None = None,
+        solution_aggregate_prompt: str | None = None,
     ) -> Conversation:
-        """更新群聊协作编排字段（orchestrated 必填 brief；free 清空 brief）。"""
+        """更新群聊协作编排字段（orchestrated 必填 brief；free 清空 brief）。
+
+        方案实例绑定（solution_instance_id）和三阶段 prompts 在会话创建时一次性写入；
+        PATCH 路径仅允许清空/同步传入同值（防覆盖），固定编排语义要求 prompts 只读。
+        """
         conv = self.get(conversation_id)
         if collaboration_mode is not None:
             conv = Conversation(
@@ -338,11 +404,39 @@ class SqliteConversationRepository(ConversationRepository):
         if planner_employee_id is not None:
             value = None if (isinstance(planner_employee_id, str) and not planner_employee_id.strip()) else planner_employee_id
             conv = Conversation(**{**conv.model_dump(), "planner_employee_id": value})
+        # 方案绑定：仅允许设置（创建时）或同值同步；不允许覆盖为不同值（固定编排）。
+        if solution_instance_id is not None:
+            value = None if (isinstance(solution_instance_id, str) and not solution_instance_id.strip()) else solution_instance_id
+            prev = conv.solution_instance_id
+            if prev is not None and value is not None and prev != value:
+                raise Conflict(f"solution_instance_id already bound to {prev!r}; cannot rebind to {value!r}")
+            conv = Conversation(**{**conv.model_dump(), "solution_instance_id": value})
+        if solution_planner_prompt is not None:
+            conv = Conversation(**{**conv.model_dump(), "solution_planner_prompt": str(solution_planner_prompt)})
+        if solution_subtask_prompt is not None:
+            conv = Conversation(**{**conv.model_dump(), "solution_subtask_prompt": str(solution_subtask_prompt)})
+        if solution_aggregate_prompt is not None:
+            conv = Conversation(**{**conv.model_dump(), "solution_aggregate_prompt": str(solution_aggregate_prompt)})
+        if solution_expert_employee_ids is not None:
+            ids = solution_expert_employee_ids if isinstance(solution_expert_employee_ids, list) else []
+            # 防御：不可变快照语义 —— 已有列表时不允许重建（除非显式传 None 清空）。
+            prev_ids = conv.solution_expert_employee_ids
+            if prev_ids and ids and prev_ids != ids:
+                raise Conflict(
+                    f"solution_expert_employee_ids already bound to {prev_ids!r}; cannot rebind"
+                )
+            conv = Conversation(**{**conv.model_dump(), "solution_expert_employee_ids": [str(x) for x in ids]})
         self._db.execute(
             "UPDATE conversations SET collaboration_mode = ?, orchestration_brief = ?, "
-            "planner_employee_id = ?, updated_at = ? WHERE id = ?",
+            "planner_employee_id = ?, updated_at = ?, solution_instance_id = ?, "
+            "solution_planner_prompt = ?, solution_subtask_prompt = ?, solution_aggregate_prompt = ?, "
+            "solution_expert_employee_ids = ? "
+            "WHERE id = ?",
             (conv.collaboration_mode, conv.orchestration_brief, conv.planner_employee_id,
-             _iso(_now()), conversation_id),
+             _iso(_now()), conv.solution_instance_id,
+             conv.solution_planner_prompt, conv.solution_subtask_prompt, conv.solution_aggregate_prompt,
+             json.dumps(conv.solution_expert_employee_ids),
+             conversation_id),
         )
         return self.get(conversation_id)
 

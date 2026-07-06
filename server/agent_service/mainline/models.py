@@ -84,11 +84,22 @@ class TaskStatus(str, Enum):
 class Conversation(BaseModel):
     """本地会话。主状态固定枚举；**无展示态字段**（D6）。
 
-    协作编排口径（parity Manager侧 app/team_panel Conversation）：
+    协作编排口径（parity Manager侧 app/team_panel Conversation）。两种编排入口：固定编排（从
+    Operator 行业方案"创建群聊"，会话绑定 solution_instance_id + 三阶段 prompts，
+    UI 只读展示，不在会话级覆盖）与自由协作（@提及路由 或 独占 orchestrated + 自动
+    planner，可自由拉 Agent 进群）。
     - collaboration_mode: "free" 自由讨论（@提及驱动）| "orchestrated" 规则编排（planner 按
       orchestration_brief 拆解后分配专家 + 聚合）。私聊/默认 = free。
     - orchestration_brief: 编排指令，orchestrated 模式下注入 planner 拆解提示词。
     - planner_employee_id: 指定编排者（roster 内 handle）；空则运行时自动选一非专家做 planner。
+    - solution_instance_id: 从 Operator 行业方案"创建群聊"入口绑定的方案实例 id。空 = 自由创建群聊；
+      绑定后 collaboration_mode 自动为 orchestrated，orchestrator 读取该实例自带的三阶段 prompts 作为
+      固定编排规则（UI 只读展示，不在会话级覆盖）。Agent 端是本地数据面单写端——方案主数据在 Manager，
+      本端只存引用 + prompts 快照（D14）。
+    - solution_planner_prompt / solution_subtask_prompt / solution_aggregate_prompt:
+      方案级固定编排三阶段提示词（parity Operator solution_template 的 planner/subtask/
+      aggregate）。由 Manager authorized config pull 随 solution 落到本地投影；建群时绑定到本会话。
+      空串 = 回退 runtime 内置默认（group.py 兜底逻辑不变）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -96,11 +107,26 @@ class Conversation(BaseModel):
     id: str
     title: str | None = None
     state: ConversationState = ConversationState.ACTIVE
+    conversation_type: str = Field(default="group", description="group | private；私聊归属员工时设 private，便于群聊页过滤列出与 group-dispatch 边界校验")
     collaboration_mode: str = Field(default="free", description="free | orchestrated")
     orchestration_brief: str = Field(default="", description="orchestrated 模式下的 planner 编排指令")
     planner_employee_id: str | None = Field(default=None, description="指定编排者 roster handle")
     # 私聊归属员工（parity 企业侧 Conversation.entry_employee_id）。用于工作台按员工索引会话、推导未读。
     entry_employee_id: str | None = Field(default=None, description="本私聊所属员工 employee_id；群聊/编排会话为 None")
+    # 方案实例绑定（从 Operator 行业方案"创建群聊"入口固定编排时设置）。
+    solution_instance_id: str | None = Field(
+        default=None,
+        description="绑定的方案实例 id；从解决方案创建群聊时设置；自由创建/私聊为 None",
+    )
+    # 方案级固定编排三阶段 prompts（parity Operator solution_template）；空串回退运行时默认。
+    solution_planner_prompt: str = Field(default="", description="方案 planner prompt 快照")
+    solution_subtask_prompt: str = Field(default="", description="方案子任务拆解 prompt 快照")
+    solution_aggregate_prompt: str = Field(default="", description="方案聚合汇总 prompt 快照")
+    # 方案对应的专家群 employee_id 快照（建群时绑定，固定编排 roster 过滤用）；自由创建/私聊为空列表。
+    solution_expert_employee_ids: list[str] = Field(
+        default_factory=list,
+        description="绑定的方案对应的专家 employee_id 列表（从解决方案创建群聊时设置）",
+    )
     # 阅读状态（parity Manager 侧 ConversationReadState；本地单用户一列化）。
     last_read_at: datetime | None = Field(default=None, description="本会话最后阅读时间（用户查看时间线时刷新）")
     last_read_message_id: str | None = Field(default=None, description="用户已读的最后一条消息 id；None 表示尚未阅读")
