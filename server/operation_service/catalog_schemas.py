@@ -4,6 +4,8 @@
 SolutionPackage）一律从 shared.contracts.crosstier import，**禁在此重定义**。
 
 模板真相态归 Operator（D1 / F03）。响应体不含密码、token、provider key、会话内容。
+
+字段对齐 PRD-v2 S02/S03。
 """
 
 from __future__ import annotations
@@ -26,8 +28,16 @@ class ExpertBinding(BaseModel):
     enabled: bool = Field(default=True, description="单个专家启用开关")
 
 
+# ---- 专家模板（对齐 PRD-v2 S02 专家模板字段规范）----
+
 class RegisterExpertTemplateRequest(BaseModel):
-    """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。"""
+    """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。
+
+    字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
+    default_model / skill_ids / tags / description / initial_memories / sort_order。
+    PRD 必填字段（category / avatar_url / system_prompt / default_model / skill_ids / description）
+    在 schema 层做 min_length 校验，注册即草稿（is_published 不在本请求中）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -36,18 +46,30 @@ class RegisterExpertTemplateRequest(BaseModel):
         min_length=1,
         description="模板稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
     )
-    display_name: str = Field(min_length=1)
-    persona: str | None = Field(default=None)
-    recommended_config: dict = Field(default_factory=dict)
-    default_model_json: dict = Field(default_factory=dict, description="默认模型配置（provider/model/temperature/max_tokens）")
-    default_binding_json: dict = Field(default_factory=dict, description="默认运行时绑定（skills/knowledge_bases/memory 等）")
-    prompt_pack_json: dict = Field(default_factory=dict, description="提示词包（system_prompt/behavior_rules/opening_message 等）")
-    category_code: str = Field(default="", description="专家分类码（用于目录筛选）")
-    role_name: str = Field(default="", description="角色名称（如技术专家、销售顾问）")
+    # is_published 不在注册请求中；注册即草稿，发布由单独发布动作完成（05 F03）。
+    display_name: str = Field(min_length=1, description="专家名称（PRD: name）")
+    category: str = Field(min_length=1, description="分类（市场营销/财务分析/…）(PRD: category, 必填)")
+    avatar_url: str = Field(min_length=1, description="头像图片 URL (PRD: avatar_url, 必填)")
+    system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
+    default_model: str = Field(min_length=1, description="默认使用的大模型（PRD: default_model, 必填）")
+    skill_ids: list[str] = Field(min_length=1, default_factory=list, description="预配置技能列表 (PRD: skill_ids, 必填)")
+    tags: list[str] = Field(default_factory=list, description="搜索标签 (PRD: tags)")
+    description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
+    initial_memories: list[dict] = Field(
+        default_factory=list, description="预置记忆条目 (PRD: initial_memories)"
+    )
+    sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）(PRD: sort_order)")
 
+
+# ---- 行业方案（对齐 PRD-v2 S03 + 下游 apply/建群业务流程所需字段）----
 
 class RegisterSolutionTemplateRequest(BaseModel):
-    """注册行业方案模板（北向请求）。引用专家模板 + 知识/技能 refs。"""
+    """注册行业方案模板（北向请求）。引用专家模板 + 知识/技能 refs + 协作编排规则。
+
+    保留字段依据：Operator 设置 → Manager apply（落 solution_instance）→ Agent 从方案创建群聊
+    继承编排规则（planner/subtask/aggregate_prompt 三段 prompt）。default_kb_blueprint /
+    default_skill_bundle / default_collaboration_template_ref 已删除——下游无消费。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -56,15 +78,19 @@ class RegisterSolutionTemplateRequest(BaseModel):
         min_length=1,
         description="方案稳定标识。服务端按 display_name 自动生成（slug + 随机后缀）；调用方可显式指定。",
     )
-    display_name: str = Field(min_length=1)
-    expert_template_ids: list[str] = Field(default_factory=list)
+    display_name: str = Field(min_length=1, description="方案名称")
+    description: str = Field(min_length=1, description="方案描述 (PRD: description, 必填)")
+    icon: str = Field(default="", description="方案图标 (PRD: icon)")
+    expert_template_ids: list[str] = Field(
+        min_length=1, default_factory=list, description="包含的专家模板 ID 列表 (必填)"
+    )
     expert_bindings: list["ExpertBinding"] = Field(
         default_factory=list,
         description="方案内专家绑定列表（含排序号与启用开关）；提供时优先于 expert_template_ids",
     )
-    knowledge_refs: list[str] = Field(default_factory=list)
-    skill_refs: list[str] = Field(default_factory=list)
-    default_grants: dict | None = Field(default=None)
+    knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
+    skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
+    default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
     planner_prompt: str = Field(
         default="", description="方案级协作编排规则：planner 阶段 prompt；空=回退运行时内置默认模板"
     )
@@ -73,11 +99,6 @@ class RegisterSolutionTemplateRequest(BaseModel):
     )
     aggregate_prompt: str = Field(
         default="", description="方案级协作编排规则：多专家结果聚合 prompt"
-    )
-    default_kb_blueprint: dict = Field(default_factory=dict, description="默认知识库蓝图（apply 时下发）")
-    default_skill_bundle: dict = Field(default_factory=dict, description="默认技能包（apply 时下发）")
-    default_collaboration_template_ref: str | None = Field(
-        default=None, description="默认协作模板引用（可选）"
     )
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
@@ -101,22 +122,26 @@ class SetVisibilityRequest(BaseModel):
 
 
 class UpdateExpertTemplateRequest(BaseModel):
-    """编辑专家模板（北向请求）。部分更新。"""
+    """编辑专家模板（北向请求）。部分更新。字段对齐 PRD-v2 S02。"""
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = None
-    persona: str | None = None
-    recommended_config: dict | None = None
-    default_model_json: dict | None = None
-    default_binding_json: dict | None = None
-    prompt_pack_json: dict | None = None
-    category_code: str | None = None
-    role_name: str | None = None
+    category: str | None = None
+    avatar_url: str | None = None
+    system_prompt: str | None = None
+    default_model: str | None = None
+    skill_ids: list[str] | None = None
+    tags: list[str] | None = None
+    description: str | None = None
+    initial_memories: list[dict] | None = None
+    sort_order: int | None = None
 
 
 class UpdateSolutionTemplateRequest(BaseModel):
     """编辑行业方案模板（北向请求）。部分更新。"""
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = None
+    description: str | None = None
+    icon: str | None = None
     expert_template_ids: list[str] | None = None
     expert_bindings: list["ExpertBinding"] | None = None
     knowledge_refs: list[str] | None = None
@@ -125,9 +150,6 @@ class UpdateSolutionTemplateRequest(BaseModel):
     planner_prompt: str | None = None
     subtask_prompt: str | None = None
     aggregate_prompt: str | None = None
-    default_kb_blueprint: dict | None = None
-    default_skill_bundle: dict | None = None
-    default_collaboration_template_ref: str | None = None
     tags: list[str] | None = None
 
 
@@ -142,15 +164,17 @@ class CatalogEntryResponse(BaseModel):
     display_name: str
     status: CatalogStatus
     visible_scope: dict | None = None
-    default_model_json: dict = Field(default_factory=dict)
-    default_binding_json: dict = Field(default_factory=dict)
-    prompt_pack_json: dict = Field(default_factory=dict)
-    category_code: str = Field(default="")
-    role_name: str = Field(default="")
+    category: str = Field(default="")
+    avatar_url: str = Field(default="")
+    system_prompt: str = Field(default="")
+    default_model: str = Field(default="")
+    skill_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    description: str = Field(default="")
+    initial_memories: list[dict] = Field(default_factory=list)
+    sort_order: int = Field(default=0)
 
     # payload 顶层字段（对齐前端 CatalogItem 编辑模式预填与回写）。
-    persona: str | None = Field(default=None, description="专家人设（仅 expert_template）")
-    recommended_config: dict = Field(default_factory=dict, description="推荐配置（仅 expert_template）")
     expert_bindings: list["ExpertBinding"] | None = Field(
         default=None, description="方案内专家绑定列表（仅 solution_template）"
     )
@@ -170,7 +194,3 @@ class CatalogDetailView(CatalogEntryResponse):
     planner_prompt: str = Field(default="")
     subtask_prompt: str = Field(default="")
     aggregate_prompt: str = Field(default="")
-    default_kb_blueprint: dict = Field(default_factory=dict)
-    default_skill_bundle: dict = Field(default_factory=dict)
-    default_collaboration_template_ref: str | None = Field(default=None)
-    tags: list[str] = Field(default_factory=list)

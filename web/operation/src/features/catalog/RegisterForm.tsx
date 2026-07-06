@@ -3,17 +3,14 @@ import { type FormEvent, useEffect, useState, type ReactNode } from "react";
 /**
  * 注册模板/方案表单（F03）。
  *
- * 对齐后端完整 payload:
- *   - 专家模板: persona / recommended_config (prompt_pack /
- *     default_model_ref / default_binding / default_skill_bundle /
- *     default_skills / knowledge_bindings / connector_requirements /
- *     memory_config / role_name / category_code)
- *   - 行业方案: expert_template_ids / knowledge_refs / skill_refs /
- *     default_grants / planner_prompt / subtask_prompt / aggregate_prompt /
- *     default_kb_blueprint / default_skill_bundle /
- *     default_collaboration_template_ref / tags
+ * 对齐 PRD-v2 S02/S03 与后端扁平字段:
+ *   - 专家: display_name / category / avatar_url / system_prompt /
+ *     default_model / skill_ids / tags / description / initial_memories / sort_order
+ *   - 行业方案: display_name / description / icon / expert_template_ids /
+ *     knowledge_refs / skill_refs / planner/subtask/aggregate_prompt /
+ *     default_grants / tags
  *
- * 表单按"基础 + 能力配置"分层展开;必填只有 display_name(模板 ID 由服务端自动生成)。
+ * 必填只有 display_name(模板/方案 ID 由服务端自动生成)。
  */
 import { useI18n } from "../../i18n/context";
 import { useCatalogApi } from "./useCatalogApi";
@@ -21,8 +18,6 @@ import type { CatalogApi } from "./useCatalogApi";
 import type {
   CatalogItem,
   CatalogItemType,
-  ExpertRecommendedConfig,
-  ModelRef,
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
 } from "./types";
@@ -68,29 +63,29 @@ function parseJsonOrEmpty(value: string): Record<string, unknown> | undefined {
 
 export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): ReactNode {
   const i18n = useI18n();
-  // catalogType 锁定后不再可切换，直接用作当前类型。
-  // ID 由服务端自动生成（slug + 随机后缀），运营端无需手填 #AITEAM-355 问题二。
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // 专家能力配置
-  const [persona, setPersona] = useState("");
-  const [roleName, setRoleName] = useState("");
-  const [categoryCode, setCategoryCode] = useState("");
-  const [promptPack, setPromptPack] = useState("");
-  const [modelProvider, setModelProvider] = useState("");
-  const [modelId, setModelId] = useState("");
+  // 专家模板基础 + 能力字段（PRD-v2 S02）
+  const [category, setCategory] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
   const [defaultSkillsText, setDefaultSkillsText] = useState("");
-  const [knowledgeBindingsText, setKnowledgeBindingsText] = useState("");
-  const [memoryConfig, setMemoryConfig] = useState("");
+  const [description, setDescription] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const [initialMemoriesText, setInitialMemoriesText] = useState("");
+  const [sortOrder, setSortOrder] = useState("");
   const [showExpertAdvanced, setShowExpertAdvanced] = useState(false);
 
-  // 行业方案配置
+  // 行业方案配置（PRD-v2 S03 + 编排规则）
   const [expertPicks, setExpertPicks] = useState<string[]>([]);
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
   const [expertSearch, setExpertSearch] = useState("");
+  const [solutionDescription, setSolutionDescription] = useState("");
+  const [icon, setIcon] = useState("");
   const [knowledgeRefsText, setKnowledgeRefsText] = useState("");
   const [skillRefsText, setSkillRefsText] = useState("");
   const [plannerPrompt, setPlannerPrompt] = useState("");
@@ -100,7 +95,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
   const [solutionTagsText, setSolutionTagsText] = useState("");
   const [showSolutionAdvanced, setShowSolutionAdvanced] = useState(false);
 
-  // 当表单锁定为行业方案（无类型选择器）时，自动拉取可选专家模板。
   useEffect(() => {
     if (catalogType === "solution_template" && expertOptions.length === 0) {
       api
@@ -123,59 +117,55 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
   }
 
   function buildExpertPayload(): RegisterExpertTemplate {
-    const recommended: ExpertRecommendedConfig = {};
-    if (promptPack.trim()) {
-      const parsed = parseJsonOrEmpty(promptPack);
-      if (parsed) recommended.prompt_pack = parsed;
-    }
-    if (roleName.trim()) recommended.role_name = roleName.trim();
-    if (categoryCode.trim()) recommended.category_code = categoryCode.trim();
-    const skills = parseList(defaultSkillsText);
-    if (skills.length) recommended.default_skills = skills;
-    const kb = parseList(knowledgeBindingsText);
-    if (kb.length) recommended.knowledge_bindings = kb;
-    const memory = parseJsonOrEmpty(memoryConfig);
-    if (memory) recommended.memory_config = memory;
-    if (modelProvider.trim() || modelId.trim()) {
-      const ref: ModelRef = {};
-      if (modelProvider.trim()) ref.provider_key = modelProvider.trim();
-      if (modelId.trim()) ref.model_id = modelId.trim();
-      recommended.default_model_ref = ref;
-    }
+    // Always send the editable payload so server-side required-field validation
+    // runs consistently (omitting a field would mask a 422 for required PRD fields).
     return {
       display_name: displayName.trim(),
-      ...(persona.trim() ? { persona: persona.trim() } : {}),
-      ...(Object.keys(recommended).length
-        ? { recommended_config: recommended }
-        : {}),
+      category: category.trim(),
+      avatar_url: avatarUrl.trim(),
+      system_prompt: systemPrompt.trim(),
+      default_model: defaultModel.trim(),
+      skill_ids: parseList(defaultSkillsText),
+      description: description.trim(),
+      tags: parseList(tagsText),
+      sort_order: sortOrder.trim() ? Number(sortOrder.trim()) : 0,
+      initial_memories: parseJsonArray(initialMemoriesText) ?? [],
     };
   }
 
-  function buildSolutionPayload(): RegisterSolutionTemplate {
-    const payload: RegisterSolutionTemplate = {
-      display_name: displayName.trim(),
-    };
-    if (expertPicks.length) payload.expert_template_ids = expertPicks;
-    const kRefs = parseList(knowledgeRefsText);
-    if (kRefs.length) payload.knowledge_refs = kRefs;
-    const sRefs = parseList(skillRefsText);
-    if (sRefs.length) payload.skill_refs = sRefs;
-    if (plannerPrompt.trim()) payload.planner_prompt = plannerPrompt.trim();
-    if (subtaskPrompt.trim()) payload.subtask_prompt = subtaskPrompt.trim();
-    if (aggregatePrompt.trim()) payload.aggregate_prompt = aggregatePrompt.trim();
-    if (defaultGrantsText.trim()) {
-      const parsed = parseJsonOrEmpty(defaultGrantsText);
-      if (parsed) payload.default_grants = parsed;
+  function parseJsonArray(value: string): Record<string, unknown>[] | undefined {
+    const text = value.trim();
+    if (!text) return undefined;
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+      return undefined;
+    } catch {
+      return undefined;
     }
-    const tags = parseList(solutionTagsText);
-    if (tags.length) payload.tags = tags;
-    return payload;
+  }
+
+  function buildSolutionPayload(): RegisterSolutionTemplate {
+    // Always send the editable payload so server-side required-field validation
+    // (description / expert_template_ids) runs consistently.
+    return {
+      display_name: displayName.trim(),
+      description: solutionDescription.trim(),
+      icon: icon.trim(),
+      expert_template_ids: expertPicks,
+      knowledge_refs: parseList(knowledgeRefsText),
+      skill_refs: parseList(skillRefsText),
+      planner_prompt: plannerPrompt.trim(),
+      subtask_prompt: subtaskPrompt.trim(),
+      aggregate_prompt: aggregatePrompt.trim(),
+      default_grants: parseJsonOrEmpty(defaultGrantsText) ?? null,
+      tags: parseList(solutionTagsText),
+    };
   }
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
     setValidationError(null);
-    // 名称必填；ID 由服务端自动生成（AITEAM-355 问题二）。
     if (!displayName.trim()) {
       setValidationError("名称不能为空");
       return;
@@ -229,24 +219,24 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 
         {catalogType === "expert_template" ? (
           <ExpertFields
-            persona={persona}
-            onPersonaChange={setPersona}
-            roleName={roleName}
-            onRoleNameChange={setRoleName}
-            categoryCode={categoryCode}
-            onCategoryCodeChange={setCategoryCode}
-            promptPack={promptPack}
-            onPromptPackChange={setPromptPack}
-            modelProvider={modelProvider}
-            onModelProviderChange={setModelProvider}
-            modelId={modelId}
-            onModelIdChange={setModelId}
+            category={category}
+            onCategoryChange={setCategory}
+            avatarUrl={avatarUrl}
+            onAvatarUrlChange={setAvatarUrl}
+            systemPrompt={systemPrompt}
+            onSystemPromptChange={setSystemPrompt}
+            defaultModel={defaultModel}
+            onDefaultModelChange={setDefaultModel}
             defaultSkillsText={defaultSkillsText}
             onDefaultSkillsChange={setDefaultSkillsText}
-            knowledgeBindingsText={knowledgeBindingsText}
-            onKnowledgeBindingsChange={setKnowledgeBindingsText}
-            memoryConfig={memoryConfig}
-            onMemoryConfigChange={setMemoryConfig}
+            description={description}
+            onDescriptionChange={setDescription}
+            tagsText={tagsText}
+            onTagsChange={setTagsText}
+            initialMemoriesText={initialMemoriesText}
+            onInitialMemoriesChange={setInitialMemoriesText}
+            sortOrder={sortOrder}
+            onSortOrderChange={setSortOrder}
             showAdvanced={showExpertAdvanced}
             onToggleAdvanced={() => setShowExpertAdvanced((v) => !v)}
             disabled={loading}
@@ -258,6 +248,10 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
             options={filteredExpertOptions}
             search={expertSearch}
             onSearchChange={setExpertSearch}
+            solutionDescription={solutionDescription}
+            onSolutionDescriptionChange={setSolutionDescription}
+            icon={icon}
+            onIconChange={setIcon}
             knowledgeRefsText={knowledgeRefsText}
             onKnowledgeRefsChange={setKnowledgeRefsText}
             skillRefsText={skillRefsText}
@@ -293,24 +287,24 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 }
 
 interface ExpertFormProps {
-  persona: string;
-  onPersonaChange: (v: string) => void;
-  roleName: string;
-  onRoleNameChange: (v: string) => void;
-  categoryCode: string;
-  onCategoryCodeChange: (v: string) => void;
-  promptPack: string;
-  onPromptPackChange: (v: string) => void;
-  modelProvider: string;
-  onModelProviderChange: (v: string) => void;
-  modelId: string;
-  onModelIdChange: (v: string) => void;
+  category: string;
+  onCategoryChange: (v: string) => void;
+  avatarUrl: string;
+  onAvatarUrlChange: (v: string) => void;
+  systemPrompt: string;
+  onSystemPromptChange: (v: string) => void;
+  defaultModel: string;
+  onDefaultModelChange: (v: string) => void;
   defaultSkillsText: string;
   onDefaultSkillsChange: (v: string) => void;
-  knowledgeBindingsText: string;
-  onKnowledgeBindingsChange: (v: string) => void;
-  memoryConfig: string;
-  onMemoryConfigChange: (v: string) => void;
+  description: string;
+  onDescriptionChange: (v: string) => void;
+  tagsText: string;
+  onTagsChange: (v: string) => void;
+  initialMemoriesText: string;
+  onInitialMemoriesChange: (v: string) => void;
+  sortOrder: string;
+  onSortOrderChange: (v: string) => void;
   showAdvanced: boolean;
   onToggleAdvanced: () => void;
   disabled: boolean;
@@ -319,58 +313,57 @@ interface ExpertFormProps {
 function ExpertFields(p: ExpertFormProps): ReactNode {
   return (
     <>
-      <Field label="人设 (persona)">
-        <textarea
-          className={textareaCls}
-          value={p.persona}
-          onChange={(e) => p.onPersonaChange(e.target.value)}
-          placeholder="专家人设描述(可选)"
+      <Field label="分类 (category)">
+        <Input
+          type="text"
+          className={inputCls}
+          value={p.category}
+          onChange={(e) => p.onCategoryChange(e.target.value)}
+          placeholder="如 marketing / finance / tech"
           disabled={p.disabled}
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-sm">
-        <Field label="岗位 (role_name)">
-          <Input
-            type="text"
-            className={inputCls}
-            value={p.roleName}
-            onChange={(e) => p.onRoleNameChange(e.target.value)}
-            placeholder="如 customer_success"
-            disabled={p.disabled}
-          />
-        </Field>
-        <Field label="岗位类别 (category_code)">
-          <Input
-            type="text"
-            className={inputCls}
-            value={p.categoryCode}
-            onChange={(e) => p.onCategoryCodeChange(e.target.value)}
-            placeholder="如 support / marketing / tech"
-            disabled={p.disabled}
-          />
-        </Field>
-      </div>
+      <Field label="头像 (avatar_url)">
+        <Input
+          type="text"
+          className={inputCls}
+          value={p.avatarUrl}
+          onChange={(e) => p.onAvatarUrlChange(e.target.value)}
+          placeholder="https://..."
+          disabled={p.disabled}
+        />
+      </Field>
 
-      <Field label="推荐模型">
-        <div className="grid grid-cols-2 gap-sm">
-          <Input
-            type="text"
-            className={inputCls}
-            value={p.modelProvider}
-            onChange={(e) => p.onModelProviderChange(e.target.value)}
-            placeholder="provider_key (可选)"
-            disabled={p.disabled}
-          />
-          <Input
-            type="text"
-            className={inputCls}
-            value={p.modelId}
-            onChange={(e) => p.onModelIdChange(e.target.value)}
-            placeholder="model_id"
-            disabled={p.disabled}
-          />
-        </div>
+      <Field label="系统提示词 (system_prompt)">
+        <textarea
+          className={textareaCls}
+          value={p.systemPrompt}
+          onChange={(e) => p.onSystemPromptChange(e.target.value)}
+          placeholder="岗位描述系统提示词（纯文本）"
+          disabled={p.disabled}
+        />
+      </Field>
+
+      <Field label="默认模型 (default_model)">
+        <Input
+          type="text"
+          className={inputCls}
+          value={p.defaultModel}
+          onChange={(e) => p.onDefaultModelChange(e.target.value)}
+          placeholder="如 gpt-5 / claude-opus-4-8 / deepseek"
+          disabled={p.disabled}
+        />
+      </Field>
+
+      <Field label="岗位描述 (description, ≤200字)">
+        <textarea
+          className={textareaCls}
+          value={p.description}
+          onChange={(e) => p.onDescriptionChange(e.target.value)}
+          placeholder="用户可见的岗位描述（不超过 200 字）"
+          disabled={p.disabled}
+        />
       </Field>
 
       <Button
@@ -379,48 +372,49 @@ function ExpertFields(p: ExpertFormProps): ReactNode {
         size="sm"
         onClick={p.onToggleAdvanced}
       >
-        {p.showAdvanced ? "收起能力配置 ▲" : "展开能力配置(技能 / 知识 / 记忆 / Prompt / 标签) ▼"}
+        {p.showAdvanced ? "收起能力配置 ▲" : "展开能力配置(技能 / 标签 / 记忆 / 排序) ▼"}
       </Button>
 
       {p.showAdvanced && (
         <div className="flex flex-col gap-md rounded-md border border-gold/10 p-md">
-          <Field label="默认技能 (每行或逗号分隔)">
+          <Field label="预配置技能 (skill_ids, 每行或逗号分隔)">
             <textarea
               className={textareaCls}
               value={p.defaultSkillsText}
               onChange={(e) => p.onDefaultSkillsChange(e.target.value)}
-              placeholder={"skill_a\nskill_b\nskill_c"}
+              placeholder={"skill_a\nskill_b"}
               disabled={p.disabled}
             />
           </Field>
-          <Field label="知识库绑定 (每行或逗号分隔)">
+          <Field label="搜索标签 (tags, 每行或逗号分隔)">
             <textarea
               className={textareaCls}
-              value={p.knowledgeBindingsText}
-              onChange={(e) => p.onKnowledgeBindingsChange(e.target.value)}
-              placeholder={"kb_orders\nkb_finance"}
+              value={p.tagsText}
+              onChange={(e) => p.onTagsChange(e.target.value)}
+              placeholder={"营销\n电商"}
               disabled={p.disabled}
             />
           </Field>
-          <Field label="初始记忆 (memory_config, JSON)">
+          <Field label="预置记忆 (initial_memories, JSON 数组)">
             <textarea
               className={textareaCls}
-              value={p.memoryConfig}
-              onChange={(e) => p.onMemoryConfigChange(e.target.value)}
-              placeholder={'{"type": "buffer", "max_tokens": 4096}'}
+              value={p.initialMemoriesText}
+              onChange={(e) => p.onInitialMemoriesChange(e.target.value)}
+              placeholder={'[{"role":"user","content":"偏好 Slack"}]'}
               disabled={p.disabled}
             />
           </Field>
-          <Field label="Prompt Pack (JSON: {system, task, ...})">
-            <textarea
-              className={textareaCls}
-              value={p.promptPack}
-              onChange={(e) => p.onPromptPackChange(e.target.value)}
-              placeholder={'{"system": "...", "task": "..."}'}
+          <Field label="排序权重 (sort_order, 数值越小越靠前)">
+            <Input
+              type="number"
+              className={inputCls}
+              value={p.sortOrder}
+              onChange={(e) => p.onSortOrderChange(e.target.value)}
+              placeholder="0"
               disabled={p.disabled}
             />
           </Field>
-                  </div>
+        </div>
       )}
     </>
   );
@@ -432,6 +426,10 @@ interface SolutionFormProps {
   options: CatalogItem[];
   search: string;
   onSearchChange: (v: string) => void;
+  solutionDescription: string;
+  onSolutionDescriptionChange: (v: string) => void;
+  icon: string;
+  onIconChange: (v: string) => void;
   knowledgeRefsText: string;
   onKnowledgeRefsChange: (v: string) => void;
   skillRefsText: string;
@@ -454,6 +452,27 @@ interface SolutionFormProps {
 function SolutionFields(p: SolutionFormProps): ReactNode {
   return (
     <>
+      <Field label="描述 (description)">
+        <textarea
+          className={textareaCls}
+          value={p.solutionDescription}
+          onChange={(e) => p.onSolutionDescriptionChange(e.target.value)}
+          placeholder="方案描述"
+          disabled={p.disabled}
+        />
+      </Field>
+
+      <Field label="图标 (icon)">
+        <Input
+          type="text"
+          className={inputCls}
+          value={p.icon}
+          onChange={(e) => p.onIconChange(e.target.value)}
+          placeholder="图标 URL 或标识"
+          disabled={p.disabled}
+        />
+      </Field>
+
       <Field label={`配置专家 (${p.picks.length} 已选)`}>
         <div className="flex flex-col gap-sm rounded-md border border-gold/10 p-md">
           <Input

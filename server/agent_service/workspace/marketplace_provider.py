@@ -108,39 +108,23 @@ class ManagerMarketplaceProvider:
 
     @staticmethod
     def _map_item(item: dict) -> MarketTemplate:
-        binding = item.get("default_binding_json") or {}
-        skills = []
-        knowledge_bases = []
-        if isinstance(binding, dict):
-            for s in binding.get("skills", []) or []:
-                skills.append({"code": s})
-            for k in binding.get("knowledge_bases", []) or []:
-                knowledge_bases.append({"kb_id": k})
+        # PRD-v2 扁平字段：技能/知识引用直接挂模板顶层（skill_ids/knowledge_refs），
+        # persona 由 pull 路径从 system_prompt 回填。
+        skills = [{"code": s} for s in (item.get("skill_ids") or [])]
+        knowledge_bases = [{"kb_id": k} for k in (item.get("knowledge_refs") or [])]
         tags = list(item.get("tags", []) or [])
-        role = item.get("role_name")
-        if role and role not in tags:
-            tags.insert(0, role)
-        prompt_pack = item.get("prompt_pack_json") or {}
-        persona = item.get("persona", "") or (prompt_pack.get("system_prompt", "") if isinstance(prompt_pack, dict) else "")
+        persona = item.get("persona", "") or item.get("system_prompt", "")
+        initial_memories = list(item.get("initial_memories") or [])
         return MarketTemplate(
             template_id=item.get("template_id", ""),
             display_name=item.get("display_name", ""),
-            category=item.get("category_code", ""),
-            model_name=_model_from_json(item.get("default_model_json")),
+            category=item.get("category", ""),
+            model_name=item.get("default_model", ""),
             tags=tags,
+            avatar_url=item.get("avatar_url") or None,
             persona=persona,
             skills=skills,
             knowledge_bases=knowledge_bases,
-            initial_memories=[],
+            initial_memories=initial_memories,
             rating=0.0,
         )
-
-
-def _model_from_json(model_json) -> str:
-    if not isinstance(model_json, dict):
-        return ""
-    prov = model_json.get("provider")
-    model = model_json.get("model")
-    if prov and model:
-        return f"{prov}::{model}"
-    return model or ""

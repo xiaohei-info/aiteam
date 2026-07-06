@@ -149,8 +149,8 @@ function SolutionDetailOverlay({ solution, onClose }: {
                 <div key={`${e.template_id}@${e.version}`} className="rounded-md border border-gold/15 px-md py-sm">
                   <div className="flex items-center gap-sm">
                     <span className="font-medium text-sm text-text-primary">{e.display_name}</span>
-                    {(e.role_name || e.category_code) && (
-                      <span className="text-xs text-text-muted">{e.role_name || e.category_code}</span>
+                    {e.category && (
+                      <span className="text-xs text-text-muted">{e.category}</span>
                     )}
                   </div>
                   {e.persona && <p className="m-0 mt-xs text-xs text-text-secondary">{e.persona}</p>}

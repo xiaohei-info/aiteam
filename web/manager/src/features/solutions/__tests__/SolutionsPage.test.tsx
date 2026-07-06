@@ -32,7 +32,7 @@ function mockApi(): ExpertsApi {
     listTemplates: vi.fn().mockResolvedValue([]),
     listSolutions: vi.fn().mockResolvedValue([{
       solution_id: "sol-1", version: "1", display_name: "测试方案",
-      experts: [{ template_id: "tpl-1", version: "1", display_name: "架构师", persona: "技术架构专家", role_name: "企业架构顾问" }],
+      experts: [{ template_id: "tpl-1", version: "1", display_name: "架构师", persona: "技术架构专家", category: "tech" }],
       knowledge_refs: ["ks-shared"], skill_refs: ["skill-a"], tags: ["金融"], planner_prompt: "",
     } as SolutionPackage]),
     recruitExpert: vi.fn().mockResolvedValue({}),

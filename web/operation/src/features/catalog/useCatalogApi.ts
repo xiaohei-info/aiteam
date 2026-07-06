@@ -27,17 +27,21 @@ import type {
  * 部分更新：调用方只填要改的字段，未出现的字段不参与 PATCH。 */
 export type UpdateExpertTemplateChanges = {
   display_name?: string;
-  persona?: string | null;
-  recommended_config?: Record<string, unknown>;
-  default_model_json?: Record<string, unknown>;
-  default_binding_json?: Record<string, unknown>;
-  prompt_pack_json?: Record<string, unknown>;
-  category_code?: string;
-  role_name?: string;
+  category?: string;
+  avatar_url?: string;
+  system_prompt?: string;
+  default_model?: string;
+  skill_ids?: string[];
+  tags?: string[];
+  description?: string;
+  initial_memories?: Record<string, unknown>[];
+  sort_order?: number;
 };
 
 export type UpdateSolutionTemplateChanges = {
   display_name?: string;
+  description?: string;
+  icon?: string;
   expert_template_ids?: string[];
   expert_bindings?: { template_id: string; sequence_no: number; enabled: boolean }[];
   knowledge_refs?: string[];
@@ -46,9 +50,6 @@ export type UpdateSolutionTemplateChanges = {
   planner_prompt?: string;
   subtask_prompt?: string;
   aggregate_prompt?: string;
-  default_kb_blueprint?: Record<string, unknown>;
-  default_skill_bundle?: Record<string, unknown>;
-  default_collaboration_template_ref?: string | null;
   tags?: string[];
 };
 
