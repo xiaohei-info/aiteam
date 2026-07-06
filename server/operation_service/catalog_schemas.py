@@ -96,7 +96,7 @@ class RegisterSolutionTemplateRequest(BaseModel):
     skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
     default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
     planner_prompt: str = Field(
-        default="", description="方案级协作编排规则：planner 阶段 prompt；空=回退运行时内置默认模板"
+        default="", description="方案级协作编排规则：planner 阶段 prompt；必填，服务端强制非空"
     )
     subtask_prompt: str = Field(
         default="", description="方案级协作编排规则：子任务拆解 prompt"

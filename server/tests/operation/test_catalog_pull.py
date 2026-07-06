@@ -96,6 +96,7 @@ def _register_and_publish_solution(client):
             "description": "marketing",
             "expert_template_ids": ["tpl-cmo"],
             "planner_template_id": "tpl-cmo",
+            "planner_prompt": "Plan marketing campaign",
         },
         headers=_auth_header(),
     )
@@ -203,6 +204,7 @@ def _register_solution_with_bindings(client):
             "display_name": "Bound Solution",
             "description": "bound sol",
             "planner_template_id": "tpl-ceo",
+            "planner_prompt": "Plan bound campaign",
             "expert_bindings": [
                 {"template_id": "tpl-cmo", "sequence_no": 2, "enabled": False},
                 {"template_id": "tpl-ceo", "sequence_no": 1, "enabled": True},

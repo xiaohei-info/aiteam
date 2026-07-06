@@ -129,6 +129,22 @@ def _resolve_planner_template_id(
     return pid
 
 
+def _resolve_planner_prompt(planner_prompt: str) -> str:
+    """校验 planner 编排规则提示词必填（AITEAM-677）。
+
+    需求明确"必须指定 planner 角色并为其设置固定编排规则的提示词"。
+    服务端必须强制 planner_prompt 非空，避免直接 API 调用绕过前端校验。
+    """
+    from shared.errors import ValidationProblem
+
+    prompt = (planner_prompt or "").strip()
+    if not prompt:
+        raise ValidationProblem(
+            "planner_prompt is required: the planner orchestration prompt must not be empty"
+        )
+    return prompt
+
+
 def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
     """Construct a CatalogDetailView from a CatalogEntry, populating all payload fields."""
     from .catalog_schemas import CatalogDetailView
@@ -204,6 +220,7 @@ class CatalogService:
         def make(candidate: str) -> CatalogEntry:
             bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
             planner_id = _resolve_planner_template_id(req.planner_template_id, bindings)
+            planner_prompt = _resolve_planner_prompt(req.planner_prompt)
             return CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
                 template_id=candidate,
@@ -225,7 +242,7 @@ class CatalogService:
                     "knowledge_refs": req.knowledge_refs,
                     "skill_refs": req.skill_refs,
                     "default_grants": req.default_grants,
-                    "planner_prompt": req.planner_prompt,
+                    "planner_prompt": planner_prompt,
                     "subtask_prompt": req.subtask_prompt,
                     "aggregate_prompt": req.aggregate_prompt,
                     "tags": req.tags,
@@ -317,8 +334,39 @@ class CatalogService:
         if payload_updates:
             new_payload = {**(entry.payload or {}), **payload_updates}
             top_updates['payload'] = new_payload
+        # 行业方案编辑后重新校验 planner 完整性（AITEAM-677 评审 blocker）：
+        # planner_template_id 必须非空且属于当前有效绑定专家。
+        if (
+            entry.catalog_type == CatalogType.SOLUTION_TEMPLATE
+            and top_updates.get("payload") is not None
+        ):
+            self._validate_solution_planner_integrity(top_updates["payload"])
         updated = self._repo.update(entry, **top_updates)
         return _to_response(updated)
+
+    @staticmethod
+    def _validate_solution_planner_integrity(payload: dict) -> None:
+        """编辑行业方案后校验 planner 仍合法：非空且属于当前绑定专家。
+
+        评审 blocker：PATCH 路径此前无条件 merge payload，允许把 planner 改成
+        空值或不在专家列表中的任意值，导致已发布方案被编辑成非法状态。
+        """
+        from shared.errors import ValidationProblem
+
+        bindings = payload.get("expert_bindings") or []
+        if bindings:
+            bound_ids = {b["template_id"] for b in bindings}
+        else:
+            bound_ids = set(payload.get("expert_template_ids", []))
+        planner_id = (payload.get("planner_template_id") or "").strip()
+        if not planner_id:
+            raise ValidationProblem(
+                "planner_template_id must not be empty for a solution template"
+            )
+        if bound_ids and planner_id not in bound_ids:
+            raise ValidationProblem(
+                f"planner_template_id {planner_id!r} is not among the bound experts: {sorted(bound_ids)}"
+            )
 
 
     def list_entry_details(

@@ -89,7 +89,7 @@ def test_register_expert_envelope(client, manager):
 
 
 def test_register_solution_envelope(client):
-    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo"}
+    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201
     assert r.json()["data"]["catalog_type"] == "solution_template"
@@ -201,7 +201,7 @@ def test_route_register_expert_without_id_returns_201_with_generated_id(client, 
 
 
 def test_route_register_solution_without_id_returns_201_with_generated_id(client):
-    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo"}
+    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]
