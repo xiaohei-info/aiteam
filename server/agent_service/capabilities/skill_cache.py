@@ -241,9 +241,6 @@ def _safe_join(base: Path, rel: str) -> Path:
         raise ValueError(f"路径逃逸：{rel!r}")
     full = (base / rel).resolve()
     base_resolved = base.resolve()
-    if full != base_resolved and base_resolved not in (full.parents if True else set()):
-        # 换更稳健的比较：full 以 base_resolved 为前缀。
-        pass
     try:
         full.relative_to(base_resolved)
     except ValueError as exc:

@@ -9,6 +9,8 @@
 """
 
 import asyncio
+import os
+from unittest import mock
 
 import pytest
 
@@ -22,11 +24,11 @@ def test_group_expert_carries_snapshot_fields():
     """M1 #4：群聊专家执行入口补齐 employee_id/provider_ref/thinking_level/skills/..."""
     e = GroupExpert(
         handle="alice", employee_id="emp-1", system_prompt="你是 Alice", model="m1",
-        provider_ref="relay", thinking_level="deep", skills=["code-review"],
+        provider_ref="ai-relay", thinking_level="deep", skills=["code-review"],
         knowledge_refs=["kb-backend"], connector_refs=["slack"], memory_policy={"seed": "x"},
     )
     assert e.employee_id == "emp-1"
-    assert e.provider_ref == "relay"
+    assert e.provider_ref == "ai-relay"
     assert e.thinking_level == "deep"
     assert e.skills == ["code-review"]
     assert e.knowledge_refs == ["kb-backend"]
@@ -51,7 +53,7 @@ def test_group_dispatch_derives_from_snapshot_when_orchestrator_present():
     gs = FakeGrantsService()
     snap_alice = _snapshot(
         employee_id="emp-alice", version="v1", snapshot_version="snap-a",
-        persona="你是 Alice，后端专家", model="hermes-default", provider_ref="relay",
+        persona="你是 Alice，后端专家", model="hermes-default", provider_ref="ai-relay",
         thinking_level="deep", timeout=90, skills=("code-review",),
     )
     snap_bob = _snapshot(
@@ -78,7 +80,8 @@ def test_group_dispatch_derives_from_snapshot_when_orchestrator_present():
     svc = build_mainline_service(orchestrator=orch)
     grp = GroupChatService(svc, experts=roster, orchestrator=orch)
     conv = svc.create_conversation(title="群聊")
-    result = asyncio.run(grp.post_and_dispatch(conv.id, "@alice @carol 请协作"))
+    with mock.patch.dict(os.environ, {"AI_RELAY_TOKEN": "test-relay-token"}):
+        result = asyncio.run(grp.post_and_dispatch(conv.id, "@alice @carol 请协作"))
     # carol 不在 roster → 不触发；alice 触发。
     assert result.triggered_handles == ["alice"]
     assert len(result.runs) == 1

@@ -89,7 +89,7 @@ class MissingSkillError(Exception):
     def __init__(self, missing: list[str], *, runtime: str | None = None) -> None:
         self.missing = list(missing)
         self.runtime = runtime
-        detail = f"runtime={runtime} " if runtime else ""
+        detail = f"runtime={runtime}, " if runtime else ""
         super().__init__(
             f"缺少已授权 skill 的本地投影：{detail}missing={missing}。请检查 Manager 配置或重新授权。"
         )

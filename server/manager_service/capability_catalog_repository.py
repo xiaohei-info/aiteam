@@ -43,6 +43,8 @@ class SkillCatalogRow:
     binding_policy: str
     visibility: str
     config: dict
+    files: list
+    content_hash: str
     catalog_version: int
 
 
