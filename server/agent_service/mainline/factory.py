@@ -23,6 +23,7 @@ from shared.contracts.gateway import Driver, Executor
 from ..local_db import apply_migrations, connect
 from .service import MainlineService
 from .service import UsageRecorder  # noqa: F401  (re-exported for assembly)
+from .execution_orchestrator import ExecutionOrchestrator
 from .store import (
     InMemoryConversationRepository,
     InMemoryMessageRepository,
@@ -59,6 +60,7 @@ def build_mainline_service(
     usage_recorder=None,
     tenant_id: str = "local",
     solutions: SolutionProjectionRepository | None = None,
+    orchestrator: ExecutionOrchestrator | None = None,
 ) -> MainlineService:
     # AITEAM-688 M0：部署级 runtime 固定 + 生产 Fake 禁用。
     # 生产模式：缺/未知/fake runtime、或真实 runtime CLI 缺失 → fail-fast（启动期），不静默回退 Fake。
@@ -119,4 +121,23 @@ def build_mainline_service(
         usage_recorder=usage_recorder,
         tenant_id=tenant_id,
         solutions=solutions,
+        orchestrator=orchestrator,
+    )
+
+
+def build_execution_orchestrator(
+    *,
+    grants: "GrantsService",
+    projections: "ProjectionRepository",
+    tenant_id: str = "local",
+    member_id: str = "local",
+) -> "ExecutionOrchestrator":
+    """装配专家快照驱动的统一执行编排（AITEAM-689 / M1）。
+
+    grants 提供 freeze_snapshot / latest_snapshot（在线冻结 + 离线 fallback）；
+    projections 提供本地只读专家投影（employee_id -> version 基线）。
+    """
+    return ExecutionOrchestrator(
+        grants=grants, projections=projections,
+        tenant_id=tenant_id, member_id=member_id,
     )

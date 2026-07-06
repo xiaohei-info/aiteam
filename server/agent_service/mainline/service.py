@@ -47,6 +47,10 @@ from .store import (
 )
 from .stream import StreamBroker
 from .timeline import RawEventArchive, TimelineStore
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .execution_orchestrator import ExecutionOrchestrator  # noqa: F401
 
 # 产品终态事件类型 -> Run 持久终态（#64 终态单一真相源：timeline 终态事件 -> Run 终态）。
 # 与 event_mapper.TERMINAL_TYPES / timeline._TERMINAL_TYPES 同集合，是终态类型集合的唯一业务
@@ -70,6 +74,64 @@ UsageRecorder = Callable[[str, str, "RunStatus", "dict | None", "str | None"], N
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+class RunBinding:
+    """Run 记录的专家快照绑定元数据（AITEAM-689 / M1）。
+
+    由 ExecutionOrchestrator 在派生 RunSpec 时一并产出，经 start_run 落到 Run 记录上，
+    使一次 run 可追溯：服务的专家、所用快照版本、快照来源（在线冻结/离线回退）、runtime、
+    provider 引用、技能引用列表。私聊由 start_run 据会话 entry_employee_id 自动派生；
+    群聊由 GroupChatService 按被 @ 专家逐个派生后传入。
+    """
+
+    __slots__ = (
+        "employee_id", "snapshot_version", "snapshot_source",
+        "runtime", "provider_ref", "skill_refs",
+    )
+
+    def __init__(
+        self,
+        *,
+        employee_id: str | None = None,
+        snapshot_version: str | None = None,
+        snapshot_source: str = "none",
+        runtime: str | None = None,
+        provider_ref: str | None = None,
+        skill_refs: list[str] | None = None,
+    ) -> None:
+        self.employee_id = employee_id
+        self.snapshot_version = snapshot_version
+        self.snapshot_source = snapshot_source
+        self.runtime = runtime
+        self.provider_ref = provider_ref
+        self.skill_refs = list(skill_refs) if skill_refs else []
+
+    def apply_to(self, run: "Run") -> "Run":
+        """把绑定字段写到一个 Run 对象上（返回更新后的 run）。"""
+        run.employee_id = self.employee_id
+        run.snapshot_version = self.snapshot_version
+        run.snapshot_source = self.snapshot_source
+        run.runtime = self.runtime
+        run.provider_ref = self.provider_ref
+        run.skill_refs = list(self.skill_refs)
+        return run
+
+
+def _binding_view_to_run_binding(view) -> "RunBinding":
+    """把 orchestrator.RunBindingView（dataclass）转成 service.RunBinding。
+
+    群聊下 GroupChatService 把每个 PreparedRun.binding 经此落到 start_run 的 RunBinding，
+    避免引入反向依赖。
+    """
+    return RunBinding(
+        employee_id=view.employee_id,
+        snapshot_version=view.snapshot_version,
+        snapshot_source=view.snapshot_source,
+        runtime=view.runtime,
+        provider_ref=view.provider_ref,
+        skill_refs=list(view.skill_refs),
+    )
 
 
 # 会话消息角色 -> 中立 runtime 角色（输入上下文用）。EMPLOYEE（专家回复）即 assistant 轮。
@@ -108,6 +170,7 @@ class MainlineService:
         tenant_id: str = "local",
         usage_recorder: UsageRecorder | None = None,
         solutions: "SolutionProjectionRepository | None" = None,
+        orchestrator: "ExecutionOrchestrator | None" = None,
     ) -> None:
         self._conversations = conversations
         self._messages = messages
@@ -120,6 +183,13 @@ class MainlineService:
         self._tenant_id = tenant_id
         self._usage_recorder = usage_recorder
         self._solutions = solutions
+        # 专家快照驱动统一执行编排（AITEAM-689 / M1）。在场时私聊 start_run 自动据
+        # entry_employee_id 派生 RunSpec 并绑定 Run；群聊由 GroupChatService 调用派生。
+        self._orchestrator = orchestrator
+
+    def set_orchestrator(self, orchestrator: "ExecutionOrchestrator | None") -> None:
+        """运行期注入/替换执行编排服务（供 app 装配在 mainline 与 grants 都就绪后接线）。"""
+        self._orchestrator = orchestrator
 
     @property
     def broker(self) -> StreamBroker:
@@ -331,19 +401,42 @@ class MainlineService:
         tenant_id: str | None = None,
         trigger_type: RunTriggerType | None = None,
         execution_mode: RunExecutionMode | None = None,
+        run_binding: RunBinding | None = None,
     ) -> Run:
         """起一次 run：驱动 runtime，事件归一落 timeline + 推流，终态落 Run。
 
         返回 run 的**最终持久态**（终态已落库）。展示态全程只经 broker，不落库（D6）。
         #283: 记录 trigger_type / execution_mode，并按 queued->routing->submitting->running->...
         完整生命周期流转。
+
+        AITEAM-689 (M1)：私聊会话（entry_employee_id 非空）且装配了编排服务时，**自动**据
+        专家快照派生 RunSpec 并绑定 Run 记录；前端传入的 run_spec 不作为权威配置。
+        群聊路径由 GroupChatService 按被 @ 专家逐个派生后通过 run_binding 传入绑定。
         """
-        self._conversations.get(conversation_id)
+        conversation = self._conversations.get(conversation_id)
         effective_tenant_id = tenant_id or self._tenant_id
         tt = trigger_type or self._infer_trigger_type()
         em = execution_mode or self._infer_execution_mode()
-        run = self._runs.create(Run(id=_new_id("run"), conversation_id=conversation_id,
-                                    trigger_type=tt, execution_mode=em))
+
+        prepared_spec = run_spec
+        prepared_binding = run_binding
+        # 私聊主链收口（M1 #3）：entry_employee_id 非空 + 编排服务在场 → 自动派生。
+        if (
+            prepared_binding is None
+            and self._orchestrator is not None
+            and (conversation.entry_employee_id or "").strip()
+        ):
+            prepared = self._orchestrator.prepare_private_run(
+                conversation, tenant_id=effective_tenant_id
+            )
+            prepared_spec = prepared.run_spec
+            prepared_binding = _binding_view_to_run_binding(prepared.binding)
+
+        run = Run(id=_new_id("run"), conversation_id=conversation_id,
+                  trigger_type=tt, execution_mode=em)
+        if prepared_binding is not None:
+            prepared_binding.apply_to(run)
+        run = self._runs.create(run)
         # #283 lifecycle: queued -> routing -> submitting -> running
         run.start_routing()
         self._runs.update_status(run.id, run)
@@ -361,7 +454,7 @@ class MainlineService:
             tenant_id=effective_tenant_id,
             conversation_id=conversation_id,
             task_id=task_id,
-            run_spec=run_spec or RunSpec(),
+            run_spec=prepared_spec or RunSpec(),
             input_messages=self._conversation_input_messages(conversation_id),
         )
 

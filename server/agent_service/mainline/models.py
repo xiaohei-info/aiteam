@@ -165,6 +165,17 @@ class Run(BaseModel):
     usage: dict | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+    # ── 专家快照绑定（AITEAM-689 / M1）：一次 run 可追溯到所用的专家快照版本与能力引用。
+    snapshot_version: str | None = Field(
+        default=None, description="本次 run 派生 RunSpec 所用的 EmployeeExecutionSnapshot 快照版本"
+    )
+    snapshot_source: str = Field(
+        default="none", description="快照来源：frozen=在线冻结 | fallback=Manager 离线回退最近冻结 | none=未绑定"
+    )
+    employee_id: str | None = Field(default=None, description="本次 run 服务的专家 employee_id")
+    runtime: str | None = Field(default=None, description="本次 run 实际使用的 runtime（部署级）")
+    provider_ref: str | None = Field(default=None, description="本次 run 的模型 provider 引用（不明文凭据）")
+    skill_refs: list[str] = Field(default_factory=list, description="本次 run 投影的技能引用快照（M2 投影前的引用列表）")
 
     # ── 生命周期状态流转（#283） ──────────────────────────────────────
 

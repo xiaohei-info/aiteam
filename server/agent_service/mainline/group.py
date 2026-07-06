@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.contracts.runspec import RunSpec
 
 from . import mentions
+from .execution_orchestrator import ExecutionOrchestrator
 from .models import MessageRole, Run, Task
 from .service import MainlineService
 
@@ -32,7 +33,13 @@ _SYNTHETIC_PLANNER_HANDLE = "__planner__"
 
 
 class GroupExpert(BaseModel):
-    """群聊里的一个专家（员工实例的本地最小投影）。"""
+    """群聊里的一个专家（员工实例的本地最小投影）。
+
+    AITEAM-689 (M1)：补齐 employee_id/provider_ref/thinking_level/skills/knowledge_refs/
+    connector_refs/memory_policy，使群聊入口可基于专家快照派生 RunSpec（M1 #4）。
+    employee_id 是被 @ 专家的真实员工标识，供 ExecutionOrchestrator 冻结快照；
+    handle 仅作 @提及路由键（前端可用 display_name/employee_id 作为稳定 handle）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -44,9 +51,25 @@ class GroupExpert(BaseModel):
         description="用于 @ 提及与人机展示的可读名（如中文名「李四」）；ASCII handle 与之不同名。"
         "为空则仅能用 ASCII handle 被 @到。Layer 2 fallback 的 alias 键。",
     )
+    # ── M1 专家快照派生字段 ──────────────────────────────────────────────
+    employee_id: str | None = Field(
+        default=None, description="被 @ 专家的真实员工标识；编排服务据此冻结快照派生 RunSpec"
+    )
+    provider_ref: str | None = Field(default=None, description="provider 配置引用（04 §6.7）")
+    thinking_level: str | None = Field(default=None, description="思考深度：none/basic/deep")
+    skills: list[str] = Field(default_factory=list, description="技能引用列表")
+    knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
+    connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
+    memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
 
     def to_run_spec(self) -> RunSpec:
-        return RunSpec(system_prompt=self.system_prompt, model=self.model)
+        """由 roster 最小投影构造 RunSpec（编排服务不在场时的兼容路径）。"""
+        return RunSpec(
+            system_prompt=self.system_prompt,
+            model=self.model,
+            provider_ref=self.provider_ref,
+            thinking_level=self.thinking_level,
+        )
 
 
 class Subtask(BaseModel):
@@ -157,9 +180,19 @@ def _fallback_plan(message_text: str, roster_handles: list[str]) -> list[Subtask
 class GroupChatService:
     """群聊编排器：自由讨论 / 规则编排双模式。"""
 
-    def __init__(self, mainline: MainlineService, *, experts: list[GroupExpert]) -> None:
+    def __init__(
+        self,
+        mainline: MainlineService,
+        *,
+        experts: list[GroupExpert],
+        orchestrator: ExecutionOrchestrator | None = None,
+        tenant_id: str = "local",
+    ) -> None:
         self._mainline = mainline
         self._roster: dict[str, GroupExpert] = {e.handle: e for e in experts}
+        # 专家快照驱动统一执行编排（AITEAM-689 / M1）；在场时按被 @ 专家逐个派生。
+        self._orchestrator = orchestrator
+        self._tenant_id = tenant_id
 
     @property
     def mainline(self) -> MainlineService:
@@ -175,9 +208,9 @@ class GroupChatService:
             return await self._dispatch_orchestrated(conv, user_text)
 
         experts, ignored = mentions.classify_mentions(user_text, self._roster)
-        runs = await self._run_experts(
-            conversation_id, [(_RunKey(e.handle), e.to_run_spec()) for e in experts]
-        )
+        run_items = self._experts_to_run_items(experts)
+        runs = await self._run_experts(conversation_id, run_items)
+
         return DispatchResult(
             triggered_handles=[e.handle for e in experts],
             runs=runs,
@@ -192,9 +225,27 @@ class GroupChatService:
     ) -> list[Run]:
         """编排策略按某专家发起下一跳时用（排除发起方自身，防自激回环）。"""
         experts, _ignored = mentions.classify_mentions(text, self._roster, exclude_handle=origin_handle)
-        return await self._run_experts(
-            conversation_id, [(_RunKey(e.handle), e.to_run_spec()) for e in experts]
-        )
+        return await self._run_experts(conversation_id, self._experts_to_run_items(experts))
+
+
+    def _experts_to_run_items(self, experts: list[GroupExpert]) -> list:
+        """把 roster 专家列表转成 _run_experts 的 items。
+
+        M1：编排服务在场且专家带 employee_id → 据快照派生 RunSpec + 绑定元数据；
+        否则回退到 roster 最小投影（向后兼容）。每个 item 形状：
+            (_RunKey(handle), RunSpec, RunBinding|None, task|None)
+        task 仅在编排执行阶段由调用方注入；自由讨论无 task。
+        """
+        items = []
+        for e in experts:
+            if self._orchestrator is not None and (e.employee_id or "").strip():
+                prepared = self._orchestrator.prepare_private_run(
+                    _BoundConversation(e.employee_id), tenant_id=self._tenant_id
+                )
+                items.append((_RunKey(e.handle), prepared.run_spec, prepared.binding, None))
+            else:
+                items.append((_RunKey(e.handle), e.to_run_spec(), None, None))
+        return items
 
     async def _dispatch_orchestrated(self, conv, user_text: str) -> DispatchResult:
         """规则编排：planner 拆解任务树 -> 分专家并行 -> 聚合。
@@ -313,20 +364,25 @@ class GroupChatService:
     async def _run_experts(self, conversation_id, items) -> list[Run]:
         """并发起 runs。
 
-        items 元素为二元组 (key, spec) 或三元组 (key, spec, task)。
-        key 仅用于唯一标识每个元素、避免同专家被去重。
+        items 元素为四元组 (key, spec, binding, task)：
+        - key：唯一标识每个元素、避免同专家被去重；
+        - spec：中立 RunSpec；
+        - binding：Expert 快照绑定元数据（M1），可为 None；
+        - task：仅在编排执行阶段由调用方注入；自由讨论无 task（None）。
+        key 仅用于唯一标识每个元素、避免同专家被去重。兼容更短的旧 tuple。
         """
         if not items:
             return []
 
         async def _start(item):
-            if len(item) == 3:
-                _, spec, task = item
-                return await self._mainline.start_run(
-                    conversation_id, run_spec=spec, task_id=task.id
-                )
-            _, spec = item
-            return await self._mainline.start_run(conversation_id, run_spec=spec)
+            key, spec, binding, task = _normalize_item(item)
+            kwargs = {"conversation_id": conversation_id, "run_spec": spec}
+            if binding is not None:
+                from .service import _binding_view_to_run_binding
+                kwargs["run_binding"] = _binding_view_to_run_binding(binding)
+            if task is not None:
+                kwargs["task_id"] = task.id
+            return await self._mainline.start_run(**kwargs)
 
         return list(await asyncio.gather(*(_start(i) for i in items)))
 
@@ -345,6 +401,24 @@ class GroupChatService:
                 return str(payload.get("final_text") or "")
         return ""
 
+
+class _BoundConversation:
+    """适配 ExecutionOrchestrator.prepare_private_run 的 conversation 协议。"""
+
+    def __init__(self, entry_employee_id: str) -> None:
+        self.entry_employee_id = entry_employee_id
+
+
+def _normalize_item(item):
+    """把 (key, spec)、(key, spec, task) 或 (key, spec, binding, task) 统一为四元组。"""
+    if len(item) == 4:
+        return item
+    if len(item) == 3:
+        # 兼容旧 shape (key, spec, task)。
+        key, spec, task = item
+        return key, spec, None, task
+    key, spec = item
+    return key, spec, None, None
 
 class _RunKey:
     """仅用于在 items 内保留重复专家的轻量 key。"""

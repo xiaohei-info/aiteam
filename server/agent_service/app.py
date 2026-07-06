@@ -45,7 +45,7 @@ from agent_service.grants.store import (
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
 from agent_gateway.runtime_readiness import check_runtime_readiness
-from agent_service.mainline.factory import build_mainline_service
+from agent_service.mainline.factory import build_execution_orchestrator, build_mainline_service
 from agent_service.mainline.routes import build_mainline_router
 from agent_service.mainline.service import MainlineService
 from agent_service.usage.client import (
@@ -265,6 +265,13 @@ def build_app(
         client=grants_client or _build_grants_client(login_service.current_token), db=db, projections=projections,
         solutions=shared_solutions,
     )
+    # AITEAM-689 (M1)：专家快照驱动统一执行编排。注入 mainline 后私聊 start_run 自动
+    # 据 entry_employee_id 派生 RunSpec；注入 group_mgmt 后群聊 @ 编排按被 @ 专家派生。
+    orchestrator = build_execution_orchestrator(
+        grants=grants_service, projections=projections, tenant_id="local",
+    )
+    mainline.set_orchestrator(orchestrator)
+
     app.include_router(build_grants_router(grants_service))
     # ---- P02-P09 workspace：工作台 + 人才市场 + 办公室 + 知识库 + 组织树 + 文件上传 ----
     marketplace_provider = _build_marketplace_provider(login_service)
@@ -276,7 +283,7 @@ def build_app(
     )
     app.include_router(build_workspace_router(workspace_service))
     # ---- P06 群聊管理：创建/成员/消息/归档/更新 ----
-    group_mgmt_service = build_group_mgmt_service(db=db, mainline=mainline)
+    group_mgmt_service = build_group_mgmt_service(db=db, mainline=mainline, orchestrator=orchestrator)
     app.include_router(build_group_mgmt_router(group_mgmt_service))
     # ---- Terminal / 命令执行能力（issue #415）----
     terminal_service = _build_terminal_service()
