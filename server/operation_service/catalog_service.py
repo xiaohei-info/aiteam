@@ -346,10 +346,12 @@ class CatalogService:
 
     @staticmethod
     def _validate_solution_planner_integrity(payload: dict) -> None:
-        """编辑行业方案后校验 planner 仍合法：非空且属于当前绑定专家。
+        """编辑行业方案后校验 planner 完整性（AITEAM-677 评审 blocker）。
 
-        评审 blocker：PATCH 路径此前无条件 merge payload，允许把 planner 改成
-        空值或不在专家列表中的任意值，导致已发布方案被编辑成非法状态。
+        三项校验全部强制：
+        1. 有效绑定专家集合必须非空——不允许编辑成无专家的空壳方案。
+        2. planner_template_id 必须非空且属于当前绑定专家。
+        3. planner_prompt 必须非空——不允许编辑清空编排规则提示词。
         """
         from shared.errors import ValidationProblem
 
@@ -358,14 +360,23 @@ class CatalogService:
             bound_ids = {b["template_id"] for b in bindings}
         else:
             bound_ids = set(payload.get("expert_template_ids", []))
+        if not bound_ids:
+            raise ValidationProblem(
+                "a solution template must have at least one bound expert"
+            )
         planner_id = (payload.get("planner_template_id") or "").strip()
         if not planner_id:
             raise ValidationProblem(
                 "planner_template_id must not be empty for a solution template"
             )
-        if bound_ids and planner_id not in bound_ids:
+        if planner_id not in bound_ids:
             raise ValidationProblem(
                 f"planner_template_id {planner_id!r} is not among the bound experts: {sorted(bound_ids)}"
+            )
+        planner_prompt = (payload.get("planner_prompt") or "").strip()
+        if not planner_prompt:
+            raise ValidationProblem(
+                "planner_prompt must not be empty for a solution template"
             )
 
 

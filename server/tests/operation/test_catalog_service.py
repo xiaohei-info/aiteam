@@ -786,3 +786,53 @@ def test_update_solution_valid_planner_accepted(service):
     assert updated is not None
     entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
     assert entry.payload["planner_template_id"] == "tpl-cto"
+
+
+# ---- AITEAM-677 评审二轮：PATCH 清空 planner_prompt / 清空专家列表 ----
+
+def test_update_solution_empty_planner_prompt_rejected(service):
+    """PATCH 清空 planner_prompt 应拒绝（评审二轮 blocker）。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_prompt": ""},
+        )
+
+
+def test_update_solution_whitespace_planner_prompt_rejected(service):
+    """PATCH 把 planner_prompt 改成纯空白应拒绝。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"planner_prompt": "   "},
+        )
+
+
+def test_update_solution_empty_experts_rejected(service):
+    """PATCH 把专家列表清空应拒绝（评审二轮 blocker）。"""
+    from shared.errors import ValidationProblem
+
+    service.register_solution_template(_solution())
+    with pytest.raises(ValidationProblem):
+        service.update_entry(
+            CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+            {"expert_template_ids": [], "expert_bindings": []},
+        )
+
+
+def test_update_solution_valid_planner_prompt_accepted(service):
+    """PATCH 把 planner_prompt 改成合法非空值应成功。"""
+    service.register_solution_template(_solution())
+    updated = service.update_entry(
+        CatalogType.SOLUTION_TEMPLATE, "sol-growth",
+        {"planner_prompt": "New orchestration plan"},
+    )
+    assert updated is not None
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert entry.payload["planner_prompt"] == "New orchestration plan"
