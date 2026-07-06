@@ -1,5 +1,5 @@
 import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
-import { type FormEvent, useEffect, useState, type ReactNode } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useState, type ReactNode } from "react";
 /**
  * 注册模板/方案表单（F03）。
  *
@@ -21,6 +21,18 @@ import type {
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
 } from "./types";
+
+/** 专家分类：系统默认提供，operator 也可通过「新建分类」流程追加（不允许手填）。 */
+const DEFAULT_EXPERT_CATEGORIES = [
+  "市场营销",
+  "财务分析",
+  "技术研发",
+  "客户服务",
+  "人力资源",
+];
+
+/** Select 中「新建分类」选项的哨兵值，避免与真实分类名冲突。 */
+const NEW_CATEGORY_VALUE = "__create_new_category__";
 
 const inputCls =
   "w-full rounded-md border border-gold/20 bg-surface px-md py-sm text-sm " +
@@ -70,6 +82,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 
   // 专家模板基础 + 能力字段（PRD-v2 S02）
   const [category, setCategory] = useState("");
+  const [categories, setCategories] = useState<string[]>(DEFAULT_EXPERT_CATEGORIES);
   const [avatarUrl, setAvatarUrl] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
@@ -114,6 +127,13 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
         ? prev.filter((x) => x !== templateId)
         : [...prev, templateId],
     );
+  }
+
+  function handleCreateCategory(name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    setCategory(trimmed);
   }
 
   function buildExpertPayload(): RegisterExpertTemplate {
@@ -220,7 +240,9 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
         {catalogType === "expert_template" ? (
           <ExpertFields
             category={category}
+            categories={categories}
             onCategoryChange={setCategory}
+            onCreateCategory={handleCreateCategory}
             avatarUrl={avatarUrl}
             onAvatarUrlChange={setAvatarUrl}
             systemPrompt={systemPrompt}
@@ -288,7 +310,9 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: Props): Rea
 
 interface ExpertFormProps {
   category: string;
+  categories: string[];
   onCategoryChange: (v: string) => void;
+  onCreateCategory: (name: string) => void;
   avatarUrl: string;
   onAvatarUrlChange: (v: string) => void;
   systemPrompt: string;
@@ -310,19 +334,115 @@ interface ExpertFormProps {
   disabled: boolean;
 }
 
+/**
+ * 分类选择器：下拉选择系统默认分类；缺失分类必须走「新建分类」流程，
+ * 不允许在分类框内手动填写自由文本。
+ */
+function CategoryField({
+  value,
+  categories,
+  onChange,
+  onCreate,
+  disabled,
+}: {
+  value: string;
+  categories: string[];
+  onChange: (v: string) => void;
+  onCreate: (name: string) => void;
+  disabled: boolean;
+}): ReactNode {
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  function handleSelect(e: ChangeEvent<HTMLSelectElement>): void {
+    const v = e.target.value;
+    if (v === NEW_CATEGORY_VALUE) {
+      setCreating(true);
+      return;
+    }
+    setCreating(false);
+    setDraft("");
+    onChange(v);
+  }
+
+  function confirmCreate(): void {
+    const name = draft.trim();
+    if (!name) return;
+    onCreate(name);
+    setCreating(false);
+    setDraft("");
+  }
+
+  function cancelCreate(): void {
+    setCreating(false);
+    setDraft("");
+    onChange("");
+  }
+
+  return (
+    <Field label="分类 (category)">
+      <Select
+        className={inputCls}
+        value={creating ? NEW_CATEGORY_VALUE : value}
+        onChange={handleSelect}
+        disabled={disabled || creating}
+      >
+        <option value="" disabled>
+          请选择分类
+        </option>
+        {categories.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+        <option value={NEW_CATEGORY_VALUE}>＋ 新建分类…</option>
+      </Select>
+      {creating && (
+        <div className="flex flex-col gap-xs">
+          <Input
+            type="text"
+            className={inputCls}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="输入新分类名称"
+            disabled={disabled}
+            autoFocus
+          />
+          <div className="flex gap-xs">
+            <Button
+              type="button"
+              size="sm"
+              onClick={confirmCreate}
+              disabled={disabled || !draft.trim()}
+            >
+              添加
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={cancelCreate}
+              disabled={disabled}
+            >
+              取消
+            </Button>
+          </div>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function ExpertFields(p: ExpertFormProps): ReactNode {
   return (
     <>
-      <Field label="分类 (category)">
-        <Input
-          type="text"
-          className={inputCls}
-          value={p.category}
-          onChange={(e) => p.onCategoryChange(e.target.value)}
-          placeholder="如 marketing / finance / tech"
-          disabled={p.disabled}
-        />
-      </Field>
+      <CategoryField
+        value={p.category}
+        categories={p.categories}
+        onChange={p.onCategoryChange}
+        onCreate={p.onCreateCategory}
+        disabled={p.disabled}
+      />
 
       <Field label="头像 (avatar_url)">
         <Input
