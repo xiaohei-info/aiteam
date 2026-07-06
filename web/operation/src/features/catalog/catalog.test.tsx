@@ -628,7 +628,7 @@ describe("注册表单", () => {
     fireEvent.change(modelInput, { target: { value: "gpt-5" } });
 
     // Fill all PRD required fields so the always-send payload is complete.
-    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "ecommerce" } });
+    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "市场营销" } });
     fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://example.com/a.png" } });
     fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "淘宝电商客服" } });
 
@@ -660,7 +660,7 @@ describe("注册表单", () => {
     };
     expect(body.template_id).toBeUndefined();
     expect(body.display_name).toBe("新专家");
-    expect(body.category).toBe("ecommerce");
+    expect(body.category).toBe("市场营销");
     expect(body.avatar_url).toBe("https://example.com/a.png");
     expect(body.system_prompt).toBe("电商客服");
     expect(body.default_model).toBe("gpt-5");
@@ -692,7 +692,7 @@ describe("注册表单", () => {
     await waitFor(() => expect(screen.getByText("注册新模板/方案")).toBeInTheDocument());
 
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "X专家" } });
-    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "tech" } });
+    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "技术研发" } });
     fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
@@ -707,6 +707,49 @@ describe("注册表单", () => {
 
     await waitFor(() => {
       expect((capturedBody as { initial_memories?: unknown[] })?.initial_memories).toEqual([]);
+    });
+  });
+
+  it("注册专家模板时通过「新建分类」流程追加自定义分类并提交", async () => {
+    let capturedBody: unknown = null;
+    mockFetch
+      .mockResolvedValueOnce(envOk())
+      .mockImplementationOnce(async (url: unknown, init: unknown) => {
+        if (String(url).includes("expert-templates")) {
+          const i = init as { body?: string } | undefined;
+          capturedBody = i?.body ? JSON.parse(i.body) : null;
+        }
+        return singleResponse(makeCatalogItem({ id: "new-cat", display_name: "新专家" }));
+      })
+      .mockResolvedValueOnce(envOk());
+
+    renderCatalogPage(makeSystemAdminSession());
+    await waitFor(() => expect(screen.getByText("注册专家模板")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("注册专家模板"));
+    await waitFor(() => expect(screen.getByText("注册新模板/方案")).toBeInTheDocument());
+
+    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
+    fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
+    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
+    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
+
+    // 选择「＋ 新建分类…」→ 展开新分类输入 → 添加后下拉值变更为新分类
+    const categorySelect = screen.getByLabelText("分类 (category)") as HTMLSelectElement;
+    fireEvent.change(categorySelect, { target: { value: "__create_new_category__" } });
+    const newCatInput = await screen.findByPlaceholderText("输入新分类名称");
+    fireEvent.change(newCatInput, { target: { value: "电商运营" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+
+    // 新分类已写入下拉并选中
+    await waitFor(() => {
+      expect((screen.getByLabelText("分类 (category)") as HTMLSelectElement).value).toBe("电商运营");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    await waitFor(() => {
+      expect((capturedBody as { category?: string })?.category).toBe("电商运营");
     });
   });
 
