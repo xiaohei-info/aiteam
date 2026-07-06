@@ -54,3 +54,31 @@ def build_env(policy: SandboxPolicy) -> dict[str, str]:
     env = {k: os.environ[k] for k in policy.env_allowlist if k in os.environ}
     env.update(policy.extra_env)
     return env
+
+
+# 日志/诊断输出 env 时用于脱敏的键名子串（D18：明文凭据绝不进日志/DB/前端）。
+_ENV_REDACT_SUBSTRINGS: tuple[str, ...] = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "credential",
+    "authorization",
+    "api_key",
+    "apikey",
+    "private_pem",
+    "private_key",
+    "access_key",
+    "relay_token",
+)
+
+
+def _env_key_is_sensitive(key: str) -> bool:
+    k = key.lower()
+    return any(s in k for s in _ENV_REDACT_SUBSTRINGS)
+
+
+def redact_env(env: Mapping[str, str]) -> dict[str, str]:
+    """返回 env 的脱敏副本：敏感键名的值替换为 [REDACTED]，供日志/诊断使用（D18）。"""
+    return {k: ("[REDACTED]" if _env_key_is_sensitive(k) else v) for k, v in env.items()}

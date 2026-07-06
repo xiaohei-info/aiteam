@@ -482,3 +482,94 @@ class TestUnreadCountForEmployee:
         conv = svc.create_conversation()  # no entry_employee_id
         svc.add_message(conv.id, role=MessageRole.EMPLOYEE, content="hi")
         assert svc.unread_count_for_employee("emp-1") == 0
+
+
+def test_start_run_resolves_provider_env_into_request() -> None:
+    """M4 验收：start_run 必须把 provider_ref 解析为 provider_env 传入 AgentRunRequest。"""
+    import os
+    from unittest import mock
+
+    from agent_gateway.drivers.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+    from shared.contracts.runspec import RunSpec
+
+    captured: dict = {}
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured["provider_env"] = request.provider_env
+            return RunResult(run_id=request.run_id, success=True)
+
+        async def cancel(self, run_id):
+            return None
+
+    svc = build_mainline_service(executor=_CapturingExecutor(), driver=FakeDriver())
+    conv = svc.create_conversation()
+
+    with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-anthropic-x"}):
+        asyncio.run(
+            svc.start_run(conv.id, run_spec=RunSpec(model="claude-1", provider_ref="anthropic"))
+        )
+
+    assert captured["provider_env"] == {"ANTHROPIC_API_KEY": "sk-anthropic-x"}
+
+
+def test_start_run_no_provider_ref_injects_nothing() -> None:
+    """M4 验收：无 provider_ref 时 provider_env 为空，不注入任何凭据。"""
+    from shared.contracts.runspec import RunSpec
+    from agent_gateway.drivers.fake_runtime import FakeDriver
+    from shared.contracts.gateway import Executor, RunResult
+
+    captured: dict = {}
+
+    class _CapturingExecutor(Executor):
+        async def execute(self, request, driver, on_event):
+            captured["provider_env"] = request.provider_env
+            return RunResult(run_id=request.run_id, success=True)
+
+        async def cancel(self, run_id):
+            return None
+
+    svc = build_mainline_service(executor=_CapturingExecutor(), driver=FakeDriver())
+    conv = svc.create_conversation()
+
+    run = asyncio.run(svc.start_run(conv.id, run_spec=RunSpec(model="claude-1")))
+
+    assert captured["provider_env"] == {}
+    assert run.status is RunStatus.SUCCEEDED
+
+
+def test_start_run_unknown_provider_ref_fails_fast() -> None:
+    """M4 验收：未知 provider_ref 必须 fail fast，禁止回退。"""
+    from agent_gateway.provider_resolver import ProviderResolutionError
+    from shared.contracts.runspec import RunSpec
+
+    svc = build_mainline_service()
+    conv = svc.create_conversation()
+
+    with pytest.raises(ProviderResolutionError):
+        asyncio.run(
+            svc.start_run(conv.id, run_spec=RunSpec(model="claude-1", provider_ref="totally-unknown"))
+        )
+
+
+def test_start_run_missing_provider_env_fails_fast() -> None:
+    """M4 验收：provider_ref 已知但所需 env var 缺失 → fail fast。"""
+    import os
+    from agent_gateway.provider_resolver import ProviderResolutionError
+    from shared.contracts.runspec import RunSpec
+
+    svc = build_mainline_service()
+    conv = svc.create_conversation()
+
+    # 清理 openai 相关 env，确保 missing
+    saved = {k: os.environ.pop(k, None) for k in ("OPENAI_API_KEY",)}
+    try:
+        with pytest.raises(ProviderResolutionError):
+            asyncio.run(
+                svc.start_run(conv.id, run_spec=RunSpec(model="gpt-4", provider_ref="openai"))
+            )
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v

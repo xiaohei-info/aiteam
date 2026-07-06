@@ -58,3 +58,7 @@ class AgentRunRequest(BaseModel):
     attachments: list[dict] = Field(default_factory=list, description="附件列表（文件引用）")
     workspace_policy: dict | None = Field(default=None, description="工作区策略（文件/目录隔离规则）")
     resume_session_id: str | None = Field(default=None, description="恢复会话 id（用于断点续跑）")
+    provider_env: dict[str, str] = Field(
+        default_factory=dict,
+        description="按 provider_ref 解析出的最小 env 注入（名/值）；仅沙箱 env 使用，不落库/不日志（D18）",
+    )
