@@ -12,6 +12,7 @@ from agent_service.workspace.store import (
     InMemoryWorkbenchStateRepository,
 )
 from agent_service.workspace.service import WorkspaceService
+from tests.agent.workspace._stub_provider import StubMarketplaceProvider
 
 
 def _make_service(*, upload_dir: str | None = None):
@@ -24,6 +25,7 @@ def _make_service(*, upload_dir: str | None = None):
         projections=proj, workbench_store=wb,
         kb_store=kb, doc_store=docs, upload_store=uploads,
         upload_dir=upload_dir,
+        marketplace_provider=StubMarketplaceProvider(),
     )
     return svc, kb, docs, uploads
 

@@ -12,7 +12,7 @@ from collections.abc import Callable
 from agent_service.grants.store import ProjectionRepository
 from agent_service.local_db import LocalDb
 
-from .marketplace_provider import FakeMarketplaceProvider, ManagerMarketplaceProvider, MarketplaceProvider
+from .marketplace_provider import ManagerMarketplaceProvider, MarketplaceProvider
 from .service import WorkspaceService
 from .store import (
     InMemoryKnowledgeBaseRepository,
@@ -48,7 +48,8 @@ def build_workspace_service(
     unread_counts_provider 由装配层注入（主链未读回调）；未注入时工作台未读回退 0，
     不影响现有 dev/测试。
     upload_dir 为空时上传功能不可用——调用方应确保配置。
-    marketplace_provider 未传时默认 FakeMarketplaceProvider（离线兜底，保证 marketplace 非空）。
+    marketplace_provider 必须传入一个真实 provider（通常为 ManagerMarketplaceProvider）；
+    不再提供 FakeMarketplaceProvider 兜底（AITEAM-672）。
     """
     workbench_store: WorkbenchStateRepository = (
         SqliteWorkbenchStateRepository(db) if db else InMemoryWorkbenchStateRepository()

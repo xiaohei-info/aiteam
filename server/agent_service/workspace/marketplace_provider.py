@@ -1,18 +1,39 @@
 """人才市场模板 Provider：定义从何处获取可招募专家模板。
 
 MarketTemplate 是人才市场的核心数据类型，定义在本模块以避免循环依赖。
-两种 provider 实现：
-- FakeMarketplaceProvider：离线内置默认模板，保证人才市场**永不为空**（离线/开发/Manager 不可达时兜底）。
-- ManagerMarketplaceProvider：从 Manager `/api/manager/recruit/catalog/experts` 拉取已发布模板，
-  登录后使用用户 token 调用；未登录或 Manager 不可达时降级到 fake 模板。
 
-WorkspaceService 在装配时注入一个 provider，初始化即自动 sync，消除 marketplace 永远为空的缺陷。
+实现：
+- ManagerMarketplaceProvider：从 Manager `/api/manager/recruit/catalog/experts` 拉取已发布模板，
+  登录后使用用户 token 调用；未登录或 Manager 不可达时按下方约定显式报错或返回空列表。
+
+契约：
+- 模板列表非空 → 返回 MarketTemplate 列表；
+- Manager 可正常连接但目录为空 → 返回空列表（前端展示"暂无可招募专家"）；
+- 用户未登录（无 token）→ 返回空列表（前端展示"未登录"引导）；
+- Manager 不可达 / 网络错误 → 抛出 MarketplaceProviderError，由路由层转为 problem+json
+  （502/503），明确告知用户，不用假数据掩盖。
+
+本模块不再保留任何内置假模板兜底：静默返回假数据会让用户误以为那些专家真实存在。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Protocol
+
+from shared.errors import AppError
+
+
+# ---- Provider 错误 ----
+
+class MarketplaceProviderError(AppError):
+    """人才市场 Provider 真实错误（Manager 不可达、返回无效数据等）。
+
+    路由层捕获后转为应用 problem+json（502/503），把真实错误信息回传给前端，
+    杜绝用假数据掩盖真实故障。
+    """
+
+    status, code, title = 503, "marketplace_provider_unavailable", "人才市场数据源不可达"
 
 
 # ---- 人才市场模板（本模块持有，service/routes/provider 共用） ----
@@ -43,112 +64,15 @@ class MarketplaceProvider(Protocol):
     def list_templates(self) -> list[MarketTemplate]: ...
 
 
-class FakeMarketplaceProvider:
-    """离线兜底：内置默认专家模板。
-
-    确保人才市场在以下场景仍可用：
-    - 开发/测试环境未配置 Manager
-    - Manager 服务不可达
-    - 用户尚未登录（无 token 调 Manager 目录）
-    """
-
-    _DEFAULT: list[MarketTemplate] = [
-        MarketTemplate(
-            template_id="tpl-coder",
-            display_name="代码专家",
-            category="coding",
-            model_name="gpt-5",
-            tags=["coding", "python", "review"],
-            avatar_url=None,
-            persona="资深软件工程师，擅长代码实现、Review 与调试。",
-            skills=[{"code": "code"}, {"code": "code-review"}],
-            knowledge_bases=[],
-            initial_memories=[],
-            rating=4.8,
-        ),
-        MarketTemplate(
-            template_id="tpl-researcher",
-            display_name="研究员",
-            category="research",
-            model_name="gpt-5",
-            tags=["research", "analysis"],
-            avatar_url=None,
-            persona="专注信息搜集、调研分析与报告撰写。",
-            skills=[{"code": "web-search"}, {"code": "analysis"}],
-            knowledge_bases=[],
-            initial_memories=[],
-            rating=4.6,
-        ),
-        MarketTemplate(
-            template_id="tpl-writer",
-            display_name="写作专家",
-            category="writing",
-            model_name="gpt-5",
-            tags=["writing", "copywriting", "drafting"],
-            avatar_url=None,
-            persona="擅长撰写与润色文案、邮件、文档和营销稿件。",
-            skills=[{"code": "writing"}, {"code": "editing"}],
-            knowledge_bases=[],
-            initial_memories=[],
-            rating=4.7,
-        ),
-        MarketTemplate(
-            template_id="tpl-data-analyst",
-            display_name="数据分析师",
-            category="data",
-            model_name="gpt-5",
-            tags=["data", "sql", "analytics"],
-            avatar_url=None,
-            persona="专注数据查询、SQL、指标分析与可视化解读。",
-            skills=[{"code": "sql"}, {"code": "data-analysis"}],
-            knowledge_bases=[],
-            initial_memories=[],
-            rating=4.5,
-        ),
-        MarketTemplate(
-            template_id="tpl-translator",
-            display_name="翻译专家",
-            category="language",
-            model_name="gpt-5",
-            tags=["translation", "localization"],
-            avatar_url=None,
-            persona="多语言翻译与本地化，保持语义准确与行文自然。",
-            skills=[{"code": "translation"}],
-            knowledge_bases=[],
-            initial_memories=[],
-            rating=4.4,
-        ),
-    ]
-
-    def list_templates(self) -> list[MarketTemplate]:
-        # 返回副本，避免调用方改写内置模板真相
-        return [self._copy(t) for t in self._DEFAULT]
-
-    @staticmethod
-    def _copy(t: MarketTemplate) -> MarketTemplate:
-        return MarketTemplate(
-            template_id=t.template_id,
-            display_name=t.display_name,
-            category=t.category,
-            model_name=t.model_name,
-            skills_count=t.skills_count,
-            recruit_count=t.recruit_count,
-            is_recruited=t.is_recruited,
-            tags=list(t.tags),
-            avatar_url=t.avatar_url,
-            persona=t.persona,
-            skills=[dict(s) for s in t.skills],
-            knowledge_bases=[dict(k) for k in t.knowledge_bases],
-            initial_memories=[dict(m) for m in t.initial_memories],
-            rating=t.rating,
-        )
-
-
 class ManagerMarketplaceProvider:
     """从 Manager 拉取 Operator 已发布专家模板，并映射到本地 MarketTemplate。
 
-    未配置 Manager / 无用户 token / 调用失败时降级到 FakeMarketplaceProvider，
-    保证人才市场始终非空。
+    不再做任何假数据兜底。错误分三类：
+    - `service_client` 为 None（MANAGER_URL 未配置）：构造期即配置错误，
+      `list_templates` 抛 MarketplaceProviderError，提示部署配置缺失；
+    - `token` 为空（用户未登录）：返回空列表，由前端引导登录；
+    - Manager 调用抛异常（不可达 / 5xx）：抛 MarketplaceProviderError 并带上原始原因，
+      让上游路由层把它回传给前端。
     """
 
     def __init__(
@@ -156,27 +80,30 @@ class ManagerMarketplaceProvider:
         *,
         service_client=None,  # shared.service_client.ServiceClient | None
         token_provider=None,  # () -> str | None
-        fallback: MarketplaceProvider | None = None,
     ) -> None:
         self._client = service_client
         self._token_provider = token_provider
-        self._fallback = fallback or FakeMarketplaceProvider()
 
     def list_templates(self) -> list[MarketTemplate]:
         if self._client is None:
-            return self._fallback.list_templates()
+            raise MarketplaceProviderError(
+                "Agent 未配置 MANAGER_URL，无法从 Manager 拉取人才市场模板。"
+                "请在部署环境设置 MANAGER_URL 后重启 agent 服务。"
+            )
         token = self._token_provider() if self._token_provider else None
         if not token:
-            return self._fallback.list_templates()
+            # 用户未登录：不是错误，只是当前没有可用数据，回空列表让前端展示登录引导。
+            return []
         try:
             headers = {"Authorization": f"Bearer {token}"}
             body = self._client.get("/api/manager/recruit/catalog/experts", headers=headers)
-        except Exception:
-            return self._fallback.list_templates()
+        except Exception as e:
+            # Manager 不可达 / 网络错误：把真实原因带上去，不要静默吞掉。
+            raise MarketplaceProviderError(
+                f"从 Manager 拉取人才市场模板失败：{e}"
+            ) from e
         data = body.get("data", body) if isinstance(body, dict) else body
         items = data if isinstance(data, list) else []
-        if not items:
-            return self._fallback.list_templates()
         return [self._map_item(item) for item in items]
 
     @staticmethod
