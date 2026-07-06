@@ -150,4 +150,14 @@ describe("SolutionsPage", () => {
     const card = await screen.findByTestId("solution-instance-card");
     expect(within(card).getByText("inactive")).toBeInTheDocument();
   });
+
+
+  it("应用方案成功：显示前往专家实例配置入口", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("应用方案"));
+    await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
+    expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
+  });
 });

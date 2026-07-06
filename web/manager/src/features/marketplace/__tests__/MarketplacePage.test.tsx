@@ -115,4 +115,14 @@ describe("MarketplacePage", () => {
     fireEvent.click(screen.getByText("招募"));
     await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
   });
+
+
+  it("招募成功：显示前往专家实例配置入口", async () => {
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("招募"));
+    await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
+    expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
+  });
 });
