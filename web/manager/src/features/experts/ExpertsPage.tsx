@@ -7,7 +7,7 @@
  * 原占位（Deprecated）被本实现替代（AITEAM-356 时招募/实例入口收口到
  * /marketplace + /solutions；本卡恢复实例列表 + 详情配置能力）。
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
 import { Button, GlassPanel } from "@aiteam/shared/ui";
 import { useI18n } from "../../i18n/context";
@@ -39,6 +39,12 @@ export function ExpertsPage(): ReactNode {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 直接定位已加载实例，注入抽屉以避免抽屉内再次按 id 线性查找。
+  const detailEmployee = useMemo(
+    () => (detailId ? items.find((e) => e.employee_id === detailId) ?? null : null),
+    [detailId, items],
+  );
 
   const onSaved = useCallback(
     (updated: EmployeeConfig) => {
@@ -126,6 +132,7 @@ export function ExpertsPage(): ReactNode {
       {detailId && (
         <EmployeeConfigDrawer
           employeeId={detailId}
+          employee={detailEmployee}
           onClose={() => setDetailId(null)}
           onSaved={onSaved}
         />

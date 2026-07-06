@@ -7,6 +7,9 @@
  *
  * 保存复用 PUT /api/manager/employees/{employee_id}，回传完整载入配置，
  * 仅覆盖被编辑字段，保全 tools/skills/knowledge_refs 等未触达配置。
+ *
+ * 优先由调用方注入已加载的 `employee`，避免抽屉内重复 GET 全表 + 线性查找；
+ * 未注入时（如未来独立进入）回退到按 employeeId 从列表拉取。
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
@@ -14,11 +17,13 @@ import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
 import { useProvidersApi } from "../providers/useProvidersApi";
-import type { EmployeeConfig } from "./types";
+import type { EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { ProviderCredential } from "../providers/types";
 
 export interface EmployeeConfigDrawerProps {
   employeeId: string | null;
+  /** 由列表页注入已加载的实例，避免抽屉内按 id 重复拉取全表。 */
+  employee?: EmployeeConfig | null;
   onClose: () => void;
   onSaved: (updated: EmployeeConfig) => void;
 }
@@ -51,8 +56,29 @@ function toDraft(e: EmployeeConfig): Draft {
   };
 }
 
+/** 从 EmployeeConfig 中剔除服务端托管字段，得到 PUT 请求的 EmployeeConfigIn 负载。 */
+export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
+  const {
+    employee_id,
+    employee_slug,
+    version,
+    status,
+    archive_reason,
+    archived_at,
+    ...editable
+  } = config;
+  void employee_id;
+  void employee_slug;
+  void version;
+  void status;
+  void archive_reason;
+  void archived_at;
+  return editable;
+}
+
 export function EmployeeConfigDrawer({
   employeeId,
+  employee: injectedEmployee,
   onClose,
   onSaved,
 }: EmployeeConfigDrawerProps): ReactNode {
@@ -72,6 +98,12 @@ export function EmployeeConfigDrawer({
     if (!employeeId) {
       setEmployee(null);
       setDraft(null);
+      return;
+    }
+    // 已注入 employee 时直接使用，避免全表 GET + 线性查找。
+    if (injectedEmployee && injectedEmployee.employee_id === employeeId) {
+      setEmployee(injectedEmployee);
+      setDraft(toDraft(injectedEmployee));
       return;
     }
     let alive = true;
@@ -94,7 +126,7 @@ export function EmployeeConfigDrawer({
     return () => {
       alive = false;
     };
-  }, [employeeId, experts, i18n]);
+  }, [employeeId, injectedEmployee, experts, i18n]);
 
   useEffect(() => {
     let alive = true;
@@ -171,7 +203,10 @@ export function EmployeeConfigDrawer({
     };
 
     try {
-      const saved = await experts.updateEmployee(employee.employee_id, updated);
+      const saved = await experts.updateEmployee(
+        employee.employee_id,
+        toEmployeeConfigIn(updated),
+      );
       onSaved(saved ?? updated);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.save_error"));
@@ -272,6 +307,12 @@ export function EmployeeConfigDrawer({
               </Select>
             </Field>
 
+            {/*
+              防御性提示：V1 禁止手输 model，model_select 在 provider 未选时也被 disabled，
+              故此分支对“新编辑”路径不可达。保留以兜底两类存量/数据异常：
+              (a) 后端已下发带 model 但无 provider_ref 的历史配置；
+              (b) 未来若开放手输 model 时天然给出校验提示。
+            */}
             {draft.model && !draft.provider_ref && (
               <p className="m-0 text-xs text-warning">{i18n.t("manager.experts.unverified_model_warn")}</p>
             )}

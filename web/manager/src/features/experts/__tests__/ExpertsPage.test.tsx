@@ -16,6 +16,7 @@ import type { ExpertsApi } from "../useExpertsApi";
 import type { ProvidersApi } from "../../providers/useProvidersApi";
 import type { EmployeeConfig } from "../types";
 import type { ProviderCredential } from "../../providers/types";
+import { toEmployeeConfigIn } from "../EmployeeConfigDrawer";
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -43,6 +44,20 @@ const provider: ProviderCredential = {
   supported_models: [
     { model: "gpt-4o", display_name: "GPT-4o", enabled: true },
     { model: "gpt-4o-mini", display_name: "GPT-4o mini", enabled: true },
+  ],
+};
+
+const providerB: ProviderCredential = {
+  credential_id: "cred-2",
+  provider_ref: "anthropic-main",
+  display_name: "Anthropic",
+  mode: "relay",
+  endpoint: null,
+  visibility: "tenant",
+  allowed_member_ids: [],
+  version: 1,
+  supported_models: [
+    { model: "claude-3-5-sonnet", display_name: "Claude 3.5 Sonnet", enabled: true },
   ],
 };
 
@@ -78,9 +93,20 @@ const employeeUnconfigured: EmployeeConfig = {
   status: "draft",
 };
 
-function mockApis(employees: EmployeeConfig[]): {
+function mockProviders(list: ProviderCredential[]): ProvidersApi {
+  return {
+    list: vi.fn().mockResolvedValue(list),
+    get: vi.fn().mockResolvedValue(list[0] ?? null),
+    create: vi.fn().mockResolvedValue(list[0] ?? null),
+    del: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function mockApis(
+  employees: EmployeeConfig[],
+  providers: ProviderCredential[] = [provider],
+): {
   api: ExpertsApi;
-  providersApi: ProvidersApi;
   updateEmployee: ReturnType<typeof vi.fn>;
 } {
   const updateEmployee = vi.fn().mockImplementation(async (_id: string, cfg: EmployeeConfig) => cfg);
@@ -95,15 +121,9 @@ function mockApis(employees: EmployeeConfig[]): {
     transitionEmployee: vi.fn().mockResolvedValue(null),
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
   };
-  const providersApi: ProvidersApi = {
-    list: vi.fn().mockResolvedValue([provider]),
-    get: vi.fn().mockResolvedValue(provider),
-    create: vi.fn().mockResolvedValue(provider),
-    del: vi.fn().mockResolvedValue(undefined),
-  };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
-  (useProvidersApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(providersApi);
-  return { api, providersApi, updateEmployee };
+  (useProvidersApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockProviders(providers));
+  return { api, updateEmployee };
 }
 
 function renderPage() {
@@ -141,7 +161,7 @@ describe("ExpertsPage", () => {
   });
 
   it("编辑：点击编辑配置打开抽屉，修改 provider/model 后保存调用 updateEmployee 并保留未编辑字段", async () => {
-    const { updateEmployee } = mockApis([employeeConfigured]);
+    const { api, updateEmployee } = mockApis([employeeConfigured]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
@@ -157,13 +177,36 @@ describe("ExpertsPage", () => {
     const callArgs = updateEmployee.mock.calls[0] as [string, EmployeeConfig];
     const [calledId, calledCfg] = callArgs;
     expect(calledId).toBe("emp-1");
+    // 注入 employee 后抽屉直接使用，列表不会被二次拉取。
+    expect(api.listEmployees).toHaveBeenCalledTimes(1);
     expect(calledCfg.model_policy.model).toBe("gpt-4o-mini");
     expect(calledCfg.model_policy.provider_ref).toBe("openai-main");
+    // toEmployeeConfigIn: 服务端托管字段不回写
+    expect((calledCfg as unknown as Record<string, unknown>).employee_id).toBeUndefined();
+    expect((calledCfg as unknown as Record<string, unknown>).version).toBeUndefined();
     // 未编辑字段保留
     expect(calledCfg.tools).toEqual(["t1"]);
     expect(calledCfg.skills).toEqual(["s1"]);
     expect(calledCfg.knowledge_refs).toEqual(["k1"]);
     expect(calledCfg.persona).toBe("技术架构专家");
+  });
+
+  it("级联清空：切换 provider 后，若当前 model 不在新 provider 目录内则清空 model", async () => {
+    mockApis([employeeConfigured], [provider, providerB]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+
+    const providerSelect = await screen.findByTestId("provider-select");
+    // 当前 gpt-4o 属于 openai-main 目录，合理。
+    expect((screen.getByTestId("model-select") as HTMLSelectElement).value).toBe("gpt-4o");
+    // 切到 anthropic-main，目录只有 claude-3-5-sonnet → gpt-4o 被清空。
+    fireEvent.change(providerSelect!, { target: { value: "anthropic-main" } });
+    await waitFor(() =>
+      expect((screen.getByTestId("model-select") as HTMLSelectElement).value).toBe(""),
+    );
+    // 空 option 文案提示「选择模型」已出现
+    expect(screen.getByText("选择模型")).toBeInTheDocument();
   });
 
   it("保存成功后关闭抽屉并刷新列表", async () => {
@@ -189,5 +232,22 @@ describe("ExpertsPage", () => {
     (api.listEmployees as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage();
     await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+  });
+});
+
+describe("toEmployeeConfigIn", () => {
+  it("剔除服务端托管字段", () => {
+    const minimal = toEmployeeConfigIn(employeeConfigured);
+    const keys = Object.keys(minimal);
+    expect(keys).not.toContain("employee_id");
+    expect(keys).not.toContain("employee_slug");
+    expect(keys).not.toContain("version");
+    expect(keys).not.toContain("status");
+    expect(keys).not.toContain("archive_reason");
+    expect(keys).not.toContain("archived_at");
+    // 业务字段完整保留
+    expect(minimal.display_name).toBe("架构师");
+    expect(minimal.tools).toEqual(["t1"]);
+    expect(minimal.model_policy.model).toBe("gpt-4o");
   });
 });
