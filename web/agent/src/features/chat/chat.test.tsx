@@ -507,3 +507,98 @@ describe("ChatPage — 新建私聊会话", () => {
     expect(await screen.findByText(/暂无可私聊的专家/)).toBeInTheDocument();
   });
 });
+
+// ---- 7. 私聊新建：取消 / 失败 / 返回空（覆盖 handleCancelCreate + handlePick 分支）----
+
+function chatFetchWithCreate(createImpl: (init?: RequestInit) => Response, roster: Array<{ employee_id: string; display_name: string; revoked: boolean }> = []) {
+  return vi.fn(async (url: string | URL, init?: RequestInit) => {
+    const path = typeof url === "string" ? url : url.toString();
+    if (path.includes("/api/agent/grants/experts")) {
+      return new Response(JSON.stringify({ data: roster, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
+      return createImpl(init);
+    }
+    if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && (init?.method === undefined || init?.method === "GET")) {
+      return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (path.includes("/timeline")) {
+      return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: null }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+describe("ChatPage — 新建私聊会话（失败分支）", () => {
+  it("取消弹层（Esc）关闭并回到空态", async () => {
+    loginStorage();
+    globalThis.fetch = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ data: { id: "c-new", title: "x", state: "active", created_at: "", updated_at: "" } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // Esc 关闭弹层
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("建会话返回空时展示错误提示", async () => {
+    loginStorage();
+    const fetchImpl = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ data: null }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    // 错误提示以 role=alert 形式展示（文案走 i18n useApiError）
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+
+  it("建会话接口异常时展示错误提示", async () => {
+    loginStorage();
+    const fetchImpl = chatFetchWithCreate(
+      () => new Response(JSON.stringify({ type: "err", title: "boom", status: 500, code: "server_error" }), { status: 500, headers: { "Content-Type": "application/json" } }),
+      [{ employee_id: "e1", display_name: "Luna", revoked: false }],
+    );
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /新建对话/ }));
+    const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
+    fireEvent.click(lunaBtn);
+
+    // 错误提示应出现在弹层内
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+});

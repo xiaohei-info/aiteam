@@ -59,7 +59,7 @@ export async function listConversations(
   const result = await client.listGet<Conversation>("/api/agent/conversations", {
     query: cursor ? { cursor } : undefined,
   });
- return { items: result.items, nextCursor: result.page.next_cursor, hasMore: result.page.has_more };
+  return { items: result.items, nextCursor: result.page.next_cursor, hasMore: result.page.has_more };
 }
 
 /** 建会话入参（对齐 server routes.py:CreateConversationRequest）。 */
