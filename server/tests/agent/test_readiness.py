@@ -68,6 +68,16 @@ class FakeGrants:
     def latest_snapshot(self, employee_id: str):
         return self._snapshots.get(employee_id)
 
+    # readiness 只读访问点（对齐 GrantsService 公开接口）
+    def projection_for(self, employee_id: str):
+        return self._projections.get(employee_id)
+
+    def snapshot_for_readiness(self, employee_id: str):
+        return self._snapshots.get(employee_id)
+
+    def skill_cache_for_readiness(self):
+        return self._skills.cache if self._skills is not None else None
+
 
 def _projection(emp, version="v1", skills=(), kw=(), conn=(), mem=None,
                 provider="openai"):

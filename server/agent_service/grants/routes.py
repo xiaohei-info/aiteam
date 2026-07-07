@@ -19,6 +19,7 @@ from shared.contracts.grants import LoadedExpertProjection
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 
 from .service import GrantsService
+from agent_service.readiness import ReadinessService, expert_to_dict, report_to_dict
 from shared.config import load_settings
 
 
@@ -30,8 +31,6 @@ def _read_production_flag() -> bool:
     return load_settings("agent").is_production
 
 
-
-from agent_service.readiness import ReadinessService, expert_to_dict, report_to_dict
 
 
 class SyncRequest(BaseModel):

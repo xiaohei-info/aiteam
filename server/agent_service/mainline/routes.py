@@ -139,7 +139,15 @@ def build_mainline_router(
         snap = None
         if snapshot_for_run is not None and run.employee_id:
             snap = snapshot_for_run(run.employee_id, run.snapshot_version)
-        return Envelope[dict](data=run_provenance(run, snapshot=snap))
+        data = run_provenance(run, snapshot=snap)
+        # 脚注：当 run 所绑定的快照已被清除、回退到最新快照时，capability 区块来自"最新版"而非绑定版。
+        bound = run.snapshot_version
+        resolved = getattr(snap, "snapshot_version", None)
+        if bound and resolved and resolved != bound:
+            data["provenance_note"] = (
+                f"未找到本次 run 绑定的快照（snapshot_version={bound}），下列能力摘要来自专家当前最新快照（snapshot_version={resolved}）。"
+            )
+        return Envelope[dict](data=data)
 
 
     # ---- conversation ----

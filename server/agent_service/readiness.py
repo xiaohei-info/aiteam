@@ -161,7 +161,7 @@ class ReadinessService:
     # ---- 内部 ----
 
     def _expert_readiness(self, employee_id: str) -> ExpertReadiness:
-        projection = self._grants._projections.get(employee_id)
+        projection = self._grants.projection_for(employee_id)
         if projection is None:
             return ExpertReadiness(
                 employee_id=employee_id, display_name="", handle="", available=False,
@@ -169,7 +169,7 @@ class ReadinessService:
                 reasons=["专家本地投影不存在（未装载或未授权）"],
             )
         # 绑定最新已冻结快照（用于 skills/knowledge/memory/connector refs）。
-        snapshot = self._grants.latest_snapshot(employee_id)
+        snapshot = self._grants.snapshot_for_readiness(employee_id)
         if snapshot is None:
             return ExpertReadiness(
                 employee_id=employee_id,
@@ -239,9 +239,8 @@ class ReadinessService:
 
     def _skills_readiness(self, refs: list[str]) -> list[SkillReadiness]:
         out: list[SkillReadiness] = []
-        cache = getattr(self._grants, "_skills", None)
-        # cache 为 SkillsService（持有 SkillCache）；取其底层 cache 判断已投影。
-        skill_cache: object | None = getattr(cache, "cache", None) if cache is not None else None
+        # 通过 GrantsService 显式只读访问点取底层 SkillCache（避免直接访问私属属性）。
+        skill_cache = self._grants.skill_cache_for_readiness()
         for ref in refs:
             pkg = skill_cache.get_latest(ref) if skill_cache is not None else None
             if pkg is not None:
