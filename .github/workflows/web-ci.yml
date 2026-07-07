@@ -100,6 +100,8 @@ jobs:
       DB_URL: postgresql://app_rw:apprwpass@127.0.0.1:5433/manager_control_db
       APP_RW_PASSWORD: apprwpass
       OPERATOR_URL: http://127.0.0.1:8000
+      # provider 凭据入库前需 Fernet 加密；CI 用固定测试 key（非生产密钥）。
+      MANAGER_CREDENTIAL_KEY: vAkjGKeadpMSZuL5h21AanI5tjHmoOh87WNukUbEFhE=
     steps:
       - uses: actions/checkout@v4
 
