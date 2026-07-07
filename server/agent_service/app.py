@@ -249,7 +249,19 @@ def build_app(
         production=settings.is_production,
         solutions=shared_solutions,
     )
-    app.include_router(build_mainline_router(mainline, identity_provider=login_service.current_identity))
+    def _snapshot_for_run(employee_id, snapshot_version):
+        if not employee_id:
+            return None
+        if snapshot_version:
+            snap = grants_service.load_snapshot(employee_id, snapshot_version)
+            if snap is not None:
+                return snap
+        return grants_service.latest_snapshot(employee_id)
+
+    app.include_router(build_mainline_router(
+        mainline, identity_provider=login_service.current_identity,
+        snapshot_for_run=_snapshot_for_run,
+    ))
     loop_service, _loop_scheduler = build_loop_service(mainline=mainline, db=db)
     app.include_router(build_loop_router(loop_service, _loop_scheduler))
     # workspace 在构建时注入 loop_service，供 office feed 聚合 scheduled jobs（issue #418）

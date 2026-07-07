@@ -135,3 +135,98 @@ def client_with_fake():
     from fastapi.testclient import TestClient
     app.include_router(build_grants_router(svc))
     return TestClient(app), fake
+
+
+def test_readiness_report_endpoint(monkeypatch):
+    """整端 readiness 端点返回 runtime + 每个专家可用态。"""
+    import agent_gateway.drivers.base as _base_mod
+
+    monkeypatch.setattr(_base_mod.shutil, "which", lambda _p: "/usr/local/bin/hermes")
+    monkeypatch.setattr(_base_mod.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"stdout": "h", "stderr": ""})())
+
+    client = FakeGrantsClient()
+    service = build_grants_service(client=client)
+    http = _http(service)
+    # sync so e1 is available
+    assert http.post("/api/agent/grants/sync", json={"tenant_id": "t1", "member_id": "m1"}).status_code == 200
+
+    resp = http.get("/api/agent/grants/readiness")
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert "runtime" in body
+    assert any(e["employee_id"] == "e1" for e in body["experts"])
+
+
+def test_readiness_expert_endpoint(monkeypatch):
+    """单个专家 readiness 端点。"""
+    import agent_gateway.drivers.base as _base_mod
+
+    monkeypatch.setattr(_base_mod.shutil, "which", lambda _p: "/usr/local/bin/hermes")
+    client = FakeGrantsClient()
+    service = build_grants_service(client=client)
+    http = _http(service)
+    assert http.post("/api/agent/grants/sync", json={"tenant_id": "t1", "member_id": "m1"}).status_code == 200
+
+    resp = http.get("/api/agent/grants/experts/e1/readiness")
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["employee_id"] == "e1"
+    assert "runtime" in body and "provider" in body and "available" in body
+
+
+def test_readiness_expert_missing_returns_available_false(monkeypatch):
+    """未知专家 → 端点仍返回 200，available=False。"""
+    import agent_gateway.drivers.base as _base_mod
+
+    monkeypatch.setattr(_base_mod.shutil, "which", lambda _p: "/usr/local/bin/hermes")
+    http = _http(build_grants_service(client=FakeGrantsClient()))
+    resp = http.get("/api/agent/grants/experts/does-not-exist/readiness")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["available"] is False
+
+
+def test_run_provenance_route_resolves_snapshot(monkeypatch):
+    """provenance 端点经 snapshot_for_run 解析快照，暴露 capability 摘要。"""
+    from shared.contracts.snapshot import (
+        EmployeeExecutionSnapshot, ModelPolicy, RuntimePolicy,
+    )
+    from agent_service.app import build_app
+    from agent_service.grants.factory import build_grants_service
+
+    class FakeClient:
+        def pull_authorized_config(self, request=None):
+            from shared.contracts.crosstier import AuthorizedConfigPullResponse
+            return AuthorizedConfigPullResponse()
+
+        def pull_snapshot(self, request):
+            from shared.contracts.crosstier import SnapshotPullResponse
+            snap = EmployeeExecutionSnapshot(
+                employee_id="e1", version="v1", snapshot_version="s1",
+                persona="资深工程师",
+                model_policy=ModelPolicy(model="gpt", provider_ref="openai"),
+                runtime_policy=RuntimePolicy(runtime_binding="hermes"),
+                skills=["code-review"], knowledge_refs=["kb-backend"],
+                connector_refs=["slack"], memory_policy={"ref": "mem0"},
+            )
+            return SnapshotPullResponse(snapshot=snap)
+
+    app = build_app(grants_client=FakeClient())
+    http = TestClient(app)
+
+    # create conversation with employee + message + run via mainline
+    conv = http.post("/api/agent/conversations",
+                     json={"title": "t", "entry_employee_id": "e1"}).json()["data"]
+    cid = conv["id"]
+    http.post(f"/api/agent/conversations/{cid}/messages",
+              json={"role": "user", "content": "hi"})
+    run_resp = http.post(f"/api/agent/conversations/{cid}/runs", json={}).json()
+    run_id = run_resp["data"]["id"]
+
+    resp = http.get(f"/api/agent/runs/{run_id}/provenance")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["data"]
+    assert body["binding"]["employee_id"] == "e1"
+    assert body["capability"]["knowledge_refs"] == ["kb-backend"]
+    assert body["capability"]["connector_refs"] == ["slack"]
+    assert body["capability"]["model"] == "gpt"

@@ -7,6 +7,8 @@
  *    错误提示（req 4），而非泛化的"加载失败"。
  *  - 从 GET /api/agent/grants/experts 拉取本地 roster，按配置完整度防呆（req 2）：
  *    model 与 provider_ref 齐全才可选；缺一则显示"待 Manager 配置"并禁用选择按钮。
+ *  - 聚合每个专家的就绪状态（M5）：available=false 时禁用按钮并以后端 reasons 作为
+ *    title 提示；readiness 拉取失败降级为空，不阻塞主列表。
  */
 
 import { useEffect, useState } from "react";
@@ -16,6 +18,11 @@ import type { LoadedExpertProjection } from "../group/useGroupApi";
 import { listLoadedExperts, syncGrants } from "../group/useGroupApi";
 import type { AgentApiClient } from "../../lib/api-client";
 import { useApp } from "../../lib/app-context";
+import {
+  getReadinessReport,
+  type ExpertReadiness,
+  type ReadinessState,
+} from "../readiness/useExpertReadinessApi";
 
 export interface RosterPickerProps {
   client: AgentApiClient;
@@ -41,6 +48,7 @@ export function RosterPicker({ client, onPick, onCancel, busy, error }: RosterPi
   const [loadError, setLoadError] = useState<string | null>(null);
   // sync 失败是非致命提示（保留本地离线降级），与致命加载错误分开维护。
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<Record<string, ExpertReadiness | null>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +84,18 @@ export function RosterPicker({ client, onPick, onCancel, busy, error }: RosterPi
         if (!cancelled) setLoading(false);
       }
     })();
+
+    // M5：聚合每个专家就绪状态；失败不阻塞主列表（降级为空）。
+    Promise.resolve(getReadinessReport(client))
+      .then((rep) => rep ?? null)
+      .catch(() => null)
+      .then((rep) => {
+        if (cancelled || rep === null) return;
+        const next: Record<string, ExpertReadiness | null> = {};
+        for (const e of rep.experts) next[e.employee_id] = e;
+        setReadiness(next);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -126,17 +146,34 @@ export function RosterPicker({ client, onPick, onCancel, busy, error }: RosterPi
           <ul className="flex list-none flex-col gap-sm overflow-auto p-0">
             {experts.map((p) => {
               const configured = isConfigured(p);
+              const r = readiness[p.employee_id] ?? undefined;
+              const blocked = r === undefined ? false : r.available === false;
+              const disabled = busy || !configured || blocked;
               return (
                 <li key={p.employee_id}>
                   <button
                     type="button"
                     className="flex w-full items-center justify-between rounded-md border border-gold/15 bg-surface px-md py-sm text-left transition hover:border-gold/40 hover:bg-surface-raised disabled:opacity-60"
-                    onClick={() => configured && !busy && onPick(p)}
-                    disabled={busy || !configured}
-                    aria-disabled={!configured}
-                    title={!configured ? "待 Manager 配置" : undefined}
+                    onClick={() => configured && !blocked && !busy && onPick(p)}
+                    disabled={disabled}
+                    aria-disabled={!configured || blocked}
+                    title={
+                      blocked
+                        ? r?.reasons?.join("；") ?? "专家当前不可用"
+                        : !configured
+                          ? "待 Manager 配置"
+                          : undefined
+                    }
                   >
-                    <span className="text-sm text-text-primary">{p.display_name}</span>
+                    <span className="flex items-center gap-sm">
+                      <span className="text-sm text-text-primary">{p.display_name}</span>
+                      {r && (
+                        <ReadinessDot
+                          status={r.available ? "ready" : "blocked"}
+                          label={r.available ? "可用" : "不可用"}
+                        />
+                      )}
+                    </span>
                     <span className="flex items-center gap-sm">
                       {!configured && (
                         <span className="text-xs font-medium text-text-muted">待 Manager 配置</span>
@@ -151,5 +188,28 @@ export function RosterPicker({ client, onPick, onCancel, busy, error }: RosterPi
         )}
       </GlassPanel>
     </div>
+  );
+}
+
+interface ReadinessDotProps {
+  status: ReadinessState;
+  label: string;
+}
+
+/** 就绪状态小圆点 + 文案。颜色按 status 区分；仅作轻量提示，不替代 title 原因。 */
+function ReadinessDot({ status, label }: ReadinessDotProps): React.ReactNode {
+  const dot =
+    status === "ready"
+      ? "bg-success"
+      : status === "degraded"
+        ? "bg-gold"
+        : status === "blocked"
+          ? "bg-danger"
+          : "bg-text-muted";
+  return (
+    <span className="inline-flex items-center gap-xs text-xs text-text-muted" aria-label={`就绪：${label}`}>
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
+      <span>{label}</span>
+    </span>
   );
 }
