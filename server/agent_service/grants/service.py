@@ -134,6 +134,23 @@ class GrantsService:
         self._solutions = solutions
         self._skills = SkillsService(skill_cache) if skill_cache is not None else None
 
+
+    # ---- 只读访问点（readiness 等聚合层使用，避免直接访问私属仓储）----
+
+    def projection_for(self, employee_id: str) -> LoadedExpertProjection | None:
+        """按 employee_id 取本地只读投影（readiness 聚合用）。"""
+        return self._projections.get(employee_id)
+
+    def snapshot_for_readiness(self, employee_id: str) -> EmployeeExecutionSnapshot | None:
+        """按 employee_id 取最近已冻结快照（readiness 聚合用，D14 离线回退）。"""
+        return self._snapshots.latest(employee_id)
+
+    def skill_cache_for_readiness(self):
+        """供 readiness 查询本地已投影 skill 缓存；未装配 skill 缓存时返回 None。"""
+        if self._skills is None:
+            return None
+        return self._skills.cache
+
     # ---- F10 授权配置 sync（D12：主动 pull，绝不接受推送）----
 
     def sync(self, tenant_id: str, member_id: str) -> SyncResult:

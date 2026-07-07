@@ -4,6 +4,7 @@
  *  - Esc 关闭：挂载后触发 keydown Escape -> 调用 onCancel；触发其它键 -> 不调用。
  *  - 配置完整度防呆（req 2）：model/provider_ref 齐全才可选；缺失示待 Manager 配置并禁用。
  *  - sync 失败提示（req 3/4）：sync 失败在顶部给出 Manager 端指向提示，且不阻断 roster 展示。
+ *  - readiness（AITEAM-693）：available=false 时禁用并展示原因 title；拉取失败降级为空不阻塞。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,8 +12,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AppProvider } from "../../lib/app-context";
-import { RosterPicker } from "./RosterPicker";
+import { RosterPicker, ReadinessDot } from "./RosterPicker";
 import { listLoadedExperts, syncGrants } from "../group/useGroupApi";
+import { getReadinessReport } from "../readiness/useExpertReadinessApi";
+
+vi.mock("../readiness/useExpertReadinessApi", () => ({
+  getReadinessReport: vi.fn(() => Promise.resolve(null)),
+}));
 
 vi.mock("../group/useGroupApi", () => ({
   listLoadedExperts: vi.fn(),
@@ -185,5 +191,140 @@ describe("RosterPicker - sync 失败提示（req 3/4）", () => {
     expect(await screen.findByText(/Manager 端不可达/)).toBeInTheDocument();
     // 离线降级保留：sync 失败仍展示本地 roster。
     expect(await screen.findByRole("button", { name: /专家A/ })).toBeEnabled();
+  });
+});
+
+describe("RosterPicker — readiness (AITEAM-693)", () => {
+  it("readiness 不满足时禁用该专家按钮并展示原因 title", async () => {
+    const experts = [
+      {
+        employee_id: "emp-1",
+        display_name: "甲",
+        runtime_binding: "hermes",
+        revoked: false,
+        tenant_id: "t1",
+        version: "v1",
+        handle: "a",
+        model_policy: { model: "gpt-5", provider_ref: "relay" },
+      },
+    ];
+    mockedList.mockResolvedValueOnce(experts);
+    vi.mocked(getReadinessReport).mockResolvedValueOnce({
+      runtime: "ready",
+      runtime_reason: undefined,
+      experts: [
+        {
+          employee_id: "emp-1",
+          display_name: "甲",
+          handle: "a",
+          available: false,
+          runtime: "blocked",
+          provider: "ready",
+          skills: [],
+          capabilities: [],
+          reasons: ["runtime: AGENT_RUNTIME is not configured"],
+        },
+      ],
+    });
+    renderPicker();
+    const btn = await screen.findByRole("button", { name: /甲/ });
+    expect(btn).toBeDisabled();
+    // title carries reason
+    expect(btn.getAttribute("title")).toContain("AGENT_RUNTIME");
+  });
+
+  it("readiness 满足时专家按钮可点击", async () => {
+    const experts = [
+      {
+        employee_id: "emp-1",
+        display_name: "甲",
+        revoked: false,
+        tenant_id: "t1",
+        version: "v1",
+        handle: "a",
+        model_policy: { model: "gpt-5", provider_ref: "relay" },
+      },
+    ];
+    mockedList.mockResolvedValueOnce(experts);
+    vi.mocked(getReadinessReport).mockResolvedValueOnce({
+      runtime: "ready",
+      runtime_reason: undefined,
+      experts: [
+        {
+          employee_id: "emp-1",
+          display_name: "甲",
+          handle: "a",
+          available: true,
+          runtime: "ready",
+          provider: "ready",
+          skills: [],
+          capabilities: [],
+          reasons: [],
+        },
+      ],
+    });
+    const onPick = vi.fn();
+    const client = { baseUrl: "http://test" } as never;
+    render(
+      <MemoryRouter>
+        <AppProvider>
+          <RosterPicker client={client} onPick={onPick} onCancel={vi.fn()} />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+    const btn = await screen.findByRole("button", { name: /甲/ });
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    expect(onPick).toHaveBeenCalledTimes(1);
+  });
+
+  it("readiness 拉取失败时降级为空，不阻塞专家列表展示", async () => {
+    const experts = [
+      {
+        employee_id: "emp-1",
+        display_name: "甲",
+        revoked: false,
+        tenant_id: "t1",
+        version: "v1",
+        handle: "a",
+        model_policy: { model: "gpt-5", provider_ref: "relay" },
+      },
+    ];
+    mockedList.mockResolvedValueOnce(experts);
+    vi.mocked(getReadinessReport).mockRejectedValueOnce(new Error("network"));
+    const onPick = vi.fn();
+    const client = { baseUrl: "http://test" } as never;
+    render(
+      <MemoryRouter>
+        <AppProvider>
+          <RosterPicker client={client} onPick={onPick} onCancel={vi.fn()} />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+    // 列表正常渲染，专家按钮可点击（无 readiness 即不阻断）
+    const btn = await screen.findByRole("button", { name: /甲/ });
+    expect(btn).toBeEnabled();
+  });
+});
+
+describe("ReadinessDot 颜色分支", () => {
+  it("ready -> 绿色圆点", () => {
+    const { container } = render(<ReadinessDot status="ready" label="可用" />);
+    expect(container.querySelector(".bg-success")).toBeInTheDocument();
+  });
+
+  it("degraded -> 金色圆点", () => {
+    const { container } = render(<ReadinessDot status="degraded" label="降级" />);
+    expect(container.querySelector(".bg-gold")).toBeInTheDocument();
+  });
+
+  it("blocked -> 红色圆点", () => {
+    const { container } = render(<ReadinessDot status="blocked" label="不可用" />);
+    expect(container.querySelector(".bg-danger")).toBeInTheDocument();
+  });
+
+  it("unknown -> 灰色圆点", () => {
+    const { container } = render(<ReadinessDot status="unknown" label="未知" />);
+    expect(container.querySelector(".bg-text-muted")).toBeInTheDocument();
   });
 });

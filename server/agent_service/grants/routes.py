@@ -19,6 +19,18 @@ from shared.contracts.grants import LoadedExpertProjection
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 
 from .service import GrantsService
+from agent_service.readiness import ReadinessService, expert_to_dict, report_to_dict
+from shared.config import load_settings
+
+
+def _read_runtime_selection() -> str | None:
+    return load_settings("agent").agent_runtime
+
+
+def _read_production_flag() -> bool:
+    return load_settings("agent").is_production
+
+
 
 
 class SyncRequest(BaseModel):
@@ -40,6 +52,24 @@ class SyncResultBody(BaseModel):
 
 def build_grants_router(service: GrantsService) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-grants"])
+    readiness = ReadinessService(
+        grants=service,
+        runtime_selection=_read_runtime_selection(),
+        production=_read_production_flag(),
+    )
+
+    @router.get("/grants/readiness", summary="整端 readiness：runtime + 每个已装载专家可用性",
+                description="聚合部署级 runtime、每个已装载专家的 skills/knowledge/memory/provider 就绪状态；readiness 不满足时附原因。",
+                operation_id="agent_readiness_report")
+    async def readiness_report() -> Envelope[dict]:
+        return Envelope[dict](data=report_to_dict(readiness.build_report()))
+
+    @router.get("/grants/experts/{employee_id}/readiness", summary="单个专家 readiness",
+                description="单个已装载专家的运行就绪状态（runtime/skills/knowledge/memory/provider）；不存在则 available=False。",
+                operation_id="agent_readiness_expert")
+    async def readiness_expert(employee_id: str) -> Envelope[dict]:
+        return Envelope[dict](data=expert_to_dict(readiness.expert(employee_id)))
+
 
     @router.post("/grants/sync", summary="主动 pull Manager 授权配置落本地投影（尽力而为）",
                  description="Agent 主动从 Manager pull 授权配置变更，落本地只读投影。失败不阻断本地工作。",

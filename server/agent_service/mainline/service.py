@@ -599,3 +599,39 @@ def _task_status_for(run_status: RunStatus) -> TaskStatus:
         RunStatus.CANCELLED: TaskStatus.CANCELLED,
         RunStatus.FAILED: TaskStatus.FAILED,
     }[run_status]
+
+def run_provenance(run: Run, snapshot=None) -> dict:
+    """把一次 run 的持久终态 + 绑定的快照追溯信息拼成前端可展示的结构。
+
+    D18：本函数只暴露中立引用/快照版本/能力摘要，绝不暴露 provider secret、凭据值或 persona 全文。
+    persona 仅截取前 80 字符作为展示摘要。
+    """
+    meta = {
+        "run_id": run.id,
+        "conversation_id": run.conversation_id,
+        "status": run.status.value,
+        "trigger_type": run.trigger_type.value,
+        "execution_mode": run.execution_mode.value,
+    }
+    binding = {
+        "employee_id": run.employee_id,
+        "snapshot_version": run.snapshot_version,
+        "snapshot_source": run.snapshot_source,
+        "runtime": run.runtime,
+        "provider_ref": run.provider_ref,
+        "skill_refs": list(run.skill_refs or []),
+    }
+    capability = {
+        "knowledge_refs": [],
+        "connector_refs": [],
+        "memory_policy": None,
+        "persona_preview": None,
+        "model": None,
+    }
+    if snapshot is not None:
+        capability["knowledge_refs"] = list(snapshot.knowledge_refs or [])
+        capability["connector_refs"] = list(snapshot.connector_refs or [])
+        capability["memory_policy"] = snapshot.memory_policy
+        capability["persona_preview"] = (snapshot.persona or "")[:80] or None
+        capability["model"] = snapshot.model_policy.model if snapshot.model_policy else None
+    return {"meta": meta, "binding": binding, "capability": capability}

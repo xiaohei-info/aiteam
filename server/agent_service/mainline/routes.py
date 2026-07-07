@@ -30,7 +30,7 @@ from shared.errors import Conflict
 
 from .group import DispatchResult, GroupChatService, GroupExpert
 from .models import Conversation, Message, MessageRole, Run, RunTriggerType, RunExecutionMode, Task
-from .service import MainlineService
+from .service import MainlineService, run_provenance
 from .stream import StreamBroker, StreamFrame
 
 
@@ -127,8 +127,28 @@ def build_mainline_router(
     service: MainlineService,
     *,
     identity_provider: Callable[[], TokenClaims | None] | None = None,
+    snapshot_for_run: Callable[[str, str | None], object | None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/agent", tags=["agent-mainline"])
+
+    @router.get("/runs/{run_id}/provenance", summary="取 run 追溯信息",
+                description="返回本次 run 的持久终态 + 绑定的专家快照/能力摘要（snapshot_version/runtime/model/skills/knowledge/memory/connector），绝不暴露明文凭据。",
+                operation_id="agent_run_provenance")
+    async def run_provenance_route(run_id: str) -> Envelope[dict]:
+        run = service.get_run(run_id)
+        snap = None
+        if snapshot_for_run is not None and run.employee_id:
+            snap = snapshot_for_run(run.employee_id, run.snapshot_version)
+        data = run_provenance(run, snapshot=snap)
+        # 脚注：当 run 所绑定的快照已被清除、回退到最新快照时，capability 区块来自"最新版"而非绑定版。
+        bound = run.snapshot_version
+        resolved = getattr(snap, "snapshot_version", None)
+        if bound and resolved and resolved != bound:
+            data["provenance_note"] = (
+                f"未找到本次 run 绑定的快照（snapshot_version={bound}），下列能力摘要来自专家当前最新快照（snapshot_version={resolved}）。"
+            )
+        return Envelope[dict](data=data)
+
 
     # ---- conversation ----
 
