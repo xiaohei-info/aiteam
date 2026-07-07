@@ -12,7 +12,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AppProvider } from "../../lib/app-context";
-import { RosterPicker } from "./RosterPicker";
+import { RosterPicker, ReadinessDot } from "./RosterPicker";
 import { listLoadedExperts, syncGrants } from "../group/useGroupApi";
 import { getReadinessReport } from "../readiness/useExpertReadinessApi";
 
@@ -304,5 +304,27 @@ describe("RosterPicker — readiness (AITEAM-693)", () => {
     // 列表正常渲染，专家按钮可点击（无 readiness 即不阻断）
     const btn = await screen.findByRole("button", { name: /甲/ });
     expect(btn).toBeEnabled();
+  });
+});
+
+describe("ReadinessDot 颜色分支", () => {
+  it("ready -> 绿色圆点", () => {
+    const { container } = render(<ReadinessDot status="ready" label="可用" />);
+    expect(container.querySelector(".bg-success")).toBeInTheDocument();
+  });
+
+  it("degraded -> 金色圆点", () => {
+    const { container } = render(<ReadinessDot status="degraded" label="降级" />);
+    expect(container.querySelector(".bg-gold")).toBeInTheDocument();
+  });
+
+  it("blocked -> 红色圆点", () => {
+    const { container } = render(<ReadinessDot status="blocked" label="不可用" />);
+    expect(container.querySelector(".bg-danger")).toBeInTheDocument();
+  });
+
+  it("unknown -> 灰色圆点", () => {
+    const { container } = render(<ReadinessDot status="unknown" label="未知" />);
+    expect(container.querySelector(".bg-text-muted")).toBeInTheDocument();
   });
 });

@@ -197,7 +197,7 @@ interface ReadinessDotProps {
 }
 
 /** 就绪状态小圆点 + 文案。颜色按 status 区分；仅作轻量提示，不替代 title 原因。 */
-function ReadinessDot({ status, label }: ReadinessDotProps): React.ReactNode {
+export function ReadinessDot({ status, label }: ReadinessDotProps): React.ReactNode {
   const dot =
     status === "ready"
       ? "bg-success"

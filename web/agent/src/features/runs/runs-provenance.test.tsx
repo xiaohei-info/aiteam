@@ -1,5 +1,5 @@
 /**
- * AITEAM-693：RunsPanel 追溯（provenance）展开。
+ * AITEAM-693：RunsPanel 追溯（provenance）展开 + 运行态/追溯空分支。
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -46,5 +46,35 @@ describe("RunsPanel provenance", () => {
     expect(await screen.findByText("gpt")).toBeInTheDocument();
     expect(await screen.findByText("code-review")).toBeInTheDocument();
     expect(await screen.findByText("kb-backend")).toBeInTheDocument();
+  });
+});
+
+describe("RunsPanel 运行态/追溯空分支", () => {
+  it("running 状态展示“取消”按钮", async () => {
+    const run = { id: "run_run789spin01", conversation_id: "c", status: "running",
+      trigger_type: "manual_run", execution_mode: "single_agent" };
+    mockedList.mockResolvedValueOnce([run]);
+    const client = { baseUrl: "http://test" } as never;
+    render(
+      <AppProvider>
+        <RunsPanel client={client} conversationId="c" refreshSignal={0} />
+      </AppProvider>,
+    );
+    expect(await screen.findByRole("button", { name: "取消" })).toBeInTheDocument();
+  });
+
+  it("getRunProvenance 返回 null 时展示无追溯信息", async () => {
+    const run = { id: "run_nullproven001", conversation_id: "c", status: "succeeded",
+      trigger_type: "manual_run", execution_mode: "single_agent" };
+    mockedList.mockResolvedValueOnce([run]);
+    mockedProv.mockResolvedValueOnce(null);
+    const client = { baseUrl: "http://test" } as never;
+    render(
+      <AppProvider>
+        <RunsPanel client={client} conversationId="c" refreshSignal={0} />
+      </AppProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "追溯" }));
+    expect(await screen.findByText(/未绑定专家快照/)).toBeInTheDocument();
   });
 });
