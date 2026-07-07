@@ -30,4 +30,6 @@ export interface CreateProviderInput {
   endpoint?: string;
   visibility?: "tenant" | "members";
   allowed_member_ids?: string[];
+  /** 该 provider 支持的模型能力目录（非敏感）；用于招募时按 default_model 自动匹配 provider_ref。 */
+  supported_models?: ProviderModelCapability[];
 }
