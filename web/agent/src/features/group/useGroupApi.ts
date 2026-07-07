@@ -30,6 +30,16 @@ export interface SolutionProjection {
 }
 
 /**
+ * 模型配置（对齐 server shared/contracts/snapshot.py:ModelPolicy）。
+ * 供 roster 判断专家配置完整度：model 与 provider_ref 齐全才视为可私聊专家。
+ */
+export interface ModelPolicy {
+  model?: string | null;
+  provider_ref?: string | null;
+  thinking_level?: string | null;
+}
+
+/**
  * 本地可用专家投影（对齐 server shared/contracts/grants.py:LoadedExpertProjection）。
  * 用于群聊 roster 数据源——替代演示用 mock。
  */
@@ -43,6 +53,8 @@ export interface LoadedExpertProjection {
   runtime_binding?: string | null;
   synced_at?: string | null;
   revoked: boolean;
+  /** 模型配置（model/provider_ref）。用于 roster 配置完整度防呆；缺失示"待 Manager 配置"。 */
+  model_policy?: ModelPolicy | null;
 }
 
 /**
@@ -95,6 +107,29 @@ export async function listLoadedExperts(
 ): Promise<LoadedExpertProjection[]> {
   const result = await client.listGet<LoadedExpertProjection>("/api/agent/grants/experts");
   return result.items;
+}
+
+/** 授权同步结果（对齐 server SyncResultBody）。 */
+export interface SyncGrantsResult {
+  ok: boolean;
+  upserted: number;
+  revoked: number;
+  error?: string | null;
+}
+
+/**
+ * 触发本端授权配置同步（POST /api/agent/grants/sync）。
+ * 用于 roster 打开时主动 pull，便于前端在 Manager 不可达/未授权时给出 Manager 端指向的错误提示。
+ */
+export async function syncGrants(
+  client: AgentApiClient,
+  input: { tenant_id: string; member_id: string },
+): Promise<SyncGrantsResult> {
+  const result = await client.post<SyncGrantsResult>("/api/agent/grants/sync", { body: input });
+  if (result === null) {
+    throw new Error("syncGrants: empty envelope");
+  }
+  return result;
 }
 
 /**

@@ -338,12 +338,16 @@ def test_agent_sync_local_only_sees_granted_experts(
 
     # granted 成员 sync → 可见
     granted_svc = _grants_service(_bridged_grants_client(mgr, sign_token(pg_admin_url, tid, ["member"], user_id=g_member.id)))
-    granted_svc.sync(tid, g_member.id)
+    granted_result = granted_svc.sync(tid, g_member.id)
+    # 成功路径必须断言 sync ok，避免 403/降级后空 roster 假阳性（req 3）。
+    assert granted_result.ok is True, f"granted 成员 sync 不应降级: {granted_result.error}"
     assert e.employee_id in [p.employee_id for p in granted_svc.available_experts()]
 
     # ungranted 成员 sync → 不可见
     ungranted_svc = _grants_service(_bridged_grants_client(mgr, sign_token(pg_admin_url, tid, ["member"], user_id=ug_member.id)))
-    ungranted_svc.sync(tid, ug_member.id)
+    ungranted_result = ungranted_svc.sync(tid, ug_member.id)
+    # 成功路径必须断言 sync ok，避免 403/降级后空 roster 假阳性（req 3）。
+    assert ungranted_result.ok is True, f"ungranted 成员 sync 不应降级: {ungranted_result.error}"
     assert e.employee_id not in [p.employee_id for p in ungranted_svc.available_experts()]
 
 
