@@ -278,7 +278,9 @@ function makeChatFetch(
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
     if (path.includes("/grants/experts")) {
-      return new Response(JSON.stringify({ data: rosterItems, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      // 默认补齐 model_policy（req 2 配置完整度防呆）：测试专家默认 model/provider_ref 齐全、可被选择。
+      const roster = rosterItems.map((p) => ({ model_policy: { model: "gpt-5", provider_ref: "relay" }, ...p }));
+      return new Response(JSON.stringify({ data: roster, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (path.includes("/runs") && init?.method === "POST") {
       return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -505,7 +507,9 @@ function chatFetchWithCreate(createImpl: (init?: RequestInit) => Response, roste
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
     if (path.includes("/api/agent/grants/experts")) {
-      return new Response(JSON.stringify({ data: roster, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      // 默认补齐 model_policy（req 2 配置完整度防呆）：测试专家默认 model/provider_ref 齐全、可被选择。
+      const withPolicy = roster.map((p) => ({ model_policy: { model: "gpt-5", provider_ref: "relay" }, ...p }));
+      return new Response(JSON.stringify({ data: withPolicy, page: { next_cursor: null, has_more: false } }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (path.endsWith("/api/agent/conversations") && init?.method === "POST") {
       return createImpl(init);
