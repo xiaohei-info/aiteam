@@ -77,7 +77,7 @@ class TerminalExecutor(Executor):
     family = 'terminal'
     default_idle_seconds: float | None = 300.0
 
-    def __init__(self, *, sandbox: SandboxPolicy | None = None) -> None:
+    def __init__(self, *, sandbox: SandboxPolicy | None = None, skill_cache=None) -> None:
         self._runs: dict[str, _RunHandle] = {}
         self._sandbox = sandbox
 

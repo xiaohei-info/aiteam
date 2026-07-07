@@ -24,11 +24,11 @@ def test_group_expert_carries_snapshot_fields():
     """M1 #4：群聊专家执行入口补齐 employee_id/provider_ref/thinking_level/skills/..."""
     e = GroupExpert(
         handle="alice", employee_id="emp-1", system_prompt="你是 Alice", model="m1",
-        provider_ref="relay", thinking_level="deep", skills=["code-review"],
+        provider_ref="ai-relay", thinking_level="deep", skills=["code-review"],
         knowledge_refs=["kb-backend"], connector_refs=["slack"], memory_policy={"seed": "x"},
     )
     assert e.employee_id == "emp-1"
-    assert e.provider_ref == "relay"
+    assert e.provider_ref == "ai-relay"
     assert e.thinking_level == "deep"
     assert e.skills == ["code-review"]
     assert e.knowledge_refs == ["kb-backend"]

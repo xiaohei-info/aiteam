@@ -43,6 +43,8 @@ class SkillCatalogRow:
     binding_policy: str
     visibility: str
     config: dict
+    files: list
+    content_hash: str
     catalog_version: int
 
 
@@ -80,14 +82,15 @@ class MemoryPolicyCatalogRow:
     catalog_version: int
 
 
-_SKILL_COLS = "id, skill_id, display_name, version, install_policy, binding_policy, visibility, config, catalog_version"
+_SKILL_COLS = "id, skill_id, display_name, version, install_policy, binding_policy, visibility, config, files, content_hash, catalog_version"
 
 
 def _row_to_skill(row: Any) -> SkillCatalogRow:
     return SkillCatalogRow(
         catalog_id=str(row[0]), skill_id=row[1], display_name=row[2], version=row[3],
         install_policy=row[4], binding_policy=row[5], visibility=row[6], config=row[7] or {},
-        catalog_version=row[8],
+        files=list(row[8] or []), content_hash=row[9] or "",
+        catalog_version=row[10],
     )
 
 
@@ -126,24 +129,28 @@ class CapabilityCatalogRepository:
     # ---- skill ----
 
     def create_skill(self, ctx: TenantContext, *, skill_id: str, display_name: str, version: str,
-                     install_policy: str, binding_policy: str, visibility: str, config: dict) -> SkillCatalogRow:
+                     install_policy: str, binding_policy: str, visibility: str, config: dict,
+                     files: list | None = None, content_hash: str = "") -> SkillCatalogRow:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO skill_catalog "
-                "(tenant_id, skill_id, display_name, version, install_policy, binding_policy, visibility, config) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING " + _SKILL_COLS,
+                "(tenant_id, skill_id, display_name, version, install_policy, binding_policy, visibility, config, files, content_hash) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING " + _SKILL_COLS,
                 (ctx.tenant_id, skill_id, display_name, version, install_policy, binding_policy, visibility,
-                 json.dumps(config)),
+                 json.dumps(config), json.dumps(files or []), content_hash),
             ).fetchone()
         return _row_to_skill(row)
 
     def update_skill(self, ctx: TenantContext, *, catalog_id: str, display_name: str, version: str,
-                     install_policy: str, binding_policy: str, visibility: str, config: dict) -> SkillCatalogRow | None:
+                     install_policy: str, binding_policy: str, visibility: str, config: dict,
+                     files: list | None = None, content_hash: str = "") -> SkillCatalogRow | None:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "UPDATE skill_catalog SET display_name = %s, version = %s, install_policy = %s, "
-                "binding_policy = %s, visibility = %s, config = %s WHERE id = %s RETURNING " + _SKILL_COLS,
-                (display_name, version, install_policy, binding_policy, visibility, json.dumps(config), catalog_id),
+                "binding_policy = %s, visibility = %s, config = %s, files = %s, content_hash = %s "
+                "WHERE id = %s RETURNING " + _SKILL_COLS,
+                (display_name, version, install_policy, binding_policy, visibility, json.dumps(config),
+                 json.dumps(files or []), content_hash, catalog_id),
             ).fetchone()
         return _row_to_skill(row) if row is not None else None
 
@@ -165,6 +172,13 @@ class CapabilityCatalogRepository:
                 "SELECT " + _SKILL_COLS + " FROM skill_catalog ORDER BY created_at",
             ).fetchall()
         return [_row_to_skill(r) for r in rows]
+
+    def get_skill_by_skill_id(self, ctx: TenantContext, *, skill_id: str) -> SkillCatalogRow | None:
+        """按 tenant + skill_id（业务键）取单条；不存在返回 None（供 M2 投影使用）。"""
+        with self._router.session(ctx) as s:
+            row = s.execute("SELECT " + _SKILL_COLS + " FROM skill_catalog WHERE skill_id = %s", (skill_id,)).fetchone()
+        return _row_to_skill(row) if row is not None else None
+
 
     # ---- connector ----
 

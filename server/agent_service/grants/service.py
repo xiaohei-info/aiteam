@@ -31,6 +31,9 @@ from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from .client import ManagerGrantsClient
 from .store import ProjectionRepository, SnapshotRepository, SolutionProjectionRepository
 
+from ..capabilities.skill_cache import SkillCache
+from ..capabilities.skills_service import SkillsService
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -49,16 +52,26 @@ class SyncResult:
         upserted: int = 0,
         revoked: int = 0,
         error: str | None = None,
+        skill_stored: int = 0,
+        skill_kept: int = 0,
+        skill_updated: int = 0,
+        skill_revoked_removed: int = 0,
     ) -> None:
         self.ok = ok
         self.upserted = upserted
         self.revoked = revoked
         self.error = error
+        self.skill_stored = skill_stored
+        self.skill_kept = skill_kept
+        self.skill_updated = skill_updated
+        self.skill_revoked_removed = skill_revoked_removed
 
     def __repr__(self) -> str:  # pragma: no cover - 诊断用
         return (
             f"SyncResult(ok={self.ok}, upserted={self.upserted}, "
-            f"revoked={self.revoked}, error={self.error!r})"
+            f"revoked={self.revoked}, skill_stored={self.skill_stored}, "
+            f"skill_kept={self.skill_kept}, skill_updated={self.skill_updated}, "
+            f"skill_revoked_removed={self.skill_revoked_removed}, error={self.error!r})"
         )
 
 
@@ -113,11 +126,13 @@ class GrantsService:
         projections: ProjectionRepository,
         snapshots: SnapshotRepository,
         solutions: SolutionProjectionRepository | None = None,
+        skill_cache: SkillCache | None = None,
     ) -> None:
         self._client = client
         self._projections = projections
         self._snapshots = snapshots
         self._solutions = solutions
+        self._skills = SkillsService(skill_cache) if skill_cache is not None else None
 
     # ---- F10 授权配置 sync（D12：主动 pull，绝不接受推送）----
 
@@ -165,7 +180,46 @@ class GrantsService:
                 self._solutions.upsert(raw)
                 seen.add(sid)
 
-        return SyncResult(ok=True, upserted=upserted, revoked=revoked)
+
+        # M2：写入 authorized 技能包到本地缓存；撤销授权后清理（D5：缓存只保留授权投影）。
+        skill_stored = skill_kept = skill_updated = skill_revoked = 0
+        revoked_ids_list = list(response.revoked_ids)
+        if self._skills is not None:
+            try:
+                skill_result = self._skills.store_from_sync(response.skill_packages)
+                skill_stored = skill_result.stored
+                skill_kept = skill_result.kept
+                skill_updated = skill_result.updated
+            except Exception as exc:
+                import logging as _lg
+                _lg.getLogger(__name__).warning("skill 缓存写入跳过：%s", exc)
+            try:
+                skill_revoked = self._skills.apply_revocation(self._revoked_skill_ids(revoked_ids_list))
+            except Exception as exc:
+                import logging as _lg
+                _lg.getLogger(__name__).warning("skill revoke 清理跳过：%s", exc)
+
+        return SyncResult(
+            ok=True, upserted=upserted, revoked=revoked,
+            skill_stored=skill_stored, skill_kept=skill_kept,
+            skill_updated=skill_updated, skill_revoked_removed=skill_revoked,
+        )
+
+    def _revoked_skill_ids(self, revoked_ids):
+        revoked_set = {rid for rid in revoked_ids if rid}
+        if not revoked_set:
+            return []
+        remaining_skills = set()
+        for proj in self._projections.available():
+            for sid in (proj.skills or []):
+                remaining_skills.add(str(sid))
+        if self._skills is None:
+            return []
+        result = []
+        for sid in self._skills.cache.list_skill_ids():
+            if sid not in remaining_skills:
+                result.append(sid)
+        return result
 
     def available_experts(self) -> list[LoadedExpertProjection]:
         """对话/装载路径可用专家（已授权未撤销）。只读本地投影，不跨端。"""

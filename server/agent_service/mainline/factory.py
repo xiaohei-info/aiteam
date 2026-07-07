@@ -14,6 +14,8 @@ import os
 import tempfile
 
 from agent_gateway.factory import build_runner
+from ..capabilities.skill_cache import SkillCache
+from ..grants.factory import build_grants_service
 from agent_gateway.runtime_readiness import check_runtime_readiness
 from agent_gateway.drivers import FakeDriver, FakeExecutor
 from agent_gateway.runner import GatewayRunner
@@ -61,6 +63,8 @@ def build_mainline_service(
     tenant_id: str = "local",
     solutions: SolutionProjectionRepository | None = None,
     orchestrator: ExecutionOrchestrator | None = None,
+    skill_cache: SkillCache | None = None,
+    grants_client=None,
 ) -> MainlineService:
     # AITEAM-688 M0：部署级 runtime 固定 + 生产 Fake 禁用。
     # 生产模式：缺/未知/fake runtime、或真实 runtime CLI 缺失 → fail-fast（启动期），不静默回退 Fake。
@@ -69,6 +73,8 @@ def build_mainline_service(
         # 显式注入（测试/自定义编排器）：用所给，缺者补 Fake。
         runner = GatewayRunner(executor=executor or FakeExecutor(), driver=driver or FakeDriver())
     elif production:
+        if skill_cache is None and (runtime_selection or db_path):
+            skill_cache = SkillCache()
         readiness = check_runtime_readiness(runtime_selection, production=True)
         if readiness.status != "ready":
             raise ValueError(
@@ -78,15 +84,18 @@ def build_mainline_service(
         # 生产 readiness=ready 意味着配了真实 runtime 且 CLI 可用。
         extra_env = {k: os.environ[k] for k in runtime_env_passthrough if k in os.environ}
         sandbox = SandboxPolicy(runs_root=runs_root or tempfile.gettempdir(), extra_env=extra_env)
-        runner = build_runner(runtime_selection, sandbox=sandbox)
+        runner = build_runner(runtime_selection, sandbox=sandbox, skill_cache=skill_cache)
     elif runtime_selection:
         # dev/test 真实 runtime：未知 runtime 由 get_driver 显式报错（不静默切换）。
         extra_env = {k: os.environ[k] for k in runtime_env_passthrough if k in os.environ}
         sandbox = SandboxPolicy(runs_root=runs_root or tempfile.gettempdir(), extra_env=extra_env)
-        runner = build_runner(runtime_selection, sandbox=sandbox)
+        runner = build_runner(runtime_selection, sandbox=sandbox, skill_cache=skill_cache)
     else:
         # dev/test 未配置：回退 Fake（行为不变）。
-        runner = GatewayRunner(executor=FakeExecutor(), driver=FakeDriver())
+        runner = GatewayRunner(
+            executor=FakeExecutor(),
+            driver=FakeDriver(),
+        )
     if db_path:
         db = connect(db_path)
         apply_migrations(db)

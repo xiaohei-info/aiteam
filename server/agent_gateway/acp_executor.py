@@ -85,7 +85,7 @@ class AcpClientExecutor(Executor):
 
     family = "acp"
 
-    def __init__(self, *, sandbox: SandboxPolicy | None = None) -> None:
+    def __init__(self, *, sandbox: SandboxPolicy | None = None, skill_cache=None) -> None:
         self._sandbox = sandbox
         # run_id -> (connection, session_id) 供 cancel 透传。
         self._active: dict[str, tuple[object, str]] = {}

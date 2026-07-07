@@ -90,7 +90,8 @@ class _FakeRepo:
         row = SkillCatalogRow(
             catalog_id=str(uuid.uuid4()), skill_id=kw["skill_id"], display_name=kw["display_name"],
             version=kw["version"], install_policy=kw["install_policy"], binding_policy=kw["binding_policy"],
-            visibility=kw["visibility"], config=kw["config"], catalog_version=1,
+            visibility=kw["visibility"], config=kw["config"], files=list(kw.get("files") or []),
+            content_hash=kw.get("content_hash", ""), catalog_version=1,
         )
         self._bucket(self._skills, ctx)[row.catalog_id] = row
         return row
@@ -103,7 +104,8 @@ class _FakeRepo:
         row = SkillCatalogRow(
             catalog_id=old.catalog_id, skill_id=old.skill_id, display_name=kw["display_name"],
             version=kw["version"], install_policy=kw["install_policy"], binding_policy=kw["binding_policy"],
-            visibility=kw["visibility"], config=kw["config"], catalog_version=old.catalog_version + 1,
+            visibility=kw["visibility"], config=kw["config"], files=old.files, content_hash=old.content_hash,
+            catalog_version=old.catalog_version + 1,
         )
         b[catalog_id] = row
         return row
