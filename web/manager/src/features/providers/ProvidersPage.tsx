@@ -1,6 +1,7 @@
 /**
- * Provider 凭据管理页（W-M.6 M5）。
+ * Provider 凭据管理页（W-M.6 M5, AITEAM-681）。
  * 红线（D18）：不展示/缓存明文 secret；只回 provider_ref + 非敏感元数据。
+ * 支持在创建时声明 supported_models 能力目录，供招募时按 default_model 自动匹配 provider_ref。
  */
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
@@ -8,6 +9,7 @@ import { Button, Field, GlassPanel, Input, Table } from "@aiteam/shared/ui";
 import { useSession } from "../../auth/session";
 import { useProvidersApi } from "./useProvidersApi";
 import type { ProviderCredential, CreateProviderInput } from "./types";
+import type { ProviderModelCapability } from "./types";
 
 export function ProvidersPage(): ReactNode {
   const { session } = useSession();
@@ -20,6 +22,7 @@ export function ProvidersPage(): ReactNode {
   const [form, setForm] = useState<CreateProviderInput>({ provider_ref: "", secret: "" });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [models, setModels] = useState<ProviderModelCapability[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -38,8 +41,9 @@ export function ProvidersPage(): ReactNode {
     }
     setSubmitting(true);
     try {
-      await api.create(form);
+      await api.create({ ...form, supported_models: models.filter((m) => m.model.trim() !== "") });
       setForm({ provider_ref: "", secret: "" });
+      setModels([]);
       setShowForm(false);
       void load();
     } catch (err) { setFormError(err instanceof ApiError ? err.message : "创建失败"); }
@@ -65,6 +69,32 @@ export function ProvidersPage(): ReactNode {
               onChange={(e) => setForm((p) => ({ ...p, display_name: e.target.value }))} placeholder="OpenAI Key" disabled={submitting} /></Field>
             <Field label="Secret（明文，仅本次）"><Input type="password" value={form.secret}
               onChange={(e) => setForm((p) => ({ ...p, secret: e.target.value }))} placeholder="sk-..." disabled={submitting} /></Field>
+            <div className="flex flex-col gap-sm">
+              <span className="text-xs text-text-secondary">能力目录（supported_models）</span>
+              <p className="m-0 text-xs text-text-muted">声明本 Provider 支持的模型；招募时按专家 default_model 自动匹配。</p>
+              {models.map((m, idx) => (
+                <div key={idx} className="flex items-center gap-sm">
+                  <Input type="text" value={m.model}
+                    onChange={(e) => setModels((prev) => prev.map((x, i) => i === idx ? { ...x, model: e.target.value } : x))}
+                    placeholder="模型标识，如 gpt-4o" disabled={submitting} />
+                  <Input type="text" value={m.display_name ?? ""}
+                    onChange={(e) => setModels((prev) => prev.map((x, i) => i === idx ? { ...x, display_name: e.target.value } : x))}
+                    placeholder="显示名（可选）" disabled={submitting} />
+                  <label className="flex items-center gap-xs text-xs text-text-secondary">
+                    <input type="checkbox" checked={m.enabled !== false}
+                      onChange={(e) => setModels((prev) => prev.map((x, i) => i === idx ? { ...x, enabled: e.target.checked } : x))}
+                      disabled={submitting} />
+                    启用
+                  </label>
+                  <Button type="button" variant="danger" size="sm" disabled={submitting}
+                    onClick={() => setModels((prev) => prev.filter((_, i) => i !== idx))}>移除</Button>
+                </div>
+              ))}
+              <Button type="button" variant="ghost" size="sm" className="self-start" disabled={submitting}
+                onClick={() => setModels((prev) => [...prev, { model: "", display_name: "", enabled: true }])}>
+                ＋ 添加模型
+              </Button>
+            </div>
             {formError && <p className="m-0 text-sm text-danger">{formError}</p>}
             <div className="flex gap-sm">
               <Button type="submit" disabled={submitting} className="self-start">{submitting ? "提交中…" : "创建"}</Button>
