@@ -171,7 +171,7 @@ describe("ProvidersPage", () => {
     fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("＋ 添加模型"));
     fireEvent.click(screen.getByText("创建"));
-    await waitFor(() => expect(screen.queryByText("新增凭据")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("创建")).not.toBeInTheDocument());
     expect(screen.queryByPlaceholderText("模型标识，如 gpt-4o")).not.toBeInTheDocument();
   });
 
