@@ -102,6 +102,9 @@ class PreparedRun:
     - mcp_derivation 记录 knowledge/memory/connector 装配结果（阻断/降级/通过），
       便于调用方自检/前端 readiness 展示；
     - 包含 mcp_config 的 RunSpec 已可直接交给 Driver。
+
+    D18 安全：mcp_derivation.health_results[*].resolved_env 包含已解析的连接器凭据，
+    调用方禁止将其持久化（落 DB / 日志 / 事件）或透传给前端；仅用于运行期 env 注入。
     """
 
     run_spec: RunSpec

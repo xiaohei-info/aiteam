@@ -11,10 +11,10 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from enum import Enum
-from typing import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,24 +51,21 @@ def check_capability_health(entry: CapabilityEntry, *, ref: str) -> CapabilityHe
 
     不抛错：把结果收敛到 CapabilityHealth，由调用方按 kind 决定阻断/降级。
     """
-    # 1) env 解析
     resolved: dict[str, str] = {}
     missing: list[str] = []
     for name in entry.required_env:
-        val = _safe_getenv(name)
+        val = _safe_getenv(host_env(), name)
         if val is None:
             missing.append(name)
         else:
             resolved[name] = val
 
-    # 2) health_check 探测
     hc = entry.health_check
     cli_available = False
     cli_version: str | None = None
     reason: str | None = None
 
     if hc.mode == "none":
-        # 信任声明：仅 env 缺失视为 not_ready
         if missing:
             reason = f"missing env: {missing}"
         return CapabilityHealth(
@@ -79,7 +76,7 @@ def check_capability_health(entry: CapabilityEntry, *, ref: str) -> CapabilityHe
         )
 
     if hc.mode == "url":
-        url_val = _safe_getenv(hc.url_env) if hc.url_env else None
+        url_val = _safe_getenv(host_env(), hc.url_env) if hc.url_env else None
         if url_val:
             cli_available = True
         elif missing:
@@ -125,19 +122,26 @@ def resolve_env_for_entries(entries: list[CapabilityEntry]) -> dict[str, str]:
     仅从宿主 os.environ 取值；缺失的跳过（由 health 检查负责报错）。
     返回的 dict 不落盘、不日志（D18）：调用方只用于构造 RunSpec.mcp_config 的 env 字段。
     """
+    env = host_env()
     out: dict[str, str] = {}
     for e in entries:
         for name in e.required_env:
-            val = _safe_getenv(name)
-            if val is not None and name not in out:
+            val = env.get(name)
+            if val and name not in out:
                 out[name] = val
     return out
 
 
-def _safe_getenv(name: str | None) -> str | None:
+def host_env() -> dict[str, str]:
+    """宿主 env 只读快照（dict 拷贝）。测试可通过 ``patch`` 此函数注入假 env。"""
+    return dict(os.environ)
+
+
+def _safe_getenv(env: dict[str, str], name: str | None) -> str | None:
+    """从 env 快照读单个变量；None / 空串视为缺失。"""
     if not name:
         return None
-    val = _OS_ENV.get(name)
+    val = env.get(name)
     return val if val else None
 
 
@@ -152,7 +156,3 @@ def _probe_version(command: str, args: list[str]) -> str | None:
         return None
     line = (out.stdout or out.stderr or "").strip().splitlines()
     return line[0] if line else None
-
-
-# 宿主 env 只读视图（便于测试 patch）。
-_OS_ENV: Mapping[str, str] = __import__("os").environ

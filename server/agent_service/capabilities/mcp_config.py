@@ -96,7 +96,7 @@ def snapshot_to_mcp_config(
         if entry is None:
             derivation.blocked.append(f"connector:{ref}")
             derivation.health_results.append(
-                _not_ready_health(ref, ref, "no registry entry")
+                _not_ready_health(ref, ref, "no registry entry", kind=CapabilityKind.CONNECTOR)
             )
             continue
         health = check_capability_health(entry, ref=ref)
@@ -153,23 +153,22 @@ def assert_capability_ready(derivation: MCPConfigDerivation) -> None:
         )
 
 
-def _not_ready_health(name: str, ref: str, reason: str) -> CapabilityHealth:
+def _not_ready_health(name: str, ref: str, reason: str,
+                      *, kind: CapabilityKind = CapabilityKind.KNOWLEDGE) -> CapabilityHealth:
     return CapabilityHealth(
-        name=name, kind=CapabilityKind.KNOWLEDGE, ref=ref,
+        name=name, kind=kind, ref=ref,
         status=HealthStatus.NOT_READY, reason=reason,
     )
 
 
-def _memory_refs(memory_policy: dict | None | str) -> list[str]:
+def _memory_refs(memory_policy: dict | None) -> list[str]:
     """从 memory_policy 提取 ref 列表。
 
-    memory_policy 可能是 dict（含 policy_id / provider 等）、字符串或空；
+    memory_policy 是 dict（含 policy_id / provider / id 等）或空；
     当 dict 缺可识别 id 时回退 "default" 模板。
     """
     if not memory_policy:
         return []
-    if isinstance(memory_policy, str):
-        return [memory_policy] if memory_policy.strip() else []
     policy_id = (
         memory_policy.get("policy_id")
         or memory_policy.get("provider")

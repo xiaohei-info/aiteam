@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 from enum import Enum
-from pathlib import Path
 from typing import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -60,7 +59,7 @@ class CapabilityEntry(BaseModel):
     )
     required_env: list[str] = Field(
         default_factory=list,
-        description="运行所需 env var 名（从宿主 os.environ 解析，不落盘/日志，D18）",
+        description="运行所需 env var 名（从宿主 os.environ 解析，不落盘/日志 D18）",
     )
     url: str | None = Field(default=None, description="连接型 MCP 的 endpoint（可选）")
     health_check: HealthCheck = Field(default_factory=HealthCheck)
@@ -72,7 +71,11 @@ class CapabilityEntry(BaseModel):
 
 
 class CapabilityRegistry:
-    """Agent 本地能力 registry：中立引用 → MCP server 模板。
+    """Agent 本地能力 registry：按 (kind, ref) 查找 MCP server 模板。
+
+    默认 registry 中每个 (kind, ref) 一个条目——knowledge 按 knowledge_space_id、memory 按
+    policy_id、connector 按 connector_id 索引。模板级复用（多个 ref 共用同一 MCP server 命令）
+    由调用方自行注册多个 (kind, ref) 指向同名模板即可。
 
     使用方式::
 
@@ -86,7 +89,7 @@ class CapabilityRegistry:
     # ---- 查询 ----
 
     def lookup(self, kind: CapabilityKind, ref: str) -> CapabilityEntry | None:
-        """按 (kind, ref) 查条目；找不到返回 None。"""
+        """按 (kind, ref) 查条目；找不到或 disabled 返回 None。"""
         entry = self._entries.get((kind, ref))
         if entry is None:
             return None
@@ -105,33 +108,21 @@ class CapabilityRegistry:
 
     def refs_for_kind(self, kind: CapabilityKind) -> list[str]:
         """列出本 registry 中已登记、已启用的某 kind 的 ref 列表。"""
-        return [k[1] for k, e in self._entries.items() if k[0] == kind and e.enabled]
+        return [k[1] for k, e in self._items() if k[0] == kind]
+
+    def _items(self) -> list[tuple[tuple[CapabilityKind, str], CapabilityEntry]]:
+        return [(k, v) for k, v in self._entries.items() if v.enabled]
 
     # ---- 默认 registry ----
     # 默认模板：覆盖常见本地 MCP server（LightRAG/mem0/典型 connector）。
-    # 生产可经环境变量 AGENT_CAPABILITY_OVERRIDES 或服务端下发覆写（本卡只落默认 + 静态形态）。
-
-    _DEFAULT_CMD_ARGS: dict[str, list[str]] = {}
-    _DEFAULT_ENV: dict[str, list[str]] = {}
+    # 生产可经环境变量覆写命令/args/所需 env；服务端下发扩展留作 follow-up。
 
     @classmethod
     def default(cls) -> "CapabilityRegistry":
-        """构造默认 registry。
-
-        含四类本地 MCP 模板：
-        - LightRAG 知识检索（knowledge，按 knowledge_space_id 索引）；
-        - mem0 / OpenMemory 本地记忆（memory，按 memory_policy 索引）；
-        - 常见 connector（slack/notion/etc，按 connector_id 索引）。
-        entries 不以 ref 为 key：同一模板可被多个 ref 复用（如 knowledge 共用 LightRAG server，
-        ref 仅区分 workspace）。registry 的 key 是「能力种类 + 唯一模板 id」，snapshot 中的 ref
-        需经 ``qualified_ref()`` 转为 (kind, template_id, instance_hint)。为简化，默认模板 id 等于 ref：
-        每个 knowledge_space_id / connector_id / memory_policy 一个条目；模板级别的复用由调用方按
-        ref 直接查找即可。
-        """
+        """构造默认 registry。含 knowledge(LightRAG) / memory(mem0) / 常见 connector 模板。"""
         entries: dict[tuple[CapabilityKind, str], CapabilityEntry] = {}
 
-        # --- knowledge: LightRAG ---
-        # 模板：lightrag-mcp 本地服务（venv 内 python 模块）。按 knowledge_space_id 一条目。
+        # knowledge：LightRAG。每个 knowledge_space_id 一条目。
         for kid in ("default",):
             entries[(CapabilityKind.KNOWLEDGE, kid)] = CapabilityEntry(
                 name="lightrag",
@@ -139,12 +130,12 @@ class CapabilityRegistry:
                 display_name="LightRAG 本地知识检索",
                 command=os.getenv("AITEAM_LIGHTRAG_CMD", "lightrag-mcp"),
                 args=_cmd_args("AITEAM_LIGHTRAG_ARGS"),
-                env={"LIGHTRAG_WORKSPACE_DIR": os.getenv("AITEAM_LIGHTRAG_DIR", str(Path.home() / ".aiteam" / "lightrag"))},
+                env={"LIGHTRAG_WORKSPACE_DIR": os.getenv("AITEAM_LIGHTRAG_DIR", "~/.aiteam/lightrag")},
                 required_env=_csv_list(os.getenv("AITEAM_LIGHTRAG_REQUIRED_ENV", "")),
                 health_check=HealthCheck(mode="command", command=os.getenv("AITEAM_LIGHTRAG_CMD", "lightrag-mcp")),
             )
 
-        # --- memory: mem0 ---
+        # memory：mem0 / OpenMemory。每个 policy_id 一条目。
         for mid in ("default",):
             entries[(CapabilityKind.MEMORY, mid)] = CapabilityEntry(
                 name="mem0",
@@ -152,13 +143,12 @@ class CapabilityRegistry:
                 display_name="mem0 / OpenMemory 本地记忆",
                 command=os.getenv("AITEAM_MEM0_CMD", "mem0-mcp"),
                 args=_cmd_args("AITEAM_MEM0_ARGS"),
-                env={"MEM0_DIR": os.getenv("AITEAM_MEM0_DIR", str(Path.home() / ".aiteam" / "mem0"))},
+                env={"MEM0_DIR": os.getenv("AITEAM_MEM0_DIR", "~/.aiteam/mem0")},
                 required_env=_csv_list(os.getenv("AITEAM_MEM0_REQUIRED_ENV", "")),
                 health_check=HealthCheck(mode="command", command=os.getenv("AITEAM_MEM0_CMD", "mem0-mcp")),
             )
 
-        # --- connector 模板：按 connector_id 静态登记；常见 connector 可作为预设 ---
-        # 凭据名规矩（D18）：统一走 CONNECTOR_<ID>_TOKEN / _API_KEY，从宿主 env 解析，不落盘。
+        # connector：按 connector_id 静态登记预设；凭据走 CONNECTOR_<ID>_TOKEN（D18）。
         for cid, cmd in (("slack", "slack-mcp"), ("notion", "notion-mcp"), ("github", "github-mcp")):
             entries[(CapabilityKind.CONNECTOR, cid)] = CapabilityEntry(
                 name=cid,
@@ -187,6 +177,4 @@ def _csv_list(raw: str) -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-# 延迟导入避免循环（exceptions 在同一包内，registry 自己 raise 时需要）。
-# 为简化，CapabilityUnavailable 在本模块以字符串形式子类化，from import 在 __init__.py 中重新导出。
-from .exceptions import CapabilityUnavailable  # noqa: E402,F811  (re-export via __all__)
+from .exceptions import CapabilityUnavailable  # noqa: E402,F811
