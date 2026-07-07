@@ -1,17 +1,19 @@
-"""专家快照驱动的统一执行编排（AITEAM-689 / M1）。
+"""专家快照驱动的统一执行编排（AITEAM-689 / M1，AITEAM-692 / M3）。
 
-职责（M1 #1/#2）：
-- 私聊：据会话 entry_employee_id 冻结/复用专家快照，派生 RunSpec + 绑定元数据；
-- 群聊：按被 @ 专家逐个冻结/复用快照，派生各自的 RunSpec + 绑定元数据；
-- Manager 在线时经 GrantsService.freeze_snapshot 冻结；不可达时 fallback 到最近已冻结快照，
-  并标记 snapshot_source=fallback（D14 离线降级）；
-- 无快照可用时明确报错（NoSnapshotAvailable），不回退到未知配置。
+职责：
+- M1：私聊 / 群聊据会话 entry_employee_id 冻结/复用专家快照，派生 RunSpec + 绑定元数据；
+  Manager 在线时经 GrantsService.freeze_snapshot 冻结；不可达时 fallback 到最近已冻结快照，
+  并标记 snapshot_source=fallback（D14 离线降级）；无快照可用时明确报错。
+- M3（AITEAM-692）：把快照中的 knowledge_refs / memory_policy / connector_refs 转成
+  ``RunSpec.mcp_config``（A 类能力统一注入，06 §7.5.2），运行前做 capability 健康检查，
+  并按失败策略阻断 / 降级。
 
-架构边界（M1）：
+架构边界：
 - Manager 是配置真相源；Agent 只读投影 + 本地冻结快照。
 - 不支持的快照字段（skills/knowledge_refs/connector_refs/memory_policy）**显式降级**：
-  记录在 RunSpecDerivation.degraded 列表，不静默丢弃；M2/M3 装配时再消费。
-- 前端传入的 model/system_prompt/runtime 不作为权威配置（由 start_run 层保证）。
+  记录在 RunSpecDerivation.degraded 列表；M2/M3 装配时再消费。
+- M3 装配依赖本地 CapabilityRegistry（lookup 模板 + 健康检查）；装配失败按策略：
+  knowledge 不可用阻断、memory 不可用降级、connector 明确失败。
 """
 
 from __future__ import annotations
@@ -21,6 +23,13 @@ from typing import TYPE_CHECKING, Protocol
 
 from shared.contracts.runspec import RunSpec
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
+
+from agent_service.capabilities import (
+    CapabilityRegistry,
+    MCPConfigDerivation,
+    assert_capability_ready,
+    snapshot_to_mcp_config,
+)
 
 if TYPE_CHECKING:
     from agent_service.grants.service import GrantsService
@@ -87,10 +96,20 @@ def snapshot_to_runspec(snapshot: EmployeeExecutionSnapshot) -> RunSpecDerivatio
 
 @dataclass
 class PreparedRun:
-    """一次 run 的准备结果：中立 RunSpec + 落到 Run 记录的绑定元数据。"""
+    """一次 run 的准备结果：中立 RunSpec + 落到 Run 记录的绑定元数据。
+
+    M3 扩展：
+    - mcp_derivation 记录 knowledge/memory/connector 装配结果（阻断/降级/通过），
+      便于调用方自检/前端 readiness 展示；
+    - 包含 mcp_config 的 RunSpec 已可直接交给 Driver。
+
+    D18 安全：mcp_derivation.health_results[*].resolved_env 包含已解析的连接器凭据，
+    调用方禁止将其持久化（落 DB / 日志 / 事件）或透传给前端；仅用于运行期 env 注入。
+    """
 
     run_spec: RunSpec
     binding: "RunBindingView"
+    mcp_derivation: MCPConfigDerivation | None = None
 
 
 @dataclass
@@ -110,7 +129,7 @@ class _ConversationLike(Protocol):
 
 
 class ExecutionOrchestrator:
-    """统一执行编排（M1 #1）。"""
+    """统一执行编排（M1 #1 + M3 能力装配）。"""
 
     def __init__(
         self,
@@ -119,11 +138,14 @@ class ExecutionOrchestrator:
         projections: "ProjectionRepository",
         tenant_id: str = "local",
         member_id: str = "local",
+        capability_registry: CapabilityRegistry | None = None,
     ) -> None:
         self._grants = grants
         self._projections = projections
         self._tenant_id = tenant_id
         self._member_id = member_id
+        # M3：registry 可选——未注入时跳过 MCP 装配（兼容无能力场景 / 测试）。
+        self._capability_registry = capability_registry
 
     def prepare_private_run(
         self,
@@ -156,6 +178,19 @@ class ExecutionOrchestrator:
 
         snapshot, source = self._resolve_snapshot(employee_id, version=version)
         derivation = snapshot_to_runspec(snapshot)
+
+        # M3：把 knowledge/memory/connector refs 装配到 RunSpec.mcp_config。
+        mcp_derivation: MCPConfigDerivation | None = None
+        if self._capability_registry is not None:
+            mcp_derivation = snapshot_to_mcp_config(snapshot, self._capability_registry)
+            # 按失败策略：blocked 非空则阻断 run（knowledge / connector）。
+            assert_capability_ready(mcp_derivation)
+            # 通过的 mcp_config 注入 spec。
+            if mcp_derivation.mcp_config:
+                derivation.spec = derivation.spec.model_copy(
+                    update={"mcp_config": mcp_derivation.mcp_config}
+                )
+
         binding = RunBindingView(
             employee_id=snapshot.employee_id,
             snapshot_version=snapshot.snapshot_version,
@@ -164,7 +199,9 @@ class ExecutionOrchestrator:
             provider_ref=snapshot.model_policy.provider_ref,
             skill_refs=list(snapshot.skills),
         )
-        return PreparedRun(run_spec=derivation.spec, binding=binding)
+        return PreparedRun(
+            run_spec=derivation.spec, binding=binding, mcp_derivation=mcp_derivation
+        )
 
     def _resolve_snapshot(
         self, employee_id: str, version: str | None
