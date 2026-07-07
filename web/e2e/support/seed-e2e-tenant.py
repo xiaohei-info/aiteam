@@ -60,10 +60,8 @@ def main() -> int:
             )
 
     # 2. 落成员账号（must_reset=False，可直接登录）。已存在则重置密码 + 清 must_reset。
-    from manager_service.auth_service import build_auth_service
     from shared.contracts.enums import EnterpriseRole
-
-    svc = build_auth_service(biz_url, admin_dsn=admin_url)
+    from manager_service.auth_password_policy import validate_password_complexity
     from shared.contracts.tenancy import TenantContext
     from manager_service.repository import TenantAuthRepository
     from shared.db import PgTenantRouter
@@ -73,10 +71,15 @@ def main() -> int:
     router = PgTenantRouter(biz_url)
     repo = TenantAuthRepository(router)
     ctx = TenantContext(tenant_id=tenant_id, user_id="e2e-seed", roles=[EnterpriseRole.MEMBER.value])
+    admin_roles = [EnterpriseRole.ENTERPRISE_ADMIN.value]
     existing = repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
     if existing is None:
-        svc.create_member(
-            tenant_id, phone=phone, initial_password=password,
+        # 直接经 repository 落 enterprise_admin 角色：svc.create_member 硬编码 MEMBER，
+        # 而 smoke / cross-tier 全链路需要写 provider 凭据 / 招募 / 授权（门控 owner/enterprise_admin）。
+        validate_password_complexity(password)
+        repo.create_user_with_identity(
+            ctx, provider=AuthProvider.PHONE, external_id=phone,
+            secret=hash_password(password), roles=admin_roles,
             display_name="e2e-smoke-member", must_reset=False,
         )
     else:
@@ -85,6 +88,13 @@ def main() -> int:
             ctx, provider=AuthProvider.PHONE, external_id=phone,
             secret=hash_password(password), must_reset=False,
         )
+        # 兼容旧 seed 仅落 MEMBER 的历史数据：补齐 enterprise_admin，
+        # 避免跨端 E2E 写 provider/招募/授权时被 403 拒绝。
+        with router.session(ctx) as s:
+            s.execute(
+                "UPDATE app_user SET roles = %s WHERE id = %s",
+                (admin_roles, existing.user_id),
+            )
 
     print(json.dumps({"tenant_id": tenant_id, "account": phone}))
     return 0
