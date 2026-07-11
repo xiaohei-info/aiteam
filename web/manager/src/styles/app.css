@@ -1,18 +1,8 @@
-@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
-
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/preflight.css" layer(base);
 @import "@astryxdesign/core/reset.css";
 @import "@astryxdesign/core/astryx.css";
 @import "@astryxdesign/theme-stone/theme.css";
-@import "@astryxdesign/core/tailwind-theme.css";
-@import "tailwindcss/utilities.css" layer(utilities);
-@import "@aiteam/shared/design-system/tokens.css";
 
-/* 让 Tailwind v4 扫描 shared 组件源里的工具类（GlassPanel/AppShell/Button 等）。 */
-@source "../../../shared/src";
-
-/* 保留基础布局和系统字体；颜色由 Astryx theme token 接管。 */
+/* 基础文档布局与系统字体；颜色、间距和组件外观全部由 Astryx token 接管。 */
 *,
 *::before,
 *::after {
