@@ -1,47 +1,35 @@
-/**
- * 一次性凭据展示（W-O.2）。
- *
- * 红线：bootstrap_secret 仅本次展示，不缓存不重发，不用 localStorage/sessionStorage。
- * 展示时脱敏（只显示首尾各4位），提供复制按钮。
- * 黑金玻璃质感，复用 shared 组件（GlassPanel/Button）。
- *
- * 展示字段：enterprise_id / tenant_id / owner_phone / enterprise_code(可选) / must_reset
- * + 一次性 bootstrap_secret（脱敏）。
- */
 import { useState, type ReactNode } from "react";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 
-/**
- * 复制文本到剪贴板，返回是否成功。
- *
- * navigator.clipboard 仅在安全上下文（HTTPS / localhost）可用；经 http://<ip>:port 明文访问时
- * 它是 undefined，直接调用会抛错。故先试异步 Clipboard API，不可用/失败再降级到
- * document.execCommand("copy")（用临时 textarea 选中），覆盖 HTTP 场景。
- */
 async function copyText(text: string): Promise<boolean> {
   if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {
     try {
       await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      // 落到 execCommand 降级
+      // Continue with the HTTP-compatible fallback.
     }
   }
   try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.top = "0";
-    ta.style.left = "0";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.setAttribute("readonly", "");
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textArea);
+    return copied;
   } catch {
     return false;
   }
@@ -54,6 +42,12 @@ interface Props {
   ownerPhone: string;
   enterpriseCode?: string | null;
   mustReset: boolean;
+  onDismiss: () => void;
+}
+
+function masked(secret: string): string {
+  if (secret.length <= 8) return "****";
+  return `${secret.slice(0, 4)}****${secret.slice(-4)}`;
 }
 
 export function BootstrapSecretDisplay({
@@ -63,103 +57,53 @@ export function BootstrapSecretDisplay({
   ownerPhone,
   enterpriseCode,
   mustReset,
+  onDismiss,
 }: Props): ReactNode {
   const i18n = useI18n();
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-
-  function masked(secret: string): string {
-    if (secret.length <= 8) return "****";
-    return secret.slice(0, 4) + "****" + secret.slice(-4);
-  }
+  const title = i18n.t("operation.enterprise.bootstrap_secret");
 
   async function handleCopy(): Promise<void> {
-    const ok = await copyText(secret);
-    if (ok) {
-      setCopyFailed(false);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      // 两种方式都失败：提示用户手动选中复制（不静默，否则按钮像坏了）。
+    const succeeded = await copyText(secret);
+    if (!succeeded) {
       setCopyFailed(true);
+      return;
     }
+    setCopyFailed(false);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   }
 
   return (
-    <GlassPanel
-      data-testid="secret-display"
-      className="flex flex-col gap-sm rounded-window border border-gold/30 p-lg"
-    >
-      <h2 className="m-0 text-base font-semibold text-text-primary">
-        {i18n.t("operation.enterprise.bootstrap_secret")}
-      </h2>
-      <p className="m-0 text-sm text-warning">
-        {i18n.t("operation.enterprise.secret_warning")}
-      </p>
-      <div className="rounded-md bg-surface px-md py-sm">
-        {/* 常态脱敏；复制彻底失败时显示完整凭据（可 readonly 全选），保证操作员总能拿到。 */}
-        <code className="select-all break-all text-sm text-gold-bright">
-          {copyFailed ? secret : masked(secret)}
-        </code>
-      </div>
-      <dl className="m-0 grid grid-cols-1 gap-x-lg gap-y-sm text-sm sm:grid-cols-2">
-        <div className="flex gap-sm">
-          <dt className="m-0 shrink-0 text-text-muted">
-            {i18n.t("operation.enterprise.result_enterprise_id")}:
-          </dt>
-          <dd className="m-0 text-text-secondary">
-            <code>{enterpriseId}</code>
-          </dd>
-        </div>
-        <div className="flex gap-sm">
-          <dt className="m-0 shrink-0 text-text-muted">
-            {i18n.t("operation.enterprise.result_tenant_id")}:
-          </dt>
-          <dd className="m-0 text-text-secondary">
-            <code>{tenantId}</code>
-          </dd>
-        </div>
-        <div className="flex gap-sm">
-          <dt className="m-0 shrink-0 text-text-muted">
-            {i18n.t("operation.enterprise.result_owner_phone")}:
-          </dt>
-          <dd className="m-0 text-text-secondary">
-            <code>{ownerPhone}</code>
-          </dd>
-        </div>
-        {enterpriseCode ? (
-          <div className="flex gap-sm">
-            <dt className="m-0 shrink-0 text-text-muted">
-              {i18n.t("operation.enterprise.result_enterprise_code")}:
-            </dt>
-            <dd className="m-0 text-text-secondary">
-              <code>{enterpriseCode}</code>
-            </dd>
-          </div>
-        ) : null}
-        <div className="flex gap-sm sm:col-span-2">
-          <dt className="m-0 shrink-0 text-text-muted">
-            {i18n.t("operation.enterprise.result_must_reset")}:
-          </dt>
-          <dd className="m-0 text-text-secondary">
-            {mustReset
-              ? i18n.t("operation.enterprise.result_must_reset_yes")
-              : i18n.t("operation.enterprise.result_must_reset_no")}
-          </dd>
-        </div>
-      </dl>
-      <div className="flex flex-col gap-xs">
-        <Button type="button" variant="ghost" size="sm" onClick={handleCopy}>
-          {copied
-            ? i18n.t("operation.enterprise.copied")
-            : i18n.t("operation.enterprise.copy")}
-        </Button>
-        {copyFailed ? (
-          <p className="m-0 text-sm text-warning">
-            {i18n.t("operation.enterprise.copy_failed")}
-          </p>
-        ) : null}
-      </div>
-    </GlassPanel>
+    <Card role="region" aria-label={title} data-testid="secret-display">
+      <VStack gap={4}>
+        <HStack justify="between" align="center">
+          <Heading level={2}>{title}</Heading>
+          <Button label="关闭凭据" variant="ghost" size="sm" onClick={onDismiss} />
+        </HStack>
+        <Banner status="warning" title={i18n.t("operation.enterprise.secret_warning")} />
+        <Code>{copyFailed ? secret : masked(secret)}</Code>
+        <MetadataList columns="single">
+          <MetadataListItem label={i18n.t("operation.enterprise.result_enterprise_id")}><Code>{enterpriseId}</Code></MetadataListItem>
+          <MetadataListItem label={i18n.t("operation.enterprise.result_tenant_id")}><Code>{tenantId}</Code></MetadataListItem>
+          <MetadataListItem label={i18n.t("operation.enterprise.result_owner_phone")}><Code>{ownerPhone}</Code></MetadataListItem>
+          {enterpriseCode && (
+            <MetadataListItem label={i18n.t("operation.enterprise.result_enterprise_code")}><Code>{enterpriseCode}</Code></MetadataListItem>
+          )}
+          <MetadataListItem label={i18n.t("operation.enterprise.result_must_reset")}>
+            {mustReset ? i18n.t("operation.enterprise.result_must_reset_yes") : i18n.t("operation.enterprise.result_must_reset_no")}
+          </MetadataListItem>
+        </MetadataList>
+        {copyFailed && <Banner status="warning" title={i18n.t("operation.enterprise.copy_failed")} />}
+        <HStack justify="end">
+          <Button
+            label={copied ? i18n.t("operation.enterprise.copied") : i18n.t("operation.enterprise.copy")}
+            variant="secondary"
+            onClick={() => void handleCopy()}
+          />
+        </HStack>
+      </VStack>
+    </Card>
   );
 }

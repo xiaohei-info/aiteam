@@ -58,10 +58,14 @@ describe("EnterprisePage 企业开通", () => {
   afterEach(() => { localStorage.clear(); });
 
   it("渲染开通表单（企业名称 + 负责人手机号 + 提交按钮）", () => {
-    renderEnterprisePage(mockClient());
+    const { container } = renderEnterprisePage(mockClient());
+    expect(screen.getByRole("heading", { level: 1, name: "企业开通" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "开通企业" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "重置负责人凭据" })).toBeInTheDocument();
     expect(screen.getByText("企业名称")).toBeInTheDocument();
     expect(screen.getByText("负责人手机号")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开通" })).toBeInTheDocument();
+    expect(container.querySelector(".glass")).toBeNull();
   });
 
   it("空字段提交显示校验提示", async () => {
@@ -145,7 +149,7 @@ describe("EnterprisePage 企业开通", () => {
 
   it("展示重置凭据入口", () => {
     renderEnterprisePage(mockClient());
-    expect(screen.getByText("重置负责人凭据")).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "重置负责人凭据" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "重置凭据" })[0]).toBeInTheDocument();
   });
 
@@ -165,6 +169,9 @@ describe("EnterprisePage 企业开通", () => {
       target: { value: "ent_001" },
     });
     fireEvent.click(screen.getByRole("button", { name: "重置凭据" }));
+
+    expect(screen.getByRole("alertdialog", { name: "重置负责人凭据" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
 
     await waitFor(() => {
       expect(client.post).toHaveBeenCalledWith(
@@ -234,7 +241,30 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
     await waitFor(() => {
-      expect(screen.getByText("操作失败，请重试")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("操作失败，请重试");
     });
+    expect(screen.getByRole("textbox", { name: /企业名称/ })).toHaveValue("测试企业");
+    expect(screen.getByRole("textbox", { name: /负责人手机号/ })).toHaveValue("13800138000");
+  });
+
+  it("一次性凭据可明确关闭，关闭后不再出现在 DOM", async () => {
+    const client = mockClient({
+      post: vi.fn().mockResolvedValue({
+        enterprise_id: "ent_001",
+        tenant_id: "t_001",
+        enterprise_name: "测试企业",
+        owner_phone: "13800138000",
+        owner_bootstrap_secret: "sec_test_abc123",
+        must_reset: true,
+      }),
+    });
+    renderEnterprisePage(client);
+    fireEvent.change(screen.getByRole("textbox", { name: /企业名称/ }), { target: { value: "测试企业" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /负责人手机号/ }), { target: { value: "13800138000" } });
+    fireEvent.click(screen.getByRole("button", { name: "开通" }));
+
+    expect(await screen.findByRole("region", { name: "一次性 bootstrap 凭据" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭凭据" }));
+    expect(screen.queryByRole("region", { name: "一次性 bootstrap 凭据" })).toBeNull();
   });
 });

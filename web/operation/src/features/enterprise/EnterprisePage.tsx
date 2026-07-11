@@ -1,11 +1,13 @@
-/**
- * 企业开通页主组件（W-O.2）。
- *
- * F01: ProvisionForm → POST /api/operation/enterprises → 展示 owner_bootstrap_secret
- * F02: enterprise_id → POST /enterprises/{id}/owner-bootstrap/reset → 展示新凭据
- */
-import { useState, type ReactNode } from "react";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import type { ApiClient } from "../../api";
 import { ProvisionForm } from "./ProvisionForm";
@@ -16,20 +18,24 @@ interface Props {
   apiClient: ApiClient;
 }
 
+interface ResetCredentialResult {
+  enterpriseId: string;
+  output: ResetOutput;
+}
+
 export function EnterprisePage({ apiClient }: Props): ReactNode {
   const i18n = useI18n();
   const api = useEnterpriseApi(apiClient);
-
   const [provisionResult, setProvisionResult] = useState<ProvisionOutput | null>(null);
-  const [resetResult, setResetResult] = useState<ResetOutput | null>(null);
+  const [resetResult, setResetResult] = useState<ResetCredentialResult | null>(null);
   const [provisionError, setProvisionError] = useState<string | null>(null);
   const [provisionLoading, setProvisionLoading] = useState(false);
-
   const [resetEnterpriseId, setResetEnterpriseId] = useState("");
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  async function handleProvision(name: string, phone: string, code: string): Promise<void> {
+  async function handleProvision(name: string, phone: string, code: string): Promise<boolean> {
     setProvisionError(null);
     setProvisionLoading(true);
     try {
@@ -39,20 +45,29 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
         ...(code ? { enterprise_code: code } : {}),
       });
       setProvisionResult(result);
+      return true;
     } catch {
       setProvisionError(i18n.t("operation.enterprise.error"));
+      return false;
     } finally {
       setProvisionLoading(false);
     }
   }
 
+  function requestReset(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (resetEnterpriseId.trim()) setConfirmReset(true);
+  }
+
   async function handleReset(): Promise<void> {
-    if (!resetEnterpriseId.trim()) return;
+    const enterpriseId = resetEnterpriseId.trim();
+    if (!enterpriseId) return;
     setResetError(null);
     setResetLoading(true);
     try {
-      const result = await api.resetBootstrap(resetEnterpriseId.trim());
-      setResetResult(result);
+      const output = await api.resetBootstrap(enterpriseId);
+      setResetResult({ enterpriseId, output });
+      setConfirmReset(false);
     } catch {
       setResetError(i18n.t("operation.enterprise.error"));
     } finally {
@@ -61,22 +76,13 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
   }
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">
-        {i18n.t("operation.nav.enterprises")}
-      </h1>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>{i18n.t("operation.nav.enterprises")}</Heading>
+      <ProvisionForm onSubmit={handleProvision} loading={provisionLoading} error={provisionError} />
 
-      <ProvisionForm
-        onSubmit={handleProvision}
-        loading={provisionLoading}
-        error={provisionError}
-      />
-
-      {provisionResult ? (
-        <div className="flex flex-col gap-md">
-          <p className="m-0 text-sm text-success">
-            {i18n.t("operation.enterprise.success")}
-          </p>
+      {provisionResult && (
+        <VStack gap={3}>
+          <Banner status="success" title={i18n.t("operation.enterprise.success")} />
           <BootstrapSecretDisplay
             secret={provisionResult.owner_bootstrap_secret}
             enterpriseId={provisionResult.enterprise_id}
@@ -84,53 +90,63 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
             ownerPhone={provisionResult.owner_phone}
             enterpriseCode={provisionResult.enterprise_code}
             mustReset={provisionResult.must_reset}
+            onDismiss={() => setProvisionResult(null)}
           />
-        </div>
-      ) : null}
+        </VStack>
+      )}
 
-      <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
-        <h2 className="m-0 text-base font-semibold text-text-primary">
-          {i18n.t("operation.enterprise.reset_title")}
-        </h2>
-        <Field label="enterprise_id">
-          <Input
-            type="text"
-            value={resetEnterpriseId}
-            onChange={(e) => setResetEnterpriseId(e.target.value)}
-            placeholder="企业 ID"
-            disabled={resetLoading}
-          />
-        </Field>
-        {resetError ? (
-          <p className="m-0 text-sm text-danger">{resetError}</p>
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleReset}
-          disabled={resetLoading || !resetEnterpriseId.trim()}
-          className="self-start"
-        >
-          {resetLoading
-            ? i18n.t("operation.enterprise.reset_submitting")
-            : i18n.t("operation.enterprise.reset_button")}
-        </Button>
-      </GlassPanel>
+      <Card>
+        <form aria-label={i18n.t("operation.enterprise.reset_title")} onSubmit={requestReset}>
+          <VStack gap={4}>
+            <Heading level={2}>{i18n.t("operation.enterprise.reset_title")}</Heading>
+            <FormLayout>
+              <TextInput
+                label="enterprise_id"
+                value={resetEnterpriseId}
+                onChange={setResetEnterpriseId}
+                placeholder="企业 ID"
+                isRequired
+                isDisabled={resetLoading}
+              />
+            </FormLayout>
+            {resetError && <Banner status="error" title={resetError} />}
+            <HStack justify="end">
+              <Button
+                label={resetLoading ? i18n.t("operation.enterprise.reset_submitting") : i18n.t("operation.enterprise.reset_button")}
+                type="submit"
+                variant="secondary"
+                isDisabled={resetLoading || !resetEnterpriseId.trim()}
+                isLoading={resetLoading}
+              />
+            </HStack>
+          </VStack>
+        </form>
+      </Card>
 
-      {resetResult ? (
-        <div className="flex flex-col gap-md">
-          <p className="m-0 text-sm text-success">
-            {i18n.t("operation.enterprise.reset_success")}
-          </p>
+      {resetResult && (
+        <VStack gap={3}>
+          <Banner status="success" title={i18n.t("operation.enterprise.reset_success")} />
           <BootstrapSecretDisplay
-            secret={resetResult.owner_bootstrap_secret}
-            enterpriseId={resetEnterpriseId.trim()}
-            tenantId={resetResult.tenant_id}
-            ownerPhone={resetResult.owner_phone}
-            mustReset={resetResult.must_reset}
+            secret={resetResult.output.owner_bootstrap_secret}
+            enterpriseId={resetResult.enterpriseId}
+            tenantId={resetResult.output.tenant_id}
+            ownerPhone={resetResult.output.owner_phone}
+            mustReset={resetResult.output.must_reset}
+            onDismiss={() => setResetResult(null)}
           />
-        </div>
-      ) : null}
-    </section>
+        </VStack>
+      )}
+
+      <AlertDialog
+        isOpen={confirmReset}
+        onOpenChange={(isOpen) => { if (!isOpen && !resetLoading) setConfirmReset(false); }}
+        title={i18n.t("operation.enterprise.reset_title")}
+        description={`将为企业 ${resetEnterpriseId.trim()} 生成新的负责人一次性凭据，旧凭据将立即失效。`}
+        cancelLabel="取消"
+        actionLabel="确认重置"
+        isActionLoading={resetLoading}
+        onAction={() => void handleReset()}
+      />
+    </VStack>
   );
 }

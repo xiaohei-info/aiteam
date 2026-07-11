@@ -19,7 +19,7 @@ function makeI18n() {
 
 const SECRET = "GYV-bquvfVix$g6++iaWah8&";
 
-function renderDisplay() {
+function renderDisplay(onDismiss = vi.fn()) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
       <BootstrapSecretDisplay
@@ -28,6 +28,7 @@ function renderDisplay() {
         tenantId="t_1"
         ownerPhone="1111111111"
         mustReset
+        onDismiss={onDismiss}
       />
     </I18nContext.Provider>,
   );
@@ -52,6 +53,14 @@ afterEach(() => {
 });
 
 describe("BootstrapSecretDisplay 复制", () => {
+  it("提供命名区域和显式关闭动作", () => {
+    const onDismiss = vi.fn();
+    renderDisplay(onDismiss);
+    expect(screen.getByRole("region", { name: "一次性 bootstrap 凭据" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭凭据" }));
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
   it("安全上下文走 clipboard API 成功 → 已复制", async () => {
     setSecureContext(true);
     const writeText = vi.fn().mockResolvedValue(undefined);

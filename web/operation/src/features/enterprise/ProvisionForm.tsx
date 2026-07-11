@@ -1,15 +1,16 @@
-/**
- * 企业开通表单（W-O.2）。
- *
- * 输入企业名称 + 负责人手机号（必填）+ 企业代码（可选），
- * 调 POST /api/operation/enterprises。
- */
 import { type FormEvent, useState, type ReactNode } from "react";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 
 interface Props {
-  onSubmit: (name: string, phone: string, code: string) => Promise<void>;
+  onSubmit: (name: string, phone: string, code: string) => Promise<boolean>;
   loading: boolean;
   error: string | null;
 }
@@ -32,53 +33,56 @@ export function ProvisionForm({ onSubmit, loading, error }: Props): ReactNode {
       setValidationError(i18n.t("operation.enterprise.phone_required"));
       return;
     }
-    await onSubmit(name.trim(), phone.trim(), code.trim());
+    const succeeded = await onSubmit(name.trim(), phone.trim(), code.trim());
+    if (succeeded) {
+      setName("");
+      setPhone("");
+      setCode("");
+    }
   }
 
-  const displayError = validationError ?? error;
-
   return (
-    <form onSubmit={handleSubmit}>
-      <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
-        <h2 className="m-0 text-base font-semibold text-text-primary">
-          {i18n.t("operation.enterprise.provision")}
-        </h2>
-        <Field label={i18n.t("operation.enterprise.name")}>
-          <Input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={i18n.t("operation.enterprise.name")}
-            disabled={loading}
-          />
-        </Field>
-        <Field label={i18n.t("operation.enterprise.phone")}>
-          <Input
-            type="text"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="负责人手机号"
-            disabled={loading}
-          />
-        </Field>
-        <Field label={i18n.t("operation.enterprise.code")}>
-          <Input
-            type="text"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="enterprise_code（可选）"
-            disabled={loading}
-          />
-        </Field>
-        {displayError ? (
-          <p className="m-0 text-sm text-danger">{displayError}</p>
-        ) : null}
-        <Button type="submit" disabled={loading} className="self-start">
-          {loading
-            ? i18n.t("operation.enterprise.submitting")
-            : i18n.t("operation.enterprise.submit")}
-        </Button>
-      </GlassPanel>
-    </form>
+    <Card>
+      <form aria-label={i18n.t("operation.enterprise.provision")} onSubmit={(event) => void handleSubmit(event)}>
+        <VStack gap={4}>
+          <Heading level={2}>{i18n.t("operation.enterprise.provision")}</Heading>
+          <FormLayout>
+            <TextInput
+              label={i18n.t("operation.enterprise.name")}
+              value={name}
+              onChange={setName}
+              placeholder={i18n.t("operation.enterprise.name")}
+              isRequired
+              isDisabled={loading}
+            />
+            <TextInput
+              label={i18n.t("operation.enterprise.phone")}
+              value={phone}
+              onChange={setPhone}
+              placeholder="负责人手机号"
+              isRequired
+              isDisabled={loading}
+            />
+            <TextInput
+              label={i18n.t("operation.enterprise.code")}
+              value={code}
+              onChange={setCode}
+              placeholder="enterprise_code（可选）"
+              isOptional
+              isDisabled={loading}
+            />
+          </FormLayout>
+          {(validationError ?? error) && <Banner status="error" title={(validationError ?? error)!} />}
+          <HStack justify="end">
+            <Button
+              label={loading ? i18n.t("operation.enterprise.submitting") : i18n.t("operation.enterprise.submit")}
+              type="submit"
+              variant="primary"
+              isLoading={loading}
+            />
+          </HStack>
+        </VStack>
+      </form>
+    </Card>
   );
 }
