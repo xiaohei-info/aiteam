@@ -16,7 +16,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
-import { RegisterForm } from "./RegisterForm";
+import { RegisterForm } from "./register/RegisterForm";
 import { TemplateLifecycleActions, type TemplateLifecycleAction } from "./TemplateLifecycleActions";
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";

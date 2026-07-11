@@ -20,6 +20,7 @@ import { I18nContext } from "../../i18n/context";
 import { operationMessages } from "../../i18n/messages";
 import { CatalogPage } from "./CatalogPage";
 import { CatalogDetailPage } from "./CatalogDetailPage";
+import { validateRegistration } from "./register/validation";
 import type { SessionContextValue } from "../../auth/session";
 
 // ---- helpers ----
@@ -158,6 +159,11 @@ function renderCatalogDetail(sessionCtx: SessionContextValue, id: string, catalo
       </SessionContext.Provider>
     </I18nContext.Provider>,
   );
+}
+
+async function selectAstryxOption(label: string, option: string): Promise<void> {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  fireEvent.click(await screen.findByRole("option", { name: option }));
 }
 
 function makeCatalogItem(overrides: Partial<Record<string, unknown>> = {}) {
@@ -507,6 +513,82 @@ describe("API 错误展示", () => {
 // ---- 6. 注册表单 ----
 
 describe("注册表单", () => {
+  it("用键盘选择专家且不会重复保留成员", async () => {
+    const expertItems = [
+      makeCatalogItem({
+        catalog_type: "expert_template",
+        template_id: "exp_a",
+        display_name: "客服专家",
+      }),
+    ];
+    mockFetch
+      .mockResolvedValueOnce(listPage(expertItems))
+      .mockResolvedValueOnce(listPage(expertItems));
+
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
+    await screen.findByText("注册行业方案");
+    fireEvent.click(screen.getByText("注册行业方案"));
+
+    const selector = await screen.findByRole("combobox", { name: "配置专家模板" });
+    selector.focus();
+    expect(selector).toHaveFocus();
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    fireEvent.keyDown(selector, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByRole("table", { name: "已选专家" })).toHaveTextContent("客服专家");
+      expect(screen.getAllByText("客服专家")).toHaveLength(2);
+    });
+
+    fireEvent.keyDown(selector, { key: "Enter" });
+    await waitFor(() => {
+      expect(screen.queryByRole("table", { name: "已选专家" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("提交失败后保留已填写的注册输入", async () => {
+    mockFetch
+      .mockResolvedValueOnce(envOk())
+      .mockResolvedValueOnce(problemResponse(422, "invalid", "服务端拒绝注册"));
+
+    renderCatalogPage(makeSystemAdminSession());
+    await screen.findByText("注册专家模板");
+    fireEvent.click(screen.getByText("注册专家模板"));
+    fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "保留的专家" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" }), { target: { value: "保留的人设" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("服务端拒绝注册")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("display_name")).toHaveValue("保留的专家");
+      expect(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" })).toHaveValue("保留的人设");
+    });
+  });
+
+  it("行业方案不展示专家专属分类字段", async () => {
+    mockFetch.mockResolvedValue(listPage([]));
+    renderCatalogPage(makeSystemAdminSession(), "solution_template");
+    fireEvent.click(await screen.findByText("注册行业方案"));
+
+    expect(screen.queryByRole("combobox", { name: "分类 (category)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建分类" })).not.toBeInTheDocument();
+  });
+
+  it("纯校验可由表单复用", () => {
+    expect(
+      validateRegistration({
+        catalogType: "expert_template",
+        displayName: "",
+        expertTemplateIds: [],
+        plannerTemplateId: "",
+        plannerPrompt: "",
+        initialMemoriesText: "",
+        defaultGrantsText: "",
+      }),
+    ).toEqual({ displayName: "名称不能为空" });
+  });
+
   it("点击注册按钮展示表单", async () => {
     renderCatalogPage(makeSystemAdminSession());
 
@@ -631,12 +713,12 @@ describe("注册表单", () => {
     fireEvent.change(modelInput, { target: { value: "gpt-5" } });
 
     // Fill all PRD required fields so the always-send payload is complete.
-    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "市场营销" } });
+    await selectAstryxOption("分类 (category)", "市场营销");
     fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://example.com/a.png" } });
     fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "淘宝电商客服" } });
 
     // Expand advanced config and fill skills/tags/memories/sort to cover that branch.
-    fireEvent.click(screen.getByText("展开能力配置(技能 / 标签 / 记忆 / 排序) ▼"));
+    fireEvent.click(screen.getByRole("button", { name: "能力配置（技能、标签、记忆、排序）" }));
     await waitFor(() => {
       expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument();
     });
@@ -649,45 +731,27 @@ describe("注册表单", () => {
     await waitFor(() => {
       expect(capturedBody).toBeTruthy();
     });
-    const body = capturedBody as {
-      template_id?: string;
-      display_name: string;
-      category?: string;
-      avatar_url?: string;
-      system_prompt?: string;
-      default_model?: string;
-      description?: string;
-      skill_ids?: string[];
-      tags?: string[];
-      sort_order?: number;
-    };
-    expect(body.template_id).toBeUndefined();
-    expect(body.display_name).toBe("新专家");
-    expect(body.category).toBe("市场营销");
-    expect(body.avatar_url).toBe("https://example.com/a.png");
-    expect(body.system_prompt).toBe("电商客服");
-    expect(body.default_model).toBe("gpt-5");
-    expect(body.description).toBe("淘宝电商客服");
-    expect(body.skill_ids).toEqual(["chat", "refund"]);
-    expect(body.tags).toEqual(["电商", "客服"]);
-    expect(body.sort_order).toBe(10);
+    expect(capturedBody).toEqual({
+      display_name: "新专家",
+      category: "市场营销",
+      avatar_url: "https://example.com/a.png",
+      system_prompt: "电商客服",
+      default_model: "gpt-5",
+      description: "淘宝电商客服",
+      skill_ids: ["chat", "refund"],
+      tags: ["电商", "客服"],
+      sort_order: 10,
+      initial_memories: [],
+    });
     await waitFor(() => {
       expect(screen.queryByText("注册新模板/方案")).not.toBeInTheDocument();
     });
+    fireEvent.click(screen.getByText("注册专家模板"));
+    expect(screen.getByPlaceholderText("display_name")).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" })).toHaveValue("");
   });
 
-  it("注册专家模板时 initial_memories 填非法 JSON 不报错并提交", async () => {
-    let capturedBody: unknown = null;
-    mockFetch
-      .mockResolvedValueOnce(envOk())
-      .mockImplementationOnce(async (url: unknown, init: unknown) => {
-        if (String(url).includes("expert-templates")) {
-          const i = init as { body?: string } | undefined;
-          capturedBody = i?.body ? JSON.parse(i.body) : null;
-        }
-        return singleResponse(makeCatalogItem({ id: "x", display_name: "X" }));
-      })
-      .mockResolvedValueOnce(envOk());
+  it("注册专家模板时 initial_memories 填非法 JSON 会被前端校验拦截", async () => {
 
     renderCatalogPage(makeSystemAdminSession());
     await waitFor(() => expect(screen.getByText("注册专家模板")).toBeInTheDocument());
@@ -695,22 +759,22 @@ describe("注册表单", () => {
     await waitFor(() => expect(screen.getByText("注册新模板/方案")).toBeInTheDocument());
 
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "X专家" } });
-    fireEvent.change(screen.getByLabelText("分类 (category)"), { target: { value: "技术研发" } });
+    await selectAstryxOption("分类 (category)", "技术研发");
     fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
     fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
-    fireEvent.click(screen.getByText("展开能力配置(技能 / 标签 / 记忆 / 排序) ▼"));
+    fireEvent.click(screen.getByRole("button", { name: "能力配置（技能、标签、记忆、排序）" }));
     await waitFor(() => expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)"), { target: { value: "s1" } });
-    // invalid JSON → parseJsonArray catch branch returns undefined → sent as []
     fireEvent.change(screen.getByLabelText("预置记忆 (initial_memories, JSON 数组)"), { target: { value: "{not-json" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     await waitFor(() => {
-      expect((capturedBody as { initial_memories?: unknown[] })?.initial_memories).toEqual([]);
+      expect(screen.getByText("预置记忆必须是 JSON 数组")).toBeInTheDocument();
     });
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).includes("expert-templates"))).toHaveLength(0);
   });
 
   it("注册专家模板时通过「新建分类」流程追加自定义分类并提交", async () => {
@@ -737,16 +801,13 @@ describe("注册表单", () => {
     fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
     fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
 
-    // 选择「＋ 新建分类…」→ 展开新分类输入 → 添加后下拉值变更为新分类
-    const categorySelect = screen.getByLabelText("分类 (category)") as HTMLSelectElement;
-    fireEvent.change(categorySelect, { target: { value: "__create_new_category__" } });
-    const newCatInput = await screen.findByPlaceholderText("输入新分类名称");
+    fireEvent.click(screen.getByRole("button", { name: "新建分类" }));
+    const newCatInput = await screen.findByLabelText("新分类名称");
     fireEvent.change(newCatInput, { target: { value: "电商运营" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
 
-    // 新分类已写入下拉并选中
     await waitFor(() => {
-      expect((screen.getByLabelText("分类 (category)") as HTMLSelectElement).value).toBe("电商运营");
+      expect(screen.getByRole("combobox", { name: "分类 (category)" })).toHaveTextContent("电商运营");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -798,19 +859,12 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // 表单锁定为行业方案，自动拉取并展示可选专家模板
-    // （专家名同时出现在列表表格和表单选择器中，故用 getAllByText）
-    await waitFor(() => {
-      expect(screen.getAllByText("客服专家").length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText("营销专家").length).toBeGreaterThanOrEqual(1);
-    });
-
-    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
-    fireEvent.click(screen.getAllByRole("checkbox")[1]!);
-
-    // AITEAM-677：必须指定一个专家为 Planner 角色
-    const plannerRadios = screen.getAllByRole("radio");
-    fireEvent.click(plannerRadios[0]!);
+    const teamSelector = await screen.findByRole("combobox", { name: "配置专家模板" });
+    fireEvent.keyDown(teamSelector, { key: "ArrowDown" });
+    fireEvent.keyDown(teamSelector, { key: "Enter" });
+    fireEvent.keyDown(teamSelector, { key: "ArrowDown" });
+    fireEvent.keyDown(teamSelector, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "设 客服专家 为 Planner" }));
 
     // ID 由服务端自动生成（AITEAM-355 问题二）：表单只暴露 display_name，solution_id 已移除。
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
@@ -818,8 +872,17 @@ describe("注册表单", () => {
     fireEvent.change(nameInput, { target: { value: "全渠道方案" } });
 
     // AITEAM-677：planner_prompt 必填
-    const plannerPromptTa = screen.getByLabelText("Planner 编排规则提示词 (planner_prompt, 必填)");
+    const plannerPromptTa = screen.getByRole("textbox", { name: /Planner 编排规则提示词/ });
     fireEvent.change(plannerPromptTa, { target: { value: "组织各专家协作" } });
+    fireEvent.change(screen.getByLabelText("描述 (description)"), { target: { value: "全渠道服务" } });
+    fireEvent.change(screen.getByLabelText("图标 (icon)"), { target: { value: "retail" } });
+    fireEvent.change(screen.getByLabelText("知识引用 (knowledge_refs, 每行或逗号分隔)"), { target: { value: "kb_orders\nkb_finance" } });
+    fireEvent.change(screen.getByLabelText("技能引用 (skill_refs, 每行或逗号分隔)"), { target: { value: "route, summarize" } });
+    fireEvent.click(screen.getByRole("button", { name: "高级配置（Subtask、Aggregate、Grants、Tags）" }));
+    fireEvent.change(screen.getByLabelText("Subtask Prompt"), { target: { value: "拆解任务" } });
+    fireEvent.change(screen.getByLabelText("Aggregate Prompt"), { target: { value: "汇总结果" } });
+    fireEvent.change(screen.getByLabelText("默认 Grants (JSON)"), { target: { value: '{"max_concurrent_tasks":5}' } });
+    fireEvent.change(screen.getByLabelText("方案标签 (每行或逗号分隔)"), { target: { value: "零售\n电商" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
@@ -830,11 +893,20 @@ describe("注册表单", () => {
       });
       expect(registerCall).toBeTruthy();
       const body = JSON.parse(((registerCall as unknown[])[1] as { body: string }).body);
-      expect(body.expert_template_ids.sort()).toEqual(["exp_a", "exp_b"]);
-      expect(body.planner_template_id).toBe("exp_a");
-      expect(body.planner_prompt).toBe("组织各专家协作");
-      expect(body.solution_id).toBeUndefined();
-      expect(body.display_name).toBe("全渠道方案");
+      expect(body).toEqual({
+        display_name: "全渠道方案",
+        description: "全渠道服务",
+        icon: "retail",
+        expert_template_ids: ["exp_a", "exp_b"],
+        planner_template_id: "exp_a",
+        knowledge_refs: ["kb_orders", "kb_finance"],
+        skill_refs: ["route", "summarize"],
+        planner_prompt: "组织各专家协作",
+        subtask_prompt: "拆解任务",
+        aggregate_prompt: "汇总结果",
+        default_grants: { max_concurrent_tasks: 5 },
+        tags: ["零售", "电商"],
+      });
     });
   });
 
@@ -861,12 +933,13 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // 选专家但不指定 planner
-    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+    const teamSelector = await screen.findByRole("combobox", { name: "配置专家模板" });
+    fireEvent.keyDown(teamSelector, { key: "ArrowDown" });
+    fireEvent.keyDown(teamSelector, { key: "Enter" });
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
     fireEvent.change(nameInput, { target: { value: "测试方案" } });
     fireEvent.change(
-      screen.getByLabelText("Planner 编排规则提示词 (planner_prompt, 必填)"),
+      screen.getByRole("textbox", { name: /Planner 编排规则提示词/ }),
       { target: { value: "编排规则" } },
     );
 
@@ -925,9 +998,10 @@ describe("注册表单", () => {
       expect(screen.getByText("注册新模板/方案")).toBeInTheDocument();
     });
 
-    // 选专家并指定 planner，但不填 planner_prompt
-    fireEvent.click(screen.getAllByRole("checkbox")[0]!);
-    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    const teamSelector = await screen.findByRole("combobox", { name: "配置专家模板" });
+    fireEvent.keyDown(teamSelector, { key: "ArrowDown" });
+    fireEvent.keyDown(teamSelector, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "设 客服专家 为 Planner" }));
     const nameInput = document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!;
     fireEvent.change(nameInput, { target: { value: "测试方案" } });
 
@@ -1660,7 +1734,7 @@ describe("AstryX 目录工作台", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
     fireEvent.click(screen.getByRole("option", { name: "企业可见" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("可见性冲突");
+    expect(await screen.findByText("可见性冲突")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "system_prompt" })).toHaveValue("保留的输入");
   });
 

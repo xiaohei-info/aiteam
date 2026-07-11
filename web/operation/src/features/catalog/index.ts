@@ -1,6 +1,6 @@
 export { CatalogPage } from "./CatalogPage";
 export { CatalogDetailPage } from "./CatalogDetailPage";
-export { RegisterForm } from "./RegisterForm";
+export { RegisterForm } from "./register/RegisterForm";
 export { useCatalogApi } from "./useCatalogApi";
 export type {
   CatalogItem,
