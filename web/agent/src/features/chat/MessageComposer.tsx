@@ -12,8 +12,20 @@
  *   - listLoadedExperts（GET /api/agent/grants/experts）提供 @提及 roster 真实数据源。
  */
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { Button, cn } from "@aiteam/shared/ui";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
+import {
+  ChatComposer,
+  ChatComposerInput,
+  type ChatComposerInputHandle,
+} from "@astryxdesign/core/Chat";
+import { Button } from "@astryxdesign/core/Button";
 import { useApiError, useApp } from "../../lib/app-context";
 import { sendMessage, startRun } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
@@ -47,6 +59,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionAnchorRef = useRef<HTMLDivElement>(null);
   const skillAnchorRef = useRef<HTMLDivElement>(null);
+  const composerInputRef = useRef<ChatComposerInputHandle>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // roster 真实数据源（grants/experts：本地已装载/已授权专家投影）。
@@ -115,19 +128,11 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   }
 
   function insertAtCursor(insert: string) {
-    const field = document.getElementById("composer-content") as HTMLTextAreaElement | null;
-    if (field) {
-      const start = field.selectionStart ?? content.length;
-      const end = field.selectionEnd ?? content.length;
-      const next = content.slice(0, start) + insert + content.slice(end);
-      setContent(next);
-      requestAnimationFrame(() => {
-        field.focus();
-        field.selectionStart = field.selectionEnd = start + insert.length;
-      });
-    } else {
-      setContent((prev) => prev + insert);
-    }
+    const input = composerInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.insertText(insert);
+    setContent(input.getValue());
   }
 
   function pickHandle(handle: string) {
@@ -144,8 +149,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     showToast("截图工具即将上线");
   }
 
-  async function handleSubmit(event: FormEvent): Promise<void> {
-    event.preventDefault();
+  async function submitCurrentContent(): Promise<void> {
     const text = content.trim();
     const attachedNote =
       attachments.length > 0
@@ -168,152 +172,177 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     }
   }
 
+  function handleInputKeyDownCapture(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void submitCurrentContent();
+  }
+
+  const toolbarActions = (
+    <>
+      <Button
+        label="附件上传"
+        tooltip="附件上传"
+        size="sm"
+        variant="ghost"
+        icon={<span aria-hidden="true">📎</span>}
+        isIconOnly
+        onClick={openFilePicker}
+        isDisabled={sending}
+      />
+
+      <div ref={mentionAnchorRef} className="relative">
+        <Button
+          label="召唤其他智能体"
+          tooltip="@提及：召唤其他智能体"
+          size="sm"
+          variant="ghost"
+          icon={<span aria-hidden="true">🤖</span>}
+          isIconOnly
+          aria-expanded={mentionOpen}
+          onClick={() => setMentionOpen((v) => !v)}
+          isDisabled={sending}
+        />
+        {mentionOpen && (
+          <Popover>
+            {roster.length === 0 ? (
+              <div className="px-sm py-xs text-xs text-text-muted">暂无可召唤的智能体</div>
+            ) : (
+              <ul className="flex flex-col">
+                {roster.map((p) => {
+                  const handle = p.display_name;
+                  return (
+                    <li key={p.employee_id}>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
+                        onClick={() => pickHandle(handle)}
+                      >
+                        <span>@{handle}</span>
+                        <span className="text-xs text-text-muted">点击召唤</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Popover>
+        )}
+      </div>
+
+      <div ref={skillAnchorRef} className="relative">
+        <Button
+          label="技能市场入口"
+          tooltip="/：使用技能"
+          size="sm"
+          variant="ghost"
+          icon={<span aria-hidden="true">⚡</span>}
+          isIconOnly
+          aria-expanded={skillOpen}
+          onClick={() => setSkillOpen((v) => !v)}
+          isDisabled={sending}
+        />
+        {skillOpen && (
+          <Popover>
+            <ul className="flex flex-col">
+              {SKILL_OPTIONS.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
+                    onClick={() => pickSkill(s.label)}
+                  >
+                    <span>/{s.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Popover>
+        )}
+      </div>
+
+      <Button
+        label="截图工具"
+        tooltip="截图工具"
+        size="sm"
+        variant="ghost"
+        icon={<span aria-hidden="true">📷</span>}
+        isIconOnly
+        onClick={handleScreenshot}
+        isDisabled={sending}
+      />
+    </>
+  );
+
   return (
-    <form className="flex flex-col gap-xs border-t border-gold/15 p-md" onSubmit={handleSubmit}>
+    <div className="flex flex-col gap-xs p-md">
       {toast && (
         <div role="status" className="mb-xs rounded-md bg-surface-raised px-sm py-xs text-xs text-text-primary">
           {toast}
         </div>
       )}
-
-      {/* 工具栏：附件 / @提及 / 技能市场入口 / 截图 */} 
-      <div className="flex items-center gap-xs">
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          aria-label="附件上传"
-          title="附件上传"
-          onClick={openFilePicker}
-          disabled={sending}
-        >
-          📎
-        </Button>
-
-        <div ref={mentionAnchorRef} className="relative">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-label="召唤其他智能体"
-            title="@提及：召唤其他智能体"
-            aria-expanded={mentionOpen}
-            onClick={() => setMentionOpen((v) => !v)}
-            disabled={sending}
-          >
-            🤖
-          </Button>
-          {mentionOpen && (
-            <Popover>
-              {roster.length === 0 ? (
-                <div className="px-sm py-xs text-xs text-text-muted">暂无可召唤的智能体</div>
-              ) : (
-                <ul className="flex flex-col">
-                  {roster.map((p) => {
-                    const handle = p.display_name;
-                    return (
-                      <li key={p.employee_id}>
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
-                          onClick={() => pickHandle(handle)}
-                        >
-                          <span>@{handle}</span>
-                          <span className="text-xs text-text-muted">点击召唤</span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </Popover>
-          )}
-        </div>
-
-        <div ref={skillAnchorRef} className="relative">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            aria-label="技能市场入口"
-            title="/：使用技能"
-            aria-expanded={skillOpen}
-            onClick={() => setSkillOpen((v) => !v)}
-            disabled={sending}
-          >
-            ⚡
-          </Button>
-          {skillOpen && (
-            <Popover>
-              <ul className="flex flex-col">
-                {SKILL_OPTIONS.map((s) => (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
-                      onClick={() => pickSkill(s.label)}
-                    >
-                      <span>/{s.label}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </Popover>
-          )}
-        </div>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          aria-label="截图工具"
-          title="截图工具"
-          onClick={handleScreenshot}
-          disabled={sending}
-        >
-          📷
-        </Button>
-
-        <span className="flex-1" />
-      </div>
-
-      <textarea
-        id="composer-content"
-        className="resize-y rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none focus:ring-2 focus:ring-gold"
+      <ChatComposer
         value={content}
-        onChange={(e) => setContent(e.target.value)}
+        onChange={setContent}
+        onSubmit={() => undefined}
+        isDisabled={sending}
         placeholder="输入消息，@ 召唤智能体，/ 使用技能…"
-        rows={2}
-        disabled={sending}
-        aria-label="消息内容"
+        status={error ? { type: "error", message: error } : undefined}
+        drawer={
+          attachments.length > 0 || mentioned.length > 0 ? (
+            <div className="flex flex-col gap-xs px-xs">
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-xs">
+                  {attachments.map((f, i) => (
+                    <span
+                      key={`${f.name}-${i}`}
+                      className="inline-flex items-center gap-xs rounded-md border border-gold/20 bg-surface px-sm py-xs text-xs text-text-primary"
+                    >
+                      📎 {f.name}
+                      <button
+                        type="button"
+                        aria-label={`移除附件 ${f.name}`}
+                        className="text-text-muted hover:text-text-primary"
+                        onClick={() => removeAttachment(i)}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {mentioned.length > 0 && (
+                <div className="px-xs text-xs text-text-secondary" aria-live="polite">
+                  已 @提及：{mentioned.map((h) => `@${h}`).join(" ")}
+                </div>
+              )}
+            </div>
+          ) : undefined
+        }
+        footerActions={toolbarActions}
+        input={
+          <ChatComposerInput
+            handleRef={composerInputRef}
+            label="消息内容"
+            value={content}
+            onChange={setContent}
+            onSubmit={() => undefined}
+            onKeyDownCapture={handleInputKeyDownCapture}
+            placeholder="输入消息，@ 召唤智能体，/ 使用技能…"
+            isDisabled={sending}
+          />
+        }
+        sendButton={
+          <Button
+            label="发送"
+            variant="primary"
+            isDisabled={sending || (!content.trim() && attachments.length === 0)}
+            isLoading={sending}
+            onClick={() => void submitCurrentContent()}
+          />
+        }
       />
-
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-xs">
-          {attachments.map((f, i) => (
-            <span
-              key={`${f.name}-${i}`}
-              className="inline-flex items-center gap-xs rounded-md border border-gold/20 bg-surface px-sm py-xs text-xs text-text-primary"
-            >
-              📎 {f.name}
-              <button
-                type="button"
-                aria-label={`移除附件 ${f.name}`}
-                className="text-text-muted hover:text-text-primary"
-                onClick={() => removeAttachment(i)}
-              >
-                ✕
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {mentioned.length > 0 && (
-        <div className="px-xs text-xs text-text-secondary" aria-live="polite">
-          已 @提及：{mentioned.map((h) => `@${h}`).join(" ")}
-        </div>
-      )}
 
       <input
         ref={fileInputRef}
@@ -323,12 +352,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         onChange={handleFileChange}
         aria-hidden="true"
       />
-
-      {error && <div className="text-xs text-danger">{error}</div>}
-      <Button type="submit" className="self-end" disabled={sending || (content.trim().length === 0 && attachments.length === 0)}>
-        {sending ? "发送中…" : "发送"}
-      </Button>
-    </form>
+    </div>
   );
 }
 

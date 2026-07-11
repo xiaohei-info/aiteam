@@ -25,6 +25,11 @@ import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
 import { listConversations, sendMessage, startRun, createTimelineFetcher } from "./useChatApi";
 import { TimelineView } from "./TimelineView";
 
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: vi.fn(() => null),
+});
+
 // ---- 通用 helper ----
 
 function listEnvelope<T>(items: T[], nextCursor: string | null = null): string {
@@ -59,12 +64,20 @@ function clearStorage() {
 function makeFetch(
   convs: ReturnType<typeof makeConv>[],
   timelineEvents: BusinessTimelineEvent[] = [],
-  opts: { postMessageOk?: boolean } = {},
+  opts: { postMessageOk?: boolean; startRunOk?: boolean } = {},
 ) {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
     if (path.includes("/runs") && init?.method === "POST") {
-      return new Response(JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        opts.startRunOk === false
+          ? JSON.stringify({ type: "err", title: "run failed", status: 500, code: "run_failed" })
+          : JSON.stringify({ data: { id: "run-1", conversation_id: "c1", status: "running", created_at: "", updated_at: "" } }),
+        {
+          status: opts.startRunOk === false ? 500 : 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     }
     if (path.includes("/api/agent/conversations") && !path.includes("/messages") && !path.includes("/timeline") && init?.method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -145,6 +158,25 @@ describe("ConversationList", () => {
       expect(screen.getByRole("log", { name: "对话时间线" })).toBeInTheDocument(); // TerminalPanel 也有 role="log"，按 name 消歧
     });
   });
+
+  it("使用 Astryx chat log 和 composer 保留发送主链", async () => {
+    loginStorage();
+    const fetchImpl = makeFetch([makeConv("c1", "会话A")], [makeEvent(1)]);
+    globalThis.fetch = fetchImpl;
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const timeline = await screen.findByRole("log", { name: "对话时间线" });
+    expect(timeline).toBeInTheDocument();
+    expect(timeline).toHaveClass("astryx-chat-message-list");
+    const textbox = screen.getByRole("textbox", { name: "消息内容" });
+    expect(textbox).toBeInTheDocument();
+    expect(textbox.closest(".astryx-chat-composer")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument();
+  });
 });
 
 // ---- 2. TimelineView 渲染 BusinessTimelineEvent ----
@@ -192,7 +224,7 @@ describe("MessageComposer — 发送消息", () => {
 
     await waitFor(() => expect(screen.getByLabelText("消息内容")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("消息内容"), { target: { value: "hello" } });
+    setComposerContent(screen.getByLabelText("消息内容"), "hello");
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
@@ -203,7 +235,87 @@ describe("MessageComposer — 发送消息", () => {
       expect(postRun).toBeTruthy();
     });
   });
+
+  it("按 Enter 与发送按钮共用发送主链", async () => {
+    loginStorage();
+    const fetchImpl = makeFetch([makeConv("c1", "会话A")]);
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const input = await screen.findByRole("textbox", { name: "消息内容" });
+    setComposerContent(input, "enter-send");
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
+      expect(calls.some(([u, i]) => u.includes("/messages") && i?.method === "POST")).toBe(true);
+      expect(calls.some(([u, i]) => u.includes("/runs") && i?.method === "POST")).toBe(true);
+    });
+  });
+
+  it("sendMessage 失败时不清空内容", async () => {
+    loginStorage();
+    globalThis.fetch = makeFetch([makeConv("c1", "会话A")], [], { postMessageOk: false });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const input = await screen.findByRole("textbox", { name: "消息内容" });
+    setComposerContent(input, "保留这条消息");
+    const send = screen.getByRole("button", { name: "发送" });
+    fireEvent.click(send);
+
+    await waitFor(() => expect(send).not.toBeDisabled());
+    expect(readComposerContent(input)).toBe("保留这条消息");
+  });
+
+  it("startRun 失败时不清空内容", async () => {
+    loginStorage();
+    globalThis.fetch = makeFetch([makeConv("c1", "会话A")], [], { startRunOk: false });
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const input = await screen.findByRole("textbox", { name: "消息内容" });
+    const file = new File(["run"], "run.txt", { type: "text/plain" });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    setComposerContent(input, "run 失败也保留");
+    const send = screen.getByRole("button", { name: "发送" });
+    fireEvent.click(send);
+
+    await waitFor(() => expect(send).not.toBeDisabled());
+    expect(readComposerContent(input)).toBe("run 失败也保留");
+    expect(screen.getByRole("button", { name: "移除附件 run.txt" })).toBeInTheDocument();
+  });
 });
+
+function setComposerContent(input: HTMLElement, value: string): void {
+  if (input instanceof HTMLTextAreaElement) {
+    fireEvent.change(input, { target: { value } });
+    return;
+  }
+  input.textContent = value;
+  fireEvent.input(input);
+}
+
+function readComposerContent(input: HTMLElement): string {
+  return input instanceof HTMLTextAreaElement ? input.value : input.textContent ?? "";
+}
 
 // ---- 4. TimelineStore cursor 分页（loadOlder） ----
 
@@ -351,8 +463,8 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
     const lunaBtn = await screen.findByRole("button", { name: /Luna/ });
     fireEvent.click(lunaBtn);
 
-    const ta = screen.getByLabelText("消息内容") as HTMLTextAreaElement;
-    await waitFor(() => expect(ta.value).toContain("@Luna"));
+    const input = screen.getByLabelText("消息内容");
+    await waitFor(() => expect(readComposerContent(input)).toContain("@Luna"));
   });
 
   it("@提及已输入时展示「已 @提及」提示", async () => {
@@ -365,7 +477,7 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
     // 关闭面板
     fireEvent.click(document.body);
 
-    fireEvent.change(screen.getByLabelText("消息内容"), { target: { value: "你好 @Luna 请帮忙" } });
+    setComposerContent(screen.getByLabelText("消息内容"), "你好 @Luna 请帮忙");
     expect(await screen.findByText(/已 @提及：@Luna/)).toBeInTheDocument();
   });
 
@@ -376,8 +488,8 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
     const skillBtn = await screen.findByRole("button", { name: /\/写作助手/ });
     fireEvent.click(skillBtn);
 
-    const ta = screen.getByLabelText("消息内容") as HTMLTextAreaElement;
-    await waitFor(() => expect(ta.value).toContain("/写作助手"));
+    const input = screen.getByLabelText("消息内容");
+    await waitFor(() => expect(readComposerContent(input)).toContain("/写作助手"));
   });
 
   it("附件上传后发送的消息体包含 [附件: filename]", async () => {
@@ -388,7 +500,7 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
     expect(fileInput).toBeTruthy();
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    fireEvent.change(screen.getByLabelText("消息内容"), { target: { value: "请查看附件" } });
+    setComposerContent(screen.getByLabelText("消息内容"), "请查看附件");
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
@@ -398,6 +510,10 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
       const body = JSON.parse(String(postMsg?.[1]?.body ?? "{}"));
       expect(body.content).toContain("请查看附件");
       expect(body.content).toContain("[附件: spec.txt]");
+    });
+    await waitFor(() => {
+      expect(readComposerContent(screen.getByLabelText("消息内容"))).toBe("");
+      expect(screen.queryByRole("button", { name: "移除附件 spec.txt" })).toBeNull();
     });
   });
 

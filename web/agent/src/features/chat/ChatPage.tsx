@@ -8,6 +8,7 @@
 
 import { useCallback, useState } from "react";
 import { Button, GlassPanel, cn } from "@aiteam/shared/ui";
+import { ChatLayout } from "@astryxdesign/core/Chat";
 
 import { useApp, useApiError } from "../../lib/app-context";
 import { ConversationStateControl } from "./ConversationStateControl";
@@ -111,15 +112,20 @@ export function ChatPage() {
                 <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
               </div>
             )}
-            <TimelineView
-              client={client}
-              conversationId={selected.id}
-              refreshSignal={sentSignal}
-            />
+            <ChatLayout
+              density="balanced"
+              composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
+              emptyState={<div>选择一个会话开始对话</div>}
+            >
+              <TimelineView
+                client={client}
+                conversationId={selected.id}
+                refreshSignal={sentSignal}
+              />
+            </ChatLayout>
             <div className="px-md pb-sm">
               <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
             </div>
-            <MessageComposer conversationId={selected.id} onSent={handleSent} />
             <div className="min-h-0 flex-1 px-md pb-md pt-sm">
               <TerminalPanel
                 client={client}
