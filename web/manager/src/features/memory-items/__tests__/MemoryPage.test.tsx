@@ -63,15 +63,17 @@ describe("MemoryPage 记忆管理", () => {
 
   it("渲染记忆条目列表", async () => {
     mockApi();
-    renderPage();
+    const { container } = renderPage();
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
     expect(screen.getByText("用户偏好中文回答")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "记忆管理" })).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
   it("加载失败展示错误", async () => {
     mockApi({ list: vi.fn().mockRejectedValue(new ApiError("记忆服务不可用", 503, "memory_unavailable")) });
     renderPage();
-    await waitFor(() => expect(screen.getByText("记忆服务不可用")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("记忆服务不可用"));
   });
 
   it("创建记忆后刷新列表", async () => {

@@ -62,14 +62,16 @@ describe("ConnectorsPage 连接器", () => {
 
   it("渲染预设列表", async () => {
     mockApi();
-    renderPage();
+    const { container } = renderPage();
     await waitFor(() => expect(screen.getByText("GitHub")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { level: 1, name: "连接器" })).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
   it("加载失败展示错误", async () => {
     mockApi({ getPresets: vi.fn().mockRejectedValue(new ApiError("连接器服务不可用", 503, "connector_unavailable")) });
     renderPage();
-    await waitFor(() => expect(screen.getByText("连接器服务不可用")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("连接器服务不可用"));
   });
 
   it("测试连接成功展示结果", async () => {

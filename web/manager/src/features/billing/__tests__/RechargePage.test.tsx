@@ -68,12 +68,15 @@ describe("RechargePage 充值", () => {
 
   it("渲染充值记录列表", async () => {
     mockApi();
-    renderPage();
+    const { container } = renderPage();
     await waitFor(() => expect(screen.getByText("ORD001")).toBeInTheDocument());
     expect(screen.getByText("ORD002")).toBeInTheDocument();
     expect(screen.getByText("¥100.00")).toBeInTheDocument();
     expect(screen.getByText("¥50.00")).toBeInTheDocument();
     expect(screen.getByText("400,000")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "充值记录" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "支付方式" })).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
   it("空状态：无充值记录时显示空提示", async () => {
@@ -85,7 +88,7 @@ describe("RechargePage 充值", () => {
   it("加载失败展示错误信息", async () => {
     mockApi({ listRecharges: vi.fn().mockRejectedValue(new ApiError("充值服务暂不可用", 503, "recharge_unavailable")) });
     renderPage();
-    await waitFor(() => expect(screen.getByText("充值服务暂不可用")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("充值服务暂不可用"));
   });
 
   it("输入金额并提交触发 createRecharge", async () => {

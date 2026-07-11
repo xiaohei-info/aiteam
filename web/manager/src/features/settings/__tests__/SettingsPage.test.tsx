@@ -65,17 +65,19 @@ describe("SettingsPage 设置", () => {
 
   it("渲染企业设置表单 + 邀请列表", async () => {
     mockApi();
-    renderPage();
+    const { container } = renderPage();
     await waitFor(() => expect(screen.getByDisplayValue("测试企业")).toBeInTheDocument());
     const row = screen.getByTestId("invite-row");
     expect(within(row).getByText(/13800000000/)).toBeInTheDocument();
     expect(within(row).getByText("pending")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "企业设置" })).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
   it("加载失败展示错误", async () => {
     mockApi({ get: vi.fn().mockRejectedValue(new ApiError("设置服务不可用", 503, "settings_unavailable")) });
     renderPage();
-    await waitFor(() => expect(screen.getByText("设置服务不可用")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("设置服务不可用"));
   });
 
   it("保存设置后刷新", async () => {

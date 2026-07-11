@@ -1,7 +1,15 @@
 /** B05 连接器页 — 预设列表 + 状态/测试。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useConnectorsApi } from "./useConnectorsApi";
 import type { ConnectorPreset } from "./types";
 
@@ -28,23 +36,25 @@ export function ConnectorsPage(): ReactNode {
     catch (e) { setTestResult(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "测试失败"); }
   }, [api]);
 
-  if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
+  if (loading) return <Card padding={4} role="status" aria-label="连接器加载中"><Skeleton height={120} /></Card>;
 
   return (
-    <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">连接器</h1>
-      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
-      {testResult && <GlassPanel className="rounded-window p-md text-sm text-text-secondary">{testResult}</GlassPanel>}
-      <div className="grid grid-cols-4 gap-md">
+    <VStack gap={4}>
+      <Heading level={1}>连接器</Heading>
+      {error && <Banner status="error" title={error} />}
+      {testResult && <Banner status={testResult.startsWith("✅") ? "success" : "error"} title={testResult} />}
+      {presets.length === 0 ? <EmptyState title="暂无连接器" /> : <Grid columns={{ minWidth: 220, max: 4 }} gap={4}>
         {presets.map((p) => (
-          <GlassPanel key={p.preset_id} className="rounded-window p-md">
-            <div className="flex items-center gap-sm"><span className="text-lg">{p.icon ? "🔌" : "⚙"}</span><span className="text-sm font-bold text-text-primary">{p.name}</span></div>
-            <p className="m-0 mt-xs text-xs text-text-muted">{p.description}</p>
-            <p className="m-0 mt-xs text-xs text-text-muted">类型: {p.type}</p>
-            <div className="mt-sm"><Button variant="ghost" size="sm" onClick={() => void handleTest(p.preset_id)}>测试连接</Button></div>
-          </GlassPanel>
+          <Card key={p.preset_id} padding={4}>
+            <VStack gap={2}>
+              <Heading level={2}>{p.name}</Heading>
+              <Text type="supporting">{p.description}</Text>
+              <Text type="supporting">类型：{p.type}</Text>
+              <Button label="测试连接" variant="secondary" size="sm" onClick={() => void handleTest(p.preset_id)} />
+            </VStack>
+          </Card>
         ))}
-      </div>
-    </section>
+      </Grid>}
+    </VStack>
   );
 }

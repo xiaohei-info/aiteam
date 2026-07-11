@@ -1,13 +1,31 @@
 /** 充值页 — 对齐旧架构 /admin/billing/recharge 入口。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useBillingApi } from "./useBillingApi";
 import type { Recharge } from "./types";
 
 const PAYMENT_METHODS = [
   { key: "wechat", label: "微信支付" },
   { key: "alipay", label: "支付宝" },
+];
+
+type RechargeRow = Recharge & Record<string, unknown>;
+const columns: TableColumn<RechargeRow>[] = [
+  { key: "created_at", header: "时间", width: pixel(190), renderCell: (row) => row.created_at?.slice(0, 19) },
+  { key: "amount", header: "金额", width: pixel(120), renderCell: (row) => `¥${String(row.amount)}` },
+  { key: "token_credited", header: "到账Token", width: pixel(140), renderCell: (row) => row.token_credited.toLocaleString() },
+  { key: "status", header: "状态", width: pixel(120) },
+  { key: "order_no", header: "订单号", width: proportional(1) },
 ];
 
 export function RechargePage(): ReactNode {
@@ -52,72 +70,44 @@ export function RechargePage(): ReactNode {
   }
 
   return (
-    <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">充值</h1>
-
-      {error && (
-        <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>
-      )}
-
-      <GlassPanel className="rounded-window p-md">
-        <div className="flex flex-col gap-sm">
-          <Field label="充值金额（元）">
-            <Input
-              type="number"
+    <VStack gap={4}>
+      <Heading level={1}>充值</Heading>
+      {error && <Banner status="error" title={error} />}
+      <Card padding={4}>
+        <VStack gap={3}>
+          <TextInput
+              label="充值金额（元）"
               value={amount}
               placeholder="请输入金额"
-              onChange={(e) => setAmount((e.target as HTMLInputElement).value)}
+              onChange={setAmount}
+              {...({ inputMode: "decimal" } as Record<string, string>)}
+              width="100%"
             />
-          </Field>
-          <div className="flex gap-xs">
+          <HStack gap={1} role="group" aria-label="支付方式">
             {PAYMENT_METHODS.map((p) => (
               <Button
                 key={p.key}
-                variant={method === p.key ? "metal" : "ghost"}
+                label={p.label}
+                variant={method === p.key ? "primary" : "secondary"}
                 size="sm"
+                aria-pressed={method === p.key}
                 onClick={() => setMethod(p.key)}
-              >
-                {p.label}
-              </Button>
+              />
             ))}
-          </div>
-          <Button variant="metal" size="md" disabled={submitting || !amount} onClick={submit}>
-            {submitting ? "提交中…" : "立即充值"}
-          </Button>
-        </div>
-      </GlassPanel>
-
-      <GlassPanel className="rounded-window p-md">
-        <h2 className="m-0 mb-sm text-sm font-semibold text-text-secondary">充值记录</h2>
+          </HStack>
+          <Button label="立即充值" variant="primary" isDisabled={submitting || !amount} isLoading={submitting} onClick={() => void submit()} />
+        </VStack>
+      </Card>
+      <Card padding={4}>
+        <VStack gap={3}>
+        <Heading level={2}>充值记录</Heading>
         {loading ? (
-          <p className="m-0 text-sm text-text-muted">加载中…</p>
-        ) : records.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">暂无充值记录</p>
+          <VStack gap={2} role="status" aria-label="充值记录加载中"><Skeleton height={32} /><Skeleton height={64} index={1} /></VStack>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-text-muted">
-                <th className="pb-xs">时间</th>
-                <th className="pb-xs">金额</th>
-                <th className="pb-xs">到账Token</th>
-                <th className="pb-xs">状态</th>
-                <th className="pb-xs">订单号</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((r) => (
-                <tr key={r.recharge_id} className="text-text-secondary">
-                  <td className="pb-xs">{r.created_at?.slice(0, 19)}</td>
-                  <td className="pb-xs">¥{String(r.amount)}</td>
-                  <td className="pb-xs">{r.token_credited.toLocaleString()}</td>
-                  <td className="pb-xs">{r.status}</td>
-                  <td className="pb-xs">{r.order_no}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table aria-label="充值记录" tableProps={{ "aria-label": "充值记录" }} data={records as RechargeRow[]} columns={columns} idKey="recharge_id" density="compact" emptyState={<EmptyState title="暂无充值记录" isCompact />} />
         )}
-      </GlassPanel>
-    </section>
+        </VStack>
+      </Card>
+    </VStack>
   );
 }

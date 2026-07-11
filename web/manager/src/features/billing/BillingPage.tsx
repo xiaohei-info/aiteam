@@ -1,7 +1,15 @@
 /** B04 工资管理页 — 用量总览 + 明细 + 充值。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useBillingApi } from "./useBillingApi";
 import type { UsageOverview, BillingBalance } from "./types";
 
@@ -29,35 +37,39 @@ export function BillingPage(): ReactNode {
   useEffect(() => { void load(); }, [load]);
 
   return (
-    <section className="flex flex-col gap-md">
-      <div className="flex items-center justify-between">
-        <h1 className="m-0 text-xl font-bold text-text-primary">工资管理</h1>
-        <div className="flex gap-xs">
+    <VStack gap={4}>
+      <HStack justify="between" align="center">
+        <Heading level={1}>工资管理</Heading>
+        <HStack gap={1} role="group" aria-label="账单周期">
           {PERIODS.map((p) => (
-            <Button key={p.key} variant={period === p.key ? "metal" : "ghost"} size="sm" onClick={() => setPeriod(p.key)}>{p.label}</Button>
+            <Button key={p.key} label={p.label} variant={period === p.key ? "primary" : "secondary"} size="sm" aria-pressed={period === p.key} onClick={() => setPeriod(p.key)} />
           ))}
-        </div>
-      </div>
+        </HStack>
+      </HStack>
 
-      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
+      {error && <Banner status="error" title={error} />}
 
       {balance && (
-        <div className="grid grid-cols-3 gap-md">
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">账户余额</p><p className="m-0 mt-xs text-lg font-bold text-gold-bright">¥{String(balance.balance)}</p></GlassPanel>
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">预估可用Token</p><p className="m-0 mt-xs text-lg font-bold text-text-primary">{balance.estimated_tokens}</p></GlassPanel>
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">更新时间</p><p className="m-0 mt-xs text-sm text-text-secondary">{balance.updated_at?.slice(0, 19)}</p></GlassPanel>
-        </div>
+        <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
+          <Metric title="账户余额" value={`¥${String(balance.balance)}`} />
+          <Metric title="预估可用Token" value={balance.estimated_tokens.toLocaleString()} />
+          <Metric title="更新时间" value={balance.updated_at?.slice(0, 19) ?? "—"} />
+        </Grid>
       )}
 
       {overview && (
-        <div className="grid grid-cols-3 gap-md">
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">总消耗Token</p><p className="m-0 mt-xs text-lg font-bold text-text-primary">{overview.total_tokens.toLocaleString()}</p></GlassPanel>
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">折合费用</p><p className="m-0 mt-xs text-lg font-bold text-gold-bright">¥{String(overview.total_cost)}</p></GlassPanel>
-          <GlassPanel className="rounded-window p-md"><p className="m-0 text-xs text-text-muted">消耗最高员工</p><p className="m-0 mt-xs text-sm text-text-secondary">{overview.top_employee_id ?? "—"}</p></GlassPanel>
-        </div>
+        <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
+          <Metric title="总消耗Token" value={overview.total_tokens.toLocaleString()} />
+          <Metric title="折合费用" value={`¥${String(overview.total_cost)}`} />
+          <Metric title="消耗最高员工" value={overview.top_employee_id ?? "—"} />
+        </Grid>
       )}
 
-      {loading && <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>}
-    </section>
+      {loading && <Card padding={4} role="status" aria-label="工资数据加载中"><Skeleton height={96} /></Card>}
+    </VStack>
   );
+}
+
+function Metric({ title, value }: { title: string; value: string }): ReactNode {
+  return <Card padding={4}><VStack gap={1}><Text type="supporting">{title}</Text><Text type="display-2" hasTabularNumbers>{value}</Text></VStack></Card>;
 }

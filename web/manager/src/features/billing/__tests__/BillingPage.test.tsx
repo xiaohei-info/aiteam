@@ -63,16 +63,19 @@ describe("BillingPage 工资管理", () => {
 
   it("渲染用量总览 + 余额卡片", async () => {
     mockApi();
-    renderPage();
+    const { container } = renderPage();
     await waitFor(() => expect(screen.getByText("¥200.00")).toBeInTheDocument());
     expect(screen.getByText("150,000")).toBeInTheDocument();
     expect(screen.getByText("¥45.50")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "账单周期" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "本月" })).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
   it("加载失败展示错误信息", async () => {
     mockApi({ getOverview: vi.fn().mockRejectedValue(new ApiError("账单服务暂不可用", 503, "billing_unavailable")) });
     renderPage();
-    await waitFor(() => expect(screen.getByText("账单服务暂不可用")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("账单服务暂不可用"));
   });
 
   it("切换周期触发重新加载", async () => {
