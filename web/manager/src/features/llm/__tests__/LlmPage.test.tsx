@@ -85,6 +85,9 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
     expect(screen.getByTestId("model-row")).toBeInTheDocument();
     expect(screen.getByText("GPT-5")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "LLM 管理" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Provider 列表" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "模型列表" })).toBeInTheDocument();
   });
 
   it("加载失败展示错误", async () => {
@@ -101,6 +104,7 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("open-create"));
+    expect(screen.getByRole("dialog", { name: "新增 Provider" })).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("field-name"), { target: { value: "Anthropic" } });
     fireEvent.change(screen.getByTestId("field-key"), { target: { value: "anthropic" } });
     fireEvent.click(screen.getByTestId("submit-form"));
@@ -129,6 +133,7 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() =>
       expect(screen.getByTestId("action-error")).toHaveTextContent("Provider 名称已存在"),
     );
+    expect(screen.getByRole("dialog", { name: "新增 Provider" })).toBeInTheDocument();
   });
 
   it("编辑 Provider 名称/base_url/is_active 并刷新", async () => {
@@ -138,13 +143,14 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("edit-p1"));
+    expect(screen.getByRole("dialog", { name: /编辑 Provider/ })).toBeInTheDocument();
     expect(screen.getByTestId("edit-form")).toBeInTheDocument();
     // provider_key 在编辑态只读
     expect(screen.getByTestId("field-key")).toBeDisabled();
 
     fireEvent.change(screen.getByTestId("field-name"), { target: { value: "OpenAI v2" } });
     fireEvent.change(screen.getByTestId("field-baseurl"), { target: { value: "https://api.example.com" } });
-    fireEvent.click(screen.getByTestId("field-is-active"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用" }));
     fireEvent.click(screen.getByTestId("submit-form"));
 
     await waitFor(() =>
@@ -208,6 +214,7 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() => expect(screen.getByTestId("model-row")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("open-create-model"));
+    expect(screen.getByRole("dialog", { name: "新增模型" })).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("m-field-uid"), { target: { value: "claude-4" } });
     fireEvent.change(screen.getByTestId("m-field-name"), { target: { value: "Claude 4" } });
     fireEvent.change(screen.getByTestId("m-field-ctx"), { target: { value: "200000" } });

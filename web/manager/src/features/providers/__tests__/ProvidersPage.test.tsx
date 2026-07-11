@@ -66,6 +66,7 @@ describe("ProvidersPage", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("openai-main")).toBeInTheDocument());
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Provider 凭据" })).toBeInTheDocument();
   });
 
   it("只读角色（member）不显示新增凭据入口与删除操作", async () => {
@@ -80,8 +81,9 @@ describe("ProvidersPage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     fireEvent.click(screen.getByText("新增凭据"));
-    fireEvent.change(screen.getByLabelText("Provider Ref"), { target: { value: "newapi-main" } });
-    fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
+    expect(screen.getByRole("dialog", { name: "新增凭据" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Provider Ref/), { target: { value: "newapi-main" } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("创建"));
     await waitFor(() =>
       expect(api.create).toHaveBeenCalledWith(
@@ -94,7 +96,7 @@ describe("ProvidersPage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     fireEvent.click(screen.getByText("新增凭据"));
-    fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("创建"));
     await waitFor(() => expect(screen.getByText("provider_ref 和 secret 为必填")).toBeInTheDocument());
     expect(api.create).not.toHaveBeenCalled();
@@ -103,6 +105,7 @@ describe("ProvidersPage", () => {
   it("能力目录：添加模型行并渲染输入控件", async () => {
     mockApi();
     renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("暂无 Provider 凭据。")).toBeInTheDocument());
     fireEvent.click(screen.getByText("新增凭据"));
     fireEvent.click(screen.getByText("＋ 添加模型"));
     expect(screen.getByPlaceholderText("模型标识，如 gpt-4o")).toBeInTheDocument();
@@ -114,8 +117,8 @@ describe("ProvidersPage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     fireEvent.click(screen.getByText("新增凭据"));
-    fireEvent.change(screen.getByLabelText("Provider Ref"), { target: { value: "newapi-main" } });
-    fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
+    fireEvent.change(screen.getByLabelText(/Provider Ref/), { target: { value: "newapi-main" } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("＋ 添加模型"));
     fireEvent.change(screen.getByPlaceholderText("模型标识，如 gpt-4o"), { target: { value: "gpt-4o" } });
     fireEvent.change(screen.getByPlaceholderText("显示名（可选）"), { target: { value: "GPT-4o" } });
@@ -133,8 +136,8 @@ describe("ProvidersPage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     fireEvent.click(screen.getByText("新增凭据"));
-    fireEvent.change(screen.getByLabelText("Provider Ref"), { target: { value: "newapi-main" } });
-    fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
+    fireEvent.change(screen.getByLabelText(/Provider Ref/), { target: { value: "newapi-main" } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("＋ 添加模型")); // 空行，不填
     fireEvent.click(screen.getByText("创建"));
     await waitFor(() =>
@@ -145,6 +148,7 @@ describe("ProvidersPage", () => {
   it("能力目录：移除模型行", async () => {
     mockApi();
     renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("暂无 Provider 凭据。")).toBeInTheDocument());
     fireEvent.click(screen.getByText("新增凭据"));
     fireEvent.click(screen.getByText("＋ 添加模型"));
     expect(screen.getByPlaceholderText("模型标识，如 gpt-4o")).toBeInTheDocument();
@@ -155,6 +159,7 @@ describe("ProvidersPage", () => {
   it("能力目录：切换启用 checkbox", async () => {
     mockApi();
     renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("暂无 Provider 凭据。")).toBeInTheDocument());
     fireEvent.click(screen.getByText("新增凭据"));
     fireEvent.click(screen.getByText("＋ 添加模型"));
     const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
@@ -167,12 +172,39 @@ describe("ProvidersPage", () => {
     mockApi();
     renderPage(["owner"]);
     fireEvent.click(screen.getByText("新增凭据"));
-    fireEvent.change(screen.getByLabelText("Provider Ref"), { target: { value: "newapi-main" } });
-    fireEvent.change(screen.getByLabelText("Secret（明文，仅本次）"), { target: { value: "sk-..." } });
+    fireEvent.change(screen.getByLabelText(/Provider Ref/), { target: { value: "newapi-main" } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
     fireEvent.click(screen.getByText("＋ 添加模型"));
     fireEvent.click(screen.getByText("创建"));
     await waitFor(() => expect(screen.queryByText("创建")).not.toBeInTheDocument());
     expect(screen.queryByPlaceholderText("模型标识，如 gpt-4o")).not.toBeInTheDocument();
+  });
+
+  it("取消创建：关闭 Dialog 且不调用 create", async () => {
+    const api = mockApi();
+    renderPage(["owner"]);
+    fireEvent.click(screen.getByText("新增凭据"));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增凭据" })).not.toBeInTheDocument());
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it("创建失败：显示错误并保留 Dialog", async () => {
+    const api = mockApi({ create: vi.fn().mockRejectedValue(new Error("boom")) });
+    renderPage(["owner"]);
+    fireEvent.click(screen.getByText("新增凭据"));
+    fireEvent.change(screen.getByLabelText(/Provider Ref/), { target: { value: "newapi-main" } });
+    fireEvent.change(screen.getByLabelText(/Secret（明文，仅本次）/), { target: { value: "sk-..." } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("创建失败"));
+    expect(screen.getByRole("dialog", { name: "新增凭据" })).toBeInTheDocument();
+    expect(api.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("加载失败：显示错误 Banner", async () => {
+    mockApi({ list: vi.fn().mockRejectedValue(new Error("boom")) });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
   });
 
   it("删除：点击删除调用 api.del 并刷新列表", async () => {
