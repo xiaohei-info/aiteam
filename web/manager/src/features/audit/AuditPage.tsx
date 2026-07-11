@@ -1,5 +1,5 @@
 /** 审计事件页 — 事件列表。 */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
@@ -29,19 +29,25 @@ export function AuditPage(): ReactNode {
   const [eventType, setEventType] = useState("");
   const [page, setPage] = useState(1);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setEvents(await api.list({ event_type: eventType || undefined, page }));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "审计事件加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [api, eventType, page]);
+  useEffect(() => {
+    let cancelled = false;
 
-  useEffect(() => { void load(); }, [load]);
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const items = await api.list({ event_type: eventType || undefined, page });
+        if (!cancelled) setEvents(items);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "审计事件加载失败");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void load();
+    return () => { cancelled = true; };
+  }, [api, eventType, page]);
 
   const queryEvents = () => {
     setEventType(query);

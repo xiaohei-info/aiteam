@@ -5,7 +5,7 @@
  * - 空列表展示空态
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -13,6 +13,7 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { AuditPage } from "../AuditPage";
 import * as apiModule from "../useAuditApi";
+import type { AuditEvent } from "../types";
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -37,6 +38,14 @@ function mockApi(overrides: Partial<apiModule.AuditApi> = {}) {
   };
   vi.spyOn(apiModule, "useAuditApi").mockReturnValue(api);
   return api;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function renderPage() {
@@ -80,6 +89,64 @@ describe("AuditPage 审计事件", () => {
     await waitFor(() =>
       expect(api.list).toHaveBeenCalledWith({ event_type: "member.created", page: 2 }),
     );
+  });
+
+  it("第 1 页禁用上一页", async () => {
+    mockApi();
+    renderPage();
+    await screen.findByRole("table", { name: "审计事件" });
+    expect(screen.getByRole("button", { name: "上一页" })).toBeDisabled();
+  });
+
+  it("筛选会从第 2 页重置到第 1 页", async () => {
+    const api = mockApi();
+    renderPage();
+    await screen.findByRole("table", { name: "审计事件" });
+
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith({ event_type: undefined, page: 2 }),
+    );
+
+    fireEvent.change(screen.getByLabelText("事件类型筛选"), {
+      target: { value: "member.deleted" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith({ event_type: "member.deleted", page: 1 }),
+    );
+  });
+
+  it("忽略晚到的旧请求结果", async () => {
+    const oldRequest = deferred<AuditEvent[]>();
+    const newRequest = deferred<AuditEvent[]>();
+    const api = mockApi({
+      list: vi.fn().mockImplementation(({ event_type }: { event_type?: string }) =>
+        event_type ? newRequest.promise : oldRequest.promise,
+      ),
+    });
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("事件类型筛选"), {
+      target: { value: "member.deleted" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith({ event_type: "member.deleted", page: 1 }),
+    );
+
+    newRequest.resolve([
+      { event_id: "new", event_type: "member.deleted", actor_id: null, target_type: null, target_id: null, detail: {}, created_at: "2026-06-30T10:00:00Z" },
+    ]);
+    expect(await screen.findByText("member.deleted")).toBeInTheDocument();
+
+    await act(async () => {
+      oldRequest.resolve([
+        { event_id: "old", event_type: "member.created", actor_id: null, target_type: null, target_id: null, detail: {}, created_at: "2026-06-30T10:00:00Z" },
+      ]);
+    });
+    expect(screen.queryByText("member.created")).not.toBeInTheDocument();
+    expect(screen.getByText("member.deleted")).toBeInTheDocument();
   });
 
   it("加载失败展示错误信息", async () => {
