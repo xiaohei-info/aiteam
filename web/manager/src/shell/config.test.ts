@@ -8,12 +8,36 @@
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  */
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { LinkProvider } from "@astryxdesign/core/Link";
 import {
   buildShellViewModel,
+  createI18n,
   EnterpriseRole,
+  sharedMessages,
   type AuthSession,
 } from "@aiteam/shared";
 import { managerShellConfig } from "./config";
+import { AppShell } from "./AppShell";
+import { RouterLinkAdapter } from "../astryx/RouterLinkAdapter";
+import { SessionContext } from "../auth/session";
+import { I18nContext } from "../i18n/context";
+import { managerMessages } from "../i18n/messages";
+
+if (typeof window !== "undefined" && !window.matchMedia) {
+  (window as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
 
 function session(roles: string[]): AuthSession {
   return {
@@ -46,7 +70,69 @@ const ALL_NAV_IDS = [
   "settings",
 ] as const;
 
+const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
+i18n.extend("zh-CN", managerMessages["zh-CN"]!);
+
+function renderShellAtMembers(): void {
+  render(
+    createElement(
+      MemoryRouter,
+      { initialEntries: ["/members"] },
+      createElement(
+        LinkProvider,
+        {
+          component: RouterLinkAdapter,
+          children: createElement(
+            I18nContext.Provider,
+            { value: i18n },
+            createElement(
+              SessionContext.Provider,
+              {
+                value: {
+                  session: session([EnterpriseRole.OWNER]),
+                  token: "test-token",
+                  signIn: () => undefined,
+                  signOut: () => undefined,
+                  onUnauthorized: () => undefined,
+                },
+              },
+              createElement(
+                Routes,
+                null,
+                createElement(
+                  Route,
+                  { element: createElement(AppShell) },
+                  createElement(Route, {
+                    path: "/members",
+                    element: createElement("div", null, "成员页"),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        },
+      ),
+    ),
+  );
+}
+
 describe("manager shell config", () => {
+  it("以 Astryx 侧栏语义渲染当前成员账号导航", () => {
+    renderShellAtMembers();
+
+    expect(
+      screen.getByRole("navigation", { name: "Side navigation" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "成员账号" })).toHaveAttribute(
+      "href",
+      "/members",
+    );
+    expect(screen.getByRole("link", { name: "成员账号" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
   it("tier 锁死 manager", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });

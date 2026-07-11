@@ -1,12 +1,18 @@
 /**
- * 企业端壳组件：基于 page-shell 视图模型，用 shared AppShell（黑金玻璃）渲染。
+ * 企业端壳组件：基于 page-shell 视图模型，用 Astryx AppShell 渲染。
  *
  * 渲染由 buildShellViewModel 产出的可见导航树；未登录只渲染登录入口（requiresLogin）。
  * 不做跨端聚合（08 §12.3 无中心 BFF）——导航全部指向本端路由。
  */
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
+import { AppShell as AstryxAppShell } from "@astryxdesign/core/AppShell";
+import {
+  SideNav,
+  SideNavHeading,
+  SideNavItem,
+  SideNavSection,
+} from "@astryxdesign/core/SideNav";
 import { buildShellViewModel } from "@aiteam/shared";
-import { AppShell as SharedAppShell, type AppShellNavItem } from "@aiteam/shared/ui";
 import { managerShellConfig } from "./config";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
@@ -22,24 +28,32 @@ export function AppShell(): React.ReactNode {
     return <Outlet />;
   }
 
-  const nav: AppShellNavItem[] = vm.nav.map((item) => ({
-    id: item.id,
-    label: i18n.t(item.labelKey),
-    path: item.path,
-    active: item.id === vm.activeItemId,
-  }));
+  const sideNav = (
+    <SideNav
+      header={<SideNavHeading heading={i18n.t(vm.titleKey)} headingHref="/" />}
+      collapsible={{ buttonLabel: "收起企业端导航" }}
+    >
+      <SideNavSection title="主导航" isHeaderHidden>
+        {vm.nav.map((item) => (
+          <SideNavItem
+            key={item.id}
+            label={i18n.t(item.labelKey)}
+            href={item.path}
+            isSelected={item.id === vm.activeItemId}
+          />
+        ))}
+      </SideNavSection>
+    </SideNav>
+  );
 
   return (
-    <SharedAppShell
-      brand={i18n.t(vm.titleKey)}
-      nav={nav}
-      renderLink={(item, className) => (
-        <Link to={item.path} className={className}>
-          {item.label}
-        </Link>
-      )}
+    <AstryxAppShell
+      variant="elevated"
+      contentPadding={4}
+      sideNav={sideNav}
+      mobileNav={{ breakpoint: "md" }}
     >
       <Outlet />
-    </SharedAppShell>
+    </AstryxAppShell>
   );
 }
