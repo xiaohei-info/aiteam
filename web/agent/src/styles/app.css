@@ -7,6 +7,7 @@
 @import "@astryxdesign/theme-stone/theme.css";
 @import "@astryxdesign/core/tailwind-theme.css";
 @import "tailwindcss/utilities.css" layer(utilities);
+@import "@aiteam/shared/design-system/tokens.css";
 
 /* 让 Tailwind v4 扫描 shared 组件源里的工具类（GlassPanel/Button 等）。 */
 @source "../../../shared/src";
