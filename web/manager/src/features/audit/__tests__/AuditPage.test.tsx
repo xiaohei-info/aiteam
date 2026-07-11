@@ -42,10 +42,12 @@ function mockApi(overrides: Partial<apiModule.AuditApi> = {}) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function renderPage() {
@@ -117,7 +119,7 @@ describe("AuditPage 审计事件", () => {
     );
   });
 
-  it("忽略晚到的旧请求结果", async () => {
+  it("忽略晚到的旧请求成功结果", async () => {
     const oldRequest = deferred<AuditEvent[]>();
     const newRequest = deferred<AuditEvent[]>();
     const api = mockApi({
@@ -126,6 +128,9 @@ describe("AuditPage 审计事件", () => {
       ),
     });
     renderPage();
+    await waitFor(() =>
+      expect(api.list).toHaveBeenNthCalledWith(1, { event_type: undefined, page: 1 }),
+    );
 
     fireEvent.change(screen.getByLabelText("事件类型筛选"), {
       target: { value: "member.deleted" },
@@ -147,6 +152,44 @@ describe("AuditPage 审计事件", () => {
     });
     expect(screen.queryByText("member.created")).not.toBeInTheDocument();
     expect(screen.getByText("member.deleted")).toBeInTheDocument();
+  });
+
+  it("忽略晚到的旧请求错误并保持新请求加载态", async () => {
+    const oldRequest = deferred<AuditEvent[]>();
+    const newRequest = deferred<AuditEvent[]>();
+    const api = mockApi({
+      list: vi.fn().mockImplementation(({ event_type }: { event_type?: string }) =>
+        event_type ? newRequest.promise : oldRequest.promise,
+      ),
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(api.list).toHaveBeenNthCalledWith(1, { event_type: undefined, page: 1 }),
+    );
+
+    fireEvent.change(screen.getByLabelText("事件类型筛选"), {
+      target: { value: "member.deleted" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenLastCalledWith({ event_type: "member.deleted", page: 1 }),
+    );
+
+    await act(async () => {
+      oldRequest.reject(new ApiError("旧请求失败", 503, "stale_request_failed"));
+    });
+    expect(screen.getByRole("status", { name: "审计事件加载中" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("旧请求失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("member.created")).not.toBeInTheDocument();
+
+    await act(async () => {
+      newRequest.resolve([
+        { event_id: "new", event_type: "member.deleted", actor_id: null, target_type: null, target_id: null, detail: {}, created_at: "2026-06-30T10:00:00Z" },
+      ]);
+    });
+    expect(screen.getByText("member.deleted")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "审计事件加载中" })).not.toBeInTheDocument();
   });
 
   it("加载失败展示错误信息", async () => {
