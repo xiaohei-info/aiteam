@@ -48,6 +48,10 @@
     "./app-kit": {
       "types": "./dist/app-kit/index.d.ts",
       "import": "./dist/app-kit/index.js"
+    },
+    "./theme": {
+      "types": "./dist/theme/index.d.ts",
+      "import": "./dist/theme/index.js"
     }
   },
   "scripts": {
