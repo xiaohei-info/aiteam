@@ -4,16 +4,40 @@
  * 红线（D13）：只展示脱敏聚合摘要，绝不含会话内容。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { GlassPanel, Table } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../i18n/context";
 import { useGovernanceApi } from "../features/governance/useGovernanceApi";
 import type { UsageRollup, AuditSummary } from "../features/governance/types";
+
+type UsageRollupRow = UsageRollup & Record<string, unknown>;
+type AuditSummaryRow = AuditSummary & Record<string, unknown>;
 
 function fmt(v: number): string { return v.toLocaleString("zh-CN"); }
 function fmtCost(v: number | string): string {
   const yuan = Number(v) / 100;
   return yuan >= 10000 ? `${(yuan/10000).toFixed(2)} 万元` : `¥${yuan.toLocaleString("zh-CN", {minimumFractionDigits:2})}`;
 }
+
+const rollupColumns: TableColumn<UsageRollupRow>[] = [
+  { key: "employee_id", header: "员工", width: proportional(1), renderCell: (row) => row.employee_id ?? "—" },
+  { key: "run_count", header: "执行", width: pixel(100), renderCell: (row) => fmt(row.run_count) },
+  { key: "token_total", header: "Token", width: pixel(120), renderCell: (row) => fmt(row.token_total) },
+  { key: "cost_total", header: "消耗", width: pixel(140), renderCell: (row) => fmtCost(row.cost_total) },
+  { key: "error_count", header: "错误", width: pixel(100), renderCell: (row) => fmt(row.error_count) },
+];
+
+const auditColumns: TableColumn<AuditSummaryRow>[] = [
+  { key: "actor", header: "操作者", width: proportional(1) },
+  { key: "action", header: "动作", width: proportional(1) },
+  { key: "resource", header: "资源", width: proportional(1), renderCell: (row) => row.resource_type ? `${row.resource_type}/${row.resource_id}` : "—" },
+  { key: "occurred_at", header: "时间", width: pixel(200) },
+];
 
 export function DashboardPlaceholder(): ReactNode {
   const i18n = useI18n();
@@ -34,64 +58,22 @@ export function DashboardPlaceholder(): ReactNode {
 
   useEffect(() => { void load(); }, [load]);
 
+  const rollupRows = rollups.slice(0, 5) as UsageRollupRow[];
+  const auditRows = audits.slice(0, 5) as AuditSummaryRow[];
+
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">
-        {i18n.t("manager.nav.dashboard")}
-      </h1>
+    <VStack gap={6}>
+      <Heading level={1}>{i18n.t("manager.nav.dashboard")}</Heading>
       {loading ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
+        <Card padding={4} role="status" aria-label="企业概览加载中"><VStack gap={2}><Skeleton height={32} /><Skeleton height={120} index={1} /></VStack></Card>
       ) : error ? (
-        <GlassPanel className="rounded-window border border-danger/30 p-md text-sm text-danger">{error}</GlassPanel>
+        <Banner status="error" title={error} />
       ) : (
         <>
-          <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
-            <h2 className="m-0 text-base font-semibold text-text-primary">计量汇总（最近 {rollups.length} 条）</h2>
-            {rollups.length === 0 ? (
-              <p className="m-0 text-sm text-text-muted">暂无计量数据</p>
-            ) : (
-              <GlassPanel className="overflow-hidden rounded-window">
-                <Table>
-                  <thead><tr><th>员工</th><th>执行</th><th>Token</th><th>消耗</th><th>错误</th></tr></thead>
-                  <tbody>
-                    {rollups.slice(0, 5).map((r) => (
-                      <tr key={r.rollup_id}>
-                        <td>{r.employee_id ?? "—"}</td>
-                        <td>{fmt(r.run_count)}</td>
-                        <td>{fmt(r.token_total)}</td>
-                        <td>{fmtCost(r.cost_total)}</td>
-                        <td>{fmt(r.error_count)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </GlassPanel>
-            )}
-          </GlassPanel>
-          <GlassPanel className="flex flex-col gap-md rounded-window p-lg">
-            <h2 className="m-0 text-base font-semibold text-text-primary">审计事件（最近 {audits.length} 条）</h2>
-            {audits.length === 0 ? (
-              <p className="m-0 text-sm text-text-muted">暂无审计记录</p>
-            ) : (
-              <GlassPanel className="overflow-hidden rounded-window">
-                <Table>
-                  <thead><tr><th>操作者</th><th>动作</th><th>资源</th><th>时间</th></tr></thead>
-                  <tbody>
-                    {audits.slice(0, 5).map((a) => (
-                      <tr key={a.event_id}>
-                        <td>{a.actor}</td>
-                        <td>{a.action}</td>
-                        <td>{a.resource_type ? `${a.resource_type}/${a.resource_id}` : "—"}</td>
-                        <td>{a.occurred_at}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </GlassPanel>
-            )}
-          </GlassPanel>
+          <Card padding={4}><VStack gap={4}><Heading level={2}>计量汇总（最近 {rollups.length} 条）</Heading><Table aria-label="计量汇总" tableProps={{ "aria-label": "计量汇总" }} data={rollupRows} columns={rollupColumns} idKey="rollup_id" density="compact" emptyState={<EmptyState title="暂无计量数据" isCompact />} /></VStack></Card>
+          <Card padding={4}><VStack gap={4}><Heading level={2}>审计事件（最近 {audits.length} 条）</Heading><Table aria-label="审计事件" tableProps={{ "aria-label": "审计事件" }} data={auditRows} columns={auditColumns} idKey="event_id" density="compact" emptyState={<EmptyState title="暂无审计记录" isCompact />} /></VStack></Card>
         </>
       )}
-    </section>
+    </VStack>
   );
 }

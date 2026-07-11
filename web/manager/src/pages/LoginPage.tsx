@@ -1,14 +1,18 @@
 import { type FormEvent, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "@aiteam/shared";
-import { GlassPanel, Button } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Center } from "@astryxdesign/core/Center";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
 import { createManagerApiClient } from "../api/client";
-
-const fieldCls =
-  "rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary " +
-  "outline-none focus:ring-2 focus:ring-gold";
 
 interface LocationState {
   from?: string;
@@ -154,106 +158,104 @@ export function LoginPage(): React.ReactNode {
 
   if (mode === "owner-reset" && pendingReset) {
     return (
-      <div className="flex h-screen items-center justify-center bg-bg-canvas">
-        <GlassPanel className="w-[360px] rounded-window p-xl">
+      <Center minHeight="100vh" width="100%">
+        <Card width={360} padding={6}>
           <form
-            className="flex flex-col gap-md"
+            aria-label="负责人首次登录密码重置"
             data-testid="owner-reset-form"
             onSubmit={handleOwnerReset}
           >
-            <h1 className="m-0 text-xl font-bold text-text-primary">
-              {i18n.t("manager.login.owner_reset.heading")}
-            </h1>
-            <p className="m-0 text-xs text-text-secondary">
-              {`${pendingReset.tenantId} · ${pendingReset.account}`}
-            </p>
-            <label className="flex flex-col gap-xs">
-              <span className="text-xs text-text-secondary">{i18n.t("manager.login.new_password")}</span>
-              <input
-                className={fieldCls}
+            <VStack gap={4}>
+              <Heading level={1}>{i18n.t("manager.login.owner_reset.heading")}</Heading>
+              <Text type="supporting">{`${pendingReset.tenantId} · ${pendingReset.account}`}</Text>
+              <FormLayout>
+                <TextInput
+                  label={i18n.t("manager.login.new_password")}
                 type="password"
                 value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                autoComplete="new-password"
+                  onChange={setNewPassword}
+                  {...({ autoComplete: "new-password" } as Record<string, string>)}
                 data-testid="new-password"
-              />
-            </label>
-            <label className="flex flex-col gap-xs">
-              <span className="text-xs text-text-secondary">
-                {i18n.t("manager.login.confirm_new_password")}
-              </span>
-              <input
-                className={fieldCls}
+                  width="100%"
+                />
+                <TextInput
+                  label={i18n.t("manager.login.confirm_new_password")}
                 type="password"
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                autoComplete="new-password"
+                  onChange={setConfirmPassword}
+                  {...({ autoComplete: "new-password" } as Record<string, string>)}
                 data-testid="confirm-new-password"
+                  width="100%"
+                />
+              </FormLayout>
+              {error ? <Banner status="error" title={error} /> : null}
+              <Button
+                type="submit"
+                label={i18n.t("manager.login.owner_reset.submit")}
+                variant="primary"
+                isDisabled={loading}
+                isLoading={loading}
               />
-            </label>
-            {error ? <p className="m-0 text-xs text-danger">{error}</p> : null}
-            <Button type="submit" className="mt-sm" disabled={loading}>
-              {i18n.t("manager.login.owner_reset.submit")}
-            </Button>
-            <button
-              type="button"
-              className="m-0 border-none bg-transparent p-0 text-xs text-text-secondary underline"
-              onClick={handleBackToLogin}
-            >
-              {i18n.t("manager.login.owner_reset.back")}
-            </button>
+              <Button
+                label={i18n.t("manager.login.owner_reset.back")}
+                variant="ghost"
+                onClick={handleBackToLogin}
+              />
+            </VStack>
           </form>
-        </GlassPanel>
-      </div>
+        </Card>
+      </Center>
     );
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-bg-canvas">
-      <GlassPanel className="w-[360px] rounded-window p-xl">
+    <Center minHeight="100vh" width="100%">
+      <Card width={360} padding={6}>
         <form
-          className="flex flex-col gap-md"
+          aria-label="企业端登录"
           data-testid="login-form"
           onSubmit={handleLogin}
         >
-          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.title")}</h1>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("manager.login.enterprise")}</span>
-            <input
-              className={fieldCls}
+          <VStack gap={4}>
+            <Heading level={1}>{i18n.t("manager.title")}</Heading>
+            <FormLayout>
+              <TextInput
+                label={i18n.t("manager.login.enterprise")}
               type="text"
               value={enterprise}
-              onChange={(e) => setEnterprise(e.target.value)}
-              autoComplete="organization"
+                onChange={setEnterprise}
+                {...({ autoComplete: "organization" } as Record<string, string>)}
               placeholder={i18n.t("manager.login.enterprise_placeholder")}
-            />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("manager.login.account")}</span>
-            <input
-              className={fieldCls}
+                width="100%"
+              />
+              <TextInput
+                label={i18n.t("manager.login.account")}
               type="text"
               value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              autoComplete="username"
-            />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("manager.login.password")}</span>
-            <input
-              className={fieldCls}
+                onChange={setAccount}
+                {...({ autoComplete: "username" } as Record<string, string>)}
+                width="100%"
+              />
+              <TextInput
+                label={i18n.t("manager.login.password")}
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
+                onChange={setPassword}
+                {...({ autoComplete: "current-password" } as Record<string, string>)}
+                width="100%"
+              />
+            </FormLayout>
+            {error ? <Banner status="error" title={error} /> : null}
+            <Button
+              type="submit"
+              label={i18n.t("manager.login.submit")}
+              variant="primary"
+              isDisabled={loading}
+              isLoading={loading}
             />
-          </label>
-          {error ? <p className="m-0 text-xs text-danger">{error}</p> : null}
-          <Button type="submit" className="mt-sm" disabled={loading}>
-            {i18n.t("manager.login.submit")}
-          </Button>
+          </VStack>
         </form>
-      </GlassPanel>
-    </div>
+      </Card>
+    </Center>
   );
 }

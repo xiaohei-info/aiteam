@@ -41,9 +41,10 @@ describe("LoginPage", () => {
   it("渲染标题与表单字段", () => {
     renderLogin();
     expect(screen.getByText("AI Team 企业端")).toBeInTheDocument();
-    expect(screen.getByText("企业代码/名称")).toBeInTheDocument();
-    expect(screen.getByText("成员账号")).toBeInTheDocument();
-    expect(screen.getByText("登录密码")).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "企业端登录" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "企业代码/名称" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "成员账号" })).toBeInTheDocument();
+    expect(screen.getByLabelText("登录密码")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
   });
 
@@ -73,7 +74,7 @@ describe("LoginPage", () => {
     renderLogin();
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     await waitFor(() => {
-      expect(screen.getByText("请填写账号与密码")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("请填写账号与密码");
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -138,7 +139,7 @@ describe("LoginPage", () => {
     fireEvent.change(passwordInput, { target: { value: "wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
     await waitFor(() => {
-      expect(screen.getByText("账号或密码错误")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("账号或密码错误");
     });
   });
 
