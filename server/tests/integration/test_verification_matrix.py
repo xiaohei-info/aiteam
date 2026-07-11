@@ -327,15 +327,18 @@ def test_user_client_build_excludes_control_plane():
         "operation": {
             "dockerfile": deploy_dir / "Dockerfile.operation",
             "forbidden": ("agent_service", "manager_service", "web/agent", "web/manager"),
+            "package": "operation",
         },
         "manager": {
             "dockerfile": deploy_dir / "Dockerfile.manager",
             "forbidden": ("agent_service", "operation_service", "web/agent", "web/operation"),
+            "package": "manager",
         },
         "agent": {
             "dockerfile": deploy_dir / "Dockerfile.agent",
             # 🔴 D15 硬隔离线：用户端镜像绝不打包控制面后端 + 控制面前端。
             "forbidden": ("operation_service", "manager_service", "web/operation", "web/manager"),
+            "package": "agent",
         },
     }
 
@@ -348,6 +351,20 @@ def test_user_client_build_excludes_control_plane():
             continue
 
         text = dockerfile.read_text(encoding="utf-8")
+        package = spec["package"]
+        expected_workspace_copies = (
+            "COPY web/package.json web/pnpm-workspace.yaml web/pnpm-lock.yaml web/tsconfig.base.json ./",
+            "COPY web/shared/package.json shared/",
+            f"COPY web/{package}/package.json {package}/",
+            "COPY web/shared/ shared/",
+            f"COPY web/{package}/ {package}/",
+            f"COPY --from=web-builder /build/{package}/dist /app/web/{package}/dist",
+        )
+        for expected in expected_workspace_copies:
+            if expected not in text:
+                all_violations.append(
+                    f"{tier}: pnpm workspace 构建路径未对齐，缺少 `{expected}`"
+                )
         # 解析每一条 COPY 指令的目标路径（含 COPY --from=<stage> 与 COPY --chown=... 等变体）。
         # Dockerfile COPY 语法：COPY [OPTIONS] <src>... <dst>。只取 <src> 段做 forbidden 匹配
         # （<dst> 是镜像内挂载点，与跨端隔离无关）。

@@ -32,6 +32,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.operation
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: aiteam-operation:dev
     container_name: aiteam-operation
     depends_on:
@@ -55,6 +57,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.manager
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: aiteam-manager:dev
     container_name: aiteam-manager
     depends_on:
@@ -79,6 +83,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.agent
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: aiteam-agent:dev
     container_name: aiteam-agent
     ports:
