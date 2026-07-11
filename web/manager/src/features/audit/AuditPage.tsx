@@ -1,41 +1,98 @@
 /** 审计事件页 — 事件列表。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, proportional, pixel, type TableColumn } from "@astryxdesign/core/Table";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { ApiError } from "@aiteam/shared";
-import { GlassPanel } from "@aiteam/shared/ui";
 import { useAuditApi } from "./useAuditApi";
 import type { AuditEvent } from "./types";
+
+const columns: TableColumn<AuditEvent>[] = [
+  { key: "event_type", header: "事件类型", width: proportional(1) },
+  { key: "actor_id", header: "操作者", width: proportional(1), renderCell: (event) => event.actor_id ?? "—" },
+  { key: "target", header: "目标", width: proportional(1), renderCell: (event) => `${event.target_type ?? "—"}/${event.target_id ?? "—"}` },
+  { key: "created_at", header: "时间", width: pixel(190), renderCell: (event) => event.created_at.slice(0, 19) },
+];
 
 export function AuditPage(): ReactNode {
   const api = useAuditApi();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [eventType, setEventType] = useState("");
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setEvents(await api.list());
+      setEvents(await api.list({ event_type: eventType || undefined, page }));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "审计事件加载失败");
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, eventType, page]);
+
   useEffect(() => { void load(); }, [load]);
 
-  if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
+  const queryEvents = () => {
+    setEventType(query);
+    setPage(1);
+  };
 
   return (
-    <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">审计事件</h1>
-      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
-      {events.length === 0 ? <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">暂无审计事件</GlassPanel> :
-        <GlassPanel className="rounded-window p-md">
-          <table className="w-full text-sm"><thead><tr className="border-b border-gold/15 text-left text-xs text-text-muted"><th className="pb-sm">事件类型</th><th className="pb-sm">操作者</th><th className="pb-sm">目标</th><th className="pb-sm">时间</th></tr></thead>
-            <tbody>{events.map((e) => (<tr key={e.event_id} className="border-b border-gold/5" data-testid="audit-row"><td className="py-sm text-text-primary">{e.event_type}</td><td className="py-sm text-text-secondary">{e.actor_id ?? "—"}</td><td className="py-sm text-text-secondary">{e.target_type}/{e.target_id}</td><td className="py-sm text-text-muted">{e.created_at?.slice(0, 19)}</td></tr>))}</tbody>
-          </table>
-        </GlassPanel>}
-    </section>
+    <VStack gap={4}>
+      <Heading level={1}>审计事件</Heading>
+      <Card padding={4}>
+        <VStack gap={4}>
+          <HStack gap={2} align="end">
+            <TextInput
+              label="事件类型筛选"
+              value={query}
+              onChange={setQuery}
+              placeholder="例如 member.created"
+              width="100%"
+              onEnter={queryEvents}
+            />
+            <Button label="查询" onClick={queryEvents} />
+          </HStack>
+
+          {loading ? (
+            <VStack gap={2} role="status" aria-label="审计事件加载中">
+              <Skeleton height={32} />
+              <Skeleton height={32} index={1} />
+              <Skeleton height={32} index={2} />
+            </VStack>
+          ) : error ? (
+            <div role="alert">{error}</div>
+          ) : (
+            <Table
+              aria-label="审计事件"
+              tableProps={{ "aria-label": "审计事件" }}
+              data={events}
+              columns={columns}
+              idKey="event_id"
+              density="compact"
+              hasHover
+              textOverflow="truncate"
+              emptyState={<EmptyState title="暂无审计事件" isCompact />}
+            />
+          )}
+
+          <HStack gap={2} justify="end">
+            <Button label="上一页" isDisabled={page === 1 || loading} onClick={() => setPage((value) => value - 1)} />
+            <Button label="下一页" isDisabled={loading || events.length === 0} onClick={() => setPage((value) => value + 1)} />
+          </HStack>
+        </VStack>
+      </Card>
+    </VStack>
   );
 }

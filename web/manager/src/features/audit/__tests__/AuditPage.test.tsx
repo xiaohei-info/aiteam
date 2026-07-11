@@ -5,7 +5,7 @@
  * - 空列表展示空态
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -56,12 +56,30 @@ describe("AuditPage 审计事件", () => {
     vi.restoreAllMocks();
   });
 
-  it("渲染审计事件列表", async () => {
+  it("使用 Astryx 表格语义展示审计事件", async () => {
     mockApi();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId("audit-row")).toBeInTheDocument());
+    expect(await screen.findByRole("table", { name: "审计事件" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "事件类型" })).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(2);
     expect(screen.getByText("member.created")).toBeInTheDocument();
     expect(screen.getByText("member/m1")).toBeInTheDocument();
+  });
+
+  it("按事件类型筛选并翻页", async () => {
+    const api = mockApi();
+    renderPage();
+    fireEvent.change(screen.getByLabelText("事件类型筛选"), {
+      target: { value: "member.created" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenCalledWith({ event_type: "member.created", page: 1 }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() =>
+      expect(api.list).toHaveBeenCalledWith({ event_type: "member.created", page: 2 }),
+    );
   });
 
   it("加载失败展示错误信息", async () => {
