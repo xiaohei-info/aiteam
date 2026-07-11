@@ -10,6 +10,7 @@ import { BrowserRouter } from "react-router-dom";
 import { ErrorBoundary, QueryProvider } from "@aiteam/shared/app-kit";
 import { App } from "./App";
 import { AppProviders } from "./AppProviders";
+import { AstryxProviders } from "./astryx/AstryxProviders";
 import "./styles/app.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -17,9 +18,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ErrorBoundary fallback={<div className="p-lg text-danger">应用出错，请刷新重试。</div>}>
       <QueryProvider>
         <BrowserRouter>
-          <AppProviders>
-            <App />
-          </AppProviders>
+          <AstryxProviders>
+            <AppProviders>
+              <App />
+            </AppProviders>
+          </AstryxProviders>
         </BrowserRouter>
       </QueryProvider>
     </ErrorBoundary>

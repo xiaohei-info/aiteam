@@ -13,6 +13,7 @@ const sharedAlias = existsSync(resolve(sharedSrc, "dist/index.js"))
   ? null
   : [
       { find: /^@aiteam\/shared\/ui$/, replacement: resolve(sharedSrc, "ui/index.ts") },
+      { find: /^@aiteam\/shared\/theme$/, replacement: resolve(sharedSrc, "theme/index.ts") },
       { find: "@aiteam/shared", replacement: resolve(sharedSrc, "index.ts") },
     ];
 

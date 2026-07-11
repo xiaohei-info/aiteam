@@ -1,10 +1,17 @@
-@import "tailwindcss";
-@import "@aiteam/shared/design-system/tokens.css";
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-stone/theme.css";
+@import "@astryxdesign/core/tailwind-theme.css";
+@import "tailwindcss/utilities.css" layer(utilities);
 
 /* 让 Tailwind v4 扫描 shared 组件源里的工具类（GlassPanel/AppShell/Button 等）。 */
 @source "../../../shared/src";
 
-/* reset + 全局黑金画布（企业端整体深色）。token 单一来源 @aiteam/shared。 */
+/* 保留基础布局和系统字体；颜色由 Astryx theme token 接管。 */
 *,
 *::before,
 *::after {
@@ -19,6 +26,4 @@ body,
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  background: var(--color-bg-canvas);
-  color: var(--color-text-primary);
 }
