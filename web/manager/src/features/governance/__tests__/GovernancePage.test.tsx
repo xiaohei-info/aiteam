@@ -10,7 +10,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
@@ -91,12 +91,18 @@ describe("GovernancePage 企业治理", () => {
   });
 
   it("渲染计量汇总 + 审计 + 配额", async () => {
-    mockApi();
-    renderPage(["owner"]);
+    const { container } = renderPageWithApi(["owner"]);
     await waitFor(() => expect(screen.getByTestId("rollup-row")).toBeInTheDocument());
     expect(screen.getByTestId("audit-row")).toBeInTheDocument();
     expect(screen.getByTestId("quota-row")).toBeInTheDocument();
-    expect(screen.getByText("snapshot_pull_denied")).toBeInTheDocument();
+    expect(screen.getAllByText("snapshot_pull_denied").length).toBeGreaterThan(0);
+    expect(screen.getByRole("table", { name: "计量汇总" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "审计事件摘要" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "配额策略" })).toBeInTheDocument();
+    expect(screen.getByText("员工筛选")).toBeInTheDocument();
+    expect(screen.getByText("审计动作筛选")).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")).toBeInTheDocument();
+    expect(container.querySelector(".astryx-grid")).toBeInTheDocument();
   });
 
   it("创建配额：createQuota 收到 slug/enforcement/dimensions/ISO 窗口", async () => {
@@ -104,8 +110,8 @@ describe("GovernancePage 企业治理", () => {
     renderPage(["finance_admin"]);
     await waitFor(() => expect(screen.getByTestId("quota-row")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("策略标识（slug）"), { target: { value: "budget-q1" } });
-    fireEvent.change(screen.getByLabelText("成本上限（USD）"), { target: { value: "200" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /策略标识/ }), { target: { value: "budget-q1" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: /成本上限/ }), { target: { value: "200" } });
     fireEvent.click(screen.getByText("创建"));
 
     await waitFor(() => expect(api.createQuota).toHaveBeenCalledTimes(1));
@@ -117,6 +123,18 @@ describe("GovernancePage 企业治理", () => {
     // window 为 ISO 字符串
     expect(typeof arg.window_start).toBe("string");
     expect(arg.window_start).toMatch(/\dT\d.*Z$/);
+  });
+
+  it("新建配额：策略标识为空时禁用提交，填写后允许提交", async () => {
+    mockApi();
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByTestId("quota-row")).toBeInTheDocument());
+
+    const submit = screen.getByRole("button", { name: "创建" });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /策略标识/ }), { target: { value: "budget-q1" } });
+    expect(submit).toBeEnabled();
   });
 
   it("评估配额：evaluateQuota(policy_id, 窗口) 并展示治理动作", async () => {
@@ -148,4 +166,37 @@ describe("GovernancePage 企业治理", () => {
     expect(screen.queryByText("删除")).not.toBeInTheDocument();
     expect(screen.getByText("评估")).toBeInTheDocument();
   });
+
+  it("空数据时为三个聚合区块展示空状态", async () => {
+    mockApi({
+      listUsageRollups: vi.fn().mockResolvedValue([]),
+      listAudits: vi.fn().mockResolvedValue([]),
+      listQuotas: vi.fn().mockResolvedValue([]),
+    });
+    renderPage(["owner"]);
+
+    await waitFor(() => expect(screen.getByText("暂无计量数据")).toBeInTheDocument());
+    expect(screen.getByText("暂无审计事件")).toBeInTheDocument();
+    expect(screen.getByText("暂无配额策略")).toBeInTheDocument();
+  });
+
+  it("加载和失败时分别展示骨架状态与错误横幅", async () => {
+    let rejectUsage: (reason?: unknown) => void = () => {};
+    const pendingUsage = new Promise<never>((_, reject) => {
+      rejectUsage = reject;
+    });
+    mockApi({ listUsageRollups: vi.fn().mockReturnValue(pendingUsage) });
+    renderPage(["owner"]);
+
+    expect(screen.getByRole("status", { name: "治理数据加载中" })).toBeInTheDocument();
+
+    rejectUsage(new ApiError("汇总读取失败", 500, "usage_unavailable"));
+    await waitFor(() => expect(screen.getByText("汇总读取失败")).toBeInTheDocument());
+    expect(screen.getByText("汇总读取失败").closest('[role="alert"]')).not.toBeNull();
+  });
 });
+
+function renderPageWithApi(roles: string[]) {
+  mockApi();
+  return renderPage(roles);
+}
