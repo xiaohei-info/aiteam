@@ -6,12 +6,13 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
+  act,
   render,
   screen,
   waitFor,
   fireEvent,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { PlatformRole, ApiError } from "@aiteam/shared";
 import { createI18n } from "@aiteam/shared";
 import { SessionContext } from "../../auth/session";
@@ -235,7 +236,7 @@ describe("列表渲染", () => {
     await waitFor(() => {
       expect(screen.getByText("客服专家")).toBeInTheDocument();
     });
-    expect(screen.getByText("已发布")).toBeInTheDocument();
+    expect(screen.getAllByText("已发布").length).toBeGreaterThanOrEqual(1);
     // "公开" appears in visibility td + select option
     expect(screen.getAllByText("公开").length).toBeGreaterThanOrEqual(1);
   });
@@ -281,7 +282,7 @@ describe("cursor 翻页", () => {
         listPage(
           [
             makeCatalogItem({
-              catalog_type: "solution_template",
+              catalog_type: "expert_template",
               template_id: "b",
               display_name: "second",
               status: "published",
@@ -351,6 +352,7 @@ describe("管理员写操作", () => {
     });
 
     fireEvent.click(screen.getByText("发布"));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发布" }));
 
     await waitFor(() => {
       const publishCall = mockFetch.mock.calls.find((c: unknown[]) =>
@@ -379,6 +381,7 @@ describe("管理员写操作", () => {
     });
 
     fireEvent.click(screen.getByText("下架"));
+    fireEvent.click(await screen.findByRole("button", { name: "确认下架" }));
 
     await waitFor(() => {
       const unpublishCall = mockFetch.mock.calls.find((c: unknown[]) =>
@@ -443,6 +446,7 @@ describe("管理员写操作", () => {
     });
 
     fireEvent.click(screen.getByText("发布"));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发布" }));
 
     await waitFor(() => {
       const publishCall = mockFetch.mock.calls.find((c: unknown[]) =>
@@ -494,10 +498,9 @@ describe("API 错误展示", () => {
     });
 
     fireEvent.click(screen.getByText("发布"));
+    fireEvent.click(await screen.findByRole("button", { name: "确认发布" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("该模板已发布")).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toHaveTextContent("该模板已发布");
   });
 });
 
@@ -1032,7 +1035,7 @@ describe("详情页编辑模式", () => {
 
     await waitFor(() => {
       expect(screen.getByText("保存")).toBeInTheDocument();
-      expect(screen.getByText("取消")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
     });
     const systemPrompt = document.querySelector<HTMLTextAreaElement>(
       "textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]",
@@ -1210,8 +1213,8 @@ describe("详情页编辑模式", () => {
     renderCatalogDetail(makeSystemAdminSession(), "exp-1", "expert_template");
     await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
     fireEvent.click(screen.getByText("编辑"));
-    await waitFor(() => expect(screen.getByText("取消")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("取消"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByText("保存")).not.toBeInTheDocument());
     const patchCalls = mockFetch.mock.calls.filter(
       (c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH",
@@ -1487,6 +1490,270 @@ describe("详情页多 section", () => {
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新人设");
+    });
+  });
+});
+
+// ---- 9. Astryx catalog workbenches ----
+
+describe("AstryX 目录工作台", () => {
+  it("按目录类型隔离列表，并可按名称和状态筛选", async () => {
+    mockFetch.mockResolvedValue(
+      listPage([
+        makeCatalogItem({
+          catalog_type: "expert_template",
+          template_id: "expert-published",
+          display_name: "客服专家",
+          status: "published",
+        }),
+        makeCatalogItem({
+          catalog_type: "expert_template",
+          template_id: "expert-draft",
+          display_name: "财务专家",
+          status: "draft",
+        }),
+        makeCatalogItem({
+          catalog_type: "solution_template",
+          template_id: "solution-leak",
+          display_name: "不应泄漏的方案",
+          status: "published",
+        }),
+      ]),
+    );
+
+    renderCatalogPage(makeSystemAdminSession(), "expert_template");
+
+    await waitFor(() => {
+      expect(screen.getByText("客服专家")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("不应泄漏的方案")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索目录" }), {
+      target: { value: "财务" },
+    });
+    expect(screen.queryByText("客服专家")).not.toBeInTheDocument();
+    expect(screen.getByText("财务专家")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "目录状态" }));
+    fireEvent.click(screen.getByRole("option", { name: "已发布" }));
+    expect(screen.queryByText("财务专家")).not.toBeInTheDocument();
+  });
+
+  it("生命周期动作必须确认；失败时保留确认框和错误", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([makeCatalogItem({ template_id: "publish-me", status: "draft" })]),
+      )
+      .mockResolvedValueOnce(problemResponse(409, "conflict", "无法发布模板"));
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "发布" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发布" }));
+
+    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toBeInTheDocument();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+
+    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toHaveTextContent("无法发布模板");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "发布模板" })).not.toBeInTheDocument());
+  });
+
+  it("隐藏动作须经确认后才将模板设为隐藏", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        listPage([makeCatalogItem({ template_id: "retire-me", status: "unpublished" })]),
+      )
+      .mockResolvedValueOnce(singleResponse(null))
+      .mockResolvedValueOnce(listPage([]));
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "隐藏" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "隐藏" }));
+
+    expect(await screen.findByRole("alertdialog", { name: "隐藏模板" })).toBeInTheDocument();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认隐藏" }));
+
+    await waitFor(() => {
+      const request = mockFetch.mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes("/visibility"),
+      );
+      expect(request).toBeDefined();
+      expect((request![1] as { method?: string }).method).toBe("PUT");
+      expect(JSON.parse((request![1] as { body: string }).body)).toEqual({
+        visible_scope: { hidden: true },
+      });
+    });
+  });
+
+  it("详情页可切换到版本信息，并用面包屑返回对应目录", async () => {
+    mockFetch.mockResolvedValue(
+      singleResponse(
+        makeCatalogItem({
+          catalog_type: "solution_template",
+          template_id: "solution-v2",
+          display_name: "零售方案",
+          version: "2.0.0",
+        }),
+      ),
+    );
+
+    renderCatalogDetail(makeSystemAdminSession(), "solution-v2", "solution_template");
+
+    expect(await screen.findByRole("navigation", { name: "面包屑" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "版本信息" }));
+    expect(await screen.findByText("当前版本")).toBeInTheDocument();
+    expect(screen.getByText('"2.0.0"')).toBeInTheDocument();
+  });
+
+  it("详情页隐藏模板必须先经过确认", async () => {
+    const item = makeCatalogItem({ template_id: "hide-detail", display_name: "待隐藏模板", visible_scope: { public: true } });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(item))
+      .mockResolvedValueOnce(singleResponse({ ...item, visible_scope: { hidden: true } }));
+
+    renderCatalogDetail(makeSystemAdminSession(), "hide-detail");
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
+    fireEvent.click(screen.getByRole("option", { name: "隐藏" }));
+
+    expect(await screen.findByRole("alertdialog", { name: "隐藏模板" })).toBeInTheDocument();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "确认隐藏" }));
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+  });
+
+  it("可见性更新成功不覆盖未保存的本地输入", async () => {
+    const item = makeCatalogItem({ template_id: "keep-draft", display_name: "保留草稿", system_prompt: "旧提示词", visible_scope: { public: true } });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(item))
+      .mockResolvedValueOnce(singleResponse({ ...item, visible_scope: { enterprise_ids: ["*"] } }));
+
+    renderCatalogDetail(makeSystemAdminSession(), "keep-draft");
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "system_prompt" }), { target: { value: "本地未保存" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
+    fireEvent.click(screen.getByRole("option", { name: "企业可见" }));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("textbox", { name: "system_prompt" })).toHaveValue("本地未保存");
+  });
+
+  it("可见性更新失败后仍保留编辑表单和输入", async () => {
+    const item = makeCatalogItem({ template_id: "visibility-fail", display_name: "失败保留", system_prompt: "旧提示词", visible_scope: { public: true } });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(item))
+      .mockResolvedValueOnce(problemResponse(409, "conflict", "可见性冲突"));
+
+    renderCatalogDetail(makeSystemAdminSession(), "visibility-fail");
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "system_prompt" }), { target: { value: "保留的输入" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
+    fireEvent.click(screen.getByRole("option", { name: "企业可见" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("可见性冲突");
+    expect(screen.getByRole("textbox", { name: "system_prompt" })).toHaveValue("保留的输入");
+  });
+
+  it("路由切换后忽略旧模板保存的迟到响应", async () => {
+    let resolvePatch: ((response: Response) => void) | undefined;
+    const patchResponse = new Promise<Response>((resolve) => { resolvePatch = resolve; });
+    mockFetch.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") return patchResponse;
+      if (url.includes("/fresh-save")) return Promise.resolve(singleResponse(makeCatalogItem({ template_id: "fresh-save", display_name: "新模板" })));
+      return Promise.resolve(singleResponse(makeCatalogItem({ template_id: "slow-save", display_name: "旧模板", system_prompt: "旧值" })));
+    });
+
+    function RouteSwitcher() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button type="button" onClick={() => navigate("/catalog/expert_template/fresh-save")}>切换保存目标</button>
+          <CatalogDetailPage />
+        </>
+      );
+    }
+
+    render(
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={makeSystemAdminSession()}>
+          <MemoryRouter initialEntries={["/catalog/expert_template/slow-save"]}>
+            <Routes><Route path="/catalog/:catalog_type/:template_id" element={<RouteSwitcher />} /></Routes>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "system_prompt" }), { target: { value: "待保存" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mockFetch.mock.calls.some((call) => (call[1] as RequestInit | undefined)?.method === "PATCH")).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "切换保存目标" }));
+    expect(await screen.findByRole("heading", { name: "新模板" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePatch!(singleResponse(makeCatalogItem({ template_id: "slow-save", display_name: "旧模板已保存", system_prompt: "待保存" })));
+      await patchResponse;
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "旧模板已保存" })).not.toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "新模板" })).toBeInTheDocument();
+    });
+  });
+
+  it("路由参数变化时忽略过期详情响应", async () => {
+    let resolveSlow: ((response: Response) => void) | undefined;
+    let resolveFresh: ((response: Response) => void) | undefined;
+    const slow = new Promise<Response>((resolve) => { resolveSlow = resolve; });
+    const fresh = new Promise<Response>((resolve) => { resolveFresh = resolve; });
+
+    mockFetch.mockImplementation((url: string) => (
+      url.includes("/slow") ? slow : fresh
+    ));
+
+    function RouteSwitcher() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button type="button" onClick={() => navigate("/catalog/expert_template/fresh")}>切换目录项</button>
+          <CatalogDetailPage />
+        </>
+      );
+    }
+
+    const i18n = makeI18n();
+    render(
+      <I18nContext.Provider value={i18n}>
+        <SessionContext.Provider value={makeSystemAdminSession()}>
+          <MemoryRouter initialEntries={["/catalog/expert_template/slow"]}>
+            <Routes>
+              <Route path="/catalog/:catalog_type/:template_id" element={<RouteSwitcher />} />
+            </Routes>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>,
+    );
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "切换目录项" }));
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+
+    resolveFresh!(singleResponse(makeCatalogItem({ template_id: "fresh", display_name: "最新详情" })));
+    expect(await screen.findByRole("heading", { name: "最新详情" })).toBeInTheDocument();
+
+    resolveSlow!(singleResponse(makeCatalogItem({ template_id: "slow", display_name: "过期详情" })));
+    await waitFor(() => {
+      expect(screen.queryByText("过期详情")).not.toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "最新详情" })).toBeInTheDocument();
     });
   });
 });
