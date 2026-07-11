@@ -61,10 +61,14 @@ afterEach(() => {
 describe("LoginPage", () => {
   it("渲染标题与表单字段", () => {
     renderLogin();
-    expect(screen.getByText("AI Team 运营端")).toBeInTheDocument();
-    expect(screen.getByText("用户名")).toBeInTheDocument();
-    expect(screen.getByText("密码")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "AI Team 运营端" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "运营端登录" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "用户名" })).toBeInTheDocument();
+    expect(screen.getByLabelText("密码")).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "登录" });
+    submit.focus();
+    expect(submit).toHaveFocus();
+    expect(document.querySelector(".glass")).toBeNull();
   });
 
   it("已登录时跳转（不渲染表单）", () => {
@@ -89,8 +93,24 @@ describe("LoginPage", () => {
   it("空字段不发请求", () => {
     renderLogin();
     fireEvent.submit(screen.getByTestId("login-form"));
-    expect(screen.getByText("请填写用户名与密码")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("请填写用户名与密码");
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("提交期间暴露 loading status 并禁用登录按钮", async () => {
+    mockFetch.mockImplementation(() => new Promise(() => {}));
+    renderLogin();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "用户名" }), {
+      target: { value: "admin" },
+    });
+    fireEvent.change(screen.getByLabelText("密码"), {
+      target: { value: "pass" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+
+    expect(await screen.findByRole("status", { name: "正在登录" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "登录" })).toBeDisabled();
   });
 
   it("登录成功 signIn + navigate", async () => {
@@ -132,7 +152,7 @@ describe("LoginPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
     await waitFor(() => {
-      expect(screen.getByText("用户名或密码错误")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("用户名或密码错误");
     });
   });
 });

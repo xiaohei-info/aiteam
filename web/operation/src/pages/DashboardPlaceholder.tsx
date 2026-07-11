@@ -3,7 +3,15 @@
  * GET /api/operation/rollups/board → 跨企业脱敏聚合看板。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../i18n/context";
 import { type RollupBoard, useBoardApi } from "../features/board/useBoardApi";
 
@@ -15,10 +23,12 @@ function fmtCost(v: number | string): string {
 
 function MetricCard({ label, value }: { label: string; value: string }): ReactNode {
   return (
-    <GlassPanel className="flex flex-col gap-xs rounded-window p-md">
-      <span className="text-xs text-text-secondary">{label}</span>
-      <span className="text-xl font-bold text-text-primary">{value}</span>
-    </GlassPanel>
+    <Card padding={4} role="region" aria-label={`${label}：${value}`}>
+      <VStack gap={2}>
+        <Text type="supporting">{label}</Text>
+        <Text type="display-2" hasTabularNumbers>{value}</Text>
+      </VStack>
+    </Card>
   );
 }
 
@@ -39,29 +49,37 @@ export function DashboardPlaceholder(): ReactNode {
   useEffect(() => { void load(); }, [load]);
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">
-        {i18n.t("operation.nav.dashboard")}
-      </h1>
+    <VStack gap={6}>
+      <Heading level={1}>{i18n.t("operation.nav.dashboard")}</Heading>
       {loading ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
+        <Card padding={4} role="status" aria-label="运营概览加载中">
+          <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
+            {Array.from({ length: 6 }, (_, index) => (
+              <Skeleton key={index} height={104} index={index} />
+            ))}
+          </Grid>
+        </Card>
       ) : error ? (
-        <GlassPanel className="flex flex-col gap-md rounded-window border border-danger/30 p-lg">
-          <p className="m-0 text-sm text-danger">{error}</p>
-          <Button type="button" variant="ghost" size="sm" className="self-start" onClick={load}>重试</Button>
-        </GlassPanel>
+        <Banner
+          status="error"
+          title={error}
+          endContent={<Button label="重试" variant="ghost" onClick={load} />}
+        />
       ) : board ? (
-        <div className="grid grid-cols-2 gap-md md:grid-cols-3">
+        <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
           <MetricCard label="企业数" value={fmt(board.enterprise_count)} />
           <MetricCard label="执行次数" value={fmt(board.run_count)} />
           <MetricCard label="总消耗" value={fmtCost(board.cost_total)} />
           <MetricCard label="总 Token" value={fmt(board.token_total)} />
           <MetricCard label="错误次数" value={fmt(board.error_count)} />
           <MetricCard label="总耗时（秒）" value={fmt(board.duration_seconds_total)} />
-        </div>
+        </Grid>
       ) : (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">暂无数据</GlassPanel>
+        <EmptyState
+          title="暂无运营汇总数据"
+          description="跨企业脱敏聚合数据生成后会显示在这里。"
+        />
       )}
-    </section>
+    </VStack>
   );
 }

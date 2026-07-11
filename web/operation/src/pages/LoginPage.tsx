@@ -1,6 +1,14 @@
 import { type FormEvent, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { GlassPanel, Button, Field, Input } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Center } from "@astryxdesign/core/Center";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
 import { createOperationApiClient } from "../api/client";
@@ -17,6 +25,7 @@ export function LoginPage(): React.ReactNode {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   if (session) {
     const from = (location.state as LocationState | null)?.from ?? "/";
@@ -30,6 +39,7 @@ export function LoginPage(): React.ReactNode {
       setError(i18n.t("operation.login.required"));
       return;
     }
+    setLoading(true);
     try {
       const client = createOperationApiClient({ getToken: () => null });
       const result = await client.post<{ token: string }>("/api/operation/auth/login", {
@@ -44,36 +54,53 @@ export function LoginPage(): React.ReactNode {
       navigate(from, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请检查凭据");
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-bg-canvas">
-      <GlassPanel className="w-[360px] rounded-window p-xl">
-        <form className="flex flex-col gap-md" data-testid="login-form" onSubmit={handleSubmit}>
-          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("operation.title")}</h1>
-          <Field label={i18n.t("operation.login.username")}>
-            <Input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
+    <Center minHeight="100vh" width="100%">
+      <Card width={360} padding={6}>
+        <form
+          aria-label="运营端登录"
+          data-testid="login-form"
+          onSubmit={handleSubmit}
+        >
+          <VStack gap={4}>
+            <Heading level={1}>{i18n.t("operation.title")}</Heading>
+            <FormLayout>
+              <TextInput
+                label={i18n.t("operation.login.username")}
+                type="text"
+                value={username}
+                onChange={setUsername}
+                width="100%"
+              />
+              <TextInput
+                label={i18n.t("operation.login.password")}
+                type="password"
+                value={password}
+                onChange={setPassword}
+                width="100%"
+              />
+            </FormLayout>
+            {error ? <Banner status="error" title={error} /> : null}
+            {loading ? (
+              <Text role="status" aria-label="正在登录" type="supporting">
+                正在登录…
+              </Text>
+            ) : null}
+            <Button
+              type="submit"
+              label={i18n.t("operation.login.submit")}
+              variant="primary"
+              isDisabled={loading}
+              isLoading={loading}
             />
-          </Field>
-          <Field label={i18n.t("operation.login.password")}>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-            />
-          </Field>
-          {error ? <p className="m-0 text-xs text-danger">{error}</p> : null}
-          <Button type="submit" className="mt-sm">
-            {i18n.t("operation.login.submit")}
-          </Button>
+          </VStack>
         </form>
-      </GlassPanel>
-    </div>
+      </Card>
+    </Center>
   );
 }

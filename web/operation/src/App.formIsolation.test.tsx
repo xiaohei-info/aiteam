@@ -10,6 +10,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { PlatformRole, createI18n } from "@aiteam/shared";
 import { App } from "./App";
+import { AstryxProviders } from "./astryx/AstryxProviders";
 import { SessionContext, type SessionContextValue } from "./auth/session";
 import { I18nContext } from "./i18n/context";
 import { operationMessages } from "./i18n/messages";
@@ -52,7 +53,9 @@ function renderApp(initialPath: string) {
     <I18nContext.Provider value={makeI18n()}>
       <SessionContext.Provider value={makeSystemAdminSession()}>
         <MemoryRouter initialEntries={[initialPath]}>
-          <App />
+          <AstryxProviders>
+            <App />
+          </AstryxProviders>
         </MemoryRouter>
       </SessionContext.Provider>
     </I18nContext.Provider>,

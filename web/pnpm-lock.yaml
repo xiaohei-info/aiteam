@@ -148,6 +148,15 @@ importers:
       '@aiteam/shared':
         specifier: workspace:*
         version: link:../shared
+      '@astryxdesign/core':
+        specifier: 0.1.4
+        version: 0.1.4(@stylexjs/stylex@0.18.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@astryxdesign/theme-stone':
+        specifier: 0.1.4
+        version: 0.1.4(@astryxdesign/core@0.1.4(@stylexjs/stylex@0.18.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+      '@stylexjs/stylex':
+        specifier: 0.18.3
+        version: 0.18.3
       react:
         specifier: 19.2.7
         version: 19.2.7
