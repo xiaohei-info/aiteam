@@ -1,13 +1,24 @@
-/**
- * 成员账号页（W-M.2，08 §12.1）。
- *
- * owner/enterprise_admin 可写（建/改/停启用/删）；其余角色只读列表（03 §9.4B 鉴权在后端兜底）。
- * 红线：初始凭据仅在创建成功后**一次性**展示（管理员当场录入的明文），不回显、不缓存、
- * 不写 localStorage——后端 MemberOut 本就不含凭据，刷新即不可见。
- */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+/** 成员账号页：租户成员 CRUD；初始凭据仅成功后一次性展示。 */
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input, Select, Table } from "@aiteam/shared/ui";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useMembersApi } from "./useMembersApi";
@@ -20,33 +31,34 @@ const ASSIGNABLE_ROLES = [
   EnterpriseRole.OWNER,
 ];
 
+type MemberRow = Member & Record<string, unknown>;
+
 export function MembersPage(): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
-
   const api = useMembersApi();
   const [members, setMembers] = useState<Member[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  // 创建成功后一次性展示的凭据（account + 管理员录入的明文）；刷新/再操作即清空。
+  const [pendingDelete, setPendingDelete] = useState<Member | null>(null);
   const [createdCredential, setCreatedCredential] = useState<{ account: string; password: string } | null>(null);
 
-  const deptName = useMemo(() => {
-    const m = new Map(departments.map((d) => [d.id, d.display_name]));
-    return (id: string) => m.get(id) ?? id;
-  }, [departments]);
+  const departmentNames = useMemo(
+    () => new Map(departments.map((department) => [department.id, department.display_name])),
+    [departments],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [m, d] = await Promise.all([api.listMembers(), api.listDepartments()]);
-      setMembers(m);
-      setDepartments(d);
+      const [memberItems, departmentItems] = await Promise.all([api.listMembers(), api.listDepartments()]);
+      setMembers(memberItems);
+      setDepartments(departmentItems);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.members.load_error"));
     } finally {
@@ -54,251 +66,217 @@ export function MembersPage(): ReactNode {
     }
   }, [api, i18n]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const handleCreate = useCallback(
-    async (input: CreateMemberInput) => {
-      setActionError(null);
-      try {
-        await api.createMember(input);
-        setCreatedCredential({ account: input.account, password: input.initial_password });
-        await load();
-      } catch (err) {
-        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
-      }
-    },
-    [api, load, i18n],
-  );
+  const handleCreate = useCallback(async (input: CreateMemberInput): Promise<boolean> => {
+    setWorking(true);
+    setActionError(null);
+    try {
+      await api.createMember(input);
+      setCreatedCredential({ account: input.account, password: input.initial_password });
+      await load();
+      return true;
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
+      return false;
+    } finally {
+      setWorking(false);
+    }
+  }, [api, i18n, load]);
 
-  const handleToggleStatus = useCallback(
-    async (member: Member) => {
-      setActionError(null);
-      const next = member.status === "active" ? "disabled" : "active";
-      try {
-        await api.updateMember(member.id, { status: next });
-        await load();
-      } catch (err) {
-        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
-      }
-    },
-    [api, load, i18n],
-  );
+  const handleToggleStatus = useCallback(async (member: Member) => {
+    setWorking(true);
+    setActionError(null);
+    try {
+      await api.updateMember(member.id, { status: member.status === "active" ? "disabled" : "active" });
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
+    } finally {
+      setWorking(false);
+    }
+  }, [api, i18n, load]);
 
-  const handleDelete = useCallback(
-    async (member: Member) => {
-      setActionError(null);
-      try {
-        await api.deleteMember(member.id);
-        setConfirmDeleteId(null);
-        await load();
-      } catch (err) {
-        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
-      }
-    },
-    [api, load, i18n],
-  );
+  const handleDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    setWorking(true);
+    setActionError(null);
+    try {
+      await api.deleteMember(pendingDelete.id);
+      setPendingDelete(null);
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : i18n.t("manager.members.action_error"));
+    } finally {
+      setWorking(false);
+    }
+  }, [api, i18n, load, pendingDelete]);
+
+  const columns = useMemo<TableColumn<MemberRow>[]>(() => {
+    const base: TableColumn<MemberRow>[] = [
+      {
+        key: "display_name",
+        header: i18n.t("manager.members.col_name"),
+        width: proportional(1),
+        renderCell: (member) => <Text weight="bold" data-testid="member-row">{member.display_name || member.id}</Text>,
+      },
+      {
+        key: "status",
+        header: i18n.t("manager.members.col_status"),
+        width: pixel(110),
+        renderCell: (member) => <Badge label={member.status} variant={member.status === "active" ? "success" : "neutral"} />,
+      },
+      { key: "roles", header: i18n.t("manager.members.col_roles"), width: proportional(1), renderCell: (member) => member.roles.join(", ") },
+      {
+        key: "department_ids",
+        header: i18n.t("manager.members.col_departments"),
+        width: proportional(1),
+        renderCell: (member) => member.department_ids.map((id) => departmentNames.get(id) ?? id).join(", ") || "—",
+      },
+    ];
+    if (canWrite) {
+      base.push({
+        key: "actions",
+        header: i18n.t("manager.members.col_actions"),
+        width: pixel(190),
+        align: "end",
+        resizable: false,
+        renderCell: (member) => (
+          <HStack gap={2} justify="end">
+            <Button
+              label={member.status === "active" ? i18n.t("manager.members.disable") : i18n.t("manager.members.enable")}
+              variant="ghost"
+              size="sm"
+              isDisabled={working}
+              onClick={() => void handleToggleStatus(member)}
+            />
+            <Button
+              label={i18n.t("manager.members.delete")}
+              variant="destructive"
+              size="sm"
+              isDisabled={working}
+              onClick={() => setPendingDelete(member)}
+            />
+          </HStack>
+        ),
+      });
+    }
+    return base;
+  }, [canWrite, departmentNames, handleToggleStatus, i18n, working]);
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.members")}</h1>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>{i18n.t("manager.nav.members")}</Heading>
 
       {createdCredential && (
-        <GlassPanel
-          role="status"
-          className="rounded-window border border-gold/30 p-lg text-sm text-text-secondary"
-        >
-          <p className="m-0 mb-sm text-text-primary">{i18n.t("manager.members.credential_once")}</p>
-          <p className="m-0">
-            <strong className="text-text-primary">{i18n.t("manager.members.account")}</strong>：
-            {createdCredential.account}
-          </p>
-          <p className="m-0">
-            <strong className="text-text-primary">{i18n.t("manager.members.initial_password")}</strong>：
-            <code className="rounded bg-surface px-xs py-px text-gold-bright">{createdCredential.password}</code>
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-sm"
-            onClick={() => setCreatedCredential(null)}
-          >
-            {i18n.t("manager.members.credential_dismiss")}
-          </Button>
-        </GlassPanel>
+        <Banner
+          status="warning"
+          title={i18n.t("manager.members.credential_once")}
+          description={
+            <VStack gap={1}>
+            <Text>{i18n.t("manager.members.account")}：{createdCredential.account}</Text>
+            <Text>{i18n.t("manager.members.initial_password")}：<Code>{createdCredential.password}</Code></Text>
+            </VStack>
+          }
+          endContent={<Button label={i18n.t("manager.members.credential_dismiss")} variant="ghost" size="sm" onClick={() => setCreatedCredential(null)} />}
+        />
       )}
 
-      {canWrite && <CreateMemberForm departments={departments} onCreate={handleCreate} />}
+      {canWrite && <CreateMemberForm departments={departments} working={working} onCreate={handleCreate} />}
+      {actionError && <Banner status="error" title={actionError} />}
+      {error && <Banner status="error" title={error} />}
 
-      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-      {error && <p className="m-0 text-sm text-danger">{error}</p>}
       {loading ? (
-        <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.members.loading")}</p>
+        <Card role="status" aria-label={i18n.t("manager.members.loading")}>
+          <VStack gap={2}><Skeleton height={36} /><Skeleton height={36} index={1} /></VStack>
+        </Card>
       ) : (
-        <GlassPanel className="overflow-hidden rounded-window">
-          <Table>
-            <thead>
-              <tr>
-                <th>{i18n.t("manager.members.col_name")}</th>
-                <th>{i18n.t("manager.members.col_status")}</th>
-                <th>{i18n.t("manager.members.col_roles")}</th>
-                <th>{i18n.t("manager.members.col_departments")}</th>
-                {canWrite && <th>{i18n.t("manager.members.col_actions")}</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {members.length === 0 ? (
-                <tr>
-                  <td colSpan={canWrite ? 5 : 4} className="text-text-muted">
-                    {i18n.t("manager.members.empty")}
-                  </td>
-                </tr>
-              ) : (
-                members.map((m) => (
-                  <tr key={m.id} data-testid="member-row">
-                    <td>{m.display_name || m.id}</td>
-                    <td>{m.status}</td>
-                    <td>{m.roles.join(", ")}</td>
-                    <td>{m.department_ids.map(deptName).join(", ")}</td>
-                    {canWrite && (
-                      <td>
-                        {confirmDeleteId === m.id ? (
-                          <span className="inline-flex items-center gap-xs text-sm">
-                            <span className="text-text-secondary">{i18n.t("manager.members.delete_confirm")}</span>
-                            <Button
-                              type="button"
-                              variant="danger"
-                              size="sm"
-                              onClick={() => void handleDelete(m)}
-                            >
-                              {i18n.t("manager.members.delete_confirm_ok")}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setConfirmDeleteId(null)}
-                            >
-                              {i18n.t("manager.members.delete_cancel")}
-                            </Button>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-xs">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => void handleToggleStatus(m)}
-                            >
-                              {m.status === "active"
-                                ? i18n.t("manager.members.disable")
-                                : i18n.t("manager.members.enable")}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="danger"
-                              size="sm"
-                              onClick={() => setConfirmDeleteId(m.id)}
-                            >
-                              {i18n.t("manager.members.delete")}
-                            </Button>
-                          </span>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </Table>
-        </GlassPanel>
+        <Card padding={0}>
+          <Table
+            aria-label={i18n.t("manager.nav.members")}
+            tableProps={{ "aria-label": i18n.t("manager.nav.members") }}
+            data={members as MemberRow[]}
+            columns={columns}
+            idKey="id"
+            hasHover
+            emptyState={<EmptyState title={i18n.t("manager.members.empty")} isCompact />}
+          />
+        </Card>
       )}
-    </section>
+
+      <AlertDialog
+        isOpen={pendingDelete != null}
+        onOpenChange={(isOpen) => { if (!isOpen && !working) setPendingDelete(null); }}
+        title="删除成员"
+        description={i18n.t("manager.members.delete_confirm")}
+        cancelLabel={i18n.t("manager.members.delete_cancel")}
+        actionLabel={i18n.t("manager.members.delete_confirm_ok")}
+        isActionLoading={working}
+        onAction={() => void handleDelete()}
+      />
+    </VStack>
   );
 }
 
 interface CreateFormProps {
   departments: Department[];
-  onCreate: (input: CreateMemberInput) => void | Promise<void>;
+  working: boolean;
+  onCreate: (input: CreateMemberInput) => Promise<boolean>;
 }
 
-function CreateMemberForm({ departments, onCreate }: CreateFormProps): ReactNode {
+function CreateMemberForm({ departments, working, onCreate }: CreateFormProps): ReactNode {
   const i18n = useI18n();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<string>(EnterpriseRole.MEMBER);
-  const [deptIds, setDeptIds] = useState<string[]>([]);
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(event: FormEvent) {
+    event.preventDefault();
     if (!account.trim() || !password.trim()) return;
-    void onCreate({
+    const succeeded = await onCreate({
       account: account.trim(),
       initial_password: password,
       display_name: displayName.trim(),
       roles: [role],
-      department_ids: deptIds,
+      department_ids: departmentIds,
     });
+    if (!succeeded) return;
     setAccount("");
     setPassword("");
     setDisplayName("");
     setRole(EnterpriseRole.MEMBER);
-    setDeptIds([]);
+    setDepartmentIds([]);
   }
 
   return (
-    <GlassPanel className="rounded-window p-lg">
-      <form className="flex flex-col gap-md" onSubmit={submit}>
-        <h2 className="m-0 text-base font-semibold text-text-primary">
-          {i18n.t("manager.members.create_title")}
-        </h2>
-        <div className="grid grid-cols-1 gap-md md:grid-cols-2">
-          <Field label={i18n.t("manager.members.account")}>
-            <Input value={account} onChange={(e) => setAccount(e.target.value)} required />
-          </Field>
-          <Field label={i18n.t("manager.members.initial_password")}>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </Field>
-          <Field label={i18n.t("manager.members.display_name")}>
-            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </Field>
-          <Field label={i18n.t("manager.members.role")}>
-            <Select value={role} onChange={(e) => setRole(e.target.value)}>
-              {ASSIGNABLE_ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          {departments.length > 0 && (
-            <Field label={i18n.t("manager.members.col_departments")}>
-              <Select
-                multiple
-                value={deptIds}
-                onChange={(e) => setDeptIds(Array.from(e.target.selectedOptions, (o) => o.value))}
-              >
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.display_name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          )}
-        </div>
-        <Button type="submit" size="sm" className="self-start">
-          {i18n.t("manager.members.create_submit")}
-        </Button>
+    <Card>
+      <form aria-label={i18n.t("manager.members.create_title")} onSubmit={(event) => void submit(event)}>
+        <VStack gap={4}>
+          <Heading level={2}>{i18n.t("manager.members.create_title")}</Heading>
+          <FormLayout>
+            <Grid columns={{ minWidth: 240, repeat: "fit" }} gap={3}>
+              <TextInput label={i18n.t("manager.members.account")} value={account} onChange={setAccount} isRequired isDisabled={working} />
+              <TextInput label={i18n.t("manager.members.initial_password")} type="password" value={password} onChange={setPassword} isRequired isDisabled={working} />
+              <TextInput label={i18n.t("manager.members.display_name")} value={displayName} onChange={setDisplayName} isOptional isDisabled={working} />
+              <Selector label={i18n.t("manager.members.role")} options={ASSIGNABLE_ROLES.map((value) => ({ value, label: value }))} value={role} onChange={setRole} isRequired isDisabled={working} />
+              {departments.length > 0 && (
+                <MultiSelector
+                  label={i18n.t("manager.members.col_departments")}
+                  options={departments.map((department) => ({ value: department.id, label: department.display_name }))}
+                  value={departmentIds}
+                  onChange={setDepartmentIds}
+                  triggerDisplay="labels"
+                  isOptional
+                  isDisabled={working}
+                />
+              )}
+            </Grid>
+          </FormLayout>
+          <HStack justify="end"><Button label={i18n.t("manager.members.create_submit")} type="submit" variant="primary" isLoading={working} /></HStack>
+        </VStack>
       </form>
-    </GlassPanel>
+    </Card>
   );
 }

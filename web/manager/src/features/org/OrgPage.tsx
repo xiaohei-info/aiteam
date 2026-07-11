@@ -1,177 +1,109 @@
-/** P07 组织架构页 — 树形展示 + 员工部门分配（GH#343）。 */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+/** 组织架构页：Astryx TreeList 展示层级，并为员工分配部门。 */
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Select } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { TreeList, type TreeListItemData } from "@astryxdesign/core/TreeList";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { useOrgApi } from "./useOrgApi";
 import type { OrgTreeNode } from "./types";
 
-interface DepartmentOption {
-  id: string;
-  name: string;
+interface DepartmentOption { id: string; name: string }
+
+function collectDepartments(node: OrgTreeNode, output: DepartmentOption[]): void {
+  if (node.type === "department") output.push({ id: node.id, name: node.name });
+  node.children?.forEach((child) => collectDepartments(child, output));
 }
 
-/** 收集树中全部部门（用于分配下拉）。 */
-function collectDepartments(node: OrgTreeNode, out: DepartmentOption[]): void {
-  if (node.type === "department") out.push({ id: node.id, name: node.name });
-  node.children?.forEach((c) => collectDepartments(c, out));
-}
-
-interface EmployeeNodeProps {
-  node: OrgTreeNode;
-  depth: number;
-  departments: DepartmentOption[];
-  onAssign: (employee: OrgTreeNode) => void;
-}
-
-function EmployeeNode({ node, depth, departments, onAssign }: EmployeeNodeProps): ReactNode {
-  const i18n = useI18n();
-  const canAssign = departments.length > 0;
-  return (
-    <div style={{ paddingLeft: `${depth * 24}px` }} data-testid="org-node">
-      <div className="flex items-center gap-sm py-xs">
-        <span className="text-text-primary">👤</span>
-        <span className="text-sm text-text-primary">{node.name}</span>
-        {node.status && (
-          <span className={`text-xs ${node.status === "online" ? "text-success" : "text-text-muted"}`}>
-            ●{node.status}
-          </span>
-        )}
-        {canAssign && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="ml-xs"
-            onClick={() => onAssign(node)}
-            data-testid={`assign-trigger-${node.id}`}
-          >
-            {i18n.t("manager.org.assign")}
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface NodeViewProps {
-  node: OrgTreeNode;
-  depth: number;
-  departments: DepartmentOption[];
-  onAssign: (employee: OrgTreeNode) => void;
-}
-
-function NodeView({ node, depth, departments, onAssign }: NodeViewProps): ReactNode {
-  if (node.type === "employee") {
-    return <EmployeeNode node={node} depth={depth} departments={departments} onAssign={onAssign} />;
-  }
-  return (
-    <div style={{ paddingLeft: `${depth * 24}px` }} data-testid="org-node">
-      <div className="flex items-center gap-sm py-xs">
-        <span className="text-gold-bright">📁</span>
-        <span className="text-sm text-text-primary">{node.name}</span>
-      </div>
-      {node.children?.map((c) => (
-        <NodeView key={c.id} node={c} depth={depth + 1} departments={departments} onAssign={onAssign} />
-      ))}
-    </div>
-  );
-}
-
-interface AssignModalProps {
+interface AssignDialogProps {
   employee: OrgTreeNode;
   departments: DepartmentOption[];
   onClose: () => void;
-  onAssigned: () => void;
+  onAssign: (employeeId: string, departmentId: string) => Promise<string | null>;
 }
 
-function AssignModal({ employee, departments, onClose, onAssigned }: AssignModalProps): ReactNode {
+function AssignDialog({ employee, departments, onClose, onAssign }: AssignDialogProps): ReactNode {
   const i18n = useI18n();
-  const api = useOrgApi();
-  const [departmentId, setDepartmentId] = useState<string>("");
+  const [departmentId, setDepartmentId] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  const submit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!departmentId) return;
-      setPending(true);
-      setError(null);
-      try {
-        await api.assignDepartment(employee.id, departmentId);
-        setDone(true);
-        onAssigned();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : i18n.t("manager.org.assign_error"));
-      } finally {
-        setPending(false);
-      }
-    },
-    [api, employee.id, departmentId, onAssigned, i18n],
-  );
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!departmentId) return;
+    setPending(true);
+    setError(null);
+    const assignmentError = await onAssign(employee.id, departmentId);
+    setPending(false);
+    if (assignmentError) setError(assignmentError);
+    else setDone(true);
+  }
 
   return (
-    <div
-      className="fixed inset-0 z-[1300] flex items-center justify-center px-md"
-      role="dialog"
-      aria-modal="true"
+    <Dialog
+      isOpen
+      purpose="form"
+      width={480}
       aria-label={i18n.t("manager.org.assign_title")}
+      onOpenChange={(isOpen) => { if (!isOpen && !pending) onClose(); }}
+      data-testid="assign-modal"
     >
-      <div className="absolute inset-0 bg-bg-canvas/70" onClick={onClose} />
-      <GlassPanel
-        className="relative z-[1301] w-full max-w-md rounded-window p-lg"
-        role="document"
-        data-testid="assign-modal"
-      >
-        <form className="flex flex-col gap-md" onSubmit={submit}>
-          <h2 className="m-0 text-base font-semibold text-text-primary">
-            {i18n.t("manager.org.assign_title")}
-          </h2>
-          <p className="m-0 text-sm text-text-secondary">{employee.name}</p>
-
-          <Field label={i18n.t("manager.org.department_pick")}>
-            <Select
-              value={departmentId}
-              onChange={(e) => setDepartmentId(e.target.value)}
-              disabled={pending || done}
-              data-testid="assign-department-select"
-              required
-            >
-              <option value="" disabled>
-                {i18n.t("manager.org.department_pick")}
-              </option>
-              {departments.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {error && <p className="m-0 text-sm text-danger">{error}</p>}
-          {done && (
-            <p className="m-0 text-sm text-success" data-testid="assign-success">
-              {i18n.t("manager.org.assign_ok")}
-            </p>
-          )}
-
-          <div className="flex items-center gap-sm justify-end">
-            <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={pending}>
-              {i18n.t("common.cancel")}
-            </Button>
-            <Button type="submit" size="sm" disabled={pending || done || !departmentId}>
-              {pending
-                ? i18n.t("manager.org.assign_pending")
-                : done
-                  ? i18n.t("manager.org.assign_ok")
-                  : i18n.t("manager.org.assign_submit")}
-            </Button>
-          </div>
-        </form>
-      </GlassPanel>
-    </div>
+      <Layout
+        height="auto"
+        header={<DialogHeader title={i18n.t("manager.org.assign_title")} onOpenChange={(isOpen) => { if (!isOpen && !pending) onClose(); }} />}
+        content={
+          <LayoutContent>
+            <form id="assign-department-form" onSubmit={(event) => void submit(event)}>
+              <VStack gap={4}>
+                <Text>{employee.name}</Text>
+                <FormLayout>
+                  <Selector
+                    label={i18n.t("manager.org.department_pick")}
+                    options={departments.map((department) => ({ value: department.id, label: department.name }))}
+                    value={departmentId || undefined}
+                    onChange={setDepartmentId}
+                    placeholder={i18n.t("manager.org.department_pick")}
+                    data-testid="assign-department-select"
+                    isRequired
+                    isDisabled={pending || done}
+                  />
+                </FormLayout>
+                {error && <Banner status="error" title={error} />}
+                {done && <Banner status="success" title={i18n.t("manager.org.assign_ok")} data-testid="assign-success" />}
+              </VStack>
+            </form>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack gap={2} justify="end">
+              <Button label={i18n.t("common.cancel")} variant="ghost" isDisabled={pending} onClick={onClose} />
+              <Button
+                label={done ? i18n.t("manager.org.assign_ok") : i18n.t("manager.org.assign_submit")}
+                type="submit"
+                form="assign-department-form"
+                variant="primary"
+                isLoading={pending}
+                isDisabled={done || !departmentId}
+              />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
   );
 }
 
@@ -195,41 +127,67 @@ export function OrgPage(): ReactNode {
     }
   }, [api, i18n]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const departments = useMemo(() => {
     if (!tree) return [];
-    const out: DepartmentOption[] = [];
-    collectDepartments(tree, out);
-    return out;
+    const output: DepartmentOption[] = [];
+    collectDepartments(tree, output);
+    return output;
   }, [tree]);
 
-  if (loading) {
-    return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>;
-  }
+  const toTreeItem = useCallback((node: OrgTreeNode): TreeListItemData => ({
+    id: node.id,
+    label: node.name,
+    description: node.type === "employee" ? node.status ?? undefined : undefined,
+    startContent: <Badge label={node.type === "employee" ? "员工" : "部门"} variant={node.type === "employee" ? "blue" : "neutral"} />,
+    endContent: node.type === "employee" && departments.length > 0 ? (
+      <Button
+        label={i18n.t("manager.org.assign")}
+        variant="ghost"
+        size="sm"
+        data-testid={`assign-trigger-${node.id}`}
+        onClick={(event) => { event.stopPropagation(); setAssignTarget(node); }}
+      />
+    ) : undefined,
+    isExpanded: true,
+    children: node.children?.map(toTreeItem),
+  }), [departments.length, i18n]);
+
+  const treeItems = useMemo(() => tree ? [toTreeItem(tree)] : [], [toTreeItem, tree]);
+
+  const assign = useCallback(async (employeeId: string, departmentId: string): Promise<string | null> => {
+    try {
+      await api.assignDepartment(employeeId, departmentId);
+      await load();
+      return null;
+    } catch (err) {
+      return err instanceof ApiError ? err.message : i18n.t("manager.org.assign_error");
+    }
+  }, [api, i18n, load]);
 
   return (
-    <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">组织架构</h1>
-      {error && <GlassPanel className="rounded-window p-md text-sm text-danger">{error}</GlassPanel>}
-      <GlassPanel className="rounded-window p-md">
-        {tree ? (
-          <NodeView node={tree} depth={0} departments={departments} onAssign={setAssignTarget} />
-        ) : (
-          <p className="text-sm text-text-secondary">暂无数据</p>
-        )}
-      </GlassPanel>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>组织架构</Heading>
+      {error && <Banner status="error" title={error} />}
+      {loading ? (
+        <Card role="status" aria-label="组织架构加载中"><VStack gap={2}><Skeleton height={36} /><Skeleton height={90} index={1} /></VStack></Card>
+      ) : tree ? (
+        <Card>
+          <TreeList items={treeItems} density="balanced" header={<Heading level={2}>组织树</Heading>} data-testid="org-tree" />
+        </Card>
+      ) : (
+        <EmptyState headingLevel={2} title="暂无数据" />
+      )}
 
       {assignTarget && (
-        <AssignModal
+        <AssignDialog
           employee={assignTarget}
           departments={departments}
           onClose={() => setAssignTarget(null)}
-          onAssigned={() => void load()}
+          onAssign={assign}
         />
       )}
-    </section>
+    </VStack>
   );
 }

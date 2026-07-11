@@ -1,64 +1,65 @@
-/**
- * 成员级授权页（W-M.4，08 §12.1，D12）。
- *
- * 配置 member_grant：把 专家(employee 实例)/方案(实例) 授权给 部门/成员；增删查。
- * owner/enterprise_admin 可写，其余只读（后端鉴权兜底，见 #117）。
- */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+/** 成员级授权页：将专家/方案实例授权给成员或部门。 */
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Select, Table } from "@aiteam/shared/ui";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useGrantsApi } from "./useGrantsApi";
-import type {
-  Department,
-  ExpertOption,
-  Grant,
-  GrantResourceType,
-  Member,
-  SolutionOption,
-} from "./types";
+import type { Department, ExpertOption, Grant, GrantResourceType, Member, SolutionOption } from "./types";
+
+type GrantRow = Grant & Record<string, unknown>;
 
 export function GrantsPage(): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useGrantsApi();
-
   const [grants, setGrants] = useState<Grant[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [experts, setExperts] = useState<ExpertOption[]>([]);
   const [solutions, setSolutions] = useState<SolutionOption[]>([]);
   const [loading, setLoading] = useState(false);
+  const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<Grant | null>(null);
 
-  const nameOf = useMemo(() => {
-    const mem = new Map(members.map((m) => [m.id, m.display_name]));
-    const dep = new Map(departments.map((d) => [d.id, d.display_name]));
-    return {
-      member: (id: string) => mem.get(id) ?? id,
-      dept: (id: string) => dep.get(id) ?? id,
-    };
-  }, [members, departments]);
+  const memberNames = useMemo(() => new Map(members.map((member) => [member.id, member.display_name])), [members]);
+  const departmentNames = useMemo(() => new Map(departments.map((department) => [department.id, department.display_name])), [departments]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [g, m, d, e, s] = await Promise.all([
+      const [grantItems, memberItems, departmentItems, expertItems, solutionItems] = await Promise.all([
         api.listGrants(),
         api.listMembers(),
         api.listDepartments(),
         api.listExperts(),
         api.listSolutions(),
       ]);
-      setGrants(g);
-      setMembers(m);
-      setDepartments(d);
-      setExperts(e);
-      setSolutions(s);
+      setGrants(grantItems);
+      setMembers(memberItems);
+      setDepartments(departmentItems);
+      setExperts(expertItems);
+      setSolutions(solutionItems);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.grants.load_error"));
     } finally {
@@ -66,182 +67,199 @@ export function GrantsPage(): ReactNode {
     }
   }, [api, i18n]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const runAction = useCallback(
-    async (fn: () => Promise<unknown>) => {
-      setActionError(null);
-      try {
-        await fn();
-        await load();
-      } catch (err) {
-        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.grants.action_error"));
-      }
-    },
-    [i18n, load],
-  );
+  const runAction = useCallback(async (fn: () => Promise<unknown>): Promise<boolean> => {
+    setWorking(true);
+    setActionError(null);
+    try {
+      await fn();
+      await load();
+      return true;
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : i18n.t("manager.grants.action_error"));
+      return false;
+    } finally {
+      setWorking(false);
+    }
+  }, [i18n, load]);
+
+  const revoke = useCallback(async () => {
+    if (!pendingRevoke) return;
+    const succeeded = await runAction(() => api.deleteGrant(pendingRevoke.id));
+    if (succeeded) setPendingRevoke(null);
+  }, [api, pendingRevoke, runAction]);
+
+  const columns = useMemo<TableColumn<GrantRow>[]>(() => {
+    const base: TableColumn<GrantRow>[] = [
+      {
+        key: "resource",
+        header: i18n.t("manager.grants.col_resource"),
+        width: proportional(1),
+        renderCell: (grant) => (
+          <HStack gap={2} align="center" data-testid="grant-row">
+            <Badge label={grant.resource_type === "expert" ? i18n.t("manager.grants.type_expert") : i18n.t("manager.grants.type_solution")} variant="info" />
+            <Code>{grant.resource_id}</Code>
+          </HStack>
+        ),
+      },
+      {
+        key: "member_ids",
+        header: i18n.t("manager.grants.col_members"),
+        width: proportional(1),
+        renderCell: (grant) => grant.member_ids.map((id) => memberNames.get(id) ?? id).join(", ") || "—",
+      },
+      {
+        key: "department_ids",
+        header: i18n.t("manager.grants.col_departments"),
+        width: proportional(1),
+        renderCell: (grant) => grant.department_ids.map((id) => departmentNames.get(id) ?? id).join(", ") || "—",
+      },
+    ];
+    if (canWrite) {
+      base.push({
+        key: "actions",
+        header: i18n.t("manager.grants.col_actions"),
+        width: pixel(110),
+        align: "end",
+        resizable: false,
+        renderCell: (grant) => (
+          <Button label={i18n.t("manager.grants.revoke")} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingRevoke(grant)} />
+        ),
+      });
+    }
+    return base;
+  }, [canWrite, departmentNames, i18n, memberNames, working]);
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.grants")}</h1>
-      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-      {error && <p className="m-0 text-sm text-danger">{error}</p>}
-      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.grants.loading")}</p>}
-
+    <VStack as="section" gap={6}>
+      <Heading level={1}>{i18n.t("manager.nav.grants")}</Heading>
       {canWrite && (
         <GrantForm
           experts={experts}
           solutions={solutions}
           members={members}
           departments={departments}
+          working={working}
           onCreate={(input) => runAction(() => api.createGrant(input))}
         />
       )}
-
-      <GlassPanel className="overflow-hidden rounded-window">
-        <Table>
-          <thead>
-            <tr>
-              <th>{i18n.t("manager.grants.col_resource")}</th>
-              <th>{i18n.t("manager.grants.col_members")}</th>
-              <th>{i18n.t("manager.grants.col_departments")}</th>
-              {canWrite && <th>{i18n.t("manager.grants.col_actions")}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {grants.length === 0 ? (
-              <tr>
-                <td colSpan={canWrite ? 4 : 3} className="text-text-muted">
-                  {i18n.t("manager.grants.empty")}
-                </td>
-              </tr>
-            ) : (
-              grants.map((g) => (
-                <tr key={g.id} data-testid="grant-row">
-                  <td>
-                    {g.resource_type} · <code className="text-gold-bright">{g.resource_id}</code>
-                  </td>
-                  <td>{g.member_ids.map(nameOf.member).join(", ") || "-"}</td>
-                  <td>{g.department_ids.map(nameOf.dept).join(", ") || "-"}</td>
-                  {canWrite && (
-                    <td>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void runAction(() => api.deleteGrant(g.id))}
-                      >
-                        {i18n.t("manager.grants.revoke")}
-                      </Button>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </Table>
-      </GlassPanel>
-    </section>
+      {actionError && <Banner status="error" title={actionError} />}
+      {error && <Banner status="error" title={error} />}
+      {loading ? (
+        <Card role="status" aria-label={i18n.t("manager.grants.loading")}>
+          <VStack gap={2}><Skeleton height={36} /><Skeleton height={36} index={1} /></VStack>
+        </Card>
+      ) : (
+        <Card padding={0}>
+          <Table
+            aria-label={i18n.t("manager.nav.grants")}
+            tableProps={{ "aria-label": i18n.t("manager.nav.grants") }}
+            data={grants as GrantRow[]}
+            columns={columns}
+            idKey="id"
+            hasHover
+            emptyState={<EmptyState title={i18n.t("manager.grants.empty")} isCompact />}
+          />
+        </Card>
+      )}
+      <AlertDialog
+        isOpen={pendingRevoke != null}
+        onOpenChange={(isOpen) => { if (!isOpen && !working) setPendingRevoke(null); }}
+        title="撤销授权"
+        description="撤销后，该成员或部门将无法继续使用此资源。"
+        cancelLabel="取消"
+        actionLabel="确认撤销"
+        isActionLoading={working}
+        onAction={() => void revoke()}
+      />
+    </VStack>
   );
 }
 
-interface FormProps {
+interface GrantFormProps {
   experts: ExpertOption[];
   solutions: SolutionOption[];
   members: Member[];
   departments: Department[];
-  onCreate: (input: {
-    resource_type: GrantResourceType;
-    resource_id: string;
-    member_ids: string[];
-    department_ids: string[];
-  }) => void | Promise<void>;
+  working: boolean;
+  onCreate: (input: { resource_type: GrantResourceType; resource_id: string; member_ids: string[]; department_ids: string[] }) => Promise<boolean>;
 }
 
-function GrantForm({ experts, solutions, members, departments, onCreate }: FormProps): ReactNode {
+function GrantForm({ experts, solutions, members, departments, working, onCreate }: GrantFormProps): ReactNode {
   const i18n = useI18n();
   const [resourceType, setResourceType] = useState<GrantResourceType>("expert");
   const [resourceId, setResourceId] = useState("");
   const [memberIds, setMemberIds] = useState<string[]>([]);
-  const [deptIds, setDeptIds] = useState<string[]>([]);
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
 
-  const resourceOptions =
-    resourceType === "expert"
-      ? experts.map((e) => ({ value: e.employee_id, label: e.display_name }))
-      : solutions.map((s) => ({ value: s.id, label: s.display_name }));
+  const resourceOptions = resourceType === "expert"
+    ? experts.map((expert) => ({ value: expert.employee_id, label: expert.display_name }))
+    : solutions.map((solution) => ({ value: solution.id, label: solution.display_name }));
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!resourceId || (memberIds.length === 0 && deptIds.length === 0)) return;
-    void onCreate({
-      resource_type: resourceType,
-      resource_id: resourceId,
-      member_ids: memberIds,
-      department_ids: deptIds,
-    });
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!resourceId || (memberIds.length === 0 && departmentIds.length === 0)) return;
+    const succeeded = await onCreate({ resource_type: resourceType, resource_id: resourceId, member_ids: memberIds, department_ids: departmentIds });
+    if (!succeeded) return;
     setResourceId("");
     setMemberIds([]);
-    setDeptIds([]);
-  }
-
-  function selected(e: React.ChangeEvent<HTMLSelectElement>): string[] {
-    return Array.from(e.target.selectedOptions, (o) => o.value);
+    setDepartmentIds([]);
   }
 
   return (
-    <GlassPanel className="rounded-window p-lg">
-      <form className="flex flex-col gap-md" onSubmit={submit}>
-        <h2 className="m-0 text-base font-semibold text-text-primary">
-          {i18n.t("manager.grants.create_title")}
-        </h2>
-        <div className="grid grid-cols-1 gap-md md:grid-cols-2">
-          <Field label={i18n.t("manager.grants.resource_type")}>
-            <Select
-              value={resourceType}
-              onChange={(e) => {
-                setResourceType(e.target.value as GrantResourceType);
-                setResourceId("");
-              }}
-            >
-              <option value="expert">{i18n.t("manager.grants.type_expert")}</option>
-              <option value="solution">{i18n.t("manager.grants.type_solution")}</option>
-            </Select>
-          </Field>
-          <Field label={i18n.t("manager.grants.resource")}>
-            <Select value={resourceId} onChange={(e) => setResourceId(e.target.value)}>
-              <option value="">{i18n.t("manager.grants.resource_pick")}</option>
-              {resourceOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label={i18n.t("manager.grants.col_members")}>
-            <Select multiple value={memberIds} onChange={(e) => setMemberIds(selected(e))}>
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.display_name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label={i18n.t("manager.grants.col_departments")}>
-            <Select multiple value={deptIds} onChange={(e) => setDeptIds(selected(e))}>
-              {departments.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.display_name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-        <Button type="submit" size="sm" className="self-start">
-          {i18n.t("manager.grants.create_submit")}
-        </Button>
+    <Card>
+      <form aria-label={i18n.t("manager.grants.create_title")} onSubmit={(event) => void submit(event)}>
+        <VStack gap={4}>
+          <Heading level={2}>{i18n.t("manager.grants.create_title")}</Heading>
+          <FormLayout>
+            <Grid columns={{ minWidth: 240, repeat: "fit" }} gap={3}>
+              <Selector
+                label={i18n.t("manager.grants.resource_type")}
+                options={[
+                  { value: "expert", label: i18n.t("manager.grants.type_expert") },
+                  { value: "solution", label: i18n.t("manager.grants.type_solution") },
+                ]}
+                value={resourceType}
+                onChange={(value) => { setResourceType(value as GrantResourceType); setResourceId(""); }}
+                isRequired
+                isDisabled={working}
+              />
+              <Selector
+                label={i18n.t("manager.grants.resource")}
+                options={resourceOptions}
+                value={resourceId || undefined}
+                onChange={setResourceId}
+                placeholder={i18n.t("manager.grants.resource_pick")}
+                data-testid="grant-resource"
+                isRequired
+                isDisabled={working}
+              />
+              <MultiSelector
+                label={i18n.t("manager.grants.col_members")}
+                options={members.map((member) => ({ value: member.id, label: member.display_name }))}
+                value={memberIds}
+                onChange={setMemberIds}
+                triggerDisplay="labels"
+                data-testid="grant-members"
+                isOptional
+                isDisabled={working}
+              />
+              <MultiSelector
+                label={i18n.t("manager.grants.col_departments")}
+                options={departments.map((department) => ({ value: department.id, label: department.display_name }))}
+                value={departmentIds}
+                onChange={setDepartmentIds}
+                triggerDisplay="labels"
+                data-testid="grant-departments"
+                isOptional
+                isDisabled={working}
+              />
+            </Grid>
+          </FormLayout>
+          <HStack justify="end"><Button label={i18n.t("manager.grants.create_submit")} type="submit" variant="primary" isLoading={working} /></HStack>
+        </VStack>
       </form>
-    </GlassPanel>
+    </Card>
   );
 }

@@ -6,7 +6,7 @@
  * - member 只读：无新建表单、无撤销
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -59,6 +59,18 @@ function renderPage(roles: string[]) {
   );
 }
 
+function selectOption(label: RegExp, option: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  fireEvent.click(screen.getByRole("option", { name: option, hidden: true }));
+}
+
+function selectMultiple(label: RegExp, options: string[]) {
+  fireEvent.click(screen.getByRole("combobox", { name: label }));
+  for (const option of options) {
+    fireEvent.click(screen.getByRole("option", { name: option, hidden: true }));
+  }
+}
+
 describe("GrantsPage 成员级授权", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => {
@@ -71,7 +83,9 @@ describe("GrantsPage 成员级授权", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
     // member_id m1 在授权行内解析为"张三"（表单下拉也有同名选项，故限定行内）
-    expect(within(screen.getByTestId("grant-row")).getByText("张三")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /张三/ })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "成员级授权" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "新建授权" })).toBeInTheDocument();
   });
 
   it("创建授权：选专家资源 + 成员 → createGrant 正确入参", async () => {
@@ -80,10 +94,8 @@ describe("GrantsPage 成员级授权", () => {
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
 
     // resource_type 默认 expert；选资源 e1
-    fireEvent.change(screen.getByLabelText("授权资源"), { target: { value: "e1" } });
-    // 选成员 m1
-    const memberSelect = screen.getByLabelText("成员");
-    fireEvent.change(memberSelect, { target: { value: "m1" } });
+    selectOption(/授权资源/, "专家A");
+    selectMultiple(/成员/, ["张三"]);
     fireEvent.click(screen.getByText("授权"));
 
     await waitFor(() =>
@@ -100,7 +112,7 @@ describe("GrantsPage 成员级授权", () => {
     const api = mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("授权资源"), { target: { value: "e1" } });
+    selectOption(/授权资源/, "专家A");
     fireEvent.click(screen.getByText("授权"));
     // 无成员无部门 → createGrant 不应被调用
     await Promise.resolve();
@@ -117,15 +129,9 @@ describe("GrantsPage 成员级授权", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("授权资源"), { target: { value: "e1" } });
-    // 多选两个成员（jsdom：直接置 option.selected 再触发 change）
-    const memberSel = screen.getByLabelText("成员") as HTMLSelectElement;
-    Array.from(memberSel.options).forEach((o) => {
-      if (o.value === "m1" || o.value === "m2") o.selected = true;
-    });
-    fireEvent.change(memberSel);
-    // 选一个部门
-    fireEvent.change(screen.getByLabelText("部门"), { target: { value: "d1" } });
+    selectOption(/授权资源/, "专家A");
+    selectMultiple(/成员/, ["张三", "李四"]);
+    selectMultiple(/部门/, ["研发部"]);
     fireEvent.click(screen.getByText("授权"));
 
     await waitFor(() =>
@@ -143,6 +149,8 @@ describe("GrantsPage 成员级授权", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
     fireEvent.click(screen.getByText("撤销"));
+    expect(screen.getByRole("alertdialog", { name: "撤销授权" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
     await waitFor(() => expect(api.deleteGrant).toHaveBeenCalledWith("g1"));
   });
 
@@ -152,5 +160,13 @@ describe("GrantsPage 成员级授权", () => {
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
     expect(screen.queryByText("授权")).not.toBeInTheDocument();
     expect(screen.queryByText("撤销")).not.toBeInTheDocument();
+  });
+
+  it("加载失败显示错误 Banner", async () => {
+    mockApi({ listGrants: vi.fn().mockRejectedValue(new Error("boom")) });
+    renderPage(["owner"]);
+    await waitFor(() => expect(
+      screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("加载失败")),
+    ).toBe(true));
   });
 });

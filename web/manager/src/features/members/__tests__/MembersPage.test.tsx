@@ -85,6 +85,8 @@ describe("MembersPage 成员账号", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
     expect(screen.getAllByTestId("member-row")).toHaveLength(1);
+    expect(screen.getByRole("table", { name: "成员账号" })).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "新建成员" })).toBeInTheDocument();
   });
 
   it("owner 创建成员后一次性展示初始凭据，且不写 localStorage", async () => {
@@ -92,8 +94,8 @@ describe("MembersPage 成员账号", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("账号（手机号）"), { target: { value: "13800000000" } });
-    fireEvent.change(screen.getByLabelText("初始密码"), { target: { value: "pw-secret-123" } });
+    fireEvent.change(screen.getByLabelText(/账号（手机号）/), { target: { value: "13800000000" } });
+    fireEvent.change(screen.getByLabelText(/初始密码/), { target: { value: "pw-secret-123" } });
     fireEvent.click(screen.getByText("创建成员"));
 
     await waitFor(() => expect(api.createMember).toHaveBeenCalledTimes(1));
@@ -111,8 +113,8 @@ describe("MembersPage 成员账号", () => {
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("账号（手机号）"), { target: { value: "13800000000" } });
-    fireEvent.change(screen.getByLabelText("初始密码"), { target: { value: "pw-secret-123" } });
+    fireEvent.change(screen.getByLabelText(/账号（手机号）/), { target: { value: "13800000000" } });
+    fireEvent.change(screen.getByLabelText(/初始密码/), { target: { value: "pw-secret-123" } });
     fireEvent.click(screen.getByText("创建成员"));
 
     await waitFor(() => expect(api.createMember).toHaveBeenCalledTimes(1));
@@ -150,7 +152,7 @@ describe("MembersPage 成员账号", () => {
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("删除"));
-    await waitFor(() => expect(screen.getByText("确认删除该成员？删除后不可恢复。")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alertdialog", { name: "删除成员" })).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("确认删除"));
     await waitFor(() => expect(api.deleteMember).toHaveBeenCalledWith("m1"));
@@ -163,11 +165,17 @@ describe("MembersPage 成员账号", () => {
     await waitFor(() => expect(screen.getByText("张三")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("删除"));
-    await waitFor(() => expect(screen.getByText("确认删除该成员？删除后不可恢复。")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alertdialog", { name: "删除成员" })).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("取消"));
     expect(api.deleteMember).not.toHaveBeenCalled();
     expect(screen.getByText("停用")).toBeInTheDocument();
     expect(screen.getByText("删除")).toBeInTheDocument();
+  });
+
+  it("加载失败显示错误 Banner", async () => {
+    mockApi({ listMembers: vi.fn().mockRejectedValue(new Error("boom")) });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("成员列表加载失败"));
   });
 });
