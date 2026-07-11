@@ -1,141 +1,217 @@
-/** S01 账号管理页 — 企业列表 + 搜索 + 统计卡片 + 操作（issue #413 adds lifecycle/quota UI）。 */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useAccountsApi } from "./useAccountsApi.js";
 import type { EnterpriseAccount, EnterpriseStats } from "./types.js";
 import { EnterpriseActions } from "./EnterpriseActions.js";
 
-function statusBadge(status: string): { label: string; tone: string } {
+type AccountRow = EnterpriseAccount & Record<string, unknown>;
+
+const STATUS_OPTIONS = [
+  { value: "all", label: "全部状态" },
+  { value: "active", label: "正常" },
+  { value: "suspended", label: "暂停" },
+  { value: "banned", label: "封禁" },
+  { value: "closed", label: "注销" },
+];
+
+function statusBadge(status: string): { label: string; variant: BadgeVariant } {
   switch (status) {
     case "active":
     case "normal":
-      return { label: "正常", tone: "text-success" };
+      return { label: "正常", variant: "success" };
     case "suspended":
-      return { label: "暂停", tone: "text-warning" };
+      return { label: "暂停", variant: "warning" };
     case "banned":
-      return { label: "封禁", tone: "text-danger" };
+      return { label: "封禁", variant: "error" };
     case "closed":
-      return { label: "注销", tone: "text-text-muted" };
+      return { label: "注销", variant: "neutral" };
     default:
-      return { label: "欠费", tone: "text-warning" };
+      return { label: "欠费", variant: "warning" };
   }
+}
+
+function StatCard({ label, value }: { label: string; value: number | string }): ReactNode {
+  return (
+    <Card>
+      <VStack gap={1}>
+        <Text color="secondary">{label}</Text>
+        <Heading level={2}>{value}</Heading>
+      </VStack>
+    </Card>
+  );
 }
 
 export function AccountsPage(): ReactNode {
   const api = useAccountsApi();
   const [list, setList] = useState<EnterpriseAccount[]>([]);
   const [stats, setStats] = useState<EnterpriseStats | null>(null);
-  const [keyword, setKeyword] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [keywordDraft, setKeywordDraft] = useState("");
+  const [statusDraft, setStatusDraft] = useState("all");
+  const [filters, setFilters] = useState({ keyword: "", status: "all" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const loadSequence = useRef(0);
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError(null);
     try {
-      const [items, s] = await Promise.all([
-        api.list({ keyword: keyword || undefined, status: statusFilter || undefined }),
+      const [items, nextStats] = await Promise.all([
+        api.list({
+          keyword: filters.keyword || undefined,
+          status: filters.status === "all" ? undefined : filters.status,
+        }),
         api.getStats(),
       ]);
-      setList(items);
-      setStats(s);
+      if (sequence === loadSequence.current) {
+        setList(items);
+        setStats(nextStats);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+      if (sequence === loadSequence.current) {
+        setError(err instanceof Error ? err.message : "加载失败");
+        setList([]);
+        setStats(null);
+      }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [api, keyword, statusFilter]);
+  }, [api, filters]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
+
+  function submitSearch(event: FormEvent) {
+    event.preventDefault();
+    const next = { keyword: keywordDraft.trim(), status: statusDraft };
+    if (next.keyword === filters.keyword && next.status === filters.status) {
+      void load();
+      return;
+    }
+    setFilters(next);
+  }
+
+  const columns = useMemo<TableColumn<AccountRow>[]>(() => [
+    { key: "enterprise_name", header: "企业名称", width: proportional(1) },
+    {
+      key: "contact",
+      header: "联系人/手机",
+      width: proportional(1),
+      renderCell: (enterprise) => `${enterprise.contact_name} / ${enterprise.contact_phone}`,
+    },
+    {
+      key: "registered_at",
+      header: "注册时间",
+      width: pixel(120),
+      renderCell: (enterprise) => enterprise.registered_at?.slice(0, 10) || "—",
+    },
+    {
+      key: "total_recharged",
+      header: "累计充值",
+      width: pixel(120),
+      align: "end",
+      renderCell: (enterprise) => `￥${enterprise.total_recharged}`,
+    },
+    {
+      key: "token_consumed",
+      header: "Token消耗",
+      width: pixel(120),
+      align: "end",
+      renderCell: (enterprise) => `${((enterprise.token_consumed || 0) / 1e6).toFixed(1)}M`,
+    },
+    {
+      key: "status",
+      header: "状态",
+      width: pixel(90),
+      renderCell: (enterprise) => {
+        const badge = statusBadge(enterprise.operation_status ?? enterprise.status);
+        return <Badge label={badge.label} variant={badge.variant} />;
+      },
+    },
+    {
+      key: "actions",
+      header: "操作",
+      width: pixel(110),
+      align: "end",
+      resizable: false,
+      renderCell: (enterprise) => (
+        <EnterpriseActions api={api} enterprise={enterprise} onDone={() => void load()} />
+      ),
+    },
+  ], [api, load]);
 
   return (
-    <section className="flex flex-col gap-md">
-      <h1 className="m-0 text-xl font-bold text-text-primary">企业账号管理</h1>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>企业账号管理</Heading>
 
-      {/* 统计卡片（issue #413 adds lifecycle distribution） */}
       {stats && (
-        <div className="grid grid-cols-4 gap-md">
-          {[
-            { label: "总企业数", value: stats.total_enterprises },
-            { label: "活跃企业", value: stats.active_enterprises ?? 0 },
-            { label: "封禁企业", value: stats.banned_enterprises ?? 0 },
-            { label: "总充值(万)", value: stats.total_recharged },
-          ].map((c) => (
-            <GlassPanel key={c.label} className="rounded-window p-md">
-              <p className="m-0 text-xs text-text-muted">{c.label}</p>
-              <p className="m-0 mt-xs text-lg font-bold text-gold-bright">{c.value}</p>
-            </GlassPanel>
-          ))}
-        </div>
+        <Grid columns={{ minWidth: 180, repeat: "fit" }} gap={3}>
+          <StatCard label="总企业数" value={stats.total_enterprises} />
+          <StatCard label="活跃企业" value={stats.active_enterprises ?? 0} />
+          <StatCard label="封禁企业" value={stats.banned_enterprises ?? 0} />
+          <StatCard label="总充值(万)" value={stats.total_recharged} />
+        </Grid>
       )}
 
-      {/* 搜索栏 */}
-      <div className="flex gap-sm">
-        <Input
-          placeholder="搜索企业名称/手机号"
-          value={keyword}
-          onChange={(e) => setKeyword((e.target as HTMLInputElement).value)}
-          className="flex-1"
-        />
-        <Button variant="ghost" onClick={() => void load()}>
-          搜索
-        </Button>
-        <Button variant="ghost" onClick={() => void api.exportAll()}>
-          导出
-        </Button>
-      </div>
+      <Card>
+        <form aria-label="企业账号筛选" onSubmit={submitSearch}>
+          <HStack gap={3} align="end" wrap="wrap">
+            <TextInput
+              label="搜索企业"
+              value={keywordDraft}
+              onChange={setKeywordDraft}
+              placeholder="企业名称或手机号"
+              startIcon="search"
+              width={320}
+            />
+            <Selector
+              label="企业状态"
+              value={statusDraft}
+              onChange={setStatusDraft}
+              options={STATUS_OPTIONS}
+              width={180}
+            />
+            <Button label="搜索" type="submit" variant="secondary" />
+            <Button label="导出" variant="ghost" onClick={() => void api.exportAll()} />
+          </HStack>
+        </form>
+      </Card>
 
-      {/* 列表 */}
+      {error && <Banner status="error" title={error} />}
       {loading ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
-      ) : error ? (
-        <GlassPanel className="rounded-window border border-danger/30 p-lg text-sm text-danger">
-          {error}
-        </GlassPanel>
-      ) : list.length === 0 ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">暂无企业</GlassPanel>
-      ) : (
-        <GlassPanel className="rounded-window p-md">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gold/15 text-left text-xs text-text-muted">
-                <th className="pb-sm">企业名称</th>
-                <th className="pb-sm">联系人/手机</th>
-                <th className="pb-sm">注册时间</th>
-                <th className="pb-sm">累计充值</th>
-                <th className="pb-sm">Token消耗</th>
-                <th className="pb-sm">状态</th>
-                <th className="pb-sm">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((e) => {
-                const badge = statusBadge(e.operation_status ?? e.status);
-                return (
-                  <tr key={e.org_id} className="border-b border-gold/5 hover:bg-surface-raised/50">
-                    <td className="py-sm text-text-primary">{e.enterprise_name}</td>
-                    <td className="py-sm text-text-secondary">
-                      {e.contact_name} / {e.contact_phone}
-                    </td>
-                    <td className="py-sm text-text-secondary">{e.registered_at?.slice(0, 10)}</td>
-                    <td className="py-sm text-gold-bright">￥{e.total_recharged}</td>
-                    <td className="py-sm text-text-secondary">
-                      {((e.token_consumed || 0) / 1e6).toFixed(1)}M
-                    </td>
-                    <td className={`py-sm ${badge.tone}`}>{badge.label}</td>
-                    <td className="py-sm">
-                      <EnterpriseActions api={api} enterprise={e} onDone={() => void load()} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </GlassPanel>
-      )}
-    </section>
+        <Card role="status" aria-label="正在加载企业账号">
+          <VStack gap={2}>
+            <Skeleton height={36} />
+            <Skeleton height={36} index={1} />
+            <Skeleton height={36} index={2} />
+          </VStack>
+        </Card>
+      ) : !error ? (
+        <Card padding={0}>
+          <Table
+            aria-label="企业账号"
+            tableProps={{ "aria-label": "企业账号" }}
+            data={list as AccountRow[]}
+            columns={columns}
+            idKey="org_id"
+            hasHover
+            emptyState={<EmptyState title="暂无企业" description="调整搜索条件后重试。" isCompact />}
+          />
+        </Card>
+      ) : null}
+    </VStack>
   );
 }
