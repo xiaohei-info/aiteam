@@ -21,6 +21,7 @@ const OPERATION_SYSTEM_USERNAME = process.env.OPERATION_SYSTEM_USERNAME ?? "sysa
 const OPERATION_SYSTEM_PASSWORD = process.env.OPERATION_SYSTEM_PASSWORD ?? "changeme-me";
 const MANAGER_URL = process.env.MANAGER_URL ?? "http://127.0.0.1:8001";
 const OPERATOR_URL = process.env.OPERATOR_URL ?? "http://127.0.0.1:8000";
+const E2E_PYTHON = process.env.E2E_PYTHON ?? ".venv/bin/python";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -65,21 +66,21 @@ export default defineConfig({
   webServer: [
     {
       command:
-        `cd .. && OPERATION_SYSTEM_USERNAME=${OPERATION_SYSTEM_USERNAME} OPERATION_SYSTEM_PASSWORD=${OPERATION_SYSTEM_PASSWORD} MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} .venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000`,
+        `cd .. && OPERATION_SYSTEM_USERNAME=${OPERATION_SYSTEM_USERNAME} OPERATION_SYSTEM_PASSWORD=${OPERATION_SYSTEM_PASSWORD} MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} ${E2E_PYTHON} server/run.py --tier operation --host 127.0.0.1 --port 8000`,
       url: "http://127.0.0.1:8000/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,
     },
     {
       command:
-        `cd .. && DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} OPERATOR_URL=${OPERATOR_URL} .venv/bin/python server/run.py --tier manager --host 127.0.0.1 --port 8001`,
+        `cd .. && DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} OPERATOR_URL=${OPERATOR_URL} ${E2E_PYTHON} server/run.py --tier manager --host 127.0.0.1 --port 8001`,
       url: "http://127.0.0.1:8001/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,
     },
     {
       command:
-        `cd .. && MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} .venv/bin/python server/run.py --tier agent --host 127.0.0.1 --port 8180`,
+        `cd .. && MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} ${E2E_PYTHON} server/run.py --tier agent --host 127.0.0.1 --port 8180`,
       url: "http://127.0.0.1:8180/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,

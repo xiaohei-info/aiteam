@@ -35,6 +35,15 @@ export function collectBrowserErrors(page: Page): string[] {
 }
 
 /**
+ * 用真实 Tab 导航验证页面存在可见焦点，而不是仅调用 element.focus() 绕过键盘路径。
+ */
+export async function expectKeyboardFocusVisible(page: Page): Promise<void> {
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("Tab");
+  await expect(page.locator(":focus-visible")).toBeVisible();
+}
+
+/**
  * 登录页 smoke：标题文案可见 + 登录表单可见。
  * 三端 LoginPage 结构有差异：operation/manager 用 data-testid="login-form"，
  * agent 用裸 <form>（无 testid）。这里按 testid 优先、回退 form 元素，保证三端通用。

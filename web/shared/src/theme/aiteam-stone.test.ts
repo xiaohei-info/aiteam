@@ -8,6 +8,10 @@ describe("aiteamStone", () => {
       "#3f5f88",
       "#9fc3ef",
     ]);
+    expect(aiteamStone.__inputTokens?.["--color-text-secondary"]).toEqual([
+      "#5b6066",
+      "#b8bec5",
+    ]);
     expect(aiteamStone.tokens["--font-family-body"]).toContain("PingFang SC");
   });
 

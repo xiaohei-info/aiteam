@@ -80,8 +80,6 @@ export function ConversationList({
 
   return (
     <GlassPanel
-      role="list"
-      aria-label="会话列表"
       className="flex w-70 shrink-0 flex-col overflow-hidden rounded-window"
     >
       <div
@@ -105,7 +103,7 @@ export function ConversationList({
         <div className="px-md py-sm text-sm text-text-secondary">加载中…</div>
       )}
       {error && <div className="px-md py-sm text-sm text-danger">{error}</div>}
-      <ul className="flex-1 list-none overflow-auto p-0">
+      <ul aria-label="会话列表" className="flex-1 list-none overflow-auto p-0">
         {items.map((conv) => {
           const active = conv.id === selectedId;
           return (
