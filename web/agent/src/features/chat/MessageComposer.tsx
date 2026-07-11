@@ -173,7 +173,11 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   }
 
   function handleInputKeyDownCapture(event: KeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (event.nativeEvent.isComposing) {
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     void submitCurrentContent();

@@ -74,9 +74,8 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
       scrollToTopAction={store.canLoadMore ? handleLoadOlder : undefined}
     >
       {events.map((event) => (
-        <ChatMessage key={event.cursor} sender="assistant">
+        <ChatMessage key={event.cursor} sender="assistant" name={event.type}>
           <ChatMessageBubble
-            name={event.type}
             metadata={event.created_at}
             variant="ghost"
           >

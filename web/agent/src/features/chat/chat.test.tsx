@@ -185,7 +185,7 @@ describe("TimelineView — 渲染事件", () => {
   it("选中会话后渲染时间线事件（mock getTimeline）", async () => {
     loginStorage();
     const convs = [makeConv("c1", "会话A")];
-    const events = [makeEvent(10, "text")];
+    const events = [makeEvent(10, "answer_delta")];
     const fetchImpl = makeFetch(convs, events);
     globalThis.fetch = fetchImpl;
 
@@ -199,6 +199,8 @@ describe("TimelineView — 渲染事件", () => {
       // event payload.text = "msg-10"
       expect(screen.getByText("msg-10")).toBeInTheDocument();
     });
+    expect(screen.getByRole("article", { name: "answer_delta" })).toBeInTheDocument();
+    expect(document.querySelector('[aria-label="Message from assistant"]')).toBeNull();
   });
 });
 
@@ -259,6 +261,48 @@ describe("MessageComposer — 发送消息", () => {
     });
   });
 
+  it("IME composing Enter 不发送且不清空内容", async () => {
+    loginStorage();
+    const fetchImpl = makeFetch([makeConv("c1", "会话A")]);
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const input = await screen.findByRole("textbox", { name: "消息内容" });
+    setComposerContent(input, "组合输入");
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", isComposing: true });
+
+    expect(hasRuntimePost(fetchImpl, "/messages")).toBe(false);
+    expect(hasRuntimePost(fetchImpl, "/runs")).toBe(false);
+    expect(readComposerContent(input)).toBe("组合输入");
+  });
+
+  it("Shift+Enter 不发送并保留内容", async () => {
+    loginStorage();
+    const fetchImpl = makeFetch([makeConv("c1", "会话A")]);
+    globalThis.fetch = fetchImpl;
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider><AppRoutes /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /会话A/ }));
+    const input = await screen.findByRole("textbox", { name: "消息内容" });
+    setComposerContent(input, "保留换行内容");
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", shiftKey: true });
+
+    expect(hasRuntimePost(fetchImpl, "/messages")).toBe(false);
+    expect(hasRuntimePost(fetchImpl, "/runs")).toBe(false);
+    expect(readComposerContent(input)).toBe("保留换行内容");
+  });
+
   it("sendMessage 失败时不清空内容", async () => {
     loginStorage();
     globalThis.fetch = makeFetch([makeConv("c1", "会话A")], [], { postMessageOk: false });
@@ -315,6 +359,57 @@ function setComposerContent(input: HTMLElement, value: string): void {
 
 function readComposerContent(input: HTMLElement): string {
   return input instanceof HTMLTextAreaElement ? input.value : input.textContent ?? "";
+}
+
+function hasRuntimePost(fetchImpl: typeof fetch, path: string): boolean {
+  const calls = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls as unknown as [string, RequestInit][];
+  return calls.some(([url, init]) => url.includes(path) && init?.method === "POST");
+}
+
+function setCaretOffset(input: HTMLElement, offset: number): void {
+  const walker = document.createTreeWalker(input, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let node = walker.nextNode();
+  while (node) {
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const selection = window.getSelection();
+      if (!selection) throw new Error("Selection API unavailable");
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    remaining -= length;
+    node = walker.nextNode();
+  }
+  throw new Error(`Cannot place caret at offset ${offset}`);
+}
+
+function getCaretOffset(input: HTMLElement): number {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) throw new Error("Selection API unavailable");
+  const caret = selection.getRangeAt(0);
+  const prefix = document.createRange();
+  prefix.selectNodeContents(input);
+  prefix.setEnd(caret.startContainer, caret.startOffset);
+  return prefix.toString().length;
+}
+
+function insertUserTextAtSelection(input: HTMLElement, text: string): void {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) throw new Error("Selection API unavailable");
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.input(input);
 }
 
 // ---- 4. TimelineStore cursor 分页（loadOlder） ----
@@ -465,6 +560,29 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
 
     const input = screen.getByLabelText("消息内容");
     await waitFor(() => expect(readComposerContent(input)).toContain("@Luna"));
+  });
+
+  it("在 contentEditable 中间插入 @handle 后保留焦点与光标位置", async () => {
+    await renderChatComposer([
+      { employee_id: "e1", display_name: "Luna", revoked: false },
+    ]);
+
+    const input = screen.getByLabelText("消息内容");
+    setComposerContent(input, "你好世界");
+    input.focus();
+    setCaretOffset(input, 2);
+
+    fireEvent.click(screen.getByRole("button", { name: "召唤其他智能体" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Luna/ }));
+
+    const inserted = "你好@Luna 世界";
+    await waitFor(() => expect(readComposerContent(input)).toBe(inserted));
+    expect(document.activeElement).toBe(input);
+    expect(getCaretOffset(input)).toBe("你好@Luna ".length);
+
+    insertUserTextAtSelection(input, "X");
+    await waitFor(() => expect(readComposerContent(input)).toBe("你好@Luna X世界"));
+    expect(getCaretOffset(input)).toBe("你好@Luna X".length);
   });
 
   it("@提及已输入时展示「已 @提及」提示", async () => {
