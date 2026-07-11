@@ -9,11 +9,23 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { EmployeeConfigDrawer } from "./EmployeeConfigDrawer";
 import { useExpertsApi } from "./useExpertsApi";
 import type { EmployeeConfig } from "./types";
+
+type EmployeeRow = EmployeeConfig & Record<string, unknown>;
 
 export function ExpertsPage(): ReactNode {
   const i18n = useI18n();
@@ -54,79 +66,109 @@ export function ExpertsPage(): ReactNode {
     [],
   );
 
-  return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">
-        {i18n.t("manager.experts.instances_title")}
-      </h1>
+  const columns = useMemo<TableColumn<EmployeeRow>[]>(() => [
+    {
+      key: "display_name",
+      header: i18n.t("manager.experts.display_name"),
+      width: proportional(1),
+      renderCell: (employee) => (
+        <Text weight="bold" data-testid="employee-row">{employee.display_name}</Text>
+      ),
+    },
+    {
+      key: "employee_slug",
+      header: "slug",
+      width: proportional(1),
+      renderCell: (employee) => <Code>{employee.employee_slug}</Code>,
+    },
+    {
+      key: "status",
+      header: i18n.t("manager.experts.status_active"),
+      width: pixel(110),
+      renderCell: (employee) => (
+        <Badge
+          label={employee.status}
+          variant={employee.status === "active" ? "success" : "neutral"}
+        />
+      ),
+    },
+    {
+      key: "provider_ref",
+      header: i18n.t("manager.experts.provider_ref"),
+      width: proportional(1),
+      renderCell: (employee) => employee.model_policy.provider_ref ?? "—",
+    },
+    {
+      key: "model",
+      header: i18n.t("manager.experts.model"),
+      width: proportional(1),
+      renderCell: (employee) => employee.model_policy.model || "—",
+    },
+    {
+      key: "config_status",
+      header: i18n.t("manager.experts.config_status"),
+      width: pixel(120),
+      renderCell: (employee) => {
+        const configured = Boolean(employee.model_policy.provider_ref && employee.model_policy.model);
+        return (
+          <Badge
+            data-testid="config-status"
+            label={configured
+              ? i18n.t("manager.experts.configured")
+              : i18n.t("manager.experts.unconfigured")}
+            variant={configured ? "success" : "warning"}
+          />
+        );
+      },
+    },
+    {
+      key: "actions",
+      header: "",
+      width: pixel(120),
+      align: "end",
+      resizable: false,
+      renderCell: (employee) => (
+        <Button
+          label={i18n.t("manager.experts.edit_config")}
+          variant="ghost"
+          size="sm"
+          data-testid="edit-config"
+          onClick={() => setDetailId(employee.employee_id)}
+        />
+      ),
+    },
+  ], [i18n]);
 
-      {error && <GlassPanel className="rounded-window border border-danger/30 p-md text-sm text-danger">{error}</GlassPanel>}
+  return (
+    <VStack as="section" gap={6}>
+      <Heading level={1}>
+        {i18n.t("manager.experts.instances_title")}
+      </Heading>
+
+      {error && <Banner status="error" title={error} />}
 
       {loading ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">
-          {i18n.t("manager.experts.loading")}
-        </GlassPanel>
+        <Card role="status" aria-label={i18n.t("manager.experts.loading")}>
+          <VStack gap={2}>
+            <Text color="secondary">{i18n.t("manager.experts.loading")}</Text>
+            <Skeleton height={36} />
+            <Skeleton height={36} index={1} />
+          </VStack>
+        </Card>
       ) : items.length === 0 ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
-          {i18n.t("manager.experts.instances_empty")}
-        </GlassPanel>
+        <EmptyState headingLevel={2} title={i18n.t("manager.experts.instances_empty")} />
       ) : (
-        <GlassPanel className="overflow-hidden rounded-window">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-gold/10 text-left text-xs text-text-secondary">
-                <th className="px-md py-sm">{i18n.t("manager.experts.display_name")}</th>
-                <th className="px-md py-sm">slug</th>
-                <th className="px-md py-sm">{i18n.t("manager.experts.status_active")}</th>
-                <th className="px-md py-sm">{i18n.t("manager.experts.provider_ref")}</th>
-                <th className="px-md py-sm">{i18n.t("manager.experts.model")}</th>
-                <th className="px-md py-sm">{i18n.t("manager.experts.config_status")}</th>
-                <th className="px-md py-sm" />
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((e) => {
-                const configured = Boolean(e.model_policy.provider_ref && e.model_policy.model);
-                return (
-                  <tr
-                    key={e.employee_id}
-                    className="border-b border-gold/5 transition hover:bg-gold/5"
-                    data-testid="employee-row"
-                  >
-                    <td className="px-md py-sm font-medium text-text-primary">{e.display_name}</td>
-                    <td className="px-md py-sm"><code className="text-xs text-gold-bright">{e.employee_slug}</code></td>
-                    <td className="px-md py-sm text-text-secondary">{e.status}</td>
-                    <td className="px-md py-sm text-text-secondary">{e.model_policy.provider_ref ?? "—"}</td>
-                    <td className="px-md py-sm text-text-secondary">{e.model_policy.model || "—"}</td>
-                    <td className="px-md py-sm">
-                      <span
-                        className={`rounded-full px-sm py-xs text-xs ${
-                          configured ? "bg-success/20 text-success" : "bg-warning/20 text-warning"
-                        }`}
-                        data-testid="config-status"
-                      >
-                        {configured
-                          ? i18n.t("manager.experts.configured")
-                          : i18n.t("manager.experts.unconfigured")}
-                      </span>
-                    </td>
-                    <td className="px-md py-sm text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        data-testid="edit-config"
-                        onClick={() => setDetailId(e.employee_id)}
-                      >
-                        {i18n.t("manager.experts.edit_config")}
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </GlassPanel>
+        <Card padding={0}>
+          <Table
+            aria-label={i18n.t("manager.experts.instances_title")}
+            tableProps={{ "aria-label": i18n.t("manager.experts.instances_title") }}
+            data={items as EmployeeRow[]}
+            columns={columns}
+            idKey="employee_id"
+            hasHover
+            textOverflow="truncate"
+          />
+        </Card>
       )}
 
       {detailId && (
@@ -137,6 +179,6 @@ export function ExpertsPage(): ReactNode {
           onSaved={onSaved}
         />
       )}
-    </section>
+    </VStack>
   );
 }

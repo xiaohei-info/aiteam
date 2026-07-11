@@ -8,9 +8,23 @@
  * 不能再编辑方案内容（不再提供实例编辑入口）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { Token } from "@astryxdesign/core/Token";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
@@ -62,58 +76,94 @@ export function SolutionsPage(): ReactNode {
   );
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.solutions")}</h1>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>{i18n.t("manager.nav.solutions")}</Heading>
       {notice && (
-        <p className="m-0 flex flex-wrap items-center gap-sm text-sm text-success" role="status">
-          <span>{notice}</span>
-          <Link to="/experts" className="text-gold-bright underline" data-testid="goto-experts">
-            {i18n.t("manager.experts.edit_config")}
-          </Link>
-        </p>
+        <Banner
+          status="success"
+          title={notice}
+          endContent={
+            <Button
+              label={i18n.t("manager.experts.edit_config")}
+              href="/experts"
+              variant="ghost"
+              size="sm"
+              data-testid="goto-experts"
+            />
+          }
+        />
       )}
-      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-      {error && <p className="m-0 text-sm text-danger">{error}</p>}
-      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.experts.loading")}</p>}
+      {actionError && <Banner status="error" title={actionError} />}
+      {error && <Banner status="error" title={error} />}
 
-      <div className="flex flex-col gap-md">
-        <h2 className="m-0 text-base font-semibold text-text-primary">{i18n.t("manager.experts.solutions_title")}</h2>
-        {solutions.length === 0 ? (
-          <GlassPanel className="rounded-window p-lg text-sm text-text-muted">{i18n.t("manager.experts.solutions_empty")}</GlassPanel>
+      <VStack gap={3}>
+        <Heading level={2}>{i18n.t("manager.experts.solutions_title")}</Heading>
+        {loading ? (
+          <VStack gap={2} role="status" aria-label={i18n.t("manager.experts.loading")}>
+            <Text color="secondary">{i18n.t("manager.experts.loading")}</Text>
+            <Skeleton height={112} />
+          </VStack>
+        ) : solutions.length === 0 ? (
+          <EmptyState headingLevel={3} title={i18n.t("manager.experts.solutions_empty")} />
         ) : (
-          <GlassPanel className="flex flex-col divide-y divide-gold/10 overflow-hidden rounded-window">
+          <Grid columns={{ minWidth: 300, repeat: "fit" }} gap={3}>
             {solutions.map((s) => (
-              <div key={`${s.solution_id}@${s.version}`} data-testid="solution-row"
-                className="flex flex-wrap items-center gap-sm px-lg py-md">
-                <span className="font-medium text-text-primary">{s.display_name}</span>
-                <code className="text-xs text-gold-bright">{s.solution_id}</code>
-                <span className="ml-auto flex items-center gap-sm">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setDetailFor(s)}>
-                    {i18n.t("manager.experts.view_detail")}
-                  </Button>
-                  {canWrite && (
-                    <Button type="button" variant="ghost" size="sm"
-                      onClick={() => void runAction(() => api.applySolution({ solution_id: s.solution_id }), "manager.experts.apply_ok")}>
-                      {i18n.t("manager.experts.apply")}
-                    </Button>
+              <Card
+                key={`${s.solution_id}@${s.version}`}
+                role="article"
+                aria-label={s.display_name}
+                data-testid="solution-row"
+              >
+                <VStack gap={3}>
+                  <VStack gap={1}>
+                    <Heading level={3}>{s.display_name}</Heading>
+                    <Code>{s.solution_id}@{s.version}</Code>
+                  </VStack>
+                  {s.tags && s.tags.length > 0 && (
+                    <HStack gap={1} wrap="wrap">
+                      {s.tags.map((tag) => <Token key={tag} label={tag} size="sm" />)}
+                    </HStack>
                   )}
-                </span>
-              </div>
+                  <HStack gap={2} wrap="wrap">
+                    <Button
+                      label={i18n.t("manager.experts.view_detail")}
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setDetailFor(s)}
+                    />
+                  {canWrite && (
+                      <Button
+                        label={i18n.t("manager.experts.apply")}
+                        variant="primary"
+                        size="sm"
+                        clickAction={() => runAction(
+                          () => api.applySolution({ solution_id: s.solution_id }),
+                          "manager.experts.apply_ok",
+                        )}
+                      />
+                  )}
+                  </HStack>
+                </VStack>
+              </Card>
             ))}
-          </GlassPanel>
+          </Grid>
         )}
-      </div>
+      </VStack>
 
-      <div className="flex flex-col gap-md">
-        <h2 className="m-0 text-base font-semibold text-text-primary">{i18n.t("manager.experts.solution_instances_title")}</h2>
-        {solutionInstances.length === 0 ? (
-          <GlassPanel className="rounded-window p-lg text-sm text-text-muted">{i18n.t("manager.experts.solution_instances_empty")}</GlassPanel>
+      <VStack gap={3}>
+        <Heading level={2}>{i18n.t("manager.experts.solution_instances_title")}</Heading>
+        {loading ? (
+          <Skeleton height={96} />
+        ) : solutionInstances.length === 0 ? (
+          <EmptyState headingLevel={3} title={i18n.t("manager.experts.solution_instances_empty")} />
         ) : (
-          solutionInstances.map((si) => (
-            <SolutionInstanceCard key={si.id} instance={si} />
-          ))
+          <Grid columns={{ minWidth: 300, repeat: "fit" }} gap={3}>
+            {solutionInstances.map((si) => (
+              <SolutionInstanceCard key={si.id} instance={si} />
+            ))}
+          </Grid>
         )}
-      </div>
+      </VStack>
 
       {detailFor && (
         <SolutionDetailOverlay
@@ -121,7 +171,7 @@ export function SolutionsPage(): ReactNode {
           onClose={() => setDetailFor(null)}
         />
       )}
-    </section>
+    </VStack>
   );
 }
 
@@ -131,127 +181,145 @@ function SolutionDetailOverlay({ solution, onClose }: {
   const i18n = useI18n();
   const experts = solution.experts ?? [];
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-lg backdrop-blur-sm" role="dialog" aria-modal="true" onClick={onClose}>
-      <GlassPanel className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-window p-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-lg flex items-start justify-between gap-md">
-          <div>
-            <h2 className="m-0 text-lg font-semibold text-text-primary">{solution.display_name}</h2>
-            <code className="text-xs text-gold-bright">{solution.solution_id}@{solution.version}</code>
-          </div>
-          <button type="button" aria-label={i18n.t("manager.common.close")} onClick={onClose}
-            className="rounded-md px-sm py-xs text-text-muted transition hover:bg-surface hover:text-text-primary">✕</button>
-        </div>
+    <Dialog
+      isOpen
+      onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
+      purpose="info"
+      width={720}
+      maxHeight="85vh"
+      aria-label={solution.display_name}
+    >
+      <Layout
+        height="auto"
+        header={
+          <DialogHeader
+            title={solution.display_name}
+            subtitle={`${solution.solution_id}@${solution.version}`}
+            onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
+          />
+        }
+        content={
+          <LayoutContent>
+            <VStack gap={5}>
+              {solution.tags && solution.tags.length > 0 && (
+                <HStack gap={1} wrap="wrap">
+                  {solution.tags.map((tag) => <Token key={tag} label={tag} size="sm" />)}
+                </HStack>
+              )}
 
-        {solution.tags && solution.tags.length > 0 && (
-          <div className="mb-md flex flex-wrap gap-xs">
-            {solution.tags.map((tag) => (
-              <span key={tag} className="rounded-full bg-gold/15 px-sm py-xs text-xs text-gold-bright">{tag}</span>
-            ))}
-          </div>
-        )}
+              <VStack gap={2}>
+                <Heading level={3}>{i18n.t("manager.experts.detail_experts")}</Heading>
+                {experts.length === 0 ? (
+                  <EmptyState isCompact headingLevel={4} title={i18n.t("manager.experts.detail_no_experts")} />
+                ) : (
+                  <Grid columns={{ minWidth: 240, repeat: "fit" }} gap={2}>
+                    {experts.map((expert) => (
+                      <Card key={`${expert.template_id}@${expert.version}`} variant="muted" padding={3}>
+                        <VStack gap={1}>
+                          <HStack gap={2} align="center" wrap="wrap">
+                            <Text weight="bold">{expert.display_name}</Text>
+                            {expert.category && <Badge label={expert.category} />}
+                          </HStack>
+                          {expert.persona && <Text color="secondary">{expert.persona}</Text>}
+                        </VStack>
+                      </Card>
+                    ))}
+                  </Grid>
+                )}
+              </VStack>
 
-        {experts.length > 0 && (
-          <div className="mb-lg">
-            <h3 className="mb-sm text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_experts")}</h3>
-            <div className="flex flex-col gap-sm">
-              {experts.map((e) => (
-                <div key={`${e.template_id}@${e.version}`} className="rounded-md border border-gold/15 px-md py-sm">
-                  <div className="flex items-center gap-sm">
-                    <span className="font-medium text-sm text-text-primary">{e.display_name}</span>
-                    {e.category && (
-                      <span className="text-xs text-text-muted">{e.category}</span>
-                    )}
-                  </div>
-                  {e.persona && <p className="m-0 mt-xs text-xs text-text-secondary">{e.persona}</p>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {experts.length === 0 && (
-          <p className="mb-lg text-sm text-text-muted">{i18n.t("manager.experts.detail_no_experts")}</p>
-        )}
+              <MetadataList columns="single">
+                <MetadataListItem label={i18n.t("manager.experts.detail_knowledge_refs")}>
+                  <HStack gap={1} wrap="wrap">
+                    {(solution.knowledge_refs ?? []).length > 0
+                      ? solution.knowledge_refs!.map((ref) => <Code key={ref}>{ref}</Code>)
+                      : <Text color="secondary">-</Text>}
+                  </HStack>
+                </MetadataListItem>
+                <MetadataListItem label={i18n.t("manager.experts.detail_skill_refs")}>
+                  <HStack gap={1} wrap="wrap">
+                    {(solution.skill_refs ?? []).length > 0
+                      ? solution.skill_refs!.map((ref) => <Code key={ref}>{ref}</Code>)
+                      : <Text color="secondary">-</Text>}
+                  </HStack>
+                </MetadataListItem>
+              </MetadataList>
 
-        {solution.knowledge_refs && solution.knowledge_refs.length > 0 && (
-          <div className="mb-lg">
-            <h3 className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_knowledge_refs")}</h3>
-            <div className="flex flex-wrap gap-xs">
-              {solution.knowledge_refs.map((k) => (
-                <code key={k} className="rounded bg-surface px-sm py-xs text-xs text-gold-bright">{k}</code>
-              ))}
-            </div>
-          </div>
-        )}
+              {(solution.planner_prompt || solution.subtask_prompt || solution.aggregate_prompt) && (
+                <VStack gap={3}>
+                  <PromptCard label={i18n.t("manager.experts.planner_prompt")} value={solution.planner_prompt} />
+                  <PromptCard label={i18n.t("manager.experts.subtask_prompt")} value={solution.subtask_prompt} />
+                  <PromptCard label={i18n.t("manager.experts.aggregate_prompt")} value={solution.aggregate_prompt} />
+                </VStack>
+              )}
+            </VStack>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack justify="end">
+              <Button label={i18n.t("manager.common.close")} onClick={onClose} />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
+  );
+}
 
-        {solution.skill_refs && solution.skill_refs.length > 0 && (
-          <div className="mb-lg">
-            <h3 className="mb-xs text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.detail_skill_refs")}</h3>
-            <div className="flex flex-wrap gap-xs">
-              {solution.skill_refs.map((s) => (
-                <code key={s} className="rounded bg-surface px-sm py-xs text-xs text-gold-bright">{s}</code>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {(solution.planner_prompt || solution.subtask_prompt || solution.aggregate_prompt) && (
-          <div className="mb-lg flex flex-col gap-md">
-            <h3 className="text-xs font-semibold text-text-secondary">{i18n.t("manager.experts.planner_prompt")}</h3>
-            {solution.planner_prompt && (
-              <div>
-                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.planner_prompt")}</p>
-                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.planner_prompt}</p>
-              </div>
-            )}
-            {solution.subtask_prompt && (
-              <div>
-                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.subtask_prompt")}</p>
-                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.subtask_prompt}</p>
-              </div>
-            )}
-            {solution.aggregate_prompt && (
-              <div>
-                <p className="m-0 mb-xs text-xs font-medium text-text-primary">{i18n.t("manager.experts.aggregate_prompt")}</p>
-                <p className="m-0 whitespace-pre-wrap rounded-md bg-surface px-md py-sm text-xs text-text-secondary">{solution.aggregate_prompt}</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex justify-end gap-sm">
-          <Button type="button" variant="ghost" onClick={onClose}>{i18n.t("manager.common.close")}</Button>
-        </div>
-      </GlassPanel>
-    </div>
+function PromptCard({ label, value }: { label: string; value?: string | null }): ReactNode {
+  if (!value) return null;
+  return (
+    <Card variant="muted" padding={3}>
+      <VStack gap={1}>
+        <Text weight="bold">{label}</Text>
+        <Text color="secondary" as="p">{value}</Text>
+      </VStack>
+    </Card>
   );
 }
 
 function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): ReactNode {
   const i18n = useI18n();
   return (
-    <GlassPanel data-testid="solution-instance-card" className="rounded-window p-md">
-      <div className="flex flex-wrap items-center gap-md mb-sm">
-        <span className="font-semibold text-text-primary">{instance.display_name}</span>
-        <code className="text-xs text-gold-bright">{instance.solution_id}@{instance.solution_version}</code>
-        <span className={`text-xs px-sm py-xs rounded-full ${instance.status === "active" ? "bg-success/20 text-success" : "bg-text-muted/20 text-text-muted"}`}>
-          {instance.status}
-        </span>
-      </div>
-      <div className="text-xs text-text-secondary space-y-xs">
-        <div>{i18n.t("manager.experts.expert_count")}: {instance.expert_employee_ids.length}</div>
-        {instance.expert_employee_ids.length > 0 && (
-          <div className="flex flex-wrap gap-xs">
-            {instance.expert_employee_ids.map((eid) => (
-              <code key={eid} className="text-xs bg-surface px-sm py-0.5 rounded">{eid}</code>
-            ))}
-          </div>
-        )}
-        <div>{i18n.t("manager.experts.solution_knowledge_refs")}: {instance.knowledge_refs.join(", ") || "-"}</div>
-        <div>{i18n.t("manager.experts.solution_skill_refs")}: {instance.skill_refs.join(", ") || "-"}</div>
-        {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
-          <div>{i18n.t("manager.experts.planner_prompt")}: {instance.planner_prompt?.slice(0, 40) || "-"}…</div>
-        )}
-      </div>
-    </GlassPanel>
+    <Card
+      role="article"
+      aria-label={instance.display_name}
+      data-testid="solution-instance-card"
+    >
+      <VStack gap={3}>
+        <HStack gap={2} align="center" wrap="wrap">
+          <Heading level={3}>{instance.display_name}</Heading>
+          <Badge
+            label={instance.status}
+            variant={instance.status === "active" ? "success" : "neutral"}
+          />
+        </HStack>
+        <Code>{instance.solution_id}@{instance.solution_version}</Code>
+        <MetadataList columns="single">
+          <MetadataListItem label={i18n.t("manager.experts.expert_count")}>
+            <VStack gap={1}>
+              <Text>{instance.expert_employee_ids.length}</Text>
+              {instance.expert_employee_ids.length > 0 && (
+                <HStack gap={1} wrap="wrap">
+                  {instance.expert_employee_ids.map((id) => <Code key={id}>{id}</Code>)}
+                </HStack>
+              )}
+            </VStack>
+          </MetadataListItem>
+          <MetadataListItem label={i18n.t("manager.experts.solution_knowledge_refs")}>
+            <Text color="secondary">{instance.knowledge_refs.join(", ") || "-"}</Text>
+          </MetadataListItem>
+          <MetadataListItem label={i18n.t("manager.experts.solution_skill_refs")}>
+            <Text color="secondary">{instance.skill_refs.join(", ") || "-"}</Text>
+          </MetadataListItem>
+          {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
+            <MetadataListItem label={i18n.t("manager.experts.planner_prompt")}>
+              <Text color="secondary">{instance.planner_prompt?.slice(0, 40) || "-"}…</Text>
+            </MetadataListItem>
+          )}
+        </MetadataList>
+      </VStack>
+    </Card>
   );
 }

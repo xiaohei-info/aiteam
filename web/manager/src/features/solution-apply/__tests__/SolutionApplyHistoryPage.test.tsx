@@ -66,13 +66,21 @@ afterEach(() => {
 });
 
 it("渲染已落地方案实例，并展开显示方案应用记录", async () => {
-  mockApi();
+  const api = mockApi();
   renderPage();
   await waitFor(() => expect(screen.getByTestId("instance-row")).toBeInTheDocument());
   expect(screen.getByText("方案 A")).toBeInTheDocument();
-  fireEvent.click(screen.getByText("查看应用历史"));
+  expect(screen.getByRole("heading", { level: 1, name: "方案应用记录" })).toBeInTheDocument();
+  expect(screen.getByRole("article", { name: "方案 A" })).toBeInTheDocument();
+  const historyButton = screen.getByRole("button", { name: /查看应用历史/ });
+  expect(historyButton).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(historyButton);
   await waitFor(() => expect(screen.getByTestId("apply-record-row")).toBeInTheDocument());
+  expect(historyButton).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByTestId("apply-record-status").textContent).toBe("已应用");
+  fireEvent.click(historyButton);
+  await waitFor(() => expect(historyButton).toHaveAttribute("aria-expanded", "false"));
+  expect(api.listApplyRecords).toHaveBeenCalledTimes(1);
 });
 
 it("加载失败展示错误信息", async () => {

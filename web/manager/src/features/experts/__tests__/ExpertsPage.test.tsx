@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
@@ -149,6 +149,7 @@ describe("ExpertsPage", () => {
     expect(screen.getByText("architect")).toBeInTheDocument();
     expect(screen.getByText("openai-main")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "已招募专家实例" })).toBeInTheDocument();
   });
 
   it("配置状态：已配置显示「已配置」，未配置显示「待配置」", async () => {
@@ -166,10 +167,12 @@ describe("ExpertsPage", () => {
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
 
+    expect(await screen.findByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
     const providerSelect = await screen.findByTestId("provider-select");
-    fireEvent.change(providerSelect!, { target: { value: "openai-main" } });
+    expect(within(providerSelect).getByRole("combobox")).toHaveTextContent("OpenAI");
     const modelSelect = screen.getByTestId("model-select");
-    fireEvent.change(modelSelect!, { target: { value: "gpt-4o-mini" } });
+    fireEvent.click(within(modelSelect).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "GPT-4o mini", hidden: true }));
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -199,11 +202,12 @@ describe("ExpertsPage", () => {
 
     const providerSelect = await screen.findByTestId("provider-select");
     // 当前 gpt-4o 属于 openai-main 目录，合理。
-    expect((screen.getByTestId("model-select") as HTMLSelectElement).value).toBe("gpt-4o");
+    expect(within(screen.getByTestId("model-select")).getByRole("combobox")).toHaveTextContent("GPT-4o");
     // 切到 anthropic-main，目录只有 claude-3-5-sonnet → gpt-4o 被清空。
-    fireEvent.change(providerSelect!, { target: { value: "anthropic-main" } });
+    fireEvent.click(within(providerSelect).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "Anthropic", hidden: true }));
     await waitFor(() =>
-      expect((screen.getByTestId("model-select") as HTMLSelectElement).value).toBe(""),
+      expect(within(screen.getByTestId("model-select")).getByRole("combobox")).toHaveTextContent("选择模型"),
     );
     // 空 option 文案提示「选择模型」已出现
     expect(screen.getByText("选择模型")).toBeInTheDocument();
@@ -221,6 +225,29 @@ describe("ExpertsPage", () => {
     );
   });
 
+  it("取消配置：关闭 Dialog 且不提交修改", async () => {
+    const { updateEmployee } = mockApis([employeeConfigured]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "专家实例详情" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "专家实例详情" })).not.toBeInTheDocument());
+    expect(updateEmployee).not.toHaveBeenCalled();
+  });
+
+  it("保存失败：显示错误并保留配置 Dialog", async () => {
+    const { updateEmployee } = mockApis([employeeConfigured]);
+    updateEmployee.mockRejectedValueOnce(new Error("boom"));
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    await screen.findByRole("dialog", { name: "专家实例详情" });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存失败"));
+    expect(screen.getByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
+  });
+
   it("空状态：无实例时显示空提示", async () => {
     mockApis([]);
     renderPage();
@@ -231,7 +258,7 @@ describe("ExpertsPage", () => {
     const api = mockApis([]).api;
     (api.listEmployees as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage();
-    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
   });
 });
 

@@ -60,6 +60,8 @@ describe("MarketplacePage", () => {
     mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { level: 1, name: "人才市场" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "测试专家" })).toBeInTheDocument();
   });
 
   it("招募：直接点击招募按钮 → recruitExpert(template_id，无 slug)", async () => {
@@ -88,7 +90,7 @@ describe("MarketplacePage", () => {
     const api = mockApi();
     (api.listTemplates as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
   });
 
   it("空状态：无模板时显示空提示", async () => {

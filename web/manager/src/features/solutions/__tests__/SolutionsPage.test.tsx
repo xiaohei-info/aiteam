@@ -70,6 +70,8 @@ describe("SolutionsPage", () => {
   it("浏览：渲染可应用方案", async () => {
     mockApi(); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { level: 1, name: "方案目录" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "测试方案" })).toBeInTheDocument();
   });
 
   it("应用方案：applySolution(solution_id)", async () => {
@@ -89,12 +91,12 @@ describe("SolutionsPage", () => {
     mockApi(); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     fireEvent.click(screen.getByText("查看详情"));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "测试方案" });
+    expect(dialog).toBeInTheDocument();
     expect(screen.getByText("架构师")).toBeInTheDocument();
     expect(screen.getByText("ks-shared")).toBeInTheDocument();
     expect(screen.getByText("skill-a")).toBeInTheDocument();
-    // 关闭
-    fireEvent.click(screen.getByText("✕"));
+    fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
@@ -111,7 +113,7 @@ describe("SolutionsPage", () => {
     const api = mockApi();
     (api.listSolutions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByText("加载失败")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
   });
 
   it("空状态：无方案时显示空提示", async () => {

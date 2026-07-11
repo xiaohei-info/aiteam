@@ -13,7 +13,18 @@
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { Button, Field, GlassPanel, Input, Select } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
 import { useProvidersApi } from "../providers/useProvidersApi";
@@ -155,6 +166,22 @@ export function EmployeeConfigDrawer({
     [selectedProvider],
   );
 
+  const providerOptions = useMemo(
+    () => providers.map((provider) => ({
+      value: provider.provider_ref,
+      label: provider.display_name || provider.provider_ref,
+    })),
+    [providers],
+  );
+
+  const modelOptions = useMemo(
+    () => availableModels.map((model) => ({
+      value: model.model,
+      label: model.display_name || model.model,
+    })),
+    [availableModels],
+  );
+
   if (!employeeId) return null;
 
   function update<K extends keyof Draft>(key: K, value: Draft[K]): void {
@@ -216,175 +243,158 @@ export function EmployeeConfigDrawer({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-lg backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
+    <Dialog
+      isOpen
+      purpose="form"
+      width={720}
+      maxHeight="90vh"
+      aria-label={i18n.t("manager.experts.detail_title")}
+      onOpenChange={(isOpen) => { if (!isOpen && !submitting) onClose(); }}
     >
-      <GlassPanel
-        className="flex max-h-[90vh] w-full max-w-2xl flex-col gap-md overflow-y-auto rounded-window p-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-md">
-          <div>
-            <h2 className="m-0 text-lg font-semibold text-text-primary">
-              {i18n.t("manager.experts.detail_title")}
-            </h2>
-            {employee && (
-              <code className="text-xs text-gold-bright">{employee.employee_slug}</code>
-            )}
-          </div>
-          <button
-            type="button"
-            aria-label={i18n.t("manager.common.close")}
-            onClick={onClose}
-            className="rounded-md px-sm py-xs text-text-muted transition hover:bg-surface hover:text-text-primary"
-          >
-            ✕
-          </button>
-        </div>
+      <Layout
+        height="auto"
+        header={
+          <DialogHeader
+            title={i18n.t("manager.experts.detail_title")}
+            subtitle={employee?.employee_slug}
+            onOpenChange={(isOpen) => { if (!isOpen && !submitting) onClose(); }}
+          />
+        }
+        content={
+          <LayoutContent>
+            <VStack gap={4}>
+              {error && <Banner status="error" title={error} />}
+              {loading || !draft ? (
+                <VStack gap={2} role="status" aria-label={i18n.t("manager.experts.loading")}>
+                  <Text color="secondary">{i18n.t("manager.experts.loading")}</Text>
+                  <Skeleton height={36} />
+                  <Skeleton height={36} index={1} />
+                </VStack>
+              ) : (
+                <form id="employee-config-form" onSubmit={handleSubmit}>
+                  <VStack gap={5}>
+                    <VStack gap={3}>
+                      <Heading level={3}>{i18n.t("manager.experts.section_prompt")}</Heading>
+                      <FormLayout>
+                        <TextInput
+                          label={i18n.t("manager.experts.display_name")}
+                          value={draft.display_name}
+                          onChange={(value) => update("display_name", value)}
+                          isDisabled={submitting}
+                        />
+                        <TextInput
+                          label={i18n.t("manager.experts.persona")}
+                          value={draft.persona}
+                          onChange={(value) => update("persona", value)}
+                          placeholder={i18n.t("manager.experts.persona")}
+                          isDisabled={submitting}
+                        />
+                      </FormLayout>
+                    </VStack>
 
-        {error && (
-          <GlassPanel className="rounded-window border border-danger/30 p-md text-sm text-danger">
-            {error}
-          </GlassPanel>
-        )}
+                    <VStack gap={3}>
+                      <Heading level={3}>{i18n.t("manager.experts.section_model")}</Heading>
+                      <FormLayout>
+                        <Selector
+                          label={i18n.t("manager.experts.provider_ref")}
+                          options={providerOptions}
+                          value={draft.provider_ref || undefined}
+                          placeholder={i18n.t("manager.experts.provider_pick")}
+                          isDisabled={submitting}
+                          isLoading={providersLoading}
+                          data-testid="provider-select"
+                          onChange={(next) => {
+                            setDraft((current) => {
+                              if (!current) return current;
+                              const provider = providers.find((item) => item.provider_ref === next) ?? null;
+                              const models = (provider?.supported_models ?? []).filter((model) => model.enabled !== false);
+                              return {
+                                ...current,
+                                provider_ref: next,
+                                model: models.some((model) => model.model === current.model)
+                                  ? current.model
+                                  : "",
+                              };
+                            });
+                          }}
+                        />
 
-        {loading || !draft ? (
-          <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">
-            {i18n.t("manager.experts.loading")}
-          </GlassPanel>
-        ) : (
-          <form className="flex flex-col gap-md" onSubmit={handleSubmit}>
-            <h3 className="m-0 text-xs font-semibold text-text-secondary">
-              {i18n.t("manager.experts.section_prompt")}
-            </h3>
-            <Field label={i18n.t("manager.experts.display_name")}>
-              <Input
-                type="text"
-                value={draft.display_name}
-                onChange={(e) => update("display_name", e.target.value)}
-                disabled={submitting}
+                        {draft.model && !draft.provider_ref && (
+                          <Banner status="warning" title={i18n.t("manager.experts.unverified_model_warn")} />
+                        )}
+
+                        <Selector
+                          label={i18n.t("manager.experts.model")}
+                          options={modelOptions}
+                          value={modelOptions.some((model) => model.value === draft.model) ? draft.model : undefined}
+                          placeholder={draft.provider_ref
+                            ? modelOptions.length === 0
+                              ? i18n.t("manager.experts.no_models_for_provider")
+                              : i18n.t("manager.experts.model_pick")
+                            : i18n.t("manager.experts.provider_first")}
+                          isDisabled={submitting || !draft.provider_ref}
+                          data-testid="model-select"
+                          onChange={(value) => update("model", value)}
+                        />
+
+                        <Selector
+                          label={i18n.t("manager.experts.thinking_level")}
+                          options={[
+                            { value: "basic", label: i18n.t("manager.experts.thinking_basic") },
+                            { value: "deep", label: i18n.t("manager.experts.thinking_deep") },
+                          ]}
+                          value={draft.thinking_level || undefined}
+                          placeholder={i18n.t("manager.experts.thinking_none")}
+                          isDisabled={submitting}
+                          onChange={(value) => update("thinking_level", value as Draft["thinking_level"])}
+                        />
+                      </FormLayout>
+                    </VStack>
+
+                    <VStack gap={3}>
+                      <Heading level={3}>{i18n.t("manager.experts.runtime")}</Heading>
+                      <FormLayout>
+                        <TextInput
+                          label={i18n.t("manager.experts.runtime_binding")}
+                          value={draft.runtime_binding}
+                          onChange={(value) => update("runtime_binding", value)}
+                          isDisabled={submitting}
+                        />
+                        <TextInput
+                          label={i18n.t("manager.experts.timeout_seconds")}
+                          value={draft.timeout_seconds}
+                          onChange={(value) => update("timeout_seconds", value)}
+                          isDisabled={submitting}
+                        />
+                      </FormLayout>
+                    </VStack>
+                  </VStack>
+                </form>
+              )}
+            </VStack>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack gap={2} justify="end">
+              <Button
+                label={i18n.t("manager.experts.cancel")}
+                variant="ghost"
+                isDisabled={submitting}
+                onClick={onClose}
               />
-            </Field>
-            <Field label={i18n.t("manager.experts.persona")}>
-              <Input
-                type="text"
-                value={draft.persona}
-                onChange={(e) => update("persona", e.target.value)}
-                placeholder={i18n.t("manager.experts.persona")}
-                disabled={submitting}
+              <Button
+                label={i18n.t("manager.experts.save")}
+                variant="primary"
+                type="submit"
+                form="employee-config-form"
+                isDisabled={loading || !draft}
+                isLoading={submitting}
               />
-            </Field>
-
-            <h3 className="m-0 mt-sm text-xs font-semibold text-text-secondary">
-              {i18n.t("manager.experts.section_model")}
-            </h3>
-            <Field label={i18n.t("manager.experts.provider_ref")}>
-              <Select
-                value={draft.provider_ref}
-                onChange={(e) => {
-                  const next = (e.target as HTMLSelectElement).value;
-                  setDraft((d) => {
-                    if (!d) return d;
-                    // 切换 provider 时，若当前 model 不在新 provider 目录内则清空。
-                    const newProvider = providers.find((p) => p.provider_ref === next) ?? null;
-                    const models = (newProvider?.supported_models ?? []).filter((m) => m.enabled !== false);
-                    const model = models.some((m) => m.model === d.model) ? d.model : "";
-                    return { ...d, provider_ref: next, model };
-                  });
-                }}
-                disabled={submitting || providersLoading}
-                data-testid="provider-select"
-              >
-                <option value="">{i18n.t("manager.experts.provider_pick")}</option>
-                {providers.map((p) => (
-                  <option key={p.credential_id} value={p.provider_ref}>
-                    {p.display_name || p.provider_ref}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            {/*
-              防御性提示：V1 禁止手输 model，model_select 在 provider 未选时也被 disabled，
-              故此分支对“新编辑”路径不可达。保留以兜底两类存量/数据异常：
-              (a) 后端已下发带 model 但无 provider_ref 的历史配置；
-              (b) 未来若开放手输 model 时天然给出校验提示。
-            */}
-            {draft.model && !draft.provider_ref && (
-              <p className="m-0 text-xs text-warning">{i18n.t("manager.experts.unverified_model_warn")}</p>
-            )}
-
-            <Field label={i18n.t("manager.experts.model")}>
-              <Select
-                value={availableModels.some((m) => m.model === draft.model) ? draft.model : ""}
-                onChange={(e) => update("model", (e.target as HTMLSelectElement).value)}
-                disabled={submitting || !draft.provider_ref}
-                data-testid="model-select"
-              >
-                <option value="">
-                  {draft.provider_ref
-                    ? availableModels.length === 0
-                      ? i18n.t("manager.experts.no_models_for_provider")
-                      : i18n.t("manager.experts.model_pick")
-                    : i18n.t("manager.experts.provider_first")}
-                </option>
-                {availableModels.map((m) => (
-                  <option key={m.model} value={m.model}>
-                    {m.display_name || m.model}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <Field label={i18n.t("manager.experts.thinking_level")}>
-              <Select
-                value={draft.thinking_level}
-                onChange={(e) =>
-                  update("thinking_level", (e.target as HTMLSelectElement).value as Draft["thinking_level"])
-                }
-                disabled={submitting}
-              >
-                <option value="">{i18n.t("manager.experts.thinking_none")}</option>
-                <option value="basic">{i18n.t("manager.experts.thinking_basic")}</option>
-                <option value="deep">{i18n.t("manager.experts.thinking_deep")}</option>
-              </Select>
-            </Field>
-
-            <h3 className="m-0 mt-sm text-xs font-semibold text-text-secondary">
-              {i18n.t("manager.experts.runtime")}
-            </h3>
-            <Field label={i18n.t("manager.experts.runtime_binding")}>
-              <Input
-                type="text"
-                value={draft.runtime_binding}
-                onChange={(e) => update("runtime_binding", e.target.value)}
-                disabled={submitting}
-              />
-            </Field>
-            <Field label={i18n.t("manager.experts.timeout_seconds")}>
-              <Input
-                type="number"
-                min="1"
-                value={draft.timeout_seconds}
-                onChange={(e) => update("timeout_seconds", e.target.value)}
-                disabled={submitting}
-              />
-            </Field>
-
-            <div className="mt-sm flex justify-end gap-sm">
-              <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
-                {i18n.t("manager.experts.cancel")}
-              </Button>
-              <Button type="submit" disabled={submitting}>
-                {submitting ? i18n.t("manager.experts.saving") : i18n.t("manager.experts.save")}
-              </Button>
-            </div>
-          </form>
-        )}
-      </GlassPanel>
-    </div>
+            </HStack>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
   );
 }

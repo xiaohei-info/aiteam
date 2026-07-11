@@ -10,16 +10,26 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
-import { GlassPanel } from "@aiteam/shared/ui";
+import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { Collapsible } from "@astryxdesign/core/Collapsible";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { useSolutionApplyApi } from "./useSolutionApplyApi";
 import type { SolutionApplyRecord, SolutionInstanceSummary } from "./types";
 
-const STATUS_STYLE: Record<string, string> = {
-  applied: "bg-success/20 text-success",
-  revoked: "bg-danger/20 text-danger",
+const STATUS_VARIANT: Record<string, BadgeVariant> = {
+  applied: "success",
+  revoked: "error",
 };
-const FALLBACK_STATUS_STYLE = "bg-text-muted/20 text-text-muted";
 
 export function SolutionApplyHistoryPage(): ReactNode {
   const i18n = useI18n();
@@ -43,8 +53,12 @@ export function SolutionApplyHistoryPage(): ReactNode {
     }
   }, [api, i18n]);
 
-  const openRecords = useCallback(
-    async (instanceId: string, solutionId: string) => {
+  const setRecordsOpen = useCallback(
+    async (isOpen: boolean, instanceId: string, solutionId: string) => {
+      if (!isOpen) {
+        setActiveId(null);
+        return;
+      }
       setActiveId(instanceId);
       setRecordsLoading(true);
       try {
@@ -63,63 +77,60 @@ export function SolutionApplyHistoryPage(): ReactNode {
   }, [loadInstances]);
 
   return (
-    <section className="flex flex-col gap-lg">
-      <div className="flex flex-wrap items-baseline justify-between gap-md">
-        <h1 className="m-0 text-xl font-bold text-text-primary">
-          {i18n.t("manager.solution_apply.title")}
-        </h1>
-        <p className="m-0 text-sm text-text-muted">
-          {i18n.t("manager.solution_apply.description")}
-        </p>
-      </div>
+    <VStack as="section" gap={6}>
+      <VStack gap={1}>
+        <Heading level={1}>{i18n.t("manager.solution_apply.title")}</Heading>
+        <Text color="secondary">{i18n.t("manager.solution_apply.description")}</Text>
+      </VStack>
 
-      {error && (
-        <GlassPanel className="rounded-window p-md text-sm text-danger" role="alert">
-          {error}
-        </GlassPanel>
-      )}
+      {error && <Banner status="error" title={error} />}
 
       {loading ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">
-          {i18n.t("manager.experts.loading")}
-        </GlassPanel>
+        <VStack gap={2} role="status" aria-label={i18n.t("manager.experts.loading")}>
+          <Text color="secondary">{i18n.t("manager.experts.loading")}</Text>
+          <Skeleton height={84} />
+        </VStack>
       ) : instances.length === 0 ? (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">
-          {i18n.t("manager.solution_apply.empty_instances")}
-        </GlassPanel>
+        <EmptyState headingLevel={2} title={i18n.t("manager.solution_apply.empty_instances")} />
       ) : (
-        <GlassPanel className="flex flex-col divide-y divide-gold/10 overflow-hidden rounded-window">
+        <VStack gap={3}>
           {instances.map((instance) => {
             const open = activeId === instance.id;
+            const name = instance.display_name || instance.solution_id;
             return (
-              <div key={instance.id} data-testid="instance-row" className="flex flex-col gap-sm px-lg py-md">
-                <div className="flex flex-wrap items-center gap-sm">
-                  <span className="font-semibold text-text-primary">
-                    {instance.display_name || instance.solution_id}
-                  </span>
-                  <code className="text-xs text-gold-bright">
-                    {instance.solution_id}
-                    {instance.solution_version ? `@${instance.solution_version}` : ""}
-                  </code>
-                  <span className="text-xs text-text-muted">{instance.status}</span>
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    className="ml-auto text-xs text-gold underline"
-                    onClick={() => void openRecords(instance.id, instance.solution_id)}
-                  >
-                    {i18n.t("manager.solution_apply.view_history")}
-                  </button>
-                </div>
-                {open ? (
+              <Card
+                key={instance.id}
+                role="article"
+                aria-label={name}
+                data-testid="instance-row"
+              >
+                <Collapsible
+                  isOpen={open}
+                  onOpenChange={(isOpen) => void setRecordsOpen(
+                    isOpen,
+                    instance.id,
+                    instance.solution_id,
+                  )}
+                  trigger={
+                    <HStack gap={2} align="center" wrap="wrap">
+                      <Text weight="bold">{name}</Text>
+                      <Code>
+                        {instance.solution_id}
+                        {instance.solution_version ? `@${instance.solution_version}` : ""}
+                      </Code>
+                      <Badge label={instance.status} variant={STATUS_VARIANT[instance.status] ?? "neutral"} />
+                      <Text color="accent">{i18n.t("manager.solution_apply.view_history")}</Text>
+                    </HStack>
+                  }
+                >
                   <ApplyRecords records={records} loading={recordsLoading} i18n={i18n} />
-                ) : null}
-              </div>
+                </Collapsible>
+              </Card>
             );
           })}
-        </GlassPanel>
+        </VStack>
       )}
-    </section>
+    </VStack>
   );
 }
 
@@ -133,51 +144,54 @@ function ApplyRecords({
   i18n: ReturnType<typeof useI18n>;
 }): ReactNode {
   if (loading) {
-    return <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.experts.loading")}</p>;
+    return <Skeleton height={64} />;
   }
   if (records.length === 0) {
-    return (
-      <p className="m-0 text-sm text-text-muted">{i18n.t("manager.solution_apply.empty_records")}</p>
-    );
+    return <EmptyState isCompact headingLevel={3} title={i18n.t("manager.solution_apply.empty_records")} />;
   }
   return (
-    <div className="flex flex-col gap-sm">
+    <VStack gap={2}>
       {records.map((record) => {
-        const statusStyle = STATUS_STYLE[record.status] ?? FALLBACK_STATUS_STYLE;
         return (
-          <div
+          <Card
             key={record.id}
             data-testid="apply-record-row"
-            className="flex flex-col gap-xs rounded-md bg-surface/60 px-md py-sm"
+            variant="muted"
+            padding={3}
           >
-            <div className="flex flex-wrap items-center gap-sm">
-              <span className={`text-xs px-sm py-xs rounded-full ${statusStyle}`} data-testid="apply-record-status">
-                {i18n.t(`manager.solution_apply.status.${record.status}`)}
-              </span>
-              <span className="text-xs text-text-secondary">
-                {record.solution_version ? `v${record.solution_version}` : "—"}
-              </span>
-            </div>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-xs">
-              <dt className="text-text-muted">{i18n.t("manager.solution_apply.applied_by")}</dt>
-              <dd className="m-0 text-text-primary">{record.applied_by ?? "—"}</dd>
-              <dt className="text-text-muted">{i18n.t("manager.solution_apply.applied_at")}</dt>
-              <dd className="m-0 text-text-primary">{record.created_at?.slice(0, 19) ?? "—"}</dd>
-              <dt className="text-text-muted">{i18n.t("manager.solution_apply.expert_count")}</dt>
-              <dd className="m-0 text-text-primary">{record.expert_instance_ids.length}</dd>
-            </dl>
-            {record.expert_instance_ids.length > 0 ? (
-              <div className="flex flex-wrap gap-xs">
-                {record.expert_instance_ids.map((id) => (
-                  <code key={id} className="text-xs bg-surface px-sm py-0.5 rounded">
-                    {id}
-                  </code>
-                ))}
-              </div>
-            ) : null}
-          </div>
+            <VStack gap={3}>
+              <HStack gap={2} align="center" wrap="wrap">
+                <Badge
+                  data-testid="apply-record-status"
+                  label={i18n.t(`manager.solution_apply.status.${record.status}`)}
+                  variant={STATUS_VARIANT[record.status] ?? "neutral"}
+                />
+                <Text color="secondary">
+                  {record.solution_version ? `v${record.solution_version}` : "—"}
+                </Text>
+              </HStack>
+              <MetadataList columns="single">
+                <MetadataListItem label={i18n.t("manager.solution_apply.applied_by")}>
+                  {record.applied_by ?? "—"}
+                </MetadataListItem>
+                <MetadataListItem label={i18n.t("manager.solution_apply.applied_at")}>
+                  {record.created_at?.slice(0, 19) ?? "—"}
+                </MetadataListItem>
+                <MetadataListItem label={i18n.t("manager.solution_apply.expert_count")}>
+                  <VStack gap={1}>
+                    <Text>{record.expert_instance_ids.length}</Text>
+                    {record.expert_instance_ids.length > 0 && (
+                      <HStack gap={1} wrap="wrap">
+                        {record.expert_instance_ids.map((id) => <Code key={id}>{id}</Code>)}
+                      </HStack>
+                    )}
+                  </VStack>
+                </MetadataListItem>
+              </MetadataList>
+            </VStack>
+          </Card>
         );
       })}
-    </div>
+    </VStack>
   );
 }

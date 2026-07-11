@@ -10,9 +10,17 @@
  * 招募成功后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
-import { Button } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/CodeBlock";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Grid } from "@astryxdesign/core/Grid";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
@@ -60,54 +68,73 @@ export function MarketplacePage(): ReactNode {
   );
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("manager.nav.marketplace")}</h1>
+    <VStack as="section" gap={6}>
+      <Heading level={1}>{i18n.t("manager.nav.marketplace")}</Heading>
       {notice && (
-        <p className="m-0 flex flex-wrap items-center gap-sm text-sm text-success" role="status">
-          <span>{notice}</span>
-          <Link
-            to="/experts"
-            className="text-gold-bright underline"
-            data-testid="goto-experts"
-          >
-            {i18n.t("manager.experts.edit_config")}
-          </Link>
-        </p>
+        <Banner
+          status="success"
+          title={notice}
+          endContent={
+            <Button
+              label={i18n.t("manager.experts.edit_config")}
+              href="/experts"
+              variant="ghost"
+              size="sm"
+              data-testid="goto-experts"
+            />
+          }
+        />
       )}
-      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-      {error && <p className="m-0 text-sm text-danger">{error}</p>}
-      {loading && <p className="m-0 text-sm text-text-secondary">{i18n.t("manager.experts.loading")}</p>}
+      {actionError && <Banner status="error" title={actionError} />}
+      {error && <Banner status="error" title={error} />}
 
-      <div className="flex flex-col gap-md">
-        <h2 className="m-0 text-base font-semibold text-text-primary">
+      <VStack gap={3}>
+        <Heading level={2}>
           {i18n.t("manager.experts.templates_title")}
-        </h2>
-        {templates.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">
-            {i18n.t("manager.experts.templates_empty")}
-          </p>
+        </Heading>
+        {loading ? (
+          <VStack gap={2} role="status" aria-label={i18n.t("manager.experts.loading")}>
+            <Text color="secondary">{i18n.t("manager.experts.loading")}</Text>
+            <Skeleton height={96} />
+          </VStack>
+        ) : templates.length === 0 ? (
+          <EmptyState
+            headingLevel={3}
+            title={i18n.t("manager.experts.templates_empty")}
+          />
         ) : (
-          <ul className="m-0 flex flex-col gap-sm p-0" data-testid="template-list">
+          <Grid columns={{ minWidth: 280, repeat: "fit" }} gap={3} data-testid="template-list">
             {templates.map((t) => (
-              <li key={`${t.template_id}@${t.version}`} data-testid="template-row"
-                className="flex flex-wrap items-center gap-sm rounded-md border border-gold/15 px-lg py-md">
-                <span className="font-medium text-text-primary">{t.display_name}</span>
-                <code className="text-xs text-gold-bright">{t.template_id}</code>
-                <span className="ml-auto text-xs text-text-muted">{t.persona ?? ""}</span>
+              <Card
+                key={`${t.template_id}@${t.version}`}
+                role="article"
+                aria-label={t.display_name}
+                data-testid="template-row"
+                padding={4}
+              >
+                <VStack gap={3}>
+                  <VStack gap={1}>
+                    <Heading level={3}>{t.display_name}</Heading>
+                    <Code>{t.template_id}@{t.version}</Code>
+                  </VStack>
+                  {t.persona && <Text color="secondary">{t.persona}</Text>}
                 {canWrite && (
-                  <Button type="button" size="sm"
-                    onClick={() => void runAction(
+                    <Button
+                      label={i18n.t("manager.experts.recruit")}
+                      size="sm"
+                      variant="primary"
+                      clickAction={() => runAction(
                       () => api.recruitExpert({ template_id: t.template_id }),
                       "manager.experts.recruit_ok",
-                    )}>
-                    {i18n.t("manager.experts.recruit")}
-                  </Button>
+                      )}
+                    />
                 )}
-              </li>
+                </VStack>
+              </Card>
             ))}
-          </ul>
+          </Grid>
         )}
-      </div>
-    </section>
+      </VStack>
+    </VStack>
   );
 }
