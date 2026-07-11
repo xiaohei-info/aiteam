@@ -1,12 +1,11 @@
-/**
- * 跨企业总览看板页（W-O.4）。
- *
- * GET /api/operation/rollups/board → 渲染总览面板。
- * D13：只展示脱敏聚合摘要，绝不渲染会话内容/执行明细/raw event。
- * 黑金玻璃质感，复用 shared 组件（Button/GlassPanel）。
- */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { VStack } from "@astryxdesign/core/VStack";
 import { type RollupBoard, useBoardApi } from "./useBoardApi.js";
 import { OverviewCards } from "./OverviewCards.js";
 
@@ -15,59 +14,39 @@ export function BoardPage(): ReactNode {
   const [board, setBoard] = useState<RollupBoard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const sequence = useRef(0);
 
   const fetchBoard = useCallback(async () => {
+    const requestId = ++sequence.current;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getBoard();
-      setBoard(data);
+      const nextBoard = await api.getBoard();
+      if (requestId === sequence.current) setBoard(nextBoard);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
+      if (requestId === sequence.current) {
+        setBoard(null);
+        setError(err instanceof Error ? err.message : "加载失败");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === sequence.current) setLoading(false);
     }
   }, [api]);
 
-  useEffect(() => {
-    fetchBoard();
-  }, [fetchBoard]);
-
-  const handleEnterpriseClick = useCallback(() => {
-    // 暂无企业列表 API，总览指标卡点击暂不跳转
-  }, []);
-
-  if (loading) {
-    return (
-      <section className="flex flex-col gap-md">
-        <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
-        <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel>
-      </section>
-    );
-  }
-
-  if (error) {
-    return (
-      <section className="flex flex-col gap-md">
-        <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
-        <GlassPanel className="flex flex-col gap-md rounded-window border border-danger/30 p-lg">
-          <p className="m-0 text-sm text-danger">{error}</p>
-          <Button type="button" variant="ghost" size="sm" className="self-start" onClick={fetchBoard}>
-            重试
-          </Button>
-        </GlassPanel>
-      </section>
-    );
-  }
+  useEffect(() => { void fetchBoard(); }, [fetchBoard]);
 
   return (
-    <section className="flex flex-col gap-lg">
-      <h1 className="m-0 text-xl font-bold text-text-primary">跨企业治理看板</h1>
-      {board ? (
-        <OverviewCards board={board} onEnterpriseClick={handleEnterpriseClick} />
+    <VStack as="section" gap={6}>
+      <Heading level={1}>跨企业治理看板</Heading>
+      {loading ? (
+        <Card role="status" aria-label="治理看板加载中"><Skeleton height={120} /></Card>
+      ) : error ? (
+        <Banner status="error" title={error} endContent={<Button label="重试" variant="ghost" onClick={fetchBoard} />} />
+      ) : board ? (
+        <OverviewCards board={board} />
       ) : (
-        <GlassPanel className="rounded-window p-lg text-sm text-text-muted">暂无数据</GlassPanel>
+        <EmptyState title="暂无数据" description="脱敏聚合摘要生成后会显示在这里。" />
       )}
-    </section>
+    </VStack>
   );
 }

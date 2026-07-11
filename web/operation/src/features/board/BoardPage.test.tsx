@@ -7,7 +7,7 @@
  * 3. D13 红线：绝不渲染会话内容/执行明细/raw event 字段
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type Envelope } from "@aiteam/shared";
 import { I18nContext } from "../../i18n/context";
@@ -94,6 +94,12 @@ function mockResponse<T>(data: T, status = 200) {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 function renderWithProviders(ui: React.ReactNode, session?: Partial<SessionContextValue>) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
@@ -121,6 +127,7 @@ describe("OverviewCards 组件", () => {
     expect(container.textContent).toContain("¥9,876.50");
     expect(container.textContent).toContain("总 Token");
     expect(container.textContent).toContain("5,000,000");
+    expect(screen.getByRole("region", { name: "企业数：5" })).toBeInTheDocument();
   });
 });
 
@@ -147,14 +154,14 @@ describe("BoardPage 跨企业总览", () => {
   it("loading 态显示加载提示", () => {
     fetchSpy.mockImplementation(() => new Promise(() => {})); // 永不 resolve
     renderWithProviders(<BoardPage />);
-    expect(screen.getByText("加载中…")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "治理看板加载中" })).toBeInTheDocument();
   });
 
   it("API 失败显示错误与重试按钮", async () => {
     fetchSpy.mockRejectedValue(new Error("网络错误"));
     renderWithProviders(<BoardPage />);
     await waitFor(() => {
-      expect(screen.getByText("网络错误")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("网络错误");
       expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     });
   });
@@ -165,6 +172,36 @@ describe("BoardPage 跨企业总览", () => {
     await waitFor(() => {
       expect(screen.getByText("暂无数据")).toBeInTheDocument();
     });
+  });
+
+  it("依赖切换后忽略旧请求的迟到响应", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    fetchSpy.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    const renderTree = (token: string) => (
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={{ ...noopSession, token }}>
+          <MemoryRouter><BoardPage /></MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>
+    );
+    const view = render(renderTree("token-1"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    view.rerender(renderTree("token-2"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve(new Response(JSON.stringify(mockEnvelope({ ...mockBoard, enterprise_count: 9 })), { status: 200, headers: { "Content-Type": "application/json" } }));
+      await second.promise;
+    });
+    expect(await screen.findByRole("region", { name: "企业数：9" })).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve(new Response(JSON.stringify(mockEnvelope({ ...mockBoard, enterprise_count: 1 })), { status: 200, headers: { "Content-Type": "application/json" } }));
+      await first.promise;
+    });
+    expect(screen.queryByRole("region", { name: "企业数：1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "企业数：9" })).toBeInTheDocument();
   });
 
   // === D13 红线：绝不包含会话内容/执行明细 ===
@@ -242,7 +279,7 @@ describe("D13 红线：绝不渲染会话内容/执行明细/raw event", () => {
     // 加载态
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     const { container: c1, unmount } = renderWithProviders(<BoardPage />);
-    expect(screen.getByText("加载中…")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "治理看板加载中" })).toBeInTheDocument();
     let html = c1.innerHTML.toLowerCase();
     for (const key of forbiddenContentKeys) {
       expect(html, `加载态不应出现: ${key}`).not.toContain(key);

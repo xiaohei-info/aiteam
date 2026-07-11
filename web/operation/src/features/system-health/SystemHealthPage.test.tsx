@@ -4,7 +4,7 @@
  * 覆盖：渲染服务状态、loading 态、error fallback、状态颜色区分。
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n } from "@aiteam/shared";
 import { I18nContext } from "../../i18n/context";
@@ -115,21 +115,31 @@ describe("SystemHealthPage", () => {
       expect(screen.getByText("down")).toBeInTheDocument();
       expect(screen.getByText("agent")).toBeInTheDocument();
       expect(screen.getByText("local")).toBeInTheDocument();
+      expect(screen.getByRole("table", { name: "服务健康状态" })).toBeInTheDocument();
     });
   });
 
   it("loading 态显示加载中", () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderPage();
-    expect(screen.getByText("加载中…")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "系统健康加载中" })).toBeInTheDocument();
   });
 
-  it("API 失败显示暂无数据", async () => {
+  it("API 失败显示明确错误", async () => {
     fetchSpy.mockRejectedValue(new Error("fail"));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("暂无数据")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("系统健康加载失败");
     });
+  });
+
+  it("API 失败后可以重试恢复", async () => {
+    fetchSpy
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: makeHealth() }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("table", { name: "服务健康状态" })).toBeInTheDocument();
   });
 
   it("返回 null data 显示暂无数据", async () => {

@@ -126,10 +126,11 @@ describe("FinancePage", () => {
     mockBothEndpoints(makeOverview(), makeReports());
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("本月")).toBeInTheDocument();
-      expect(screen.getByText("本季")).toBeInTheDocument();
-      expect(screen.getByText("本年")).toBeInTheDocument();
-      expect(screen.getByText("全部")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "本月" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "本季" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "本年" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "全部" })).toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: "财务统计周期" })).toBeInTheDocument();
     });
   });
 
@@ -173,14 +174,14 @@ describe("FinancePage", () => {
   it("loading 态显示加载中", () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderPage();
-    expect(screen.getByText("加载中…")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "财务数据加载中" })).toBeInTheDocument();
   });
 
   it("API 失败展示真实错误", async () => {
     fetchSpy.mockRejectedValue(new Error("服务不可用"));
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("服务不可用")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("服务不可用");
     });
   });
 
@@ -188,7 +189,7 @@ describe("FinancePage", () => {
     mockBothEndpoints(makeOverview({ period: "month" }), makeReports());
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("本月")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "本月" })).toBeInTheDocument();
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const calledUrls = fetchSpy.mock.calls.map((c) => String(c[0]));
@@ -218,11 +219,13 @@ describe("FinancePage 报表明细面板", () => {
       expect(screen.getByText("财务报表明细")).toBeInTheDocument();
     });
     expect(screen.getByText("充值笔数")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "充值笔数：2" })).toBeInTheDocument();
     expect(screen.getByText("充值金额")).toBeInTheDocument();
     expect(screen.getByText("¥15000.00")).toBeInTheDocument();
     expect(screen.getByText("毛利润")).toBeInTheDocument();
     expect(screen.getByText("¥7000.00")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "财务报表类型" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "充值明细" })).toBeInTheDocument();
   });
 
   it("三个 tab 都能渲染，默认展示充值明细行", async () => {
@@ -231,9 +234,9 @@ describe("FinancePage 报表明细面板", () => {
     await waitFor(() => {
       expect(screen.getByText("财务报表明细")).toBeInTheDocument();
     });
-    expect(screen.getByText("充值明细")).toBeInTheDocument();
-    expect(screen.getByText("消耗明细")).toBeInTheDocument();
-    expect(screen.getByText("利润明细")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "充值明细" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "消耗明细" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "利润明细" })).toBeInTheDocument();
 
     // 默认 tab = recharge，展示真实行数据
     expect(screen.getByText("充值单号")).toBeInTheDocument();
@@ -249,7 +252,7 @@ describe("FinancePage 报表明细面板", () => {
     });
     const before = fetchSpy.mock.calls.length;
 
-    fireEvent.click(screen.getByText("消耗明细"));
+    fireEvent.click(screen.getByRole("button", { name: "消耗明细" }));
     await waitFor(() => {
       expect(screen.getByText("Token 用量")).toBeInTheDocument();
       expect(screen.getByText("1200000")).toBeInTheDocument();
@@ -267,7 +270,7 @@ describe("FinancePage 报表明细面板", () => {
     });
     const before = fetchSpy.mock.calls.length;
 
-    fireEvent.click(screen.getByText("利润明细"));
+    fireEvent.click(screen.getByRole("button", { name: "利润明细" }));
     await waitFor(() => {
       expect(screen.getByText("总收入")).toBeInTheDocument();
       expect(screen.getByText("72000.00")).toBeInTheDocument();
@@ -313,7 +316,7 @@ describe("FinancePage 报表明细面板", () => {
     });
 
     mockBothEndpoints(makeOverview({ period: "quarter", total_recharged: "99999.00" }), makeReports());
-    fireEvent.click(screen.getByText("本季"));
+    fireEvent.click(screen.getByRole("button", { name: "本季" }));
 
     await waitFor(() => {
       expect(screen.getByText("¥99999.00")).toBeInTheDocument();
@@ -336,6 +339,15 @@ describe("FinancePage 错误态", () => {
     });
     expect(screen.queryByText("总充值金额")).not.toBeInTheDocument();
     expect(screen.queryByText("利润")).not.toBeInTheDocument();
+  });
+
+  it("加载失败后可以重试恢复", async () => {
+    fetchSpy.mockRejectedValue(new Error("加载失败"));
+    renderPage();
+    const retry = await screen.findByRole("button", { name: "重试" });
+    mockBothEndpoints(makeOverview(), makeReports());
+    fireEvent.click(retry);
+    expect(await screen.findByRole("region", { name: "总充值金额：¥50000.00" })).toBeInTheDocument();
   });
 
   it("overview 失败即便 reports 成功也展示错误", async () => {
