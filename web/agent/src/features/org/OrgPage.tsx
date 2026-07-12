@@ -7,7 +7,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
-import { GlassPanel, Button } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApp } from "../../lib/app-context";
 import { getOrgTree } from "./useOrgApi";
@@ -141,25 +147,21 @@ function OrgNode({ node }: { node: OrgTreeNode }) {
   const isRoot = node.type === "department";
   const kids = node.children ?? [];
   return (
-    <div className="flex flex-col items-center" data-testid="org-node" data-node-id={node.id} data-node-type={node.type}>
-      <GlassPanel className={`rounded-window px-sm py-xs text-center min-w-[120px] ${isRoot ? "border border-gold/60" : "border border-gold/20"}`}>
-        <p className="m-0 text-sm font-bold text-gold" data-testid="org-node-name">{node.name}</p>
-        <p className="m-0 text-xs text-text-muted">{isRoot ? "部门" : "员工"}</p>
-      </GlassPanel>
+    <VStack align="center" gap={2} data-testid="org-node" data-node-id={node.id} data-node-type={node.type}>
+      <Card padding={2} variant={isRoot ? "yellow" : "muted"} minHeight={64} width={150}>
+        <VStack align="center" gap={1}>
+          <Text weight="semibold" data-testid="org-node-name">{node.name}</Text>
+          <Text type="supporting">{isRoot ? "部门" : "员工"}</Text>
+        </VStack>
+      </Card>
       {kids.length > 0 && (
-        <>
-          <div className="w-px h-md bg-gold/50" />
-          <div className="flex items-start gap-md">
+          <HStack gap={4} align="start" wrap="wrap">
             {kids.map((c) => (
-              <div key={c.id} className="flex flex-col items-center">
-                <div className="h-md w-px bg-gold/50" />
-                <OrgNode node={c} />
-              </div>
+              <OrgNode key={c.id} node={c} />
             ))}
-          </div>
-        </>
+          </HStack>
       )}
-    </div>
+    </VStack>
   );
 }
 
@@ -192,24 +194,19 @@ export function OrgPage() {
     downloadSvgAsPng(buildSvg(tree), "org-tree.png");
   }, [tree]);
 
-  if (loading) return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">{i18n.t("agent.org.loading")}</GlassPanel>;
-  if (error) return <GlassPanel className="rounded-window border border-danger/30 p-lg text-sm text-danger" data-testid="org-error">{error}</GlassPanel>;
+  if (loading) return <Banner status="info" title={i18n.t("agent.org.loading")} />;
+  if (error) return <Banner status="error" title={error} data-testid="org-error" />;
   if (!tree) return null;
 
   return (
-    <section className="flex flex-col gap-md" data-testid="org-page">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("agent.org.title")}</h1>
-          <p className="m-0 mt-xs text-xs text-text-muted">{i18n.t("agent.org.subtitle")}</p>
-        </div>
-        <div className="flex gap-sm">
-          <Button variant="ghost" onClick={handleExport} data-testid="org-export">{i18n.t("agent.org.export")}</Button>
-        </div>
-      </div>
-      <div ref={treeRef} data-testid="org-tree" className="org-tree-container flex justify-start overflow-auto rounded-window border border-gold/20 bg-surface p-lg">
+    <VStack gap={4} role="region" aria-label={i18n.t("agent.org.title")} data-testid="org-page">
+      <HStack justify="between" align="center">
+        <VStack gap={1}><Heading level={1}>{i18n.t("agent.org.title")}</Heading><Text type="supporting">{i18n.t("agent.org.subtitle")}</Text></VStack>
+        <Button label={i18n.t("agent.org.export")} variant="secondary" onClick={handleExport} data-testid="org-export" />
+      </HStack>
+      <Card ref={treeRef} data-testid="org-tree" padding={4}>
         <OrgNode node={tree} />
-      </div>
-    </section>
+      </Card>
+    </VStack>
   );
 }
