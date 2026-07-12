@@ -61,6 +61,7 @@ describe("ConversationList — filter", () => {
       expect(screen.getByText("会话c1")).toBeInTheDocument();
       expect(screen.getByText("会话c3")).toBeInTheDocument();
     });
+    expect(screen.getByRole("region", { name: "群聊会话" })).toBeInTheDocument();
     expect(mockedList).toHaveBeenCalledTimes(1);
   });
 

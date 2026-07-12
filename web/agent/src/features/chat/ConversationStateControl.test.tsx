@@ -47,6 +47,7 @@ describe("ConversationStateControl — active 状态", () => {
       />,
     );
 
+    expect(screen.getByRole("region", { name: "会话状态" })).toBeInTheDocument();
     expect(screen.getByText("活跃")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "静音" })).toBeInTheDocument();
@@ -74,6 +75,21 @@ describe("ConversationStateControl — active 状态", () => {
       expect(mockedSetState).toHaveBeenCalledWith(client, "c1", "paused");
     });
     expect(onStateChanged).toHaveBeenCalledWith(expect.objectContaining({ state: "paused" }));
+  });
+
+  it("归档会话必须经过破坏性确认", async () => {
+    const client = makeClient();
+    render(
+      <ConversationStateControl
+        client={client}
+        conversation={makeConv("c1", "active")}
+        onStateChanged={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "归档" }));
+    expect(screen.getByRole("alertdialog", { name: "归档会话" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认归档" })).toBeInTheDocument();
   });
 });
 

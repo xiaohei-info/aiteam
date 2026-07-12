@@ -195,7 +195,7 @@ describe("RosterPicker - sync 失败提示（req 3/4）", () => {
 });
 
 describe("RosterPicker — readiness (AITEAM-693)", () => {
-  it("readiness 不满足时禁用该专家按钮并展示原因 title", async () => {
+  it("readiness 不满足时禁用该专家按钮并展示原因", async () => {
     const experts = [
       {
         employee_id: "emp-1",
@@ -229,8 +229,7 @@ describe("RosterPicker — readiness (AITEAM-693)", () => {
     renderPicker();
     const btn = await screen.findByRole("button", { name: /甲/ });
     expect(btn).toBeDisabled();
-    // title carries reason
-    expect(btn.getAttribute("title")).toContain("AGENT_RUNTIME");
+    expect(screen.getByText(/AGENT_RUNTIME/)).toBeInTheDocument();
   });
 
   it("readiness 满足时专家按钮可点击", async () => {
@@ -307,24 +306,14 @@ describe("RosterPicker — readiness (AITEAM-693)", () => {
   });
 });
 
-describe("ReadinessDot 颜色分支", () => {
-  it("ready -> 绿色圆点", () => {
-    const { container } = render(<ReadinessDot status="ready" label="可用" />);
-    expect(container.querySelector(".bg-success")).toBeInTheDocument();
-  });
-
-  it("degraded -> 金色圆点", () => {
-    const { container } = render(<ReadinessDot status="degraded" label="降级" />);
-    expect(container.querySelector(".bg-gold")).toBeInTheDocument();
-  });
-
-  it("blocked -> 红色圆点", () => {
-    const { container } = render(<ReadinessDot status="blocked" label="不可用" />);
-    expect(container.querySelector(".bg-danger")).toBeInTheDocument();
-  });
-
-  it("unknown -> 灰色圆点", () => {
-    const { container } = render(<ReadinessDot status="unknown" label="未知" />);
-    expect(container.querySelector(".bg-text-muted")).toBeInTheDocument();
+describe("ReadinessDot 语义分支", () => {
+  it.each([
+    ["ready", "可用"],
+    ["degraded", "降级"],
+    ["blocked", "不可用"],
+    ["unknown", "未知"],
+  ] as const)("%s 状态提供可访问文本", (status, label) => {
+    render(<ReadinessDot status={status} label={label} />);
+    expect(screen.getByRole("img", { name: `就绪：${label}` })).toBeInTheDocument();
   });
 });

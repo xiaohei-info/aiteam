@@ -42,8 +42,8 @@ if (typeof window !== "undefined" && !window.matchMedia) {
   });
 }
 
-if (typeof window !== "undefined" && !window.scrollTo) {
-  (window as unknown as { scrollTo: unknown }).scrollTo = () => {};
+if (typeof window !== "undefined") {
+  window.scrollTo = () => {};
 }
 
 // Astryx Button 的 loading Spinner 使用 Canvas 画环；jsdom 未实现 2D context。
@@ -58,4 +58,14 @@ if (typeof HTMLCanvasElement !== "undefined") {
     arc: () => {},
     stroke: () => {},
   })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+}
+
+// jsdom 未实现原生 dialog API；Astryx Dialog/AlertDialog 依赖它管理焦点与开闭。
+if (typeof HTMLDialogElement !== "undefined") {
+  HTMLDialogElement.prototype.showModal ??= function showModal() {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close ??= function close() {
+    this.removeAttribute("open");
+  };
 }
