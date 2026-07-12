@@ -6,7 +6,12 @@
  * run 终态走 RunsPanel / timeline。
  */
 
-import { GlassPanel } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import type { OfficeScheduledJob, ScheduledJobStatus } from "./types";
 
 const STATUS_LABEL: Record<ScheduledJobStatus, string> = {
@@ -16,9 +21,6 @@ const STATUS_LABEL: Record<ScheduledJobStatus, string> = {
   error: "错误",
 };
 const STATUS_ICON: Record<ScheduledJobStatus, string> = { active: "⚡", paused: "⏸", completed: "✓", error: "⚠" };
-const STATUS_COLOR: Record<ScheduledJobStatus, string> = {
-  active: "text-success", paused: "text-text-muted", completed: "text-success", error: "text-danger",
-};
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return "—";
@@ -41,24 +43,23 @@ interface JobCardProps {
 
 function JobCard({ job }: JobCardProps) {
   return (
-    <GlassPanel key={job.loop_id} data-testid="office-scheduled-job" className="rounded-window p-md">
-      <div className="flex items-start justify-between gap-sm">
-        <p className="m-0 text-sm font-bold text-text-primary">{job.title}</p>
-        <span className={`text-xs ${STATUS_COLOR[job.status]}`}>{STATUS_ICON[job.status]} {STATUS_LABEL[job.status]}</span>
-      </div>
-      <p className="m-0 mt-xs text-xs text-text-muted">重复：{recurrenceSuffix(job)}</p>
+    <Card key={job.loop_id} data-testid="office-scheduled-job" padding={3} width={280}>
+      <VStack gap={1}>
+      <HStack justify="between"><Text weight="semibold">{job.title}</Text><Badge label={`${STATUS_ICON[job.status]} ${STATUS_LABEL[job.status]}`} variant={job.status === "error" ? "error" : job.status === "active" ? "success" : "neutral"} /></HStack>
+      <Text type="supporting">重复：{recurrenceSuffix(job)}</Text>
       {job.next_run_at && (
-        <p className="m-0 mt-xs text-xs text-text-muted">下次触发：{formatTimestamp(job.next_run_at)}</p>
+        <Text type="supporting">下次触发：{formatTimestamp(job.next_run_at)}</Text>
       )}
-      <p className="m-0 mt-xs text-xs text-text-muted">
+      <Text type="supporting">
         已触发 {job.fire_count} 次 · 上次：{formatTimestamp(job.last_fired_at)}
-      </p>
+      </Text>
       {job.retry_count > 0 && (
-        <p className="m-0 mt-xs text-xs text-danger">
+        <Text type="supporting">
           连续失败 {job.retry_count}/{job.max_retries}
-        </p>
+        </Text>
       )}
-    </GlassPanel>
+      </VStack>
+    </Card>
   );
 }
 
@@ -68,13 +69,13 @@ interface ScheduledJobsProps {
 
 export function ScheduledJobs({ jobs }: ScheduledJobsProps) {
   if (jobs.length === 0) {
-    return <GlassPanel className="rounded-window p-lg text-sm text-text-secondary" data-testid="office-scheduled-jobs-empty">暂无定时任务</GlassPanel>;
+    return <EmptyState title="暂无定时任务" data-testid="office-scheduled-jobs-empty" />;
   }
   return (
-    <div className="grid grid-cols-3 gap-md" data-testid="office-scheduled-jobs">
+    <HStack gap={3} wrap="wrap" data-testid="office-scheduled-jobs">
       {jobs.map((job) => (
         <JobCard key={job.loop_id} job={job} />
       ))}
-    </div>
+    </HStack>
   );
 }
