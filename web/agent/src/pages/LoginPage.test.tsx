@@ -71,6 +71,7 @@ describe("LoginPage", () => {
         </MemoryRouter>,
       );
       expect(screen.getByRole("heading", { level: 1, name: "登录" })).toBeInTheDocument();
+      expect(screen.getByRole("form", { name: "用户端登录" })).toBeInTheDocument();
       expect(screen.getByLabelText("账号（手机号 / 用户名）")).toBeInTheDocument();
       expect(screen.getByLabelText("密码")).toBeInTheDocument();
       expect(screen.queryByLabelText("企业提示（tenant_id）")).not.toBeInTheDocument();
@@ -127,10 +128,8 @@ describe("LoginPage", () => {
       await waitFor(() => {
         expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
       });
-      // reset shell 内显示账号的段落——对应 LoginPage.tsx 第 97 行新增 {account} 段落。
-      const accountParagraph = screen.getByText(account);
-      expect(accountParagraph).toBeInTheDocument();
-      expect(accountParagraph.tagName).toBe("P");
+      // 重置视图必须保留账号上下文；具体标签由 Astryx Text 决定，不能绑死历史 DOM。
+      expect(screen.getByText(account)).toBeInTheDocument();
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -1,16 +1,20 @@
-/** 登录页（03 §9.4C 本地登录）。黑金玻璃质感；保留 i18n key 与字段，行为不变。 */
+/** Agent 本地登录：保留认证和首次密码重置语义，视图直接使用 Astryx。 */
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "@aiteam/shared/api-client";
-import { GlassPanel, Button } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Center } from "@astryxdesign/core/Center";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApiError, useApp } from "../lib/app-context";
 
-const fieldCls =
-  "rounded-md border border-gold/25 bg-surface px-md py-sm text-sm text-text-primary " +
-  "outline-none focus:ring-2 focus:ring-gold";
-
-export function LoginPage() {
+export function LoginPage(): React.ReactNode {
   const { client, i18n, applyLogin } = useApp();
   const toMessage = useApiError();
   const navigate = useNavigate();
@@ -37,7 +41,6 @@ export function LoginPage() {
       navigate("/workspace");
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
-        // Manager 要求重置密码 → 切换到重置模式（保留已填 account/password/tenant）
         setMode("reset");
         setError(null);
         return;
@@ -88,85 +91,81 @@ export function LoginPage() {
 
   if (mode === "reset") {
     return (
-      <div className="flex h-screen items-center justify-center bg-bg-canvas">
-        <GlassPanel className="flex w-[360px] flex-col gap-md rounded-window p-xl">
-          <form className="flex flex-col gap-md" onSubmit={handleReset}>
-            <h1 className="m-0 text-xl font-bold text-text-primary">
-              {i18n.t("agent.login.reset_heading")}
-            </h1>
-            <p className="m-0 text-xs text-text-secondary">{account}</p>
-            <label className="flex flex-col gap-xs">
-              <span className="text-xs text-text-secondary">{i18n.t("agent.login.new_password")}</span>
-              <input
-                className={fieldCls}
-                type="password"
-                value={newPassword}
-                autoComplete="new-password"
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
+      <Center minHeight="100vh" width="100%">
+        <Card width={360} padding={6}>
+          <form aria-label="用户端首次登录密码重置" onSubmit={handleReset}>
+            <VStack gap={4}>
+              <Heading level={1}>{i18n.t("agent.login.reset_heading")}</Heading>
+              <Text type="supporting">{account}</Text>
+              <FormLayout>
+                <TextInput
+                  label={i18n.t("agent.login.new_password")}
+                  type="password"
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  {...({ autoComplete: "new-password", required: true } as Record<string, string | boolean>)}
+                  width="100%"
+                />
+                <TextInput
+                  label={i18n.t("agent.login.confirm_new_password")}
+                  type="password"
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  {...({ autoComplete: "new-password", required: true } as Record<string, string | boolean>)}
+                  width="100%"
+                />
+              </FormLayout>
+              {error ? <Banner status="error" title={error} /> : null}
+              <Button
+                type="submit"
+                label={i18n.t("agent.login.reset_submit")}
+                variant="primary"
+                isDisabled={submitting}
+                isLoading={submitting}
               />
-            </label>
-            <label className="flex flex-col gap-xs">
-              <span className="text-xs text-text-secondary">{i18n.t("agent.login.confirm_new_password")}</span>
-              <input
-                className={fieldCls}
-                type="password"
-                value={confirmPassword}
-                autoComplete="new-password"
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-              />
-            </label>
-            {error ? <div className="text-xs text-danger">{error}</div> : null}
-            <Button type="submit" disabled={submitting} className="mt-sm">
-              {submitting ? i18n.t("agent.login.loading") : i18n.t("agent.login.reset_submit")}
-            </Button>
-            <button
-              type="button"
-              className="m-0 border-none bg-transparent p-0 text-xs text-text-secondary underline"
-              onClick={handleBackToLogin}
-            >
-              {i18n.t("agent.login.reset_back")}
-            </button>
+              <Button label={i18n.t("agent.login.reset_back")} variant="ghost" onClick={handleBackToLogin} />
+            </VStack>
           </form>
-        </GlassPanel>
-      </div>
+        </Card>
+      </Center>
     );
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-bg-canvas">
-      <GlassPanel className="flex w-[360px] flex-col gap-md rounded-window p-xl">
-        <form className="flex flex-col gap-md" onSubmit={handleSubmit}>
-          <h1 className="m-0 text-xl font-bold text-text-primary">{i18n.t("agent.login.title")}</h1>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("agent.login.account")}</span>
-            <input
-              className={fieldCls}
-              type="text"
-              value={account}
-              autoComplete="username"
-              onChange={(e) => setAccount(e.target.value)}
-              required
+    <Center minHeight="100vh" width="100%">
+      <Card width={360} padding={6}>
+        <form aria-label="用户端登录" data-testid="login-form" onSubmit={handleSubmit}>
+          <VStack gap={4}>
+            <Heading level={1}>{i18n.t("agent.login.title")}</Heading>
+            <FormLayout>
+              <TextInput
+                label={i18n.t("agent.login.account")}
+                type="text"
+                value={account}
+                onChange={setAccount}
+                {...({ autoComplete: "username", required: true } as Record<string, string | boolean>)}
+                width="100%"
+              />
+              <TextInput
+                label={i18n.t("agent.login.password")}
+                type="password"
+                value={password}
+                onChange={setPassword}
+                {...({ autoComplete: "current-password", required: true } as Record<string, string | boolean>)}
+                width="100%"
+              />
+            </FormLayout>
+            {error ? <Banner status="error" title={error} /> : null}
+            <Button
+              type="submit"
+              label={i18n.t("agent.login.submit")}
+              variant="primary"
+              isDisabled={submitting}
+              isLoading={submitting}
             />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-xs text-text-secondary">{i18n.t("agent.login.password")}</span>
-            <input
-              className={fieldCls}
-              type="password"
-              value={password}
-              autoComplete="current-password"
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </label>
-          {error ? <div className="text-xs text-danger">{error}</div> : null}
-          <Button type="submit" disabled={submitting} className="mt-sm">
-            {submitting ? i18n.t("agent.login.loading") : i18n.t("agent.login.submit")}
-          </Button>
+          </VStack>
         </form>
-      </GlassPanel>
-    </div>
+      </Card>
+    </Center>
   );
 }

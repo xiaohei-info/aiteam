@@ -45,3 +45,17 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 if (typeof window !== "undefined" && !window.scrollTo) {
   (window as unknown as { scrollTo: unknown }).scrollTo = () => {};
 }
+
+// Astryx Button 的 loading Spinner 使用 Canvas 画环；jsdom 未实现 2D context。
+// 这里提供最小无副作用 context，保留组件的真实 loading 路径且避免测试输出噪声。
+if (typeof HTMLCanvasElement !== "undefined") {
+  HTMLCanvasElement.prototype.getContext = (() => ({
+    lineCap: "round",
+    lineWidth: 0,
+    strokeStyle: "",
+    globalAlpha: 1,
+    beginPath: () => {},
+    arc: () => {},
+    stroke: () => {},
+  })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+}
