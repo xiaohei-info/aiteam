@@ -19,5 +19,24 @@ export const aiteamStone = defineTheme({
     "--font-family-body": systemSans,
     "--font-family-heading": systemSans,
     "--font-family-code": '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    "--text-heading-1-size": "1.875rem",
+    "--text-heading-1-leading": "1.2",
+    "--text-heading-2-leading": "1.25",
+  },
+  components: {
+    heading: {
+      "level:1": { letterSpacing: "-0.02em" },
+      "level:2": { letterSpacing: "-0.012em" },
+    },
+    card: {
+      base: { boxShadow: "var(--shadow-low)" },
+      "variant:muted": { boxShadow: "none" },
+    },
+    "chat-composer": {
+      base: {
+        borderColor: "var(--color-border-emphasized)",
+        boxShadow: "var(--shadow-med)",
+      },
+    },
   },
 });

@@ -19,4 +19,12 @@ describe("aiteamStone", () => {
     expect(aiteamStone.tokens["--duration-fast"]).toBe("125ms");
     expect(aiteamStone.tokens["--duration-medium"]).toBe("250ms");
   });
+
+  it("uses compact heading hierarchy and restrained surface elevation", () => {
+    expect(aiteamStone.tokens["--text-heading-1-size"]).toBe("1.875rem");
+    expect(aiteamStone.tokens["--text-heading-1-leading"]).toBe("1.2");
+    expect(aiteamStone.components?.heading?.["level:1"]?.letterSpacing).toBe("-0.02em");
+    expect(aiteamStone.components?.card?.base?.boxShadow).toBe("var(--shadow-low)");
+    expect(aiteamStone.components?.["chat-composer"]?.base?.boxShadow).toBe("var(--shadow-med)");
+  });
 });
