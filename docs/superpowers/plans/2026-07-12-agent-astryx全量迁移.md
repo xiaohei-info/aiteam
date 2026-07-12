@@ -42,17 +42,17 @@
 - Consumes: `useApp`, `AgentApiClient`, `createConversation`, `sendMessage`, `startRun`, `TimelineStore`。
 - Produces: Astryx 登录表单、侧栏壳、私聊页、命名 Dialog 与可访问的 conversation/timeline/composer 控件。
 
-- [ ] **Step 1: 补充失败测试**
+- [x] **Step 1: 补充失败测试**
 
 为登录页增加 `form[name]`、错误 `alert` 与密码重置输入保留断言；为 chat 增加命名会话列表、状态 Badge、创建专家 `Dialog`、时间线 `log`、消息输入和发送后 `message → run` 调用顺序断言。现有 API mock 与 `data-testid` 不改名。
 
-- [ ] **Step 2: 运行 RED 验证**
+- [x] **Step 2: 运行 RED 验证**
 
 Run: `corepack pnpm@11.4.0 --dir web/agent exec vitest run src/pages/LoginPage.test.tsx src/features/chat --reporter=dot`
 
 Expected: 新增 Astryx 语义断言失败，既有行为断言仍可识别原契约。
 
-- [ ] **Step 3: 用直接 Astryx primitives 替换旧视图**
+- [x] **Step 3: 用直接 Astryx primitives 替换旧视图**
 
 实现边界：
 
@@ -68,7 +68,7 @@ Expected: 新增 Astryx 语义断言失败，既有行为断言仍可识别原�
 
 使用 `Card`、`Stack`、`Inline`、`Table`、`Badge`、`Banner`、`EmptyState`、`Dialog`、`FormLayout`、`TextInput`、`Button`、`Chat*` primitives。`RosterPicker` 的 Manager 同步失败提示与 readiness 禁用语义保持；状态迁移保留后端 409 反馈；时间线只消费 `BusinessTimelineEvent`。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 Run:
 
@@ -96,21 +96,21 @@ git commit -m "feat(agent): migrate login and private chat to Astryx"
 - Consumes: `ConversationList`、`TimelineView`、`listLoadedExperts`、`createFreeConversation`、`createConversationFromSolution`、`groupDispatch`。
 - Produces: Astryx 群聊协作页、专家 roster、方案选择 Dialog 与 mention composer。
 
-- [ ] **Step 1: 补充失败测试**
+- [x] **Step 1: 补充失败测试**
 
 断言群聊页的命名主地标、专家 roster、`@提及` 按钮、方案创建 `Dialog`、触发结果 live region、群聊输入器和错误后的内容保留；保留 `parseMentions` 的纯函数回归用例。
 
-- [ ] **Step 2: 运行 RED 验证**
+- [x] **Step 2: 运行 RED 验证**
 
 Run: `corepack pnpm@11.4.0 --dir web/agent exec vitest run src/features/group/group.test.tsx --reporter=dot`
 
 Expected: 新 Astryx 语义断言失败。
 
-- [ ] **Step 3: 迁移**
+- [x] **Step 3: 迁移**
 
 用 `Card`、`Toolbar`、`Badge`、`Dialog`、`Selector`、`AlertDialog`、`EmptyState`、`Banner`、`Button` 与 `ChatComposer` 直接表达布局。保留 `window` CustomEvent 的 mention 解耦、solution 固定编排入口、free conversation 默认路径、`group-dispatch` 请求体与 `triggered_handles` 展示态。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 Run:
 
@@ -140,21 +140,21 @@ git commit -m "feat(agent): migrate group collaboration to Astryx"
 - Consumes: `listConversations`、`listLoops`、`createLoop`、`enableLoop`、`disableLoop`、`fireLoopNow`、`listRuns`、`listTasks`、`cancelRun`、`retryRun`、`getRunProvenance`、`executeCommand`。
 - Produces: 本地概览、Loop 表单、Run/Task 表格和 command event 输出面板。
 
-- [ ] **Step 1: 补充失败测试**
+- [x] **Step 1: 补充失败测试**
 
 覆盖工作台加载/error/empty、Loop 失效 cron 与失败保留输入、启停/立即触发、Run 取消/重试/追溯展开、终端 stdout/stderr/system 状态与取消按钮。所有破坏性 Run/Loop 动作应断言 `AlertDialog`。
 
-- [ ] **Step 2: 运行 RED 验证**
+- [x] **Step 2: 运行 RED 验证**
 
 Run: `corepack pnpm@11.4.0 --dir web/agent exec vitest run src/features/workspace src/features/runs src/features/terminal --reporter=dot`
 
 Expected: 新的结构和确认语义断言失败。
 
-- [ ] **Step 3: 迁移**
+- [x] **Step 3: 迁移**
 
 使用 `Grid`、`Card`、`Table`、`FormLayout`、`TextInput`、`CodeBlock`、`Collapsible`、`Badge`、`Banner`、`AlertDialog`、`EmptyState`。终端继续只消费归一 command 事件，严格保留 `AbortController`、输出滚动、会话切换清理和本机凭据最小注入边界。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 Run:
 
@@ -188,21 +188,21 @@ git commit -m "feat(agent): migrate local workspace and execution panels to Astr
 - Consumes: marketplace/knowledge/office/org/sync/settings hooks and local preference state.
 - Produces: 直接 Astryx 的本地能力页面；不改变 payload、上传、导出、同步与本地 localStorage 的所有权。
 
-- [ ] **Step 1: 补充失败测试**
+- [x] **Step 1: 补充失败测试**
 
 覆盖市场分类/招募、知识库上传/URL 导入/重试/检索、办公室任务卡、组织 PNG 导出、同步快照与 outbox、设置 tab、偏好本地保存、退出和重新同步。新增状态文字与 Badge 的语义断言，禁止仅颜色传达状态。
 
-- [ ] **Step 2: 运行 RED 验证**
+- [x] **Step 2: 运行 RED 验证**
 
 Run: `corepack pnpm@11.4.0 --dir web/agent exec vitest run src/features/marketplace src/features/knowledge src/features/office src/features/org src/features/settings --reporter=dot`
 
 Expected: 新的 Astryx 地标、表单、表格、Tabs/Dialogs 断言失败。
 
-- [ ] **Step 3: 迁移**
+- [x] **Step 3: 迁移**
 
 使用 `PageHeader`、`Grid`、`Card`、`Table`、`SearchInput`、`TabList`、`FormLayout`、`FileInput`、`Dialog`、`AlertDialog`、`MetadataList`、`Banner`、`EmptyState` 与 `Button`。保留上传 API、PNG canvas 导出、快照和 outbox 脱敏展示、设置只本机持久化。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 Run:
 
@@ -233,7 +233,7 @@ git commit -m "feat(agent): migrate local capability pages to Astryx"
 - Consumes: 全部迁移后页面与 Agent E2E storage state。
 - Produces: 不含旧 UI 构建链的 Agent 产物，零遗留自动门禁、视觉/可访问性证据和 GO/NO-GO 记录。
 
-- [ ] **Step 1: 先写零遗留失败门禁**
+- [x] **Step 1: 先写零遗留失败门禁**
 
 递归扫描 `src` 并拒绝：`@aiteam/shared/ui`、`className=`、`glass`、`text-gold`、`bg-surface`、`border-gold`、`text-text-`、`rounded-window`；扫描配置并拒绝 `tailwindcss`、`@tailwindcss/vite`、`@source` 与 `@aiteam/shared/design-system/tokens.css`。
 
@@ -241,15 +241,15 @@ Run: `corepack pnpm@11.4.0 --dir web/agent exec vitest run src/astryx/no-legacy-
 
 Expected: 当前遗留命中，测试失败。
 
-- [ ] **Step 2: 物理删除旧链**
+- [x] **Step 2: 物理删除旧链**
 
 删除 Tailwind Vite 插件/devDependencies、Tailwind 与旧 token CSS imports、兼容变量和 `.glass` 规则；CSS 入口仅留 Astryx reset/core/Stone 与文档基础布局。用 `corepack pnpm@11.4.0 --dir web install --lockfile-only` 更新 lockfile。
 
-- [ ] **Step 3: 补齐浏览器上线验证**
+- [x] **Step 3: 补齐浏览器上线验证**
 
 E2E 覆盖登录、工作台、私聊发送→Run、群聊、知识库或设置、Loop 确认。每个关键页面断言 heading/main、无 console/page error、可见键盘焦点、axe critical/serious 为零；为私聊/工作台或群聊采集 light/dark snapshots。真实主链继续由既有 `astryx-chat.spec.ts` 验证。
 
-- [ ] **Step 4: 独立门禁**
+- [x] **Step 4: 独立门禁**
 
 Run:
 
@@ -264,7 +264,7 @@ rg -n '@aiteam/shared/ui|className=|glass|text-gold|bg-surface|border-gold|text-
 
 Expected: 全绿；静态扫描不含门禁文件本身时无命中。
 
-- [ ] **Step 5: 记录并提交**
+- [x] **Step 5: 记录并提交**
 
 验收文档记录测试总数、E2E 总数、浏览器/axe、快照、gzip 体积、警告、零 legacy 结果与 Agent GO。
 

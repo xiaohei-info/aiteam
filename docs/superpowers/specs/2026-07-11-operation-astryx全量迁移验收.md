@@ -65,4 +65,4 @@
 
 ## 上线裁决
 
-Operation 已达到页面、行为、可访问性、构建、浏览器与零 legacy 的上线门槛，可以正式 GO。Manager 与 Operation 均已完成；Agent 尚未完成，因此三端整体仍不可最终上线。
+Operation 已达到页面、行为、可访问性、构建、浏览器与零 legacy 的上线门槛。Agent 也已于后续迁移中完成，Manager、Operation、Agent 三端新前端整体裁决为 GO。
