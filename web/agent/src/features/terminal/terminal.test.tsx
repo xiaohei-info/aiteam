@@ -107,6 +107,7 @@ describe("TerminalPanel", () => {
   it("renders input + execute button + hint when authed", () => {
     loginStorage();
     renderPanel();
+    expect(screen.getByRole("region", { name: "本地终端" })).toBeInTheDocument();
     expect(screen.getByLabelText("命令输入")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /执行/i })).toBeInTheDocument();
     expect(screen.getByText(/输入命令/)).toBeInTheDocument();

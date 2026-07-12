@@ -9,7 +9,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Input, cn } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import type { AgentApiClient } from "../../lib/api-client";
 import { useApp } from "../../lib/app-context";
 import { executeCommand, type TerminalEvent } from "./useTerminalApi";
@@ -131,77 +137,57 @@ export function TerminalPanel({ client, conversationId, refreshSignal = 0 }: Ter
   if (!session) return null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-sm">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-sm">
-          <span className="text-xs font-semibold text-text-primary">Terminal</span>
-          <span className="rounded-sm border border-gold/15 px-xs text-xs text-text-muted">
-            {SHELL_HINT}
-          </span>
-        </div>
-        <span
-          className={cn(
-            "text-xs",
-            runState === "completed" && "text-success",
-            runState === "error" && "text-danger",
-            runState === "cancelled" && "text-text-muted",
-            running && "text-gold",
-          )}
-        >
-          {runState}
-        </span>
-      </div>
+    <VStack gap={2} role="region" aria-label="本地终端" minHeight={0}>
+      <HStack justify="between" align="center">
+        <HStack gap={1} align="center">
+          <Text type="label">Terminal</Text>
+          <Badge label={SHELL_HINT} />
+        </HStack>
+        <Badge
+          label={runState}
+          variant={runState === "completed" ? "success" : runState === "error" ? "error" : running ? "warning" : "neutral"}
+        />
+      </HStack>
 
-      <div
+      <Card
         ref={outRef}
-        className="flex min-h-[160px] flex-1 flex-col gap-xs overflow-auto rounded-md border border-gold/15 bg-surface p-sm font-mono text-xs text-text-primary"
+        minHeight={160}
+        padding={2}
         role="log"
         aria-live="polite"
         aria-label="命令输出"
       >
-        {lines.length === 0 && !running && (
-          <span className="text-text-muted">
+        <VStack gap={1}>
+          {lines.length === 0 && !running && (
+            <Text type="supporting" as="div">
             输入命令开始执行。命令在用户端本地隔离 cwd 中执行。
-          </span>
-        )}
-        {lines.map((line) => (
-          <pre
-            key={line.id}
-            className={cn(
-              "m-0 whitespace-pre-wrap break-all",
-              line.stream === "stderr" && "text-danger",
-              line.stream === "system" && "text-text-muted",
-            )}
-          >
-            {line.text}
-          </pre>
-        ))}
-        {error && runState === "error" && (
-          <pre className="m-0 whitespace-pre-wrap break-all text-danger">{error}</pre>
-        )}
-      </div>
+            </Text>
+          )}
+          {lines.map((line) => (
+            <pre key={line.id} data-stream={line.stream}>{line.text}</pre>
+          ))}
+          {error && runState === "error" && <pre data-stream="stderr">{error}</pre>}
+        </VStack>
+      </Card>
 
-      <form className="flex items-center gap-sm" onSubmit={handleSubmit}>
-        <Input
+      <form onSubmit={handleSubmit}>
+        <HStack gap={2} align="end">
+        <TextInput
+          width="100%"
+          label="命令输入"
+          isLabelHidden
           value={command}
-          onChange={(e) => setCommand(e.currentTarget.value)}
+          onChange={setCommand}
           placeholder="例如：echo hello"
-          aria-label="命令输入"
-          className="flex-1"
-          disabled={running}
-          autoComplete="off"
-          spellCheck={false}
+          isDisabled={running}
         />
         {running ? (
-          <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
-            取消
-          </Button>
+          <Button type="button" label="取消" variant="secondary" size="sm" onClick={handleCancel} />
         ) : (
-          <Button type="submit" size="sm" disabled={running || command.trim().length === 0}>
-            执行
-          </Button>
+          <Button type="submit" label="执行" variant="primary" size="sm" isDisabled={command.trim().length === 0} />
         )}
+        </HStack>
       </form>
-    </div>
+    </VStack>
   );
 }
