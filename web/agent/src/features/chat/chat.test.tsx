@@ -157,6 +157,7 @@ describe("ConversationList", () => {
     await waitFor(() => {
       expect(screen.getByRole("log", { name: "对话时间线" })).toBeInTheDocument(); // TerminalPanel 也有 role="log"，按 name 消歧
     });
+    expect(screen.getByRole("region", { name: "会话工作区" })).toBeInTheDocument();
   });
 
   it("使用 Astryx chat log 和 composer 保留发送主链", async () => {

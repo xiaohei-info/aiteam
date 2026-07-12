@@ -1,16 +1,15 @@
-/**
- * W-A.2 私聊对话页 —— 组合：左侧会话列表 + 选中后右侧时间线 + 底部输入器。
- *
- * 展示态不入持久化主状态（D6）：selected / timelineRefreshSignal / createOpen /
- * createError 均为本组件局部运行态，不写入 store、不落库。TimelineStore 内部 buffer
- * 也只在内存中存活（卸载即丢）。
- */
-
+/** 本地私聊工作区：保持会话、时间线与 message → run 行为，视图直接使用 Astryx。 */
 import { useCallback, useState } from "react";
-import { Button, GlassPanel, cn } from "@aiteam/shared/ui";
+import { Card } from "@astryxdesign/core/Card";
 import { ChatLayout } from "@astryxdesign/core/Chat";
+import { Button } from "@astryxdesign/core/Button";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 
-import { useApp, useApiError } from "../../lib/app-context";
+import { useApiError, useApp } from "../../lib/app-context";
 import { ConversationStateControl } from "./ConversationStateControl";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
@@ -22,57 +21,50 @@ import type { Conversation } from "./useChatApi";
 import { createConversation } from "./useChatApi";
 import type { LoadedExpertProjection } from "../group/useGroupApi";
 
-export function ChatPage() {
+export function ChatPage(): React.ReactNode {
   const { client } = useApp();
   const toMessage = useApiError();
   const [selected, setSelected] = useState<Conversation | null>(null);
-  // 发送消息后 +1，触发列表刷新（updated_at）+ timeline catchUp。
   const [sentSignal, setSentSignal] = useState(0);
-  // Loop 面板展开态（局部运行态，不落库）。
   const [loopPanelOpen, setLoopPanelOpen] = useState(false);
-  // "新建对话"专家选择弹层 + 创建中错误（局部运行态，D6）。
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const handleSelect = useCallback((conv: Conversation) => setSelected(conv), []);
-  const handleSent = useCallback(() => setSentSignal((n) => n + 1), []);
-
+  const handleSelect = useCallback((conversation: Conversation) => setSelected(conversation), []);
+  const handleSent = useCallback(() => setSentSignal((signal) => signal + 1), []);
   const handleCancelCreate = useCallback(() => {
     if (creating) return;
     setCreateOpen(false);
     setCreateError(null);
   }, [creating]);
 
-  const handlePick = useCallback(
-    async (expert: LoadedExpertProjection) => {
-      if (creating) return;
-      setCreating(true);
-      setCreateError(null);
-      try {
-        const created = await createConversation(client, {
-          title: expert.display_name,
-          collaboration_mode: "free",
-          entry_employee_id: expert.employee_id,
-        });
-        if (!created) {
-          setCreateError(toMessage(new Error("建会话返回为空")));
-          return;
-        }
-        setSelected(created);
-        setSentSignal((n) => n + 1);
-        setCreateOpen(false);
-      } catch (err) {
-        setCreateError(toMessage(err));
-      } finally {
-        setCreating(false);
+  const handlePick = useCallback(async (expert: LoadedExpertProjection) => {
+    if (creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const created = await createConversation(client, {
+        title: expert.display_name,
+        collaboration_mode: "free",
+        entry_employee_id: expert.employee_id,
+      });
+      if (!created) {
+        setCreateError(toMessage(new Error("建会话返回为空")));
+        return;
       }
-    },
-    [client, creating, toMessage],
-  );
+      setSelected(created);
+      setSentSignal((signal) => signal + 1);
+      setCreateOpen(false);
+    } catch (err) {
+      setCreateError(toMessage(err));
+    } finally {
+      setCreating(false);
+    }
+  }, [client, creating, toMessage]);
 
   return (
-    <div className="flex h-full min-h-0 gap-md">
+    <HStack gap={4} align="start">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -80,78 +72,33 @@ export function ChatPage() {
         refreshSignal={sentSignal}
         onCreate={() => setCreateOpen(true)}
       />
-      <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
+      <Card role="region" aria-label="会话工作区">
         {selected ? (
-          <>
-            <div className="px-md pt-md">
-              <ConversationStateControl
-                client={client}
-                conversation={selected}
-                onStateChanged={setSelected}
-              />
-            </div>
-            <div className="flex items-center justify-between border-b border-gold/10 px-md py-sm">
-              <span className="truncate text-sm font-semibold text-text-primary">
-                {selected.title ?? selected.id}
-              </span>
+          <VStack gap={4}>
+            <ConversationStateControl client={client} conversation={selected} onStateChanged={setSelected} />
+            <HStack justify="between" align="center">
+              <Heading level={2}>{selected.title ?? selected.id}</Heading>
               <Button
-                type="button"
-                variant="ghost"
-                size="sm"
+                label="任务编排"
+                variant={loopPanelOpen ? "secondary" : "ghost"}
                 aria-pressed={loopPanelOpen}
-                aria-label="任务编排"
-                title="任务编排（Loop 周期任务队列）"
-                className={cn("gap-xs", loopPanelOpen && "bg-surface-raised text-gold-bright")}
-                onClick={() => setLoopPanelOpen((v) => !v)}
-              >
-                🦞 编排
-              </Button>
-            </div>
-            {loopPanelOpen && (
-              <div className="px-md pt-sm">
-                <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
-              </div>
-            )}
+                onClick={() => setLoopPanelOpen((open) => !open)}
+              />
+            </HStack>
+            {loopPanelOpen ? <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} /> : null}
             <ChatLayout
               density="balanced"
               composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
-              emptyState={<div>选择一个会话开始对话</div>}
+              emptyState={<Text>选择一个会话开始对话</Text>}
             >
-              <TimelineView
-                client={client}
-                conversationId={selected.id}
-                refreshSignal={sentSignal}
-              />
+              <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
             </ChatLayout>
-            <div className="px-md pb-sm">
-              <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
-            </div>
-            <div className="min-h-0 flex-1 px-md pb-md pt-sm">
-              <TerminalPanel
-                client={client}
-                conversationId={selected.id}
-                refreshSignal={sentSignal}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-md text-text-muted">
-            <div>选择一个会话开始对话</div>
-            <Button type="button" onClick={() => setCreateOpen(true)}>
-              ＋ 新建对话
-            </Button>
-          </div>
-        )}
-      </GlassPanel>
-      {createOpen && (
-        <RosterPicker
-          client={client}
-          onPick={handlePick}
-          onCancel={handleCancelCreate}
-          busy={creating}
-          error={createError}
-        />
-      )}
-    </div>
+            <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+            <TerminalPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+          </VStack>
+        ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
+      </Card>
+      {createOpen ? <RosterPicker client={client} onPick={handlePick} onCancel={handleCancelCreate} busy={creating} error={createError} /> : null}
+    </HStack>
   );
 }
