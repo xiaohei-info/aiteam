@@ -80,7 +80,7 @@ export function ConversationList({
   }, [client, hasMore, loading, nextCursor, visibleItems]);
 
   return (
-    <Card role="region" aria-label={`${headerLabel}会话`}>
+    <Card role="region" aria-label={`${headerLabel}会话`} width={280}>
       <VStack gap={3}>
         <HStack justify="between" align="center">
           <Heading level={2} data-testid="conv-list-header-label">{headerLabel}</Heading>

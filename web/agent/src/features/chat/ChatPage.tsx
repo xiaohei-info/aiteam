@@ -8,6 +8,7 @@ import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
+import { StackItem } from "@astryxdesign/core/Stack";
 
 import { useApiError, useApp } from "../../lib/app-context";
 import { ConversationStateControl } from "./ConversationStateControl";
@@ -64,7 +65,7 @@ export function ChatPage(): React.ReactNode {
   }, [client, creating, toMessage]);
 
   return (
-    <HStack gap={4} align="start">
+    <HStack data-testid="chat-layout" gap={4} align="start" width="100%">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -72,32 +73,34 @@ export function ChatPage(): React.ReactNode {
         refreshSignal={sentSignal}
         onCreate={() => setCreateOpen(true)}
       />
-      <Card role="region" aria-label="会话工作区">
-        {selected ? (
-          <VStack gap={4}>
-            <ConversationStateControl client={client} conversation={selected} onStateChanged={setSelected} />
-            <HStack justify="between" align="center">
-              <Heading level={2}>{selected.title ?? selected.id}</Heading>
-              <Button
-                label="任务编排"
-                variant={loopPanelOpen ? "secondary" : "ghost"}
-                aria-pressed={loopPanelOpen}
-                onClick={() => setLoopPanelOpen((open) => !open)}
-              />
-            </HStack>
-            {loopPanelOpen ? <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} /> : null}
-            <ChatLayout
-              density="balanced"
-              composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
-              emptyState={<Text>选择一个会话开始对话</Text>}
-            >
-              <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
-            </ChatLayout>
-            <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
-            <TerminalPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
-          </VStack>
-        ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
-      </Card>
+      <StackItem size="fill" crossAlignSelf="stretch">
+        <Card role="region" aria-label="会话工作区" width="100%">
+          {selected ? (
+            <VStack gap={4} width="100%">
+              <ConversationStateControl client={client} conversation={selected} onStateChanged={setSelected} />
+              <HStack justify="between" align="center">
+                <Heading level={2}>{selected.title ?? selected.id}</Heading>
+                <Button
+                  label="任务编排"
+                  variant={loopPanelOpen ? "secondary" : "ghost"}
+                  aria-pressed={loopPanelOpen}
+                  onClick={() => setLoopPanelOpen((open) => !open)}
+                />
+              </HStack>
+              {loopPanelOpen ? <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} /> : null}
+              <ChatLayout
+                density="balanced"
+                composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
+                emptyState={<Text>选择一个会话开始对话</Text>}
+              >
+                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+              </ChatLayout>
+              <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+              <TerminalPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+            </VStack>
+          ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
+        </Card>
+      </StackItem>
       {createOpen ? <RosterPicker client={client} onPick={handlePick} onCancel={handleCancelCreate} busy={creating} error={createError} /> : null}
     </HStack>
   );

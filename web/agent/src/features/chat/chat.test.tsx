@@ -160,6 +160,22 @@ describe("ConversationList", () => {
     expect(screen.getByRole("region", { name: "会话工作区" })).toBeInTheDocument();
   });
 
+  it("私聊双栏布局占满可用内容宽度", async () => {
+    loginStorage();
+    globalThis.fetch = makeFetch([makeConv("c1", "会话A")]);
+
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <AppProvider>
+          <AppRoutes />
+        </AppProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("会话A");
+    expect(screen.getByTestId("chat-layout")).toHaveStyle({ width: "100%" });
+  });
+
   it("使用 Astryx chat log 和 composer 保留发送主链", async () => {
     loginStorage();
     const fetchImpl = makeFetch([makeConv("c1", "会话A")], [makeEvent(1)]);
