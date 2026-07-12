@@ -8,7 +8,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "@aiteam/shared/api-client";
-import { GlassPanel, Button } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Dialog } from "@astryxdesign/core/Dialog";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApp } from "../../lib/app-context";
 import {
@@ -87,110 +97,107 @@ export function WorkspacePage() {
   const enabledCount = loops.filter((l) => l.status === "enabled").length;
 
   return (
-    <div className="flex flex-col gap-lg">
-      <header className="flex flex-col gap-xs">
-        <div className="flex items-center justify-between">
-          <h1 className="m-0 text-xl font-bold text-text-primary">
-            {i18n.t("agent.nav.workspace")}
-          </h1>
-          <Button size="sm" onClick={() => setShowCreateLoop(true)}>
-            + {i18n.t("agent.workspace.create_loop")}
-          </Button>
-        </div>
-        {showCreateLoop && (
-          <GlassPanel className="flex flex-col gap-sm rounded-window p-md">
-            <h3 className="m-0 text-sm font-semibold text-text-primary">{i18n.t("agent.workspace.create_loop_title")}</h3>
-            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none placeholder:text-text-muted" placeholder="会话 ID (conversation_id)" value={newConvId} onChange={(e) => setNewConvId(e.target.value)} />
-            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary font-mono outline-none placeholder:text-text-muted" placeholder="cron (e.g. 0 9 * * *)" value={newCron} onChange={(e) => setNewCron(e.target.value)} />
-            <input className="rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none placeholder:text-text-muted" placeholder={i18n.t("agent.workspace.title_optional")} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
-            <div className="flex gap-sm">
-              <Button size="sm" onClick={handleCreateLoop}>{i18n.t("agent.workspace.create")}</Button>
-              <Button variant="ghost" size="sm" onClick={() => setShowCreateLoop(false)}>{i18n.t("agent.workspace.cancel")}</Button>
-            </div>
-          </GlassPanel>
-        )}
-        <p className="m-0 text-sm text-text-secondary">
-          {i18n.t("agent.workspace.summary")}: {conversations.length} · Loop {loops.length}（
-          {enabledCount} {i18n.t("agent.workspace.enabled")}）
-        </p>
-        {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-        {error && <p className="m-0 text-sm text-danger">{error}</p>}
-        {loading && <p className="m-0 text-sm text-text-muted">{i18n.t("agent.workspace.loading")}</p>}
-      </header>
+    <VStack gap={6} role="region" aria-label="本地工作台">
+      <HStack justify="between" align="center" wrap="wrap">
+        <Heading level={1}>{i18n.t("agent.nav.workspace")}</Heading>
+        <Button label={i18n.t("agent.workspace.create_loop")} size="sm" variant="primary" onClick={() => setShowCreateLoop(true)} />
+      </HStack>
+      <Text as="p" type="supporting">
+        {i18n.t("agent.workspace.summary")}: {conversations.length} · Loop {loops.length}（
+        {enabledCount} {i18n.t("agent.workspace.enabled")}）
+      </Text>
+      {actionError && <Banner status="error" title={actionError} />}
+      {error && <Banner status="error" title={error} />}
+      {loading && <Banner status="info" title={i18n.t("agent.workspace.loading")} />}
 
-      <GlassPanel className="flex flex-col gap-sm rounded-window p-lg">
-        <h2 className="m-0 text-base font-semibold text-gold">
-          {i18n.t("agent.workspace.conversations_title")}
-        </h2>
+      <Card padding={4}>
+        <VStack gap={2}>
+        <Heading level={2}>{i18n.t("agent.workspace.conversations_title")}</Heading>
         {conversations.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">
-            {i18n.t("agent.workspace.conversations_empty")}
-          </p>
+          <EmptyState title={i18n.t("agent.workspace.conversations_empty")} headingLevel={3} isCompact />
         ) : (
-          <ul className="m-0 flex list-none flex-col gap-xs p-0">
+          <VStack as="ul" gap={1}>
             {conversations.map((c) => (
-              <li
+              <HStack
+                as="li"
                 key={c.id}
                 data-testid="ws-conversation"
-                className="flex items-center gap-sm border-b border-gold/10 py-xs text-sm last:border-b-0"
+                gap={1}
+                align="center"
               >
-                <Link to="/chat" className="text-gold no-underline hover:underline">
-                  {c.title || c.id}
-                </Link>
-                <span className="text-text-muted">· {c.state}</span>
-              </li>
+                <Link to="/chat">{c.title || c.id}</Link>
+                <Badge label={c.state} />
+              </HStack>
             ))}
-          </ul>
+          </VStack>
         )}
-      </GlassPanel>
+        </VStack>
+      </Card>
 
-      <GlassPanel className="flex flex-col gap-sm rounded-window p-lg">
-        <h2 className="m-0 text-base font-semibold text-gold">
-          {i18n.t("agent.workspace.loops_title")}
-        </h2>
+      <Card padding={4}>
+        <VStack gap={2}>
+        <Heading level={2}>{i18n.t("agent.workspace.loops_title")}</Heading>
         {loops.length === 0 ? (
-          <p className="m-0 text-sm text-text-muted">{i18n.t("agent.workspace.loops_empty")}</p>
+          <EmptyState title={i18n.t("agent.workspace.loops_empty")} headingLevel={3} isCompact />
         ) : (
-          <ul className="m-0 flex list-none flex-col gap-sm p-0">
+          <VStack as="ul" gap={2}>
             {loops.map((l) => (
-              <li
+              <HStack
+                as="li"
                 key={l.id}
                 data-testid="ws-loop"
-                className="flex flex-wrap items-center gap-sm border-b border-gold/10 py-sm last:border-b-0"
+                gap={2}
+                align="center"
+                wrap="wrap"
               >
-                <span className="flex-1 text-sm text-text-secondary">
-                  <strong className="text-text-primary">{l.title || l.id}</strong> ·{" "}
-                  <code className="rounded-sm bg-surface px-xs text-xs text-text-muted">{l.cron}</code> ·{" "}
-                  {l.status}
-                </span>
+                <Text>{l.title || l.id}</Text>
+                <Text type="code">{l.cron}</Text>
+                <Badge label={l.status} variant={l.status === "enabled" ? "success" : "neutral"} />
                 {l.status === "enabled" ? (
                   <Button
-                    variant="ghost"
+                    label={i18n.t("agent.workspace.disable")}
+                    variant="secondary"
                     size="sm"
                     onClick={() => void runLoopAction(() => disableLoop(client, l.id))}
-                  >
-                    {i18n.t("agent.workspace.disable")}
-                  </Button>
+                  />
                 ) : (
                   <Button
-                    variant="ghost"
+                    label={i18n.t("agent.workspace.enable")}
+                    variant="secondary"
                     size="sm"
                     onClick={() => void runLoopAction(() => enableLoop(client, l.id))}
-                  >
-                    {i18n.t("agent.workspace.enable")}
-                  </Button>
+                  />
                 )}
                 <Button
+                  label={i18n.t("agent.workspace.fire")}
                   size="sm"
+                  variant="primary"
                   onClick={() => void runLoopAction(() => fireLoop(client, l.id))}
-                >
-                  {i18n.t("agent.workspace.fire")}
-                </Button>
-              </li>
+                />
+              </HStack>
             ))}
-          </ul>
+          </VStack>
         )}
-      </GlassPanel>
-    </div>
+        </VStack>
+      </Card>
+
+      <Dialog
+        isOpen={showCreateLoop}
+        onOpenChange={setShowCreateLoop}
+        purpose="form"
+        aria-label={i18n.t("agent.workspace.create_loop_title")}
+      >
+        <VStack gap={3}>
+          <Heading level={2}>{i18n.t("agent.workspace.create_loop_title")}</Heading>
+          <TextInput label="会话 ID (conversation_id)" value={newConvId} onChange={setNewConvId} />
+          <TextInput label="Cron 表达式" value={newCron} onChange={setNewCron} />
+          <TextInput label={i18n.t("agent.workspace.title_optional")} value={newTitle} onChange={setNewTitle} />
+          <HStack justify="end" gap={2}>
+            <Button label={i18n.t("agent.workspace.cancel")} variant="secondary" onClick={() => setShowCreateLoop(false)} />
+            <Button label={i18n.t("agent.workspace.create")} variant="primary" onClick={() => void handleCreateLoop()} />
+          </HStack>
+        </VStack>
+      </Dialog>
+    </VStack>
   );
 }

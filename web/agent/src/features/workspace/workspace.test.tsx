@@ -71,6 +71,7 @@ describe("WorkspacePage 工作台", () => {
 
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId("ws-conversation")).toBeInTheDocument());
+    expect(screen.getByRole("region", { name: "本地工作台" })).toBeInTheDocument();
     expect(screen.getByText("需求讨论")).toBeInTheDocument();
     // 跳转链接指向 /chat
     expect(screen.getByText("需求讨论").closest("a")?.getAttribute("href")).toBe("/chat");
