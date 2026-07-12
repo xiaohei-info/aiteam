@@ -45,8 +45,9 @@ test.describe("operation api-contract", () => {
   });
 
   test("错误响应不是 text/html SPA fallback", async ({ request }) => {
-    // /api/operation/enterprises 是 POST-only：GET → 405 problem+json（验错误模型，非 SPA）。
-    await expectProblemJson(request, TIER, "/api/operation/enterprises", { expectedStatus: 405 });
+    // 静态前端启用后，GET 会由 API 保留路径的 SPA fallback 统一收口为 404 problem+json；
+    // 这里验证的核心契约是 API 错误绝不能回落成 index.html。
+    await expectProblemJson(request, TIER, "/api/operation/enterprises", { expectedStatus: 404 });
   });
 });
 

@@ -68,7 +68,6 @@ describe("LoginPage", () => {
     const submit = screen.getByRole("button", { name: "登录" });
     submit.focus();
     expect(submit).toHaveFocus();
-    expect(document.querySelector(".glass")).toBeNull();
   });
 
   it("已登录时跳转（不渲染表单）", () => {

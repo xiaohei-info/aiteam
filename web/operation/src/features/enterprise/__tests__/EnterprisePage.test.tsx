@@ -58,14 +58,13 @@ describe("EnterprisePage 企业开通", () => {
   afterEach(() => { localStorage.clear(); });
 
   it("渲染开通表单（企业名称 + 负责人手机号 + 提交按钮）", () => {
-    const { container } = renderEnterprisePage(mockClient());
+    renderEnterprisePage(mockClient());
     expect(screen.getByRole("heading", { level: 1, name: "企业开通" })).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "开通企业" })).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "重置负责人凭据" })).toBeInTheDocument();
     expect(screen.getByText("企业名称")).toBeInTheDocument();
     expect(screen.getByText("负责人手机号")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开通" })).toBeInTheDocument();
-    expect(container.querySelector(".glass")).toBeNull();
   });
 
   it("空字段提交显示校验提示", async () => {

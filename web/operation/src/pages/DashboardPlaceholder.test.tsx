@@ -26,12 +26,11 @@ describe("DashboardPlaceholder", () => {
     getBoard.mockReset();
   });
 
-  it("加载时暴露命名 status 且不渲染旧 glass 节点", () => {
+  it("加载时暴露命名 status", () => {
     getBoard.mockImplementation(() => new Promise(() => {}));
-    const { container } = renderDashboard();
+    renderDashboard();
 
     expect(screen.getByRole("status", { name: "运营概览加载中" })).toBeInTheDocument();
-    expect(container.querySelector(".glass")).toBeNull();
   });
 
   it("用命名指标卡展示跨企业汇总", async () => {

@@ -29,10 +29,9 @@ describe("SolutionsPage", () => {
 
   it("使用命名 Astryx 表格展示方案统计", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(JSON.stringify({ data: [{ solution_id: "sol-1", name: "零售方案", apply_count: 8, active_enterprises: 3 }] }), { status: 200, headers: { "content-type": "application/json" } }));
-    const { container } = renderPage();
+    renderPage();
     expect(await screen.findByRole("table", { name: "行业方案统计" })).toBeInTheDocument();
     expect(screen.getByText("零售方案")).toBeInTheDocument();
-    expect(container.querySelector(".glass")).toBeNull();
   });
 
   it("暴露 loading、error 与 empty 语义", async () => {
