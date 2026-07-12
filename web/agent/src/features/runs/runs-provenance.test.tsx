@@ -40,6 +40,7 @@ describe("RunsPanel provenance", () => {
       </AppProvider>,
     );
 
+    expect(await screen.findByRole("region", { name: "运行与任务" })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "追溯" }));
     expect(await screen.findByText("snap-1")).toBeInTheDocument();
     expect(await screen.findByText("hermes")).toBeInTheDocument();

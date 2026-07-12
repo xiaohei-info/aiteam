@@ -6,7 +6,13 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
-import { Button, GlassPanel, Table } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import type { AgentApiClient } from "../../lib/api-client";
 import {
   listRuns, listTasks, cancelRun, retryRun, getRunProvenance,
@@ -15,14 +21,11 @@ import {
 
 interface Props { client: AgentApiClient; conversationId: string; refreshSignal?: number; }
 
-function statusColor(s: string): string {
-  if (s === "succeeded" || s === "completed") return "text-success";
-  if (s === "running" || s === "submitting") return "text-gold";
-  if (s === "queued" || s === "routing") return "text-text-secondary";
-  if (s === "waiting_human") return "text-gold-soft";
-  if (s === "failed") return "text-danger";
-  if (s === "cancelled") return "text-text-muted";
-  return "text-text-secondary";
+function statusVariant(status: string): "success" | "warning" | "error" | "neutral" {
+  if (status === "succeeded" || status === "completed") return "success";
+  if (status === "failed") return "error";
+  if (status === "running" || status === "submitting" || status === "waiting_human") return "warning";
+  return "neutral";
 }
 
 export function RunsPanel({ client, conversationId, refreshSignal = 0 }: Props): ReactNode {
@@ -57,14 +60,16 @@ export function RunsPanel({ client, conversationId, refreshSignal = 0 }: Props):
     });
   }, [provenance, loadingProv, client]);
 
-  if (error) return <p className="m-0 text-xs text-danger">{error}</p>;
+  if (error) return <Banner status="error" title={error} />;
   if (runs.length === 0 && tasks.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-sm">
+    <VStack gap={2} role="region" aria-label="运行与任务">
       {runs.length > 0 && (
-        <GlassPanel className="overflow-hidden rounded-window">
-          <Table>
+        <Card padding={3}>
+          <VStack gap={2}>
+            <Text type="label">Run</Text>
+          <table>
             <thead><tr><th>Run</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               {runs.map((r) => {
@@ -72,60 +77,62 @@ export function RunsPanel({ client, conversationId, refreshSignal = 0 }: Props):
                 const prov = provenance[r.id];
                 return [
                   <tr key={r.id}>
-                      <td><code className="text-xs text-gold-bright">{r.id.slice(-8)}</code></td>
+                      <td><Text type="code">{r.id.slice(-8)}</Text></td>
                       <td>
-                        <div className="flex flex-col">
-                          <span className={statusColor(r.status)}>{r.status}</span>
+                        <VStack gap={1}>
+                          <Badge label={r.status} variant={statusVariant(r.status)} />
                           {(r.trigger_type || r.execution_mode) && (
-                            <span className="text-xs text-text-muted">{r.trigger_type}/{r.execution_mode}</span>
+                            <Text type="supporting">{r.trigger_type}/{r.execution_mode}</Text>
                           )}
-                        </div>
+                        </VStack>
                       </td>
                       <td>
-                        <div className="flex gap-xs">
-                          <Button type="button" variant="ghost" size="sm"
+                        <HStack gap={1} wrap="wrap">
+                          <Button type="button" label={open ? "收起" : "追溯"} variant="secondary" size="sm"
                             aria-expanded={open}
-                            onClick={() => void toggle(r.id)}>
-                            {open ? "收起" : "追溯"}
-                          </Button>
+                            onClick={() => void toggle(r.id)} />
                           {r.status === "running" && (
-                            <Button type="button" variant="ghost" size="sm" onClick={async () => { await cancelRun(client, r.id); void load(); }}>取消</Button>
+                            <Button type="button" label="取消" variant="secondary" size="sm" onClick={async () => { await cancelRun(client, r.id); void load(); }} />
                           )}
                           {(r.status === "succeeded" || r.status === "completed" || r.status === "failed" || r.status === "cancelled") && (
-                            <Button type="button" variant="ghost" size="sm" onClick={async () => { await retryRun(client, r.id); void load(); }}>重试</Button>
+                            <Button type="button" label="重试" variant="secondary" size="sm" onClick={async () => { await retryRun(client, r.id); void load(); }} />
                           )}
-                        </div>
+                        </HStack>
                       </td>
                     </tr>,
                     open ? (
                       <tr key={`${r.id}-prov`}>
-                        <td colSpan={3} className="bg-surface-raised/40">
+                        <td colSpan={3}>
                           <ProvenanceDetail prov={prov} loading={!!loadingProv[r.id]} run={r} />
                         </td>
                       </tr>
                     ) : null,
                   ];
-              })}
+            })}
             </tbody>
-          </Table>
-        </GlassPanel>
+          </table>
+          </VStack>
+        </Card>
       )}
       {tasks.length > 0 && (
-        <GlassPanel className="overflow-hidden rounded-window">
-          <Table>
+        <Card padding={3}>
+          <VStack gap={2}>
+            <Text type="label">Task</Text>
+          <table>
             <thead><tr><th>Task</th><th>状态</th></tr></thead>
             <tbody>
               {tasks.map((t) => (
                 <tr key={t.id}>
-                  <td className="text-sm">{t.title}</td>
-                  <td><span className={statusColor(t.status)}>{t.status}</span></td>
+                  <td>{t.title}</td>
+                  <td><Badge label={t.status} variant={statusVariant(t.status)} /></td>
                 </tr>
               ))}
             </tbody>
-          </Table>
-        </GlassPanel>
+          </table>
+          </VStack>
+        </Card>
       )}
-    </div>
+    </VStack>
   );
 }
 
@@ -137,10 +144,10 @@ function ProvenanceDetail(
   },
 ): ReactNode {
   if (loading || prov === undefined) {
-    return <div className="px-md py-xs text-xs text-text-muted">加载追溯信息…</div>;
+    return <Text type="supporting" as="div">加载追溯信息…</Text>;
   }
   if (prov === null) {
-    return <div className="px-md py-xs text-xs text-text-muted">无追溯信息（未绑定专家快照）</div>;
+    return <Text type="supporting" as="div">无追溯信息（未绑定专家快照）</Text>;
   }
   const b = prov.binding;
   const c = prov.capability;
@@ -158,12 +165,12 @@ function ProvenanceDetail(
   ];
   void run;
   return (
-    <dl className="grid grid-cols-2 gap-x-md gap-y-xs px-md py-xs text-xs">
+    <dl>
       {kv.map(([k, v]) => (
-        <div key={k} className="contents">
-          <dt className="text-text-muted">{k}</dt>
-          <dd className="text-text-primary break-words">{v}</dd>
-        </div>
+        <HStack as="div" key={k} gap={2}>
+          <dt>{k}</dt>
+          <dd>{v}</dd>
+        </HStack>
       ))}
     </dl>
   );
