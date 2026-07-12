@@ -562,6 +562,7 @@ describe("MessageComposer 工具栏 + @提及 + 附件", () => {
     expect(screen.getByRole("button", { name: "召唤其他智能体" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "技能市场入口" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "截图工具" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/[📎🤖⚡📷]/u);
     // AITEAM-688：runtime/model 是部署级配置，私聊不再提供模型选择入口。
     expect(screen.queryByRole("button", { name: /当前模型/ })).toBeNull();
   });

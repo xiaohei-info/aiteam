@@ -29,10 +29,12 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
 import { Popover } from "@astryxdesign/core/Popover";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
+import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
 import { sendMessage, startRun } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
@@ -177,7 +179,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         tooltip="附件上传"
         size="sm"
         variant="ghost"
-        icon={<span aria-hidden="true">📎</span>}
+        icon={<Icon icon={AttachmentIcon} size="sm" />}
         isIconOnly
         onClick={openFilePicker}
         isDisabled={sending}
@@ -216,7 +218,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           tooltip="@提及：召唤其他智能体"
           size="sm"
           variant="ghost"
-          icon={<span aria-hidden="true">🤖</span>}
+          icon={<Icon icon={AgentIcon} size="sm" />}
           isIconOnly
           isDisabled={sending}
         />
@@ -247,7 +249,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           tooltip="/：使用技能"
           size="sm"
           variant="ghost"
-          icon={<span aria-hidden="true">⚡</span>}
+          icon={<Icon icon={SkillIcon} size="sm" />}
           isIconOnly
           isDisabled={sending}
         />
@@ -258,7 +260,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         tooltip="截图工具"
         size="sm"
         variant="ghost"
-        icon={<span aria-hidden="true">📷</span>}
+        icon={<Icon icon={ScreenshotIcon} size="sm" />}
         isIconOnly
         onClick={handleScreenshot}
         isDisabled={sending}
@@ -287,14 +289,14 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
                       gap={1}
                       align="center"
                     >
-                      <Badge label={f.name} icon={<span aria-hidden="true">📎</span>} />
+                      <Badge label={f.name} icon={<Icon icon={AttachmentIcon} size="xsm" />} />
                       <Button
                         label={`移除附件 ${f.name}`}
                         tooltip={`移除附件 ${f.name}`}
                         variant="ghost"
                         size="sm"
                         isIconOnly
-                        icon={<span aria-hidden="true">✕</span>}
+                        icon={<Icon icon="close" size="xsm" />}
                         aria-label={`移除附件 ${f.name}`}
                         onClick={() => removeAttachment(i)}
                       />
