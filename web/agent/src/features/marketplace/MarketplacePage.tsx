@@ -1,7 +1,16 @@
 /** P03 人才市场页 — 专家浏览/招募 + 发布需求/上架智能体入口（demo 对齐：AI-Team-Demo.html:1265-1266）。 */
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
-import { Button, GlassPanel, Input } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
 import { listTemplates, recruit } from "./useMarketplaceApi";
 import type { MarketTemplate } from "./types";
@@ -51,49 +60,46 @@ export function MarketplacePage() {
   }, [i18n]);
 
   return (
-    <section className="flex flex-col gap-md">
-      <div className="flex items-start justify-between gap-sm">
-        <h1 className="m-0 text-xl font-bold text-text-primary">人才市场</h1>
-        <div className="flex gap-sm">
-          <Button variant="ghost" onClick={() => void handlePublishRequirement()}>{i18n.t("agent.marketplace.publish_requirement")}</Button>
-          <Button variant="metal" onClick={() => void handleListMyAgent()}>{i18n.t("agent.marketplace.list_my_agent")}</Button>
-        </div>
-      </div>
+    <VStack gap={4} role="region" aria-label="人才市场">
+      <HStack justify="between" align="center" wrap="wrap">
+        <Heading level={1}>人才市场</Heading>
+        <HStack gap={1}>
+          <Button label={i18n.t("agent.marketplace.publish_requirement")} variant="secondary" onClick={() => void handlePublishRequirement()} />
+          <Button label={i18n.t("agent.marketplace.list_my_agent")} variant="primary" onClick={() => void handleListMyAgent()} />
+        </HStack>
+      </HStack>
 
-      <div className="flex gap-sm">
-        <Input placeholder="搜索专家名称、技能…" value={keyword} onChange={(e) => setKeyword((e.target as HTMLInputElement).value)} className="flex-1" />
-        <Button variant="ghost" onClick={() => void load()}>搜索</Button>
-      </div>
+      <HStack gap={2} align="end">
+        <TextInput label="搜索专家名称、技能" isLabelHidden placeholder="搜索专家名称、技能…" value={keyword} onChange={setKeyword} width="100%" />
+        <Button label="搜索" variant="secondary" onClick={() => void load()} />
+      </HStack>
 
-      <div className="flex flex-wrap gap-xs">
+      <HStack gap={1} wrap="wrap">
         {categories.map((c) => (
-          <Button key={c} variant={category === c ? "metal" : "ghost"} size="sm" onClick={() => setCategory(c)}>{c}</Button>
+          <Button key={c} label={c} variant={category === c ? "primary" : "secondary"} size="sm" onClick={() => setCategory(c)} />
         ))}
-      </div>
+      </HStack>
 
-      {actionError && <p className="m-0 text-sm text-danger">{actionError}</p>}
-      {actionInfo && <p className="m-0 rounded-md border border-info/30 bg-info/10 px-sm py-sm text-sm text-info">{actionInfo}</p>}
+      {actionError && <Banner status="error" title={actionError} />}
+      {actionInfo && <Banner status="info" title={actionInfo} />}
 
-      {loading ? <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">加载中…</GlassPanel> :
-        error ? <GlassPanel className="rounded-window border border-danger/30 p-lg text-sm text-danger">{error}</GlassPanel> :
-        templates.length === 0 ? <GlassPanel className="rounded-window p-lg text-sm text-text-secondary">暂无可招募专家</GlassPanel> :
-        <div className="grid grid-cols-3 gap-md">
+      {loading ? <Banner status="info" title="加载中…" /> :
+        error ? <Banner status="error" title={error} /> :
+        templates.length === 0 ? <EmptyState title="暂无可招募专家" /> :
+        <HStack gap={3} wrap="wrap">
           {templates.map((t) => (
-            <GlassPanel key={t.template_id} className="rounded-window p-md">
-              <div className="flex items-start justify-between">
-                <div><p className="m-0 text-sm font-bold text-text-primary">{t.display_name}</p><p className="m-0 mt-xs text-xs text-text-muted">{t.category} · {t.model_name} · {t.skills_count} Skills</p></div>
-              </div>
-              {t.tags.length > 0 && <div className="mt-xs flex flex-wrap gap-xs">{t.tags.slice(0, 3).map((tag) => <span key={tag} className="rounded-pill bg-gold/10 px-sm py-0.5 text-xs text-gold">{tag}</span>)}</div>}
-              <p className="m-0 mt-xs text-xs text-text-muted">已有 {t.recruit_count} 家企业招募</p>
-              <div className="mt-sm">
-                {t.is_recruited ? <span className="text-sm text-success">✓ 已招募</span> :
-                  <Button variant="metal" size="sm" disabled={recruiting === t.template_id} onClick={() => void handleRecruit(t.template_id)}>
-                    {recruiting === t.template_id ? "招募中…" : "招募"}
-                  </Button>}
-              </div>
-            </GlassPanel>
+            <Card key={t.template_id} padding={3} width={280}>
+              <VStack gap={2}>
+                <Text weight="semibold">{t.display_name}</Text>
+                <Text type="supporting">{t.category} · {t.model_name} · {t.skills_count} Skills</Text>
+                {t.tags.length > 0 && <HStack gap={1} wrap="wrap">{t.tags.slice(0, 3).map((tag) => <Badge key={tag} label={tag} />)}</HStack>}
+                <Text type="supporting">已有 {t.recruit_count} 家企业招募</Text>
+                {t.is_recruited ? <Badge variant="success" label="✓ 已招募" /> :
+                  <Button label="招募" variant="primary" size="sm" isLoading={recruiting === t.template_id} onClick={() => void handleRecruit(t.template_id)} />}
+              </VStack>
+            </Card>
           ))}
-        </div>}
-    </section>
+        </HStack>}
+    </VStack>
   );
 }
