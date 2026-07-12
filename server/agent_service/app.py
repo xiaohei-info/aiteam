@@ -42,6 +42,7 @@ from agent_service.grants.store import (
     SqliteProjectionRepository,
     SqliteSolutionProjectionRepository,
 )
+from agent_service.capabilities.skill_cache import SkillCache
 from agent_service.loop.factory import build_loop_service
 from agent_service.loop.routes import build_loop_router
 from agent_gateway.runtime_readiness import check_runtime_readiness
@@ -241,6 +242,9 @@ def build_app(
     shared_solutions: SolutionProjectionRepository = (
         SqliteSolutionProjectionRepository(db) if db else InMemorySolutionProjectionRepository()
     )
+    # M2：grants sync 与 Gateway per-run 投影必须共享同一个本地技能缓存；否则 Manager 已
+    # 下发的 SkillPackage 不会被后续真实 runtime 找到。
+    skill_cache = SkillCache() if settings.agent_runtime else None
     mainline = mainline_service or build_mainline_service(
         db_path=settings.agent_db_path,
         runtime_selection=settings.agent_runtime,
@@ -248,6 +252,7 @@ def build_app(
         runtime_env_passthrough=settings.agent_runtime_env_passthrough,
         production=settings.is_production,
         solutions=shared_solutions,
+        skill_cache=skill_cache,
     )
     def _snapshot_for_run(employee_id, snapshot_version):
         if not employee_id:
@@ -275,7 +280,7 @@ def build_app(
     app.include_router(build_usage_router(usage_service))
     grants_service = build_grants_service(
         client=grants_client or _build_grants_client(login_service.current_token), db=db, projections=projections,
-        solutions=shared_solutions,
+        solutions=shared_solutions, skill_cache=skill_cache,
     )
     # AITEAM-689 (M1)：专家快照驱动统一执行编排。注入 mainline 后私聊 start_run 自动
     # 据 entry_employee_id 派生 RunSpec；注入 group_mgmt 后群聊 @ 编排按被 @ 专家派生。

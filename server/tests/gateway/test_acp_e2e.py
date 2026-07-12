@@ -8,12 +8,21 @@ import asyncio
 import sys
 import types
 
-from agent_gateway.acp_executor import AcpClientExecutor, _text_of, map_acp_update, _user_text
+from agent_gateway.acp_executor import (
+    AcpClientExecutor,
+    _acp_mcp_servers,
+    _prepare_hermes_skill_home,
+    _prompt_text,
+    _text_of,
+    map_acp_update,
+    _user_text,
+)
+from agent_gateway.sandbox import SandboxPolicy
 from shared.contracts.gateway import Driver, RuntimeCapability
-from shared.contracts.runspec import AgentRunRequest, RunSpec
+from shared.contracts.runspec import AgentRunRequest, McpServerConfig, RunSpec
 
 _FAKE_ACP_AGENT = r"""
-import sys, json
+import os, sys, json
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
 
@@ -61,6 +70,11 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": mid, "result": {}})
     elif m == "session/prompt":
         sid = msg.get("params", {}).get("sessionId", "acp-fake-1")
+        if mode == "provider_env":
+            _session = _session_update(sid, _text_chunk(os.environ.get("RUNTIME_PROVIDER_KEY", "missing")))
+            notify("session/update", _session)
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+            continue
         notify("session/update", _session_update(sid, _text_chunk("Hello ")))
         notify("session/update", _session_update(sid, _text_chunk("world")))
         notify("session/update", {
@@ -272,6 +286,52 @@ def test_user_text_empty_messages():
     assert _user_text(req) == ""
 
 
+def test_prompt_text_keeps_snapshot_persona_separate_from_user_input():
+    req = _req(messages=[{"role": "user", "content": "回答 1+1"}])
+    req.run_spec = RunSpec(system_prompt="你是严谨的财务专家")
+
+    assert _prompt_text(req) == (
+        "【专家执行指令（来自企业已授权快照，必须优先遵守）】\n"
+        "你是严谨的财务专家\n\n"
+        "【用户请求】\n回答 1+1"
+    )
+
+
+def test_acp_mcp_servers_maps_stdio_and_http_configs():
+    servers = _acp_mcp_servers([
+        McpServerConfig(
+            name="local-memory", command="npx", args=["--yes", "memory-server"],
+            env={"MEMORY_DIR": "/tmp/memory"},
+        ),
+        McpServerConfig(name="remote-search", url="https://mcp.example.test"),
+    ])
+
+    stdio, http = servers
+    assert stdio.name == "local-memory"
+    assert stdio.command == "npx"
+    assert stdio.args == ["--yes", "memory-server"]
+    assert [(item.name, item.value) for item in stdio.env] == [("MEMORY_DIR", "/tmp/memory")]
+    assert http.name == "remote-search"
+    assert http.url == "https://mcp.example.test"
+
+
+def test_hermes_skill_home_overlay_only_writes_run_home(tmp_path):
+    source_home = tmp_path / "source-home"
+    source_home.mkdir()
+    source_config = source_home / "config.yaml"
+    source_config.write_text("model:\n  default: test\nskills:\n  external_dirs:\n  - /shared\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    env = {"HERMES_HOME": str(source_home)}
+
+    _prepare_hermes_skill_home(str(run_dir), env)
+
+    overlay = (run_dir / ".aiteam-hermes-home" / "config.yaml").read_text()
+    assert str(run_dir / ".agent_context" / "skills") in overlay
+    assert "/shared" in overlay
+    assert source_config.read_text() == "model:\n  default: test\nskills:\n  external_dirs:\n  - /shared\n"
+
+
 # ---- AcpClientExecutor.execute — e2e with fake ACP agent --------------------
 
 
@@ -317,6 +377,18 @@ def test_execute_with_model_switches():
     events, result = _run(_AcpDriver("model"), _req(model="gpt-5.4"))
     assert result.success is True
     assert result.session_id == "acp-fake-1"
+
+
+def test_execute_sandbox_injects_provider_env(tmp_path):
+    request = _req()
+    request.provider_env = {"RUNTIME_PROVIDER_KEY": "provider-secret"}
+    events, result = _run(
+        _AcpDriver("provider_env"),
+        request,
+        AcpClientExecutor(sandbox=SandboxPolicy(runs_root=str(tmp_path))),
+    )
+    assert result.success is True
+    assert [event.payload["text"] for event in events if event.type == "text_delta"] == ["provider-secret"]
 
 
 def test_execute_set_model_error_is_swallowed():
@@ -391,3 +463,20 @@ def test_apply_model_no_models_attr():
 
     sess = types.SimpleNamespace(models=None)
     asyncio.run(AcpClientExecutor._apply_model(NoopConn(), sess, "s1", "m1"))
+
+
+def test_apply_model_keeps_current_custom_provider_for_same_bare_model():
+    calls = []
+
+    class Conn:
+        async def set_session_model(self, *, session_id, model_id):
+            calls.append((session_id, model_id))
+
+    session = types.SimpleNamespace(
+        models=types.SimpleNamespace(
+            current_model_id="custom:minimax-m3",
+            available_models=[types.SimpleNamespace(model_id="openrouter/minimax-m3", name="minimax-m3")],
+        )
+    )
+    asyncio.run(AcpClientExecutor._apply_model(Conn(), session, "s1", "minimax-m3"))
+    assert calls == []

@@ -290,6 +290,9 @@ class CodexAppServerExecutor(Executor):
         if self._sandbox is not None:
             cwd = prepare_run_dir(self._sandbox, run_id)
             env = build_env(self._sandbox)
+            # provider_ref 已在业务层解析为最小凭据集合；Codex app-server 子进程同样必须
+            # 显式注入，避免沙箱脱敏后丢失运行所需的 provider key（D18）。
+            env.update(request.provider_env)
 
         usage_holder: dict = {}
         terminal: dict = {"type": None, "error": None}

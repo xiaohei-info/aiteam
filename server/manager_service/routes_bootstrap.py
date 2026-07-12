@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request, status
 
 from shared.contracts.crosstier import OwnerBootstrapSync
 from shared.contracts.envelope import Envelope
-from shared.errors import Conflict, NotFound
+from shared.errors import NotFound
 from shared.service_token import verify_service_token
 
 from .exceptions import ManagerAdminDbNotConfigured
@@ -59,14 +59,10 @@ def owner_bootstrap(
         cache = build_auth_service(db_url, admin_dsn=admin_db_url)
         request.app.state._auth_service = cache
 
-    try:
-        user_id = cache.provision_owner(
-            body.tenant_id,
-            phone=body.owner_phone,
-            bootstrap_password=body.bootstrap_secret,  # 明文传入，provision_owner 内单次 scrypt
-        )
-    except Conflict:
-        # 幂等：账号已存在（重放同 key），视为成功。
-        return Envelope[dict](data={"tenant_id": body.tenant_id, "idempotent": True})
+    user_id = cache.sync_owner_bootstrap(
+        body.tenant_id,
+        phone=body.owner_phone,
+        bootstrap_password=body.bootstrap_secret,  # 明文传入，Manager 内单次 scrypt
+    )
 
     return Envelope[dict](data={"tenant_id": body.tenant_id, "user_id": user_id})

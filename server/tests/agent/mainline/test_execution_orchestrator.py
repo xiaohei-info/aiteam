@@ -154,9 +154,9 @@ def _make_projection(emp_id="emp-1", version="v2") -> LoadedExpertProjection:
     )
 
 
-def _orchestrator(emp_id="emp-1", version="v2"):
+def _orchestrator(emp_id="emp-1", version="v2", provider_ref="relay"):
     grants = FrozenGrantsClient()
-    snap = _snapshot(employee_id=emp_id, version=version)
+    snap = _snapshot(employee_id=emp_id, version=version, provider_ref=provider_ref)
     grants.snapshots[emp_id] = snap
     gs = FakeGrantsService()
     gs.client.snapshots[emp_id] = snap
@@ -177,7 +177,7 @@ class _Conv:
 
 
 def test_prepare_private_run_online_freezes_and_marks_frozen():
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     prepared = orch.prepare_private_run(_Conv(entry_employee_id="emp-1"), tenant_id="t1")
     assert prepared.run_spec.system_prompt == "严谨后端工程师"
     assert prepared.run_spec.model == "hermes-default"
@@ -190,7 +190,7 @@ def test_prepare_private_run_online_freezes_and_marks_frozen():
 
 
 def test_prepare_private_run_falls_back_when_manager_unreachable():
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     # 预先冻结一个旧快照作为 fallback
     old = _snapshot(employee_id="emp-1", version="v1", snapshot_version="snap-5", persona="旧版persona")
     gs.snapshots.freeze(old)
@@ -205,7 +205,7 @@ def test_prepare_private_run_falls_back_when_manager_unreachable():
 def test_prepare_private_run_raises_when_no_both_online_and_frozen():
     """在线不可达且无任何已冻结快照 → 明确报错（无配置错误才走 fallback）。"""
     from agent_service.mainline.execution_orchestrator import NoSnapshotAvailable
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     gs.client.unreachable = True
     # 不预冻结
     with pytest.raises(NoSnapshotAvailable):
@@ -221,7 +221,7 @@ def test_prepare_private_run_requires_employee_binding():
 
 
 def test_prepare_group_run_derives_per_mentioned_expert():
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     # 第二个专家
     snap2 = _snapshot(employee_id="emp-2", version="v3", snapshot_version="snap-12", persona="前端专家", model="gpt-5")
     gs.client.snapshots["emp-2"] = snap2
@@ -238,7 +238,7 @@ def test_start_run_auto_derives_for_private_chat_when_orchestrator_present():
     from agent_service.mainline.factory import build_mainline_service
     from agent_service.mainline.models import RunStatus
 
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     svc = build_mainline_service(orchestrator=orch)
     conv = svc.create_conversation(entry_employee_id="emp-1", title="与专家对话")
     run = asyncio.run(svc.start_run(conv.id))
@@ -253,9 +253,9 @@ def test_private_chat_auto_derive_end_to_end_with_fallback():
     from agent_service.mainline.factory import build_mainline_service
     from agent_service.mainline.models import RunStatus
 
-    orch, gs = _orchestrator()
+    orch, gs = _orchestrator(provider_ref=None)
     # 预冻结一个快照用作 fallback
-    fb = _snapshot(employee_id="emp-1", version="v0", snapshot_version="snap-fb", persona="fallback persona")
+    fb = _snapshot(employee_id="emp-1", version="v0", snapshot_version="snap-fb", persona="fallback persona", provider_ref=None)
     gs.snapshots.freeze(fb)
     gs.client.unreachable = True
 

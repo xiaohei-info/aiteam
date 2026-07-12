@@ -217,6 +217,7 @@ def build_mainline_router(
             task_id=req.task_id,
             run_spec=req.run_spec,
             tenant_id=claims.tenant_id if claims is not None else None,
+            member_id=claims.user_id if claims is not None else None,
             trigger_type=RunTriggerType(req.trigger_type) if req.trigger_type else None,
             execution_mode=RunExecutionMode(req.execution_mode) if req.execution_mode else None,
         )
@@ -252,7 +253,14 @@ def build_mainline_router(
         # 群聊编排只允许群会话：私聊(entry_employee_id 非空)不可走 group-dispatch，防会话边界串线。
         if getattr(conv, "entry_employee_id", None):
             raise Conflict("group-dispatch 仅支持群聊会话；私聊会话不允许多专家群聊编排")
-        group = GroupChatService(service, experts=req.experts)
+        claims = identity_provider() if identity_provider is not None else None
+        group = GroupChatService(
+            service,
+            experts=req.experts,
+            orchestrator=service.orchestrator,
+            tenant_id=claims.tenant_id if claims is not None else "local",
+            member_id=claims.user_id if claims is not None else "local",
+        )
         result = await group.post_and_dispatch(conversation_id, req.text)
         return Envelope[DispatchResult](data=result)
 

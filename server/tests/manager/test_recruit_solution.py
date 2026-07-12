@@ -458,7 +458,7 @@ def test_apply_solution_expands_experts_and_instance():
 
 
 def test_apply_solution_applies_default_grants_from_package():
-    """F07：请求未指定授权时，用方案包 default_grants 展开到每个专家（D12）。"""
+    """F07：请求未指定授权时，方案与展开专家均继承 default_grants（D12）。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
     svc, _, grant, _, _ = _build_service(catalog)
@@ -470,6 +470,8 @@ def test_apply_solution_applies_default_grants_from_package():
     for eid in result.solution_instance.expert_employee_ids:
         assert ("expert", eid) in grants
         assert grants[("expert", eid)].department_ids == ["dept-default"]
+    solution_grant = grants[("solution", result.solution_instance.id)]
+    assert solution_grant.department_ids == ["dept-default"]
 
 
 def test_apply_solution_request_grants_override_package_defaults():
@@ -487,6 +489,9 @@ def test_apply_solution_request_grants_override_package_defaults():
     for eid in result.solution_instance.expert_employee_ids:
         assert grants[("expert", eid)].department_ids == ["dept-req"]
         assert grants[("expert", eid)].member_ids == ["mem-req"]
+    solution_grant = grants[("solution", result.solution_instance.id)]
+    assert solution_grant.department_ids == ["dept-req"]
+    assert solution_grant.member_ids == ["mem-req"]
 
 
 def test_apply_solution_conflict_when_already_applied():

@@ -152,6 +152,7 @@ class ExecutionOrchestrator:
         conversation: _ConversationLike,
         *,
         tenant_id: str | None = None,
+        member_id: str | None = None,
     ) -> PreparedRun:
         """私聊主链收口（M1 #3）：据会话 entry_employee_id 派生 RunSpec + 绑定。"""
         employee_id = (conversation.entry_employee_id or "").strip()
@@ -159,24 +160,32 @@ class ExecutionOrchestrator:
             raise NoSnapshotAvailable(
                 "private run requires a bound expert (conversation.entry_employee_id)"
             )
-        return self._prepare_one(employee_id, tenant_id=tenant_id or self._tenant_id)
+        return self._prepare_one(
+            employee_id,
+            tenant_id=tenant_id or self._tenant_id,
+            member_id=member_id or self._member_id,
+        )
 
     def prepare_group_run(
         self,
         mentioned_employee_ids: list[str],
         *,
         tenant_id: str | None = None,
+        member_id: str | None = None,
     ) -> list[PreparedRun]:
         """群聊主链收口（M1 #4）：按被 @ 专家逐个派生 RunSpec + 绑定。"""
         effective_tenant = tenant_id or self._tenant_id
-        return [self._prepare_one(eid.strip(), tenant_id=effective_tenant)
+        effective_member = member_id or self._member_id
+        return [self._prepare_one(eid.strip(), tenant_id=effective_tenant, member_id=effective_member)
                 for eid in mentioned_employee_ids if eid and eid.strip()]
 
-    def _prepare_one(self, employee_id: str, *, tenant_id: str) -> PreparedRun:
+    def _prepare_one(self, employee_id: str, *, tenant_id: str, member_id: str) -> PreparedRun:
         projection = self._projections.get(employee_id)
         version = projection.version if projection else None
 
-        snapshot, source = self._resolve_snapshot(employee_id, version=version)
+        snapshot, source = self._resolve_snapshot(
+            employee_id, version=version, tenant_id=tenant_id, member_id=member_id
+        )
         derivation = snapshot_to_runspec(snapshot)
 
         # M3：把 knowledge/memory/connector refs 装配到 RunSpec.mcp_config。
@@ -204,13 +213,13 @@ class ExecutionOrchestrator:
         )
 
     def _resolve_snapshot(
-        self, employee_id: str, version: str | None
+        self, employee_id: str, version: str | None, *, tenant_id: str, member_id: str
     ) -> tuple[EmployeeExecutionSnapshot, str]:
         """在线冻结优先；不可达则 fallback 到最近已冻结快照（D14）。"""
         try:
             snapshot = self._grants.freeze_snapshot(
-                tenant_id=self._tenant_id,
-                member_id=self._member_id,
+                tenant_id=tenant_id,
+                member_id=member_id,
                 employee_id=employee_id,
                 employee_version=version,
             )

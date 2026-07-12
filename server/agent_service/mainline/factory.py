@@ -14,6 +14,7 @@ import os
 import tempfile
 
 from agent_gateway.factory import build_runner
+from ..capabilities.registry import CapabilityRegistry
 from ..capabilities.skill_cache import SkillCache
 from ..grants.factory import build_grants_service
 from agent_gateway.runtime_readiness import check_runtime_readiness
@@ -149,5 +150,5 @@ def build_execution_orchestrator(
     return ExecutionOrchestrator(
         grants=grants, projections=projections,
         tenant_id=tenant_id, member_id=member_id,
+        capability_registry=CapabilityRegistry.default(),
     )
-

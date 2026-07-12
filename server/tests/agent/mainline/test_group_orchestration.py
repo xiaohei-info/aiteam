@@ -12,8 +12,9 @@ import asyncio
 import pytest
 
 from agent_service.mainline.factory import build_mainline_service
-from agent_service.mainline.group import GroupChatService, GroupExpert
+from agent_service.mainline.group import GroupChatService, GroupExpert, _inject_brief
 from agent_service.mainline.models import RunStatus
+from shared.contracts.runspec import RunSpec
 
 
 def _experts():
@@ -84,6 +85,26 @@ def test_orchestrated_brief_injected_into_every_run_spec():
     for p in prompts:
         assert "编排规则" in p, p
         assert brief in p, p
+
+
+def test_inject_brief_preserves_provider_mapping_fields():
+    """编排只应覆盖提示词，不能丢失 D18 的 provider 映射或 A 类能力配置。"""
+    original = RunSpec(
+        system_prompt="原始角色",
+        model="minimax-m3",
+        provider_ref="openai",
+        thinking_level="basic",
+        timeout_seconds=90,
+        mcp_config=[{"name": "local-kb"}],
+    )
+
+    injected = _inject_brief(original, "先分析再汇总。")
+
+    assert injected.system_prompt != original.system_prompt
+    assert injected.provider_ref == "openai"
+    assert injected.thinking_level == "basic"
+    assert injected.timeout_seconds == 90
+    assert injected.mcp_config == original.mcp_config
 
 
 def test_free_mode_unchanged_mention_only():

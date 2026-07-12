@@ -12,6 +12,7 @@ import pytest
 
 from shared.errors import Unauthorized, ValidationProblem
 from manager_service.auth_service import AuthService, LoginInput, OwnerResetInput
+from shared.contracts.enums import AuthProvider, EnterpriseRole
 
 
 def _svc():
@@ -75,3 +76,24 @@ def test_login_accepts_valid_uuid_tenant_id():
         ))
     assert isinstance(exc.value, Unauthorized)
     svc._repo.find_identity.assert_called_once()
+
+
+def test_sync_owner_bootstrap_replaces_existing_owner_credential():
+    """Operator 重置 bootstrap 时必须覆盖已有 owner，而不能静默吞掉冲突。"""
+    svc = _svc()
+    existing = MagicMock(user_id="owner-1")
+    svc._repo.find_identity.return_value = existing
+
+    user_id = svc.sync_owner_bootstrap(
+        "550e8400-e29b-41d4-a716-446655440000",
+        phone="13800138000",
+        bootstrap_password="Boot-Pass-1",
+    )
+
+    assert user_id == "owner-1"
+    svc._repo.update_secret.assert_called_once()
+    args, kwargs = svc._repo.update_secret.call_args
+    assert kwargs["provider"] == AuthProvider.PHONE
+    assert kwargs["external_id"] == "13800138000"
+    assert kwargs["must_reset"] is True
+    assert args[0].roles == [EnterpriseRole.OWNER.value]

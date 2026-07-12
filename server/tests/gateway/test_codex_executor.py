@@ -12,6 +12,7 @@ from agent_gateway.codex_executor import (
     _effort_of,
     map_codex_notification,
 )
+from agent_gateway.sandbox import SandboxPolicy
 from shared.contracts.gateway import Driver, RuntimeCapability
 from shared.contracts.runspec import AgentRunRequest, RunSpec
 
@@ -136,7 +137,7 @@ def test_thread_params_inject_system_prompt_and_never_approval():
 # fake codex app-server：真子进程，按真实协议 line-delimited JSON-RPC 应答。
 # argv[1] 为 mode：ok（正常一轮）| error（发 error 终态）| hang（不自然完成，等 turn/interrupt）。
 _FAKE_SERVER = r"""
-import sys, json
+import os, sys, json
 mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
 def send(o):
     sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
@@ -156,6 +157,10 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": mid, "result": {"thread": {"id": "th-fake"}}})
     elif m == "turn/start":
         send({"jsonrpc": "2.0", "id": mid, "result": {"turn": {"id": "tn-fake"}}})
+        if mode == "provider_env":
+            notify("item/agentMessage/delta", {"delta": os.environ.get("RUNTIME_PROVIDER_KEY", "missing")})
+            notify("turn/completed", {"threadId": "th-fake", "turn": {"id": "tn-fake", "status": "completed", "error": None}})
+            continue
         if mode == "error":
             notify("error", {"message": "boom from fake"})
             continue
@@ -235,6 +240,18 @@ def test_execute_spawn_failure_returns_error_not_crash():
     assert result.success is False
     assert "spawn failed" in (result.error or "")
     assert events[-1].type == "error"
+
+
+def test_execute_sandbox_injects_provider_env(tmp_path):
+    request = _req()
+    request.provider_env = {"RUNTIME_PROVIDER_KEY": "provider-secret"}
+    events, result = _run(
+        _FakeDriver("provider_env"),
+        request,
+        CodexAppServerExecutor(sandbox=SandboxPolicy(runs_root=str(tmp_path))),
+    )
+    assert result.success is True
+    assert [event.payload["text"] for event in events if event.type == "text_delta"] == ["provider-secret"]
 
 
 def test_cancel_mid_run_terminates_and_emits_cancelled():

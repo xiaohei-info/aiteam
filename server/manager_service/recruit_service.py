@@ -338,7 +338,7 @@ class RecruitService:
                 )
             )
 
-        # 4) 落方案默认授权（D12）：方案包默认授权或请求指定授权 → 展开到每个专家的 member_grant。
+        # 4) 计算方案默认授权（D12）：方案包默认授权或请求指定授权。
         grants_applied = False
         grant_dept_ids = list(req.department_ids)
         grant_member_ids = list(req.member_ids)
@@ -352,7 +352,6 @@ class RecruitService:
                     resource_type="expert", resource_id=employee_id,
                     department_ids=grant_dept_ids, member_ids=grant_member_ids,
                 )
-            grants_applied = True
 
         # 5) 建 solution_instance（本 tenant 展开后的真相）。
         instance = self._recruit.create_solution_instance(
@@ -369,6 +368,16 @@ class RecruitService:
             default_grants_meta=package.default_grants,
             template_meta=package.model_dump(mode="json"),
         )
+
+        # 方案本身也必须被授权：Agent 的方案投影按 ``resource_type=solution`` 裁剪，
+        # 仅授权展开后的 expert 会让成员能私聊专家、却无法从该方案创建群聊。
+        if grant_dept_ids or grant_member_ids:
+            _upsert_grant(
+                self._grants, ctx,
+                resource_type="solution", resource_id=instance.id,
+                department_ids=grant_dept_ids, member_ids=grant_member_ids,
+            )
+            grants_applied = True
 
         # 6) 审计。
         self._recruit.append_recruit_event(

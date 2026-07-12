@@ -27,6 +27,7 @@ vi.mock("../group/useGroupApi", () => ({
 
 const mockedList = listLoadedExperts as unknown as ReturnType<typeof vi.fn>;
 const mockedSync = syncGrants as unknown as ReturnType<typeof vi.fn>;
+const mockedReadiness = getReadinessReport as unknown as ReturnType<typeof vi.fn>;
 
 const validClaims = {
   user_id: "u-1",
@@ -45,6 +46,8 @@ beforeEach(() => {
   localStorage.clear();
   mockedSync.mockReset();
   mockedList.mockReset();
+  mockedReadiness.mockReset();
+  mockedReadiness.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -105,6 +108,34 @@ describe("RosterPicker - Escape 关闭", () => {
 });
 
 describe("RosterPicker - 配置完整度防呆（req 2）", () => {
+  it("仅缺首次冻结快照时允许在线首跑", async () => {
+    mockedSync.mockResolvedValueOnce({ ok: true, upserted: 0, revoked: 0 });
+    mockedList.mockResolvedValueOnce([
+      {
+        employee_id: "e1",
+        tenant_id: "t1",
+        version: "v1",
+        handle: "首跑专家",
+        display_name: "首跑专家",
+        model_policy: { model: "gpt-5", provider_ref: "relay", thinking_level: "deep" },
+        revoked: false,
+      },
+    ]);
+    mockedReadiness.mockResolvedValueOnce({
+      runtime: "ready",
+      experts: [{
+        employee_id: "e1", display_name: "首跑专家", handle: "首跑专家",
+        available: false, runtime: "blocked", provider: "blocked", skills: [], capabilities: [],
+        reasons: ["专家 首跑专家 没有已冻结快照（Manager 未拉取/未装载）"],
+      }],
+    });
+
+    renderPicker();
+
+    expect(await screen.findByRole("button", { name: /首跑专家/ })).toBeEnabled();
+    expect(screen.getByText("首次运行将冻结快照")).toBeInTheDocument();
+  });
+
   it("model 与 provider_ref 齐全时可选", async () => {
     mockedSync.mockResolvedValueOnce({ ok: true, upserted: 0, revoked: 0 });
     mockedList.mockResolvedValueOnce([

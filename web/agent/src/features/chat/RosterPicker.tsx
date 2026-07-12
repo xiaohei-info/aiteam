@@ -27,6 +27,19 @@ export interface RosterPickerProps {
 
 const isConfigured = (expert: LoadedExpertProjection) => !!(expert.model_policy?.model && expert.model_policy?.provider_ref);
 
+/**
+ * 执行快照在首次提交 Run 时才在线拉取并冻结；没有本地快照只代表不能离线回退，
+ * 不能在在线首跑前把专家选择入口封死。
+ */
+function needsInitialSnapshot(report: ExpertReadiness | undefined): boolean {
+  return Boolean(
+    report
+    && !report.available
+    && report.reasons.length > 0
+    && report.reasons.every((reason) => reason.includes("没有已冻结快照")),
+  );
+}
+
 export function RosterPicker({ client, onPick, onCancel, busy = false, error }: RosterPickerProps): React.ReactNode {
   const { session } = useApp();
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
@@ -105,7 +118,8 @@ export function RosterPicker({ client, onPick, onCancel, busy = false, error }: 
             {experts.map((expert) => {
               const configured = isConfigured(expert);
               const report = readiness[expert.employee_id] ?? undefined;
-              const blocked = report?.available === false;
+              const waitingForFirstSnapshot = needsInitialSnapshot(report);
+              const blocked = report?.available === false && !waitingForFirstSnapshot;
               const disabled = busy || !configured || blocked;
               const reason = blocked ? report?.reasons?.join("；") ?? "专家当前不可用" : undefined;
               return (
@@ -117,6 +131,7 @@ export function RosterPicker({ client, onPick, onCancel, busy = false, error }: 
                     </HStack>
                     <HStack gap={1} wrap="wrap">
                       {!configured ? <Badge label="待 Manager 配置" variant="warning" /> : null}
+                      {waitingForFirstSnapshot ? <Badge label="首次运行将冻结快照" variant="info" /> : null}
                       {expert.runtime_binding ? <Badge label={expert.runtime_binding} variant="neutral" /> : null}
                       {reason ? <Text type="supporting">{reason}</Text> : null}
                     </HStack>

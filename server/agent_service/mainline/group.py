@@ -115,11 +115,11 @@ def _inject_brief(spec: RunSpec, brief: str) -> RunSpec:
     """把编排指令注入 RunSpec.system_prompt（parity Manager 侧 planner 注入策略）。"""
     text = (brief or "").strip()
     if not text:
-        return RunSpec(system_prompt=spec.system_prompt, model=spec.model)
+        return spec
     header = "【编排规则（必须严格遵守，优先级高于下方默认提示）】\n" f"{text}"
     base = (spec.system_prompt or "").strip()
     merged = f"{header}\n\n{base}" if base else header
-    return RunSpec(system_prompt=merged, model=spec.model)
+    return spec.model_copy(update={"system_prompt": merged})
 
 
 def _extract_json(text: str):
@@ -187,12 +187,14 @@ class GroupChatService:
         experts: list[GroupExpert],
         orchestrator: ExecutionOrchestrator | None = None,
         tenant_id: str = "local",
+        member_id: str = "local",
     ) -> None:
         self._mainline = mainline
         self._roster: dict[str, GroupExpert] = {e.handle: e for e in experts}
         # 专家快照驱动统一执行编排（AITEAM-689 / M1）；在场时按被 @ 专家逐个派生。
         self._orchestrator = orchestrator
         self._tenant_id = tenant_id
+        self._member_id = member_id
 
     @property
     def mainline(self) -> MainlineService:
@@ -240,12 +242,25 @@ class GroupChatService:
         for e in experts:
             if self._orchestrator is not None and (e.employee_id or "").strip():
                 prepared = self._orchestrator.prepare_private_run(
-                    _BoundConversation(e.employee_id), tenant_id=self._tenant_id
+                    _BoundConversation(e.employee_id),
+                    tenant_id=self._tenant_id,
+                    member_id=self._member_id,
                 )
                 items.append((_RunKey(e.handle), prepared.run_spec, prepared.binding, None))
             else:
                 items.append((_RunKey(e.handle), e.to_run_spec(), None, None))
         return items
+
+    def _prepare_expert_spec(self, expert: GroupExpert):
+        """从本地专家快照派生 RunSpec；无编排器时保留旧的 roster 兼容路径。"""
+        if self._orchestrator is not None and (expert.employee_id or "").strip():
+            prepared = self._orchestrator.prepare_private_run(
+                _BoundConversation(expert.employee_id),
+                tenant_id=self._tenant_id,
+                member_id=self._member_id,
+            )
+            return prepared.run_spec, prepared.binding
+        return expert.to_run_spec(), None
 
     async def _dispatch_orchestrated(self, conv, user_text: str) -> DispatchResult:
         """规则编排：planner 拆解任务树 -> 分专家并行 -> 聚合。
@@ -286,19 +301,30 @@ class GroupChatService:
                 "只输出 JSON: {\"subtasks\":[{\"title\",\"description\",\"assignee\",\"depends_on\":[]}]}"
             )
             # 固定编排：syst 级提示词 = 方案自带的 planner prompt；自由协作回退默认。
-            planner = GroupExpert(
-                handle=_SYNTHETIC_PLANNER_HANDLE,
-                system_prompt=sol_planner or default_prompt,
+            # 方案群聊的 planner 也必须继承某个已授权专家的运行时映射；不能构造
+            # 空 RunSpec，否则 provider_ref 会丢失，运行期无法注入最小凭据。
+            planner = (
+                self._roster[sorted(allowed_handles)[0]]
+                if self._orchestrator is not None and allowed_handles
+                else GroupExpert(
+                    handle=_SYNTHETIC_PLANNER_HANDLE,
+                    system_prompt=sol_planner or default_prompt,
+                )
             )
             executor_handles = sorted(allowed_handles)
 
         # 1) planner 拆解：固定编排直接用方案 prompt（叠加用户任务上下文）；自由协作走 brief。
         planner_rule = sol_planner if fixed else brief
+        planner_base_spec, planner_binding = self._prepare_expert_spec(planner)
         planner_spec = _inject_brief(
-            planner.to_run_spec(),
+            planner_base_spec,
             planner_rule + ("\n\n用户任务：" + user_text if user_text else planner_rule),
         )
-        planner_run = await self._mainline.start_run(conv.id, run_spec=planner_spec)
+        planner_kwargs = {"run_spec": planner_spec}
+        if planner_binding is not None:
+            from .service import _binding_view_to_run_binding
+            planner_kwargs["run_binding"] = _binding_view_to_run_binding(planner_binding)
+        planner_run = await self._mainline.start_run(conv.id, **planner_kwargs)
         plan_text = self._run_completed_text(planner_run)
 
         # 2) 解析 plan；无法解析（如 fake runtime）则降级为每专家一子任务。
@@ -315,6 +341,7 @@ class GroupChatService:
                      assignee=planner_handle or "", run_id=planner_run.id),
         ]
         spec_by_assignee: dict[str, RunSpec] = {}
+        binding_by_assignee: dict[str, object | None] = {}
         tasks_by_assignee: dict[str, Task] = {}
         for sub in subtasks:
             assignee = sub.assignee or (executor_handles[0] if executor_handles else "")
@@ -325,12 +352,13 @@ class GroupChatService:
                 sub_rule = sol_subtask + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
             else:
                 sub_rule = brief + ("\n\n子任务：" + sub.title + ("\n" + sub.description).rstrip()).strip()
-            # 固定编排不信任客户端 roster 的 system_prompt/model——构造空 RunSpec，
-            # 仅注入方案级 subtask_prompt（本地快照）；自由协作仍用 roster 拼 RunSpec。
-            base_spec = RunSpec() if fixed else (
-                self._roster[assignee].to_run_spec() if assignee in self._roster else RunSpec()
-            )
+            expert = self._roster.get(assignee)
+            if fixed and self._orchestrator is None:
+                base_spec, binding = RunSpec(), None
+            else:
+                base_spec, binding = self._prepare_expert_spec(expert) if expert else (RunSpec(), None)
             spec_by_assignee[assignee] = _inject_brief(base_spec, sub_rule)
+            binding_by_assignee[assignee] = binding
             task_nodes.append(TaskNode(
                 task_id=task.id, title=sub.title, assignee=assignee, depends_on=[root_task.id],
             ))
@@ -338,7 +366,12 @@ class GroupChatService:
         # 4) 并行执行各专家子任务（编排规则 + 子任务上下文注入）。
         runs: list[Run] = [planner_run]
         run_items = [
-            (_RunKey(sub.assignee), spec_by_assignee[sub.assignee], tasks_by_assignee[sub.assignee])
+            (
+                _RunKey(sub.assignee),
+                spec_by_assignee[sub.assignee],
+                binding_by_assignee[sub.assignee],
+                tasks_by_assignee[sub.assignee],
+            )
             for sub in subtasks if sub.assignee in spec_by_assignee
         ]
         if run_items:
@@ -349,8 +382,12 @@ class GroupChatService:
             aggregate_rule = sol_aggregate
         else:
             aggregate_rule = brief + "\n\n请汇总下列各成员产出，合并为一个面向用户的最终交付。"
-        aggregate_spec = _inject_brief(planner.to_run_spec(), aggregate_rule)
-        runs.append(await self._mainline.start_run(conv.id, run_spec=aggregate_spec))
+        aggregate_spec = _inject_brief(planner_base_spec, aggregate_rule)
+        aggregate_kwargs = {"run_spec": aggregate_spec}
+        if planner_binding is not None:
+            from .service import _binding_view_to_run_binding
+            aggregate_kwargs["run_binding"] = _binding_view_to_run_binding(planner_binding)
+        runs.append(await self._mainline.start_run(conv.id, **aggregate_kwargs))
 
         return DispatchResult(
             triggered_handles=[sub.assignee for sub in subtasks],

@@ -1,7 +1,7 @@
 """routes_bootstrap 分支覆盖补齐（无 DB 非集成）：F02 负责人 bootstrap 收端。
 
 verify_service_token 守卫：生产 SERVICE_TOKEN 配置下要求 X-Service-Token 匹配；dev 占位值 fail-open（AITEAM-331 B2：未配置不再 fail-open）。
-_auth_service 缓存 vs build 路径；Conflict → 幂等 200。
+_auth_service 缓存与 create-or-replace bootstrap 路径。
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
-from shared.errors import Conflict
 from tests.manager._auth_helper import make_inmem_verifier_and_signer
 
 
@@ -109,7 +108,7 @@ def test_bootstrap_unknown_tenant_404():
 
 def _fake_auth_svc(provision_uid="user-1"):
     svc = MagicMock()
-    svc.provision_owner.return_value = provision_uid
+    svc.sync_owner_bootstrap.return_value = provision_uid
     return svc
 
 
@@ -122,32 +121,30 @@ def test_bootstrap_happy():
         r = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r.status_code == 201
         assert r.json()["data"]["user_id"] == "user-1"
-        # 第二次：cache hit → provision_owner 仍调用一次
+        # 第二次：cache hit → 同步入口仍调用一次
         r2 = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r2.status_code == 201
 
 
-def test_bootstrap_idempotent_conflict():
-    """provision_owner 抛 Conflict → 幂等返回 201 idempotent=True。"""
+def test_bootstrap_existing_owner_uses_replaceable_sync():
+    """已有负责人时仍调用可覆盖同步入口，供 Operator 重置新凭据。"""
     fake = _fake_auth_svc()
-    fake.provision_owner.side_effect = Conflict("already exists")
     with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
             patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r.status_code == 201
-        assert r.json()["data"]["idempotent"] is True
+        assert r.json()["data"]["user_id"] == "user-1"
+        fake.sync_owner_bootstrap.assert_called_once()
 
 
-def test_bootstrap_idempotent_cache_hit_after_conflict():
-    """Conflict 分支也覆盖 cache hit（第二次请求重新构造路径——build 缓存仍命中）。"""
+def test_bootstrap_sync_cache_hit():
+    """第二次同步复用缓存，仍进入可覆盖同步入口。"""
     fake = _fake_auth_svc()
-    fake.provision_owner.side_effect = Conflict("already exists")
     with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
             patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         c.post("/api/manager/owner-bootstrap", json=_body())
-        # 第二次 cache hit
         r2 = c.post("/api/manager/owner-bootstrap", json=_body())
         assert r2.status_code == 201
-        assert r2.json()["data"]["idempotent"] is True
+        assert fake.sync_owner_bootstrap.call_count == 2

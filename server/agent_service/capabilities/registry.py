@@ -137,13 +137,21 @@ class CapabilityRegistry:
 
         # memory：mem0 / OpenMemory。每个 policy_id 一条目。
         for mid in ("default",):
+            memory_env = {
+                # mem0-mcp 的标准存储路径变量；运行时配置只经 Agent 本地 env 映射。
+                "MEM0_STORE_PATH": os.getenv("AITEAM_MEM0_DIR", "~/.aiteam/mem0"),
+            }
+            # 兼容可替换的本地 memory MCP：测试或部署可显式指定其持久文件，仍不写 Hermes profile。
+            memory_file = os.getenv("AITEAM_MEMORY_FILE_PATH")
+            if memory_file:
+                memory_env["MEMORY_FILE_PATH"] = memory_file
             entries[(CapabilityKind.MEMORY, mid)] = CapabilityEntry(
                 name="mem0",
                 kind=CapabilityKind.MEMORY,
                 display_name="mem0 / OpenMemory 本地记忆",
                 command=os.getenv("AITEAM_MEM0_CMD", "mem0-mcp"),
                 args=_cmd_args("AITEAM_MEM0_ARGS"),
-                env={"MEM0_DIR": os.getenv("AITEAM_MEM0_DIR", "~/.aiteam/mem0")},
+                env=memory_env,
                 required_env=_csv_list(os.getenv("AITEAM_MEM0_REQUIRED_ENV", "")),
                 health_check=HealthCheck(mode="command", command=os.getenv("AITEAM_MEM0_CMD", "mem0-mcp")),
             )

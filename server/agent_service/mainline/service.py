@@ -193,6 +193,11 @@ class MainlineService:
         self._orchestrator = orchestrator
 
     @property
+    def orchestrator(self) -> "ExecutionOrchestrator | None":
+        """供群聊编排复用已装配的专家快照派生器。"""
+        return self._orchestrator
+
+    @property
     def broker(self) -> StreamBroker:
         """端内流式 broker（供路由层 SSE/WS 订阅）。"""
         return self._broker
@@ -400,6 +405,7 @@ class MainlineService:
         run_spec: RunSpec | None = None,
         task_id: str | None = None,
         tenant_id: str | None = None,
+        member_id: str | None = None,
         trigger_type: RunTriggerType | None = None,
         execution_mode: RunExecutionMode | None = None,
         run_binding: RunBinding | None = None,
@@ -416,9 +422,6 @@ class MainlineService:
         """
         conversation = self._conversations.get(conversation_id)
         effective_tenant_id = tenant_id or self._tenant_id
-        # M4: provider_ref 解析 + fail fast 必须在 run 落库/流转前完成，
-        # 避免产生无凭据的孤儿 run（禁止回退未知 provider）。
-        provider_env = resolve_provider_env((run_spec or RunSpec()).provider_ref)
         tt = trigger_type or self._infer_trigger_type()
         em = execution_mode or self._infer_execution_mode()
 
@@ -431,10 +434,16 @@ class MainlineService:
             and (conversation.entry_employee_id or "").strip()
         ):
             prepared = self._orchestrator.prepare_private_run(
-                conversation, tenant_id=effective_tenant_id
+                conversation,
+                tenant_id=effective_tenant_id,
+                member_id=member_id,
             )
             prepared_spec = prepared.run_spec
             prepared_binding = _binding_view_to_run_binding(prepared.binding)
+
+        # 必须在专家快照派生完成后解析 provider_ref；私聊不信任前端 RunSpec，
+        # 否则会遗漏快照里的凭据映射并启动无凭据 runtime。
+        provider_env = resolve_provider_env((prepared_spec or RunSpec()).provider_ref)
 
         run = Run(id=_new_id("run"), conversation_id=conversation_id,
                   trigger_type=tt, execution_mode=em)
