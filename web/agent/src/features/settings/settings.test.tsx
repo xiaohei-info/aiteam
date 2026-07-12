@@ -89,16 +89,25 @@ describe("SettingsPage", () => {
     renderPage();
     fireEvent.click(screen.getByRole("tab", { name: "偏好" }));
 
-    const localeSelect = screen.getByLabelText("语言") as HTMLSelectElement;
-    await waitFor(() => expect(localeSelect).toBeInTheDocument());
-
-    fireEvent.change(localeSelect, { target: { value: "en-US" } });
+    const localeSelect = await screen.findByRole("combobox", { name: "语言" });
+    fireEvent.click(localeSelect);
+    fireEvent.click(await screen.findByRole("option", { name: "English" }));
 
     await waitFor(() => {
       const raw = localStorage.getItem("aiteam.agent.preferences");
       expect(raw).toBeTruthy();
       expect(JSON.parse(raw as string).locale).toBe("en-US");
     });
+  });
+
+  it("偏好 Tab 使用 Astryx selector 与 switch，并保留本地持久化", async () => {
+    loginStorage();
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: "偏好" }));
+
+    const locale = await screen.findByRole("combobox", { name: "语言" });
+    expect(locale.tagName).toBe("BUTTON");
+    expect(screen.getByRole("switch", { name: "流式打字效果" })).toBeInTheDocument();
   });
 
   it("安全 Tab：点击退出登录清除本机登录态", async () => {

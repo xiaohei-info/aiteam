@@ -4,6 +4,8 @@ import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Switch } from "@astryxdesign/core/Switch";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
@@ -93,23 +95,21 @@ function PreferencesTab({ preferences, setPreferences }: {
     <Card padding={4}>
       <VStack gap={3}>
         <Heading level={2}>偏好设置</Heading>
-        <label htmlFor="settings-locale">语言</label>
-        <select
-          id="settings-locale"
+        <Selector
+          label="语言"
           value={preferences.locale}
-          onChange={(event) => setPreferences({ ...preferences, locale: event.currentTarget.value })}
-        >
-          <option value="zh-CN">中文（简体）</option>
-          <option value="en-US">English</option>
-        </select>
-        <label>
-          <input
-            type="checkbox"
-            checked={preferences.streamTypingEffect}
-            onChange={(event) => setPreferences({ ...preferences, streamTypingEffect: event.currentTarget.checked })}
-          />
-          流式打字效果
-        </label>
+          options={[
+            { value: "zh-CN", label: "中文（简体）" },
+            { value: "en-US", label: "English" },
+          ]}
+          onChange={(locale) => setPreferences({ ...preferences, locale })}
+        />
+        <Switch
+          label="流式打字效果"
+          description="仅影响本机对话展示。"
+          value={preferences.streamTypingEffect}
+          onChange={(streamTypingEffect) => setPreferences({ ...preferences, streamTypingEffect })}
+        />
         <Text type="supporting">偏好仅保存在本机，不上传控制面。</Text>
       </VStack>
     </Card>
