@@ -25,7 +25,13 @@ import {
   ChatComposerInput,
   type ChatComposerInputHandle,
 } from "@astryxdesign/core/Chat";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Popover } from "@astryxdesign/core/Popover";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
 import { sendMessage, startRun } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
@@ -57,8 +63,6 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   const [skillOpen, setSkillOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mentionAnchorRef = useRef<HTMLDivElement>(null);
-  const skillAnchorRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<ChatComposerInputHandle>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -85,23 +89,6 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
   }, [toast]);
-
-  // 关闭 popover 当点击外部（Esc 由 button toggle / 浏览器默认处理）。
-  useEffect(() => {
-    if (!mentionOpen && !skillOpen) return;
-    function onDocMouseDown(ev: MouseEvent) {
-      const target = ev.target as Node;
-      if (
-        (mentionOpen && mentionAnchorRef.current && !mentionAnchorRef.current.contains(target)) ||
-        (skillOpen && skillAnchorRef.current && !skillAnchorRef.current.contains(target))
-      ) {
-        setMentionOpen(false);
-        setSkillOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [mentionOpen, skillOpen]);
 
   const visibleHandles = useMemo(() => new Set(footerHandles(roster)), [roster]);
   const mentioned = useMemo(() => parseMentions(content, visibleHandles), [content, visibleHandles]);
@@ -184,7 +171,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   }
 
   const toolbarActions = (
-    <>
+    <HStack gap={1} role="group" aria-label="消息工具">
       <Button
         label="附件上传"
         tooltip="附件上传"
@@ -196,7 +183,34 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         isDisabled={sending}
       />
 
-      <div ref={mentionAnchorRef} className="relative">
+      <Popover
+        isOpen={mentionOpen}
+        onOpenChange={setMentionOpen}
+        label="召唤其他智能体"
+        placement="above"
+        width={240}
+        hasAutoFocus={false}
+        content={
+          roster.length === 0 ? (
+            <Text type="supporting">暂无可召唤的智能体</Text>
+          ) : (
+            <VStack gap={1}>
+              {roster.map((p) => {
+                const handle = p.display_name;
+                return (
+                  <Button
+                    key={p.employee_id}
+                    label={`@${handle}（点击召唤）`}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => pickHandle(handle)}
+                  />
+                );
+              })}
+            </VStack>
+          )
+        }
+      >
         <Button
           label="召唤其他智能体"
           tooltip="@提及：召唤其他智能体"
@@ -204,38 +218,30 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           variant="ghost"
           icon={<span aria-hidden="true">🤖</span>}
           isIconOnly
-          aria-expanded={mentionOpen}
-          onClick={() => setMentionOpen((v) => !v)}
           isDisabled={sending}
         />
-        {mentionOpen && (
-          <Popover>
-            {roster.length === 0 ? (
-              <div className="px-sm py-xs text-xs text-text-muted">暂无可召唤的智能体</div>
-            ) : (
-              <ul className="flex flex-col">
-                {roster.map((p) => {
-                  const handle = p.display_name;
-                  return (
-                    <li key={p.employee_id}>
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
-                        onClick={() => pickHandle(handle)}
-                      >
-                        <span>@{handle}</span>
-                        <span className="text-xs text-text-muted">点击召唤</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Popover>
-        )}
-      </div>
+      </Popover>
 
-      <div ref={skillAnchorRef} className="relative">
+      <Popover
+        isOpen={skillOpen}
+        onOpenChange={setSkillOpen}
+        label="选择技能"
+        placement="above"
+        width={240}
+        content={
+          <VStack gap={1}>
+            {SKILL_OPTIONS.map((skill) => (
+              <Button
+                key={skill.id}
+                label={`/${skill.label}`}
+                variant="ghost"
+                size="sm"
+                onClick={() => pickSkill(skill.label)}
+              />
+            ))}
+          </VStack>
+        }
+      >
         <Button
           label="技能市场入口"
           tooltip="/：使用技能"
@@ -243,28 +249,9 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           variant="ghost"
           icon={<span aria-hidden="true">⚡</span>}
           isIconOnly
-          aria-expanded={skillOpen}
-          onClick={() => setSkillOpen((v) => !v)}
           isDisabled={sending}
         />
-        {skillOpen && (
-          <Popover>
-            <ul className="flex flex-col">
-              {SKILL_OPTIONS.map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between gap-md px-sm py-xs text-left text-sm text-text-primary hover:bg-surface-raised"
-                    onClick={() => pickSkill(s.label)}
-                  >
-                    <span>/{s.label}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </Popover>
-        )}
-      </div>
+      </Popover>
 
       <Button
         label="截图工具"
@@ -276,16 +263,12 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         onClick={handleScreenshot}
         isDisabled={sending}
       />
-    </>
+    </HStack>
   );
 
   return (
-    <div className="flex flex-col gap-xs p-md">
-      {toast && (
-        <div role="status" className="mb-xs rounded-md bg-surface-raised px-sm py-xs text-xs text-text-primary">
-          {toast}
-        </div>
-      )}
+    <VStack gap={1} padding={4}>
+      {toast && <Banner status="info" title={toast} />}
       <ChatComposer
         value={content}
         onChange={setContent}
@@ -295,33 +278,36 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         status={error ? { type: "error", message: error } : undefined}
         drawer={
           attachments.length > 0 || mentioned.length > 0 ? (
-            <div className="flex flex-col gap-xs px-xs">
+            <VStack gap={1} padding={1}>
               {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-xs">
+                <HStack gap={1} wrap="wrap">
                   {attachments.map((f, i) => (
-                    <span
+                    <HStack
                       key={`${f.name}-${i}`}
-                      className="inline-flex items-center gap-xs rounded-md border border-gold/20 bg-surface px-sm py-xs text-xs text-text-primary"
+                      gap={1}
+                      align="center"
                     >
-                      📎 {f.name}
-                      <button
-                        type="button"
+                      <Badge label={f.name} icon={<span aria-hidden="true">📎</span>} />
+                      <Button
+                        label={`移除附件 ${f.name}`}
+                        tooltip={`移除附件 ${f.name}`}
+                        variant="ghost"
+                        size="sm"
+                        isIconOnly
+                        icon={<span aria-hidden="true">✕</span>}
                         aria-label={`移除附件 ${f.name}`}
-                        className="text-text-muted hover:text-text-primary"
                         onClick={() => removeAttachment(i)}
-                      >
-                        ✕
-                      </button>
-                    </span>
+                      />
+                    </HStack>
                   ))}
-                </div>
+                </HStack>
               )}
               {mentioned.length > 0 && (
-                <div className="px-xs text-xs text-text-secondary" aria-live="polite">
+                <Text type="supporting" as="div" aria-live="polite">
                   已 @提及：{mentioned.map((h) => `@${h}`).join(" ")}
-                </div>
+                </Text>
               )}
-            </div>
+            </VStack>
           ) : undefined
         }
         footerActions={toolbarActions}
@@ -352,11 +338,11 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         ref={fileInputRef}
         type="file"
         multiple
-        className="hidden"
+        hidden
         onChange={handleFileChange}
         aria-hidden="true"
       />
-    </div>
+    </VStack>
   );
 }
 
@@ -367,17 +353,4 @@ function footerHandles(roster: LoadedExpertProjection[]): string[] {
     if (p.display_name) seen.add(p.display_name);
   }
   return [...seen];
-}
-
-interface PopoverProps {
-  children: React.ReactNode;
-}
-
-/** 工具按钮弹层：玻璃质感 + 圆角边框。相对父级绝对定位；复用 design tokens。 */
-function Popover({ children }: PopoverProps): React.ReactNode {
-  return (
-    <div className="glass absolute bottom-full left-0 z-[1300] mb-xs min-w-[12rem] overflow-hidden p-xs">
-      {children}
-    </div>
-  );
 }

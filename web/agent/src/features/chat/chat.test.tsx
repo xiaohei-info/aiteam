@@ -541,6 +541,7 @@ async function renderChatComposer(rosterItems: Array<{ employee_id: string; disp
 describe("MessageComposer 工具栏 + @提及 + 附件", () => {
   it("渲染工具栏：附件 / @ / 技能 / 截图", async () => {
     await renderChatComposer();
+    expect(screen.getByRole("group", { name: "消息工具" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "附件上传" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "召唤其他智能体" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "技能市场入口" })).toBeInTheDocument();
