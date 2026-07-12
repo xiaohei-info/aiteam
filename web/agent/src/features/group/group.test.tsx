@@ -142,13 +142,7 @@ describe("GroupPage — 渲染", () => {
       expect(screen.getByText("群聊A")).toBeInTheDocument();
       expect(screen.getByText("群聊B")).toBeInTheDocument();
     });
-   // 列表头部文案是「群聊」（区别于私聊页的「私聊」）——用 testid 精确定位 header，
-    // 避免与 PageShell 侧边栏 NavLink 的"群聊"导航项撞文本。headerLabel 单独落到
-    // testid=conv-list-header-label 的 span 上（header 里还有「新建」按钮）。
-    const headers = screen.getAllByTestId("conv-list-header");
-    expect(headers.length).toBeGreaterThan(0);
-    const label = headers[0]!.querySelector('[data-testid="conv-list-header-label"]');
-    expect(label?.textContent).toBe("群聊");
+    expect(screen.getByRole("region", { name: "群聊会话" })).toBeInTheDocument();
   });
 
   it("选中会话后渲染时间线 + roster + 输入器", async () => {
@@ -168,6 +162,8 @@ describe("GroupPage — 渲染", () => {
     await waitFor(() => expect(screen.getByText("群聊A")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /群聊A/ }));
 
+    expect(await screen.findByRole("region", { name: "群聊协作工作区" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "本会话专家" })).toBeInTheDocument();
     // roster 展示演示专家（专家A / 专家B）
     await waitFor(() => {
       expect(screen.getByText("@专家A")).toBeInTheDocument();
@@ -491,7 +487,8 @@ describe("GroupPage — 从解决方案创建群聊", () => {
     fireEvent.click(screen.getByRole("button", { name: /从解决方案创建群聊/ }));
 
     const select = await screen.findByRole("combobox");
-    fireEvent.change(select, { target: { value: "si-1" } });
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByRole("option", { name: /电商专家群/ }));
     fireEvent.click(screen.getByRole("button", { name: /^创建群聊$/ }));
 
     await waitFor(() => {
@@ -636,4 +633,3 @@ describe("GroupPage — 创建自由群聊", () => {
     promptSpy.mockRestore();
   });
 });
-

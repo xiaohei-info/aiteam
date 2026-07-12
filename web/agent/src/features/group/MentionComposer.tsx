@@ -10,7 +10,11 @@
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Button } from "@aiteam/shared/ui";
+import { Button } from "@astryxdesign/core/Button";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextArea } from "@astryxdesign/core/TextArea";
+import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApiError, useApp } from "../../lib/app-context";
 import type { DispatchResult, GroupExpert } from "./useGroupApi";
@@ -81,25 +85,33 @@ export function MentionComposer({ conversationId, experts, onDispatched }: Menti
   }
 
   return (
-    <form className="flex flex-col gap-xs border-t border-gold/15 p-md" onSubmit={handleSubmit}>
-      <textarea
-        className="resize-y rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none focus:ring-2 focus:ring-gold"
+    <form onSubmit={handleSubmit}>
+      <VStack gap={1} padding={4}>
+      <TextArea
+        label="群聊消息内容"
+        isLabelHidden
         value={content}
-        onChange={(e) => setContent(e.target.value)}
+        onChange={setContent}
         placeholder="输入消息，@专家 触发协作…"
         rows={2}
-        disabled={sending}
-        aria-label="群聊消息内容"
+        isDisabled={sending}
+        status={error ? { type: "error", message: error } : undefined}
       />
       {mentioned.length > 0 && (
-        <div className="px-xs text-xs text-text-secondary" aria-live="polite">
+        <Text type="supporting" as="div" aria-live="polite">
           将触发：{mentioned.map((h) => `@${h}`).join(" ")}
-        </div>
+        </Text>
       )}
-      {error && <div className="text-xs text-danger">{error}</div>}
-      <Button type="submit" className="self-end" disabled={sending || content.trim().length === 0}>
-        {sending ? "发送中…" : "发送"}
-      </Button>
+      <HStack justify="end">
+        <Button
+          type="submit"
+          label="发送"
+          variant="primary"
+          isLoading={sending}
+          isDisabled={sending || content.trim().length === 0}
+        />
+      </HStack>
+      </VStack>
     </form>
   );
 }

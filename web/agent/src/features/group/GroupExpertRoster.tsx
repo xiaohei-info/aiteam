@@ -8,6 +8,9 @@
  */
 
 import type { GroupExpert } from "./useGroupApi";
+import { Button } from "@astryxdesign/core/Button";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
 
 export interface GroupExpertRosterProps {
   experts: GroupExpert[];
@@ -18,33 +21,30 @@ export interface GroupExpertRosterProps {
 export function GroupExpertRoster({ experts, onPickHandle }: GroupExpertRosterProps) {
   if (experts.length === 0) {
     return (
-      <div className="flex items-center gap-sm" aria-label="本会话专家">
-        <div className="text-xs font-semibold text-text-secondary">专家（0）</div>
-        <div className="text-xs text-text-muted">本会话暂无已装载专家</div>
-      </div>
+      <HStack gap={1} align="center" role="group" aria-label="本会话专家">
+        <Text type="label">专家（0）</Text>
+        <Text type="supporting">本会话暂无已装载专家</Text>
+      </HStack>
     );
   }
 
   return (
-    <div className="flex items-center gap-sm" aria-label="本会话专家">
-      <div className="whitespace-nowrap text-xs font-semibold text-text-secondary">
-        专家（{experts.length}）<span className="ml-xs font-normal text-text-muted">@提及触发</span>
-      </div>
-      <ul className="m-0 flex list-none flex-wrap gap-xs p-0">
+    <HStack gap={1} align="center" wrap="wrap" role="group" aria-label="本会话专家">
+      <Text type="label">专家（{experts.length}）· @提及触发</Text>
+      <HStack gap={1} wrap="wrap">
         {experts.map((expert) => (
-          <li key={expert.handle} className="inline-flex items-center gap-xs">
-            <button
-              type="button"
-              className="rounded-sm border border-gold/25 bg-surface px-sm py-0.5 text-xs text-gold transition hover:bg-surface-raised"
+          <HStack key={expert.handle} gap={1} align="center">
+            <Button
+              label={`@${expert.display_name || expert.handle}`}
+              variant="secondary"
+              size="sm"
               onClick={() => onPickHandle?.(expert.handle)}
               aria-label={`@提及 ${expert.display_name || expert.handle}`}
-            >
-              @{expert.display_name || expert.handle}
-            </button>
-            {expert.model && <span className="text-[10px] text-text-muted">{expert.model}</span>}
-          </li>
+            />
+            {expert.model && <Text type="supporting">{expert.model}</Text>}
+          </HStack>
         ))}
-      </ul>
-    </div>
+      </HStack>
+    </HStack>
   );
 }

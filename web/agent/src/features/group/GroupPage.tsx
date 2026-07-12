@@ -25,7 +25,17 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
 
 import { useApp } from "../../lib/app-context";
-import { Button, GlassPanel } from "@aiteam/shared/ui";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Dialog } from "@astryxdesign/core/Dialog";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Selector } from "@astryxdesign/core/Selector";
+import { Text } from "@astryxdesign/core/Text";
+import { Toolbar } from "@astryxdesign/core/Toolbar";
+import { VStack } from "@astryxdesign/core/VStack";
 import { ConversationList } from "../chat/ConversationList";
 import { TimelineView } from "../chat/TimelineView";
 import type { Conversation } from "../chat/useChatApi";
@@ -189,7 +199,7 @@ export function GroupPage() {
   }, [client]);
 
   return (
-    <div className="flex h-full min-h-0 gap-md">
+    <HStack gap={4} height="100%" minHeight={0}>
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -199,42 +209,50 @@ export function GroupPage() {
         // 群聊页只列群会话（排除 entry_employee_id 非空的私聊），防止私聊被当做群聊进入编排。
         filter={(c) => c.entry_employee_id == null}
       />
-      <div className="flex min-w-0 flex-1 flex-col gap-md">
-        <div className="flex flex-wrap items-center justify-between gap-sm rounded-window border border-gold/15 bg-surface-raised px-md py-sm">
-          <div className="flex flex-wrap items-center gap-sm">
-            <span className="text-sm font-semibold text-text-primary">群聊协作</span>
-            {rosterError && (
-              <span className="text-xs text-danger" role="alert" aria-live="polite">{rosterError}</span>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-sm">
-            <Button size="sm" variant="metal" onClick={handleOpenCreate}>
-              从解决方案创建群聊
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => void handleCreateFree()} disabled={freeCreating}>
-              {freeCreating ? "创建中…" : "创建自由群聊"}
-            </Button>
-            {freeCreateError && (
-              <span className="text-xs text-danger" role="alert">{freeCreateError}</span>
-            )}
-          </div>
-        </div>
-      <GlassPanel className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-window">
+      <VStack gap={4} width="100%" minHeight={0}>
+        <Toolbar
+          label="群聊协作操作"
+          startContent={
+            <HStack gap={2} align="center" wrap="wrap">
+              <Heading level={1}>群聊协作</Heading>
+              {rosterError && <Text type="supporting" role="alert">{rosterError}</Text>}
+            </HStack>
+          }
+          endContent={
+            <HStack gap={1} wrap="wrap">
+              <Button label="从解决方案创建群聊" size="sm" variant="primary" onClick={handleOpenCreate} />
+              <Button
+                label="创建自由群聊"
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleCreateFree()}
+                isLoading={freeCreating}
+              />
+            </HStack>
+          }
+        />
+        {freeCreateError && <Banner status="error" title={freeCreateError} />}
+      <Card role="region" aria-label="群聊协作工作区" width="100%" padding={0}>
         {selected ? (
-          <>
-            <div className="flex flex-wrap items-center justify-between gap-md border-b border-gold/15 px-md py-sm">
-              <GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />
-              {lastTriggered && lastTriggered.length > 0 && (
-                <div className="text-xs font-semibold text-success" aria-live="polite">
-                  本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
-                </div>
-              )}
-              {lastIgnored && lastIgnored.length > 0 && (
-                <div className="text-xs text-danger" aria-live="polite" role="alert">
-                  未识别的专家：{lastIgnored.join(" ")}（请检查 roster 中的展示名）
-                </div>
-              )}
-            </div>
+          <VStack gap={2} padding={4}>
+            <Toolbar
+              label="群聊专家与编排状态"
+              startContent={<GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />}
+              endContent={
+                <VStack gap={1} align="end">
+                  {lastTriggered && lastTriggered.length > 0 && (
+                    <Text type="supporting" as="div" aria-live="polite">
+                      本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
+                    </Text>
+                  )}
+                  {lastIgnored && lastIgnored.length > 0 && (
+                    <Text type="supporting" as="div" aria-live="polite" role="alert">
+                      未识别的专家：{lastIgnored.join(" ")}（请检查 roster 中的展示名）
+                    </Text>
+                  )}
+                </VStack>
+              }
+            />
             <TimelineView
               client={client}
               conversationId={selected.id}
@@ -245,71 +263,62 @@ export function GroupPage() {
               experts={rosterForSelected}
               onDispatched={handleDispatched}
             />
-          </>
+          </VStack>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-text-muted">
-            选择一个群聊会话开始多专家协作
-          </div>
+          <EmptyState
+            title="选择一个群聊会话"
+            description="选择会话后即可开始多专家协作。"
+            headingLevel={2}
+          />
         )}
-      </GlassPanel>
-      </div>
+      </Card>
+      </VStack>
 
-      {showCreateModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-bg-canvas/80 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="从解决方案创建群聊"
-          onClick={handleCloseCreate}
-        >
-          <GlassPanel
-            className="w-full max-w-lg space-y-md p-lg"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold text-text-primary">从解决方案创建群聊</h2>
-            <p className="text-sm text-text-secondary">
+      <Dialog
+        isOpen={showCreateModal}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) handleCloseCreate();
+        }}
+        aria-label="从解决方案创建群聊"
+        purpose="form"
+        width={560}
+      >
+        <VStack gap={4}>
+            <Heading level={2}>从解决方案创建群聊</Heading>
+            <Text as="p">
               选择一个行业方案实例，将以其自带的三阶段固定编排规则（planner / subtask / aggregate）创建群聊。
               创建后编排规则只读，不可在会话中覆盖。
-            </p>
+            </Text>
             {solutions === null ? (
-              <p className="text-sm text-text-secondary">加载中…</p>
+              <Text type="supporting">加载中…</Text>
             ) : solutions.length === 0 ? (
-              <p className="text-sm text-danger">暂无可用方案实例，请先在 Manager 端应用方案后再来建群。</p>
+              <Banner status="warning" title="暂无可用方案实例" description="请先在 Manager 端应用方案后再来建群。" />
             ) : (
-              <div className="space-y-xs">
-                <label className="block text-xs font-medium text-text-secondary">选择方案实例</label>
-                <select
-                  className="w-full rounded-md border border-gold/20 bg-surface px-md py-sm text-sm text-text-primary outline-none focus:border-gold/50 focus:ring-2 focus:ring-gold"
-                  value={selectedSolutionId ?? ""}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedSolutionId(e.target.value || null)}
-                >
-                  <option value="">— 请选择 —</option>
-                  {solutions.map((s) => (
-                    <option key={s.solution_instance_id} value={s.solution_instance_id}>
-                      {s.display_name}{s.version ? ` · v${s.version}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <Selector
+                label="选择方案实例"
+                placeholder="请选择"
+                options={solutions.map((solution) => ({
+                  value: solution.solution_instance_id,
+                  label: `${solution.display_name}${solution.version ? ` · v${solution.version}` : ""}`,
+                }))}
+                value={selectedSolutionId ?? undefined}
+                onChange={setSelectedSolutionId}
+                width="100%"
+              />
             )}
-            {solutionsError && (
-              <p className="text-xs text-danger" aria-live="polite">{solutionsError}</p>
-            )}
-            <div className="flex justify-end gap-sm">
-              <Button variant="ghost" onClick={handleCloseCreate} disabled={creating}>
-                取消
-              </Button>
+            {solutionsError && <Banner status="error" title={solutionsError} />}
+            <HStack justify="end" gap={2}>
+              <Button label="取消" variant="secondary" onClick={handleCloseCreate} isDisabled={creating} />
               <Button
-                variant="metal"
-                disabled={!selectedSolutionId || !solutions || solutions.length === 0 || creating}
+                label="创建群聊"
+                variant="primary"
+                isDisabled={!selectedSolutionId || !solutions || solutions.length === 0 || creating}
+                isLoading={creating}
                 onClick={() => void handleConfirmCreate()}
-              >
-                {creating ? "创建中…" : "创建群聊"}
-              </Button>
-            </div>
-          </GlassPanel>
-        </div>
-      )}
-    </div>
+              />
+            </HStack>
+        </VStack>
+      </Dialog>
+    </HStack>
   );
 }
