@@ -119,6 +119,7 @@ describe("LoopPanel（嵌在 ChatPage）", () => {
     fireEvent.click(screen.getByRole("button", { name: /任务编排/ }));
 
     await waitFor(() => expect(screen.getByText("每日报告")).toBeInTheDocument());
+    expect(screen.getByRole("region", { name: "Loop 编排" })).toBeInTheDocument();
     // 只显示本会话的 loop（loopB 属于 c2，应被过滤掉）
     expect(screen.queryByText("其他会话")).not.toBeInTheDocument();
     // fire_count 展示

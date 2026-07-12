@@ -11,7 +11,14 @@
  */
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
-import { Button, Field, GlassPanel, Input, Table, cn } from "@aiteam/shared/ui";
+import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import type { AgentApiClient } from "../../lib/api-client";
 import {
   createLoop,
@@ -39,9 +46,9 @@ function formatTimestamp(ts: string | null): string {
 
 function statusBadge(status: Loop["status"]): ReactNode {
   if (status === "enabled") {
-    return <span className="text-success">● 启用</span>;
+    return <Badge variant="success" label="启用" />;
   }
-  return <span className="text-text-muted">○ 停用</span>;
+  return <Badge label="停用" />;
 }
 
 export function LoopPanel({ client, conversationId, refreshSignal = 0 }: Props): ReactNode {
@@ -136,16 +143,17 @@ export function LoopPanel({ client, conversationId, refreshSignal = 0 }: Props):
   };
 
   return (
-    <GlassPanel className="flex flex-col gap-sm rounded-window">
-      <div className="flex items-center justify-between px-md pt-sm">
-        <span className="text-sm font-semibold text-text-primary">🦞 任务编排</span>
-        <span className="text-xs text-text-muted">{loops.length} 个周期任务</span>
-      </div>
+    <Card role="region" aria-label="Loop 编排" padding={4}>
+      <VStack gap={3}>
+      <HStack justify="between" align="center">
+        <Text type="label">任务编排</Text>
+        <Text type="supporting">{loops.length} 个周期任务</Text>
+      </HStack>
 
-      {error && <p className="mx-md text-xs text-danger">{error}</p>}
+      {error && <Banner status="error" title={error} />}
 
       {loops.length > 0 && (
-        <Table>
+        <table>
           <thead>
             <tr>
               <th>标题</th>
@@ -159,47 +167,40 @@ export function LoopPanel({ client, conversationId, refreshSignal = 0 }: Props):
           <tbody>
             {loops.map((l) => (
               <tr key={l.id}>
-                <td className="text-sm">{l.title ?? <span className="text-text-muted">未命名</span>}</td>
-                <td><code className="text-xs text-gold-bright">{l.cron}</code></td>
+                <td>{l.title ?? "未命名"}</td>
+                <td><code>{l.cron}</code></td>
                 <td>{statusBadge(l.status)}</td>
-                <td className="text-xs text-text-secondary">{l.fire_count}</td>
-                <td className="text-xs text-text-secondary">{formatTimestamp(l.last_fired_at)}</td>
+                <td>{l.fire_count}</td>
+                <td>{formatTimestamp(l.last_fired_at)}</td>
                 <td>
-                  <div className="flex gap-xs">
+                  <HStack gap={1}>
                     {l.status === "disabled" ? (
-                      <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void onEnable(l.id)}>
-                        启用
-                      </Button>
+                      <Button type="button" label="启用" variant="secondary" size="sm" isDisabled={busy} onClick={() => void onEnable(l.id)} />
                     ) : (
-                      <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void onDisable(l.id)}>
-                        停用
-                      </Button>
+                      <Button type="button" label="停用" variant="secondary" size="sm" isDisabled={busy} onClick={() => void onDisable(l.id)} />
                     )}
-                    <Button type="button" variant="metal" size="sm" disabled={busy || l.status === "disabled"} onClick={() => void onFire(l.id)}>
-                      ▶ 触发
-                    </Button>
-                  </div>
+                    <Button type="button" label="触发" variant="primary" size="sm" isDisabled={busy || l.status === "disabled"} onClick={() => void onFire(l.id)} />
+                  </HStack>
                 </td>
               </tr>
             ))}
           </tbody>
-        </Table>
+        </table>
       )}
 
-      <form className={cn("flex flex-col gap-sm border-t border-gold/10 px-md pb-sm", loops.length > 0 ? "pt-sm" : "pt-xs")} onSubmit={onCreate}>
-        <div className="flex gap-sm">
-          <Field label="标题" className="flex-1">
-            <Input value={title} placeholder="可选，如 每日报告" onChange={(e) => setTitle(e.target.value)} disabled={busy} />
-          </Field>
-          <Field label="Cron 表达式" className="flex-1">
-            <Input value={cron} placeholder="分 时 日 月 周，如 0 9 * * *" onChange={(e) => setCron(e.target.value)} disabled={busy} />
-          </Field>
-        </div>
-        {formError && <p className="-mt-xs text-xs text-danger">{formError}</p>}
-        <Button type="submit" variant="metal" size="sm" disabled={busy} className="self-end">
-          + 创建 Loop
-        </Button>
+      <form onSubmit={onCreate}>
+        <VStack gap={2}>
+        <HStack gap={2} wrap="wrap">
+          <TextInput label="标题" value={title} placeholder="可选，如 每日报告" onChange={setTitle} isDisabled={busy} />
+          <TextInput label="Cron 表达式" value={cron} placeholder="分 时 日 月 周，如 0 9 * * *" onChange={setCron} isDisabled={busy} />
+        </HStack>
+        {formError && <Banner status="error" title={formError} />}
+        <HStack justify="end">
+          <Button type="submit" label="创建 Loop" variant="primary" size="sm" isDisabled={busy} />
+        </HStack>
+        </VStack>
       </form>
-    </GlassPanel>
+      </VStack>
+    </Card>
   );
 }
