@@ -10,9 +10,11 @@ scope: agent-rebuild
 
 ## 实施进度
 
-- **M0-A（已完成）**：`experiments/pi-sdk-spike/` 已锁定 Pi `0.84.2`，验证 controlled ResourceLoader、custom tool、Pi event、Session JSONL reopen 和 abort。
-- **M1-A（已完成）**：新增 `server/agent_service` Node/TypeScript 最小纵向切片，包含 SessionHost、Pi Session index、SQLite idempotency receipt、`prompt`、SSE、`entries`、`abort` 和测试。
-- **当前明确未完成**：真实 provider/AI Relay、Manager JWT/auth 接入、Skills/knowledge/Hindsight、sandbox、delegate child Session、schedule、前端切换以及旧 Python Agent 删除。
+- **M0-A（已完成）**：`experiments/pi-sdk-spike/` 锁定 Pi `0.84.2`，验证 controlled ResourceLoader、custom tool、Pi event、Session JSONL reopen 和 abort。
+- **M1-A（已完成）**：Node Agent `SessionHost`、Pi Session index、SQLite idempotency receipt、`prompt`、SSE、`entries`、`abort`。
+- **M1/B（已完成）**：旧 Python Agent/Gateway、Run/Task/Loop/Timeline 执行链、旧 migrations/tests、runtime contracts 和前端旧 API 已删除；Agent/Manager/Frontend 基础契约已切换到 Pi。
+- **M2（已完成基础切片）**：Manager Hindsight memory facade、knowledge artifact facade、Agent `memory_*`/`knowledge_*` tools、snapshot-bound tool policy、`delegate_employee` 内存 child Session、Manager/Agent ownership/security hardening。
+- **当前仍未完成**：真实 provider credential vault/AI Relay、签名 Skill package materialize、外部 sandbox 实体接入、schedule 实际执行与 occurrence receipts、usage outbox 产生/上报、attachment/artifact 完整生命周期、全环境 Playwright/live PostgreSQL 验证。
 
 > 本计划是 `docs/superpowers/specs/2026-08-17-pi-coding-agent-sdk-agent架构重构设计.md` 的实施配套，不新增架构裁决。
 > 目标是把当前 Python Agent/Gateway 代码迁移为 Node/TypeScript + 进程内 Pi SDK，并删除旧执行模型。
@@ -22,14 +24,14 @@ scope: agent-rebuild
 
 ### 1.1 实现事实
 
-当前仓库尚未在 `server` 或 `web` 中接入 `pi-coding-agent` SDK：
+当前仓库已完成 Agent 运行面切换：
 
-- `server/agent_service/` 仍为 Python/FastAPI，约 12,320 行；
-- `server/agent_gateway/` 仍为多 runtime Gateway，约 3,479 行、25 个 Python 文件；
-- `web/agent/` 仍以 Run/Task/Loop/Timeline API 为主链，约 9,628 行 TS/TSX；
-- Agent/Gateway 相关测试约 91 个文件；
-- Agent 组合根 `server/agent_service/app.py:248-307` 同时装配 Mainline、Gateway、Loop、Usage、Grants、Workspace、GroupMgmt 和 Terminal；
-- 当前不存在 Node Agent package、SessionHost、Pi Session index 或 Manager Hindsight HTTP client。
+- `server/agent_service/` 现在是 Node.js/TypeScript Pi Agent package；
+- `server/agent_gateway/` 和旧 Python `server/agent_service` 已删除；
+- `web/agent/` Chat 主链使用 `prompt/events/entries/abort`，不再使用 Run/Task/Loop/Timeline；
+- Manager 负责授权投影、snapshot、Hindsight memory 和 knowledge artifact facade；
+- Node Agent 组合根是 `src/main.ts + SessionHost`；
+- 旧 Python Agent/Gateway 仅可能出现在历史文档、迁移清理 SQL 或忽略的本地缓存中，不参与运行。
 
 ### 1.2 当前主链
 
