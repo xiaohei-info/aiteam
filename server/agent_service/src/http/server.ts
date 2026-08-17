@@ -129,7 +129,7 @@ export class AgentHttpServer {
         const entries = await this.options.host.entries(route.conversationId);
         return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, entries } });
       }
-      if (route.action === "prompt" && request.method === "POST") return await this.prompt(request, response, route.conversationId, caller.callerId);
+      if (route.action === "prompt" && request.method === "POST") return await this.prompt(request, response, route.conversationId, caller);
       if (route.action === "abort" && request.method === "POST") {
         const aborted = await this.options.host.abort(route.conversationId);
         return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, aborted } });
@@ -318,7 +318,8 @@ export class AgentHttpServer {
   private stringArray(value: unknown, name: string, maxItems: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > 128)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an array of strings`); return value as string[]; }
   private objectField(value: unknown, name: string): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an object`); return value as Record<string, unknown>; }
 
-  private async prompt(request: IncomingMessage, response: ServerResponse, conversationId: string, callerId: string): Promise<void> {
+  private async prompt(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    const callerId = caller.callerId;
     const key = this.header(request, "idempotency-key");
     if (!key || key.length > 256) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required and must be <= 256 characters");
     const payload = await this.readJson(request);
@@ -334,14 +335,15 @@ export class AgentHttpServer {
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
-    void this.runPrompt(conversationId, callerId, key, receipt.ownerInstance, text, images);
+    void this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images);
     this.writeReceipt(response, conversationId, key, "accepted");
   }
 
-  private async runPrompt(conversationId: string, callerId: string, key: string, ownerInstance: string | undefined, text: string, images: unknown): Promise<void> {
+  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: unknown): Promise<void> {
+    const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, this.asImages(images));
+      const lastEntryId = await this.options.host.prompt(conversationId, text, this.asImages(images), caller);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {
       this.options.store.markUnknown(conversationId, callerId, key, ownerInstance);

@@ -27,6 +27,11 @@ export interface ManagerClient {
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
+  memoryRecall?(caller: AuthenticatedCaller, employeeId: string, query: string, limit: number): Promise<unknown>;
+  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown>): Promise<unknown>;
+  memoryDelete?(caller: AuthenticatedCaller, memoryId: string): Promise<void>;
+  knowledgeSearch?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown>;
+  knowledgeGet?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -89,18 +94,78 @@ export class HttpManagerClient implements ManagerClient {
     return this.unwrap(response);
   }
 
-  private async request(path: string, caller: AuthenticatedCaller, body?: unknown): Promise<unknown> {
-    const response = await this.fetchImpl(new URL(path, this.baseUrl).toString(), {
-      method: body === undefined ? "GET" : "POST",
-      headers: {
-        Accept: "application/json",
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        ...(caller.accessToken ? { Authorization: `Bearer ${caller.accessToken}` } : {}),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  async memoryRecall(caller: AuthenticatedCaller, employeeId: string, query: string, limit: number): Promise<unknown> {
+    const response = await this.request("/api/manager/memories/recall", caller, undefined, {
+      employee_id: employeeId,
+      query,
+      limit: String(limit),
     });
+    return this.unwrap(response);
+  }
+
+  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown>): Promise<unknown> {
+    const response = await this.request("/api/manager/memories/retain", caller, {
+      employee_id: employeeId,
+      content,
+      metadata,
+    });
+    return this.unwrap(response);
+  }
+
+  async memoryDelete(caller: AuthenticatedCaller, memoryId: string): Promise<void> {
+    await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, undefined, "DELETE");
+  }
+
+  async knowledgeSearch(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown> {
+    const response = await this.request("/api/manager/knowledge/artifacts/search", caller, {
+      employee_id: employeeId,
+      knowledge_refs: [...knowledgeRefs],
+      query,
+      limit,
+    });
+    return this.unwrap(response);
+  }
+
+  async knowledgeGet(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown> {
+    const response = await this.request("/api/manager/knowledge/artifacts/get", caller, {
+      employee_id: employeeId,
+      knowledge_refs: [...knowledgeRefs],
+      citation_id: citationId,
+    });
+    return this.unwrap(response);
+  }
+
+  private async request(
+    path: string,
+    caller: AuthenticatedCaller,
+    body?: unknown,
+    query?: Record<string, string>,
+    method?: "GET" | "POST" | "DELETE",
+  ): Promise<unknown> {
+    const url = new URL(path, this.baseUrl);
+    for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
+    const requestMethod = method ?? (body === undefined ? "GET" : "POST");
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url.toString(), {
+        method: requestMethod,
+        headers: {
+          Accept: "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(caller.accessToken ? { Authorization: `Bearer ${caller.accessToken}` } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (error) {
+      throw new ManagerUnavailableError("Manager request failed", { cause: error });
+    }
     if (!response.ok) throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
-    return response.json();
+    if (response.status === 204) return undefined;
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new ManagerUnavailableError("Manager returned an invalid response", { cause: error });
+    }
   }
 
   private unwrap(value: unknown): unknown {
@@ -111,8 +176,8 @@ export class HttpManagerClient implements ManagerClient {
 }
 
 export class ManagerUnavailableError extends Error {
-  constructor(message = "Manager is unavailable") {
-    super(message);
+  constructor(message = "Manager is unavailable", options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "ManagerUnavailableError";
   }
 }

@@ -12,7 +12,11 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
-import type { AgentSqliteStore } from "../storage/sqlite.js";
+import type { AuthenticatedCaller } from "../http/auth.js";
+import type { ManagerClient } from "../manager-client.js";
+import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
+import { createKnowledgeTools } from "../tools/knowledge.js";
+import { createMemoryTools } from "../tools/memory.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -33,6 +37,13 @@ export class InvalidEventCursorError extends Error {
   }
 }
 
+export interface SessionAuthorization {
+  caller: AuthenticatedCaller;
+  employeeId: string;
+  snapshot: FrozenSnapshot;
+  managerClient?: ManagerClient;
+}
+
 export interface SessionHostOptions {
   cwdRoot: string;
   agentDir: string;
@@ -40,7 +51,8 @@ export interface SessionHostOptions {
   store: AgentSqliteStore;
   modelRuntime: ModelRuntime;
   model: Model<any>;
-  resourceLoaderFactory: (conversationId: string) => ResourceLoader;
+  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
+  managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
 }
 
@@ -65,6 +77,13 @@ export class ConversationBusyError extends Error {
   constructor() {
     super("Conversation already has an active Pi prompt");
     this.name = "ConversationBusyError";
+  }
+}
+
+export class SessionAuthorizationError extends Error {
+  constructor(message = "Conversation employee is not authorized locally") {
+    super(message);
+    this.name = "SessionAuthorizationError";
   }
 }
 
@@ -109,13 +128,14 @@ export class SessionHost {
     return () => record.listeners.delete(subscriber);
   }
 
-  async prompt(conversationId: string, text: string, images?: ImageContent[]): Promise<string | undefined> {
+  async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller): Promise<string | undefined> {
     const record = await this.ensureRecord(conversationId);
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
 
     try {
-      record.sessionReady = this.ensureSession(record);
+      const authorization = caller ? this.resolveAuthorization(record, caller) : undefined;
+      record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
       await session.prompt(text, images ? { images } : undefined);
       this.publishNewEntries(record);
@@ -167,7 +187,7 @@ export class SessionHost {
 
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("Persistent SessionManager did not provide a session file");
-    this.options.store.saveConversation({ id: conversationId, sessionFile, workspace });
+    this.options.store.saveConversation({ ...(indexed ?? {}), id: conversationId, sessionFile, workspace });
 
     const record: SessionRecord = {
       conversationId,
@@ -180,15 +200,16 @@ export class SessionHost {
     return record;
   }
 
-  private async ensureSession(record: SessionRecord): Promise<AgentSession> {
+  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
     if (record.session) return record.session;
-    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId);
+    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization);
     await resourceLoader.reload();
+    const customTools = this.toolsFor(authorization);
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
       model: this.options.model,
-      thinkingLevel: "off",
+      thinkingLevel: this.thinkingLevelFor(authorization),
       modelRuntime: this.options.modelRuntime,
       resourceLoader,
       sessionManager: record.sessionManager,
@@ -196,12 +217,53 @@ export class SessionHost {
         compaction: { enabled: false },
         retry: { enabled: false },
       }),
-      tools: this.options.customTools?.map((tool) => tool.name) ?? [],
-      customTools: this.options.customTools,
+      tools: customTools.map((tool) => tool.name),
+      customTools,
     });
     record.session = result.session;
     record.unsubscribe = result.session.subscribe((event) => this.publish(record, event));
     return result.session;
+  }
+
+  private toolsFor(authorization?: SessionAuthorization): ToolDefinition[] {
+    if (!authorization) return this.options.customTools ?? [];
+    const allowed = this.allowedTools(authorization.snapshot);
+    const tools = [
+      ...(this.options.customTools ?? []),
+      ...createMemoryTools({ caller: authorization.caller, employeeId: authorization.employeeId, managerClient: authorization.managerClient }),
+      ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), managerClient: authorization.managerClient }),
+    ];
+    return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index);
+  }
+
+  private allowedTools(snapshot: FrozenSnapshot): Set<string> {
+    const policy = snapshot.tool_policy;
+    if (!policy || typeof policy !== "object") return new Set();
+    const allowed = (policy as Record<string, unknown>).allowed_tools;
+    return new Set(Array.isArray(allowed) ? allowed.filter((name): name is string => typeof name === "string") : []);
+  }
+
+  private knowledgeRefs(snapshot: FrozenSnapshot): string[] {
+    return Array.isArray(snapshot.knowledge_refs) ? snapshot.knowledge_refs.filter((ref): ref is string => typeof ref === "string") : [];
+  }
+
+  private thinkingLevelFor(authorization?: SessionAuthorization): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" {
+    const policy = authorization?.snapshot.model_policy;
+    const value = policy && typeof policy === "object"
+      ? (policy as Record<string, unknown>).thinking_level
+      : undefined;
+    return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "off";
+  }
+
+  private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller): SessionAuthorization | undefined {
+    const metadata = this.options.store.getConversationMetadata(record.conversationId);
+    const employeeId = metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
+    if (!employeeId) return undefined;
+    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === employeeId);
+    if (!expert || expert.revoked || (caller.tenantId && expert.tenant_id !== caller.tenantId)) throw new SessionAuthorizationError();
+    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version);
+    if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
+    return { caller, employeeId, snapshot, managerClient: this.options.managerClient };
   }
 
   private disposeSession(record: SessionRecord): void {

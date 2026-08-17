@@ -5,6 +5,7 @@ import { fauxProvider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { SessionHost } from "./pi/session-host.js";
+import type { ManagerClient } from "./manager-client.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 export async function createFixture() {
@@ -18,7 +19,7 @@ export async function createFixture() {
   });
   modelRuntime.registerNativeProvider(faux.provider);
   const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
-  const createHost = (model = faux.getModel()) =>
+  const createHost = (model = faux.getModel(), managerClient?: ManagerClient) =>
     new SessionHost({
       cwdRoot: join(dataRoot, "workspaces"),
       agentDir: join(dataRoot, "pi"),
@@ -26,6 +27,7 @@ export async function createFixture() {
       store,
       modelRuntime,
       model,
+      managerClient,
       resourceLoaderFactory: () => createControlledResourceLoader("test system prompt"),
     });
   const host = createHost();
