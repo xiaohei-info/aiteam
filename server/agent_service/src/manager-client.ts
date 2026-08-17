@@ -226,8 +226,9 @@ function normalizeExpert(value: unknown, tenantId?: string): LoadedExpertProject
 function normalizeSolution(value: unknown, tenantId?: string): LoadedSolutionProjection {
   if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid solution projection");
   const raw = value as Record<string, unknown>;
-  const id = stringValue(raw.solution_instance_id ?? raw.solution_id, "solution_instance_id");
-  return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version: String(raw.version ?? ""), ...(tenantId ? { tenant_id: tenantId } : {}) };
+  const id = stringValue(raw.solution_instance_id ?? raw.solution_id ?? raw.id, "solution_instance_id");
+  const version = String(raw.version ?? (raw.solution_version !== undefined && raw.config_version !== undefined ? `${raw.solution_version}:${raw.config_version}` : raw.solution_version ?? raw.config_version ?? ""));
+  return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}) };
 }
 
 function normalizeSnapshot(value: unknown, tenantId?: string): FrozenSnapshot {
