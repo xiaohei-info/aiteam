@@ -47,6 +47,7 @@ export interface ConversationMetadata {
 export interface LoadedExpertProjection {
   employee_id: string;
   tenant_id: string;
+  member_id?: string;
   version: string;
   handle: string;
   display_name: string;
@@ -61,6 +62,7 @@ export interface LoadedSolutionProjection {
   display_name: string;
   version: string;
   tenant_id?: string;
+  member_id?: string;
   [key: string]: unknown;
 }
 
@@ -70,12 +72,14 @@ export interface FrozenSnapshot {
   snapshot_version: string;
   display_name: string;
   tenant_id?: string;
+  member_id?: string;
   [key: string]: unknown;
 }
 
 export interface UsageOutboxItem {
   summary_id: string;
   tenant_id: string;
+  member_id: string;
   kind: string;
   status: string;
   attempts: number;
@@ -187,29 +191,38 @@ export class AgentSqliteStore {
       );
 
       CREATE TABLE IF NOT EXISTS loaded_employee_projection (
-        employee_id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
         tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL DEFAULT '',
         version TEXT NOT NULL,
         projection_json TEXT NOT NULL,
         revoked INTEGER NOT NULL DEFAULT 0,
-        synced_at TEXT NOT NULL
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (employee_id, tenant_id, member_id)
       );
       CREATE TABLE IF NOT EXISTS loaded_solution_projection (
-        solution_instance_id TEXT PRIMARY KEY,
+        solution_instance_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '',
+        member_id TEXT NOT NULL DEFAULT '',
         version TEXT NOT NULL,
         projection_json TEXT NOT NULL,
-        synced_at TEXT NOT NULL
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (solution_instance_id, tenant_id, member_id)
       );
       CREATE TABLE IF NOT EXISTS frozen_snapshot (
-        employee_id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '',
+        member_id TEXT NOT NULL DEFAULT '',
         snapshot_version TEXT NOT NULL,
         version TEXT NOT NULL,
         projection_json TEXT NOT NULL,
-        synced_at TEXT NOT NULL
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (employee_id, tenant_id, member_id)
       );
       CREATE TABLE IF NOT EXISTS usage_summary_outbox (
         summary_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL DEFAULT '',
         kind TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -223,6 +236,7 @@ export class AgentSqliteStore {
     `);
     // Pi Session JSONL is the sole content fact source; remove any pre-cutover raw event table.
     this.db.exec("DROP TABLE IF EXISTS pi_event");
+    this.migrateOwnershipTables();
     for (const statement of [
       "ALTER TABLE conversation ADD COLUMN title TEXT",
       "ALTER TABLE conversation ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'",
@@ -235,12 +249,51 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN member_id TEXT",
       "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
+      "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
+    this.db.prepare("UPDATE usage_summary_outbox SET member_id = COALESCE(NULLIF(member_id, ''), json_extract(payload_json, '$.member_id'), '') WHERE member_id = ''").run();
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', last_error = COALESCE(last_error, 'Recovered unfinished usage upload'), claim_token = NULL, claimed_at = NULL WHERE status = 'sending'").run();
+  }
+
+  private migrateOwnershipTables(): void {
+    const tableInfo = (table: string) => this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; pk: number }[];
+    const rebuild = (table: string, createSql: string, columns: string, select: string) => {
+      const legacy = `${table}_legacy`;
+      this.db.exec(`ALTER TABLE ${table} RENAME TO ${legacy}; ${createSql}; INSERT INTO ${table} (${columns}) SELECT ${select} FROM ${legacy}; DROP TABLE ${legacy};`);
+    };
+    const employeeInfo = tableInfo("loaded_employee_projection");
+    if (!employeeInfo.some((column) => column.name === "member_id") || employeeInfo.filter((column) => column.pk > 0).map((column) => column.name).join(",") !== "employee_id,tenant_id,member_id") {
+      const member = employeeInfo.some((column) => column.name === "member_id") ? "COALESCE(member_id, json_extract(projection_json, '$.member_id'), '')" : "COALESCE(json_extract(projection_json, '$.member_id'), '')";
+      rebuild("loaded_employee_projection", `CREATE TABLE loaded_employee_projection (
+        employee_id TEXT NOT NULL, tenant_id TEXT NOT NULL, member_id TEXT NOT NULL DEFAULT '', version TEXT NOT NULL,
+        projection_json TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, synced_at TEXT NOT NULL,
+        PRIMARY KEY (employee_id, tenant_id, member_id)
+      )`, "employee_id, tenant_id, member_id, version, projection_json, revoked, synced_at", `employee_id, tenant_id, ${member}, version, projection_json, revoked, synced_at`);
+    }
+    const solutionInfo = tableInfo("loaded_solution_projection");
+    if (!solutionInfo.some((column) => column.name === "member_id") || solutionInfo.filter((column) => column.pk > 0).map((column) => column.name).join(",") !== "solution_instance_id,tenant_id,member_id") {
+      const tenant = solutionInfo.some((column) => column.name === "tenant_id") ? "COALESCE(tenant_id, json_extract(projection_json, '$.tenant_id'), '')" : "COALESCE(json_extract(projection_json, '$.tenant_id'), '')";
+      const member = solutionInfo.some((column) => column.name === "member_id") ? "COALESCE(member_id, json_extract(projection_json, '$.member_id'), '')" : "COALESCE(json_extract(projection_json, '$.member_id'), '')";
+      rebuild("loaded_solution_projection", `CREATE TABLE loaded_solution_projection (
+        solution_instance_id TEXT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', member_id TEXT NOT NULL DEFAULT '', version TEXT NOT NULL,
+        projection_json TEXT NOT NULL, synced_at TEXT NOT NULL,
+        PRIMARY KEY (solution_instance_id, tenant_id, member_id)
+      )`, "solution_instance_id, tenant_id, member_id, version, projection_json, synced_at", `solution_instance_id, ${tenant}, ${member}, version, projection_json, synced_at`);
+    }
+    const snapshotInfo = tableInfo("frozen_snapshot");
+    if (!snapshotInfo.some((column) => column.name === "member_id") || snapshotInfo.filter((column) => column.pk > 0).map((column) => column.name).join(",") !== "employee_id,tenant_id,member_id") {
+      const tenant = snapshotInfo.some((column) => column.name === "tenant_id") ? "COALESCE(tenant_id, json_extract(projection_json, '$.tenant_id'), '')" : "COALESCE(json_extract(projection_json, '$.tenant_id'), '')";
+      const member = snapshotInfo.some((column) => column.name === "member_id") ? "COALESCE(member_id, json_extract(projection_json, '$.member_id'), '')" : "COALESCE(json_extract(projection_json, '$.member_id'), '')";
+      rebuild("frozen_snapshot", `CREATE TABLE frozen_snapshot (
+        employee_id TEXT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', member_id TEXT NOT NULL DEFAULT '', snapshot_version TEXT NOT NULL,
+        version TEXT NOT NULL, projection_json TEXT NOT NULL, synced_at TEXT NOT NULL,
+        PRIMARY KEY (employee_id, tenant_id, member_id)
+      )`, "employee_id, tenant_id, member_id, snapshot_version, version, projection_json, synced_at", `employee_id, ${tenant}, ${member}, snapshot_version, version, projection_json, synced_at`);
+    }
   }
 
   listScheduledConversations(): ConversationRecord[] {
@@ -343,44 +396,46 @@ export class AgentSqliteStore {
     return record ? this.toMetadata(record) : undefined;
   }
 
-  listLoadedExperts(): LoadedExpertProjection[] {
-    return (this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE revoked = 0 ORDER BY employee_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as LoadedExpertProjection);
+  listLoadedExperts(tenantId?: string, memberId?: string): LoadedExpertProjection[] {
+    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM loaded_employee_projection WHERE revoked = 0 AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as LoadedExpertProjection, tenant_id: row.tenant_id, ...(row.member_id ? { member_id: row.member_id } : {}) }));
   }
 
-  listSnapshots(): FrozenSnapshot[] {
-    return (this.db.prepare("SELECT projection_json FROM frozen_snapshot ORDER BY employee_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as FrozenSnapshot);
+  listSnapshots(tenantId?: string, memberId?: string): FrozenSnapshot[] {
+    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM frozen_snapshot WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as FrozenSnapshot, ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
   }
 
-  listSolutions(): LoadedSolutionProjection[] {
-    return (this.db.prepare("SELECT projection_json FROM loaded_solution_projection ORDER BY solution_instance_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as LoadedSolutionProjection);
+  listSolutions(tenantId?: string, memberId?: string): LoadedSolutionProjection[] {
+    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM loaded_solution_projection WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY solution_instance_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as LoadedSolutionProjection, ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
   }
 
-  replaceProjections(experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[] = []): { upserted: number; revoked: number } {
+  replaceProjections(experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[] = [], owner?: { tenantId: string; memberId: string }): { upserted: number; revoked: number } {
     const now = new Date().toISOString();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id) DO UPDATE SET tenant_id=excluded.tenant_id, version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
-      for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.version, JSON.stringify({ ...expert, synced_at: expert.synced_at ?? now, revoked: false }), now);
-      const revoke = this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ?");
-      for (const id of revokedIds) revoke.run(now, id);
-      const upsertSolution = this.db.prepare("INSERT INTO loaded_solution_projection (solution_instance_id, version, projection_json, synced_at) VALUES (?, ?, ?, ?) ON CONFLICT(solution_instance_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
-      for (const solution of solutions) upsertSolution.run(solution.solution_instance_id, solution.version, JSON.stringify(solution), now);
-      const upsertSnapshot = this.db.prepare("INSERT INTO frozen_snapshot (employee_id, snapshot_version, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(employee_id) DO UPDATE SET snapshot_version=excluded.snapshot_version, version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
-      for (const snapshot of snapshots) upsertSnapshot.run(snapshot.employee_id, snapshot.snapshot_version, snapshot.version, JSON.stringify(snapshot), now);
+      const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, member_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
+      for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.member_id ?? "", expert.version, JSON.stringify({ ...expert, tenant_id: expert.tenant_id, ...(expert.member_id ? { member_id: expert.member_id } : {}), synced_at: expert.synced_at ?? now, revoked: false }), now);
+      const revoke = owner
+        ? this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND (member_id = ? OR member_id = '')")
+        : this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ?");
+      for (const id of revokedIds) owner ? revoke.run(now, id, owner.tenantId, owner.memberId) : revoke.run(now, id);
+      const upsertSolution = this.db.prepare("INSERT INTO loaded_solution_projection (solution_instance_id, tenant_id, member_id, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(solution_instance_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
+      for (const solution of solutions) upsertSolution.run(solution.solution_instance_id, solution.tenant_id ?? "", solution.member_id ?? "", solution.version, JSON.stringify({ ...solution, ...(solution.tenant_id ? { tenant_id: solution.tenant_id } : {}), ...(solution.member_id ? { member_id: solution.member_id } : {}) }), now);
+      const upsertSnapshot = this.db.prepare("INSERT INTO frozen_snapshot (employee_id, tenant_id, member_id, snapshot_version, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET snapshot_version=excluded.snapshot_version, version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
+      for (const snapshot of snapshots) upsertSnapshot.run(snapshot.employee_id, snapshot.tenant_id ?? "", snapshot.member_id ?? "", snapshot.snapshot_version, snapshot.version, JSON.stringify({ ...snapshot, ...(snapshot.tenant_id ? { tenant_id: snapshot.tenant_id } : {}), ...(snapshot.member_id ? { member_id: snapshot.member_id } : {}) }), now);
       this.db.exec("COMMIT");
       return { upserted: experts.length + solutions.length + snapshots.length, revoked: revokedIds.length };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  listUsageOutbox(tenantId?: string): UsageOutboxItem[] {
-    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at, claim_token FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null) as unknown as UsageOutboxItem[];
+  listUsageOutbox(tenantId?: string, memberId?: string): UsageOutboxItem[] {
+    return this.db.prepare("SELECT summary_id, tenant_id, member_id, kind, status, attempts, last_error, created_at, claim_token FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as unknown as UsageOutboxItem[];
   }
 
   upsertUsageSummary(summary: UsageSummary): void {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO usage_summary_outbox (summary_id, tenant_id, kind, status, attempts, last_error, payload_json, created_at)
-      VALUES (?, ?, 'usage', 'pending', 0, NULL, ?, ?)
+      INSERT INTO usage_summary_outbox (summary_id, tenant_id, member_id, kind, status, attempts, last_error, payload_json, created_at)
+      VALUES (?, ?, ?, 'usage', 'pending', 0, NULL, ?, ?)
       ON CONFLICT(summary_id) DO UPDATE SET
         payload_json = json_object(
           'schema_version', '1', 'summary_id', excluded.summary_id,
@@ -402,15 +457,17 @@ export class AgentSqliteStore {
           'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),
           'duration_seconds_total', json_extract(usage_summary_outbox.payload_json, '$.duration_seconds_total') + json_extract(excluded.payload_json, '$.duration_seconds_total')
         ), status = CASE WHEN status = 'sent' THEN 'sent' ELSE 'pending' END, last_error = NULL
-    `).run(summary.summary_id, summary.tenant_id, JSON.stringify(summary), now);
+    `).run(summary.summary_id, summary.tenant_id, summary.member_id, JSON.stringify(summary), now);
   }
 
-  claimUsageOutbox(tenantId: string, limit = 50): Array<{ summary_id: string; tenant_id: string; payload: UsageSummary; claim_token: string }> {
+  claimUsageOutbox(tenantId: string, memberIdOrLimit?: string | number, limit = 50): Array<{ summary_id: string; tenant_id: string; payload: UsageSummary; claim_token: string }> {
+    const memberId = typeof memberIdOrLimit === "string" ? memberIdOrLimit : undefined;
+    const effectiveLimit = typeof memberIdOrLimit === "number" ? memberIdOrLimit : limit;
     const claimToken = randomUUID();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const rows = this.db.prepare(`SELECT summary_id, tenant_id, payload_json FROM usage_summary_outbox
-        WHERE tenant_id = ? AND status IN ('pending', 'failed') ORDER BY created_at ASC LIMIT ?`).all(tenantId, Math.min(Math.max(limit, 1), 100)) as { summary_id: string; tenant_id: string; payload_json: string }[];
+        WHERE tenant_id = ? AND (? IS NULL OR member_id = '' OR member_id = ?) AND status IN ('pending', 'failed') ORDER BY created_at ASC LIMIT ?`).all(tenantId, memberId ?? null, memberId ?? null, Math.min(Math.max(effectiveLimit, 1), 100)) as { summary_id: string; tenant_id: string; payload_json: string }[];
       for (const row of rows) this.db.prepare("UPDATE usage_summary_outbox SET status = 'sending', attempts = attempts + 1, claim_token = ?, claimed_at = ?, last_error = NULL WHERE summary_id = ? AND status IN ('pending', 'failed')").run(claimToken, new Date().toISOString(), row.summary_id);
       this.db.exec("COMMIT");
       return rows.map((row) => ({ summary_id: row.summary_id, tenant_id: row.tenant_id, payload: JSON.parse(row.payload_json) as UsageSummary, claim_token: claimToken }));

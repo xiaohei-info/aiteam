@@ -348,11 +348,14 @@ export class SessionHost {
 
   private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller): SessionAuthorization | undefined {
     const metadata = this.options.store.getConversationMetadata(record.conversationId);
+    const memberId = caller.userId ?? caller.callerId;
+    if (metadata?.tenant_id && metadata.tenant_id !== caller.tenantId) throw new SessionAuthorizationError();
+    if (metadata?.member_id && metadata.member_id !== memberId) throw new SessionAuthorizationError();
     const employeeId = metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
     if (!employeeId) throw new SessionAuthorizationError("Conversation has no authorized employee");
-    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === employeeId);
-    if (!expert || expert.revoked || (caller.tenantId && expert.tenant_id !== caller.tenantId)) throw new SessionAuthorizationError();
-    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version && (!caller.tenantId || !item.tenant_id || item.tenant_id === caller.tenantId));
+    const expert = this.options.store.listLoadedExperts(caller.tenantId, memberId).find((item) => item.employee_id === employeeId);
+    if (!expert || expert.revoked) throw new SessionAuthorizationError();
+    const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && item.version === expert.version);
     if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
     return { caller, employeeId, snapshot, managerClient: this.options.managerClient };
   }
@@ -372,9 +375,10 @@ export class SessionHost {
 
   private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
     if (!authorization.caller.tenantId) throw new Error("Authenticated tenant is required for delegation");
-    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === input.employee_id && item.tenant_id === authorization.caller.tenantId && !item.revoked);
+    const memberId = authorization.caller.userId ?? authorization.caller.callerId;
+    const expert = this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && !item.revoked);
     if (!expert) throw new Error("Employee is not in the authorized local roster");
-    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === input.employee_id && item.version === expert.version);
+    const snapshot = this.options.store.listSnapshots(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && item.version === expert.version);
     if (!snapshot) throw new Error("Employee snapshot is not available locally");
 
     const prompt = [input.task, input.context ? `Context:\n${input.context}` : ""].filter(Boolean).join("\n\n");

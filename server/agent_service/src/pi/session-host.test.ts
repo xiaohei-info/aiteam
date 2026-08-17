@@ -74,6 +74,28 @@ test("SessionHost binds authorized snapshot tools and emits Pi tool events", asy
   }
 });
 
+test("same-tenant members cannot read or prompt each other's projections and sessions", async () => {
+  const fixture = await createFixture();
+  try {
+    const now = new Date().toISOString();
+    fixture.store.replaceProjections([
+      { employee_id: "member-one-employee", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "one", display_name: "One", revoked: false, synced_at: now, model_policy: { model: "test" } },
+      { employee_id: "member-two-employee", tenant_id: "tenant-1", member_id: "member-2", version: "1", handle: "two", display_name: "Two", revoked: false, synced_at: now, model_policy: { model: "test" } },
+    ], [], [
+      { employee_id: "member-one-employee", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "one", display_name: "One", tool_policy: { allowed_tools: [] } },
+      { employee_id: "member-two-employee", tenant_id: "tenant-1", member_id: "member-2", version: "1", snapshot_version: "two", display_name: "Two", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "member-two-session", tenantId: "tenant-1", memberId: "member-2", sessionFile: "", workspace: "", entryEmployeeId: "member-two-employee" });
+    assert.deepEqual(fixture.store.listLoadedExperts("tenant-1", "member-1").map((expert) => expert.employee_id), ["member-one-employee"]);
+    assert.deepEqual(fixture.store.listSnapshots("tenant-1", "member-1").map((snapshot) => snapshot.employee_id), ["member-one-employee"]);
+    const host = fixture.createHost();
+    await assert.rejects(host.prompt("member-two-session", "must not run", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" }), /not authorized locally/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("delegate_employee rejects cross-tenant or missing local roster targets", async () => {
   const fixture = await createFixture();
   try {

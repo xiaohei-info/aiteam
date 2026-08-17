@@ -302,13 +302,13 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listLoadedExperts().filter((item) => item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
-  private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSolutions().filter((item) => !item.tenant_id || item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
+  private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
   private listMarketplaceTemplates(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
   private listKnowledgeBases(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
   private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
-  private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots().filter((item) => item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
-  private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
+  private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
+  private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
 
   private async flushUsage(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.usageFlush) throw new HttpProblem(503, "manager_unavailable", "Manager usage upload is not configured");
@@ -327,9 +327,9 @@ export class AgentHttpServer {
     if (tenantId !== caller.tenantId || memberId !== (caller.userId ?? caller.callerId)) throw new HttpProblem(403, "forbidden", "Sync identity does not match authenticated caller");
     const knownVersions = body.known_versions === undefined ? {} : this.objectField(body.known_versions, "known_versions");
     try {
-      const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions as Record<string, string>), caller.tenantId);
+      const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions as Record<string, string>), caller.tenantId, caller.userId ?? caller.callerId);
       const snapshots = config.snapshots ?? (this.options.managerClient.pullSnapshots ? await this.options.managerClient.pullSnapshots(caller, config.experts ?? []) : []);
-      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots.map((snapshot) => ({ ...snapshot, tenant_id: caller.tenantId })), config.revoked_ids ?? []);
+      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId });
       this.writeJson(response, 200, { data: { ok: true, ...result } });
     } catch (error) {
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
@@ -340,13 +340,13 @@ export class AgentHttpServer {
   private async readiness(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const runtime = (await this.options.runtimeReady?.()) ?? true;
     const state = runtime ? "ready" : "blocked";
-    const experts = this.options.store.listLoadedExperts().filter((expert) => expert.tenant_id === caller.tenantId).map((expert) => this.expertReadinessValue(expert, runtime));
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => this.expertReadinessValue(expert, runtime));
     this.writeJson(response, 200, { data: { runtime: state, runtime_reason: runtime ? undefined : "Pi runtime is not ready", experts } });
   }
 
   private async expertReadiness(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
     const id = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === id && item.tenant_id === caller.tenantId);
+    const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === id);
     if (!expert) return this.writeJson(response, 200, { data: { employee_id: id, display_name: id, handle: id, available: false, runtime: "unknown", provider: "unknown", skills: [], capabilities: [], reasons: ["Expert is not authorized locally"] } });
     const runtime = (await this.options.runtimeReady?.()) ?? true;
     this.writeJson(response, 200, { data: this.expertReadinessValue(expert, runtime) });
@@ -364,7 +364,7 @@ export class AgentHttpServer {
   }
 
   private officeScene(response: ServerResponse, caller: AuthenticatedCaller): void {
-    const employees = this.options.store.listLoadedExperts().filter((expert) => expert.tenant_id === caller.tenantId).map((expert) => ({ employee_id: expert.employee_id, display_name: expert.display_name, status: expert.revoked ? "offline" : "ready", task: null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null }));
+    const employees = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ employee_id: expert.employee_id, display_name: expert.display_name, status: expert.revoked ? "offline" : "ready", task: null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null }));
     const summary = { total: employees.length, working: 0, ready: employees.filter((employee) => employee.status === "ready").length, offline: employees.filter((employee) => employee.status === "offline").length };
     this.writeJson(response, 200, { data: { employees, summary } });
   }
@@ -387,8 +387,8 @@ export class AgentHttpServer {
     const conversation = this.options.store.getOwnedConversation(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
-    const expert = employeeId ? this.options.store.listLoadedExperts().find((item) => item.employee_id === employeeId && item.tenant_id === caller.tenantId && !item.revoked) : undefined;
-    const snapshot = employeeId && expert ? this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version && item.tenant_id === caller.tenantId) : undefined;
+    const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
+    const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
     if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
     const payload = await this.readJson(request);
     const text = payload.text;

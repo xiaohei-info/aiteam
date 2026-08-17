@@ -21,7 +21,7 @@ export class UsageFlushService {
   private async flushInternal(caller: AuthenticatedCaller, limit: number): Promise<{ sent: string[]; failed: string[] }> {
     const client = this.managerClient;
     if (!client?.uploadUsage) throw new Error("Manager usage upload is not configured");
-    const rows = this.store.claimUsageOutbox(caller.tenantId!, limit);
+    const rows = this.store.claimUsageOutbox(caller.tenantId!, caller.userId ?? caller.callerId, limit);
     const sent: string[] = [];
     const failed: string[] = [];
     for (const row of rows) {
