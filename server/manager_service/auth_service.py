@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
@@ -172,9 +173,16 @@ class AuthService:
 
     # ---- token 单一出口（9.3/9.5）----
     def _issue(self, tenant_id, user_id, roles):
+        now = int(time.time())
         claims = TokenClaims(
-            tenant_id=tenant_id, user_id=user_id, roles=roles,
-            exp=int(time.time()) + _ACCESS_TTL_SECONDS,
+            tenant_id=tenant_id,
+            enterprise_id=tenant_id,
+            user_id=user_id,
+            roles=roles,
+            iss=os.getenv("AITEAM_JWT_ISSUER", "aiteam-manager"),
+            aud=os.getenv("AITEAM_JWT_AUDIENCE", "aiteam-agent"),
+            iat=now,
+            exp=now + _ACCESS_TTL_SECONDS,
         )
         token = self._keys.signer(tenant_id).sign(claims)
         return AuthResult(token=token, claims=claims)

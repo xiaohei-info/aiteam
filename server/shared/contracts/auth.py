@@ -27,6 +27,9 @@ class TokenClaims(BaseModel):
     enterprise_id: str | None = Field(default=None)
     user_id: str = Field(description="规范账号 id（UUID 字符串）")
     roles: list[str] = Field(default_factory=list, description="EnterpriseRole/PlatformRole 取值")
+    iss: str | None = Field(default=None, description="JWT issuer；Agent 生产验签必填")
+    aud: str | list[str] | None = Field(default=None, description="JWT audience；Agent 生产验签必填")
+    iat: int | None = Field(default=None, description="JWT issued-at Unix 秒")
     exp: int = Field(description="过期时间（Unix 秒）。短期 access token，过期需重新联网登录")
 
 

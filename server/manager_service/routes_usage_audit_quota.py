@@ -32,7 +32,7 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.tenancy import TenantContext
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError
+from shared.errors import AppError, Forbidden
 
 from .schemas import (
     AuditSummaryOut,
@@ -42,7 +42,6 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
-from .service_ingress import service_tenant_context
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
     build_usage_audit_quota_service,
@@ -91,10 +90,12 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
     async def upload_usage(
         body: UsageSummaryUploadIn,
         request: Request,
-        ctx: TenantContext = Depends(service_tenant_context),
+        claims: TokenClaims = Depends(require),
     ) -> Envelope[dict]:
         svc = _service(request)
-        # body.tenant_id is compatibility-only and is never used as a tenant authority.
+        ctx = tenant_context_from(claims)
+        if body.tenant_id != ctx.tenant_id:
+            raise Forbidden("usage tenant_id must match the authenticated tenant")
         result = svc.ingest_upload(ctx, body.model_dump(exclude={"tenant_id"}))
         return Envelope[dict](data=result)
 

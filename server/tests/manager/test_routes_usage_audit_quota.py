@@ -30,10 +30,6 @@ def _hdr(roles=("owner",)):
     return {"Authorization": "Bearer " + sign_inmem_token(_SIGNER, "t1", list(roles))}
 
 
-def _svc_hdr():
-    return {"X-Service-Token": "test-service-token"}
-
-
 def _client(db_url):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
@@ -152,14 +148,14 @@ def test_quota_create_no_db_503():
 
 def test_usage_upload_no_db_503():
     client = _client(None)
-    r = client.post("/api/manager/usage/upload", json=_UPLOAD_BODY, headers=_svc_hdr())
+    r = client.post("/api/manager/usage/upload", json=_UPLOAD_BODY, headers=_hdr())
     assert r.status_code == 503
 
 
 def test_usage_upload_extra_422():
     client = _client("postgresql://fake/fake")
     r = client.post("/api/manager/usage/upload",
-                    json={**_UPLOAD_BODY, "bad": 1}, headers=_svc_hdr())
+                    json={**_UPLOAD_BODY, "bad": 1}, headers=_hdr())
     assert r.status_code == 422
 
 
@@ -222,8 +218,8 @@ def test_usage_upload_happy():
                return_value=fake):
         c = _client("postgresql://fake/fake")
         r = c.post("/api/manager/usage/upload",
-                   json={**_UPLOAD_BODY, "tenant_id": "forged", "usage": [{"id": "s1"}]},
-                   headers=_svc_hdr())
+                   json={**_UPLOAD_BODY, "usage": [{"id": "s1"}]},
+                   headers=_hdr())
         assert r.status_code == 200
         assert r.json()["data"]["ingested"] == 1
         assert fake.ingest_upload.call_args.args[0].tenant_id == "t1"
@@ -315,10 +311,6 @@ _VERIFIER2, _SIGNER2 = make_inmem_verifier_and_signer()
 
 def _hdr2(roles=("owner",)):
     return {"Authorization": "Bearer " + sign_inmem_token(_SIGNER2, "t9", list(roles))}
-
-
-def _svc_hdr2():
-    return {"X-Service-Token": "test-service-token"}
 
 
 def _client2(db_url):
