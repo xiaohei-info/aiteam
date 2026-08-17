@@ -124,6 +124,10 @@ docker run --rm aiteam-agent:dev sh -c \
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
+| `KNOWLEDGE_INDEX_URL` | Manager 外部知识 artifact/index 地址 | `https://knowledge-index.example.com` |
+| `KNOWLEDGE_INDEX_SERVICE_TOKEN` | Manager→artifact/index bearer token | `<secret>` |
+| `KNOWLEDGE_INDEX_SEARCH_PATH` | artifact/index 搜索路径 | `/artifacts/search` |
+| `KNOWLEDGE_INDEX_GET_PATH` | artifact/index citation 路径 | `/artifacts/get` |
 
 > 变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
 
