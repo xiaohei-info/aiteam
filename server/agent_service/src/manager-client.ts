@@ -22,6 +22,7 @@ export interface ManagerOwnerResetInput {
 }
 
 export interface ManagerClient {
+  resolveTenantByAccount?(account: string): Promise<unknown>;
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
@@ -44,6 +45,10 @@ export class ManagerAuthError extends Error {
 /** Thin Agent→Manager seam. It never turns transport failure into authorization. */
 export class HttpManagerClient implements ManagerClient {
   constructor(private readonly baseUrl: string, private readonly fetchImpl: typeof fetch = fetch) {}
+
+  async resolveTenantByAccount(account: string): Promise<unknown> {
+    return this.authRequest("/api/auth/resolve-tenant-by-account", { account });
+  }
 
   async login(input: ManagerAuthInput): Promise<unknown> {
     return this.authRequest("/api/auth/login", input);

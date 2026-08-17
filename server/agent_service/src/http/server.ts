@@ -86,10 +86,12 @@ export class AgentHttpServer {
 
       const route = this.matchConversationRoute(url.pathname);
       const platformRoute = this.matchPlatformRoute(url.pathname);
-      if (!route && !platformRoute) {
+      const publicAuthRoute = url.pathname === "/api/auth/resolve-tenant-by-account";
+      if (!route && !platformRoute && !publicAuthRoute) {
         if (request.method === "GET" && this.serveSpa(url.pathname, response)) return;
         throw new HttpProblem(404, "not_found", "Route not found");
       }
+      if (url.pathname === "/api/auth/resolve-tenant-by-account" && request.method === "POST") return await this.resolveTenantByAccount(request, response);
       if (platformRoute === "login" && request.method === "POST") return await this.login(request, response);
       if (platformRoute === "reset-password" && request.method === "POST") return await this.resetPassword(request, response);
       let caller: AuthenticatedCaller;
@@ -153,6 +155,23 @@ export class AgentHttpServer {
       this.errors += 1;
       if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
       this.writeError(response, error, requestId);
+    }
+  }
+
+  private async resolveTenantByAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!this.options.managerClient?.resolveTenantByAccount) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is not configured");
+    const body = await this.readJson(request);
+    const account = this.stringField(body.account, "account", 256);
+    try {
+      const payload = await this.options.managerClient.resolveTenantByAccount(account);
+      this.writeJson(response, 200, payload);
+    } catch (error) {
+      if (error instanceof ManagerAuthError) {
+        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
+        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "tenant_resolution_failed", typeof body?.detail === "string" ? body.detail : "Manager tenant resolution failed", body?.errors);
+      }
+      if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
+      throw error;
     }
   }
 
@@ -551,6 +570,7 @@ const OPENAPI = {
     "/api/agent/conversations": { get: { operationId: "listConversations", responses: { "200": { description: "Conversation metadata" } } }, post: { operationId: "createConversation", responses: { "201": { description: "Conversation metadata" } } } },
     "/api/agent/conversations/{conversation_id}": { get: { operationId: "getConversation", responses: { "200": { description: "Conversation metadata" } } }, patch: { operationId: "updateConversation", responses: { "200": { description: "Conversation metadata" } } }, delete: { operationId: "deleteConversation", responses: { "200": { description: "Deleted" } } } },
     "/api/agent/conversations/{conversation_id}/state": { put: { operationId: "setConversationState", responses: { "200": { description: "Conversation metadata" } } } },
+    "/api/auth/resolve-tenant-by-account": { post: { operationId: "resolveTenantByAccount", responses: { "200": { description: "Resolved tenant" }, "503": { description: "Manager unavailable" } } } },
     "/api/agent/login": { post: { operationId: "login", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Authentication failed" } } } },
     "/api/agent/reset-password": { post: { operationId: "resetPassword", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Reset failed" } } } },
     "/api/agent/ping": { get: { operationId: "ping", responses: { "200": { description: "Pong" } } } },
