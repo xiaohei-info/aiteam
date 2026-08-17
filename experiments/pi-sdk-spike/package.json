@@ -1,0 +1,25 @@
+{
+  "name": "@aiteam/pi-sdk-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "run": "tsx src/pi-sdk-spike.ts",
+    "verify": "npm run check && npm run run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "typebox": "1.3.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "tsx": "4.19.2",
+    "typescript": "5.9.3"
+  }
+}

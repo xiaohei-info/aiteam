@@ -8,6 +8,12 @@ scope: agent-rebuild
 
 # AI Team 基于 pi-coding-agent 的代码迁移与删除计划
 
+## 实施进度
+
+- **M0-A（已完成）**：`experiments/pi-sdk-spike/` 已锁定 Pi `0.84.2`，验证 controlled ResourceLoader、custom tool、Pi event、Session JSONL reopen 和 abort。
+- **M1-A（已完成）**：新增 `server/agent_service` Node/TypeScript 最小纵向切片，包含 SessionHost、Pi Session index、SQLite idempotency receipt、`prompt`、SSE、`entries`、`abort` 和测试。
+- **当前明确未完成**：真实 provider/AI Relay、Manager JWT/auth 接入、Skills/knowledge/Hindsight、sandbox、delegate child Session、schedule、前端切换以及旧 Python Agent 删除。
+
 > 本计划是 `docs/superpowers/specs/2026-08-17-pi-coding-agent-sdk-agent架构重构设计.md` 的实施配套，不新增架构裁决。
 > 目标是把当前 Python Agent/Gateway 代码迁移为 Node/TypeScript + 进程内 Pi SDK，并删除旧执行模型。
 > 本计划只描述迁移顺序、文件边界、接口和验收；若与 spec 冲突，以 spec 为准。
