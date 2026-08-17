@@ -39,7 +39,7 @@ import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import { MentionComposer } from "./MentionComposer";
 import {
-  createLocalGroupConversation,
+  createGroupConversation,
   listLoadedExperts,
   listSolutionInstances,
   type GroupExpert,
@@ -152,10 +152,21 @@ export function GroupPage() {
     if (!sol) return;
     setCreating(true);
     try {
-      const conv = createLocalGroupConversation({
+      const coordinator = sol.expert_employee_ids?.map((id) => experts.find((expert) => expert.employee_id === id)).find(Boolean)
+        ?? experts.find((expert) => !expert.revoked);
+      if (!coordinator) {
+        setSolutionsError("暂无可授权的群聊协调专家");
+        return;
+      }
+      const conv = await createGroupConversation(client, {
         solution_instance_id: sol.solution_instance_id,
         title: sol.display_name || "方案群聊",
+        coordinator_employee_id: coordinator.employee_id,
       });
+      if (!conv) {
+        setSolutionsError("创建群聊返回为空");
+        return;
+      }
       setShowCreateModal(false);
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
@@ -164,7 +175,7 @@ export function GroupPage() {
     } finally {
       setCreating(false);
     }
-  }, [selectedSolutionId, solutions, client]);
+  }, [selectedSolutionId, solutions, experts, client]);
 
   const handleCreateFree = useCallback(async () => {
     setFreeCreateError(null);
@@ -172,7 +183,19 @@ export function GroupPage() {
     try {
       const title = window.prompt("自由群聊名称", "自由协作群");
       if (title === null) return;
-      const conv = createLocalGroupConversation({ title });
+      const coordinator = experts.find((expert) => !expert.revoked);
+      if (!coordinator) {
+        setFreeCreateError("暂无可授权的群聊协调专家");
+        return;
+      }
+      const conv = await createGroupConversation(client, {
+        title,
+        coordinator_employee_id: coordinator.employee_id,
+      });
+      if (!conv) {
+        setFreeCreateError("创建群聊返回为空");
+        return;
+      }
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
     } catch (err) {
@@ -180,7 +203,7 @@ export function GroupPage() {
     } finally {
       setFreeCreating(false);
     }
-  }, [client]);
+  }, [client, experts]);
 
   return (
     <HStack gap={4} height="100%" minHeight={0}>
@@ -190,8 +213,8 @@ export function GroupPage() {
         onSelect={handleSelect}
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
-        // 群聊页只列群会话（排除 entry_employee_id 非空的私聊），防止私聊被当做群聊进入编排。
-        filter={(c) => c.entry_employee_id == null}
+        // 群聊页只列 kind=group 会话；私聊也有 entry_employee_id，不能靠员工字段判型。
+        filter={(c) => c.kind === "group" || (c.kind === undefined && c.entry_employee_id == null)}
       />
       <VStack gap={4} width="100%" minHeight={0}>
         <Toolbar

@@ -1,5 +1,5 @@
 import type { AgentApiClient } from "../../lib/api-client";
-import { makeLocalConversation, writeLocalConversation } from "../chat/conversation-store";
+import { createConversation, type Conversation } from "../chat/useChatApi";
 
 export interface SolutionProjection {
   solution_instance_id: string;
@@ -59,15 +59,19 @@ export async function listSolutionInstances(client: AgentApiClient): Promise<Sol
   return result.items;
 }
 
-export function createLocalGroupConversation(input: {
-  title?: string | null;
-  solution_instance_id?: string | null;
-}): import("../chat/useChatApi").Conversation {
-  const conversation = makeLocalConversation({
+export function createGroupConversation(
+  client: AgentApiClient,
+  input: {
+    title?: string | null;
+    solution_instance_id?: string | null;
+    coordinator_employee_id: string;
+  },
+): Promise<Conversation | null> {
+  return createConversation(client, {
     title: input.title,
+    kind: "group",
     collaboration_mode: input.solution_instance_id ? "orchestrated" : "free",
+    coordinator_employee_id: input.coordinator_employee_id,
     solution_instance_id: input.solution_instance_id,
   });
-  writeLocalConversation(conversation);
-  return conversation;
 }

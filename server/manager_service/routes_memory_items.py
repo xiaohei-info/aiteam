@@ -6,29 +6,65 @@ local memory CRUD repository is constructed here.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request, status
+import hashlib
+
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
+from shared.db import PgTenantRouter
+from shared.errors import AppError
+
+from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
+from .employee_config_service import build_employee_config_service
+from .enterprise_audit_repository import build_enterprise_audit_repository
 from .hindsight_client import HindsightClient
+from .member_service import GrantService, MemberDeptService
+from .memory_service import MemoryService, build_memory_service
+from .repository_member import GrantRepository, MemberDeptRepository
+from .snapshot_service import build_snapshot_service
 
 
 class MemoryRetainIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    employee_id: str
+    employee_id: str = Field(min_length=1)
     content: str = Field(min_length=1)
     metadata: dict = Field(default_factory=dict)
 
 
-def _client(request: Request) -> HindsightClient:
-    client = getattr(request.app.state, "_hindsight_client", None)
-    if client is None:
-        client = HindsightClient()
-        request.app.state._hindsight_client = client
-    return client
+class _ManagerNotConfigured(AppError):
+    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+def _service(request: Request) -> MemoryService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    service = getattr(request.app.state, "_memory_service", None)
+    if service is None:
+        router = PgTenantRouter(dsn)
+        member_repo = MemberDeptRepository(router)
+        grant_repo = GrantRepository(router)
+        snapshot = build_snapshot_service(
+            config_service=build_employee_config_service(router),
+            grant_service=GrantService(repo=grant_repo, members=member_repo),
+            member_service=MemberDeptService(repo=member_repo),
+            audit_recorder=build_enterprise_audit_repository(router),
+            knowledge_binding=EmployeeKnowledgeBindingRepository(router),
+        )
+        backend = getattr(request.app.state, "_hindsight_client", None) or HindsightClient()
+        service = build_memory_service(snapshot=snapshot, backend=backend)
+        request.app.state._memory_service = service
+    return service
+
+
+def _delete_key(tenant_id: str, employee_id: str, memory_id: str) -> str:
+    """Stable retry key when clients do not provide one; no local idempotency store needed."""
+    raw = f"{tenant_id}:{employee_id}:{memory_id}".encode()
+    return f"memory-delete-{hashlib.sha256(raw).hexdigest()}"
 
 
 def build_memory_items_router(verifier) -> APIRouter:
@@ -38,12 +74,12 @@ def build_memory_items_router(verifier) -> APIRouter:
     @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall")
     async def recall(
         request: Request,
-        employee_id: str,
+        employee_id: str = Query(min_length=1),
         query: str = Query(min_length=1),
         limit: int = Query(default=10, ge=1, le=100),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[dict]:
-        data = _client(request).recall(
+        data = _service(request).recall(
             tenant_context_from(claims), employee_id=employee_id, query=query, limit=limit,
         )
         return Envelope(data=data)
@@ -55,7 +91,7 @@ def build_memory_items_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[dict]:
-        data = _client(request).retain(
+        data = _service(request).retain(
             tenant_context_from(claims), employee_id=body.employee_id,
             content=body.content, metadata=body.metadata,
         )
@@ -66,9 +102,19 @@ def build_memory_items_router(verifier) -> APIRouter:
     async def delete_memory(
         memory_id: str,
         request: Request,
+        employee_id: str = Query(min_length=1),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         claims: TokenClaims = Depends(require),
     ) -> Response:
-        _client(request).delete(tenant_context_from(claims), memory_id=memory_id)
+        ctx = tenant_context_from(claims)
+        _service(request).delete(
+            ctx,
+            employee_id=employee_id,
+            memory_id=memory_id,
+            idempotency_key=idempotency_key or _delete_key(ctx.tenant_id, employee_id, memory_id),
+        )
+        # Hindsight may acknowledge an asynchronous/pending delete.  204 remains the
+        # established Manager contract; the stable key makes retries safe until settled.
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

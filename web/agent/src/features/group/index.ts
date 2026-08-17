@@ -2,7 +2,7 @@ export { GroupPage } from "./GroupPage";
 export { GroupExpertRoster } from "./GroupExpertRoster";
 export { MentionComposer, parseMentions } from "./MentionComposer";
 export {
-  createLocalGroupConversation,
+  createGroupConversation,
   listLoadedExperts,
   listSolutionInstances,
   syncGrants,

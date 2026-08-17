@@ -77,7 +77,7 @@ async function loginTier(tier: Tier, tenantId?: string): Promise<{ token: string
     } else if (tier === "manager") {
       body = { tenant_id: creds.tenant_id ?? "", account: creds.account ?? "", password: creds.password };
     } else {
-      body = { account: creds.account ?? "", password: creds.password, tenant_hint: creds.tenant_id };
+      body = { account: creds.account ?? "", password: creds.password, tenant_id: creds.tenant_id };
     }
     const response = await ctx.post(LOGIN_PATH[tier], { data: body, failOnStatusCode: false });
     if (!response.ok()) {

@@ -27,34 +27,16 @@ const scene = {
 const feedData = {
   events: [
     {
-      type: "scheduled_job",
-      loop_id: "loop-1",
+      type: "conversation_schedule",
       title: "数据清洗",
-      status: "active",
       conversation_id: "conv-1",
-      recurrence_type: "daily",
-      cron: "0 9 * * *",
-      next_run_at: "2026-01-02T09:00:00Z",
-      fire_count: 3,
-      last_fired_at: "2026-01-01T09:00:00Z",
-      max_retries: 3,
-      retry_count: 0,
-      created_at: "2026-01-01T08:00:00Z",
+      schedule: { recurrence: "daily", at: "09:00" },
     },
     {
-      type: "scheduled_job",
-      loop_id: "loop-2",
+      type: "conversation_schedule",
       title: "文案润色",
-      status: "paused",
       conversation_id: "conv-2",
-      recurrence_type: "cron",
-      cron: "*/30 * * * *",
-      next_run_at: "2026-01-01T10:30:00Z",
-      fire_count: 0,
-      last_fired_at: null,
-      max_retries: 3,
-      retry_count: 1,
-      created_at: "2026-01-01T08:30:00Z",
+      schedule: { recurrence: "cron", expression: "*/30 * * * *" },
     },
   ],
 };
@@ -196,7 +178,7 @@ describe("OfficePage", () => {
     });
   });
 
-  it("Feed 渲染失败重试计数", async () => {
+  it("Feed renders Conversation.schedule metadata without Loop retry state", async () => {
     loginStorage();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -210,7 +192,8 @@ describe("OfficePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/连续失败 1\/3/)).toBeInTheDocument();
+      expect(screen.getAllByText(/调度：/)).toHaveLength(2);
+      expect(screen.queryByText(/连续失败|已触发|loop-/)).toBeNull();
     });
   });
 

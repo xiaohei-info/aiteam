@@ -68,7 +68,7 @@ export function OfficePage() {
       {feedLoading && <Banner status="info" title="加载中…" />}
 
       {feed && !feedLoading && (
-        <ScheduledJobs jobs={feed.events.filter((e) => e.type === "scheduled_job")} />
+        <ScheduledJobs jobs={feed.events.filter((e) => e.type === "conversation_schedule")} />
       )}
     </VStack>
   );

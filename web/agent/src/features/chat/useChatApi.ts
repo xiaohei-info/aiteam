@@ -1,18 +1,20 @@
 /** Agent chat API: prompt submission, persisted Pi entries, and Pi event SSE. */
 import type { PiEntry, PiEvent, ConversationEntries } from "@aiteam/shared/contracts";
 import type { AgentApiClient } from "../../lib/api-client";
-import { makeLocalConversation, readLocalConversations, updateLocalConversation, writeLocalConversation } from "./conversation-store";
 
 export interface Conversation {
   id: string;
   title: string | null;
+  kind?: string;
+  labels?: string[];
   state: string;
   collaboration_mode?: string;
-  entry_employee_id?: string | null;
-  solution_instance_id?: string | null;
+  entry_employee_id: string | null;
+  coordinator_employee_id: string | null;
+  solution_instance_id: string | null;
   solution_expert_employee_ids?: string[];
-  last_read_at: string | null;
-  last_read_message_id: string | null;
+  schedule: Record<string, unknown> | null;
+  last_read_entry_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -21,28 +23,40 @@ export async function listConversations(
   client: AgentApiClient,
   cursor?: string | null,
 ): Promise<{ items: Conversation[]; nextCursor: string | null; hasMore: boolean }> {
-  void client;
-  const items = readLocalConversations();
-  const offset = cursor ? Number.parseInt(cursor, 10) || 0 : 0;
-  const page = items.slice(offset, offset + 50);
-  const nextOffset = offset + page.length;
-  return { items: page, nextCursor: nextOffset < items.length ? String(nextOffset) : null, hasMore: nextOffset < items.length };
+  const result = await client.listGet<Conversation>("/api/agent/conversations", {
+    query: { limit: 50, cursor },
+  });
+  return {
+    items: result.items,
+    nextCursor: result.page.next_cursor,
+    hasMore: result.page.has_more,
+  };
 }
 
 export interface CreateConversationInput {
+  id?: string;
   title?: string | null;
+  kind?: string;
   collaboration_mode?: "free" | "orchestrated" | null;
   entry_employee_id?: string | null;
+  coordinator_employee_id?: string | null;
+  solution_instance_id?: string | null;
 }
 
 export async function createConversation(
   client: AgentApiClient,
   input: CreateConversationInput,
 ): Promise<Conversation | null> {
-  void client;
-  const conversation = makeLocalConversation(input);
-  writeLocalConversation(conversation);
-  return conversation;
+  return client.post<Conversation>("/api/agent/conversations", {
+    body: {
+      ...(input.id ? { id: input.id } : {}),
+      title: input.title ?? null,
+      kind: input.kind ?? (input.collaboration_mode === "orchestrated" ? "group" : "private"),
+      ...(input.entry_employee_id !== undefined ? { entry_employee_id: input.entry_employee_id } : {}),
+      ...(input.coordinator_employee_id !== undefined ? { coordinator_employee_id: input.coordinator_employee_id } : {}),
+      ...(input.solution_instance_id !== undefined ? { solution_instance_id: input.solution_instance_id } : {}),
+    },
+  });
 }
 
 export interface PromptInput {
@@ -115,13 +129,26 @@ export async function abortPrompt(client: AgentApiClient, conversationId: string
   return result?.aborted ?? false;
 }
 
+export async function updateConversation(
+  client: AgentApiClient,
+  conversationId: string,
+  patch: { title?: string | null; schedule?: Record<string, unknown> | null },
+): Promise<Conversation | null> {
+  return client.patch<Conversation>(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}`,
+    { body: patch },
+  );
+}
+
 export async function setConversationState(
   client: AgentApiClient,
   conversationId: string,
   state: string,
 ): Promise<Conversation | null> {
-  void client;
-  return updateLocalConversation(conversationId, { state });
+  return client.put<Conversation>(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}/state`,
+    { body: { state } },
+  );
 }
 
 async function readSse(

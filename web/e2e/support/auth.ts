@@ -53,7 +53,7 @@ export function storageStatePath(tier: Tier): string {
 
 /** 各端默认凭据（dev/单机部署 SOP 口径，对齐 .env.example 与 conftest）。 */
 export interface TierCredentials {
-  /** operation: username + password；manager/agent: account(phone) + password + tenant_id。 */
+  /** operation: username + password；manager/agent: account(phone) + password + optional tenant_id。 */
   username?: string;
   account?: string;
   password: string;
@@ -93,7 +93,7 @@ interface ManagerLoginInput {
 interface AgentLoginInput {
   account: string;
   password: string;
-  tenant_hint?: string;
+  tenant_id?: string;
 }
 
 /** 各端登录返回 envelope.data 的最小形状（只需 token，agent 额外 claims）。 */
@@ -125,7 +125,7 @@ export async function apiLogin(
   } else if (tier === "manager") {
     body = { tenant_id: creds.tenant_id ?? "", account: creds.account ?? "", password: creds.password };
   } else {
-    body = { account: creds.account ?? "", password: creds.password, tenant_hint: creds.tenant_id };
+    body = { account: creds.account ?? "", password: creds.password, tenant_id: creds.tenant_id };
   }
   const response = await request.post(`${origin}${LOGIN_PATH[tier]}`, {
     data: body,
@@ -155,12 +155,12 @@ export async function loginViaPage(
   const textInputs = form.locator("input[type=text], input:not([type])");
   const passwordInput = form.locator("input[type=password]");
 
-  // manager/agent 有租户字段（第一个 text input）；operation 只有 username。
-  if (tier !== "operation" && creds.tenant_id) {
+  // Manager 保留 tenant_id 输入；Agent 由同源 Node Agent 按账号解析租户。
+  if (tier === "manager" && creds.tenant_id) {
     await textInputs.first().fill(creds.tenant_id);
   }
-  // 账号/用户名：operation 是第一个 text input；manager/agent 是第二个（第一个是 tenant）。
-  const accountIndex = tier === "operation" ? 0 : 1;
+  // 账号/用户名：operation/agent 是第一个 text input，manager 是第二个。
+  const accountIndex = tier === "manager" ? 1 : 0;
   await textInputs.nth(accountIndex).fill(creds.username ?? creds.account ?? "");
   await passwordInput.first().fill(creds.password);
   await form.locator("button[type=submit]").first().click();

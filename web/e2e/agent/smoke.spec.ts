@@ -35,6 +35,9 @@ test.describe("agent api-contract", () => {
       "/api/agent/conversations/{conversation_id}/entries",
       "/api/agent/conversations/{conversation_id}/events",
       "/api/agent/conversations/{conversation_id}/abort",
+      "/api/agent/conversations",
+      "/api/agent/conversations/{conversation_id}",
+      "/api/agent/conversations/{conversation_id}/state",
     ]));
     expect(Object.keys(openapi.paths).some((path) => /messages|runs|tasks|loops|timeline|group-dispatch|terminal-execute/.test(path))).toBe(false);
   });

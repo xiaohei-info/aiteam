@@ -24,10 +24,13 @@ function makeConv(id: string, isPrivate = false): Conversation {
   return {
     id,
     title: isPrivate ? null : `会话${id}`,
+    kind: isPrivate ? "private" : "group",
     state: "active",
-    last_read_at: null,
-    last_read_message_id: null,
     entry_employee_id: isPrivate ? "emp-1" : null,
+    coordinator_employee_id: isPrivate ? null : "emp-2",
+    solution_instance_id: null,
+    schedule: null,
+    last_read_entry_id: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -53,7 +56,7 @@ describe("ConversationList — filter", () => {
         selectedId={null}
         onSelect={() => {}}
         headerLabel="群聊"
-        filter={(c) => !c.entry_employee_id}
+        filter={(c) => c.kind === "group"}
       />,
     );
 
@@ -83,7 +86,7 @@ describe("ConversationList — filter", () => {
         client={makeClient()}
         selectedId={null}
         onSelect={() => {}}
-        filter={(c) => !c.entry_employee_id}
+        filter={(c) => c.kind === "group"}
       />,
     );
 

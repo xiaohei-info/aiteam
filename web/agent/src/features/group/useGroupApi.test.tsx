@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentApiClient } from "../../lib/api-client";
-import { listLoadedExperts, listSolutionInstances, createLocalGroupConversation } from "./useGroupApi";
+import { listLoadedExperts, listSolutionInstances, createGroupConversation } from "./useGroupApi";
 
 describe("useGroupApi read-only projections", () => {
   it("reads the authorized roster projection", async () => {
@@ -17,10 +17,25 @@ describe("useGroupApi read-only projections", () => {
     expect(client.listGet).toHaveBeenCalledWith("/api/agent/grants/solutions");
   });
 
-  it("creates only a local group index", () => {
-    localStorage.clear();
-    const conversation = createLocalGroupConversation({ title: "Group", solution_instance_id: "s1" });
-    expect(conversation.collaboration_mode).toBe("orchestrated");
-    expect(JSON.parse(localStorage.getItem("aiteam.agent.conversations") ?? "[]")[0].solution_instance_id).toBe("s1");
+  it("creates a server-owned group metadata record with coordinator authorization", async () => {
+    const client = { post: vi.fn(async (_path: string, options: { body: unknown }) => ({
+      id: "c1",
+      title: "Group",
+      kind: "group",
+      state: "active",
+      entry_employee_id: null,
+      coordinator_employee_id: "e1",
+      solution_instance_id: "s1",
+      schedule: null,
+      last_read_entry_id: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      options,
+    })) } as unknown as AgentApiClient;
+    await createGroupConversation(client, { title: "Group", solution_instance_id: "s1", coordinator_employee_id: "e1" });
+    expect(client.post).toHaveBeenCalledWith("/api/agent/conversations", {
+      body: expect.objectContaining({ kind: "group", coordinator_employee_id: "e1", solution_instance_id: "s1" }),
+    });
+    expect(localStorage.getItem("aiteam.agent.conversations")).toBeNull();
   });
 });

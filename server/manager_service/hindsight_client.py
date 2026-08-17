@@ -47,13 +47,28 @@ class HindsightClient:
         self._settings = settings or HindsightSettings.from_env()
         self._client = client
 
-    def _request(self, ctx: TenantContext, path: str | None, payload: dict[str, Any]) -> dict:
-        if not self._settings.base_url or not path:
-            raise HindsightUnavailable("HINDSIGHT_URL and operation paths must be configured")
-        client = self._client or httpx.Client(base_url=self._settings.base_url.rstrip("/"), timeout=10.0)
-        headers = {"X-Tenant-ID": ctx.tenant_id}
-        if self._settings.token:
-            headers["Authorization"] = f"Bearer {self._settings.token}"
+    def _request(
+        self,
+        ctx: TenantContext,
+        path: str | None,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        settings = self._settings
+        # Validate the complete service contract before constructing a transport or
+        # making an outbound request.  Hindsight must never be contacted unauthenticated.
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (settings.base_url, settings.token, path)
+        ):
+            raise HindsightUnavailable(
+                "HINDSIGHT_URL, HINDSIGHT_SERVICE_TOKEN and operation paths must be configured"
+            )
+        client = self._client or httpx.Client(base_url=settings.base_url.rstrip("/"), timeout=10.0)
+        headers = {"X-Tenant-ID": ctx.tenant_id, "Authorization": f"Bearer {settings.token}"}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         try:
             response = client.post(
                 f"{self._settings.base_url.rstrip('/')}/{path.lstrip('/')}",
@@ -80,5 +95,17 @@ class HindsightClient:
             "employee_id": employee_id, "content": content, "metadata": metadata,
         })
 
-    def delete(self, ctx: TenantContext, *, memory_id: str) -> dict:
-        return self._request(ctx, self._settings.delete_path, {"memory_id": memory_id})
+    def delete(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        memory_id: str,
+        idempotency_key: str,
+    ) -> dict:
+        return self._request(
+            ctx,
+            self._settings.delete_path,
+            {"employee_id": employee_id, "memory_id": memory_id},
+            idempotency_key=idempotency_key,
+        )

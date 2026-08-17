@@ -17,8 +17,15 @@ import { AppRoutes } from "../app/routes";
 function mockFetch(): ReturnType<typeof vi.fn> {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
+    if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
+      return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (path.endsWith("/api/agent/login")) {
       const body = JSON.parse(String(init?.body ?? "{}"));
+      expect(body).toMatchObject({ tenant_id: "t-1" });
       const claims = {
         user_id: body.account,
         tenant_id: "t-1",
@@ -39,6 +46,12 @@ function mockFetch(): ReturnType<typeof vi.fn> {
 function mockFetchForbidden(): ReturnType<typeof vi.fn> {
   return vi.fn(async (url: string | URL, _init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
+    if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
+      return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (path.endsWith("/api/agent/login")) {
       return new Response(
         JSON.stringify({
@@ -130,6 +143,35 @@ describe("LoginPage", () => {
       });
       // 重置视图必须保留账号上下文；具体标签由 Astryx Text 决定，不能绑死历史 DOM。
       expect(screen.getByText(account)).toBeInTheDocument();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("重置提交发送 tenant_id 与 old_password", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
+        return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (path.endsWith("/api/agent/login")) {
+        return new Response(JSON.stringify({ code: "agent_must_reset", status: 403, detail: "首次登录，请设置新密码" }), { status: 403, headers: { "Content-Type": "application/problem+json" } });
+      }
+      expect(path).toContain("/api/agent/reset-password");
+      expect(JSON.parse(String(init?.body))).toEqual({ account: "alice", tenant_id: "t-1", old_password: "bootstrap", new_password: "fresh-password" });
+      return new Response(JSON.stringify({ data: { token: "tok-reset", claims: { user_id: "alice", tenant_id: "t-1", roles: [], exp: 9999999999 } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    try {
+      render(<MemoryRouter initialEntries={["/login"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
+      fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), { target: { value: "alice" } });
+      fireEvent.change(screen.getByLabelText("密码"), { target: { value: "bootstrap" } });
+      fireEvent.click(screen.getByRole("button", { name: "登录" }));
+      await waitFor(() => expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText("新密码"), { target: { value: "fresh-password" } });
+      fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "fresh-password" } });
+      fireEvent.click(screen.getByRole("button", { name: "设置新密码并登录" }));
+      await waitFor(() => expect(fetchImpl).toHaveBeenCalledWith(expect.stringContaining("/api/agent/reset-password"), expect.anything()));
     } finally {
       globalThis.fetch = originalFetch;
     }

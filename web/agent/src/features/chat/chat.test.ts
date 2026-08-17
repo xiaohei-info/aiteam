@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
-import { getEntries, submitPrompt, subscribePiEvents } from "./useChatApi";
+import { createConversation, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -9,6 +9,23 @@ function client(fetch: typeof globalThis.fetch): AgentApiClient {
 }
 
 describe("Pi chat contract", () => {
+  it("lists and creates server-owned conversation metadata", async () => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return new Response(JSON.stringify({ data: { id: "c1", title: "Private", kind: "private", state: "active", entry_employee_id: "e1", coordinator_employee_id: null, solution_instance_id: null, schedule: null, last_read_entry_id: null, created_at: "now", updated_at: "now" } }), { status: 201, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ data: [{ id: "c1" }], page: { next_cursor: "c1", has_more: true } }), { headers: { "content-type": "application/json" } });
+    });
+    const api = client(fetchMock as unknown as typeof fetch);
+    await expect(listConversations(api)).resolves.toMatchObject({ items: [{ id: "c1" }], nextCursor: "c1", hasMore: true });
+    await expect(createConversation(api, { title: "Private", entry_employee_id: "e1" })).resolves.toMatchObject({ entry_employee_id: "e1" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://agent.test/api/agent/conversations?limit=50");
+  });
+
+  it("persists state through the Node Agent state endpoint", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => new Response(JSON.stringify({ data: { id: "c1", state: JSON.parse(String(init?.body)).state } }), { headers: { "content-type": "application/json" } }));
+    await expect(setConversationState(client(fetchMock as unknown as typeof fetch), "c1", "paused")).resolves.toMatchObject({ state: "paused" });
+    expect(fetchMock).toHaveBeenCalledWith("http://agent.test/api/agent/conversations/c1/state", expect.objectContaining({ method: "PUT" }));
+  });
+
   it("submits one idempotent prompt request", async () => {
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       expect(init?.method).toBe("POST");

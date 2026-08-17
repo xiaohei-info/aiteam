@@ -2,36 +2,27 @@ import AxeBuilder from "@axe-core/playwright";
 import { authTest, expect } from "../support/fixtures";
 import { collectBrowserErrors, expectKeyboardFocusVisible } from "../support/smoke";
 
-const conversation = {
-  id: "astryx-chat-benchmark",
-  title: "Astryx 设计评审",
-  state: "active",
-  collaboration_mode: "free",
-  last_read_at: null,
-  last_read_message_id: null,
-  created_at: "2026-07-11T08:00:00Z",
-  updated_at: "2026-07-11T08:30:00Z",
-};
-
-async function seedConversation(page: import("@playwright/test").Page): Promise<void> {
-  await page.addInitScript((item) => {
-    localStorage.setItem("aiteam.agent.conversations", JSON.stringify([item]));
-  }, conversation);
-}
-
-async function openChat(page: import("@playwright/test").Page): Promise<void> {
-  await seedConversation(page);
+async function openChat(
+  page: import("@playwright/test").Page,
+  request: import("@playwright/test").APIRequestContext,
+): Promise<{ id: string; title: string }> {
+  const conversation = { id: `astryx-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`, title: "Astryx 设计评审" };
+  const response = await request.post("/api/agent/conversations", {
+    data: { id: conversation.id, title: conversation.title, kind: "private" },
+  });
+  expect(response.status()).toBe(201);
   await page.goto("/chat");
   await page.getByRole("button", { name: conversation.title }).click();
   await expect(page.getByRole("log", { name: "对话事件流" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "消息内容" })).toBeVisible();
+  return conversation;
 }
 
 authTest.describe("Agent Astryx Chat", () => {
-  authTest("light mode passes visual, accessibility, keyboard, and console gates", async ({ authedPage }) => {
+  authTest("light mode passes visual, accessibility, keyboard, and console gates", async ({ authedPage, authedRequest }) => {
     const browserErrors = collectBrowserErrors(authedPage);
     await authedPage.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
-    await openChat(authedPage);
+    await openChat(authedPage, authedRequest);
     await expect(authedPage).toHaveScreenshot("agent-chat-light.png", { fullPage: true });
     const results = await new AxeBuilder({ page: authedPage }).analyze();
     expect(results.violations.filter((item) => item.impact === "critical" || item.impact === "serious")).toEqual([]);
@@ -39,18 +30,18 @@ authTest.describe("Agent Astryx Chat", () => {
     expect(browserErrors).toEqual([]);
   });
 
-  authTest("dark and reduced-motion modes remain usable", async ({ authedPage }) => {
+  authTest("dark and reduced-motion modes remain usable", async ({ authedPage, authedRequest }) => {
     const browserErrors = collectBrowserErrors(authedPage);
     await authedPage.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-    await openChat(authedPage);
+    await openChat(authedPage, authedRequest);
     await expect(authedPage.getByRole("textbox", { name: "消息内容" })).toBeEditable();
     await authedPage.getByRole("link", { name: "工作台" }).focus();
     await expect(authedPage.getByRole("link", { name: "工作台" })).toBeFocused();
     expect(browserErrors).toEqual([]);
   });
 
-  authTest("sending a prompt reaches the Node Agent prompt endpoint", async ({ authedPage }) => {
-    await openChat(authedPage);
+  authTest("sending a prompt reaches the Node Agent prompt endpoint", async ({ authedPage, authedRequest }) => {
+    const conversation = await openChat(authedPage, authedRequest);
     const promptResponse = authedPage.waitForResponse((response) =>
       response.request().method() === "POST" && response.url().endsWith(`/conversations/${conversation.id}/prompt`),
     );

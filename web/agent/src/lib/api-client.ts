@@ -16,8 +16,8 @@ import type { TokenClaims } from "@aiteam/shared/contracts";
 export interface AgentLoginRequest {
   account: string;
   password: string;
-  /** 企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）。 */
-  tenant_hint?: string | null;
+  /** 可选租户；缺失时由同源 Node Agent 通过 Manager resolver 解析。 */
+  tenant_id?: string | null;
 }
 
 /** 登录返回（对齐 server LoginResult）。token + 解出的 claims。 */
@@ -29,11 +29,11 @@ export interface AgentLoginResult {
 /** 密码重置入参（对齐 server PasswordResetRequest）。 */
 export interface AgentPasswordResetRequest {
   account: string;
-  /** 旧密码/初始密码 */
+  /** UI 保留 password 字段；发送到 Manager-compatible Agent API 时映射为 old_password。 */
   password: string;
   new_password: string;
-  /** 企业定位提示（可选）；空缺时 Manager 按员工账号自动解析 tenant（#382）。 */
-  tenant_hint?: string | null;
+  /** 可选租户；缺失时由同源 Node Agent 通过 Manager resolver 解析。 */
+  tenant_id?: string | null;
 }
 
 export interface AgentClientOptions {
@@ -65,7 +65,10 @@ export class AgentApiClient extends ApiClient {
 
   /** 本地登录（对齐 server /api/agent/login，公开端点）。 */
   async login(req: AgentLoginRequest): Promise<AgentLoginResult> {
-    const result = await this.post<AgentLoginResult>("/api/agent/login", { body: req });
+    const tenant_id = await this.resolveTenant(req.account, req.tenant_id);
+    const result = await this.post<AgentLoginResult>("/api/agent/login", {
+      body: { account: req.account, password: req.password, tenant_id },
+    });
     if (result === null) {
       // 不应发生：登录端点约定返回 envelope.data；防御性兜底，消除「null 当结果用」。
       throw new Error("login: empty envelope");
@@ -75,8 +78,15 @@ export class AgentApiClient extends ApiClient {
 
   /** 密码重置（对齐 server /api/agent/reset-password，公开端点）。 */
   async resetPassword(req: AgentPasswordResetRequest): Promise<AgentLoginResult> {
-    const result = await this.post<AgentLoginResult>("/api/agent/reset-password", { body: req });
-    if (result === null) {
+    const tenant_id = await this.resolveTenant(req.account, req.tenant_id);
+    const result = await this.post<AgentLoginResult>("/api/agent/reset-password", {
+      body: {
+        account: req.account,
+        tenant_id,
+        old_password: req.password,
+        new_password: req.new_password,
+      },
+    });    if (result === null) {
       throw new Error("resetPassword: empty envelope");
     }
     return result;
@@ -85,5 +95,14 @@ export class AgentApiClient extends ApiClient {
   /** 解出当前身份（对齐 server /api/agent/whoami，受保护）。 */
   async whoami(): Promise<TokenClaims | null> {
     return this.get<TokenClaims>("/api/agent/whoami");
+  }
+
+  private async resolveTenant(account: string, tenantId?: string | null): Promise<string> {
+    if (tenantId) return tenantId;
+    const result = await this.post<{ tenant_id: string }>("/api/auth/resolve-tenant-by-account", {
+      body: { account },
+    });
+    if (!result?.tenant_id) throw new Error("resolve tenant: empty response");
+    return result.tenant_id;
   }
 }

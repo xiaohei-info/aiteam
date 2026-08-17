@@ -355,18 +355,29 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       failOnStatusCode: false,
     });
     stageExpect(rosterResp.ok(), "roster", `Agent roster（grants/experts）应可达：status=${rosterResp.status()}`);
-    const rosterBody = (await rosterResp.json()) as { data?: Array<{ employee_id?: string }> };
-    const rosterItems = rosterBody.data ?? [];
+    const rosterBody = (await rosterResp.json()) as { data?: { items?: Array<{ employee_id?: string }> } };
+    const rosterItems = rosterBody.data?.items ?? [];
     stageExpect(
       rosterItems.some((e) => e.employee_id === employeeId),
       "roster",
       `Agent roster 应包含招募 employee ${employeeId}（实际 ${rosterItems.length} 条）`,
     );
 
-    // ── 9 + 10. Node Agent 直接打开本地 Pi Conversation 并提交 prompt ──
-    // Conversation metadata is owned by the local Agent UI; the Node API owns
-    // only prompt/entries/events/abort and does not expose a create/detail route.
+    // ── 9. UI-equivalent Agent create persists metadata and authorization target ──
     const convId = `e2e-private-${uniqueTag}`;
+    const createResp = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
+      data: {
+        id: convId,
+        title: "E2E private chat",
+        kind: "private",
+        entry_employee_id: employeeId,
+      },
+      headers: { "Content-Type": "application/json" },
+      failOnStatusCode: false,
+    });
+    stageExpect(createResp.status() === 201, "conversation", `Agent conversation metadata 应创建：status=${createResp.status()}`);
+
+    // ── 10. Node Agent Pi Conversation prompt ──
     const promptResp = await request.post(
       `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}/prompt`,
       {
