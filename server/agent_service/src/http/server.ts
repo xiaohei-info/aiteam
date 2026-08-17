@@ -361,7 +361,13 @@ export class AgentHttpServer {
     const write = (envelope: PiEventEnvelope) => {
       if (closed) return;
       if (!started) return pending.push(envelope), undefined;
-      if (!response.writableEnded) response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(envelope.event)}\n\n`);
+      if (!response.writableEnded) {
+        const event = envelope.source_ref
+          ? { ...envelope.event, conversation_id: envelope.conversation_id, source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id }
+          : envelope.event;
+        const id = envelope.source_ref ? "" : `id: ${envelope.id}\n`;
+        response.write(`${id}event: pi\ndata: ${JSON.stringify(event)}\n\n`);
+      }
     };
     const unsubscribe = await this.options.host.subscribe(conversationId, write, requested ?? undefined);
     response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });

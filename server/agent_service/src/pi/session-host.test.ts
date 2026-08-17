@@ -68,6 +68,95 @@ test("SessionHost binds authorized snapshot tools and emits Pi tool events", asy
   }
 });
 
+test("delegate_employee rejects cross-tenant or missing local roster targets", async () => {
+  const fixture = await createFixture();
+  try {
+    const snapshot = (employeeId: string, version = "1") => ({ employee_id: employeeId, version, snapshot_version: `snapshot-${employeeId}`, display_name: employeeId, persona: "Delegate", tool_policy: { allowed_tools: ["delegate_employee"] } });
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: new Date().toISOString() },
+      { employee_id: "same-tenant", tenant_id: "tenant-1", version: "1", handle: "same", display_name: "Same", revoked: false, synced_at: new Date().toISOString() },
+      { employee_id: "other-tenant", tenant_id: "tenant-2", version: "1", handle: "other", display_name: "Other", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [snapshot("coordinator"), snapshot("same-tenant"), snapshot("other-tenant")]);
+    fixture.store.createConversation({ id: "group-auth", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
+    const host = fixture.createHost();
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("delegate_employee", { employee_id: "other-tenant", task: "do not run" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await host.prompt("group-auth", "delegate", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const entries = await host.entries("group-auth");
+    const result = entries.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    assert(result && result.type === "message" && result.message.role === "toolResult");
+    assert.match(result.message.content[0]?.type === "text" ? result.message.content[0].text : "", /authorized local roster/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("delegate_employee forwards child events with opaque attribution and bounds fanout", async () => {
+  const fixture = await createFixture();
+  try {
+    const snapshot = (employeeId: string) => ({ employee_id: employeeId, version: "1", snapshot_version: `snapshot-${employeeId}`, display_name: employeeId, persona: "Delegate", tool_policy: { allowed_tools: ["delegate_employee"] } });
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: new Date().toISOString() },
+      ...["a", "b", "c", "d", "e"].map((employee_id) => ({ employee_id, tenant_id: "tenant-1", version: "1", handle: employee_id, display_name: employee_id, revoked: false, synced_at: new Date().toISOString() })),
+    ], [], [snapshot("coordinator"), ...["a", "b", "c", "d", "e"].map(snapshot)]);
+    fixture.store.createConversation({ id: "group-fanout", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
+    const host = fixture.createHost();
+    const envelopes: Array<{ source_ref?: string; tool_call_id?: string; event: { type: string } }> = [];
+    await host.subscribe("group-fanout", (envelope) => envelopes.push(envelope as typeof envelopes[number]));
+    fixture.faux.setResponses([
+      fauxAssistantMessage(["a", "b", "c", "d", "e"].map((employee_id, index) => fauxToolCall("delegate_employee", { employee_id, task: `task-${index}` }, { id: `call-${index}` })), { stopReason: "toolUse" }),
+      ...["a", "b", "c", "d"].map((employee_id) => fauxAssistantMessage(`${employee_id} result`)),
+      fauxAssistantMessage("coordinator result"),
+    ]);
+    await host.prompt("group-fanout", "delegate", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const childEvents = envelopes.filter((envelope) => envelope.source_ref);
+    assert(childEvents.length > 0);
+    assert(childEvents.every((envelope) => envelope.source_ref && envelope.tool_call_id));
+    assert.equal(new Set(childEvents.map((envelope) => envelope.tool_call_id)).size, 4);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost aborts active delegated child sessions", async () => {
+  const fixture = await createFixture();
+  try {
+    const slow = fauxProvider({
+      api: "aiteam-delegate-slow-api",
+      provider: "aiteam-delegate-slow",
+      models: [{ id: "aiteam-delegate-slow-1", name: "AI Team Delegate Slow" }],
+      tokensPerSecond: 50,
+    });
+    fixture.modelRuntime.registerNativeProvider(slow.provider);
+    const host = fixture.createHost(slow.getModel());
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: new Date().toISOString() },
+      { employee_id: "worker", tenant_id: "tenant-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [
+      { employee_id: "coordinator", version: "1", snapshot_version: "snapshot-coordinator", display_name: "Coordinator", tool_policy: { allowed_tools: ["delegate_employee"] } },
+      { employee_id: "worker", version: "1", snapshot_version: "snapshot-worker", display_name: "Worker", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "group-abort", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
+    slow.setResponses([
+      fauxAssistantMessage(fauxToolCall("delegate_employee", { employee_id: "worker", task: "slow task" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("slow ".repeat(200)),
+      fauxAssistantMessage("parent result"),
+    ]);
+    const pending = host.prompt("group-abort", "delegate", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(await host.abort("group-abort"), true);
+    await pending;
+    assert.equal(host.isPrompting("group-abort"), false);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost aborts an active Pi prompt", async () => {
   const fixture = await createFixture();
   try {

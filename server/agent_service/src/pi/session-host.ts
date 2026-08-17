@@ -11,16 +11,20 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createKnowledgeTools } from "../tools/knowledge.js";
 import { createMemoryTools } from "../tools/memory.js";
+import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 
 export interface PiEventEnvelope {
   id: string;
   event: AgentSessionEvent;
+  conversation_id?: string;
+  source_ref?: string;
+  tool_call_id?: string;
 }
 
 export class EventCursorStaleError extends Error {
@@ -62,6 +66,12 @@ interface Subscriber {
   queued: PiEventEnvelope[];
 }
 
+interface ChildSession {
+  session?: AgentSession;
+  aborted: boolean;
+  abort: () => Promise<void>;
+}
+
 interface SessionRecord {
   conversationId: string;
   workspace: string;
@@ -70,8 +80,17 @@ interface SessionRecord {
   sessionReady?: Promise<AgentSession>;
   unsubscribe?: () => void;
   prompting: boolean;
+  aborting: boolean;
+  delegateCalls: number;
+  delegatePromptChars: number;
+  activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
 }
+
+const MAX_DELEGATE_CALLS = 4;
+const MAX_DELEGATE_CONCURRENCY = 2;
+const MAX_DELEGATE_PROMPT_BUDGET = 32_000;
+const MAX_DELEGATE_RESULT_CHARS = 2_000;
 
 export class ConversationBusyError extends Error {
   constructor() {
@@ -132,6 +151,9 @@ export class SessionHost {
     const record = await this.ensureRecord(conversationId);
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
+    record.aborting = false;
+    record.delegateCalls = 0;
+    record.delegatePromptChars = 0;
 
     try {
       const authorization = caller ? this.resolveAuthorization(record, caller) : undefined;
@@ -143,6 +165,8 @@ export class SessionHost {
     } finally {
       record.sessionReady = undefined;
       record.prompting = false;
+      record.aborting = false;
+      await this.abortChildren(record);
       this.disposeSession(record);
     }
   }
@@ -150,8 +174,10 @@ export class SessionHost {
   async abort(conversationId: string): Promise<boolean> {
     const record = this.records.get(conversationId);
     if (!record) return false;
+    record.aborting = true;
     const session = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-    if (!session) return false;
+    const children = await this.abortChildren(record);
+    if (!session) return children > 0;
     await session.abort();
     return true;
   }
@@ -166,7 +192,10 @@ export class SessionHost {
   }
 
   async dispose(): Promise<void> {
-    for (const record of this.records.values()) this.disposeSession(record);
+    for (const record of this.records.values()) {
+      await this.abortChildren(record);
+      this.disposeSession(record);
+    }
     this.records.clear();
   }
 
@@ -194,6 +223,10 @@ export class SessionHost {
       workspace,
       sessionManager,
       prompting: false,
+      aborting: false,
+      delegateCalls: 0,
+      delegatePromptChars: 0,
+      activeDelegates: new Set(),
       listeners: new Set(),
     };
     this.records.set(conversationId, record);
@@ -204,7 +237,7 @@ export class SessionHost {
     if (record.session) return record.session;
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization);
     await resourceLoader.reload();
-    const customTools = this.toolsFor(authorization);
+    const customTools = this.toolsFor(authorization, true, record);
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
@@ -225,13 +258,14 @@ export class SessionHost {
     return result.session;
   }
 
-  private toolsFor(authorization?: SessionAuthorization): ToolDefinition[] {
+  private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord): ToolDefinition[] {
     if (!authorization) return this.options.customTools ?? [];
     const allowed = this.allowedTools(authorization.snapshot);
     const tools = [
-      ...(this.options.customTools ?? []),
+      ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
       ...createMemoryTools({ caller: authorization.caller, employeeId: authorization.employeeId, managerClient: authorization.managerClient }),
       ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), managerClient: authorization.managerClient }),
+      ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
     return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index);
   }
@@ -271,6 +305,94 @@ export class SessionHost {
     record.unsubscribe = undefined;
     record.session?.dispose();
     record.session = undefined;
+  }
+
+  private async abortChildren(record: SessionRecord): Promise<number> {
+    const children = [...record.activeDelegates];
+    await Promise.all(children.map((child) => child.abort().catch(() => undefined)));
+    return children.length;
+  }
+
+  private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
+    if (!authorization.caller.tenantId) throw new Error("Authenticated tenant is required for delegation");
+    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === input.employee_id && item.tenant_id === authorization.caller.tenantId && !item.revoked);
+    if (!expert) throw new Error("Employee is not in the authorized local roster");
+    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === input.employee_id && item.version === expert.version);
+    if (!snapshot) throw new Error("Employee snapshot is not available locally");
+
+    const prompt = [input.task, input.context ? `Context:\n${input.context}` : ""].filter(Boolean).join("\n\n");
+    if (record.aborting || signal?.aborted) throw new Error("Delegation aborted");
+    if (record.delegateCalls >= MAX_DELEGATE_CALLS) throw new Error(`Delegation limit reached (maximum ${MAX_DELEGATE_CALLS})`);
+    if (record.delegatePromptChars + prompt.length > MAX_DELEGATE_PROMPT_BUDGET) throw new Error("Delegation prompt budget exceeded");
+    record.delegateCalls += 1;
+    record.delegatePromptChars += prompt.length;
+    while (record.activeDelegates.size >= MAX_DELEGATE_CONCURRENCY) {
+      if (record.aborting || signal?.aborted) throw new Error("Delegation aborted");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const child: ChildSession = { aborted: false, abort: async () => { child.aborted = true; await child.session?.abort(); } };
+    record.activeDelegates.add(child);
+    const sourceRef = createHash("sha256").update(`${record.conversationId}:${toolCallId}:${Date.now()}`).digest("hex").slice(0, 24);
+    try {
+      const sessionManager = SessionManager.inMemory(record.workspace);
+      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, { ...authorization, employeeId: snapshot.employee_id, snapshot });
+      await resourceLoader.reload();
+      const childTools = this.toolsFor({ ...authorization, employeeId: snapshot.employee_id, snapshot }, false);
+      const result = await createAgentSession({
+        cwd: record.workspace,
+        agentDir: this.options.agentDir,
+        model: this.modelFor(snapshot),
+        thinkingLevel: this.thinkingLevelFor({ ...authorization, snapshot }),
+        modelRuntime: this.options.modelRuntime,
+        resourceLoader,
+        sessionManager,
+        settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
+        tools: childTools.map((tool) => tool.name),
+        customTools: childTools,
+      });
+      child.session = result.session;
+      if (child.aborted || signal?.aborted || record.aborting) await child.abort();
+      const unsubscribe = result.session.subscribe((event) => this.publishChild(record, event, sourceRef, toolCallId));
+      try {
+        await result.session.prompt(prompt);
+        return this.childSummary(sessionManager.getEntries());
+      } finally {
+        unsubscribe();
+        await child.abort();
+        result.session.dispose();
+      }
+    } finally {
+      record.activeDelegates.delete(child);
+    }
+  }
+
+  private modelFor(snapshot: FrozenSnapshot): Model<any> {
+    const policy = snapshot.model_policy;
+    if (policy && typeof policy === "object") {
+      const values = policy as Record<string, unknown>;
+      const provider = typeof values.provider === "string" ? values.provider : typeof values.provider_ref === "string" ? values.provider_ref : undefined;
+      const model = typeof values.model === "string" ? values.model : typeof values.model_id === "string" ? values.model_id : undefined;
+      if (provider && model) return this.options.modelRuntime.getModel(provider, model) ?? this.options.model;
+    }
+    return this.options.model;
+  }
+
+  private childSummary(entries: ReturnType<SessionManager["getEntries"]>): string {
+    for (const entry of [...entries].reverse()) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      const text = entry.message.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("").trim();
+      if (text) return text.slice(0, MAX_DELEGATE_RESULT_CHARS);
+    }
+    return "Employee completed without a textual result.";
+  }
+
+  private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string): void {
+    const envelope: PiEventEnvelope = { id: `${sourceRef}:${Date.now()}`, event, conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId };
+    for (const subscriber of record.listeners) {
+      if (subscriber.replaying) subscriber.queued.push(envelope);
+      else subscriber.listener(envelope);
+    }
   }
 
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
