@@ -82,6 +82,7 @@ interface SessionRecord {
   sessionManager: SessionManager;
   session?: AgentSession;
   sessionReady?: Promise<AgentSession>;
+  promptPromise?: Promise<string | undefined>;
   unsubscribe?: () => void;
   prompting: boolean;
   aborting: boolean;
@@ -158,13 +159,21 @@ export class SessionHost {
       const session = await record.sessionReady;
       const startedAt = Date.now();
       const entriesBefore = record.sessionManager.getEntries().length;
+      const promptPromise = (async () => {
+        try {
+          await session.prompt(text, images ? { images } : undefined);
+          await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
+          return record.sessionManager.getLeafId() ?? undefined;
+        } catch (error) {
+          await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
+          throw error;
+        }
+      })();
+      record.promptPromise = promptPromise;
       try {
-        await session.prompt(text, images ? { images } : undefined);
-        await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
-        return record.sessionManager.getLeafId() ?? undefined;
-      } catch (error) {
-        await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
-        throw error;
+        return await promptPromise;
+      } finally {
+        if (record.promptPromise === promptPromise) record.promptPromise = undefined;
       }
     } finally {
       record.sessionReady = undefined;
@@ -198,6 +207,7 @@ export class SessionHost {
       record.aborting = true;
       await this.abortChildren(record);
       await record.session?.abort().catch(() => undefined);
+      await record.promptPromise?.catch(() => undefined);
       this.disposeSession(record);
       this.records.delete(conversationId);
     }
@@ -211,9 +221,11 @@ export class SessionHost {
 
   async abortAll(): Promise<void> {
     await Promise.all([...this.records.values()].map(async (record) => {
-      if (!record.prompting) return;
+      if (!record.prompting && !record.promptPromise && !record.sessionReady) return;
       record.aborting = true;
-      await record.session?.abort().catch(() => undefined);
+      const session = record.session ?? await record.sessionReady?.catch(() => undefined);
+      await session?.abort().catch(() => undefined);
+      await record.promptPromise?.catch(() => undefined);
     }));
   }
 
@@ -225,7 +237,9 @@ export class SessionHost {
   async dispose(): Promise<void> {
     for (const record of this.records.values()) {
       await this.abortChildren(record);
-      await record.session?.abort().catch(() => undefined);
+      const session = record.session ?? await record.sessionReady?.catch(() => undefined);
+      await session?.abort().catch(() => undefined);
+      await record.promptPromise?.catch(() => undefined);
       this.disposeSession(record);
     }
     this.records.clear();
