@@ -22,6 +22,7 @@ export interface AgentHttpServerOptions {
   store: AgentSqliteStore;
   authenticate: AuthenticateRequest;
   runtimeReady?: () => boolean | Promise<boolean>;
+  localReady?: () => boolean | Promise<boolean>;
   managerClient?: ManagerClient;
   logger?: Pick<Console, "error">;
   spaRoot?: string;
@@ -80,7 +81,10 @@ export class AgentHttpServer {
       if (request.method === "GET" && url.pathname === "/metrics") return this.writeMetrics(response);
       if (request.method === "GET" && url.pathname === "/readyz") {
         let ready = false;
-        try { this.options.store.db.prepare("SELECT 1").get(); ready = true; } catch { ready = false; }
+        try {
+          this.options.store.db.prepare("SELECT 1").get();
+          ready = (await this.options.localReady?.()) ?? true;
+        } catch { ready = false; }
         return this.writeJson(response, ready ? 200 : 503, { data: { ready } });
       }
       if (request.method === "GET" && url.pathname === "/openapi.json") return this.writeJson(response, 200, OPENAPI);
@@ -536,7 +540,7 @@ export class AgentHttpServer {
       "# TYPE aiteam_agent_http_errors_total counter",
       `aiteam_agent_http_errors_total ${this.errors}`,
       "",
-    ].join("\\n");
+    ].join("\n");
     this.writeText(response, 200, body, "text/plain; version=0.0.4; charset=utf-8");
   }
 

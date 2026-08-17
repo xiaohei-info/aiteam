@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, readFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
@@ -61,6 +61,10 @@ const http = new AgentHttpServer({
   authenticate,
   managerClient,
   usageFlush,
+  localReady: () => {
+    for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
+    return true;
+  },
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
