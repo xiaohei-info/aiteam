@@ -19,7 +19,10 @@ test("SessionHost persists a Pi session and replays entries", async () => {
     assert(events.includes("agent_settled"));
     const entries = await fixture.host.entries("conversation-1");
     assert(entries.some((entry) => entry.type === "message"));
-    assert.equal((fixture.store.db.prepare("SELECT COUNT(*) AS count FROM pi_event").get() as { count: number }).count, 0);
+    assert.equal(
+      (fixture.store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pi_event'").get() as { name?: string } | undefined)?.name,
+      undefined,
+    );
     unsubscribe();
 
     const replayed: string[] = [];

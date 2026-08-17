@@ -84,12 +84,6 @@ export interface UsageOutboxItem {
   claim_token?: string | null;
 }
 
-export interface PersistedEvent {
-  conversationId: string;
-  cursor: number;
-  event: string;
-}
-
 export interface IdempotencyReceipt {
   conversationId: string;
   callerId: string;
@@ -145,12 +139,6 @@ interface ConversationRow {
   updated_at: string;
 }
 
-interface EventRow {
-  conversation_id: string;
-  cursor: number;
-  event_json: string;
-}
-
 const DEFAULT_LEASE_MS = 30_000;
 
 export class AgentSqliteStore {
@@ -198,14 +186,6 @@ export class AgentSqliteStore {
         PRIMARY KEY (conversation_id, caller_id, idempotency_key)
       );
 
-      CREATE TABLE IF NOT EXISTS pi_event (
-        conversation_id TEXT NOT NULL,
-        cursor INTEGER NOT NULL,
-        event_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, cursor)
-      );
-
       CREATE TABLE IF NOT EXISTS loaded_employee_projection (
         employee_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -241,6 +221,8 @@ export class AgentSqliteStore {
       );
       CREATE INDEX IF NOT EXISTS usage_outbox_status_idx ON usage_summary_outbox(status, created_at);
     `);
+    // Pi Session JSONL is the sole content fact source; remove any pre-cutover raw event table.
+    this.db.exec("DROP TABLE IF EXISTS pi_event");
     for (const statement of [
       "ALTER TABLE conversation ADD COLUMN title TEXT",
       "ALTER TABLE conversation ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'",
@@ -342,7 +324,7 @@ export class AgentSqliteStore {
 
   deleteConversation(id: string, tenantId?: string, memberId?: string): boolean {
     const result = this.db.prepare("DELETE FROM conversation WHERE id = ? AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)").run(id, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null);
-    this.db.prepare("DELETE FROM pi_event WHERE conversation_id = ?").run(id);
+    this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
     return result.changes > 0;
   }
 
@@ -441,37 +423,6 @@ export class AgentSqliteStore {
 
   markUsageFailed(summaryId: string, claimToken: string, error: string): void {
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(error.slice(0, 500), summaryId, claimToken);
-  }
-
-  appendEvent(conversationId: string, event: unknown): number {
-    const cursor = (this.db
-      .prepare("SELECT COALESCE(MAX(cursor), 0) + 1 AS next_cursor FROM pi_event WHERE conversation_id = ?")
-      .get(conversationId) as { next_cursor: number }).next_cursor;
-    this.db
-      .prepare("INSERT INTO pi_event (conversation_id, cursor, event_json, created_at) VALUES (?, ?, ?, ?)")
-      .run(conversationId, cursor, JSON.stringify(event), new Date().toISOString());
-    // Keep the local log bounded while retaining enough history for reconnects.
-    this.db.prepare("DELETE FROM pi_event WHERE conversation_id = ? AND cursor <= ?").run(conversationId, cursor - 2048);
-    return cursor;
-  }
-
-  getEvents(conversationId: string, after?: number): PersistedEvent[] {
-    const rows = this.db
-      .prepare(`
-        SELECT conversation_id, cursor, event_json
-        FROM pi_event
-        WHERE conversation_id = ? AND cursor > ?
-        ORDER BY cursor ASC
-      `)
-      .all(conversationId, after ?? 0) as unknown as EventRow[];
-    return rows.map((row) => ({ conversationId: row.conversation_id, cursor: row.cursor, event: row.event_json }));
-  }
-
-  getEventBounds(conversationId: string): { first?: number; last?: number } {
-    const row = this.db
-      .prepare("SELECT MIN(cursor) AS first, MAX(cursor) AS last FROM pi_event WHERE conversation_id = ?")
-      .get(conversationId) as { first: number | null; last: number | null };
-    return { first: row.first ?? undefined, last: row.last ?? undefined };
   }
 
   reservePrompt(input: {
