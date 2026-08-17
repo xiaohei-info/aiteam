@@ -7,6 +7,7 @@ import { createControlledResourceLoader } from "./pi/resources.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost } from "./pi/session-host.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
+import { HttpManagerClient } from "./manager-client.js";
 
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
@@ -46,6 +47,7 @@ const http = new AgentHttpServer({
   host: sessionHost,
   store,
   authenticate,
+  managerClient: process.env.AITEAM_MANAGER_URL ? new HttpManagerClient(process.env.AITEAM_MANAGER_URL) : undefined,
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
 });
 

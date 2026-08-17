@@ -2,9 +2,11 @@ export { GroupPage } from "./GroupPage";
 export { GroupExpertRoster } from "./GroupExpertRoster";
 export { MentionComposer, parseMentions } from "./MentionComposer";
 export {
-  groupDispatch,
+  createLocalGroupConversation,
+  listLoadedExperts,
+  listSolutionInstances,
+  syncGrants,
   type GroupExpert,
-  type GroupDelegation,
-  type DispatchResult,
-  type GroupDispatchInput,
+  type LoadedExpertProjection,
+  type SolutionProjection,
 } from "./useGroupApi";

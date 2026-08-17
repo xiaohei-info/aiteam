@@ -1,5 +1,5 @@
 import type { AgentApiClient } from "../../lib/api-client";
-import type { MarketTemplate, MarketTemplateDetail, RecruitResult } from "./types";
+import type { MarketTemplate, MarketTemplateDetail } from "./types";
 
 export async function listTemplates(client: AgentApiClient, params?: { category?: string; keyword?: string }): Promise<MarketTemplate[]> {
   const sp = new URLSearchParams();
@@ -12,8 +12,4 @@ export async function listTemplates(client: AgentApiClient, params?: { category?
 
 export async function getTemplateDetail(client: AgentApiClient, templateId: string): Promise<MarketTemplateDetail | null> {
   return client.get<MarketTemplateDetail>(`/api/agent/marketplace/templates/${templateId}`);
-}
-
-export async function recruit(client: AgentApiClient, templateId: string): Promise<RecruitResult | null> {
-  return client.post<RecruitResult>("/api/agent/recruitments", { body: { template_id: templateId } });
 }

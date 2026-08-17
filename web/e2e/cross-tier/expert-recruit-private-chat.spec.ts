@@ -363,46 +363,28 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       `Agent roster 应包含招募 employee ${employeeId}（实际 ${rosterItems.length} 条）`,
     );
 
-    // ── 9 + 10. Agent 创建私聊会话，entry_employee_id == employee_id ──
-    const convTitle = `E2E private chat ${uniqueTag}`;
-    const convResp = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
-      data: { title: convTitle, entry_employee_id: employeeId },
-      headers: { "Content-Type": "application/json" },
-      // 本地单用户端点，无 require_claims。
-      failOnStatusCode: false,
-    });
-    stageExpect(
-      convResp.ok(),
-      "conversation",
-      `Agent 创建私聊会话应可达：status=${convResp.status()}`,
+    // ── 9 + 10. Node Agent 直接打开本地 Pi Conversation 并提交 prompt ──
+    // Conversation metadata is owned by the local Agent UI; the Node API owns
+    // only prompt/entries/events/abort and does not expose a create/detail route.
+    const convId = `e2e-private-${uniqueTag}`;
+    const promptResp = await request.post(
+      `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}/prompt`,
+      {
+        data: { text: `@${employeeId} E2E private chat` },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": `private-${uniqueTag}` },
+        failOnStatusCode: false,
+      },
     );
-    const convBody = (await convResp.json()) as {
-      data?: { id?: string; entry_employee_id?: string; title?: string };
-    };
-    stageExpect(Boolean(convBody.data?.id), "conversation", "创建会话响应须含 conversation id");
-    stageExpect(
-      convBody.data?.entry_employee_id === employeeId,
-      "conversation",
-      `私聊会话 entry_employee_id 应等于招募 employee：期望=${employeeId} 实际=${convBody.data?.entry_employee_id}`,
-    );
+    stageExpect(promptResp.status() === 202, "conversation", `Agent prompt 应接受：status=${promptResp.status()}`);
 
-    // ── 11. 回查会话详情，二次确认 entry_employee_id 落库 ──
-    const convId = convBody.data?.id;
-    const convGetResp = await request.get(
-      `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}`,
-      { failOnStatusCode: false },
+    // ── 11. Pi entries 是私聊的持久视图 ──
+    const entriesResp = await request.get(
+      `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}/entries`,
+      { headers: { "Content-Type": "application/json" }, failOnStatusCode: false },
     );
-    stageExpect(
-      convGetResp.ok(),
-      "conversation",
-      `Agent 会话详情应可达：status=${convGetResp.status()}`,
-    );
-    const convGetBody = (await convGetResp.json()) as { data?: { entry_employee_id?: string } };
-    stageExpect(
-      convGetBody.data?.entry_employee_id === employeeId,
-      "conversation",
-      `会话详情 entry_employee_id 持久化一致：期望=${employeeId} 实际=${convGetBody.data?.entry_employee_id}`,
-    );
+    stageExpect(entriesResp.ok(), "conversation", `Agent entries 应可达：status=${entriesResp.status()}`);
+    const entriesBody = (await entriesResp.json()) as { data?: { entries?: unknown[] } };
+    stageExpect(Array.isArray(entriesBody.data?.entries), "conversation", "entries 响应须含 entries 数组");
   });
 
   // ── 门禁 negative 用例：authorized-config 主体不一致 → 403，且不得被误判为通过 ──

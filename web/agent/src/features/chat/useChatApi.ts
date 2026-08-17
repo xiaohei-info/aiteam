@@ -1,19 +1,15 @@
 /** Agent chat API: prompt submission, persisted Pi entries, and Pi event SSE. */
 import type { PiEntry, PiEvent, ConversationEntries } from "@aiteam/shared/contracts";
 import type { AgentApiClient } from "../../lib/api-client";
+import { makeLocalConversation, readLocalConversations, updateLocalConversation, writeLocalConversation } from "./conversation-store";
 
 export interface Conversation {
   id: string;
   title: string | null;
   state: string;
   collaboration_mode?: string;
-  orchestration_brief?: string;
-  planner_employee_id?: string | null;
   entry_employee_id?: string | null;
   solution_instance_id?: string | null;
-  solution_planner_prompt?: string;
-  solution_subtask_prompt?: string;
-  solution_aggregate_prompt?: string;
   solution_expert_employee_ids?: string[];
   last_read_at: string | null;
   last_read_message_id: string | null;
@@ -25,10 +21,12 @@ export async function listConversations(
   client: AgentApiClient,
   cursor?: string | null,
 ): Promise<{ items: Conversation[]; nextCursor: string | null; hasMore: boolean }> {
-  const result = await client.listGet<Conversation>("/api/agent/conversations", {
-    query: cursor ? { cursor } : undefined,
-  });
-  return { items: result.items, nextCursor: result.page.next_cursor, hasMore: result.page.has_more };
+  void client;
+  const items = readLocalConversations();
+  const offset = cursor ? Number.parseInt(cursor, 10) || 0 : 0;
+  const page = items.slice(offset, offset + 50);
+  const nextOffset = offset + page.length;
+  return { items: page, nextCursor: nextOffset < items.length ? String(nextOffset) : null, hasMore: nextOffset < items.length };
 }
 
 export interface CreateConversationInput {
@@ -41,13 +39,10 @@ export async function createConversation(
   client: AgentApiClient,
   input: CreateConversationInput,
 ): Promise<Conversation | null> {
-  return client.post<Conversation>("/api/agent/conversations", {
-    body: {
-      ...(input.title !== undefined && input.title !== null ? { title: input.title } : {}),
-      ...(input.collaboration_mode ? { collaboration_mode: input.collaboration_mode } : {}),
-      ...(input.entry_employee_id ? { entry_employee_id: input.entry_employee_id } : {}),
-    },
-  });
+  void client;
+  const conversation = makeLocalConversation(input);
+  writeLocalConversation(conversation);
+  return conversation;
 }
 
 export interface PromptInput {
@@ -125,10 +120,8 @@ export async function setConversationState(
   conversationId: string,
   state: string,
 ): Promise<Conversation | null> {
-  return client.put<Conversation>(
-    `/api/agent/conversations/${encodeURIComponent(conversationId)}/state`,
-    { body: { state } },
-  );
+  void client;
+  return updateLocalConversation(conversationId, { state });
 }
 
 async function readSse(

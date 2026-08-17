@@ -4,9 +4,8 @@
  * 组合（最大化复用 chat 模块）：
  *   左：ConversationList（复用，headerLabel="群聊"）
  *   右：TimelineView（复用——TimelineStore 按 cursor 归并，多 run 事件天然并入同一时间线）
- *       + GroupExpertRoster（拉取真实 roster）
- *       + MentionComposer（@提及 -> group-dispatch）
- *       + triggered_handles 展示（"@提及触发了哪些专家"）
+ *       + GroupExpertRoster（只读 roster 投影）
+ *       + MentionComposer（@提及 -> coordinator prompt）
  *
  * 展示态不入持久化主状态（D6）：selected / roster / lastTriggered / lastIgnored /
  * dispatchSignal 均为本组件局部运行态，不写入 store、不落库。
@@ -17,9 +16,7 @@
  * roster 点击 -> 输入框追加：用 window CustomEvent（"group:append-mention"）解耦，
  * MentionComposer 内部 useEffect 监听，避免组件间 ref/状态提升耦合。
  *
- * 建群入口（"都选方案一" 第四章决策）：固定编排入口位于本页面顶部 header 条，点"从解决方案创建群聊"
- * 打开 Modal 选择 Operator 行业方案实例——选中后 POST /conversations 走固定编排（solution 自带
- * 三阶段 prompts，UI 只读展示不覆盖）；自由创建仍为默认行为。
+ * 建群入口只在本地保存会话索引；方案内容是只读授权投影，不向 Agent 发送 planner payload。
  */
 
 import { useCallback, useEffect, useState, useMemo } from "react";
@@ -42,12 +39,9 @@ import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import { MentionComposer } from "./MentionComposer";
 import {
-  createConversationFromSolution,
-  createFreeConversation,
+  createLocalGroupConversation,
   listLoadedExperts,
   listSolutionInstances,
-  type CreateFromSolutionInput,
-  type DispatchResult,
   type GroupExpert,
   type LoadedExpertProjection,
   type SolutionProjection,
@@ -75,8 +69,6 @@ export function GroupPage() {
   // 已装载专家原始投影列表（含 employee_id 供方案绑定 roster 过滤）。
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
-  const [lastTriggered, setLastTriggered] = useState<string[] | null>(null);
-  const [lastIgnored, setLastIgnored] = useState<string[] | null>(null);
   // 一轮编排完成后 +1，触发列表刷新 + timeline catchUp（补拉 since highWater 的新事件）。
   const [dispatchSignal, setDispatchSignal] = useState(0);
   // "从解决方案创建群聊" 固定编排入口：列表+弹窗状态
@@ -106,8 +98,6 @@ export function GroupPage() {
 
   const handleSelect = useCallback((conv: Conversation) => {
     setSelected(conv);
-    setLastTriggered(null);
-    setLastIgnored(null);
   }, []);
 
   // 全部已装载专家 -> GroupExpert roster。
@@ -126,9 +116,7 @@ export function GroupPage() {
     return filtered.length > 0 ? filtered : roster;
   }, [selected, roster]);
 
-  const handleDispatched = useCallback((result: DispatchResult) => {
-    setLastTriggered(result.triggered_handles);
-    setLastIgnored(result.ignored_handles ?? null);
+  const handleDispatched = useCallback(() => {
     setDispatchSignal((n) => n + 1);
   }, []);
 
@@ -164,11 +152,10 @@ export function GroupPage() {
     if (!sol) return;
     setCreating(true);
     try {
-      const input: CreateFromSolutionInput = {
+      const conv = createLocalGroupConversation({
         solution_instance_id: sol.solution_instance_id,
         title: sol.display_name || "方案群聊",
-      };
-      const conv = await createConversationFromSolution(client, input);
+      });
       setShowCreateModal(false);
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
@@ -185,7 +172,7 @@ export function GroupPage() {
     try {
       const title = window.prompt("自由群聊名称", "自由协作群");
       if (title === null) return;
-      const conv = await createFreeConversation(client, { title });
+      const conv = createLocalGroupConversation({ title });
       setDispatchSignal((n) => n + 1);
       setSelected(conv);
     } catch (err) {
@@ -237,16 +224,9 @@ export function GroupPage() {
               startContent={<GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />}
               endContent={
                 <VStack gap={1} align="end">
-                  {lastTriggered && lastTriggered.length > 0 && (
-                    <Text type="supporting" as="div" aria-live="polite">
-                      本轮 @提及触发：{lastTriggered.map((h) => `@${h}`).join(" ")}
-                    </Text>
-                  )}
-                  {lastIgnored && lastIgnored.length > 0 && (
-                    <Text type="supporting" as="div" aria-live="polite" role="alert">
-                      未识别的专家：{lastIgnored.join(" ")}（请检查 roster 中的展示名）
-                    </Text>
-                  )}
+                  <Text type="supporting" as="div" aria-live="polite">
+                    @提及将由 coordinator Conversation 处理
+                  </Text>
                 </VStack>
               }
             />

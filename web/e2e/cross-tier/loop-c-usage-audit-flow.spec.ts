@@ -215,11 +215,11 @@ test.describe("Loop-C usage audit 跨端数据隔离", () => {
 });
 
 test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传播", () => {
-  test("Agent create conversation + prompt → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
+  test("Agent Conversation prompt → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
     request,
   }) => {
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
-    // Agent create conversation → prompt → outbox summary 写入/更新 → flush sent>0 →
+    // Agent Conversation prompt → outbox summary 写入/更新 → flush sent>0 →
     // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。
 
     const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
@@ -240,16 +240,9 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
     );
 
-    // ── 阶段 2/6: 创建会话 + 提交 Pi prompt（Pi model 产生 usage → UsageRecorder 入 outbox）──
+    // ── 阶段 2/6: Node Agent Conversation prompt（Pi model 产生 usage → UsageRecorder 入 outbox）──
     const traceId = `e2e-loopc-${Date.now()}`;
-    const convResp = await request.post(`${agentOrigin}/api/agent/conversations`, {
-      data: { title: `Loop-C propagation ${traceId}` },
-      headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
-      failOnStatusCode: false,
-    });
-    expect(convResp.ok(), `create conversation: ${convResp.status()}`).toBe(true);
-    const convId = ((await convResp.json()) as { data: { id: string } }).data.id;
-
+    const convId = `e2e-usage-${traceId}`;
     const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
       data: { text: `E2E usage cross-tier: ${traceId}` },
       headers: {

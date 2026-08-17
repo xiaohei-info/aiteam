@@ -1,3 +1,2 @@
 export interface MarketTemplate { template_id: string; display_name: string; category: string; model_name: string; skills_count: number; recruit_count: number; is_recruited: boolean; tags: string[]; avatar_url: string | null; }
 export interface MarketTemplateDetail extends MarketTemplate { persona: string; skills: Array<Record<string, unknown>>; knowledge_bases: Array<Record<string, unknown>>; initial_memories: Array<Record<string, unknown>>; rating: number; }
-export interface RecruitResult { success: boolean; employee_id: string | null; message: string; }

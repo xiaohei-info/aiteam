@@ -1,9 +1,8 @@
 /**
  * W-A.3 群聊 @提及输入器（#68 / 06 §7.6 / D19）。
  *
- * 与私聊 MessageComposer 的差异：发送时走 POST /group-dispatch。
- * 请求体携带本会话 roster（后端按 roster 解析 @提及、各起一个 run）。@解析只认 roster
- * 内已知 handle（与后端 mentions.resolve_mentions 口径一致——未知 handle 不触发 run）。
+ * 群聊与私聊统一走 coordinator Conversation 的 prompt 入口；roster 仅用于本地 @提及提示。
+ * @解析只认 roster 内已知 handle，不把 roster 或 planner payload 发送给 Agent。
  *
  * 发送后清空输入并回调 onDispatched（父组件据此触发 timeline catchUp + 展示
  * triggered_handles）。展示态不入持久化主状态（D6）。
@@ -17,15 +16,15 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApiError, useApp } from "../../lib/app-context";
-import type { DispatchResult, GroupExpert } from "./useGroupApi";
-import { groupDispatch } from "./useGroupApi";
+import type { GroupExpert } from "./useGroupApi";
+import { submitPrompt } from "../chat/useChatApi";
 
 export interface MentionComposerProps {
   conversationId: string;
-  /** 本会话已装载专家 roster（演示用，前端持有）。 */
+  /** 本地已授权 roster，仅用于 @提及提示。 */
   experts: GroupExpert[];
-  /** 一轮编排完成后回调，参数为本轮 DispatchResult（含 triggered_handles）。 */
-  onDispatched: (result: DispatchResult) => void;
+  /** prompt 被 coordinator 接收后的刷新回调。 */
+  onDispatched: () => void;
 }
 
 /**
@@ -73,10 +72,10 @@ export function MentionComposer({ conversationId, experts, onDispatched }: Menti
     setSending(true);
     setError(null);
     try {
-      // 携带完整 roster（后端按 roster 解析 @提及）；即便本轮无 @，也发原文（后端落 USER 消息、不起 run）。
-      const result = await groupDispatch(client, conversationId, { text, experts });
+      // Mentions are coordinator instructions in the ordinary Conversation prompt.
+      await submitPrompt(client, conversationId, { text });
       setContent("");
-      onDispatched(result);
+      onDispatched();
     } catch (err) {
       setError(toMessage(err));
     } finally {

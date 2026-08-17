@@ -155,7 +155,7 @@ export class SessionHost {
     if (existing) return existing;
 
     const indexed = this.options.store.getConversation(conversationId);
-    const workspace = indexed?.workspace ?? join(this.options.cwdRoot, this.safeDirectoryName(conversationId));
+    const workspace = indexed?.workspace || join(this.options.cwdRoot, this.safeDirectoryName(conversationId));
     mkdirSync(workspace, { recursive: true });
 
     let sessionManager: SessionManager;

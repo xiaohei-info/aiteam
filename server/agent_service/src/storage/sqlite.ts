@@ -5,10 +5,75 @@ import { mkdirSync } from "node:fs";
 
 export type ReceiptState = "accepted" | "completed" | "unknown";
 
+export type ConversationState = "draft" | "active" | "paused" | "muted" | "archived";
+
 export interface ConversationRecord {
   id: string;
   sessionFile: string;
   workspace: string;
+  title?: string | null;
+  kind?: string;
+  labels?: string[];
+  state?: ConversationState;
+  entryEmployeeId?: string | null;
+  coordinatorEmployeeId?: string | null;
+  solutionRef?: string | null;
+  schedule?: Record<string, unknown> | null;
+  lastReadEntryId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ConversationMetadata {
+  id: string;
+  title: string | null;
+  kind: string;
+  labels: string[];
+  state: ConversationState;
+  entry_employee_id: string | null;
+  coordinator_employee_id: string | null;
+  solution_instance_id: string | null;
+  schedule: Record<string, unknown> | null;
+  last_read_entry_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoadedExpertProjection {
+  employee_id: string;
+  tenant_id: string;
+  version: string;
+  handle: string;
+  display_name: string;
+  revoked: boolean;
+  synced_at: string;
+  model_policy?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface LoadedSolutionProjection {
+  solution_instance_id: string;
+  display_name: string;
+  version: string;
+  [key: string]: unknown;
+}
+
+export interface FrozenSnapshot {
+  employee_id: string;
+  version: string;
+  snapshot_version: string;
+  display_name: string;
+  [key: string]: unknown;
+}
+
+export interface UsageOutboxItem {
+  summary_id: string;
+  tenant_id: string;
+  kind: string;
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
 }
 
 export interface PersistedEvent {
@@ -57,6 +122,17 @@ interface ConversationRow {
   id: string;
   session_file: string;
   workspace: string;
+  title: string | null;
+  kind: string;
+  labels_json: string;
+  state: ConversationState;
+  entry_employee_id: string | null;
+  coordinator_employee_id: string | null;
+  solution_ref: string | null;
+  schedule_json: string | null;
+  last_read_entry_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface EventRow {
@@ -81,9 +157,19 @@ export class AgentSqliteStore {
         id TEXT PRIMARY KEY,
         session_file TEXT NOT NULL,
         workspace TEXT NOT NULL,
+        title TEXT,
+        kind TEXT NOT NULL DEFAULT 'chat',
+        labels_json TEXT NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('draft', 'active', 'paused', 'muted', 'archived')),
+        entry_employee_id TEXT,
+        coordinator_employee_id TEXT,
+        solution_ref TEXT,
+        schedule_json TEXT,
+        last_read_entry_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS conversation_updated_idx ON conversation(updated_at DESC, id);
 
       CREATE TABLE IF NOT EXISTS idempotency_receipt (
         conversation_id TEXT NOT NULL,
@@ -106,30 +192,167 @@ export class AgentSqliteStore {
         created_at TEXT NOT NULL,
         PRIMARY KEY (conversation_id, cursor)
       );
+
+      CREATE TABLE IF NOT EXISTS loaded_employee_projection (
+        employee_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        projection_json TEXT NOT NULL,
+        revoked INTEGER NOT NULL DEFAULT 0,
+        synced_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS loaded_solution_projection (
+        solution_instance_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        projection_json TEXT NOT NULL,
+        synced_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS frozen_snapshot (
+        employee_id TEXT PRIMARY KEY,
+        snapshot_version TEXT NOT NULL,
+        version TEXT NOT NULL,
+        projection_json TEXT NOT NULL,
+        synced_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS usage_summary_outbox (
+        summary_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS usage_outbox_status_idx ON usage_summary_outbox(status, created_at);
     `);
+    for (const statement of [
+      "ALTER TABLE conversation ADD COLUMN title TEXT",
+      "ALTER TABLE conversation ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'",
+      "ALTER TABLE conversation ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'",
+      "ALTER TABLE conversation ADD COLUMN state TEXT NOT NULL DEFAULT 'active'",
+      "ALTER TABLE conversation ADD COLUMN entry_employee_id TEXT",
+      "ALTER TABLE conversation ADD COLUMN coordinator_employee_id TEXT",
+      "ALTER TABLE conversation ADD COLUMN solution_ref TEXT",
+      "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
+      "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
+    ]) {
+      try { this.db.exec(statement); } catch { /* already migrated */ }
+    }
   }
 
   getConversation(id: string): ConversationRecord | undefined {
     const row = this.db
-      .prepare("SELECT id, session_file, workspace FROM conversation WHERE id = ?")
+      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
       .get(id) as ConversationRow | undefined;
-    return row
-      ? { id: row.id, sessionFile: row.session_file, workspace: row.workspace }
-      : undefined;
+    return row ? this.toConversation(row) : undefined;
+  }
+
+  listConversations(limit = 50, cursor?: string): { items: ConversationMetadata[]; nextCursor: string | null; hasMore: boolean } {
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const rows = this.db.prepare(`
+      SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
+             coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at
+      FROM conversation
+      WHERE (? IS NULL OR updated_at < (SELECT updated_at FROM conversation WHERE id = ?))
+      ORDER BY updated_at DESC, id DESC LIMIT ?
+    `).all(cursor ?? null, cursor ?? null, safeLimit + 1) as unknown as ConversationRow[];
+    const hasMore = rows.length > safeLimit;
+    const items = rows.slice(0, safeLimit).map((row) => this.toMetadata(row));
+    return { items, nextCursor: hasMore ? items.at(-1)?.id ?? null : null, hasMore };
   }
 
   saveConversation(record: ConversationRecord): void {
     const now = new Date().toISOString();
-    this.db
-      .prepare(`
-        INSERT INTO conversation (id, session_file, workspace, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          session_file = excluded.session_file,
-          workspace = excluded.workspace,
-          updated_at = excluded.updated_at
-      `)
-      .run(record.id, record.sessionFile, record.workspace, now, now);
+    this.db.prepare(`
+      INSERT INTO conversation (
+        id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
+        coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        session_file = excluded.session_file,
+        workspace = excluded.workspace,
+        title = excluded.title,
+        kind = excluded.kind,
+        labels_json = excluded.labels_json,
+        state = excluded.state,
+        entry_employee_id = excluded.entry_employee_id,
+        coordinator_employee_id = excluded.coordinator_employee_id,
+        solution_ref = excluded.solution_ref,
+        schedule_json = excluded.schedule_json,
+        last_read_entry_id = excluded.last_read_entry_id,
+        updated_at = excluded.updated_at
+    `).run(
+      record.id, record.sessionFile, record.workspace, record.title ?? null, record.kind ?? "chat",
+      JSON.stringify(record.labels ?? []), record.state ?? "active", record.entryEmployeeId ?? null,
+      record.coordinatorEmployeeId ?? null, record.solutionRef ?? null,
+      record.schedule ? JSON.stringify(record.schedule) : null, record.lastReadEntryId ?? null,
+      record.createdAt ?? now, record.updatedAt ?? now,
+    );
+  }
+
+  createConversation(input: Omit<ConversationRecord, "sessionFile" | "workspace"> & { sessionFile?: string; workspace?: string }): ConversationMetadata {
+    const now = new Date().toISOString();
+    this.saveConversation({
+      ...input,
+      sessionFile: input.sessionFile ?? "",
+      workspace: input.workspace ?? "",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return this.getConversationMetadata(input.id)!;
+  }
+
+  updateConversation(id: string, patch: Partial<Omit<ConversationRecord, "id" | "sessionFile" | "workspace">>): ConversationMetadata | undefined {
+    const current = this.getConversation(id);
+    if (!current) return undefined;
+    const now = new Date().toISOString();
+    this.saveConversation({ ...current, ...patch, id, updatedAt: now });
+    return this.getConversationMetadata(id);
+  }
+
+  deleteConversation(id: string): boolean {
+    const result = this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
+    this.db.prepare("DELETE FROM pi_event WHERE conversation_id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  getConversationMetadata(id: string): ConversationMetadata | undefined {
+    const record = this.getConversation(id);
+    return record ? this.toMetadata(record) : undefined;
+  }
+
+  listLoadedExperts(): LoadedExpertProjection[] {
+    return (this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE revoked = 0 ORDER BY employee_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as LoadedExpertProjection);
+  }
+
+  listSnapshots(): FrozenSnapshot[] {
+    return (this.db.prepare("SELECT projection_json FROM frozen_snapshot ORDER BY employee_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as FrozenSnapshot);
+  }
+
+  listSolutions(): LoadedSolutionProjection[] {
+    return (this.db.prepare("SELECT projection_json FROM loaded_solution_projection ORDER BY solution_instance_id").all() as { projection_json: string }[]).map((row) => JSON.parse(row.projection_json) as LoadedSolutionProjection);
+  }
+
+  replaceProjections(experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[] = []): { upserted: number; revoked: number } {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id) DO UPDATE SET tenant_id=excluded.tenant_id, version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
+      for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.version, JSON.stringify({ ...expert, synced_at: expert.synced_at ?? now, revoked: false }), now);
+      const revoke = this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ?");
+      for (const id of revokedIds) revoke.run(now, id);
+      const upsertSolution = this.db.prepare("INSERT INTO loaded_solution_projection (solution_instance_id, version, projection_json, synced_at) VALUES (?, ?, ?, ?) ON CONFLICT(solution_instance_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
+      for (const solution of solutions) upsertSolution.run(solution.solution_instance_id, solution.version, JSON.stringify(solution), now);
+      const upsertSnapshot = this.db.prepare("INSERT INTO frozen_snapshot (employee_id, snapshot_version, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(employee_id) DO UPDATE SET snapshot_version=excluded.snapshot_version, version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
+      for (const snapshot of snapshots) upsertSnapshot.run(snapshot.employee_id, snapshot.snapshot_version, snapshot.version, JSON.stringify(snapshot), now);
+      this.db.exec("COMMIT");
+      return { upserted: experts.length + solutions.length + snapshots.length, revoked: revokedIds.length };
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  listUsageOutbox(): UsageOutboxItem[] {
+    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at FROM usage_summary_outbox ORDER BY created_at DESC").all() as unknown as UsageOutboxItem[];
   }
 
   appendEvent(conversationId: string, event: unknown): number {
@@ -282,6 +505,58 @@ export class AgentSqliteStore {
 
   close(): void {
     this.db.close();
+  }
+
+  private toConversation(row: ConversationRow): ConversationRecord {
+    return {
+      id: row.id,
+      sessionFile: row.session_file,
+      workspace: row.workspace,
+      title: row.title,
+      kind: row.kind,
+      labels: this.parseLabels(row.labels_json),
+      state: row.state,
+      entryEmployeeId: row.entry_employee_id,
+      coordinatorEmployeeId: row.coordinator_employee_id,
+      solutionRef: row.solution_ref,
+      schedule: this.parseJsonObject(row.schedule_json),
+      lastReadEntryId: row.last_read_entry_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private toMetadata(row: ConversationRow | ConversationRecord): ConversationMetadata {
+    const record = "session_file" in row ? this.toConversation(row) : row;
+    return {
+      id: record.id,
+      title: record.title ?? null,
+      kind: record.kind ?? "chat",
+      labels: record.labels ?? [],
+      state: record.state ?? "active",
+      entry_employee_id: record.entryEmployeeId ?? null,
+      coordinator_employee_id: record.coordinatorEmployeeId ?? null,
+      solution_instance_id: record.solutionRef ?? null,
+      schedule: record.schedule ?? null,
+      last_read_entry_id: record.lastReadEntryId ?? null,
+      created_at: record.createdAt ?? new Date(0).toISOString(),
+      updated_at: record.updatedAt ?? new Date(0).toISOString(),
+    };
+  }
+
+  private parseLabels(value: string): string[] {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch { return []; }
+  }
+
+  private parseJsonObject(value: string | null): Record<string, unknown> | null {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    } catch { return null; }
   }
 
   private finishTransaction(row: ReceiptRow): IdempotencyReceipt {

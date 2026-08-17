@@ -24,6 +24,8 @@ export interface JwtJwk {
 
 export interface AuthenticatedCaller {
   callerId: string;
+  /** Optional bearer forwarding token for the narrow Agent→Manager pull seam. */
+  accessToken?: string;
   tenantId?: string;
   userId?: string;
   roles?: string[];
@@ -76,13 +78,15 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
 
   const userId = typeof claims.user_id === "string" ? claims.user_id : typeof claims.sub === "string" ? claims.sub : "";
   if (!userId || typeof claims.tenant_id !== "string") throw new Error("JWT identity claims are missing");
-  return {
+  const caller: AuthenticatedCaller = {
     callerId: userId,
     userId,
     tenantId: claims.tenant_id,
     roles: Array.isArray(claims.roles) ? claims.roles.filter((role): role is string => typeof role === "string") : [],
     claims,
   };
+  Object.defineProperty(caller, "accessToken", { value: token, enumerable: false });
+  return caller;
 }
 
 function audienceContains(audience: JwtClaims["aud"], expected: string): boolean {

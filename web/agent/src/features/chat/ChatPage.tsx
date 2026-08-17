@@ -15,7 +15,6 @@ import { ConversationStateControl } from "./ConversationStateControl";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
-import { TerminalPanel } from "../terminal";
 import { RosterPicker } from "./RosterPicker";
 import type { Conversation } from "./useChatApi";
 import { createConversation } from "./useChatApi";
@@ -86,7 +85,6 @@ export function ChatPage(): React.ReactNode {
               >
                 <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
               </ChatLayout>
-              <TerminalPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
             </VStack>
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
         </Card>

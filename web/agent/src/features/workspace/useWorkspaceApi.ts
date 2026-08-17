@@ -1,4 +1,5 @@
 import type { AgentApiClient } from "../../lib/api-client";
+import { listConversations as listChatConversations } from "../chat/useChatApi";
 
 export interface Conversation {
   id: string;
@@ -8,5 +9,6 @@ export interface Conversation {
 }
 
 export async function listConversations(client: AgentApiClient): Promise<Conversation[]> {
-  return (await client.listGet<Conversation>("/api/agent/conversations")).items ?? [];
+  const result = await listChatConversations(client);
+  return result.items;
 }

@@ -12,7 +12,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
-import { listTemplates, recruit } from "./useMarketplaceApi";
+import { listTemplates } from "./useMarketplaceApi";
 import type { MarketTemplate } from "./types";
 
 export function MarketplacePage() {
@@ -23,9 +23,7 @@ export function MarketplacePage() {
   const [category, setCategory] = useState("全部");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [actionInfo, setActionInfo] = useState<string | null>(null);
-  const [recruiting, setRecruiting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -44,18 +42,11 @@ export function MarketplacePage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const handleRecruit = useCallback(async (templateId: string) => {
-    setRecruiting(templateId); setActionError(null);
-    try { await recruit(client, templateId); await load(); } catch (errRecruit) { setActionError(errRecruit instanceof ApiError ? errRecruit.message : "招募失败"); } finally { setRecruiting(null); }
-  }, [client, load]);
-
   const handlePublishRequirement = useCallback(() => {
-    setActionError(null);
     setActionInfo(i18n.t("agent.marketplace.publish_requirement_hint"));
   }, [i18n]);
 
   const handleListMyAgent = useCallback(() => {
-    setActionError(null);
     setActionInfo(i18n.t("agent.marketplace.list_my_agent_hint"));
   }, [i18n]);
 
@@ -80,7 +71,6 @@ export function MarketplacePage() {
         ))}
       </HStack>
 
-      {actionError && <Banner status="error" title={actionError} />}
       {actionInfo && <Banner status="info" title={actionInfo} />}
 
       {loading ? <Banner status="info" title="加载中…" /> :
@@ -95,7 +85,7 @@ export function MarketplacePage() {
                 {t.tags.length > 0 && <HStack gap={1} wrap="wrap">{t.tags.slice(0, 3).map((tag) => <Badge key={tag} label={tag} />)}</HStack>}
                 <Text type="supporting">已有 {t.recruit_count} 家企业招募</Text>
                 {t.is_recruited ? <Badge variant="success" label="✓ 已招募" /> :
-                  <Button label="招募" variant="primary" size="sm" isLoading={recruiting === t.template_id} onClick={() => void handleRecruit(t.template_id)} />}
+                  <Text type="supporting">请在 Manager 端配置</Text>}
               </VStack>
             </Card>
           ))}
