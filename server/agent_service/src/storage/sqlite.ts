@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 
 export type ReceiptState = "accepted" | "completed" | "unknown";
 
@@ -18,6 +18,8 @@ export interface ConversationRecord {
   entryEmployeeId?: string | null;
   coordinatorEmployeeId?: string | null;
   solutionRef?: string | null;
+  tenantId?: string | null;
+  memberId?: string | null;
   schedule?: Record<string, unknown> | null;
   lastReadEntryId?: string | null;
   createdAt?: string;
@@ -33,6 +35,8 @@ export interface ConversationMetadata {
   entry_employee_id: string | null;
   coordinator_employee_id: string | null;
   solution_instance_id: string | null;
+  tenant_id?: string | null;
+  member_id?: string | null;
   schedule: Record<string, unknown> | null;
   last_read_entry_id: string | null;
   created_at: string;
@@ -55,6 +59,7 @@ export interface LoadedSolutionProjection {
   solution_instance_id: string;
   display_name: string;
   version: string;
+  tenant_id?: string;
   [key: string]: unknown;
 }
 
@@ -63,6 +68,7 @@ export interface FrozenSnapshot {
   version: string;
   snapshot_version: string;
   display_name: string;
+  tenant_id?: string;
   [key: string]: unknown;
 }
 
@@ -129,6 +135,8 @@ interface ConversationRow {
   entry_employee_id: string | null;
   coordinator_employee_id: string | null;
   solution_ref: string | null;
+  tenant_id: string | null;
+  member_id: string | null;
   schedule_json: string | null;
   last_read_entry_id: string | null;
   created_at: string;
@@ -150,6 +158,7 @@ export class AgentSqliteStore {
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
+    try { chmodSync(path, 0o600); } catch { /* database may be created by SQLite after open */ }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
 
@@ -164,6 +173,8 @@ export class AgentSqliteStore {
         entry_employee_id TEXT,
         coordinator_employee_id TEXT,
         solution_ref TEXT,
+        tenant_id TEXT,
+        member_id TEXT,
         schedule_json TEXT,
         last_read_entry_id TEXT,
         created_at TEXT NOT NULL,
@@ -234,6 +245,8 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN entry_employee_id TEXT",
       "ALTER TABLE conversation ADD COLUMN coordinator_employee_id TEXT",
       "ALTER TABLE conversation ADD COLUMN solution_ref TEXT",
+      "ALTER TABLE conversation ADD COLUMN tenant_id TEXT",
+      "ALTER TABLE conversation ADD COLUMN member_id TEXT",
       "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
     ]) {
@@ -243,20 +256,21 @@ export class AgentSqliteStore {
 
   getConversation(id: string): ConversationRecord | undefined {
     const row = this.db
-      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
+      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
       .get(id) as ConversationRow | undefined;
     return row ? this.toConversation(row) : undefined;
   }
 
-  listConversations(limit = 50, cursor?: string): { items: ConversationMetadata[]; nextCursor: string | null; hasMore: boolean } {
+  listConversations(limit = 50, cursor?: string, tenantId?: string, memberId?: string): { items: ConversationMetadata[]; nextCursor: string | null; hasMore: boolean } {
     const safeLimit = Math.min(Math.max(limit, 1), 100);
     const rows = this.db.prepare(`
       SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
-             coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at
+             coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at
       FROM conversation
       WHERE (? IS NULL OR updated_at < (SELECT updated_at FROM conversation WHERE id = ?))
+        AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)
       ORDER BY updated_at DESC, id DESC LIMIT ?
-    `).all(cursor ?? null, cursor ?? null, safeLimit + 1) as unknown as ConversationRow[];
+    `).all(cursor ?? null, cursor ?? null, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null, safeLimit + 1) as unknown as ConversationRow[];
     const hasMore = rows.length > safeLimit;
     const items = rows.slice(0, safeLimit).map((row) => this.toMetadata(row));
     return { items, nextCursor: hasMore ? items.at(-1)?.id ?? null : null, hasMore };
@@ -267,8 +281,8 @@ export class AgentSqliteStore {
     this.db.prepare(`
       INSERT INTO conversation (
         id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
-        coordinator_employee_id, solution_ref, schedule_json, last_read_entry_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         session_file = excluded.session_file,
         workspace = excluded.workspace,
@@ -279,6 +293,8 @@ export class AgentSqliteStore {
         entry_employee_id = excluded.entry_employee_id,
         coordinator_employee_id = excluded.coordinator_employee_id,
         solution_ref = excluded.solution_ref,
+        tenant_id = excluded.tenant_id,
+        member_id = excluded.member_id,
         schedule_json = excluded.schedule_json,
         last_read_entry_id = excluded.last_read_entry_id,
         updated_at = excluded.updated_at
@@ -286,6 +302,7 @@ export class AgentSqliteStore {
       record.id, record.sessionFile, record.workspace, record.title ?? null, record.kind ?? "chat",
       JSON.stringify(record.labels ?? []), record.state ?? "active", record.entryEmployeeId ?? null,
       record.coordinatorEmployeeId ?? null, record.solutionRef ?? null,
+      record.tenantId ?? null, record.memberId ?? null,
       record.schedule ? JSON.stringify(record.schedule) : null, record.lastReadEntryId ?? null,
       record.createdAt ?? now, record.updatedAt ?? now,
     );
@@ -311,14 +328,24 @@ export class AgentSqliteStore {
     return this.getConversationMetadata(id);
   }
 
-  deleteConversation(id: string): boolean {
-    const result = this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
+  deleteConversation(id: string, tenantId?: string, memberId?: string): boolean {
+    const result = this.db.prepare("DELETE FROM conversation WHERE id = ? AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)").run(id, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null);
     this.db.prepare("DELETE FROM pi_event WHERE conversation_id = ?").run(id);
     return result.changes > 0;
   }
 
   getConversationMetadata(id: string): ConversationMetadata | undefined {
     const record = this.getConversation(id);
+    return record ? this.toMetadata(record) : undefined;
+  }
+
+  getOwnedConversation(id: string, tenantId: string, memberId: string): ConversationRecord | undefined {
+    const record = this.getConversation(id);
+    return record && record.tenantId === tenantId && record.memberId === memberId ? record : undefined;
+  }
+
+  getOwnedConversationMetadata(id: string, tenantId: string, memberId: string): ConversationMetadata | undefined {
+    const record = this.getOwnedConversation(id, tenantId, memberId);
     return record ? this.toMetadata(record) : undefined;
   }
 
@@ -351,8 +378,8 @@ export class AgentSqliteStore {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  listUsageOutbox(): UsageOutboxItem[] {
-    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at FROM usage_summary_outbox ORDER BY created_at DESC").all() as unknown as UsageOutboxItem[];
+  listUsageOutbox(tenantId?: string): UsageOutboxItem[] {
+    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null) as unknown as UsageOutboxItem[];
   }
 
   appendEvent(conversationId: string, event: unknown): number {
@@ -412,29 +439,16 @@ export class AgentSqliteStore {
         if (existing.request_fingerprint !== input.fingerprint) throw new IdempotencyConflictError();
         const expired = !existing.lease_expires_at || existing.lease_expires_at <= now.toISOString();
         if (existing.state === "completed") return this.finishTransaction(existing);
-        if (!expired) {
-          if (existing.state === "unknown") throw new IdempotencyUnknownError();
-          return this.finishTransaction(existing);
+        if (existing.state === "unknown") {
+          this.db.exec("COMMIT");
+          throw new IdempotencyUnknownError();
         }
+        if (!expired) return this.finishTransaction(existing);
 
-        const ownerInstance = randomUUID();
-        this.db
-          .prepare(`
-            UPDATE idempotency_receipt
-            SET state = 'accepted', owner_instance = ?, lease_expires_at = ?, accepted_at = ?, completed_at = NULL
-            WHERE conversation_id = ? AND caller_id = ? AND idempotency_key = ?
-          `)
-          .run(ownerInstance, leaseExpiresAt, now.toISOString(), input.conversationId, input.callerId, input.key);
+        // An expired accepted receipt is uncertain, never a license to replay Pi.
+        this.db.prepare("UPDATE idempotency_receipt SET state = 'unknown', lease_expires_at = NULL WHERE conversation_id = ? AND caller_id = ? AND idempotency_key = ? AND state = 'accepted'").run(input.conversationId, input.callerId, input.key);
         this.db.exec("COMMIT");
-        return {
-          conversationId: input.conversationId,
-          callerId: input.callerId,
-          key: input.key,
-          fingerprint: input.fingerprint,
-          state: "accepted",
-          ownerInstance,
-          isNew: true,
-        };
+        throw new IdempotencyUnknownError();
       }
 
       const ownerInstance = randomUUID();
@@ -466,7 +480,7 @@ export class AgentSqliteStore {
         isNew: true,
       };
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already committed before an uncertainty error */ }
       throw error;
     }
   }
@@ -519,6 +533,8 @@ export class AgentSqliteStore {
       entryEmployeeId: row.entry_employee_id,
       coordinatorEmployeeId: row.coordinator_employee_id,
       solutionRef: row.solution_ref,
+      tenantId: row.tenant_id,
+      memberId: row.member_id,
       schedule: this.parseJsonObject(row.schedule_json),
       lastReadEntryId: row.last_read_entry_id,
       createdAt: row.created_at,
@@ -537,6 +553,8 @@ export class AgentSqliteStore {
       entry_employee_id: record.entryEmployeeId ?? null,
       coordinator_employee_id: record.coordinatorEmployeeId ?? null,
       solution_instance_id: record.solutionRef ?? null,
+      tenant_id: record.tenantId ?? null,
+      member_id: record.memberId ?? null,
       schedule: record.schedule ?? null,
       last_read_entry_id: record.lastReadEntryId ?? null,
       created_at: record.createdAt ?? new Date(0).toISOString(),

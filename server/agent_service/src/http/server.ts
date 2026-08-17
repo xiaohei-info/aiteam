@@ -1,11 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
+import { readFileSync, statSync } from "node:fs";
+import { extname, join, resolve, relative, isAbsolute } from "node:path";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
+import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient } from "../manager-client.js";
+import { SessionAuthorizationError } from "../pi/session-host.js";
+import { serializePiEvent } from "../pi/event-sse.js";
 import type { ConversationState, LoadedExpertProjection } from "../storage/sqlite.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
@@ -18,6 +22,7 @@ export interface AgentHttpServerOptions {
   runtimeReady?: () => boolean | Promise<boolean>;
   managerClient?: ManagerClient;
   logger?: Pick<Console, "error">;
+  spaRoot?: string;
 }
 
 export class HttpProblem extends Error {
@@ -29,6 +34,9 @@ export class HttpProblem extends Error {
 
 export class AgentHttpServer {
   readonly server: Server;
+  private requests = 0;
+  private errors = 0;
+  private readonly promptWorkers = new Set<Promise<void>>();
 
   constructor(private readonly options: AgentHttpServerOptions) {
     this.server = createServer((request, response) => {
@@ -52,27 +60,24 @@ export class AgentHttpServer {
     });
   }
 
-  close(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!this.server.listening) return resolve();
-      this.server.close((error) => (error ? reject(error) : resolve()));
-    });
+  async close(): Promise<void> {
+    await this.options.host.abortAll();
+    await Promise.allSettled([...this.promptWorkers]);
+    if (!this.server.listening) return;
+    await new Promise<void>((resolve, reject) => this.server.close((error) => (error ? reject(error) : resolve())));
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.requests += 1;
     const requestId = this.header(request, "x-request-id") ?? randomUUID();
     response.setHeader("X-Request-ID", requestId);
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       if (request.method === "GET" && url.pathname === "/healthz") return this.writeJson(response, 200, { data: { status: "ok" } });
+      if (request.method === "GET" && url.pathname === "/metrics") return this.writeMetrics(response);
       if (request.method === "GET" && url.pathname === "/readyz") {
         let ready = false;
-        try {
-          this.options.store.db.prepare("SELECT 1").get();
-          ready = (await this.options.runtimeReady?.()) ?? true;
-        } catch {
-          ready = false;
-        }
+        try { this.options.store.db.prepare("SELECT 1").get(); ready = true; } catch { ready = false; }
         return this.writeJson(response, ready ? 200 : 503, { data: { ready } });
       }
       if (request.method === "GET" && url.pathname === "/openapi.json") return this.writeJson(response, 200, OPENAPI);
@@ -81,7 +86,10 @@ export class AgentHttpServer {
 
       const route = this.matchConversationRoute(url.pathname);
       const platformRoute = this.matchPlatformRoute(url.pathname);
-      if (!route && !platformRoute) throw new HttpProblem(404, "not_found", "Route not found");
+      if (!route && !platformRoute) {
+        if (request.method === "GET" && this.serveSpa(url.pathname, response)) return;
+        throw new HttpProblem(404, "not_found", "Route not found");
+      }
       if (platformRoute === "login" && request.method === "POST") return await this.login(request, response);
       if (platformRoute === "reset-password" && request.method === "POST") return await this.resetPassword(request, response);
       let caller: AuthenticatedCaller;
@@ -90,7 +98,7 @@ export class AgentHttpServer {
       } catch {
         throw new HttpProblem(401, "unauthenticated", "Authentication is required");
       }
-      if (!caller.callerId) throw new HttpProblem(401, "unauthenticated", "Authenticated caller is required");
+      if (!caller.callerId || !caller.tenantId || !(caller.userId ?? caller.callerId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
 
       if (
         platformRoute === "gone" ||
@@ -100,42 +108,49 @@ export class AgentHttpServer {
       ) throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API");
       if (platformRoute === "ping" && request.method === "GET") return this.writeJson(response, 200, { data: { pong: true } });
       if (platformRoute === "whoami" && request.method === "GET") return this.writeJson(response, 200, { data: caller.claims ?? { user_id: caller.userId ?? caller.callerId, tenant_id: caller.tenantId ?? null, roles: caller.roles ?? [] } });
-      if (platformRoute === "conversations" && request.method === "GET") return this.listConversations(response, url.searchParams);
-      if (platformRoute === "conversations" && request.method === "POST") return await this.createConversation(request, response);
-      if (platformRoute === "conversation" && request.method === "GET") return this.getConversation(response, url.pathname);
-      if (platformRoute === "conversation" && (request.method === "PATCH" || request.method === "PUT")) return await this.updateConversation(request, response, url.pathname);
-      if (platformRoute === "conversation" && request.method === "DELETE") return this.deleteConversation(response, url.pathname);
-      if (platformRoute === "state" && request.method === "GET") return this.getConversationState(response, url.pathname);
-      if (platformRoute === "state" && request.method === "PUT") return await this.updateConversationState(request, response, url.pathname);
-      if (platformRoute === "experts" && request.method === "GET") return this.listExperts(response);
-      if (platformRoute === "solutions" && request.method === "GET") return this.listSolutions(response);
-      if (platformRoute === "snapshots" && request.method === "GET") return this.listSnapshots(response);
-      if (platformRoute === "readiness" && request.method === "GET") return await this.readiness(response);
-      if (platformRoute === "expert-readiness" && request.method === "GET") return await this.expertReadiness(response, url.pathname);
+      if (platformRoute === "conversations" && request.method === "GET") return this.listConversations(response, url.searchParams, caller);
+      if (platformRoute === "conversations" && request.method === "POST") return await this.createConversation(request, response, caller);
+      if (platformRoute === "conversation" && request.method === "GET") return this.getConversation(response, url.pathname, caller);
+      if (platformRoute === "conversation" && (request.method === "PATCH" || request.method === "PUT")) return await this.updateConversation(request, response, url.pathname, caller);
+      if (platformRoute === "conversation" && request.method === "DELETE") return await this.deleteConversation(response, url.pathname, caller);
+      if (platformRoute === "state" && request.method === "GET") return this.getConversationState(response, url.pathname, caller);
+      if (platformRoute === "state" && request.method === "PUT") return await this.updateConversationState(request, response, url.pathname, caller);
+      if (platformRoute === "experts" && request.method === "GET") return this.listExperts(response, caller);
+      if (platformRoute === "solutions" && request.method === "GET") return this.listSolutions(response, caller);
+      if (platformRoute === "snapshots" && request.method === "GET") return this.listSnapshots(response, caller);
+      if (platformRoute === "readiness" && request.method === "GET") return await this.readiness(response, caller);
+      if (platformRoute === "expert-readiness" && request.method === "GET") return await this.expertReadiness(response, url.pathname, caller);
       if (platformRoute === "sync" && request.method === "POST") return await this.syncGrants(request, response, caller);
-      if (platformRoute === "outbox" && request.method === "GET") return this.listOutbox(response);
+      if (platformRoute === "outbox" && request.method === "GET") return this.listOutbox(response, caller);
       if (platformRoute === "marketplace" && request.method === "GET") return this.listMarketplaceTemplates(response);
       if (platformRoute === "knowledge-bases" && request.method === "GET") return this.listKnowledgeBases(response);
       if (platformRoute === "knowledge-read" && request.method === "GET") return this.listKnowledgeReadModel(response);
       if (platformRoute === "org" && request.method === "GET") return await this.orgTree(response, caller);
-      if (platformRoute === "office-scene" && request.method === "GET") return this.officeScene(response);
+      if (platformRoute === "office-scene" && request.method === "GET") return this.officeScene(response, caller);
       if (platformRoute === "office-feed" && request.method === "GET") return this.officeFeed(response);
 
       if (!route) throw new HttpProblem(405, "method_not_allowed", "Method not allowed");
       if (route.action === "events" && request.method === "GET") {
+        this.requireOwnedConversation(route.conversationId, caller);
         return await this.events(request, response, route.conversationId, url.searchParams.get("after"));
       }
       if (route.action === "entries" && request.method === "GET") {
+        this.requireOwnedConversation(route.conversationId, caller);
         const entries = await this.options.host.entries(route.conversationId);
         return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, entries } });
       }
-      if (route.action === "prompt" && request.method === "POST") return await this.prompt(request, response, route.conversationId, caller);
+      if (route.action === "prompt" && request.method === "POST") {
+        this.requireOwnedConversation(route.conversationId, caller);
+        return await this.prompt(request, response, route.conversationId, caller);
+      }
       if (route.action === "abort" && request.method === "POST") {
+        this.requireOwnedConversation(route.conversationId, caller);
         const aborted = await this.options.host.abort(route.conversationId);
         return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, aborted } });
       }
       throw new HttpProblem(405, "method_not_allowed", "Method not allowed");
     } catch (error) {
+      this.errors += 1;
       if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
       this.writeError(response, error, requestId);
     }
@@ -182,17 +197,17 @@ export class AgentHttpServer {
     }
   }
 
-  private listConversations(response: ServerResponse, query: URLSearchParams): void {
+  private listConversations(response: ServerResponse, query: URLSearchParams, caller: AuthenticatedCaller): void {
     const rawLimit = query.get("limit");
     const limit = rawLimit === null ? 50 : Number(rawLimit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpProblem(422, "invalid_limit", "limit must be an integer between 1 and 100");
     const cursor = query.get("cursor") ?? undefined;
-    if (cursor !== undefined && !this.options.store.getConversationMetadata(cursor)) throw new HttpProblem(422, "invalid_cursor", "cursor does not identify a conversation");
-    const result = this.options.store.listConversations(limit, cursor);
+    if (cursor !== undefined && !this.options.store.getOwnedConversationMetadata(cursor, caller.tenantId!, caller.userId ?? caller.callerId)) throw new HttpProblem(422, "invalid_cursor", "cursor does not identify a conversation");
+    const result = this.options.store.listConversations(limit, cursor, caller.tenantId, caller.userId ?? caller.callerId);
     this.writeJson(response, 200, { data: { items: result.items, page: { next_cursor: result.nextCursor, has_more: result.hasMore } } });
   }
 
-  private async createConversation(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  private async createConversation(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const title = body.title === undefined || body.title === null ? null : this.stringField(body.title, "title", 200);
     const kind = body.kind === undefined ? "chat" : this.stringField(body.kind, "kind", 64);
@@ -204,8 +219,15 @@ export class AgentHttpServer {
       entryEmployeeId: this.optionalString(body.entry_employee_id, "entry_employee_id"),
       coordinatorEmployeeId: this.optionalString(body.coordinator_employee_id, "coordinator_employee_id"),
       solutionRef: this.optionalString(body.solution_instance_id, "solution_instance_id"),
+      tenantId: caller.tenantId,
+      memberId: caller.userId ?? caller.callerId,
     });
     this.writeJson(response, 201, { data: metadata });
+  }
+
+  private requireOwnedConversation(conversationId: string, caller: AuthenticatedCaller): void {
+    if (!caller.tenantId) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant is required");
+    if (!this.options.store.getOwnedConversation(conversationId, caller.tenantId, caller.userId ?? caller.callerId)) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
   }
 
   private getConversationId(pathname: string): string {
@@ -214,13 +236,13 @@ export class AgentHttpServer {
     return decodeURIComponent(match[1]);
   }
 
-  private getConversation(response: ServerResponse, pathname: string): void {
-    const metadata = this.options.store.getConversationMetadata(this.getConversationId(pathname));
+  private getConversation(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): void {
+    const metadata = this.options.store.getOwnedConversationMetadata(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: metadata });
   }
 
-  private async updateConversation(request: IncomingMessage, response: ServerResponse, pathname: string): Promise<void> {
+  private async updateConversation(request: IncomingMessage, response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const patch: Parameters<AgentSqliteStore["updateConversation"]>[1] = {};
     if (body.title !== undefined) patch.title = body.title === null ? null : this.stringField(body.title, "title", 200);
@@ -228,38 +250,40 @@ export class AgentHttpServer {
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.objectField(body.schedule, "schedule");
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.optionalString(body.last_read_entry_id, "last_read_entry_id");
+    this.requireOwnedConversation(this.getConversationId(pathname), caller);
     const updated = this.options.store.updateConversation(this.getConversationId(pathname), patch);
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: updated });
   }
 
-  private getConversationState(response: ServerResponse, pathname: string): void {
-    const metadata = this.options.store.getConversationMetadata(this.getConversationId(pathname));
+  private getConversationState(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): void {
+    const metadata = this.options.store.getOwnedConversationMetadata(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state } });
   }
 
-  private async updateConversationState(request: IncomingMessage, response: ServerResponse, pathname: string): Promise<void> {
+  private async updateConversationState(request: IncomingMessage, response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const state = this.stringField(body.state, "state", 32) as ConversationState;
     if (!["draft", "active", "paused", "muted", "archived"].includes(state)) throw new HttpProblem(422, "invalid_state", "Unsupported conversation state");
+    this.requireOwnedConversation(this.getConversationId(pathname), caller);
     const updated = this.options.store.updateConversation(this.getConversationId(pathname), { state });
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: updated });
   }
 
-  private deleteConversation(response: ServerResponse, pathname: string): void {
-    if (!this.options.store.deleteConversation(this.getConversationId(pathname))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+  private async deleteConversation(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
+    if (!(await this.options.host.delete(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: this.options.store.listLoadedExperts(), page: { next_cursor: null, has_more: false } } }); }
-  private listSolutions(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: this.options.store.listSolutions(), page: { next_cursor: null, has_more: false } } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listLoadedExperts().filter((item) => item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
+  private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSolutions().filter((item) => !item.tenant_id || item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
   private listMarketplaceTemplates(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
   private listKnowledgeBases(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
   private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
-  private listSnapshots(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots(), page: { next_cursor: null, has_more: false } } }); }
-  private listOutbox(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(), page: { next_cursor: null, has_more: false } } }); }
+  private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots().filter((item) => item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
+  private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
 
   private async syncGrants(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient) throw new HttpProblem(503, "manager_unavailable", "Manager sync is not configured");
@@ -269,9 +293,9 @@ export class AgentHttpServer {
     if (tenantId !== caller.tenantId || memberId !== (caller.userId ?? caller.callerId)) throw new HttpProblem(403, "forbidden", "Sync identity does not match authenticated caller");
     const knownVersions = body.known_versions === undefined ? {} : this.objectField(body.known_versions, "known_versions");
     try {
-      const config = await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions as Record<string, string>);
+      const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions as Record<string, string>), caller.tenantId);
       const snapshots = config.snapshots ?? (this.options.managerClient.pullSnapshots ? await this.options.managerClient.pullSnapshots(caller, config.experts ?? []) : []);
-      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? []);
+      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots.map((snapshot) => ({ ...snapshot, tenant_id: caller.tenantId })), config.revoked_ids ?? []);
       this.writeJson(response, 200, { data: { ok: true, ...result } });
     } catch (error) {
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
@@ -279,16 +303,16 @@ export class AgentHttpServer {
     }
   }
 
-  private async readiness(response: ServerResponse): Promise<void> {
+  private async readiness(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const runtime = (await this.options.runtimeReady?.()) ?? true;
     const state = runtime ? "ready" : "blocked";
-    const experts = this.options.store.listLoadedExperts().map((expert) => this.expertReadinessValue(expert, runtime));
+    const experts = this.options.store.listLoadedExperts().filter((expert) => expert.tenant_id === caller.tenantId).map((expert) => this.expertReadinessValue(expert, runtime));
     this.writeJson(response, 200, { data: { runtime: state, runtime_reason: runtime ? undefined : "Pi runtime is not ready", experts } });
   }
 
-  private async expertReadiness(response: ServerResponse, pathname: string): Promise<void> {
+  private async expertReadiness(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
     const id = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === id);
+    const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === id && item.tenant_id === caller.tenantId);
     if (!expert) return this.writeJson(response, 200, { data: { employee_id: id, display_name: id, handle: id, available: false, runtime: "unknown", provider: "unknown", skills: [], capabilities: [], reasons: ["Expert is not authorized locally"] } });
     const runtime = (await this.options.runtimeReady?.()) ?? true;
     this.writeJson(response, 200, { data: this.expertReadinessValue(expert, runtime) });
@@ -305,8 +329,8 @@ export class AgentHttpServer {
     catch { throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable"); }
   }
 
-  private officeScene(response: ServerResponse): void {
-    const employees = this.options.store.listLoadedExperts().map((expert) => ({ employee_id: expert.employee_id, display_name: expert.display_name, status: expert.revoked ? "offline" : "ready", task: null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null }));
+  private officeScene(response: ServerResponse, caller: AuthenticatedCaller): void {
+    const employees = this.options.store.listLoadedExperts().filter((expert) => expert.tenant_id === caller.tenantId).map((expert) => ({ employee_id: expert.employee_id, display_name: expert.display_name, status: expert.revoked ? "offline" : "ready", task: null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null }));
     const summary = { total: employees.length, working: 0, ready: employees.filter((employee) => employee.status === "ready").length, offline: employees.filter((employee) => employee.status === "offline").length };
     this.writeJson(response, 200, { data: { employees, summary } });
   }
@@ -322,6 +346,12 @@ export class AgentHttpServer {
     const callerId = caller.callerId;
     const key = this.header(request, "idempotency-key");
     if (!key || key.length > 256) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required and must be <= 256 characters");
+    const conversation = this.options.store.getOwnedConversation(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+    if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
+    const expert = employeeId ? this.options.store.listLoadedExperts().find((item) => item.employee_id === employeeId && item.tenant_id === caller.tenantId && !item.revoked) : undefined;
+    const snapshot = employeeId && expert ? this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version && item.tenant_id === caller.tenantId) : undefined;
+    if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
     const payload = await this.readJson(request);
     const text = payload.text;
     if (typeof text !== "string" || text.trim().length === 0 || text.length > 200_000) {
@@ -335,7 +365,9 @@ export class AgentHttpServer {
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
-    void this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images);
+    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images);
+    this.promptWorkers.add(worker);
+    void worker.finally(() => this.promptWorkers.delete(worker));
     this.writeReceipt(response, conversationId, key, "accepted");
   }
 
@@ -362,11 +394,11 @@ export class AgentHttpServer {
       if (closed) return;
       if (!started) return pending.push(envelope), undefined;
       if (!response.writableEnded) {
-        const event = envelope.source_ref
-          ? { ...envelope.event, conversation_id: envelope.conversation_id, source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id }
-          : envelope.event;
-        const id = envelope.source_ref ? "" : `id: ${envelope.id}\n`;
-        response.write(`${id}event: pi\ndata: ${JSON.stringify(event)}\n\n`);
+        const event = serializePiEvent(envelope.event, {
+          ...(envelope.source_ref ? { conversation_id: envelope.conversation_id, source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id } : {}),
+        });
+        if (!event) return;
+        response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
       }
     };
     const unsubscribe = await this.options.host.subscribe(conversationId, write, requested ?? undefined);
@@ -458,14 +490,50 @@ export class AgentHttpServer {
     response.end(html);
   }
 
+  private writeMetrics(response: ServerResponse): void {
+    const body = [
+      "# TYPE aiteam_agent_http_requests_total counter",
+      `aiteam_agent_http_requests_total ${this.requests}`,
+      "# TYPE aiteam_agent_http_errors_total counter",
+      `aiteam_agent_http_errors_total ${this.errors}`,
+      "",
+    ].join("\\n");
+    this.writeText(response, 200, body, "text/plain; version=0.0.4; charset=utf-8");
+  }
+
+  private writeText(response: ServerResponse, status: number, body: string, contentType: string): void {
+    if (response.writableEnded) return;
+    response.writeHead(status, { "Content-Length": Buffer.byteLength(body), "Content-Type": contentType });
+    response.end(body);
+  }
+
+  private serveSpa(pathname: string, response: ServerResponse): boolean {
+    const root = this.options.spaRoot;
+    if (!root || pathname.startsWith("/api/") || pathname === "/api") return false;
+    const candidate = pathname === "/" ? "index.html" : pathname.slice(1);
+    const requested = resolve(root, candidate);
+    const rootResolved = resolve(root);
+    const rel = relative(rootResolved, requested);
+    let file = requested;
+    if (rel.startsWith("..") || isAbsolute(rel)) return false;
+    try { if (!statSync(file).isFile()) file = join(rootResolved, "index.html"); } catch { file = join(rootResolved, "index.html"); }
+    try {
+      const content = readFileSync(file);
+      const type = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml" }[extname(file)] ?? "application/octet-stream";
+      response.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }); response.end(content); return true;
+    } catch { return false; }
+  }
+
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
     let problem: { status: number; code: string; detail: string; errors?: unknown };
     if (error instanceof HttpProblem) problem = { status: error.status, code: error.code, detail: error.message, errors: error.errors };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
+    else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
     else if (error instanceof InvalidEventCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
+    else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }

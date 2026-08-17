@@ -70,7 +70,7 @@ export class HttpManagerClient implements ManagerClient {
       member_id: caller.userId ?? caller.callerId,
       known_versions: knownVersions,
     });
-    return this.unwrap(response) as AuthorizedConfig;
+    return normalizeAuthorizedConfig(this.unwrap(response), caller.tenantId);
   }
 
   async pullSnapshots(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]> {
@@ -82,9 +82,9 @@ export class HttpManagerClient implements ManagerClient {
         employee_id: expert.employee_id,
         employee_version: expert.version,
       });
-      const value = this.unwrap(response) as { snapshot?: FrozenSnapshot };
+      const value = this.unwrap(response) as { snapshot?: unknown };
       if (!value?.snapshot) throw new ManagerUnavailableError("Manager returned an invalid snapshot response");
-      snapshots.push(value.snapshot);
+      snapshots.push(normalizeSnapshot(value.snapshot, caller.tenantId));
     }
     return snapshots;
   }
@@ -181,3 +181,74 @@ export class ManagerUnavailableError extends Error {
     this.name = "ManagerUnavailableError";
   }
 }
+
+export function normalizeAuthorizedConfig(value: unknown, tenantId?: string): AuthorizedConfig {
+  if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid authorized config");
+  const body = value as Record<string, unknown>;
+  const experts = Array.isArray(body.experts) ? body.experts.map((item) => normalizeExpert(item, tenantId)) : [];
+  const solutions = Array.isArray(body.solutions) ? body.solutions.map((item) => normalizeSolution(item, tenantId)) : [];
+  const snapshots = Array.isArray(body.snapshots) ? body.snapshots.map((item) => normalizeSnapshot(item, tenantId)) : undefined;
+  const revoked_ids = Array.isArray(body.revoked_ids) ? body.revoked_ids.filter((id): id is string => typeof id === "string") : [];
+  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids };
+}
+
+function normalizeExpert(value: unknown, tenantId?: string): LoadedExpertProjection {
+  if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid employee projection");
+  const raw = value as Record<string, unknown>;
+  const employeeId = stringValue(raw.employee_id, "employee_id");
+  const version = String(raw.version ?? "");
+  if (!version) throw new ManagerUnavailableError("Manager employee projection is missing version");
+  const modelPolicy = objectValue(raw.model_policy) ?? {
+    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(typeof raw.provider_ref === "string" ? { provider_ref: raw.provider_ref } : {}),
+    ...(typeof raw.thinking_level === "string" ? { thinking_level: raw.thinking_level } : {}),
+  };
+  return {
+    ...raw,
+    employee_id: employeeId,
+    tenant_id: tenantId ?? (typeof raw.tenant_id === "string" ? raw.tenant_id : ""),
+    version,
+    handle: typeof raw.employee_slug === "string" ? raw.employee_slug : typeof raw.handle === "string" ? raw.handle : employeeId,
+    display_name: typeof raw.display_name === "string" ? raw.display_name : employeeId,
+    revoked: raw.revoked === true,
+    synced_at: typeof raw.synced_at === "string" ? raw.synced_at : new Date().toISOString(),
+    model_policy: modelPolicy,
+    tools: stringArray(raw.tools),
+    skills: stringArray(raw.skills ?? raw.skill_refs),
+  };
+}
+
+function normalizeSolution(value: unknown, tenantId?: string): LoadedSolutionProjection {
+  if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid solution projection");
+  const raw = value as Record<string, unknown>;
+  const id = stringValue(raw.solution_instance_id ?? raw.solution_id, "solution_instance_id");
+  return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version: String(raw.version ?? ""), ...(tenantId ? { tenant_id: tenantId } : {}) };
+}
+
+function normalizeSnapshot(value: unknown, tenantId?: string): FrozenSnapshot {
+  if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid employee snapshot");
+  const raw = value as Record<string, unknown>;
+  const employeeId = stringValue(raw.employee_id, "employee_id");
+  const version = String(raw.version ?? "");
+  const snapshotVersion = stringValue(raw.snapshot_version, "snapshot_version");
+  if (!version) throw new ManagerUnavailableError("Manager snapshot is missing version");
+  return {
+    ...raw,
+    employee_id: employeeId,
+    version,
+    snapshot_version: snapshotVersion,
+    display_name: typeof raw.display_name === "string" ? raw.display_name : employeeId,
+    model_policy: objectValue(raw.model_policy) ?? {},
+    tools: stringArray(raw.tools),
+    skill_refs: stringArray(raw.skill_refs ?? raw.skills),
+    tool_policy: objectValue(raw.tool_policy) ?? { allowed_tools: stringArray(raw.tools) },
+    ...(tenantId ? { tenant_id: tenantId } : {}),
+  };
+}
+
+function stringValue(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) throw new ManagerUnavailableError(`Manager projection is missing ${name}`);
+  return value;
+}
+function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+function objectValue(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }

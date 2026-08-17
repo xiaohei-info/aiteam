@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, chmodSync, rmSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   type AgentSession,
@@ -18,6 +18,7 @@ import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createKnowledgeTools } from "../tools/knowledge.js";
 import { createMemoryTools } from "../tools/memory.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
+import { serializePiEvent } from "./event-sse.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -58,6 +59,7 @@ export interface SessionHostOptions {
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
+  sandboxAvailable?: () => boolean;
 }
 
 interface Subscriber {
@@ -110,8 +112,12 @@ export class SessionHost {
   private readonly records = new Map<string, SessionRecord>();
 
   constructor(private readonly options: SessionHostOptions) {
-    mkdirSync(options.cwdRoot, { recursive: true });
-    mkdirSync(options.sessionDir, { recursive: true });
+    mkdirSync(options.cwdRoot, { recursive: true, mode: 0o700 });
+    mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
+    mkdirSync(options.agentDir, { recursive: true, mode: 0o700 });
+    chmodSync(options.cwdRoot, 0o700);
+    chmodSync(options.sessionDir, 0o700);
+    chmodSync(options.agentDir, 0o700);
   }
 
   async subscribe(
@@ -123,20 +129,9 @@ export class SessionHost {
     const subscriber: Subscriber = { listener, replaying: true, queued: [] };
     record.listeners.add(subscriber);
     try {
-      const cursor = this.parseCursor(after);
-      const bounds = this.options.store.getEventBounds(conversationId);
-      if (cursor !== undefined && bounds.first !== undefined && cursor < bounds.first - 1) {
-        throw new EventCursorStaleError(cursor, bounds.first);
-      }
-
-      let events = this.options.store.getEvents(conversationId, cursor);
-      if (events.length === 0 && cursor === undefined) {
-        this.persistExistingEntries(record);
-        events = this.options.store.getEvents(conversationId);
-      }
-      for (const persisted of events) {
-        listener({ id: String(persisted.cursor), event: JSON.parse(persisted.event) as AgentSessionEvent });
-      }
+      // Pi entries are the durable replay source. Transient AgentSessionEvents stay in memory;
+      // callers use GET /entries with a Pi entry id after reconnecting.
+      if (after !== undefined && after !== "") this.parseEntryCursor(after);
       subscriber.replaying = false;
       for (const envelope of subscriber.queued.splice(0)) listener(envelope);
     } catch (error) {
@@ -160,7 +155,6 @@ export class SessionHost {
       record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
       await session.prompt(text, images ? { images } : undefined);
-      this.publishNewEntries(record);
       return record.sessionManager.getLeafId() ?? undefined;
     } finally {
       record.sessionReady = undefined;
@@ -186,6 +180,33 @@ export class SessionHost {
     return this.records.get(conversationId)?.prompting ?? false;
   }
 
+  async delete(conversationId: string, tenantId: string, memberId: string): Promise<boolean> {
+    const indexed = this.options.store.getOwnedConversation(conversationId, tenantId, memberId);
+    if (!indexed) return false;
+    const record = this.records.get(conversationId);
+    if (record) {
+      record.aborting = true;
+      await this.abortChildren(record);
+      await record.session?.abort().catch(() => undefined);
+      this.disposeSession(record);
+      this.records.delete(conversationId);
+    }
+    for (const path of [indexed.sessionFile, indexed.workspace]) {
+      if (!path) continue;
+      this.assertManagedPathEither(path, path === indexed.workspace ? this.options.cwdRoot : this.options.sessionDir, this.options.cwdRoot);
+      rmSync(path, { recursive: true, force: true });
+    }
+    return this.options.store.deleteConversation(conversationId, tenantId, memberId);
+  }
+
+  async abortAll(): Promise<void> {
+    await Promise.all([...this.records.values()].map(async (record) => {
+      if (!record.prompting) return;
+      record.aborting = true;
+      await record.session?.abort().catch(() => undefined);
+    }));
+  }
+
   async entries(conversationId: string) {
     const record = await this.ensureRecord(conversationId);
     return record.sessionManager.getEntries();
@@ -194,6 +215,7 @@ export class SessionHost {
   async dispose(): Promise<void> {
     for (const record of this.records.values()) {
       await this.abortChildren(record);
+      await record.session?.abort().catch(() => undefined);
       this.disposeSession(record);
     }
     this.records.clear();
@@ -204,11 +226,16 @@ export class SessionHost {
     if (existing) return existing;
 
     const indexed = this.options.store.getConversation(conversationId);
-    const workspace = indexed?.workspace || join(this.options.cwdRoot, this.safeDirectoryName(conversationId));
-    mkdirSync(workspace, { recursive: true });
+    if (!indexed) throw new Error("Conversation does not exist");
+    const workspace = indexed.workspace || join(this.options.cwdRoot, this.safeDirectoryName(conversationId));
+    this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
+    mkdirSync(workspace, { recursive: true, mode: 0o700 });
+    this.assertManagedPath(workspace, this.options.cwdRoot);
+    chmodSync(workspace, 0o700);
 
     let sessionManager: SessionManager;
-    if (indexed?.sessionFile && existsSync(indexed.sessionFile)) {
+    if (indexed.sessionFile && existsSync(indexed.sessionFile)) {
+      this.assertManagedPathEither(indexed.sessionFile, this.options.sessionDir, this.options.cwdRoot);
       sessionManager = SessionManager.open(indexed.sessionFile, this.options.sessionDir, workspace);
     } else {
       sessionManager = SessionManager.create(workspace, this.options.sessionDir);
@@ -216,7 +243,9 @@ export class SessionHost {
 
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("Persistent SessionManager did not provide a session file");
-    this.options.store.saveConversation({ ...(indexed ?? {}), id: conversationId, sessionFile, workspace });
+    this.assertManagedPathEither(sessionFile, this.options.sessionDir, this.options.cwdRoot);
+    try { chmodSync(sessionFile, 0o600); } catch { /* SDK may create it after first append */ }
+    this.options.store.saveConversation({ ...indexed, id: conversationId, sessionFile, workspace });
 
     const record: SessionRecord = {
       conversationId,
@@ -238,6 +267,9 @@ export class SessionHost {
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization);
     await resourceLoader.reload();
     const customTools = this.toolsFor(authorization, true, record);
+    if (authorization && this.hasCodingTools(authorization.snapshot) && !this.options.sandboxAvailable?.()) {
+      throw new SessionAuthorizationError("Coding tools require an available external sandbox");
+    }
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
@@ -254,6 +286,7 @@ export class SessionHost {
       customTools,
     });
     record.session = result.session;
+    try { chmodSync(record.sessionManager.getSessionFile()!, 0o600); } catch { /* SDK may defer the first write */ }
     record.unsubscribe = result.session.subscribe((event) => this.publish(record, event));
     return result.session;
   }
@@ -292,10 +325,10 @@ export class SessionHost {
   private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller): SessionAuthorization | undefined {
     const metadata = this.options.store.getConversationMetadata(record.conversationId);
     const employeeId = metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
-    if (!employeeId) return undefined;
+    if (!employeeId) throw new SessionAuthorizationError("Conversation has no authorized employee");
     const expert = this.options.store.listLoadedExperts().find((item) => item.employee_id === employeeId);
     if (!expert || expert.revoked || (caller.tenantId && expert.tenant_id !== caller.tenantId)) throw new SessionAuthorizationError();
-    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version);
+    const snapshot = this.options.store.listSnapshots().find((item) => item.employee_id === employeeId && item.version === expert.version && (!caller.tenantId || !item.tenant_id || item.tenant_id === caller.tenantId));
     if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
     return { caller, employeeId, snapshot, managerClient: this.options.managerClient };
   }
@@ -388,6 +421,7 @@ export class SessionHost {
   }
 
   private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string): void {
+    if (!serializePiEvent(event, { conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId })) return;
     const envelope: PiEventEnvelope = { id: `${sourceRef}:${Date.now()}`, event, conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId };
     for (const subscriber of record.listeners) {
       if (subscriber.replaying) subscriber.queued.push(envelope);
@@ -396,8 +430,9 @@ export class SessionHost {
   }
 
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
+    if (!serializePiEvent(event)) return;
     const envelope: PiEventEnvelope = {
-      id: String(this.options.store.appendEvent(record.conversationId, event)),
+      id: this.entryIdentity(event) ?? `${record.conversationId}:${Date.now()}`,
       event,
     };
     for (const subscriber of record.listeners) {
@@ -406,35 +441,39 @@ export class SessionHost {
     }
   }
 
-  private persistExistingEntries(record: SessionRecord): void {
-    for (const entry of record.sessionManager.getEntries()) {
-      this.options.store.appendEvent(record.conversationId, { type: "entry_appended", entry });
-    }
+  private parseEntryCursor(after: string): void {
+    if (after.length > 256 || !/^[A-Za-z0-9:_-]+$/.test(after)) throw new InvalidEventCursorError();
   }
 
-  private publishNewEntries(record: SessionRecord): void {
-    const known = new Set(
-      this.options.store.getEvents(record.conversationId).flatMap((item) => {
-        try {
-          const event = JSON.parse(item.event) as { type?: string; entry?: { id?: string } };
-          return event.type === "entry_appended" && event.entry?.id ? [event.entry.id] : [];
-        } catch {
-          return [];
-        }
-      }),
-    );
-    for (const entry of record.sessionManager.getEntries()) {
-      if (known.has(entry.id)) continue;
-      this.publish(record, { type: "entry_appended", entry });
-    }
+  private entryIdentity(event: AgentSessionEvent): string | undefined {
+    const value = event as unknown as Record<string, unknown>;
+    const message = value.message;
+    if (message && typeof message === "object" && typeof (message as Record<string, unknown>).id === "string") return (message as Record<string, unknown>).id as string;
+    return typeof value.entry_id === "string" ? value.entry_id : undefined;
   }
 
-  private parseCursor(after?: string): number | undefined {
-    if (after === undefined || after === "") return undefined;
-    if (!/^\d+$/.test(after)) throw new InvalidEventCursorError();
-    const cursor = Number(after);
-    if (!Number.isSafeInteger(cursor)) throw new InvalidEventCursorError();
-    return cursor;
+  private hasCodingTools(snapshot: FrozenSnapshot): boolean {
+    const allowed = this.allowedTools(snapshot);
+    return ["bash", "read", "write", "edit", "grep", "find", "ls"].some((name) => allowed.has(name));
+  }
+
+  private assertManagedPathEither(path: string, ...roots: string[]): void {
+    if (roots.some((root) => { try { this.assertManagedPath(path, root); return true; } catch { return false; } })) return;
+    throw new Error("Path escapes Agent data root");
+  }
+
+  private assertManagedLexicalPath(path: string, root: string): void {
+    if (!isAbsolute(path) || !isAbsolute(root)) throw new Error("Managed paths must be absolute");
+    const rel = relative(resolve(root), resolve(path));
+    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path escapes Agent data root");
+  }
+
+  private assertManagedPath(path: string, root: string): void {
+    if (!isAbsolute(path) || !isAbsolute(root)) throw new Error("Managed paths must be absolute");
+    const resolvedRoot = realpathSync(root);
+    const resolved = existsSync(path) ? realpathSync(path) : join(realpathSync(join(path, "..")), path.split("/").at(-1)!);
+    const rel = relative(resolvedRoot, resolved);
+    if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path escapes Agent data root");
   }
 
   private safeDirectoryName(conversationId: string): string {

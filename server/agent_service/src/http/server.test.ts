@@ -16,12 +16,14 @@ async function waitForEntries(url: string, token: string): Promise<unknown[]> {
 
 test("Agent HTTP prompt accepts an idempotent Pi prompt", async () => {
   const fixture = await createFixture();
+  fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
   const http = new AgentHttpServer({
     host: fixture.host,
     store: fixture.store,
     authenticate: (request) => {
       assert.equal(request.headers.authorization, "Bearer test");
-      return { callerId: "member-1" };
+      return { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] };
     },
   });
   await http.listen(0);

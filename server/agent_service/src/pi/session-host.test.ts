@@ -19,6 +19,7 @@ test("SessionHost persists a Pi session and replays entries", async () => {
     assert(events.includes("agent_settled"));
     const entries = await fixture.host.entries("conversation-1");
     assert(entries.some((entry) => entry.type === "message"));
+    assert.equal((fixture.store.db.prepare("SELECT COUNT(*) AS count FROM pi_event").get() as { count: number }).count, 0);
     unsubscribe();
 
     const replayed: string[] = [];
@@ -27,7 +28,9 @@ test("SessionHost persists a Pi session and replays entries", async () => {
     const unsubscribeReopened = await reopenedHost.subscribe("conversation-1", (envelope) => {
       replayed.push(envelope.event.type);
     });
-    assert(replayed.includes("entry_appended"));
+    assert.deepEqual(replayed, []);
+    const reopenedEntries = await reopenedHost.entries("conversation-1");
+    assert(reopenedEntries.some((entry) => entry.type === "message"));
     unsubscribeReopened();
     await reopenedHost.dispose();
   } finally {

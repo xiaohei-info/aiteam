@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HttpManagerClient, ManagerUnavailableError } from "./manager-client.js";
+import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -26,6 +26,24 @@ test("HttpManagerClient forwards authenticated, employee-scoped memory and knowl
   assert.equal(requests[3].init.body, JSON.stringify({ employee_id: "employee-1", knowledge_refs: ["set-a"], query: "policy", limit: 5 }));
   assert.equal(requests[4].init.body, JSON.stringify({ employee_id: "employee-1", knowledge_refs: ["set-a"], citation_id: "citation-1" }));
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
+});
+
+test("normalizes the Manager AuthorizedConfig contract into local projection fields", () => {
+  const config = normalizeAuthorizedConfig({
+    experts: [{ employee_id: "employee-1", employee_slug: "helper", display_name: "Helper", version: 7, model: "model-1", provider_ref: "provider-1", tools: ["memory_recall"], skills: ["skill-1"] }],
+    solutions: [{ solution_instance_id: "solution-1", display_name: "Solution", version: 3 }],
+    snapshots: [{ employee_id: "employee-1", version: 7, snapshot_version: "snap-7", display_name: "Helper", model_policy: { model: "model-1" }, skills: ["skill-1"], tools: ["memory_recall"] }],
+    revoked_ids: [],
+  }, "tenant-1");
+  assert.equal(config.experts[0].handle, "helper");
+  assert.equal(config.experts[0].version, "7");
+  assert.equal(config.experts[0].tenant_id, "tenant-1");
+  assert.deepEqual(config.experts[0].tools, ["memory_recall"]);
+  assert.deepEqual(config.experts[0].skills, ["skill-1"]);
+  assert.equal(config.solutions[0].version, "3");
+  assert.equal(config.snapshots?.[0].version, "7");
+  assert.deepEqual(config.snapshots?.[0].skill_refs, ["skill-1"]);
+  assert.deepEqual(config.snapshots?.[0].tool_policy, { allowed_tools: ["memory_recall"] });
 });
 
 test("HttpManagerClient turns transport failures into explicit unavailable errors", async () => {

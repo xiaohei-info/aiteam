@@ -1,4 +1,5 @@
 import { fauxAssistantMessage, fauxProvider, type Model } from "@earendil-works/pi-ai";
+import { chmodSync, existsSync } from "node:fs";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export interface ConfiguredModelRuntime {
@@ -24,11 +25,15 @@ export async function createConfiguredModelRuntime(options: {
     return { runtime, model: faux.getModel(), mode: "faux" };
   }
 
+  const authPath = `${options.agentDir}/auth.json`;
+  const modelsPath = `${options.agentDir}/models.json`;
+  for (const path of [authPath, modelsPath]) if (existsSync(path)) chmodSync(path, 0o600);
   const runtime = await ModelRuntime.create({
-    authPath: `${options.agentDir}/auth.json`,
-    modelsPath: `${options.agentDir}/models.json`,
+    authPath,
+    modelsPath,
     refreshOnCreate: false,
   });
+  for (const path of [authPath, modelsPath]) if (existsSync(path)) chmodSync(path, 0o600);
   const available = await runtime.getAvailable();
   const model = options.modelId
     ? available.find((candidate) => candidate.id === options.modelId)

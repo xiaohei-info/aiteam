@@ -10,6 +10,8 @@ export interface JwtClaims {
   aud?: string | string[];
   exp?: number;
   nbf?: number;
+  iat?: number;
+  enterprise_id?: string;
   [key: string]: unknown;
 }
 
@@ -34,14 +36,15 @@ export interface AuthenticatedCaller {
 
 export interface JwtAuthenticatorOptions {
   jwks: { keys: JwtJwk[] };
-  issuer?: string;
-  audience?: string;
+  issuer: string;
+  audience: string;
   clockSkewSeconds?: number;
 }
 
 export type AuthenticateRequest = (request: IncomingMessage) => AuthenticatedCaller | Promise<AuthenticatedCaller>;
 
 export function createJwtAuthenticator(options: JwtAuthenticatorOptions): AuthenticateRequest {
+  if (!options.issuer || !options.audience) throw new Error("JWT issuer and audience are required");
   const keys = new Map(options.jwks.keys.filter((key) => key.kty === "RSA" && key.alg !== "HS256").map((key) => [key.kid, key]));
   return (request) => {
     const header = request.headers.authorization;
@@ -72,10 +75,11 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
   const now = Math.floor(Date.now() / 1000);
   const skew = options.clockSkewSeconds ?? 30;
   if (typeof claims.exp !== "number" || claims.exp + skew < now) throw new Error("JWT is expired");
+  if (typeof claims.iat !== "number" || claims.iat - skew > now) throw new Error("JWT issued-at claim is missing or invalid");
+  if (claims.iss !== options.issuer) throw new Error("JWT issuer mismatch");
+  if (!audienceContains(claims.aud, options.audience)) throw new Error("JWT audience mismatch");
+  if (typeof claims.enterprise_id !== "string" || !Array.isArray(claims.roles)) throw new Error("JWT required claims are missing");
   if (typeof claims.nbf === "number" && claims.nbf - skew > now) throw new Error("JWT is not active");
-  if (options.issuer !== undefined && claims.iss !== options.issuer) throw new Error("JWT issuer mismatch");
-  if (options.audience !== undefined && !audienceContains(claims.aud, options.audience)) throw new Error("JWT audience mismatch");
-
   const userId = typeof claims.user_id === "string" ? claims.user_id : typeof claims.sub === "string" ? claims.sub : "";
   if (!userId || typeof claims.tenant_id !== "string") throw new Error("JWT identity claims are missing");
   const caller: AuthenticatedCaller = {

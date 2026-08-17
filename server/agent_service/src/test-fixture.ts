@@ -19,6 +19,9 @@ export async function createFixture() {
   });
   modelRuntime.registerNativeProvider(faux.provider);
   const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
+  for (const id of ["c1", "conversation-1", "conversation-2"]) {
+    store.createConversation({ id, sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
+  }
   const createHost = (model = faux.getModel(), managerClient?: ManagerClient) =>
     new SessionHost({
       cwdRoot: join(dataRoot, "workspaces"),
@@ -29,6 +32,7 @@ export async function createFixture() {
       model,
       managerClient,
       resourceLoaderFactory: () => createControlledResourceLoader("test system prompt"),
+      sandboxAvailable: () => false,
     });
   const host = createHost();
   return {

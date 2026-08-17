@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
@@ -18,8 +18,10 @@ const useDevAuth = process.env.AITEAM_AGENT_DEV_AUTH === "true";
 
 if (environment === "production" && useFauxModel) throw new Error("AITEAM_PI_FAKE=true is forbidden in production");
 if (environment === "production" && useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
+if (environment === "production" && (!process.env.AITEAM_AGENT_JWT_ISSUER || !process.env.AITEAM_AGENT_JWT_AUDIENCE)) throw new Error("Production Agent JWT issuer and audience are required");
 
-mkdirSync(dataRoot, { recursive: true });
+mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
+chmodSync(dataRoot, 0o700);
 const agentDir = join(dataRoot, "pi");
 const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
@@ -35,13 +37,14 @@ const sessionHost = new SessionHost({
   modelRuntime: configured.runtime,
   model: configured.model,
   managerClient,
+  sandboxAvailable: () => process.env.AITEAM_AGENT_SANDBOX_READY === "true",
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization)),
 });
 
 const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => {
       if (request.headers.authorization !== "Bearer local-development") throw new HttpProblem(401, "unauthenticated", "Invalid development bearer token");
-      return { callerId: "local-development", userId: "local-development", roles: ["member"] };
+      return { callerId: "local-development", userId: process.env.AITEAM_AGENT_DEV_MEMBER ?? "local-development", tenantId: process.env.AITEAM_AGENT_DEV_TENANT ?? "local-development", roles: ["member"] };
     }
   : createJwtAuthenticator(loadJwtOptions());
 
@@ -51,6 +54,7 @@ const http = new AgentHttpServer({
   authenticate,
   managerClient,
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
+  spaRoot: process.env.AITEAM_AGENT_SPA_ROOT,
 });
 
 await http.listen(port, hostAddress);
@@ -82,5 +86,8 @@ function loadJwtOptions() {
     throw new Error("AITEAM_AGENT_JWKS_JSON must be valid JSON");
   }
   if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) throw new Error("Agent JWKS must contain at least one key");
-  return { jwks, issuer: process.env.AITEAM_AGENT_JWT_ISSUER, audience: process.env.AITEAM_AGENT_JWT_AUDIENCE };
+  const issuer = process.env.AITEAM_AGENT_JWT_ISSUER;
+  const audience = process.env.AITEAM_AGENT_JWT_AUDIENCE;
+  if (!issuer || !audience) throw new Error("Agent JWT issuer and audience are required");
+  return { jwks, issuer, audience };
 }

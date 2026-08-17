@@ -8,7 +8,7 @@ async function start(managerClient?: ManagerClient) {
   const fixture = await createFixture();
   fixture.store.replaceProjections([
     { employee_id: "e1", tenant_id: "t1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test", provider_ref: "test" } },
-  ], [{ solution_instance_id: "s1", display_name: "Solution", version: "1" }], [{ employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "Helper" }]);
+  ], [{ solution_instance_id: "s1", display_name: "Solution", version: "1" }], [{ employee_id: "e1", tenant_id: "t1", version: "1", snapshot_version: "s1", display_name: "Helper" }]);
   const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, managerClient, authenticate: () => ({ callerId: "m1", userId: "m1", tenantId: "t1", roles: ["member"] }) });
   await http.listen(0);
   const address = http.server.address();
@@ -25,7 +25,7 @@ test("Agent platform metadata, local projections, readiness, office, identity an
   };
   const { fixture, http, base } = await start(remote);
   try {
-    const created = await fetch(`${base}/api/agent/conversations`, { method: "POST", headers: auth, body: JSON.stringify({ title: "Local", labels: ["one"] }) });
+    const created = await fetch(`${base}/api/agent/conversations`, { method: "POST", headers: auth, body: JSON.stringify({ title: "Local", labels: ["one"], entry_employee_id: "e1" }) });
     assert.equal(created.status, 201);
     const conversation = (await created.json() as { data: { id: string; state: string } }).data;
     assert.equal(conversation.state, "active");
