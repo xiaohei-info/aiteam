@@ -4,7 +4,7 @@ export { MentionComposer, parseMentions } from "./MentionComposer";
 export {
   groupDispatch,
   type GroupExpert,
-  type GroupRun,
+  type GroupDelegation,
   type DispatchResult,
   type GroupDispatchInput,
 } from "./useGroupApi";

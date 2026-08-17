@@ -131,7 +131,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.experts.detail_no_experts": "暂无专家信息",
     "manager.experts.detail_knowledge_refs": "知识引用",
     "manager.experts.detail_skill_refs": "技能引用",
-    "manager.experts.runtime_binding": "运行时绑定",
+    "manager.experts.execution_policy": "会话执行策略",
     "manager.experts.timeout_seconds": "超时（秒）",
     "manager.experts.tools": "工具",
     "manager.experts.knowledge_refs": "知识引用",

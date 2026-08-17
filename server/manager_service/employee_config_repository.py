@@ -18,7 +18,7 @@ from shared.errors import Conflict
 
 @dataclass(frozen=True)
 class EmployeeConfigRow:
-    """employee 配置行（中立字段，runtime 无关）+ 生命周期状态。"""
+    """employee 配置行（Pi 会话中立字段）+ 生命周期状态。"""
 
     employee_id: str
     employee_slug: str
@@ -27,7 +27,6 @@ class EmployeeConfigRow:
     model: str | None
     provider_ref: str | None
     thinking_level: str | None
-    runtime_binding: str | None
     timeout_seconds: int | None
     tools: list[str]
     skills: list[str]
@@ -42,7 +41,7 @@ class EmployeeConfigRow:
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
-    "runtime_binding, timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
+    "timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
     "memory_policy, version, status, archive_reason, archived_at"
 )
 
@@ -56,22 +55,21 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         model=row[4],
         provider_ref=row[5],
         thinking_level=row[6],
-        runtime_binding=row[7],
-        timeout_seconds=row[8],
-        tools=list(row[9] or []),
-        skills=list(row[10] or []),
-        knowledge_refs=list(row[11] or []),
-        connector_refs=list(row[12] or []),
-        memory_policy=row[13],
-        version=row[14],
-        status=row[15],
-        archive_reason=row[16],
-        archived_at=row[17],
+        timeout_seconds=row[7],
+        tools=list(row[8] or []),
+        skills=list(row[9] or []),
+        knowledge_refs=list(row[10] or []),
+        connector_refs=list(row[11] or []),
+        memory_policy=row[12],
+        version=row[13],
+        status=row[14],
+        archive_reason=row[15],
+        archived_at=row[16],
     )
 
 
 class EmployeeConfigRepository:
-    """employee 配置的租户内读写。runtime 中立（D16）；tenant_id 取自 ctx（D22）。"""
+    """employee 配置的租户内读写。Pi 会话中立（D16）；tenant_id 取自 ctx（D22）。"""
 
     def __init__(self, router: PgTenantRouter):
         self._router = router
@@ -86,7 +84,6 @@ class EmployeeConfigRepository:
         model: str | None,
         provider_ref: str | None,
         thinking_level: str | None,
-        runtime_binding: str | None,
         timeout_seconds: int | None,
         tools: list[str],
         skills: list[str],
@@ -100,7 +97,7 @@ class EmployeeConfigRepository:
                 """
                 INSERT INTO employee (
                     tenant_id, employee_slug, display_name, persona, model, provider_ref,
-                    thinking_level, runtime_binding, timeout_seconds, tools, skills,
+                    thinking_level, timeout_seconds, tools, skills,
                     knowledge_refs, connector_refs, memory_policy
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
@@ -108,7 +105,7 @@ class EmployeeConfigRepository:
                 RETURNING """ + _CONFIG_COLUMNS,
                 (
                     ctx.tenant_id, employee_slug, display_name, persona, model, provider_ref,
-                    thinking_level, runtime_binding, timeout_seconds,
+                    thinking_level, timeout_seconds,
                     json.dumps(tools), json.dumps(skills), json.dumps(knowledge_refs),
                     json.dumps(connector_refs), json.dumps(memory_policy) if memory_policy else None,
                 ),
@@ -142,7 +139,6 @@ class EmployeeConfigRepository:
         model: str | None,
         provider_ref: str | None,
         thinking_level: str | None,
-        runtime_binding: str | None,
         timeout_seconds: int | None,
         tools: list[str],
         skills: list[str],
@@ -156,13 +152,13 @@ class EmployeeConfigRepository:
                 """
                 UPDATE employee SET
                     display_name = %s, persona = %s, model = %s, provider_ref = %s,
-                    thinking_level = %s, runtime_binding = %s, timeout_seconds = %s,
+                    thinking_level = %s, timeout_seconds = %s,
                     tools = %s, skills = %s, knowledge_refs = %s, connector_refs = %s,
                     memory_policy = %s
                 WHERE id = %s
                 RETURNING """ + _CONFIG_COLUMNS,
                 (
-                    display_name, persona, model, provider_ref, thinking_level, runtime_binding,
+                    display_name, persona, model, provider_ref, thinking_level,
                     timeout_seconds, json.dumps(tools), json.dumps(skills),
                     json.dumps(knowledge_refs), json.dumps(connector_refs),
                     json.dumps(memory_policy) if memory_policy else None,

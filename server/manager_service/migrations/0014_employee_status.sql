@@ -29,7 +29,6 @@ BEGIN
         NEW.model IS DISTINCT FROM OLD.model OR
         NEW.provider_ref IS DISTINCT FROM OLD.provider_ref OR
         NEW.thinking_level IS DISTINCT FROM OLD.thinking_level OR
-        NEW.runtime_binding IS DISTINCT FROM OLD.runtime_binding OR
         NEW.timeout_seconds IS DISTINCT FROM OLD.timeout_seconds OR
         NEW.tools IS DISTINCT FROM OLD.tools OR
         NEW.skills IS DISTINCT FROM OLD.skills OR

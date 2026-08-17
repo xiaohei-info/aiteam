@@ -75,9 +75,9 @@ def _create_member(msvc, ctx, phone, display_name, roles, *, must_reset=False):
 
 def _create_employee(esvc, ctx, slug, display_name="专家"):
     from manager_service.schemas import EmployeeConfigIn
-    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+    from shared.contracts.snapshot import ModelPolicy, ExecutionPolicy
     return esvc.create(ctx, EmployeeConfigIn(
-        display_name=display_name, model_policy=ModelPolicy(model="m"), runtime_policy=RuntimePolicy(),
+        display_name=display_name, model_policy=ModelPolicy(model="m"), execution_policy=ExecutionPolicy(),
     ), employee_slug=slug)
 
 

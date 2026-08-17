@@ -37,7 +37,7 @@ from .enums import (
 )
 from .envelope import Envelope, ListEnvelope, Page, Problem, ProblemFieldError
 from .grants import LoadedExpertProjection, MemberGrant
-from .snapshot import EmployeeExecutionSnapshot, ModelPolicy, RuntimePolicy
+from .snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
 from .summary import AuditSummaryEvent, UsageSummary
 from .tenancy import TenantContext
 
@@ -70,7 +70,7 @@ __all__ = [
     "MemberGrant",
     "EmployeeExecutionSnapshot",
     "ModelPolicy",
-    "RuntimePolicy",
+    "ExecutionPolicy",
     "AuditSummaryEvent",
     "UsageSummary",
     "TenantContext",

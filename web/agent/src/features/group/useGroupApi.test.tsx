@@ -46,7 +46,7 @@ describe("useGroupApi — listLoadedExperts", () => {
 
 describe("useGroupApi — groupDispatch", () => {
   it("POST .../group-dispatch，body 含 text + experts，返回 DispatchResult", async () => {
-    const dispatch: DispatchResult = { triggered_handles: ["专家A"], runs: [] };
+    const dispatch: DispatchResult = { triggered_handles: ["专家A"], delegations: [] };
     const client = makeClient(envelope([]), dispatch);
     const r = await groupDispatch(client as AgentApiClient, "c1", { text: "@专家A 你好", experts: [] });
     expect(r).toEqual(dispatch);

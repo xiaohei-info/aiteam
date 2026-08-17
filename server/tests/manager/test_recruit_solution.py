@@ -58,7 +58,7 @@ class _FakeEmployeeRepo:
             employee_id=str(uuid.uuid4()), employee_slug=kw["employee_slug"],
             display_name=kw["display_name"], persona=kw["persona"], model=kw["model"],
             provider_ref=kw["provider_ref"], thinking_level=kw["thinking_level"],
-            runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
+            timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
             status=kw.get("status", "applied"),
@@ -303,7 +303,7 @@ def _expert_template(template_id="tpl-1", version="v1", display_name="专家A") 
         persona="你是测试专家",
         recommended_config={
             "model": "claude-opus-4-8", "provider_ref": "relay-default",
-            "thinking_level": "high", "runtime_binding": "hermes_acp",
+            "thinking_level": "high",
             "timeout_seconds": 120, "tools": ["search"], "skills": ["code-review"],
             "knowledge_refs": ["ks_default"],
         },
@@ -330,7 +330,7 @@ def test_recruit_expert_creates_employee_instance_from_template():
     row = emp.get(_ctx("t-a"), employee_id=result.employee_id)
     assert row.display_name == "专家A"
     assert row.model == "claude-opus-4-8"
-    assert row.runtime_binding == "hermes_acp"
+    assert row.provider_ref == "relay-default"
     assert row.skills == ["code-review"]
     assert result.grants_applied is False
     # 审计事件已记

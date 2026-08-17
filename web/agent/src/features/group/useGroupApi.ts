@@ -44,7 +44,6 @@ export interface LoadedExpertProjection {
   /** Stable ASCII handle for roster/@提及. Prefer this over display_name for matching. */
   handle: string;
   display_name: string;
-  runtime_binding?: string | null;
   synced_at?: string | null;
   revoked: boolean;
   /** 模型配置（model/provider_ref）。用于 roster 配置完整度防呆；缺失示"待 Manager 配置"。 */
@@ -53,7 +52,7 @@ export interface LoadedExpertProjection {
 
 /**
  * 群聊里的一个专家（对齐 server group.py:GroupExpert）。
- * handle 是 @提及里用的标识；persona/model 为派生 RunSpec 所需最小字段。
+ * handle 是 @提及里用的标识；persona/model 为 Pi 会话委托所需最小字段。
  */
 export interface GroupExpert {
   handle: string;
@@ -64,8 +63,8 @@ export interface GroupExpert {
   model?: string | null;
 }
 
-/** 一次 Run（对齐 server models.py:Run，持久终态；展示态不在此）。 */
-export interface GroupRun {
+/** 一次专家委托的结果摘要。 */
+export interface GroupDelegation {
   id: string;
   conversation_id: string;
   status: string;
@@ -79,7 +78,7 @@ export interface GroupRun {
 /** 一轮群聊编排结果（对齐 server group.py:DispatchResult）。 */
 export interface DispatchResult {
   triggered_handles: string[];
-  runs: GroupRun[];
+  delegations: GroupDelegation[];
   /** 本轮 input 中未被 roster 命中的 @提及（带 @ 前缀，保序）。前端据此给出负向提示。服务端可选字段。 */
   ignored_handles?: string[];
 }

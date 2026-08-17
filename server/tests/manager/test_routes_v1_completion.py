@@ -104,7 +104,7 @@ def test_settings_get_ok():
     svc = MagicMock()
     svc.get_settings.return_value = {"enterprise_name": "TestCo", "logo_url": None,
                                       "phone": None, "contact_email": "",
-                                      "default_runtime": "hermes_acp", "invite_required": True,
+                                      "invite_required": True,
                                       "member_approval": True, "max_employees": 100, "features": {},
                                       "updated_at": datetime.utcnow()}
     with patch("manager_service.routes_settings._service", return_value=svc):
@@ -117,7 +117,7 @@ def test_settings_patch_ok():
     svc = MagicMock()
     svc.patch_settings.return_value = {"enterprise_name": "NewName", "logo_url": None,
                                         "phone": None, "contact_email": "",
-                                        "default_runtime": "hermes_acp", "invite_required": True,
+                                        "invite_required": True,
                                         "member_approval": True, "max_employees": 100, "features": {},
                                         "updated_at": datetime.utcnow()}
     with patch("manager_service.routes_settings._service", return_value=svc):
@@ -245,7 +245,7 @@ def test_settings_service_get_defaults():
     router.queue(FakeCursor(fetchone=None))  # get_settings SELECT → None
     # upsert_settings 内部: 1) SELECT id check → exists → skipped update; 2) final SELECT
     router.queue(FakeCursor(fetchone=("s-1",)))  # existing check returns id
-    router.queue(FakeCursor(fetchone=("s-1", "DefaultCo", "", "", None, "hermes_acp", True, True, 100, {}, datetime.utcnow())))  # final SELECT
+    router.queue(FakeCursor(fetchone=("s-1", "DefaultCo", "", "", None, True, True, 100, {}, datetime.utcnow())))  # final SELECT
     svc = SettingsService(SettingsRepository(router))
     result = svc.get_settings(ctx())
     assert result["enterprise_name"] == "DefaultCo"
@@ -345,7 +345,7 @@ def test_employee_export_ok():
     mock_item.employee_slug = "expert-1"
     mock_item.display_name = "专家A"
     mock_item.model = "gpt-4"
-    mock_item.runtime_binding = "hermes_acp"
+    mock_item.provider_ref = "relay-default"
     mock_item.skills = ["skill1", "skill2"]
     mock_item.version = 1
     svc.list_all.return_value = [mock_item]

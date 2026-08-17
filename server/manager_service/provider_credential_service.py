@@ -6,7 +6,7 @@
 - 对外响应只回 provider_ref + 非敏感元数据（endpoint/可见性/version/能力目录），**绝不回明文 key/令牌**，
   也绝不回密文（密文亦非下发对象，防密钥泄露后重放）。
 - 明文凭据在 service 层经 CryptoService.encrypt 加密后入 repository；service 内部按需解密给
-  受控编排面（如 pull 已授权 provider 配置到用户端 local_capability_cache，由 Driver 最小注入）。
+  受控编排面（如按授权 pull provider 配置到用户端，由 Pi ModelRuntime 最小装配）。
 - 可见性/成员级授权真相态：visibility=tenant（租户内全员可用）| members（仅 allowed_member_ids）。
 - 本地最小注入语义不在控制面执行 provider 调用（Manager 不调用 LLM/Relay，04 §6.7 澄清）。
 - tenant_id 全程经 TenantContext，不手写过滤（D22）。

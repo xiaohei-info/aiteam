@@ -9,10 +9,10 @@ from ._fake_router import FakeCursor, FakeRouter, ctx
 
 def _set_row(
     eid="s-1", name="Test", email="contact@test.com", phone="", logo=None,
-    runtime="hermes_acp", inv=True, appr=True, mx=100, feat=None,
+    inv=True, appr=True, mx=100, feat=None,
 ):
     return (
-        eid, name, email, phone, logo, runtime, inv, appr, mx,
+        eid, name, email, phone, logo, inv, appr, mx,
         feat or {}, datetime.utcnow(),
     )
 
@@ -24,7 +24,6 @@ def test_get_settings_found():
     assert row is not None
     assert row.enterprise_name == "Test"
     assert row.contact_email == "contact@test.com"
-    assert row.default_runtime == "hermes_acp"
     assert row.invite_required is True
     assert row.member_approval is True
     assert row.max_employees == 100
@@ -56,7 +55,7 @@ def test_upsert_settings_update_all_fields():
     router.queue(FakeCursor(rowcount=1))  # UPDATE
     router.queue(FakeCursor(fetchone=_set_row(
         name="Updated", email="u@test.com", phone="13800138000",
-        logo="https://x/logo.png", runtime="custom_acp", inv=False,
+        logo="https://x/logo.png", inv=False,
         appr=False, mx=200, feat={"sso": True},
     )))  # fetch after
     row = SettingsRepository(router).upsert_settings(
@@ -65,7 +64,6 @@ def test_upsert_settings_update_all_fields():
         contact_email="u@test.com",
         contact_phone="13800138000",
         logo_url="https://x/logo.png",
-        default_runtime="custom_acp",
         invite_required=False,
         member_approval=False,
         max_employees=200,
@@ -75,7 +73,6 @@ def test_upsert_settings_update_all_fields():
     assert row.contact_email == "u@test.com"
     assert row.contact_phone == "13800138000"
     assert row.logo_url == "https://x/logo.png"
-    assert row.default_runtime == "custom_acp"
     assert row.invite_required is False
     assert row.member_approval is False
     assert row.max_employees == 200

@@ -57,9 +57,8 @@ export interface ModelPolicy {
   thinking_level?: string | null;
 }
 
-/** 中立运行时策略（对齐 RuntimePolicy）。 */
-export interface RuntimePolicy {
-  runtime_binding?: string | null;
+/** Pi 会话执行限制；不选择底层执行器。 */
+export interface ExecutionPolicy {
   timeout_seconds?: number | null;
 }
 
@@ -71,7 +70,7 @@ export interface EmployeeConfig {
   display_name: string;
   persona?: string | null;
   model_policy: ModelPolicy;
-  runtime_policy: RuntimePolicy;
+  execution_policy: ExecutionPolicy;
   tools: string[];
   skills: string[];
   knowledge_refs: string[];

@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS enterprise_settings (
     contact_email          text NOT NULL DEFAULT '',
     contact_phone          text NOT NULL DEFAULT '',
     logo_url               text,
-    default_runtime        text NOT NULL DEFAULT 'hermes_acp',
     invite_required        boolean NOT NULL DEFAULT true,
     member_approval        boolean NOT NULL DEFAULT true,
     max_employees          integer NOT NULL DEFAULT 100,

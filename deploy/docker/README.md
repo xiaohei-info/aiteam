@@ -108,7 +108,7 @@ docker run --rm aiteam-agent:dev sh -c \
 #   ---
 #   agent
 # 
-# ✓ 应只见 agent_service（无 Python operation_service、manager_service、agent_gateway）
+# ✓ 用户端交付物应只见 Node agent_service（无 Python 控制面服务）
 # ✓ web 目录应只见 agent（无 operation、manager）
 ```
 

@@ -1,10 +1,7 @@
-"""员工/专家执行快照（04 §6.3，D5）。
+"""员工/专家 Pi 会话快照（04 §6.3，D5）。
 
-所有权裁决（D5）：快照由**用户端 Agent Service 在装载专家/提交 run 时从 Manager 拉取并冻结**，
-连同 snapshot_version 落用户端本地库；run 全程只引用该快照，保证一次 run 配置稳定、
-Manager 离线时仍可执行。Manager 只提供「按 employee_id+version 生成快照」的接口。
-
-RunSpec（06 §7.5.1）由本快照派生。
+快照由用户端 Agent Service 从 Manager 拉取并冻结，包含启动一个 Pi 会话所需的
+员工身份、模型策略和授权能力；Manager 离线时仍可使用本地冻结快照。
 """
 
 from __future__ import annotations
@@ -15,30 +12,31 @@ from pydantic import BaseModel, ConfigDict, Field
 class ModelPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: str | None = Field(default=None, description="中立 model id；空=runtime 默认")
+    model: str | None = Field(default=None, description="Pi model id；空=产品默认模型")
     provider_ref: str | None = Field(default=None, description="provider 配置引用（04 §6.7）")
     thinking_level: str | None = Field(default=None, description="思考深度：none/basic/deep")
 
 
-class RuntimePolicy(BaseModel):
+class ExecutionPolicy(BaseModel):
+    """Pi 会话执行限制，不选择或标识底层执行器。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    runtime_binding: str | None = Field(default=None, description="employee 默认 runtime（06 §7.6）")
-    timeout_seconds: int | None = Field(default=None, description="超时秒数（可选，覆盖默认）")
+    timeout_seconds: int | None = Field(default=None, description="单次 Pi 会话超时秒数（可选）")
 
 
 class EmployeeExecutionSnapshot(BaseModel):
-    """执行前固化的员工/专家执行快照（04 §6.3）。"""
+    """创建 Pi 会话前固化的员工/专家配置快照（04 §6.3）。"""
 
     model_config = ConfigDict(extra="forbid")
 
     employee_id: str
     version: str = Field(description="employee 配置版本")
-    snapshot_version: str = Field(description="快照版本（与 run 绑定，落用户端本地库）")
+    snapshot_version: str = Field(description="快照版本（与 Pi 会话绑定，落用户端本地库）")
     display_name: str = ""
     persona: str | None = Field(default=None, description="中立 persona 文本（不写 SOUL.md）")
     model_policy: ModelPolicy = Field(default_factory=ModelPolicy)
-    runtime_policy: RuntimePolicy = Field(default_factory=RuntimePolicy)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     tools: list[str] = Field(default_factory=list, description="工具列表")
     skills: list[str] = Field(default_factory=list, description="技能引用列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")

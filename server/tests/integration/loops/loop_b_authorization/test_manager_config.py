@@ -76,7 +76,7 @@ def test_manager_config_owner_create_employee_and_grant_to_member_then_pull_auth
         EmployeeConfigIn,
         MemberGrantCreate,
     )
-    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+    from shared.contracts.snapshot import ModelPolicy, ExecutionPolicy
 
     db_url = migrated_pg
     auth = build_auth_service(db_url, admin_dsn=pg_admin_url)
@@ -107,7 +107,7 @@ def test_manager_config_owner_create_employee_and_grant_to_member_then_pull_auth
     ))
 
     # 建 employee 1 (grant to member)
-    e1_cfg = EmployeeConfigIn(display_name="专家A", model_policy=ModelPolicy(model="m"), runtime_policy=RuntimePolicy())
+    e1_cfg = EmployeeConfigIn(display_name="专家A", model_policy=ModelPolicy(model="m"), execution_policy=ExecutionPolicy())
     e1 = esvc.create(owner_ctx, e1_cfg, employee_slug="exp-mc-a")
     gsvc.create_grant(owner_ctx, MemberGrantCreate(
         resource_type="expert", resource_id=e1.employee_id, department_ids=[], member_ids=[member.id],
@@ -353,7 +353,7 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(ExpertTemplateDetail(
         template_id="tpl-rc1", version="1", display_name="模板专家",
-        recommended_config={"model": "gpt-5", "runtime_binding": "hermes_acp"},
+        recommended_config={"model": "gpt-5", "thinking_level": "deep"},
     ))
     rsvc = build_recruit_service(catalog=catalog, router=router)
 
@@ -403,8 +403,8 @@ def test_manager_config_cross_tenant_isolation_employee_not_visible(
     # Create employee in tenant_a first
     ctx_a = TenantContext(tenant_id=tid_a, user_id=str(uuid.uuid4()), roles=["owner"])
     from manager_service.schemas import EmployeeConfigIn
-    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
-    e_cfg = EmployeeConfigIn(display_name="隔离测试", model_policy=ModelPolicy(model="m"), runtime_policy=RuntimePolicy())
+    from shared.contracts.snapshot import ModelPolicy, ExecutionPolicy
+    e_cfg = EmployeeConfigIn(display_name="隔离测试", model_policy=ModelPolicy(model="m"), execution_policy=ExecutionPolicy())
     e = esvc.create(ctx_a, e_cfg, employee_slug=f"iso_{uuid.uuid4().hex[:6]}")
 
     # tenant B 看不到 tenant A 的 employee

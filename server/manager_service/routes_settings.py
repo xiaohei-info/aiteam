@@ -67,7 +67,6 @@ def build_settings_router(verifier) -> APIRouter:
             logo_url=body.logo_url,
             phone=body.phone,
             contact_email=body.contact_email,
-            default_runtime=body.default_runtime,
             invite_required=body.invite_required,
             member_approval=body.member_approval,
             max_employees=body.max_employees,

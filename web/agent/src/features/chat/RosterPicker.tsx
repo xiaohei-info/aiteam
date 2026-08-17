@@ -132,7 +132,6 @@ export function RosterPicker({ client, onPick, onCancel, busy = false, error }: 
                     <HStack gap={1} wrap="wrap">
                       {!configured ? <Badge label="待 Manager 配置" variant="warning" /> : null}
                       {waitingForFirstSnapshot ? <Badge label="首次运行将冻结快照" variant="info" /> : null}
-                      {expert.runtime_binding ? <Badge label={expert.runtime_binding} variant="neutral" /> : null}
                       {reason ? <Text type="supporting">{reason}</Text> : null}
                     </HStack>
                   </VStack>

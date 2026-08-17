@@ -152,11 +152,11 @@ def build_employee_router(verifier) -> APIRouter:
         import csv, io
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["employee_id", "employee_slug", "display_name", "model", "runtime_binding", "skills", "version"])
+        writer.writerow(["employee_id", "employee_slug", "display_name", "model", "provider_ref", "thinking_level", "skills", "version"])
         for it in items:
             writer.writerow([
                 it.employee_id, it.employee_slug, it.display_name,
-                it.model or "", it.runtime_binding or "",
+                it.model or "", it.provider_ref or "", it.thinking_level or "",
                 ",".join(it.skills), it.version,
             ])
         return Response(

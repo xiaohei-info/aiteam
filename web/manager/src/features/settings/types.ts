@@ -3,7 +3,6 @@ export interface EnterpriseSettings {
   logo_url: string | null;
   phone: string | null;
   contact_email: string;
-  default_runtime: string;
   invite_required: boolean;
   member_approval: boolean;
   max_employees: number;

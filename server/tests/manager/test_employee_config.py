@@ -1,8 +1,8 @@
-"""employee/expert 配置 CRUD + runtime 中立性验收（M2，06 §7.6 / 04 §6.1，D16/D22）。
+"""employee/expert 配置 CRUD + Pi 会话策略验收（M2，04 §6.1，D16/D22）。
 
 非 integration（默认门必跑，不依赖 PG）：
 - HTTP 受保护端点：无 token → 401；未配置 DB → 503（problem+json）。
-- schema runtime 中立性：runtime_binding 仅接受中立标识符；拒绝 runtime 参数/profile 片段。
+- schema Pi 执行策略：仅允许会话限制，不接受底层执行器字段。
 - 业务编排：跨租户不可见、冲突/缺失判定（用内存伪 repository 验，不依赖 PG）。
 
 integration（真 PG）：CRUD 端到端 + 跨租户 RLS 隔离 + version 自增。
@@ -19,35 +19,15 @@ from manager_service.employee_config_service import EmployeeConfigService
 from manager_service.schemas import EmployeeConfigIn, EmployeeConfigOut
 
 
-# ---- runtime 中立性（D16 红线：不配置 runtime 非中立）----
+# ---- Pi 会话策略（D16：不配置底层执行器）----
 
 
-def test_runtime_binding_neutral_identifier_accepted():
-    """默认 runtime_policy.runtime_binding=None 合法；显式中立标识符也合法。"""
-    assert EmployeeConfigIn(display_name="x").runtime_policy.runtime_binding is None
-    from shared.contracts.snapshot import RuntimePolicy
-    ok = EmployeeConfigIn(
-        display_name="x", runtime_policy=RuntimePolicy(runtime_binding="claude_code_json_stream"),
-    )
-    assert ok.runtime_policy.runtime_binding == "claude_code_json_stream"
+def test_execution_policy_is_neutral_session_limit():
+    from shared.contracts.snapshot import ExecutionPolicy
 
-
-@pytest.mark.parametrize("bad", [
-    "hermes_acp --flag x",      # 含启动参数
-    "SOUL.md",                  # 原生 profile 文件名
-    "config.yaml",              # 原生配置文件
-    "/usr/local/bin/hermes",    # 路径
-    "runtime=val",              # 含等号
-    "Hermes_ACP",               # 非全小写
-    "hermes acp",               # 含空格
-    "hermes-acp",               # 含连字符
-])
-def test_runtime_binding_rejects_non_neutral(bad):
-    """runtime_binding 必须是中立标识符；runtime 参数/profile/路径一律拒绝（D16 红线）。"""
-    from pydantic import ValidationError
-    from shared.contracts.snapshot import RuntimePolicy
-    with pytest.raises(ValidationError):
-        EmployeeConfigIn(display_name="x", runtime_policy=RuntimePolicy(runtime_binding=bad))
+    config = EmployeeConfigIn(display_name="x", execution_policy=ExecutionPolicy(timeout_seconds=120))
+    assert config.execution_policy.timeout_seconds == 120
+    assert not hasattr(config.execution_policy, "binding")
 
 
 def test_config_carries_no_native_runtime_format():
@@ -75,7 +55,7 @@ class _FakeRepo:
             employee_id=str(uuid.uuid4()), employee_slug=kw["employee_slug"],
             display_name=kw["display_name"], persona=kw["persona"], model=kw["model"],
             provider_ref=kw["provider_ref"], thinking_level=kw["thinking_level"],
-            runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
+            timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
             status="draft",
@@ -101,7 +81,7 @@ class _FakeRepo:
             employee_id=old.employee_id, employee_slug=old.employee_slug,
             display_name=kw["display_name"], persona=kw["persona"], model=kw["model"],
             provider_ref=kw["provider_ref"], thinking_level=kw["thinking_level"],
-            runtime_binding=kw["runtime_binding"], timeout_seconds=kw["timeout_seconds"],
+            timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"],
             version=old.version + 1, status=old.status,

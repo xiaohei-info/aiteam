@@ -42,7 +42,7 @@ async function installDeterministicChatData(page: Page): Promise<void> {
       });
       return;
     }
-    if (path.endsWith("/timeline")) {
+    if (path.endsWith("/entries")) {
       await fulfillJson(route, {
         data: [
           {
@@ -56,10 +56,6 @@ async function installDeterministicChatData(page: Page): Promise<void> {
         ],
         page: { next_cursor: null, has_more: false },
       });
-      return;
-    }
-    if (path.endsWith("/runs") || path.endsWith("/tasks")) {
-      await fulfillJson(route, emptyPage);
       return;
     }
     await route.continue();
@@ -102,7 +98,7 @@ authTest.describe("Agent Astryx Chat benchmark", () => {
     expect(browserErrors).toEqual([]);
   });
 
-  authTest("sending a message still completes the real message-to-run API mainline", async ({ authedPage, authedRequest }) => {
+  authTest("sending a prompt still reaches the direct Pi session API", async ({ authedPage, authedRequest }) => {
     const createResponse = await authedRequest.post("/api/agent/conversations", {
       data: { title: "astryx-e2e-mainline" },
       failOnStatusCode: false,
@@ -124,11 +120,8 @@ authTest.describe("Agent Astryx Chat benchmark", () => {
       await route.continue();
     });
 
-    const messageResponse = authedPage.waitForResponse((response) =>
-      response.request().method() === "POST" && response.url().endsWith(`/conversations/${createdConversation.id}/messages`),
-    );
-    const runResponse = authedPage.waitForResponse((response) =>
-      response.request().method() === "POST" && response.url().endsWith(`/conversations/${createdConversation.id}/runs`),
+    const promptResponse = authedPage.waitForResponse((response) =>
+      response.request().method() === "POST" && response.url().endsWith(`/conversations/${createdConversation.id}/prompt`),
     );
 
     await authedPage.goto("/chat");
@@ -137,8 +130,7 @@ authTest.describe("Agent Astryx Chat benchmark", () => {
     await textbox.fill("验证 Astryx 发送主链");
     await authedPage.getByRole("button", { name: "发送" }).click();
 
-    expect((await messageResponse).ok()).toBeTruthy();
-    expect((await runResponse).ok()).toBeTruthy();
+    expect((await promptResponse).status()).toBe(202);
     await expect(textbox).toHaveText("");
   });
 });

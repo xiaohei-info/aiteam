@@ -194,7 +194,6 @@ class RecruitService:
                 model=recommended.get("model"),
                 provider_ref=match.provider_ref,
                 thinking_level=recommended.get("thinking_level"),
-                runtime_binding=recommended.get("runtime_binding"),
                 timeout_seconds=recommended.get("timeout_seconds"),
                 tools=list(recommended.get("tools", [])),
                 skills=list(recommended.get("skills", [])),
@@ -300,8 +299,7 @@ class RecruitService:
                     model=recommended.get("model"),
                     provider_ref=match.provider_ref,
                     thinking_level=recommended.get("thinking_level"),
-                    runtime_binding=recommended.get("runtime_binding"),
-                    timeout_seconds=recommended.get("timeout_seconds"),
+                        timeout_seconds=recommended.get("timeout_seconds"),
                     tools=list(recommended.get("tools", [])),
                     skills=list(recommended.get("skills", []))
                     + list(package.skill_refs),  # 方案级技能引用叠加到每个专家

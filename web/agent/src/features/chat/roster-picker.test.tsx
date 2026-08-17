@@ -231,7 +231,6 @@ describe("RosterPicker — readiness (AITEAM-693)", () => {
       {
         employee_id: "emp-1",
         display_name: "甲",
-        runtime_binding: "hermes",
         revoked: false,
         tenant_id: "t1",
         version: "v1",

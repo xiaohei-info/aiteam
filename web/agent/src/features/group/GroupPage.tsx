@@ -55,16 +55,13 @@ import {
 
 /**
  * 把 LoadedExpertProjection 投影成群聊编排所需的 GroupExpert。
- * handle 用 display_name（@提及入口友好）；persona/model 留待 RunSpec 派生。
+ * handle 用 display_name（@提及入口友好）；模型策略由 Agent 的 Pi 会话快照提供。
  */
 function toGroupExpert(p: {
   handle: string;
   display_name: string;
   employee_id?: string | null;
-  runtime_binding?: string | null;
 }): GroupExpert {
-  // M1：不再把 runtime_binding 塞进 model（前端 model 不作为权威配置）；
-  // 后端按 employee_id 从专家快照派生 RunSpec。
   return {
     handle: p.handle,
     display_name: p.display_name,

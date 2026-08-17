@@ -79,7 +79,7 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
         "display_name": "专家A",
         "persona": "你是一名资深测试专家",
         "model_policy": {"model": "claude-opus-4-8", "provider_ref": "relay-default", "thinking_level": "high"},
-        "runtime_policy": {"runtime_binding": "hermes_acp", "timeout_seconds": 120},
+        "execution_policy": {"timeout_seconds": 120},
         "tools": ["search"],
         "skills": ["code-review"],
         "knowledge_refs": ["ks_default"],
@@ -95,7 +95,7 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert r.status_code == 201, r.text
     created = r.json()["data"]
     assert created["employee_slug"] == "exp-a"
-    assert created["runtime_policy"]["runtime_binding"] == "hermes_acp"
+    assert created["execution_policy"]["timeout_seconds"] == 120
     assert created["model_policy"]["model"] == "claude-opus-4-8"
     assert created["memory_policy"] == {"seed": "记住用户偏好"}
     assert created["version"] == 1

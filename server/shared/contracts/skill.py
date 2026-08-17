@@ -3,15 +3,14 @@
 中立技能分发契约：
 - SkillPackage：Manager 投送给 Agent 的完整技能真相（skill_id/version/content_hash/
   display_name/description + 文件列表）。Manager 是技能真相源（D5），Agent 本地只缓存授权投影。
-- SkillFile：单个技能文件（相对路径 + 内容 + 内容哈希），供 cache 按 version/hash
-  判断更新、供 projector 写到 workDir 原生技能目录。
+- SkillFile：单个技能文件（相对路径 + 内容 + 内容哈希），供本地 Pi ResourceLoader
+  按 version/hash 判断更新。
 
 架构边界（M2）：
 - 技能真相在 Manager（capability_catalog.skill_catalog）；用户端 Agent 只缓存「被授权专家引用的」
   技能包的本地副本（~/.aiteam-agent/capabilities/skills/{skill_id}/{version}/）。
-- per-run 投影只复制到 workDir，不写 runtime 共享 profile（D16）。
-- 不支持原生 skill 发现时才显式降级（codex/opencode/openclaw 在 capability 中标注
-  supports_native_skills=False，已在 Driver.capabilities(); 这里只负责投影 + 缺失报错）。
+- 技能包只加载到受控 Pi ResourceLoader，不发现用户全局配置（D16）。
+- Agent 负责授权、版本和 hash 校验；技能内容不携带执行器参数。
 """
 
 from __future__ import annotations

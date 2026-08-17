@@ -43,11 +43,11 @@ def _ctx(tid: str, roles=None, user_id="u-1") -> TenantContext:
 
 
 def _body() -> EmployeeConfigIn:
-    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+    from shared.contracts.snapshot import ModelPolicy, ExecutionPolicy
     return EmployeeConfigIn(
         display_name="专家X",
         model_policy=ModelPolicy(model="gpt-5"),
-        runtime_policy=RuntimePolicy(),
+        execution_policy=ExecutionPolicy(),
     )
 
 

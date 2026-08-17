@@ -214,12 +214,12 @@ test.describe("Loop-C usage audit 跨端数据隔离", () => {
   });
 });
 
-test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播", () => {
-  test("Agent create conversation + run → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
+test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传播", () => {
+  test("Agent create conversation + prompt → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
     request,
   }) => {
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
-    // Agent create conversation → message → run → outbox summary 写入/更新 → flush sent>0 →
+    // Agent create conversation → prompt → outbox summary 写入/更新 → flush sent>0 →
     // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。
 
     const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
@@ -240,7 +240,7 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
       usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
     );
 
-    // ── 阶段 2/6: 创建会话 + 发消息 + 起 run（FakeRuntime 产生 usage → UsageRecorder 入 outbox）──
+    // ── 阶段 2/6: 创建会话 + 提交 Pi prompt（Pi model 产生 usage → UsageRecorder 入 outbox）──
     const traceId = `e2e-loopc-${Date.now()}`;
     const convResp = await request.post(`${agentOrigin}/api/agent/conversations`, {
       data: { title: `Loop-C propagation ${traceId}` },
@@ -250,32 +250,27 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     expect(convResp.ok(), `create conversation: ${convResp.status()}`).toBe(true);
     const convId = ((await convResp.json()) as { data: { id: string } }).data.id;
 
-    const msgResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/messages`, {
-      data: { role: "user", content: `E2E usage cross-tier: ${traceId}` },
-      headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
+    const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
+      data: { text: `E2E usage cross-tier: ${traceId}` },
+      headers: {
+        Authorization: `Bearer ${agentLogin.token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": traceId,
+      },
       failOnStatusCode: false,
     });
-    expect(msgResp.ok(), `send message: ${msgResp.status()}`).toBe(true);
+    expect(promptResp.status(), `submit prompt: ${promptResp.status()}`).toBe(202);
 
-    const runResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/runs`, {
-      data: {},
-      headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
-      failOnStatusCode: false,
-    });
-    expect(runResp.ok(), `start run: ${runResp.status()}`).toBe(true);
-    const runBody = (await runResp.json()) as { data: { id: string } };
-    const runId = runBody.data.id;
-
-    // ── 阶段 3/6: 捕获本轮 run 写入/更新的 pending usage summary_id ──
-    const afterRunResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
+    // ── 阶段 3/6: 捕获本轮 prompt 写入/更新的 pending usage summary_id ──
+    const afterPromptResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
     });
-    expect(afterRunResp.ok(), `outbox read after run: ${afterRunResp.status()}`).toBe(true);
-    const afterRunBody = (await afterRunResp.json()) as { data: unknown[] };
-    const pendingAfterRun = Array.isArray(afterRunBody.data) ? afterRunBody.data.length : 0;
-    const usageAfterRun = usageOutboxItems(afterRunBody.data);
-    const changedUsageItems = usageAfterRun.filter((item) => {
+    expect(afterPromptResp.ok(), `outbox read after prompt: ${afterPromptResp.status()}`).toBe(true);
+    const afterPromptBody = (await afterPromptResp.json()) as { data: unknown[] };
+    const pendingAfterPrompt = Array.isArray(afterPromptBody.data) ? afterPromptBody.data.length : 0;
+    const usageAfterPrompt = usageOutboxItems(afterPromptBody.data);
+    const changedUsageItems = usageAfterPrompt.filter((item) => {
       const id = summaryId(item);
       return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
     });
@@ -284,7 +279,7 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     );
     expect(
       flushedSummaryIds.size,
-      `run ${runId} 后 outbox 应新增或更新至少一条 usage summary (pending before=${pendingBefore}, after=${pendingAfterRun})`,
+      `prompt ${traceId} 后 outbox 应新增或更新至少一条 usage summary (pending before=${pendingBefore}, after=${pendingAfterPrompt})`,
     ).toBeGreaterThan(0);
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
@@ -319,8 +314,8 @@ test.describe("Loop-C usage outbox flush → Manager rollup 跨端数据传播",
     const afterFlushBody = (await afterFlushResp.json()) as { data: unknown[] };
     const pendingAfterFlush = Array.isArray(afterFlushBody.data) ? afterFlushBody.data.length : -1;
     expect(
-      pendingAfterFlush <= pendingAfterRun,
-      `flush 后 pending 应 ≤ run 后 (afterRun=${pendingAfterRun}, afterFlush=${pendingAfterFlush})`,
+      pendingAfterFlush <= pendingAfterPrompt,
+      `flush 后 pending 应 ≤ prompt 后 (afterPrompt=${pendingAfterPrompt}, afterFlush=${pendingAfterFlush})`,
     ).toBe(true);
     const remainingFlushedIds = usageOutboxItems(afterFlushBody.data)
       .map((item) => summaryId(item))

@@ -96,7 +96,7 @@ def _create_employee(client: TestClient, token: str, slug: str) -> dict:
         "display_name": "专家A",
         "persona": "你是一名资深测试专家",
         "model_policy": {"model": "claude-opus-4-8", "provider_ref": "relay-default", "thinking_level": "high"},
-        "runtime_policy": {"runtime_binding": "hermes_acp", "timeout_seconds": 120},
+        "execution_policy": {"timeout_seconds": 120},
         "tools": ["search"],
         "skills": ["code-review"],
         "knowledge_refs": ["ks_default"],
@@ -153,7 +153,7 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     assert snap["version"] == "1"
     assert snap["display_name"] == "专家A"
     assert snap["model_policy"]["model"] == "claude-opus-4-8"
-    assert snap["runtime_policy"]["runtime_binding"] == "hermes_acp"
+    assert snap["execution_policy"]["timeout_seconds"] == 120
     assert snap["memory_policy"] == {"seed": "记住用户偏好"}
     assert snap["snapshot_version"]
 

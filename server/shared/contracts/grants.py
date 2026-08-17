@@ -14,7 +14,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 
 
 class MemberGrant(BaseModel):
@@ -40,10 +40,9 @@ class LoadedExpertProjection(BaseModel):
     tenant_id: str
     version: str = Field(description="配置版本/etag，用于增量 sync")
     display_name: str = ""
-    runtime_binding: str | None = Field(default=None, description="runtime 标识符（hermes_acp/claude_code_json_stream 等）")
     persona: str | None = Field(default=None, description="中立 persona 文本（不写 SOUL.md，D16）")
-    model_policy: ModelPolicy = Field(default_factory=ModelPolicy, description="模型配置（中立 model/provider/thinking）")
-    runtime_policy: RuntimePolicy = Field(default_factory=RuntimePolicy, description="runtime 配置（中立 runtime_binding/timeout）")
+    model_policy: ModelPolicy = Field(default_factory=ModelPolicy, description="Pi 模型配置（provider/model/thinking）")
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy, description="Pi 会话限制（不选择执行器）")
     tools: list[str] = Field(default_factory=list, description="工具引用列表")
     skills: list[str] = Field(default_factory=list, description="技能引用列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")

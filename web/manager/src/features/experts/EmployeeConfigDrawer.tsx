@@ -1,7 +1,7 @@
 /**
  * 专家实例详情 / LLM 配置抽屉（AITEAM-683）。
  *
- * 列表行点击后打开：展示并修改 display_name / persona / model_policy / runtime_policy；
+ * 列表行点击后打开：展示并修改 display_name / persona / model_policy / execution_policy；
  * provider 与 model 先从本 tenant 的 provider-credentials 目录中选 provider，
  * 再从该 provider 的 enabled supported_models 中选 model（V1 不提供手输）。
  *
@@ -47,7 +47,6 @@ type Draft = {
   provider_ref: string;
   model: string;
   thinking_level: (typeof THINKING_LEVELS)[number] | "";
-  runtime_binding: string;
   timeout_seconds: string;
 };
 
@@ -61,9 +60,8 @@ function toDraft(e: EmployeeConfig): Draft {
     thinking_level: (THINKING_LEVELS as readonly string[]).includes(tl)
       ? (tl as (typeof THINKING_LEVELS)[number])
       : "",
-    runtime_binding: e.runtime_policy.runtime_binding ?? "",
     timeout_seconds:
-      e.runtime_policy.timeout_seconds != null ? String(e.runtime_policy.timeout_seconds) : "",
+      e.execution_policy.timeout_seconds != null ? String(e.execution_policy.timeout_seconds) : "",
   };
 }
 
@@ -223,8 +221,7 @@ export function EmployeeConfigDrawer({
         thinking_level:
           draft.thinking_level === "" ? null : (draft.thinking_level as NonNullable<EmployeeConfig["model_policy"]["thinking_level"]>),
       },
-      runtime_policy: {
-        runtime_binding: draft.runtime_binding.trim() === "" ? null : draft.runtime_binding,
+      execution_policy: {
         timeout_seconds: timeout,
       },
     };
@@ -352,14 +349,8 @@ export function EmployeeConfigDrawer({
                     </VStack>
 
                     <VStack gap={3}>
-                      <Heading level={3}>{i18n.t("manager.experts.runtime")}</Heading>
+                      <Heading level={3}>{i18n.t("manager.experts.execution_policy")}</Heading>
                       <FormLayout>
-                        <TextInput
-                          label={i18n.t("manager.experts.runtime_binding")}
-                          value={draft.runtime_binding}
-                          onChange={(value) => update("runtime_binding", value)}
-                          isDisabled={submitting}
-                        />
                         <TextInput
                           label={i18n.t("manager.experts.timeout_seconds")}
                           value={draft.timeout_seconds}

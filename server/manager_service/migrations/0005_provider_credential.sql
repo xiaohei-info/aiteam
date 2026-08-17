@@ -5,8 +5,8 @@
 --   - 管理面存 provider 接入配置真相：默认 AI Relay 端点 + 企业级令牌；或（可选）直连 provider 凭据（API key）。
 --   - 明文凭据入库前加密（应用层 cryptography.Fernet；密钥来源 settings/env，不入库不日志）。
 --   - 对外只给 provider_ref + 非敏感元数据（endpoint/可见性），绝不下发明文 key/令牌。
---   - RunSpec 以 provider_ref 引用（06 §7.5.1），不内联明文凭据。
---   - 本地最小注入：用户端 pull 已授权 provider 配置到 local_capability_cache，Driver 注入 runtime env/配置。
+--   - Employee snapshot 以 provider_ref 引用该配置，不内联明文凭据。
+--   - 本地最小注入：用户端按授权拉取 provider 元数据并由 Pi ModelRuntime 解析凭据。
 --
 -- 隔离硬约束（04 §6.1.1）：本表为租户作用域，ENABLE + FORCE ROW LEVEL SECURITY；
 --   tenant_id 唯一来源是 TenantContext（D22），业务 SQL 不接受手写 tenant 过滤。

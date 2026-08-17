@@ -21,7 +21,7 @@ import logging
 from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
-from shared.contracts.snapshot import EmployeeExecutionSnapshot, RuntimePolicy
+from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
 
@@ -184,8 +184,7 @@ def _to_snapshot(
         display_name=config.display_name,
         persona=config.persona,
         model_policy=config.model_policy,
-        # Runtime selection belongs to the Agent Gateway; snapshots carry no binding.
-        runtime_policy=RuntimePolicy(timeout_seconds=config.runtime_policy.timeout_seconds),
+        execution_policy=ExecutionPolicy(timeout_seconds=config.execution_policy.timeout_seconds),
         tools=list(config.tools),
         skills=list(config.skills),
         knowledge_refs=knowledge_refs,
@@ -207,8 +206,6 @@ def _derive_snapshot_version(
         exclude={"employee_id", "employee_slug", "version", "knowledge_refs"},
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)
-    if isinstance(payload.get("runtime_policy"), dict):
-        payload["runtime_policy"].pop("runtime_binding", None)
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(f"{config.employee_id}|{version}|{canonical}".encode()).hexdigest()
     return f"snap_{version}_{digest[:16]}"

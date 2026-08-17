@@ -89,13 +89,13 @@ def _ctx(tid: str, roles=None, user_id="u-1") -> TenantContext:
 
 
 def _full_body() -> EmployeeConfigIn:
-    from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+    from shared.contracts.snapshot import ModelPolicy, ExecutionPolicy
 
     return EmployeeConfigIn(
         display_name="专家A",
         persona="你是一名资深测试专家",
         model_policy=ModelPolicy(model="claude-opus-4-8", provider_ref="relay-default", thinking_level="high"),
-        runtime_policy=RuntimePolicy(runtime_binding="hermes_acp", timeout_seconds=120),
+        execution_policy=ExecutionPolicy(timeout_seconds=120),
         tools=["search"],
         skills=["code-review"],
         knowledge_refs=["ks_default"],
@@ -291,8 +291,8 @@ def test_generate_maps_all_fields():
     assert snap.model_policy.model == "claude-opus-4-8"
     assert snap.model_policy.provider_ref == "relay-default"
     assert snap.model_policy.thinking_level == "high"
-    assert snap.runtime_policy.runtime_binding is None
-    assert snap.runtime_policy.timeout_seconds == 120
+    assert snap.execution_policy.timeout_seconds == 120
+    assert snap.execution_policy.timeout_seconds == 120
     assert snap.tools == ["search"]
     assert snap.skills == ["code-review"]
     assert snap.knowledge_refs == []  # relation binding is the sole snapshot source

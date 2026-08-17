@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from shared.contracts.enums import EnterpriseRole
-from shared.contracts.snapshot import ModelPolicy, RuntimePolicy
+from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Conflict, Forbidden, NotFound
 from shared.db import PgTenantRouter
@@ -40,9 +40,7 @@ class EmployeeConfigService:
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
             thinking_level=body.model_policy.thinking_level,
-            # Runtime selection belongs to Agent Gateway, never Manager state.
-            runtime_binding=None,
-            timeout_seconds=body.runtime_policy.timeout_seconds,
+            timeout_seconds=body.execution_policy.timeout_seconds,
             tools=body.tools,
             skills=body.skills,
             # employee_knowledge_binding is the sole authorization source of truth.
@@ -68,9 +66,7 @@ class EmployeeConfigService:
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
             thinking_level=body.model_policy.thinking_level,
-            # Runtime selection belongs to Agent Gateway, never Manager state.
-            runtime_binding=None,
-            timeout_seconds=body.runtime_policy.timeout_seconds,
+            timeout_seconds=body.execution_policy.timeout_seconds,
             tools=body.tools,
             skills=body.skills,
             # employee_knowledge_binding is the sole authorization source of truth.
@@ -143,7 +139,7 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         display_name=row.display_name,
         persona=row.persona,
         model_policy=ModelPolicy(model=row.model, provider_ref=row.provider_ref, thinking_level=row.thinking_level),
-        runtime_policy=RuntimePolicy(timeout_seconds=row.timeout_seconds),
+        execution_policy=ExecutionPolicy(timeout_seconds=row.timeout_seconds),
         tools=row.tools,
         skills=row.skills,
         knowledge_refs=[],

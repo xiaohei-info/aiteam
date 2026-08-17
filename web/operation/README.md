@@ -6,7 +6,7 @@ AI Team v1 **运营端前端**（独立工程 / 独立构建，v1 概要设计 0
 
 - 只调本端 `/api/operation/*` 与 `/api/auth/*`；跨端（`/api/manager/*`、`/api/agent/*`）由 `@aiteam/shared` 的 `ApiClient` 基类在发请求前拦截抛 `cross_tier_call_forbidden`。
 - 公共能力一律从 `@aiteam/shared` import（page-shell / api-client / role-state / i18n / 设计系统 / contracts），**禁止复制**。
-- 只消费归一后的 `BusinessTimelineEvent`，不绑定 runtime 原始事件（D6）。
+- 运营端只消费脱敏治理摘要，不绑定用户端 Pi 会话事件（D6）。
 
 ## 目录
 

@@ -1,14 +1,14 @@
 /**
  * AITEAM-224 用户端（Agent）单端 smoke + API contract（最终执行 DAG §5.1 验收第 4 条）。
  *
- * 覆盖：auth / workspace / conversation / group / run / sync / api-contract。
- * 前端只调本端 /api/agent/* + /api/agent/login（08 §12.2），不跨端直调、不直绑 Hermes Runtime 内部对象。
+ * 覆盖：auth / workspace / conversation / group / prompt / sync / api-contract。
+ * 前端只调本端 /api/agent/* + /api/agent/login（08 §12.2），不跨端直调、不直绑 Pi SDK 内部对象。
  *
  * agent 是用户端本地优先单用户端（03 §9.4C）：登录经 Manager 校验凭据→缓存 token→本地验签；
- * mainline 路由（conversations/runs/...）无 Bearer 鉴权依赖（本地无入站、无多租户 RLS）。
+ * 主链路（conversations/prompt/entries/...）无 Bearer 鉴权依赖（本地无入站、无多租户 RLS）。
  * 故 auth 覆盖=登录链贯通 + whoami 本地验签；api-contract=problem+json 守卫（非 SPA fallback）。
  *
- * 非目标：不重复 service 层业务断言、不测 LLM 文本质量、不绕过 Team Panel 直连 Runtime。
+ * 非目标：不重复 service 层业务断言、不测 LLM 文本质量、不绕过 Agent 会话 API 直连 Pi SDK。
  * 验证命令：npx playwright test --project=agent-smoke
  */
 
@@ -50,10 +50,6 @@ authTest.describe("agent workspace（工作台）", () => {
     await expectListEnvelope(request, TIER, "/api/agent/conversations", token);
   });
 
-  authTest("loops 列表返回 list envelope", async ({ request, token }) => {
-    await expectListEnvelope(request, TIER, "/api/agent/loops", token);
-  });
-
   authTest("workspace 页面 shell 就绪无 console error", async ({ authedPage }) => {
     const browserErrors = collectBrowserErrors(authedPage);
     await authedPage.goto("/workspace");
@@ -63,7 +59,7 @@ authTest.describe("agent workspace（工作台）", () => {
 });
 
 authTest.describe("agent conversation（会话主链）", () => {
-  authTest("建会话 → 列消息 → 起 run 的契约形状", async ({ authedRequest }) => {
+  authTest("建会话 → 列 Pi entries 的契约形状", async ({ authedRequest }) => {
     // 建会话（POST /api/agent/conversations）→ envelope.data.id
     const createResp = await authedRequest.post("/api/agent/conversations", {
       data: { title: "e2e-smoke" },
@@ -74,13 +70,13 @@ authTest.describe("agent conversation（会话主链）", () => {
     expect(created.data?.id, "conversation envelope has id").toBeTruthy();
     const convId = created.data.id;
 
-    // 列消息（GET /conversations/{id}/messages）→ list envelope
-    const msgResp = await authedRequest.get(`/api/agent/conversations/${convId}/messages`, {
+    // 列 Pi entries（GET /conversations/{id}/entries）→ envelope
+    const msgResp = await authedRequest.get(`/api/agent/conversations/${convId}/entries`, {
       failOnStatusCode: false,
     });
-    expect(msgResp.ok(), `list messages failed: ${msgResp.status()}`).toBeTruthy();
-    const msgBody = (await msgResp.json()) as { data: unknown[]; page?: unknown };
-    expect(Array.isArray(msgBody.data)).toBeTruthy();
+    expect(msgResp.ok(), `list entries failed: ${msgResp.status()}`).toBeTruthy();
+    const entriesBody = (await msgResp.json()) as { data: { entries: unknown[] } };
+    expect(Array.isArray(entriesBody.data.entries)).toBeTruthy();
   });
 
   authTest("chat 页面 shell 就绪无 console error", async ({ authedPage }) => {
@@ -105,22 +101,21 @@ authTest.describe("agent group（群聊）", () => {
   });
 });
 
-authTest.describe("agent run（执行）", () => {
-  authTest("runs 列表端点契约可达（建会话后列 runs）", async ({ authedRequest }) => {
-    // 建会话 → 列该会话的 runs（GET /conversations/{id}/runs）→ list envelope
+authTest.describe("agent prompt（Pi 会话）", () => {
+  authTest("prompt 入口直接接受一次 Pi 会话输入", async ({ authedRequest }) => {
     const createResp = await authedRequest.post("/api/agent/conversations", {
-      data: { title: "e2e-smoke-runs" },
-      failOnStatusCode: false,
+      data: { title: "e2e-smoke-prompt" }, failOnStatusCode: false,
     });
     expect(createResp.ok()).toBeTruthy();
     const convId = ((await createResp.json()) as { data: { id: string } }).data.id;
-    const runsResp = await authedRequest.get(`/api/agent/conversations/${convId}/runs`, {
+    const promptResp = await authedRequest.post(`/api/agent/conversations/${convId}/prompt`, {
+      data: { text: "e2e prompt" }, headers: { "Idempotency-Key": `e2e-${Date.now()}` },
       failOnStatusCode: false,
     });
-    expect(runsResp.ok(), `list runs failed: ${runsResp.status()}`).toBeTruthy();
-    const runsBody = (await runsResp.json()) as { data: unknown[]; page?: unknown };
-    expect(Array.isArray(runsBody.data)).toBeTruthy();
-    expect(runsBody).toHaveProperty("page");
+    expect(promptResp.status()).toBe(202);
+    const body = (await promptResp.json()) as { data: { accepted: boolean; conversation_id: string } };
+    expect(body.data.accepted).toBe(true);
+    expect(body.data.conversation_id).toBe(convId);
   });
 });
 

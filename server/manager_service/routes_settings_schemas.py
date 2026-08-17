@@ -14,7 +14,6 @@ class EnterpriseSettingsOut(BaseModel):
     logo_url: str | None = None
     phone: str | None = None
     contact_email: str = ""
-    default_runtime: str = "hermes_acp"
     invite_required: bool = True
     member_approval: bool = True
     max_employees: int = 100
@@ -28,7 +27,6 @@ class EnterpriseSettingsPatch(BaseModel):
     logo_url: str | None = None
     phone: str | None = None
     contact_email: str | None = None
-    default_runtime: str | None = None
     invite_required: bool | None = None
     member_approval: bool | None = None
     max_employees: int | None = None
