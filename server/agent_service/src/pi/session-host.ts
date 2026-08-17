@@ -311,7 +311,7 @@ export class SessionHost {
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
-      model: this.options.model,
+      model: authorization ? this.modelFor(authorization.snapshot) : this.options.model,
       thinkingLevel: this.thinkingLevelFor(authorization),
       modelRuntime: this.options.modelRuntime,
       resourceLoader,
