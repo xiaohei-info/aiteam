@@ -83,6 +83,13 @@ load_env() {
   source "${ENV_FILE}"
   set +a
 
+  # 控制面环境名必须由 ctl 的 --env 选择器决定，不能让 .env.prod 缺省值回落为 dev。
+  case "${ENV_CONFIG}" in
+    prod) export AITEAM_ENV="production" ;;
+    test) export AITEAM_ENV="test" ;;
+    dev)  export AITEAM_ENV="development" ;;
+  esac
+
   # 构建数据库连接串
   DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
   # ADMIN_DB_URL：管理连接串，用于 Migration / RLS 启用 / 控制面表直读直写
@@ -390,6 +397,7 @@ start_service_local() {
       local agent_env="${AITEAM_ENV:-dev}"
       local agent_dev_auth="${AITEAM_AGENT_DEV_AUTH:-true}"
       local agent_fake="${AITEAM_PI_FAKE:-true}"
+      local agent_manager_url="${AITEAM_MANAGER_URL:-${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}}"
       if [[ "${agent_env}" == "production" ]]; then
         [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
         [[ -n "${AITEAM_PI_FAKE:-}" ]] || agent_fake=false
@@ -401,6 +409,13 @@ start_service_local() {
         AITEAM_ENV="${agent_env}" \
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
+        AITEAM_MANAGER_URL="${agent_manager_url}" \
+        AITEAM_AGENT_JWKS_JSON="${AITEAM_AGENT_JWKS_JSON:-}" \
+        AITEAM_AGENT_JWKS_PATH="${AITEAM_AGENT_JWKS_PATH:-}" \
+        AITEAM_AGENT_JWT_ISSUER="${AITEAM_AGENT_JWT_ISSUER:-}" \
+        AITEAM_AGENT_JWT_AUDIENCE="${AITEAM_AGENT_JWT_AUDIENCE:-}" \
+        AITEAM_AGENT_SANDBOX_READY="${AITEAM_AGENT_SANDBOX_READY:-false}" \
+        AITEAM_AGENT_SPA_ROOT="${AITEAM_AGENT_SPA_ROOT:-${REPO_ROOT}/web/agent/dist}" \
         pnpm --dir "${REPO_ROOT}/server/agent_service" start \
         >> "${LOG_FILE}" 2>&1 &
       disown

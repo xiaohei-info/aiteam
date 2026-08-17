@@ -91,9 +91,16 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       AITEAM_AGENT_DATA_DIR: /app/data
-      AITEAM_AGENT_DEV_AUTH: "true"
-      AITEAM_PI_FAKE: "true"
-      AITEAM_ENV: dev
+      AITEAM_AGENT_DEV_AUTH: ${AITEAM_AGENT_DEV_AUTH:-true}
+      AITEAM_PI_FAKE: ${AITEAM_PI_FAKE:-true}
+      AITEAM_ENV: ${AITEAM_ENV:-dev}
+      AITEAM_MANAGER_URL: ${AITEAM_MANAGER_URL:-http://manager:8000}
+      AITEAM_AGENT_JWKS_JSON: ${AITEAM_AGENT_JWKS_JSON:-}
+      AITEAM_AGENT_JWKS_PATH: ${AITEAM_AGENT_JWKS_PATH:-}
+      AITEAM_AGENT_JWT_ISSUER: ${AITEAM_AGENT_JWT_ISSUER:-}
+      AITEAM_AGENT_JWT_AUDIENCE: ${AITEAM_AGENT_JWT_AUDIENCE:-}
+      AITEAM_AGENT_SANDBOX_READY: ${AITEAM_AGENT_SANDBOX_READY:-false}
+      AITEAM_AGENT_SPA_ROOT: /app/web/agent/dist
     depends_on:
       postgres:
         condition: service_healthy

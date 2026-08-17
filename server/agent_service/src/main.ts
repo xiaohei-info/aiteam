@@ -19,6 +19,7 @@ const useDevAuth = process.env.AITEAM_AGENT_DEV_AUTH === "true";
 if (environment === "production" && useFauxModel) throw new Error("AITEAM_PI_FAKE=true is forbidden in production");
 if (environment === "production" && useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
 if (environment === "production" && (!process.env.AITEAM_AGENT_JWT_ISSUER || !process.env.AITEAM_AGENT_JWT_AUDIENCE)) throw new Error("Production Agent JWT issuer and audience are required");
+if (environment === "production" && !process.env.AITEAM_MANAGER_URL) throw new Error("Production Agent Manager URL is required");
 
 mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
 chmodSync(dataRoot, 0o700);
@@ -54,7 +55,7 @@ const http = new AgentHttpServer({
   authenticate,
   managerClient,
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
-  spaRoot: process.env.AITEAM_AGENT_SPA_ROOT,
+  spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
 
 await http.listen(port, hostAddress);
