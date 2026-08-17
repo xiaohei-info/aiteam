@@ -72,8 +72,8 @@ export function MentionComposer({ conversationId, experts, onDispatched }: Menti
     setSending(true);
     setError(null);
     try {
-      // Mentions are coordinator instructions in the ordinary Conversation prompt.
-      await submitPrompt(client, conversationId, { text });
+      // Mentions remain ordinary prompt text but also constrain delegate_employee targets server-side.
+      await submitPrompt(client, conversationId, { text, mentions: mentioned });
       setContent("");
       onDispatched();
     } catch (err) {

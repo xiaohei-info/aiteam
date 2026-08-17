@@ -62,6 +62,7 @@ export async function createConversation(
 export interface PromptInput {
   text: string;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  mentions?: string[];
 }
 
 export interface PromptAccepted {

@@ -403,21 +403,22 @@ export class AgentHttpServer {
     if (images !== undefined && (!Array.isArray(images) || images.length > 8 || images.some((image) => !image || typeof image !== "object" || (image as Record<string, unknown>).type !== "image" || typeof (image as Record<string, unknown>).data !== "string" || typeof (image as Record<string, unknown>).mimeType !== "string"))) {
       throw new HttpProblem(422, "invalid_images", "images must contain at most 8 {type, data, mimeType} objects");
     }
-    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images: images ?? [] })).digest("hex");
+    const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
+    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images: images ?? [], mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
-    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images);
+    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images, mentions);
     this.promptWorkers.add(worker);
     void worker.finally(() => this.promptWorkers.delete(worker));
     this.writeReceipt(response, conversationId, key, "accepted");
   }
 
-  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: unknown): Promise<void> {
+  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: unknown, mentions: string[]): Promise<void> {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, this.asImages(images), caller);
+      const lastEntryId = await this.options.host.prompt(conversationId, text, this.asImages(images), caller, mentions);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {
       this.options.store.markUnknown(conversationId, callerId, key, ownerInstance);

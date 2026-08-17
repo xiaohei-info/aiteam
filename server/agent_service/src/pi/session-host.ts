@@ -47,6 +47,7 @@ export interface SessionAuthorization {
   caller: AuthenticatedCaller;
   employeeId: string;
   snapshot: FrozenSnapshot;
+  mentionedEmployeeIds?: ReadonlySet<string>;
   managerClient?: ManagerClient;
 }
 
@@ -145,7 +146,7 @@ export class SessionHost {
     return () => record.listeners.delete(subscriber);
   }
 
-  async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller): Promise<string | undefined> {
+  async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[]): Promise<string | undefined> {
     const record = await this.ensureRecord(conversationId);
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
@@ -154,7 +155,7 @@ export class SessionHost {
     record.delegatePromptChars = 0;
 
     try {
-      const authorization = caller ? this.resolveAuthorization(record, caller) : undefined;
+      const authorization = caller ? this.resolveAuthorization(record, caller, mentions ?? []) : undefined;
       record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
       const startedAt = Date.now();
@@ -360,7 +361,7 @@ export class SessionHost {
     return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "off";
   }
 
-  private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller): SessionAuthorization | undefined {
+  private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller, mentions: string[] = []): SessionAuthorization | undefined {
     const metadata = this.options.store.getConversationMetadata(record.conversationId);
     const memberId = caller.userId ?? caller.callerId;
     if (metadata?.tenant_id && metadata.tenant_id !== caller.tenantId) throw new SessionAuthorizationError();
@@ -371,7 +372,10 @@ export class SessionHost {
     if (!expert || expert.revoked) throw new SessionAuthorizationError();
     const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && item.version === expert.version);
     if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
-    return { caller, employeeId, snapshot, managerClient: this.options.managerClient };
+    const mentionedEmployeeIds = mentions.length
+      ? new Set(this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((item) => mentions.includes(item.handle)).map((item) => item.employee_id))
+      : undefined;
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient };
   }
 
   private disposeSession(record: SessionRecord): void {
@@ -390,6 +394,9 @@ export class SessionHost {
   private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
     if (!authorization.caller.tenantId) throw new Error("Authenticated tenant is required for delegation");
     const memberId = authorization.caller.userId ?? authorization.caller.callerId;
+    if (authorization.mentionedEmployeeIds && !authorization.mentionedEmployeeIds.has(input.employee_id)) {
+      throw new Error("Employee was not explicitly mentioned in this group prompt");
+    }
     const expert = this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && !item.revoked);
     if (!expert) throw new Error("Employee is not in the authorized local roster");
     const snapshot = this.options.store.listSnapshots(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && item.version === expert.version);
