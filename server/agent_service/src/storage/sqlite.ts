@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import type { UsageSummary } from "../usage.js";
 import { dirname } from "node:path";
 import { chmodSync, mkdirSync } from "node:fs";
 
@@ -80,6 +81,7 @@ export interface UsageOutboxItem {
   attempts: number;
   last_error: string | null;
   created_at: string;
+  claim_token?: string | null;
 }
 
 export interface PersistedEvent {
@@ -233,7 +235,9 @@ export class AgentSqliteStore {
         attempts INTEGER NOT NULL DEFAULT 0,
         last_error TEXT,
         payload_json TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        claim_token TEXT,
+        claimed_at TEXT
       );
       CREATE INDEX IF NOT EXISTS usage_outbox_status_idx ON usage_summary_outbox(status, created_at);
     `);
@@ -249,9 +253,17 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN member_id TEXT",
       "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
+      "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
+      "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
+    this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', last_error = COALESCE(last_error, 'Recovered unfinished usage upload'), claim_token = NULL, claimed_at = NULL WHERE status = 'sending'").run();
+  }
+
+  listScheduledConversations(): ConversationRecord[] {
+    const rows = this.db.prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
+    return rows.map((row) => this.toConversation(row));
   }
 
   getConversation(id: string): ConversationRecord | undefined {
@@ -379,7 +391,56 @@ export class AgentSqliteStore {
   }
 
   listUsageOutbox(tenantId?: string): UsageOutboxItem[] {
-    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null) as unknown as UsageOutboxItem[];
+    return this.db.prepare("SELECT summary_id, tenant_id, kind, status, attempts, last_error, created_at, claim_token FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null) as unknown as UsageOutboxItem[];
+  }
+
+  upsertUsageSummary(summary: UsageSummary): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO usage_summary_outbox (summary_id, tenant_id, kind, status, attempts, last_error, payload_json, created_at)
+      VALUES (?, ?, 'usage', 'pending', 0, NULL, ?, ?)
+      ON CONFLICT(summary_id) DO UPDATE SET
+        payload_json = json_object(
+          'schema_version', '1', 'summary_id', excluded.summary_id,
+          'tenant_id', excluded.tenant_id, 'member_id', json_extract(usage_summary_outbox.payload_json, '$.member_id'),
+          'employee_id', json_extract(usage_summary_outbox.payload_json, '$.employee_id'),
+          'window_start', json_extract(usage_summary_outbox.payload_json, '$.window_start'),
+          'window_end', json_extract(usage_summary_outbox.payload_json, '$.window_end'),
+          'prompt_count', json_extract(usage_summary_outbox.payload_json, '$.prompt_count') + json_extract(excluded.payload_json, '$.prompt_count'),
+          'settled_count', json_extract(usage_summary_outbox.payload_json, '$.settled_count') + json_extract(excluded.payload_json, '$.settled_count'),
+          'error_count', json_extract(usage_summary_outbox.payload_json, '$.error_count') + json_extract(excluded.payload_json, '$.error_count'),
+          'input_tokens', json_extract(usage_summary_outbox.payload_json, '$.input_tokens') + json_extract(excluded.payload_json, '$.input_tokens'),
+          'output_tokens', json_extract(usage_summary_outbox.payload_json, '$.output_tokens') + json_extract(excluded.payload_json, '$.output_tokens'),
+          'cache_tokens', json_extract(usage_summary_outbox.payload_json, '$.cache_tokens') + json_extract(excluded.payload_json, '$.cache_tokens'),
+          'cost_minor', json_extract(usage_summary_outbox.payload_json, '$.cost_minor') + json_extract(excluded.payload_json, '$.cost_minor'),
+          'currency', json_extract(usage_summary_outbox.payload_json, '$.currency'),
+          'duration_ms_total', json_extract(usage_summary_outbox.payload_json, '$.duration_ms_total') + json_extract(excluded.payload_json, '$.duration_ms_total'),
+          'run_count', json_extract(usage_summary_outbox.payload_json, '$.run_count') + json_extract(excluded.payload_json, '$.run_count'),
+          'token_total', json_extract(usage_summary_outbox.payload_json, '$.token_total') + json_extract(excluded.payload_json, '$.token_total'),
+          'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),
+          'duration_seconds_total', json_extract(usage_summary_outbox.payload_json, '$.duration_seconds_total') + json_extract(excluded.payload_json, '$.duration_seconds_total')
+        ), status = CASE WHEN status = 'sent' THEN 'sent' ELSE 'pending' END, last_error = NULL
+    `).run(summary.summary_id, summary.tenant_id, JSON.stringify(summary), now);
+  }
+
+  claimUsageOutbox(tenantId: string, limit = 50): Array<{ summary_id: string; tenant_id: string; payload: UsageSummary; claim_token: string }> {
+    const claimToken = randomUUID();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.db.prepare(`SELECT summary_id, tenant_id, payload_json FROM usage_summary_outbox
+        WHERE tenant_id = ? AND status IN ('pending', 'failed') ORDER BY created_at ASC LIMIT ?`).all(tenantId, Math.min(Math.max(limit, 1), 100)) as { summary_id: string; tenant_id: string; payload_json: string }[];
+      for (const row of rows) this.db.prepare("UPDATE usage_summary_outbox SET status = 'sending', attempts = attempts + 1, claim_token = ?, claimed_at = ?, last_error = NULL WHERE summary_id = ? AND status IN ('pending', 'failed')").run(claimToken, new Date().toISOString(), row.summary_id);
+      this.db.exec("COMMIT");
+      return rows.map((row) => ({ summary_id: row.summary_id, tenant_id: row.tenant_id, payload: JSON.parse(row.payload_json) as UsageSummary, claim_token: claimToken }));
+    } catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
+  }
+
+  markUsageSent(summaryId: string, claimToken: string): void {
+    this.db.prepare("UPDATE usage_summary_outbox SET status = 'sent', claim_token = NULL, claimed_at = NULL, last_error = NULL WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(summaryId, claimToken);
+  }
+
+  markUsageFailed(summaryId: string, claimToken: string, error: string): void {
+    this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(error.slice(0, 500), summaryId, claimToken);
   }
 
   appendEvent(conversationId: string, event: unknown): number {
@@ -419,6 +480,7 @@ export class AgentSqliteStore {
     key: string;
     fingerprint: string;
     leaseMs?: number;
+    oneShot?: boolean;
   }): IdempotencyReceipt {
     const leaseMs = input.leaseMs ?? DEFAULT_LEASE_MS;
     const now = new Date();
@@ -469,6 +531,7 @@ export class AgentSqliteStore {
           leaseExpiresAt,
           now.toISOString(),
         );
+      if (input.oneShot) this.db.prepare("UPDATE conversation SET schedule_json = json_set(COALESCE(schedule_json, '{}'), '$.enabled', json('false')), updated_at = ? WHERE id = ?").run(now.toISOString(), input.conversationId);
       this.db.exec("COMMIT");
       return {
         conversationId: input.conversationId,

@@ -11,6 +11,8 @@ import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, t
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEvent } from "../pi/event-sse.js";
 import type { ConversationState, LoadedExpertProjection } from "../storage/sqlite.js";
+import { validateSchedule } from "../schedule.js";
+import type { UsageFlushService } from "../usage-flush.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -23,6 +25,7 @@ export interface AgentHttpServerOptions {
   managerClient?: ManagerClient;
   logger?: Pick<Console, "error">;
   spaRoot?: string;
+  usageFlush?: UsageFlushService;
 }
 
 export class HttpProblem extends Error {
@@ -124,6 +127,7 @@ export class AgentHttpServer {
       if (platformRoute === "expert-readiness" && request.method === "GET") return await this.expertReadiness(response, url.pathname, caller);
       if (platformRoute === "sync" && request.method === "POST") return await this.syncGrants(request, response, caller);
       if (platformRoute === "outbox" && request.method === "GET") return this.listOutbox(response, caller);
+      if (platformRoute === "usage-flush" && request.method === "POST") return await this.flushUsage(request, response, caller);
       if (platformRoute === "marketplace" && request.method === "GET") return this.listMarketplaceTemplates(response);
       if (platformRoute === "knowledge-bases" && request.method === "GET") return this.listKnowledgeBases(response);
       if (platformRoute === "knowledge-read" && request.method === "GET") return this.listKnowledgeReadModel(response);
@@ -233,8 +237,10 @@ export class AgentHttpServer {
     const labels = body.labels === undefined ? [] : this.stringArray(body.labels, "labels", 32);
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
     if (this.options.store.getConversationMetadata(id)) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
+    let schedule = null;
+    if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
     const metadata = this.options.store.createConversation({
-      id, title, kind, labels, state: "active",
+      id, title, kind, labels, state: "active", schedule,
       entryEmployeeId: this.optionalString(body.entry_employee_id, "entry_employee_id"),
       coordinatorEmployeeId: this.optionalString(body.coordinator_employee_id, "coordinator_employee_id"),
       solutionRef: this.optionalString(body.solution_instance_id, "solution_instance_id"),
@@ -267,7 +273,7 @@ export class AgentHttpServer {
     if (body.title !== undefined) patch.title = body.title === null ? null : this.stringField(body.title, "title", 200);
     if (body.kind !== undefined) patch.kind = this.stringField(body.kind, "kind", 64);
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
-    if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.objectField(body.schedule, "schedule");
+    if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.optionalString(body.last_read_entry_id, "last_read_entry_id");
     this.requireOwnedConversation(this.getConversationId(pathname), caller);
     const updated = this.options.store.updateConversation(this.getConversationId(pathname), patch);
@@ -303,6 +309,15 @@ export class AgentHttpServer {
   private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
   private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots().filter((item) => item.tenant_id === caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
   private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(caller.tenantId), page: { next_cursor: null, has_more: false } } }); }
+
+  private async flushUsage(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
+    if (!this.options.usageFlush) throw new HttpProblem(503, "manager_unavailable", "Manager usage upload is not configured");
+    const body = await this.readJson(request);
+    const limit = body.limit === undefined ? 50 : Number(body.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpProblem(422, "invalid_limit", "limit must be an integer between 1 and 100");
+    const result = await this.options.usageFlush.flush(caller, limit);
+    this.writeJson(response, 200, { data: result });
+  }
 
   private async syncGrants(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient) throw new HttpProblem(503, "manager_unavailable", "Manager sync is not configured");
@@ -360,6 +375,10 @@ export class AgentHttpServer {
   private optionalString(value: unknown, name: string): string | null { if (value === undefined || value === null) return null; return this.stringField(value, name, 256); }
   private stringArray(value: unknown, name: string, maxItems: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > 128)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an array of strings`); return value as string[]; }
   private objectField(value: unknown, name: string): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an object`); return value as Record<string, unknown>; }
+  private parseSchedule(value: unknown): Record<string, unknown> {
+    try { return validateSchedule(value) as unknown as Record<string, unknown>; }
+    catch (error) { throw new HttpProblem(422, "invalid_schedule", error instanceof Error ? error.message : "Unsupported schedule"); }
+  }
 
   private async prompt(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     const callerId = caller.callerId;
@@ -449,6 +468,7 @@ export class AgentHttpServer {
     if (/^\/api\/agent\/grants\/experts\/[^/]+\/readiness$/.test(pathname)) return "expert-readiness";
     if (pathname === "/api/agent/grants/sync") return "sync";
     if (pathname === "/api/agent/usage/outbox") return "outbox";
+    if (pathname === "/api/agent/usage/flush") return "usage-flush";
     if (pathname === "/api/agent/marketplace/templates" || /^\/api\/agent\/marketplace\/templates\/[^/]+$/.test(pathname)) return "marketplace";
     if (pathname === "/api/agent/knowledge-bases") return "knowledge-bases";
     if (/^\/api\/agent\/knowledge-bases\/[^/]+\/(search|documents|ingestions)(\/[^/]+)?$/.test(pathname)) return "knowledge-read";
@@ -582,6 +602,7 @@ const OPENAPI = {
     "/api/agent/grants/experts/{employee_id}/readiness": { get: { operationId: "expertReadiness", responses: { "200": { description: "Readiness" } } } },
     "/api/agent/grants/sync": { post: { operationId: "syncGrants", responses: { "200": { description: "Sync result" }, "503": { description: "Manager unavailable" } } } },
     "/api/agent/usage/outbox": { get: { operationId: "listUsageOutbox", responses: { "200": { description: "Usage summaries" } } } },
+    "/api/agent/usage/flush": { post: { operationId: "flushUsage", responses: { "200": { description: "Usage flush result" }, "503": { description: "Manager unavailable" } } } },
     "/api/agent/marketplace/templates": { get: { operationId: "listMarketplaceTemplates", responses: { "200": { description: "Read-only catalog projection" } } } },
     "/api/agent/knowledge-bases": { get: { operationId: "listKnowledgeBases", responses: { "200": { description: "Read-only knowledge projection" } } } },
     "/api/agent/org/tree":  { get: { operationId: "orgTree", responses: { "200": { description: "Organization tree" } } } },

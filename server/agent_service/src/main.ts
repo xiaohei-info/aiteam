@@ -8,6 +8,9 @@ import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 import { HttpManagerClient } from "./manager-client.js";
+import { aggregateUsage } from "./usage.js";
+import { UsageFlushService } from "./usage-flush.js";
+import { ScheduleService } from "./schedule.js";
 
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
@@ -39,6 +42,7 @@ const sessionHost = new SessionHost({
   model: configured.model,
   managerClient,
   sandboxAvailable: () => process.env.AITEAM_AGENT_SANDBOX_READY === "true",
+  usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization)),
 });
 
@@ -49,20 +53,26 @@ const authenticate = useDevAuth
     }
   : createJwtAuthenticator(loadJwtOptions());
 
+const usageFlush = new UsageFlushService(store, managerClient);
+const schedule = new ScheduleService(store, sessionHost);
 const http = new AgentHttpServer({
   host: sessionHost,
   store,
   authenticate,
   managerClient,
+  usageFlush,
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
 
 await http.listen(port, hostAddress);
+ schedule.start();
 console.log(`AI Team Node Agent listening on http://${hostAddress}:${port}`);
 
 const shutdown = async () => {
+  await schedule.stop();
   await http.close().catch(() => undefined);
+  await usageFlush.close();
   await sessionHost.dispose();
   store.close();
 };

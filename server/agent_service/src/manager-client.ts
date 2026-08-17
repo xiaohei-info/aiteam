@@ -1,5 +1,6 @@
 import type { AuthenticatedCaller } from "./http/auth.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
+import type { UsageSummary } from "./usage.js";
 
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
@@ -33,6 +34,7 @@ export interface ManagerClient {
   memoryDelete?(caller: AuthenticatedCaller, memoryId: string): Promise<void>;
   knowledgeSearch?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown>;
   knowledgeGet?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown>;
+  uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -140,12 +142,17 @@ export class HttpManagerClient implements ManagerClient {
     return this.unwrap(response);
   }
 
+  async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
+    return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [summary], audits: [] }, undefined, "POST", summary.summary_id));
+  }
+
   private async request(
     path: string,
     caller: AuthenticatedCaller,
     body?: unknown,
     query?: Record<string, string>,
     method?: "GET" | "POST" | "DELETE",
+    idempotencyKey?: string,
   ): Promise<unknown> {
     const url = new URL(path, this.baseUrl);
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
@@ -158,6 +165,7 @@ export class HttpManagerClient implements ManagerClient {
           Accept: "application/json",
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(caller.accessToken ? { Authorization: `Bearer ${caller.accessToken}` } : {}),
+          ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });

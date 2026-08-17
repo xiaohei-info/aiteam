@@ -19,6 +19,7 @@ import { createKnowledgeTools } from "../tools/knowledge.js";
 import { createMemoryTools } from "../tools/memory.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
+import type { UsageCapture } from "../usage.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -60,6 +61,7 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
   sandboxAvailable?: () => boolean;
+  usageRecorder?: (capture: UsageCapture) => void | Promise<void>;
 }
 
 interface Subscriber {
@@ -154,8 +156,16 @@ export class SessionHost {
       const authorization = caller ? this.resolveAuthorization(record, caller) : undefined;
       record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
-      await session.prompt(text, images ? { images } : undefined);
-      return record.sessionManager.getLeafId() ?? undefined;
+      const startedAt = Date.now();
+      const entriesBefore = record.sessionManager.getEntries().length;
+      try {
+        await session.prompt(text, images ? { images } : undefined);
+        await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
+        return record.sessionManager.getLeafId() ?? undefined;
+      } catch (error) {
+        await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
+        throw error;
+      }
     } finally {
       record.sessionReady = undefined;
       record.prompting = false;
@@ -219,6 +229,20 @@ export class SessionHost {
       this.disposeSession(record);
     }
     this.records.clear();
+  }
+
+  private async recordUsage(record: SessionRecord, authorization: SessionAuthorization | undefined, startedAt: number, settled: boolean, entriesBefore: number): Promise<void> {
+    if (!this.options.usageRecorder || !authorization?.caller.tenantId || !authorization.caller.userId) return;
+    const employeeId = authorization.employeeId;
+    await this.options.usageRecorder({
+      tenantId: authorization.caller.tenantId,
+      memberId: authorization.caller.userId,
+      employeeId,
+      startedAt,
+      endedAt: Date.now(),
+      entries: record.sessionManager.getEntries().slice(entriesBefore),
+      settled,
+    });
   }
 
   private async ensureRecord(conversationId: string): Promise<SessionRecord> {
