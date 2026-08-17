@@ -14,7 +14,9 @@ scope: agent-rebuild
 - **M1-A（已完成）**：Node Agent `SessionHost`、Pi Session index、SQLite idempotency receipt、`prompt`、SSE、`entries`、`abort`。
 - **M1/B（已完成）**：旧 Python Agent/Gateway、Run/Task/Loop/Timeline 执行链、旧 migrations/tests、runtime contracts 和前端旧 API 已删除；Agent/Manager/Frontend 基础契约已切换到 Pi。
 - **M2（已完成基础切片）**：Manager Hindsight memory facade、knowledge artifact facade、Agent `memory_*`/`knowledge_*` tools、snapshot-bound tool policy、`delegate_employee` 内存 child Session、Manager/Agent ownership/security hardening。
-- **当前仍未完成**：真实 provider credential vault/AI Relay、签名 Skill package materialize、外部 sandbox 实体接入、schedule 实际执行与 occurrence receipts、usage outbox 产生/上报、attachment/artifact 完整生命周期、全环境 Playwright/live PostgreSQL 验证。
+- **M3-A（已完成）**：严格 `Conversation.schedule`、本地 occurrence scheduler、unknown 不重放、Pi usage 聚合、脱敏 usage outbox、Manager upload/flush。
+- **P0 安全收敛（已完成）**：caller/member/tenant 绑定、snapshot wire normalization、JWT issuer/audience、SSE allowlist、删除/关闭流程、生产 Faux/dev-auth guard、SPA/API 边界、raw Pi event SQLite 表移除。
+- **当前仍未完成**：真实 provider credential vault/AI Relay、签名 Skill package materialize、外部 sandbox 实体接入、knowledge/marketplace 非空授权 UI projection、attachment/artifact 完整生命周期、全环境 Playwright/live PostgreSQL/Hindsight 验证。
 
 > 本计划是 `docs/superpowers/specs/2026-08-17-pi-coding-agent-sdk-agent架构重构设计.md` 的实施配套，不新增架构裁决。
 > 目标是把当前 Python Agent/Gateway 代码迁移为 Node/TypeScript + 进程内 Pi SDK，并删除旧执行模型。
