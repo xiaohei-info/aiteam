@@ -58,18 +58,21 @@ class KnowledgeArtifactClient:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         settings = self._settings
-        if not settings.base_url or not path:
+        if not settings.base_url or not settings.token or not path:
             raise KnowledgeArtifactUnavailable(
-                "KNOWLEDGE_INDEX_URL, KNOWLEDGE_INDEX_SEARCH_PATH and "
-                "KNOWLEDGE_INDEX_GET_PATH must be configured"
+                "KNOWLEDGE_INDEX_URL, KNOWLEDGE_INDEX_SERVICE_TOKEN, "
+                "KNOWLEDGE_INDEX_SEARCH_PATH and KNOWLEDGE_INDEX_GET_PATH must be configured"
             )
 
         client = self._client or httpx.Client(
             base_url=settings.base_url.rstrip("/"), timeout=10.0
         )
-        headers = {"X-Tenant-ID": ctx.tenant_id, "Accept": "application/json"}
-        if settings.token:
-            headers["Authorization"] = f"Bearer {settings.token}"
+        headers = {
+            "X-Tenant-ID": ctx.tenant_id,
+            "X-Member-ID": ctx.user_id,
+            "Authorization": f"Bearer {settings.token}",
+            "Accept": "application/json",
+        }
         try:
             response = client.post(
                 f"{settings.base_url.rstrip('/')}/{path.lstrip('/')}",

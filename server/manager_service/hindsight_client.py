@@ -66,7 +66,11 @@ class HindsightClient:
                 "HINDSIGHT_URL, HINDSIGHT_SERVICE_TOKEN and operation paths must be configured"
             )
         client = self._client or httpx.Client(base_url=settings.base_url.rstrip("/"), timeout=10.0)
-        headers = {"X-Tenant-ID": ctx.tenant_id, "Authorization": f"Bearer {settings.token}"}
+        headers = {
+            "X-Tenant-ID": ctx.tenant_id,
+            "X-Member-ID": ctx.user_id,
+            "Authorization": f"Bearer {settings.token}",
+        }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         try:
