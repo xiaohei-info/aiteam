@@ -22,6 +22,6 @@ export {
   IsolationLevel,
 } from "./enums.js";
 
-export type { BusinessTimelineEvent, TimelineCursor } from "./events.js";
+export type { ConversationEntries, PiEntry, PiEvent, PiEventEnvelope } from "./events.js";
 
 export type { TokenClaims, UserPrincipal, AuthSession } from "./auth.js";

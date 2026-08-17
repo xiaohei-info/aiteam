@@ -224,7 +224,7 @@ class KnowledgeSpaceBindingCreate(BaseModel):
 
     knowledge_space_id: str
     resource_type: Literal["expert", "department", "member"] = Field(
-        description="expert 真相态走 employee.knowledge_refs；department/member 走 knowledge_space_binding 表"
+        description="expert 真相态走 employee_knowledge_binding；department/member 走 knowledge_space_binding 表"
     )
     resource_id: str
 
@@ -766,109 +766,6 @@ class EmployeePromptRollbackIn(BaseModel):
     target_version_no: int = Field(description="要回滚到的历史版本号")
     change_reason: str | None = Field(default=None, description="回滚原因（写入历史追溯）")
 
-
-# ---- run_event：运行事件明细（runtime 归一事件脱敏归档）----
-#
-# 红线（D13）：run-event 仅承载脱敏事件元数据（event_type/source/preview/payload），不含会话/
-# prompt/session 内容/工具输入输出明细。preview_text 与 payload_json 由调用方（runtime 归一化器）脱敏。
-
-
-class RunEventIn(BaseModel):
-    """单条 run-event 入参（由 runtime 归一化器脱敏归档，issue #292）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str = Field(description="归属 run（对齐 TeamRun.id）")
-    cursor_no: int = Field(description="run 内单调递增游标（北向分页水位）")
-    event_type: str = Field(description="事件类型：step_start | step_end | tool_call | ...")
-    source_type: str = Field(
-        default="session",
-        description="事件源：session | kanban_task | cron_job | gateway | system",
-    )
-    source_id: str = Field(description="事件源实体 id")
-    team_task_id: str | None = Field(default=None, description="关联 team_task；纯 run 级事件为 null")
-    employee_id: str | None = Field(default=None, description="触发员工；系统事件为 null")
-    event_ts: datetime | None = Field(default=None, description="事件发生时间；空=now()")
-    preview_text: str = Field(default="", description="脱敏预览文本（禁含会话/配置内容）")
-    payload_json: dict = Field(
-        default_factory=dict,
-        description="脱敏事件负载（neutral），禁含会话/prompt/tool IO 明文",
-    )
-
-
-class RunEventOut(BaseModel):
-    """run-event 出参。无会话内容字段（D13）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    event_id: str
-    run_id: str
-    cursor_no: int
-    event_type: str
-    source_type: str
-    source_id: str
-    team_task_id: str | None = None
-    employee_id: str | None = None
-    event_ts: datetime | None = None
-    preview_text: str = ""
-    payload_json: dict = Field(default_factory=dict)
-    created_at: datetime
-
-
-class RunEventListOut(BaseModel):
-    """按 run 的 run-event 分页列表 + 水位。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str
-    items: list[RunEventOut] = Field(default_factory=list)
-    max_cursor: int = 0
-
-
-# ---- usage_ledger：逐 token 计费明细 ----
-#
-# 红线（D13）：ledger 仅承载逐 run 计量数字（tokens/cost_cents/occurred_at），不存会话内容。
-# 按 (tenant_id, run_id, source_type) 幂等回写——F13 重复上报以最新值覆盖（对齐旧 usage_ledger_repo）。
-
-
-class UsageLedgerIn(BaseModel):
-    """单行 usage_ledger 入参（issue #292）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str = Field(description="归属 run；对齐 run_event run_id")
-    employee_id: str = Field(description="归属员工")
-    conversation_id: str | None = Field(default=None, description="归属会话；可空")
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    total_tokens: int = Field(default=0, ge=0)
-    cost_cents: int = Field(default=0, ge=0, description="费用（分）；逐 run 累计")
-    source_type: str = Field(
-        default="run_summary",
-        description="来源：run_summary | usage_event | backfill",
-    )
-    occurred_at: datetime | None = Field(default=None, description="计费发生时间；空=now()")
-    created_by: str | None = Field(default=None, description="上报主体标识（服务/用户 id）")
-
-
-class UsageLedgerOut(BaseModel):
-    """usage_ledger 出参。无会话内容字段（D13）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    ledger_id: str
-    tenant_id: str
-    run_id: str
-    employee_id: str
-    conversation_id: str | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    cost_cents: int = 0
-    source_type: str = "run_summary"
-    occurred_at: datetime | None = None
-    created_at: datetime
-    created_by: str | None = None
 
 
 class InAppNotificationOut(BaseModel):

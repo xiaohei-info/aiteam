@@ -10,8 +10,7 @@ seed_knowledge_space，落点为 manager_control_db 经 apply_migrations 落地�
 - cleanup 在 **tenant 会话内** DELETE：RLS 物理限定，删 A 租户够不到 B 租户——
   "不污染其它 tenant"是数据库强制，不靠应用层 WHERE 兜底。
 
-注：snapshot / usage_outbox 表属 agent_service 迁移（独立 agent DB），不在 manager_control_db；
-其 seed 归 Wave 1 P2-S0 三端装配 harness，本底座不越界伪造（见 PR 描述路径映射）。
+注：用户端本地 SQLite 表不属于 manager_control_db；其 seed 不由本 Manager fixture 越界伪造。
 """
 
 from __future__ import annotations

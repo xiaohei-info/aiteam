@@ -1,15 +1,9 @@
 /**
  * W-A.3 群聊编排 API 适配层（#68 / 06 §7.6 / D19）。
  *
- * 好品味点：**不重造**——会话列表/时间线拉取直接复用 chat/useChatApi 的
- * `listConversations` / `getTimeline` / `createTimelineFetcher`（import 过来用）。
- * 本文件只收口群聊独有的一个端点：POST /group-dispatch（@提及触发多专家、多 run
- * 并入同一时间线）。契约类型来自后端 routes.py:GroupDispatchRequest /
- * group.py:DispatchResult/GroupExpert/Run，按本端 API 边界镜像（shared 未镜像，
- * 与 AgentLoginRequest 同级处理，对齐 server 字段、extra=forbid）。
- *
- * 红线（D6）：DispatchResult.runs 是归一后的 Run（持久终态），不绑 runtime-native
- * event；时间线渲染只消费 BusinessTimelineEvent（TimelineView 已保证）。
+ * 本文件只收口群聊独有的一个端点：POST /group-dispatch（@提及触发多专家协作）。
+ * 契约类型按本端 API 边界镜像（shared 未镜像，与 AgentLoginRequest 同级处理）。
+ * 群聊展示由 TimelineView 直接消费 Agent 事件流。
  * 红线（D3）：AgentApiClient 基类已拦截跨端直调，本文件无需重复校验。
  */
 

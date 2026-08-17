@@ -1,4 +1,4 @@
-"""三端 OpenAPI route contract matrix（L1）。
+"""控制面 OpenAPI route contract matrix（L1）。
 
 目标：每个 `/api/<tier>/*` 北向 route 都必须由真实 FastAPI app 装配出来，且 HTTP
 响应不能被 SPA fallback 或静态资源层吞成 text/html。
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from run import get_app
 
-TIERS = ("operation", "manager", "agent")
+TIERS = ("operation", "manager")
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 PLACEHOLDER_VALUES = {
     "catalog_type": "experts",

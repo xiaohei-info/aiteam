@@ -1,61 +1,30 @@
-# 用户端构建产物（D15 / 09 §14.2）—— **硬隔离线**。
-#
-# 按端精简：只装 server/{agent_service,agent_gateway,shared} + server/run.py + server/requirements.txt，
-#           前端只装 web/agent 构建产物。
-#
-# 🔴 D15 红线（隐私 + 最小攻击面）：用户端交付物**绝不打包**运营端/企业端的**后端代码与前端界面**。
-#    因此 COPY 指令严格限定，绝不出现：
-#      - server/operation_service / server/manager_service（控制面后端）
-#      - web/operation / web/manager（控制面前端）
-#    agent_gateway 是用户端内随附组件（CLAUDE §4），随本端产物分发。
+# 用户端 Agent 独立 Node 产物（D15）：不打包 Python 控制面或旧 Agent 实现。
 
-# ---------------------------------------------------------------------------
-# Stage 1: 前端构建（node 构建 web/agent + web/shared → dist）
-# ---------------------------------------------------------------------------
 FROM node:22-alpine AS web-builder
 WORKDIR /build
 
 COPY web/package.json web/pnpm-workspace.yaml web/pnpm-lock.yaml web/tsconfig.base.json ./
 COPY web/shared/package.json shared/
 COPY web/agent/package.json agent/
-
 RUN corepack enable && corepack prepare pnpm@11.4.0 --activate \
     && pnpm install --frozen-lockfile --filter @aiteam/agent... --filter @aiteam/shared
-
-# 仅 COPY 本端 + 共享源码（绝不 COPY web/operation 或 web/manager 进构建上下文）。
 COPY web/shared/ shared/
 COPY web/agent/ agent/
-
 RUN pnpm --filter @aiteam/shared build && pnpm --filter @aiteam/agent build
 
-# ---------------------------------------------------------------------------
-# Stage 2: 后端运行时（python slim）
-# ---------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM node:22-alpine AS runtime
+WORKDIR /app/server/agent_service
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
-
-WORKDIR /app
-
-COPY server/requirements.txt /app/server/requirements.txt
-ARG PIP_INDEX_URL=https://pypi.org/simple
-RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r /app/server/requirements.txt
-
-# 🔴 仅 COPY 本端后端代码 + shared + agent_gateway（用户端随附组件）+ 统一启动器。
-#    严格限定：绝不 COPY server/operation_service、server/manager_service。
-COPY server/run.py /app/server/run.py
-COPY server/shared/ /app/server/shared/
-COPY server/agent_service/ /app/server/agent_service/
-COPY server/agent_gateway/ /app/server/agent_gateway/
-
+COPY server/agent_service/package.json server/agent_service/pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.4.0 --activate \
+    && pnpm install --frozen-lockfile --prod=false
+COPY server/agent_service/src/ ./src/
 COPY --from=web-builder /build/agent/dist /app/web/agent/dist
 
-ENV PYTHONPATH=/app/server \
-    APP_TIER=agent
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    AITEAM_AGENT_DATA_DIR=/app/data
 
 EXPOSE 8000
-
-ENTRYPOINT ["python", "server/run.py", "--tier=agent", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["pnpm", "start"]

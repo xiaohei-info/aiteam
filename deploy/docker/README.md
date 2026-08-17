@@ -14,39 +14,34 @@ AI Team v1 是「云侧双控制面 + 用户本地数据面」架构，三端是
 |----|----------|------|-------------|----------|----------|
 | 运营端 Operation | 平台方部署 | `Dockerfile.operation` | 8001 | `server/operation_service` + `shared` | `web/operation` |
 | 企业端 Manager | 平台托管多租户 SaaS | `Dockerfile.manager` | 8002 | `server/manager_service` + `shared` | `web/manager` |
-| 用户端 Agent | 每用户本机自部署 | `Dockerfile.agent` | 8003 | `server/agent_service` + `agent_gateway` + `shared` | `web/agent` |
+| 用户端 Agent | 每用户本机自部署 | `Dockerfile.agent` | 8003 | Node `server/agent_service` | `web/agent` |
 
 通信面（05 §5.5 窄通信面）：
 - Operator ↔ Manager：云侧服务间调用（`MANAGER_URL` / `OPERATOR_URL`）。
 - Agent → Manager：用户端主动访问（`MANAGER_URL`）；**Operator/Manager 绝不向用户机器入站**。
-- Agent 本地库 + 本地执行：会话/Run/Task/Loop 全在用户本机，**不上传控制面**。
+- Agent 本地库 + 本地执行：会话与 Pi Session 全在用户本机，**不上传控制面**。
 
 ---
 
 ## 2. 按端精简产物（D15 红线）
 
-源码单仓共享，但**交付物按端精简**（09 §14.2）—— CI 按端产出**三个独立镜像**，各镜像只含本端代码：
+源码单仓共享，但**交付物按端精简**（09 §14.2）—— CI 按端产出独立镜像，各镜像只含本端代码：
 
 - `Dockerfile.operation`：只 COPY `server/{operation_service,shared}` + `server/run.py` + `web/operation` 构建产物。
 - `Dockerfile.manager`：只 COPY `server/{manager_service,shared}` + `server/run.py` + `web/manager` 构建产物。
-- `Dockerfile.agent`：只 COPY `server/{agent_service,agent_gateway,shared}` + `server/run.py` + `web/agent` 构建产物。
+- `Dockerfile.agent`：只 COPY Node `server/agent_service` + `web/agent` 构建产物。
 
 **硬隔离线**：用户端交付物（`Dockerfile.agent`）**绝不打包**：
-- 控制面后端：`server/operation_service`、`server/manager_service`
+- 控制面后端：`server/operation_service`、`server/manager_service`，以及任何 Python Agent/Gateway 代码
 - 控制面前端：`web/operation`、`web/manager`
 
 理由（隐私 + 最小攻击面）：用户端镜像只会被装到最终用户机器上，不得让控制面 UI 或控制面业务代码随之下发。
 
-**禁止运行时胖产物**：不做"一个含三端全部代码的镜像在运行时 `APP_TIER` 切端"（09 §14.2）。`server/run.py --tier=...` 只用于 dev 便利与按端构建入口选择，不等于把三端代码塞进同一交付物。
+**禁止运行时胖产物**：不做"一个含三端全部代码的镜像在运行时切端"（09 §14.2）。`server/run.py --tier=...` 只用于控制面 dev 便利；Node Agent 由自身包独立启动。
 
 ### 构建产物隔离闸门
 
-两层互补（`server/tests/integration/test_verification_matrix.py`）：
-
-| 层 | 测试 | 验什么 |
-|----|------|--------|
-| 源码层 | `test_source_level_tier_isolation` | AST 扫 import 图，钉死跨端 import 不存在（已转正） |
-| 产物层 | `test_user_client_build_excludes_control_plane` | 静态解析 `Dockerfile.<tier>` 的 COPY 指令，钉死用户端产物 COPY 不含控制面路径（本次转正） |
+用户端镜像由 `Dockerfile.agent` 显式 COPY Node Agent 与 Agent 前端；不复制 Python `server/` 控制面代码，构建即形成产物隔离。
 
 ---
 
@@ -109,11 +104,11 @@ docker run --rm aiteam-agent:dev sh -c \
   'ls /app/server && echo --- && ls /app/web'
 
 # 预期输出：
-#   agent_service  agent_gateway  shared
+#   agent_service
 #   ---
 #   agent
 # 
-# ✓ 应只见 agent_service、agent_gateway、shared（无 operation_service、manager_service）
+# ✓ 应只见 agent_service（无 Python operation_service、manager_service、agent_gateway）
 # ✓ web 目录应只见 agent（无 operation、manager）
 ```
 
@@ -123,7 +118,7 @@ docker run --rm aiteam-agent:dev sh -c \
 
 | 变量 | 用于 | 示例 |
 |------|------|------|
-| `APP_TIER` | 统一启动器选择本端（已由 Dockerfile ENTRYPOINT 固定） | `operation` / `manager` / `agent` |
+| `AITEAM_AGENT_DATA_DIR` | Node Agent 本地数据目录 | `/app/data` |
 | `DB_URL` | 业务连接串（受约束 `app_rw` 角色 + RLS） | `postgresql://...` |
 | `ADMIN_DB_URL` | 管理连接串（超管/DDL owner，仅供迁移/DDL） | `postgresql://...` |
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
@@ -141,7 +136,7 @@ deploy/
 ├── docker/
 │   ├── Dockerfile.operation   # 运营端产物（只含 operation_service + shared + web/operation）
 │   ├── Dockerfile.manager     # 企业端产物（只含 manager_service + shared + web/manager）
-│   ├── Dockerfile.agent       # 用户端产物（只含 agent_service + agent_gateway + shared + web/agent）
+│   ├── Dockerfile.agent       # 用户端 Node 产物（只含 agent_service + web/agent）
 │   ├── docker-compose.yml     # 单机模拟三端 + postgres
 │   ├── docker-utils.sh        # Docker 构建与清理工具（build/clean）
 │   └── README.md              # 本文件

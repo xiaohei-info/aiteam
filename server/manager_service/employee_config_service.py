@@ -40,11 +40,13 @@ class EmployeeConfigService:
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
             thinking_level=body.model_policy.thinking_level,
-            runtime_binding=body.runtime_policy.runtime_binding,
+            # Runtime selection belongs to Agent Gateway, never Manager state.
+            runtime_binding=None,
             timeout_seconds=body.runtime_policy.timeout_seconds,
             tools=body.tools,
             skills=body.skills,
-            knowledge_refs=body.knowledge_refs,
+            # employee_knowledge_binding is the sole authorization source of truth.
+            knowledge_refs=[],
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
         )
@@ -66,11 +68,13 @@ class EmployeeConfigService:
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
             thinking_level=body.model_policy.thinking_level,
-            runtime_binding=body.runtime_policy.runtime_binding,
+            # Runtime selection belongs to Agent Gateway, never Manager state.
+            runtime_binding=None,
             timeout_seconds=body.runtime_policy.timeout_seconds,
             tools=body.tools,
             skills=body.skills,
-            knowledge_refs=body.knowledge_refs,
+            # employee_knowledge_binding is the sole authorization source of truth.
+            knowledge_refs=[],
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
         )
@@ -139,10 +143,10 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         display_name=row.display_name,
         persona=row.persona,
         model_policy=ModelPolicy(model=row.model, provider_ref=row.provider_ref, thinking_level=row.thinking_level),
-        runtime_policy=RuntimePolicy(runtime_binding=row.runtime_binding, timeout_seconds=row.timeout_seconds),
+        runtime_policy=RuntimePolicy(timeout_seconds=row.timeout_seconds),
         tools=row.tools,
         skills=row.skills,
-        knowledge_refs=row.knowledge_refs,
+        knowledge_refs=[],
         connector_refs=row.connector_refs,
         memory_policy=row.memory_policy,
         version=row.version,

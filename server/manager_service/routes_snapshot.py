@@ -21,6 +21,7 @@ from shared.errors import AppError, Forbidden
 
 from .employee_config_service import build_employee_config_service
 from .enterprise_audit_repository import build_enterprise_audit_repository
+from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .member_service import GrantService, MemberDeptService
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import SnapshotService, build_snapshot_service
@@ -50,6 +51,7 @@ def _service(request: Request) -> SnapshotService:
             grant_service=GrantService(repo=grant_repo, members=member_repo),
             member_service=MemberDeptService(repo=member_repo),
             audit_recorder=build_enterprise_audit_repository(router),
+            knowledge_binding=EmployeeKnowledgeBindingRepository(router),
         )
         request.app.state._snapshot_service = cache
     return cache

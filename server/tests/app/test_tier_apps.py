@@ -4,10 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from run import get_app
-from shared.auth import DevTokenService
-from shared.contracts.auth import TokenClaims
-
-TIERS = ["operation", "manager", "agent"]
+TIERS = ["operation", "manager"]
 
 
 @pytest.fixture(params=TIERS)
@@ -58,18 +55,6 @@ def test_protected_endpoint_401_problem_json(client, tier):
     body = r.json()
     assert body["code"] == "unauthorized"
     assert body["status"] == 401
-
-
-def test_protected_endpoint_200_with_dev_token(client, tier):
-    """骨架期验签口径迁移完成：三端已全切 RS256（operation 缺口2、agent 批次C、manager 批次D）。
-    whoami 200 由各端专门测试覆盖；此参数化测试只保留 401（无 token）语义。"""
-    pytest.skip(f"{tier} 已切 RS256，whoami 200 见各端专门测试")
-    token = DevTokenService().sign(
-        TokenClaims(user_id="u1", tenant_id="t1", roles=["member"], exp=9999999999)
-    )
-    r = client.get(f"/api/{tier}/whoami", headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200
-    assert r.json()["data"]["user_id"] == "u1"
 
 
 def test_operation_whoami_with_system_token():

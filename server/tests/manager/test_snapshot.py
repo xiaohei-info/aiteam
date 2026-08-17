@@ -291,11 +291,11 @@ def test_generate_maps_all_fields():
     assert snap.model_policy.model == "claude-opus-4-8"
     assert snap.model_policy.provider_ref == "relay-default"
     assert snap.model_policy.thinking_level == "high"
-    assert snap.runtime_policy.runtime_binding == "hermes_acp"
+    assert snap.runtime_policy.runtime_binding is None
     assert snap.runtime_policy.timeout_seconds == 120
     assert snap.tools == ["search"]
     assert snap.skills == ["code-review"]
-    assert snap.knowledge_refs == ["ks_default"]
+    assert snap.knowledge_refs == []  # relation binding is the sole snapshot source
     assert snap.connector_refs == ["slack"]
     assert snap.memory_policy == {"seed": "记住用户偏好"}
     assert snap.snapshot_version  # 非空

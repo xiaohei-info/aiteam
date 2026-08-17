@@ -3,7 +3,7 @@
  *
  * 本地优先：数据全部来自本地 Loop 仓储，不依赖远端推送。
  * 展示态不落库——仅渲染 Loop 主状态（status / next_run_at / fire_count），
- * run 终态走 RunsPanel / timeline。
+ * 执行状态由 Agent 事件流呈现。
  */
 
 import { Badge } from "@astryxdesign/core/Badge";

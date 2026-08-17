@@ -19,6 +19,20 @@ export interface PiEventEnvelope {
   event: AgentSessionEvent;
 }
 
+export class EventCursorStaleError extends Error {
+  constructor(readonly requested: number, readonly firstAvailable: number) {
+    super(`Event cursor ${requested} is no longer available; first available cursor is ${firstAvailable}`);
+    this.name = "EventCursorStaleError";
+  }
+}
+
+export class InvalidEventCursorError extends Error {
+  constructor() {
+    super("Event cursor must be a non-negative integer");
+    this.name = "InvalidEventCursorError";
+  }
+}
+
 export interface SessionHostOptions {
   cwdRoot: string;
   agentDir: string;
@@ -30,6 +44,12 @@ export interface SessionHostOptions {
   customTools?: ToolDefinition[];
 }
 
+interface Subscriber {
+  listener: (envelope: PiEventEnvelope) => void;
+  replaying: boolean;
+  queued: PiEventEnvelope[];
+}
+
 interface SessionRecord {
   conversationId: string;
   workspace: string;
@@ -38,9 +58,7 @@ interface SessionRecord {
   sessionReady?: Promise<AgentSession>;
   unsubscribe?: () => void;
   prompting: boolean;
-  sequence: number;
-  history: PiEventEnvelope[];
-  listeners: Set<(envelope: PiEventEnvelope) => void>;
+  listeners: Set<Subscriber>;
 }
 
 export class ConversationBusyError extends Error {
@@ -64,14 +82,31 @@ export class SessionHost {
     after?: string,
   ): Promise<() => void> {
     const record = await this.ensureRecord(conversationId);
-    record.listeners.add(listener);
+    const subscriber: Subscriber = { listener, replaying: true, queued: [] };
+    record.listeners.add(subscriber);
+    try {
+      const cursor = this.parseCursor(after);
+      const bounds = this.options.store.getEventBounds(conversationId);
+      if (cursor !== undefined && bounds.first !== undefined && cursor < bounds.first - 1) {
+        throw new EventCursorStaleError(cursor, bounds.first);
+      }
 
-    const replay = record.history.length > 0 ? record.history : this.entriesAsEvents(record);
-    for (const envelope of replay) {
-      if (!after || this.isAfter(envelope.id, after, replay)) listener(envelope);
+      let events = this.options.store.getEvents(conversationId, cursor);
+      if (events.length === 0 && cursor === undefined) {
+        this.persistExistingEntries(record);
+        events = this.options.store.getEvents(conversationId);
+      }
+      for (const persisted of events) {
+        listener({ id: String(persisted.cursor), event: JSON.parse(persisted.event) as AgentSessionEvent });
+      }
+      subscriber.replaying = false;
+      for (const envelope of subscriber.queued.splice(0)) listener(envelope);
+    } catch (error) {
+      record.listeners.delete(subscriber);
+      throw error;
     }
 
-    return () => record.listeners.delete(listener);
+    return () => record.listeners.delete(subscriber);
   }
 
   async prompt(conversationId: string, text: string, images?: ImageContent[]): Promise<string | undefined> {
@@ -83,6 +118,7 @@ export class SessionHost {
       record.sessionReady = this.ensureSession(record);
       const session = await record.sessionReady;
       await session.prompt(text, images ? { images } : undefined);
+      this.publishNewEntries(record);
       return record.sessionManager.getLeafId() ?? undefined;
     } finally {
       record.sessionReady = undefined;
@@ -110,9 +146,7 @@ export class SessionHost {
   }
 
   async dispose(): Promise<void> {
-    for (const record of this.records.values()) {
-      this.disposeSession(record);
-    }
+    for (const record of this.records.values()) this.disposeSession(record);
     this.records.clear();
   }
 
@@ -140,8 +174,6 @@ export class SessionHost {
       workspace,
       sessionManager,
       prompting: false,
-      sequence: 0,
-      history: [],
       listeners: new Set(),
     };
     this.records.set(conversationId, record);
@@ -150,7 +182,6 @@ export class SessionHost {
 
   private async ensureSession(record: SessionRecord): Promise<AgentSession> {
     if (record.session) return record.session;
-
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId);
     await resourceLoader.reload();
     const result = await createAgentSession({
@@ -181,28 +212,45 @@ export class SessionHost {
   }
 
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
-    const envelope: PiEventEnvelope = { id: `${++record.sequence}`, event };
-    record.history.push(envelope);
-    if (record.history.length > 512) record.history.shift();
-    for (const listener of record.listeners) listener(envelope);
-  }
-
-  private entriesAsEvents(record: SessionRecord): PiEventEnvelope[] {
-    return record.sessionManager.getEntries().map((entry) => ({
-      id: `entry-${entry.id}`,
-      event: { type: "entry_appended", entry },
-    }));
-  }
-
-  private isAfter(id: string, after: string, replay: PiEventEnvelope[]): boolean {
-    if (id === after) return false;
-    if (after.startsWith("entry-")) {
-      const afterIndex = replay.findIndex((item) => item.id === after);
-      const currentIndex = replay.findIndex((item) => item.id === id);
-      return afterIndex < 0 || currentIndex > afterIndex;
+    const envelope: PiEventEnvelope = {
+      id: String(this.options.store.appendEvent(record.conversationId, event)),
+      event,
+    };
+    for (const subscriber of record.listeners) {
+      if (subscriber.replaying) subscriber.queued.push(envelope);
+      else subscriber.listener(envelope);
     }
-    const afterNumber = Number(after);
-    return !Number.isFinite(afterNumber) || Number(id) > afterNumber;
+  }
+
+  private persistExistingEntries(record: SessionRecord): void {
+    for (const entry of record.sessionManager.getEntries()) {
+      this.options.store.appendEvent(record.conversationId, { type: "entry_appended", entry });
+    }
+  }
+
+  private publishNewEntries(record: SessionRecord): void {
+    const known = new Set(
+      this.options.store.getEvents(record.conversationId).flatMap((item) => {
+        try {
+          const event = JSON.parse(item.event) as { type?: string; entry?: { id?: string } };
+          return event.type === "entry_appended" && event.entry?.id ? [event.entry.id] : [];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    for (const entry of record.sessionManager.getEntries()) {
+      if (known.has(entry.id)) continue;
+      this.publish(record, { type: "entry_appended", entry });
+    }
+  }
+
+  private parseCursor(after?: string): number | undefined {
+    if (after === undefined || after === "") return undefined;
+    if (!/^\d+$/.test(after)) throw new InvalidEventCursorError();
+    const cursor = Number(after);
+    if (!Number.isSafeInteger(cursor)) throw new InvalidEventCursorError();
+    return cursor;
   }
 
   private safeDirectoryName(conversationId: string): string {

@@ -1,99 +1,114 @@
-/**
- * W-A.2 时间线视图（右侧）—— 渲染 BusinessTimelineEvent 流（08 §12.2 / D6）。
- *
- * 复用 @aiteam/shared 的 TimelineStore（cursor 单调升序 + 去重 + loadOlder 翻旧页），
- * history fetcher 由 useChatApi.createTimelineFetcher 适配本端 AgentApiClient。
- *
- * 红线（D6）：**只消费 BusinessTimelineEvent**，绝不绑 runtime-native event。
- * 本组件不解析 payload 形状（各 type 由后端定稿），仅按 type + created_at 渲染骨架。
- */
-
-import { useEffect, useMemo, useState } from "react";
-import type { BusinessTimelineEvent } from "@aiteam/shared/contracts";
-import { TimelineStore } from "@aiteam/shared/timeline-client";
+/** Conversation view backed by persisted Pi entries and the live Pi SSE stream. */
+import { useEffect, useState, type ReactNode } from "react";
+import type { PiEntry, PiEvent } from "@aiteam/shared/contracts";
 import {
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-
 import type { AgentApiClient } from "../../lib/api-client";
-import { createTimelineFetcher } from "./useChatApi";
+import { getEntries, subscribePiEvents } from "./useChatApi";
 
 export interface TimelineViewProps {
   client: AgentApiClient;
   conversationId: string;
-  /** 新消息发送后 +1 触发 catchUp 补洞（重拉 since highWater 的新事件）。 */
   refreshSignal?: number;
 }
 
 export function TimelineView({ client, conversationId, refreshSignal = 0 }: TimelineViewProps) {
-  const store = useMemo(
-    () => new TimelineStore({ conversationId, history: createTimelineFetcher(client) }),
-    [client, conversationId],
-  );
-
-  const [events, setEvents] = useState<readonly BusinessTimelineEvent[]>(() => store.snapshot);
-  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [entries, setEntries] = useState<PiEntry[]>([]);
+  const [events, setEvents] = useState<Array<{ id: string; event: PiEvent }>>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = store.onChange((next) => setEvents([...next]));
-    // 初始：从最新一页向后回填（after=null 取全量；TimelineStore 的 catchUp 走 afterCursor=highWater）。
-    void store.catchUp();
+    let alive = true;
+    setEntries([]);
+    setEvents([]);
+    setError(null);
+    const subscription = subscribePiEvents(
+      client,
+      conversationId,
+      (next) => {
+        if (alive) setEvents((current) => current.some((item) => item.id === next.id) ? current : [...current, next]);
+      },
+      (cause) => {
+        if (alive) setError(cause instanceof Error ? cause.message : "事件流连接失败");
+      },
+    );
+    void getEntries(client, conversationId)
+      .then((next) => {
+        if (alive) setEntries(next);
+      })
+      .catch((cause: unknown) => {
+        if (alive) setError(cause instanceof Error ? cause.message : "加载会话失败");
+      });
     return () => {
-      unsub();
-      store.stop();
+      alive = false;
+      subscription.close();
     };
-  }, [store]);
+  }, [client, conversationId]);
 
-  // 发消息后触发 catchUp：补拉 since highWater 的新事件。
   useEffect(() => {
     if (refreshSignal === 0) return;
-    void store.catchUp();
-  }, [refreshSignal, store]);
+    void getEntries(client, conversationId).then(setEntries).catch(() => undefined);
+  }, [client, conversationId, refreshSignal]);
 
-  const handleLoadOlder = async (): Promise<void> => {
-    if (loadingOlder || !store.canLoadMore) return;
-    setLoadingOlder(true);
-    try {
-      await store.loadOlder();
-    } finally {
-      setLoadingOlder(false);
-    }
-  };
-
+  const hasContent = entries.length > 0 || events.length > 0;
   return (
     <ChatMessageList
-      ref={(node) => {
-        node?.setAttribute("aria-label", "对话时间线");
-      }}
-      aria-label="对话时间线"
-      data-testid="conversation-timeline"
-      emptyState={<EmptyState title="暂无事件" isCompact />}
-      scrollToTopAction={store.canLoadMore ? handleLoadOlder : undefined}
+      ref={(node) => node?.setAttribute("aria-label", "对话事件流")}
+      aria-label="对话事件流"
+      data-testid="conversation-events"
+      emptyState={<EmptyState title={error ?? "暂无事件"} isCompact />}
     >
-      {events.map((event) => (
-        <ChatMessage key={event.cursor} sender="assistant" name={event.type}>
-          <ChatMessageBubble
-            metadata={event.created_at}
-            variant="ghost"
-          >
-            {renderPayload(event)}
+      {entries.map((entry) => (
+        <ChatMessage key={`entry-${entry.id}`} sender={entryRole(entry)} name={entry.type}>
+          <ChatMessageBubble metadata="" variant="ghost">
+            {renderEntry(entry)}
           </ChatMessageBubble>
         </ChatMessage>
       ))}
+      {events.map(({ id, event }) => (
+        <ChatMessage key={`event-${id}`} sender="assistant" name={event.type}>
+          <ChatMessageBubble metadata="实时" variant="ghost">
+            {renderEvent(event)}
+          </ChatMessageBubble>
+        </ChatMessage>
+      ))}
+      {!hasContent && error ? <span role="alert">{error}</span> : null}
     </ChatMessageList>
   );
 }
 
-/**
- * payload 渲染：最小必要——text/answer/answer_delta 等常见 type 取 text 字段，其余打印 JSON。
- * 具体 payload 形状由各端 OpenAPI 定稿（BusinessTimelineEvent 是最小稳定骨架）。
- */
-function renderPayload(event: BusinessTimelineEvent): React.ReactNode {
-  const text = typeof event.payload.text === "string" ? event.payload.text : null;
-  if (text) return text;
-  if (event.payload.content && typeof event.payload.content === "string") return event.payload.content;
-  return JSON.stringify(event.payload);
+function entryRole(entry: PiEntry): "user" | "assistant" {
+  const message = asRecord(entry.message);
+  return message?.role === "user" ? "user" : "assistant";
+}
+
+function renderEntry(entry: PiEntry): ReactNode {
+  const message = asRecord(entry.message);
+  return textFrom(message?.content ?? entry.content) ?? JSON.stringify(entry);
+}
+
+function renderEvent(event: PiEvent): ReactNode {
+  return textFrom(event.message ?? event.content ?? event.text) ?? JSON.stringify(event);
+}
+
+function textFrom(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((part) => asRecord(part)?.text)
+      .filter((part): part is string => typeof part === "string")
+      .join("");
+    return text || null;
+  }
+  const record = asRecord(value);
+  if (record && typeof record.text === "string") return record.text;
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
 }

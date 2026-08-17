@@ -5,8 +5,7 @@ name: v1-server-ci
 #   1) 共享契约校验 + 边界约束扫描（旧路径/HERMES_WEBUI_*/旧角色/import app）——无需 PG。
 #   2) 集成测试（真 PostgreSQL + RLS）——堵住「集成测试在无 PG 机器上被 deselect、门是绿的
 #      但集成路径从没真跑过」的假绿漏洞（该漏洞曾让 M3/M5 的 jsonb→text[] 等真 bug 漏到合并后）。
-# 待服务建成后逐步打开：OpenAPI 质量门禁、timeline parity、入户链、分端产物隔离
-# （见 server/tests/integration/test_verification_matrix.py 占位）。
+# Node Agent 的 typecheck/test 由 node-agent job 独立执行；Python jobs 仅覆盖控制面与 shared。
 #
 # 注：仅作用于 v1 新代码 server/；不触碰冻结的 app/（旧单体有自己的测试）。
 
@@ -111,6 +110,28 @@ jobs:
         # 显式 -m integration；迁移在首次连接自动应用（apply_migrations），无需手动建表。
         run: python -m pytest -q -m integration
 
+  node-agent:
+    name: Node Agent typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: pnpm
+          cache-dependency-path: server/agent_service/pnpm-lock.yaml
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install Agent dependencies
+        working-directory: server/agent_service
+        run: pnpm install --frozen-lockfile
+      - name: Check Agent
+        working-directory: server/agent_service
+        run: pnpm check
+      - name: Test Agent
+        working-directory: server/agent_service
+        run: pnpm test
+
   branch-coverage-ratchet:
     name: 分支覆盖棘轮（PR→main 不退化）
     runs-on: ubuntu-latest
@@ -170,8 +191,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-cov diff-cover
           python -m pytest -q \
-            --cov=operation_service --cov=manager_service \
-            --cov=agent_service --cov=agent_gateway --cov=shared \
+            --cov=operation_service --cov=manager_service --cov=shared \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
       # base(main) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
@@ -192,8 +212,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/base-cov"
           pip install -r requirements.txt pytest pytest-cov
           python -m pytest -q \
-            --cov=operation_service --cov=manager_service \
-            --cov=agent_service --cov=agent_gateway --cov=shared \
+            --cov=operation_service --cov=manager_service --cov=shared \
             --cov-branch --cov-report=json:"$GITHUB_WORKSPACE/base-cov/base.json"
 
       - name: 改动分支覆盖门槛（diff-cover ≥90%）

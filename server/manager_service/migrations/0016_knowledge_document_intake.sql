@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_document
 
 -- ========== 3. knowledge_document_binding（employee ↔ document 索引绑定传播） ==========
 -- intake 完成后，向 knowledge_space 已绑员工传播索引绑定（D21 下的 index binding 视图）。
--- 真相态仍归 employee.knowledge_refs / employee_knowledge_binding（D21）；本表为检索侧服务。
+-- 真相态归 employee_knowledge_binding（D21）；本表为检索侧服务。
 CREATE TABLE IF NOT EXISTS knowledge_document_binding (
     id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id                 uuid NOT NULL,

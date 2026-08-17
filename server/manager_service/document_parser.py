@@ -100,7 +100,7 @@ _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
 def html_to_text(html: str) -> str:
-    """去 HTML 标签/注释、归一化空白（零依赖，与 agent_service ingest.html_to_text 同形）。"""
+    """去 HTML 标签/注释、归一化空白（零依赖）。"""
     if not html:
         return ""
     text = _HTML_COMMENT_RE.sub(" ", html)

@@ -1,4 +1,4 @@
-"""SPA fallback guard for three-tier app assembly (L1).
+"""SPA fallback guard for control-plane app assembly (L1).
 
 Unknown `/api/*` paths must keep the backend error contract instead of returning an
 SPA `index.html`, while ordinary frontend routes may still fall back to the SPA.
@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from shared.app_factory import create_app, mount_frontend
 from shared.config import Settings
 
-TIERS = ("operation", "manager", "agent")
+TIERS = ("operation", "manager")
 KNOWN_OPERATION_REGRESSION_PATHS = (
     "/api/operation/catalog",
     "/api/operation/rollups/board",

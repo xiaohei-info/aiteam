@@ -1,6 +1,6 @@
 # AI Team v1 后端（`server/`）
 
-> v1 三端微服务后端：运营端 `operation_service` / 企业端 `manager_service` / 用户端 `agent_service` + 用户端内运行时网关 `agent_gateway` + 横向共享库 `shared`。
+> v1 后端：运营端 `operation_service` / 企业端 `manager_service` / 用户端 Node 包 `agent_service` + 横向共享库 `shared`。
 > 架构口径以 `docs/v1正式版本/技术设计/概要设计/` 为准；通用约束见仓库根 `CLAUDE.md` / `AGENTS.md`。
 >
 > **与 `app/` 的关系**：`app/` 是冻结的 MVP 单体，**只读契约参考**。`server/` 是 v1 全新重建，不读 `app/.env`、不调旧端点、不与 `app/` 互相 import。旧单机部署见 `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md`（那是 `app/` 的，不是本文）。
@@ -68,7 +68,7 @@ pytest -m "not integration"      # 基线：契约 + 边界 + 单元，无外部
 
 ```bash
 cd server
-python run.py --tier=agent        # 或 operation / manager
+python run.py --tier=manager        # 或 operation；用户端用 `pnpm --dir agent_service start`
 ```
 
 每端暴露 `/healthz` `/readyz` `/docs` `/redoc` `/openapi.json`。
@@ -79,12 +79,11 @@ python run.py --tier=agent        # 或 operation / manager
 
 ```text
 server/
-├── run.py                  # 统一启动器：--tier=operation|manager|agent
+├── run.py                  # 控制面启动器：--tier=operation|manager
 ├── shared/                 # 横向共享库：contracts/（代码契约）auth db errors observability service_client ...
 ├── operation_service/      # 运营端（企业开通 / 目录 / 跨企业汇总）
 ├── manager_service/        # 企业端（多租户底座 / 认证 / 业务配置）
-├── agent_service/          # 用户端（本地会话主链 / 群聊 / loop）
-├── agent_gateway/          # 用户端内运行时接入网关（Executor + Driver + fake_runtime）
+├── agent_service/          # 用户端 Node Agent（Pi Session / SQLite）
 ├── tests/                  # contracts / boundary / shared / 各端 / integration
 ├── conftest.py             # 把 server/ 加入 sys.path，使 `import shared...` 可用
 └── requirements.txt        # 运行期最小依赖（不含测试工具）

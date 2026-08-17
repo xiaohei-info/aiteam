@@ -30,7 +30,7 @@ def _ranking_row(emp_id="33333333-3333-3333-3333-333333333333", tokens=3000, cos
 
 def _record_row(rid="r-1", emp_id="33333333-3333-3333-3333-333333333333",
                 name="Alice", date=None, it=100, ot=200, cost=Decimal("0.50")):
-    return (rid, emp_id, name, date or datetime(2026, 6, 15, tzinfo=timezone.utc), it, ot, cost)
+    return (rid, emp_id, date or datetime(2026, 6, 15, tzinfo=timezone.utc), ot, cost)
 
 
 # ---- _period_to_window ----
@@ -118,8 +118,8 @@ def test_list_usage_records_returns_rows():
     rows = BillingRepository(router).list_usage_records(ctx(), period="all")
     assert len(rows) == 2
     assert rows[0]["record_id"] == "r-1"
-    assert rows[0]["employee_name"] == "Alice"
-    assert rows[0]["input_tokens"] == 100
+    assert rows[0]["employee_name"] == "33333333-3333-3333-3333-333333333333"
+    assert rows[0]["input_tokens"] == 0
     assert rows[0]["output_tokens"] == 200
     assert rows[0]["cost"] == Decimal("0.50")
     assert rows[0]["date"].startswith("2026-06-15")
@@ -148,8 +148,8 @@ def test_list_usage_records_with_period_window():
     router.queue(FakeCursor(fetchall=[]))
     BillingRepository(router).list_usage_records(ctx(), period="last_month")
     sql = router.last_sql
-    assert "occurred_at >=" in sql
-    assert "occurred_at <" in sql
+    assert "window_start >=" in sql
+    assert "window_end <=" in sql
 
 
 def test_list_usage_records_all_no_period_clause():

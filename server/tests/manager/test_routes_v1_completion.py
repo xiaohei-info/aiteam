@@ -125,30 +125,6 @@ def test_settings_patch_ok():
         r = c.patch("/api/manager/settings", json={"enterprise_name": "NewName"}, headers=_hdr())
     assert r.status_code == 200
 
-# ---- memory routes ----
-
-def test_memory_list_ok():
-    from manager_service.routes_memory_items import build_memory_items_router
-    svc = MagicMock()
-    svc.list_memories.return_value = [{"memory_id": "m-1", "employee_id": "e-1", "content": "test",
-                                        "category": "preference", "importance": 3, "source": "manual",
-                                        "created_at": datetime.utcnow(), "last_used_at": None}]
-    with patch("manager_service.routes_memory_items._service", return_value=svc):
-        c = _build_app("postgresql://x", build_memory_items_router)
-        r = c.get("/api/manager/memories", headers=_hdr())
-    assert r.status_code == 200
-
-def test_memory_create_ok():
-    from manager_service.routes_memory_items import build_memory_items_router
-    svc = MagicMock()
-    svc.create_memory.return_value = {"memory_id": "m-1", "employee_id": "e-1", "content": "hello",
-                                       "category": "preference", "importance": 3, "source": "manual",
-                                       "created_at": datetime.utcnow(), "last_used_at": None}
-    with patch("manager_service.routes_memory_items._service", return_value=svc):
-        c = _build_app("postgresql://x", build_memory_items_router)
-        r = c.post("/api/manager/memories", json={"employee_id": "e-1", "content": "hello"}, headers=_hdr())
-    assert r.status_code == 200
-
 # ---- connector ops routes ----
 
 def test_connector_presets_ok():
@@ -201,7 +177,6 @@ def test_audit_events_list_ok():
     ("routes_billing", "/api/manager/billing/balance", "GET"),
     ("routes_llm", "/api/manager/llm/providers", "GET"),
     ("routes_settings", "/api/manager/settings", "GET"),
-    ("routes_memory_items", "/api/manager/memories", "GET"),
     ("routes_org", "/api/manager/org/tree", "GET"),
 ])
 def test_no_db_503(builder, path, method):
@@ -338,28 +313,6 @@ def test_llm_provider_delete_404():
         c = _build_app("postgresql://x", build_llm_router)
         r = c.delete("/api/manager/llm/providers/p-1", headers=_hdr())
     assert r.status_code == 404
-
-# ---- memory routes 补充 ----
-
-def test_memory_update_ok():
-    from manager_service.routes_memory_items import build_memory_items_router
-    svc = MagicMock()
-    svc.patch_memory.return_value = {"memory_id": "m-1", "employee_id": "e-1", "content": "updated",
-                                      "category": "preference", "importance": 5, "source": "manual",
-                                      "created_at": datetime.utcnow(), "last_used_at": None}
-    with patch("manager_service.routes_memory_items._service", return_value=svc):
-        c = _build_app("postgresql://x", build_memory_items_router)
-        r = c.patch("/api/manager/memories/m-1", json={"content": "updated"}, headers=_hdr())
-    assert r.status_code == 200
-
-def test_memory_delete_ok():
-    from manager_service.routes_memory_items import build_memory_items_router
-    svc = MagicMock()
-    svc.delete_memory.return_value = None
-    with patch("manager_service.routes_memory_items._service", return_value=svc):
-        c = _build_app("postgresql://x", build_memory_items_router)
-        r = c.delete("/api/manager/memories/m-1", headers=_hdr())
-    assert r.status_code == 204
 
 # ---- org routes 补充 ----
 

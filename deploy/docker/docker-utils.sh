@@ -70,7 +70,7 @@ cmd_build() {
                     log ""
                     log "验证用户端产物隔离（D15 红线）："
                     log "  docker run --rm aiteam-agent:dev sh -c 'ls /app/server && echo --- && ls /app/web'"
-                    log "  应只见: agent_service agent_gateway shared | agent"
+                    log "  应只见: agent_service | agent"
                 fi
                 ;;
             *)

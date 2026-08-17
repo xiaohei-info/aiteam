@@ -47,7 +47,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ```
 运营端 Operator ⇄ service call ⇄ 企业端 Manager ◀──active access── 用户端 Agent
  (oper 库)                         (manager_control_db + tenant data space)   (agent 库, 本地)
-                                                    └─ Agent Gateway ─ Executor ─ Driver ─ runtime
+                                                    └─ Node Agent ─ Pi Session ─ local runtime
 ```
 
 **三端 + 用户端内组件职责划分：**
@@ -57,7 +57,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 | **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站 |
 | **企业端 Manager Service** | tenant 隔离 / 成员账号·认证 / 专家·方案配置 / 成员级授权 / 企业 RAG / 企业治理与计量汇总 | 持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向用户机器入站 |
 | **用户端 Agent Service** | 本地会话/群聊/run/task/loop / 事件流 / pull 装载已授权专家·方案 | 改企业端配置主数据；承担运营治理；直调 runtime CLI；暴露 runtime 原始事件；上传会话明细 |
-| **Agent Gateway（用户端内）** | run 接入、Executor+Driver、事件归一 | 定义业务对象；漂移成第二套业务后台 |
+| **Node Agent（用户端）** | 本地会话、Pi Session、事件流 | 上传会话内容；持控制面业务主数据 |
 | **External Capability（用户端本地接入）** | 知识/技能/连接器/MCP 本地执行 | 内部协作编排语义 |
 
 **主链路**：每端前端 → 本端服务（同 origin）；跨系统只走受控窄通道。禁止前端跨端直调、禁止跨端/跨库直写、禁止 Operator/Manager 向用户机器入站。
@@ -103,7 +103,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 ### 3.7 运行时接入配置（不复用旧 `app/.env`）
 
-runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配置由各 Driver 在用户端自身配置声明。**v1 不读取 `app/.env`、不使用旧 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 已废弃）。机制详见 v1 概要设计 06 §7.3/§7.5。
+runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不读取 `app/.env`、不使用旧 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 已废弃）。
 
 ### 3.8 工程实现规范（业界成熟实践，不沿用旧代码风格）
 
@@ -123,7 +123,7 @@ runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配�
 | 企业端 | `manager_service/` | `manager/` | `/api/manager/*` + `/api/auth/*` |
 | 用户端 | `agent_service/` | `agent/` | `/api/agent/*` + `/api/auth/*` |
 
-- **运行时接入网关**：`server/agent_gateway/`（随 `agent_service` 部署在用户端）
+- **用户端运行时**：Node `server/agent_service` 内置 Pi Session；不再有独立 Python Gateway
 - **Hermes Runtime**：`./.hermes/hermes-agent/`（外部独立仓，禁止写入业务逻辑）
 - **历史命名映射**：旧设计文档中的 `Agent Service` ≈ 用户端 `agent_service`；旧 `Team Panel` 已解散按端重分（配置态→Manager、执行态→Agent、开通/治理→Operation）
 
@@ -201,7 +201,7 @@ runtime（含 Hermes）经 Agent Gateway 的 Executor/Driver 接入，启动配�
 目标态工程结构（单仓，层优先）：
 
 ```
-server/   # 后端 FastAPI：operation_service / manager_service / agent_service / agent_gateway / shared / run.py
+server/   # 后端：FastAPI operation_service / manager_service + Node agent_service + shared / run.py
 web/      # 前端：operation / manager / agent / shared（按端分离）
 deploy/   # docker-compose / Dockerfile / 安装包 / ctl.sh
 app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成后删除
@@ -210,7 +210,7 @@ app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成�
 
 权限角色：企业侧 `owner | enterprise_admin | finance_admin | member`；平台侧 `system_admin | system_operator`（禁用旧 `admin/manager/viewer`）。
 
-**交付物按端精简（D15）**：单仓不拆双仓，后端统一启动器 `server/run.py --tier=operation|manager|agent` 仅供 dev/按端构建入口；CI 按端产出三个精简产物，**用户端交付物绝不打包控制面（Operator/Manager）后端与前端代码**；禁止运行时胖产物 / 前端运行时切端。工程落点理由与目录目标态详见 v1 概要设计 09 §14.1。
+**交付物按端精简（D15）**：单仓不拆双仓，控制面启动器 `server/run.py --tier=operation|manager` 仅供 dev；Node Agent 由 `pnpm --dir server/agent_service start` 独立启动。CI 按端产出精简产物，**用户端交付物绝不打包控制面（Operator/Manager）后端与前端代码**；禁止运行时胖产物 / 前端运行时切端。
 
 **关键契约一律以 v1 概要设计为准，不在此复制**：事件协议/游标与状态枚举（07）、Executor/Driver（06 §7.2/§7.3）、能力适配 RunSpec/MCP（06 §7.5）、数据所有权与租户隔离（04）、认证（03）、北向 API 与错误模型（02）。
 

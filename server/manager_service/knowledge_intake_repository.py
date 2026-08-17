@@ -304,7 +304,7 @@ class KnowledgeDocumentBindingRepository:
     """文档 ↔ 员工索引绑定访问。tenant_id 取自 ctx（D22）。
 
     传播绑定：intake 完成后，向 knowledge_space 已绑员工幂等 upsert knowledge_document_binding。
-    员工绑定真相态走 employee.knowledge_refs / employee_knowledge_binding（D21）；本表为检索侧视图。
+    员工绑定真相态走 employee_knowledge_binding（D21）；本表为检索侧视图。
     """
 
     def __init__(self, router: PgTenantRouter):

@@ -1,7 +1,7 @@
 /**
  * W-A.3 群聊 @提及输入器（#68 / 06 §7.6 / D19）。
  *
- * 与私聊 MessageComposer 的差异：发送时走 POST /group-dispatch（而非 /messages），
+ * 与私聊 MessageComposer 的差异：发送时走 POST /group-dispatch。
  * 请求体携带本会话 roster（后端按 roster 解析 @提及、各起一个 run）。@解析只认 roster
  * 内已知 handle（与后端 mentions.resolve_mentions 口径一致——未知 handle 不触发 run）。
  *

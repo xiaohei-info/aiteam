@@ -6,7 +6,7 @@ ctx 读，SQL 不接受调用方手写 tenant 过滤字符串（D22）；RLS 强
 设计口径（D21）：
 - workspace 只由 ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id) 派生，
   禁前端/Agent 直传；本 repository 不暴露 workspace 写入接口。
-- 专家绑定真相态走 employee.knowledge_refs（M2 字段），本表的 knowledge_space_binding 只落
+- 专家授权真相态走 employee_knowledge_binding，本表的 knowledge_space_binding 只落
   部门/成员绑定元数据（不做检索执行）。
 """
 
@@ -20,7 +20,7 @@ from typing import Any
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 
-# 绑定目标类型（本表承载的部门/成员；专家绑定走 employee.knowledge_refs）。
+# 绑定目标类型（本表承载的部门/成员；专家授权走 employee_knowledge_binding）。
 BINDING_RESOURCE_TYPES = ("department", "member")
 
 
@@ -134,7 +134,7 @@ class KnowledgeSpaceRepository:
 class KnowledgeSpaceBindingRepository:
     """知识空间 → 部门/成员 绑定（knowledge_space_binding 表）。tenant_id 取自 ctx（D22）。
 
-    专家绑定（resource_type=expert）的真相态走 employee.knowledge_refs（见 ExpertKnowledgeBinding），
+    专家绑定（resource_type=expert）的真相态走 employee_knowledge_binding（见 ExpertKnowledgeBinding），
     本表不承载。
     """
 
@@ -213,56 +213,43 @@ class KnowledgeSpaceBindingRepository:
 
 
 class ExpertKnowledgeBinding:
-    """专家 → 知识空间 绑定（真相态 = employee.knowledge_refs，M2 字段）。
+    """Expert knowledge authorization backed solely by employee_knowledge_binding.
 
-    tenant_id 取自 ctx（D22）；RLS 限定 employee 行。绑定 = 把 knowledge_space_id 加进/移出
-    employee.knowledge_refs（jsonb 数组），供 M7 EmployeeExecutionSnapshot 消费（04 §6.3）。
+    Kept as a narrow compatibility port for existing services; it never reads or
+    writes only employee_knowledge_binding.
     """
 
     def __init__(self, router: PgTenantRouter):
         self._router = router
 
     def bind(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str) -> bool:
-        """把 knowledge_space_id 加进 employee.knowledge_refs（幂等）。返回是否命中 employee 行。"""
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT knowledge_refs FROM employee WHERE id = %s", (employee_id,)
+                "INSERT INTO employee_knowledge_binding "
+                "(tenant_id, employee_id, knowledge_space_id, enabled, config) "
+                "VALUES (%s, %s, %s, true, '{}'::jsonb) "
+                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO UPDATE "
+                "SET enabled = true, updated_at = now() RETURNING id",
+                (ctx.tenant_id, employee_id, knowledge_space_id),
             ).fetchone()
-            if row is None:
-                return False
-            refs = list(row[0] or [])
-            if knowledge_space_id not in refs:
-                refs.append(knowledge_space_id)
-            cur = s.execute(
-                "UPDATE employee SET knowledge_refs = %s WHERE id = %s",
-                (json.dumps(refs), employee_id),
-            )
-            return cur.rowcount > 0
+        return row is not None
 
     def unbind(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str) -> bool:
-        """把 knowledge_space_id 从 employee.knowledge_refs 移出（幂等）。"""
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "SELECT knowledge_refs FROM employee WHERE id = %s", (employee_id,)
-            ).fetchone()
-            if row is None:
-                return False
-            refs = [r for r in (row[0] or []) if r != knowledge_space_id]
             cur = s.execute(
-                "UPDATE employee SET knowledge_refs = %s WHERE id = %s",
-                (json.dumps(refs), employee_id),
+                "UPDATE employee_knowledge_binding SET enabled = false, updated_at = now() "
+                "WHERE employee_id = %s AND knowledge_space_id = %s",
+                (employee_id, knowledge_space_id),
             )
-            return cur.rowcount > 0
+        return cur.rowcount > 0
 
     def list_experts_by_space(
         self, ctx: TenantContext, *, knowledge_space_id: str
     ) -> list[str]:
-        """列出本 tenant 内 knowledge_refs 包含某 knowledge_space_id 的 employee_id（RLS 裁剪）。"""
         with self._router.session(ctx) as s:
-            # knowledge_refs 是 jsonb 字符串数组（非 PG text[]），用 jsonb 包含算子 @> 判成员，
-            # 避免非法的 jsonb→text[] 强转（cannot cast type jsonb to text[]）。
             rows = s.execute(
-                "SELECT id FROM employee WHERE knowledge_refs @> to_jsonb(%s::text)",
+                "SELECT employee_id FROM employee_knowledge_binding "
+                "WHERE knowledge_space_id = %s AND enabled = true",
                 (knowledge_space_id,),
             ).fetchall()
         return [_s(r[0]) for r in rows]

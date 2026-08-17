@@ -1,5 +1,5 @@
 /**
- * W-A.2 消息输入器（底部）—— 发消息后起 run（POST /conversations/{id}/runs）触发 AI 处理。
+ * W-A.2 消息输入器（底部）——提交 prompt 后由 Agent 异步处理。
  *
  * 工具栏（对齐 demo AI-Team-Demo.html:1166-1171 + #307 验收）：
  *   📎 附件  ·  @ @提及（召唤智能体） ·  / 技能市场入口 ·  📷 截图工具
@@ -35,7 +35,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { sendMessage, startRun } from "./useChatApi";
+import { abortPrompt, submitPrompt } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
@@ -148,12 +148,21 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     setSending(true);
     setError(null);
     try {
-      await sendMessage(client, conversationId, { content: text + attachedNote });
-      // 起 run 触发 AI 处理，时间线产出 BusinessTimelineEvent。
-      await startRun(client, conversationId);
+      // Prompt submission is atomic; the Agent owns execution after acceptance.
+      await submitPrompt(client, conversationId, { text: text + attachedNote });
       setContent("");
       setAttachments([]);
       onSent();
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function abortCurrentPrompt(): Promise<void> {
+    try {
+      await abortPrompt(client, conversationId);
     } catch (err) {
       setError(toMessage(err));
     } finally {
@@ -326,13 +335,16 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           />
         }
         sendButton={
-          <Button
-            label="发送"
-            variant="primary"
-            isDisabled={sending || (!content.trim() && attachments.length === 0)}
-            isLoading={sending}
-            onClick={() => void submitCurrentContent()}
-          />
+          sending ? (
+            <Button label="停止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
+          ) : (
+            <Button
+              label="发送"
+              variant="primary"
+              isDisabled={!content.trim() && attachments.length === 0}
+              onClick={() => void submitCurrentContent()}
+            />
+          )
         }
       />
 

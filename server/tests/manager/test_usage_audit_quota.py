@@ -318,13 +318,6 @@ def test_usage_aggregate_within_window():
     assert agg.cost_total == Decimal("1.0")
 
 
-def test_ingest_rejects_tenant_mismatch():
-    """上传体 tenant_id 与身份不一致 → 403（防跨租户写入，D22）。"""
-    svc = UsageAuditQuotaService(_FakeRepo())
-    with pytest.raises(Forbidden):
-        svc.ingest_upload(_ctx("t-a"), _upload("t-b", usage=[_usage_item()]))
-
-
 # ---- 跨租户隔离（D22 + RLS 语义）----
 
 
@@ -535,15 +528,15 @@ def test_usage_upload_without_token_returns_401():
     assert resp.json()["code"] == "unauthorized"
 
 
-def test_usage_upload_without_db_returns_503():
+def test_usage_upload_without_service_tenant_claim_fails_closed():
     client = _client(None)
     resp = client.post(
         "/api/manager/usage/upload",
         headers={"X-Service-Token": "test-service-token"},
         json={"tenant_id": "t1", "usage": [], "audits": []},
     )
-    assert resp.status_code == 503
-    assert resp.json()["code"] == "manager_db_unconfigured"
+    assert resp.status_code == 401
+    assert resp.json()["code"] == "unauthorized"
 
 
 def test_quota_policies_without_token_returns_401():

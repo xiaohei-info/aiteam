@@ -138,7 +138,7 @@ pnpm e2e
 ```
 
 **说明**：
-- E2E 测试会自动启动三端后端（FastAPI）+ 三端前端（Vite dev server）
+- E2E 测试会启动控制面后端（FastAPI）与 Node Agent + 三端前端（Vite dev server）
 - Playwright 配置（`web/playwright.config.ts`）的 `webServer` 会自动拉起它们
 - 测试真实的浏览器交互、跨端 HTTP 调用、service token 契约
 
@@ -148,10 +148,13 @@ pnpm e2e
 
 ```bash
 cd server
-# 启动单个端（operation / manager / agent 三选一）
+# 启动控制面单端（operation / manager 二选一）
 python run.py --tier=operation  # 运营端，默认 http://localhost:8000
 python run.py --tier=manager    # 企业端，默认 http://localhost:8000
-python run.py --tier=agent      # 用户端，默认 http://localhost:8000
+
+# 用户端 Node Agent（独立于 Python 控制面）
+pnpm --dir server/agent_service install
+pnpm --dir server/agent_service start
 
 # 每端暴露：
 # - /healthz — 健康检查

@@ -1,5 +1,5 @@
 [Unit]
-Description=aiteam v1 three-tier (operation/manager/agent)
+Description=aiteam v1 control planes + Node Agent (operation/manager/agent)
 After=network-online.target
 Wants=network-online.target
 
@@ -17,7 +17,7 @@ SyslogIdentifier=aiteam-v1
 
 # no per-service sandbox: ctl.sh manages three tiers that write to
 # logs/ under the same directory, so ProtectSystem=strict would block
-# the python's log writes. The services are unprivileged network
+# service log writes. The services are unprivileged network
 # tenants at best; system-level sandboxing is a future hardening step.
 PrivateTmp=true
 

@@ -20,10 +20,6 @@
       "types": "./dist/api-client/index.d.ts",
       "import": "./dist/api-client/index.js"
     },
-    "./timeline-client": {
-      "types": "./dist/timeline-client/index.d.ts",
-      "import": "./dist/timeline-client/index.js"
-    },
     "./role-state": {
       "types": "./dist/role-state/index.d.ts",
       "import": "./dist/role-state/index.js"

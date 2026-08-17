@@ -386,21 +386,22 @@ start_service_local() {
       fi
       ;;
     agent)
-      echo "[ctl] Starting agent on port ${AGENT_PORT}..."
+      echo "[ctl] Starting Node agent on port ${AGENT_PORT}..."
+      local agent_env="${AITEAM_ENV:-dev}"
+      local agent_dev_auth="${AITEAM_AGENT_DEV_AUTH:-true}"
+      local agent_fake="${AITEAM_PI_FAKE:-true}"
+      if [[ "${agent_env}" == "production" ]]; then
+        [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
+        [[ -n "${AITEAM_PI_FAKE:-}" ]] || agent_fake=false
+      fi
       nohup setsid env \
-        APP_TIER=agent \
-        DB_URL="${DB_URL}" \
-        MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
-        AGENT_DB_PATH="${AGENT_DB_PATH:-${REPO_ROOT}/.state/agent.sqlite}" \
-        AGENT_RUNTIME="${AGENT_RUNTIME:-}" \
-        AGENT_RUNS_ROOT="${AGENT_RUNS_ROOT:-${REPO_ROOT}/.state/runs}" \
-        AGENT_LOOP_AUTOSTART="${AGENT_LOOP_AUTOSTART:-false}" \
-        AGENT_RUNTIME_ENV_PASSTHROUGH="${AGENT_RUNTIME_ENV_PASSTHROUGH:-}" \
-        SERVICE_TOKEN="${SERVICE_TOKEN}" \
-        LOG_LEVEL="${LOG_LEVEL}" \
-        EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=agent \
-          --host="${AGENT_HOST:-127.0.0.1}" --port="${AGENT_PORT}" \
+        PORT="${AGENT_PORT}" \
+        HOST="${AGENT_HOST:-127.0.0.1}" \
+        AITEAM_AGENT_DATA_DIR="${AGENT_DATA_DIR:-${REPO_ROOT}/.state/agent}" \
+        AITEAM_ENV="${agent_env}" \
+        AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
+        AITEAM_PI_FAKE="${agent_fake}" \
+        pnpm --dir "${REPO_ROOT}/server/agent_service" start \
         >> "${LOG_FILE}" 2>&1 &
       disown
       echo $! > "${PID_FILE}"

@@ -1,6 +1,6 @@
 """employee 独立绑定实体 租户作用域数据访问（issue AITEAM-234 / GitHub AITEAM-280，04 §6.1/§6.6，D22）。
 
-铁律（与 EmployeeConfigRepository / memory_items_repository 一致）：所有方法以 TenantContext
+铁律（与 EmployeeConfigRepository 一致）：所有方法以 TenantContext
 为隔离边界，tenant_id 只从 ctx 读取，SQL 不接受调用方手写 tenant 过滤字符串（D22）。
 RLS 强制跨租户隔离 + 外键 ON DELETE CASCADE（employee 删除时同步清除绑定，04 §6.1.1）。
 

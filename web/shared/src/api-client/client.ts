@@ -135,6 +135,29 @@ export class ApiClient {
     return env.data;
   }
 
+  /** Open a same-origin streaming response (used by Agent SSE). */
+  async stream(path: string, options: RequestOptions = {}): Promise<Response> {
+    assertOwnTierPath(this.tier, path);
+    const url = `${this.baseUrl}${path}${buildQuery(options.query)}`;
+    const headers = await this.buildHeaders(options);
+    headers.set("Accept", "text/event-stream");
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, { method: "GET", headers, signal: options.signal });
+    } catch (err) {
+      throw ApiError.network(err instanceof Error ? err.message : "network error");
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      const parsed = text ? safeJsonParse(text) : null;
+      if (parsed && typeof parsed === "object" && "code" in parsed && "status" in parsed) {
+        throw ApiError.fromProblem(parsed as Problem);
+      }
+      throw ApiError.malformed(response.status, `HTTP ${response.status}：错误响应不是 problem+json`);
+    }
+    return response;
+  }
+
   /** 底层请求：拼 URL、注入 header、发请求、按状态码归一为 envelope 或抛 ApiError。 */
   protected async request<TEnvelope>(
     method: string,

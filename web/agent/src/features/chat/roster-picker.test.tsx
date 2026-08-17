@@ -253,14 +253,14 @@ describe("RosterPicker — readiness (AITEAM-693)", () => {
           provider: "ready",
           skills: [],
           capabilities: [],
-          reasons: ["runtime: AGENT_RUNTIME is not configured"],
+          reasons: ["runtime: local Pi session is not configured"],
         },
       ],
     });
     renderPicker();
     const btn = await screen.findByRole("button", { name: /甲/ });
     expect(btn).toBeDisabled();
-    expect(screen.getByText(/AGENT_RUNTIME/)).toBeInTheDocument();
+    expect(screen.getByText(/local Pi session/)).toBeInTheDocument();
   });
 
   it("readiness 满足时专家按钮可点击", async () => {

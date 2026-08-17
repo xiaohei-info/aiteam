@@ -123,7 +123,7 @@ def build_knowledge_space_router(verifier) -> APIRouter:
         svc.delete(tenant_context_from(claims), knowledge_space_id=knowledge_space_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    # ---- 绑定（专家走 employee.knowledge_refs；部门/成员走 knowledge_space_binding 表）----
+    # ---- 绑定（专家走 employee_knowledge_binding；部门/成员走 knowledge_space_binding 表）----
 
     @router.post(
         "/{knowledge_space_id}/bindings",

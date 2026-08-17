@@ -332,7 +332,7 @@ def test_ingest_creates_index_bindings_for_bound_experts(tmp_path: Path) -> None
     )
     binding_rows = svc.list_bindings(ctx, knowledge_space_id="ks", document_id=doc.id)
     emp_ids = {b.employee_id for b in binding_rows}
-    assert {"emp-1", "emp-2"}.issubset(emp_ids)
+    assert emp_ids == {"emp-2"}
     assert all(b.status == "ready" for b in binding_rows)
 
 

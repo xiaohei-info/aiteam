@@ -1,12 +1,12 @@
 """统一启动器（09 §14.2，D15）。
 
-dev 便利：`python server/run.py --tier=operation|manager|agent`（或 APP_TIER 环境变量），
-只挂载该端的 app。**仅供 dev 与按端构建入口选择**；生产按端产出三个精简产物，
+dev 便利：`python server/run.py --tier=operation|manager`（或 APP_TIER 环境变量），
+只挂载该控制面的 app。用户端 Agent 由其 Node 包独立启动；生产按端产出精简产物，
 不做"运行时胖产物 / 一个产物切端"（D15）。
 
 用法:
-    python run.py --tier agent
-    APP_TIER=manager python run.py
+    python run.py --tier manager
+    APP_TIER=operation python run.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from fastapi import FastAPI
 _TIER_MODULES = {
     "operation": "operation_service.app",
     "manager": "manager_service.app",
-    "agent": "agent_service.app",
 }
 
 

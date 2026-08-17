@@ -1,110 +1,74 @@
-"""Manager 企业端记忆条目管理路由（B07 记忆管理）。
+"""Authenticated Manager facade over the external Hindsight memory service.
 
-边界：Manager 管理员工记忆条目（CRUD/搜索/批量删除/按员工查看）。
+Manager owns authorization and tenant context; Hindsight owns memory storage.  No
+local memory CRUD repository is constructed here.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
-from shared.contracts.envelope import Envelope, ListEnvelope
-from shared.db import PgTenantRouter
-from shared.errors import AppError
-
-from .memory_items_repository import MemoryItemsRepository
-from .memory_items_service import MemoryItemsService
-from .routes_memory_schemas import (
-    MemoryBulkDelete,
-    MemoryItemCreate,
-    MemoryItemOut,
-    MemoryItemPatch,
-)
+from shared.contracts.envelope import Envelope
+from .hindsight_client import HindsightClient
 
 
-class _ManagerNotConfigured(AppError):
-    status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+class MemoryRetainIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    employee_id: str
+    content: str = Field(min_length=1)
+    metadata: dict = Field(default_factory=dict)
 
 
-def _service(request: Request) -> MemoryItemsService:
-    dsn = request.app.state.settings.db_url
-    if not dsn:
-        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
-    cache = getattr(request.app.state, "_memory_items_service", None)
-    if cache is None:
-        cache = MemoryItemsService(MemoryItemsRepository(PgTenantRouter(dsn)))
-        request.app.state._memory_items_service = cache
-    return cache
+def _client(request: Request) -> HindsightClient:
+    client = getattr(request.app.state, "_hindsight_client", None)
+    if client is None:
+        client = HindsightClient()
+        request.app.state._hindsight_client = client
+    return client
 
 
 def build_memory_items_router(verifier) -> APIRouter:
-    router = APIRouter(prefix="/api/manager/memories", tags=["manager", "memory-items"])
+    router = APIRouter(prefix="/api/manager/memories", tags=["manager", "hindsight"])
     require = require_claims(verifier)
 
-    @router.get("", summary="列出记忆条目", operation_id="manager_memory_list")
-    async def list_memories(
+    @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall")
+    async def recall(
         request: Request,
-        employee_id: str | None = Query(default=None),
-        keyword: str | None = Query(default=None),
-        category: str | None = Query(default=None),
+        employee_id: str,
+        query: str = Query(min_length=1),
+        limit: int = Query(default=10, ge=1, le=100),
         claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[MemoryItemOut]:
-        ctx = tenant_context_from(claims)
-        svc = _service(request)
-        items = svc.list_memories(ctx, employee_id=employee_id, keyword=keyword, category=category)
-        return ListEnvelope(data=[MemoryItemOut(**r) for r in items])
-
-    @router.post("", summary="新增记忆条目", operation_id="manager_memory_create")
-    async def create_memory(
-        body: MemoryItemCreate,
-        request: Request,
-        claims: TokenClaims = Depends(require),
-    ) -> Envelope[MemoryItemOut]:
-        ctx = tenant_context_from(claims)
-        svc = _service(request)
-        data = svc.create_memory(
-            ctx, employee_id=body.employee_id, content=body.content,
-            category=body.category, importance=body.importance,
+    ) -> Envelope[dict]:
+        data = _client(request).recall(
+            tenant_context_from(claims), employee_id=employee_id, query=query, limit=limit,
         )
-        return Envelope(data=MemoryItemOut(**data))
+        return Envelope(data=data)
 
-    @router.patch("/{memory_id}", summary="编辑记忆条目", operation_id="manager_memory_patch")
-    async def patch_memory(
-        memory_id: str,
-        body: MemoryItemPatch,
+    @router.post("/retain", summary="写入 Hindsight 记忆", operation_id="manager_memory_retain",
+                 status_code=status.HTTP_201_CREATED)
+    async def retain(
+        body: MemoryRetainIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[MemoryItemOut]:
-        ctx = tenant_context_from(claims)
-        svc = _service(request)
-        data = svc.patch_memory(
-            ctx, memory_id, content=body.content, category=body.category, importance=body.importance,
+    ) -> Envelope[dict]:
+        data = _client(request).retain(
+            tenant_context_from(claims), employee_id=body.employee_id,
+            content=body.content, metadata=body.metadata,
         )
-        return Envelope(data=MemoryItemOut(**data))
+        return Envelope(data=data)
 
-    @router.delete("/{memory_id}", summary="删除记忆条目", operation_id="manager_memory_delete",
-                status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete("/{memory_id}", summary="删除 Hindsight 记忆", operation_id="manager_memory_delete",
+                   status_code=status.HTTP_204_NO_CONTENT)
     async def delete_memory(
         memory_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Response:
-        ctx = tenant_context_from(claims)
-        svc = _service(request)
-        svc.delete_memory(ctx, memory_id)
+        _client(request).delete(tenant_context_from(claims), memory_id=memory_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    @router.post("/bulk-delete", summary="批量删除记忆条目", operation_id="manager_memory_bulk_delete")
-    async def bulk_delete(
-        body: MemoryBulkDelete,
-        request: Request,
-        claims: TokenClaims = Depends(require),
-    ) -> dict:
-        ctx = tenant_context_from(claims)
-        svc = _service(request)
-        count = svc.bulk_delete(ctx, body.memory_ids)
-        return {"deleted_count": count}
 
     return router

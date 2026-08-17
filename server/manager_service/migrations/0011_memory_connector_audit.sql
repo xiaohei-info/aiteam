@@ -5,27 +5,10 @@
 -- app_rw 受约束角色。
 --
 -- 新增表：
---   memory_item — 员工记忆条目（B07）
 --   connector_status — 连接器健康状态
 --   connector_test — 连接器测试记录
 --   connector_grant — 连接器→员工可见性授权
 --   audit_event — 审计事件
-
--- ---- memory_item：员工记忆条目 ----
-CREATE TABLE IF NOT EXISTS memory_item (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id     uuid NOT NULL,
-    employee_id   uuid NOT NULL,
-    content       text NOT NULL,
-    category      text NOT NULL DEFAULT 'preference',
-    importance    integer NOT NULL DEFAULT 3 CHECK (importance >= 1 AND importance <= 5),
-    source        text NOT NULL DEFAULT 'manual',
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    last_used_at  timestamptz
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_item_employee ON memory_item(tenant_id, employee_id);
-CREATE INDEX IF NOT EXISTS idx_memory_item_category ON memory_item(tenant_id, category);
 
 -- ---- connector_status：连接器健康状态（每连接器一条，upsert 更新）----
 CREATE TABLE IF NOT EXISTS connector_status (
@@ -80,7 +63,7 @@ DECLARE
     t text;
 BEGIN
     FOREACH t IN ARRAY ARRAY[
-        'memory_item', 'connector_status', 'connector_test',
+        'connector_status', 'connector_test',
         'connector_grant', 'audit_event'
     ]
     LOOP

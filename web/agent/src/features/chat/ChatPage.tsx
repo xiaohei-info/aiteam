@@ -15,7 +15,6 @@ import { ConversationStateControl } from "./ConversationStateControl";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
-import { LoopPanel, RunsPanel } from "../runs";
 import { TerminalPanel } from "../terminal";
 import { RosterPicker } from "./RosterPicker";
 import type { Conversation } from "./useChatApi";
@@ -27,7 +26,6 @@ export function ChatPage(): React.ReactNode {
   const toMessage = useApiError();
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [sentSignal, setSentSignal] = useState(0);
-  const [loopPanelOpen, setLoopPanelOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -80,14 +78,7 @@ export function ChatPage(): React.ReactNode {
               <ConversationStateControl client={client} conversation={selected} onStateChanged={setSelected} />
               <HStack justify="between" align="center">
                 <Heading level={2}>{selected.title ?? selected.id}</Heading>
-                <Button
-                  label="任务编排"
-                  variant={loopPanelOpen ? "secondary" : "ghost"}
-                  aria-pressed={loopPanelOpen}
-                  onClick={() => setLoopPanelOpen((open) => !open)}
-                />
               </HStack>
-              {loopPanelOpen ? <LoopPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} /> : null}
               <ChatLayout
                 density="balanced"
                 composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
@@ -95,7 +86,6 @@ export function ChatPage(): React.ReactNode {
               >
                 <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
               </ChatLayout>
-              <RunsPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
               <TerminalPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} />
             </VStack>
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}

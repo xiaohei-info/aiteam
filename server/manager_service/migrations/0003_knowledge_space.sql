@@ -7,7 +7,7 @@
 --   - rag_workspace 表已存在于 0001（workspace/tenant 映射 + RLS 第二防线）；本迁移仅扩列
 --     display_name（知识空间管理面展示名），不动隔离策略。
 --   - knowledge_space_binding：知识空间 → 部门/成员 的绑定真相态（仅绑定元数据，不做检索执行；
---     专家绑定真相态走 employee.knowledge_refs（M2 已有字段），本表只落部门/成员绑定）。
+--     专家绑定真相态走 employee_knowledge_binding，本表只落部门/成员绑定）。
 --
 -- 隔离硬约束同 0001：ENABLE + FORCE RLS、业务唯一性带 tenant_id、app_rw 受约束角色。
 --   - tenant_id 唯一来源是 TenantContext（D22），业务 SQL 不接受手写 tenant 过滤。
@@ -17,7 +17,7 @@
 ALTER TABLE rag_workspace ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT '';
 
 -- ---- 知识空间绑定（tenant 作用域，D21）----
--- resource_type: department | member（专家绑定真相态走 employee.knowledge_refs，不入本表）。
+-- resource_type: department | member（专家绑定真相态走 employee_knowledge_binding，不入本表）。
 -- resource_id: 部门 id 或成员 id（均为 uuid）。
 -- unique(tenant_id, knowledge_space_id, resource_type, resource_id) 防重复绑定。
 CREATE TABLE IF NOT EXISTS knowledge_space_binding (

@@ -11,8 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Tier = Literal["operation", "manager", "agent"]
-_VALID_TIERS = ("operation", "manager", "agent")
+Tier = Literal["operation", "manager"]
+_VALID_TIERS = ("operation", "manager")
 
 
 class Settings(BaseModel):
@@ -42,22 +42,7 @@ class Settings(BaseModel):
     # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
     # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
     service_token: str | None = Field(default=None)
-    # Agent 用户端本地库文件路径（SQLite）。未配置→内存实现（dev/测试默认，不落文件）；
-    # 配置后落 SQLite 本机库，重启不丢（04 用户端轻量本地库）。
-    agent_db_path: str | None = Field(default=None)
-    # Agent 选定 runtime（06 §7.6）。未配置→Fake runtime（dev/测试默认）；配置后经 Gateway
-    # 装配真实 Driver/Executor（如 hermes/codex/claude_code/...），不静默切换。
-    agent_runtime: str | None = Field(default=None)
-    # Runtime Worker 子进程隔离工作目录根（§13）。每 run 在其下建独立 cwd。
-    agent_runs_root: str | None = Field(default=None)
-    # 进程启动期是否自启动 loop 调度后台循环（06 §7.6）。默认否（dev/测试用手动触发）。
-    agent_loop_autostart: bool = Field(default=False)
-    # 放行给 runtime 子进程的环境变量名（§13 凭据最小注入）：沙箱默认脱敏全部 env，
-    # provider 凭据（如 *_API_KEY）须经此显式 allowlist 从宿主 env 注入，否则 runtime 无法鉴权。
-    # 仅传变量名，值从宿主 os.environ 取，不内联明文（D18）。provider_ref 全量解析见后续。
-    agent_runtime_env_passthrough: tuple[str, ...] = Field(default=())
-    # 部署环境标记（AITEAM-688 M0）：production 时禁止 Fake runtime 回退，缺 runtime 必须 fail fast。
-    # 取值 dev | test | production；未配置按 dev 处理（允许 Fake，dev/测试默认）。
+    # 部署环境标记。取值 dev | test | production；未配置按 dev 处理。
     aiteam_env: str | None = Field(default=None, description="部署环境：dev | test | production；未配置=dev")
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
@@ -83,11 +68,6 @@ def load_settings(tier: Tier | None = None) -> Settings:
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
-        agent_db_path=os.getenv("AGENT_DB_PATH"),
-        agent_runtime=os.getenv("AGENT_RUNTIME"),
-        agent_runs_root=os.getenv("AGENT_RUNS_ROOT"),
-        agent_loop_autostart=os.getenv("AGENT_LOOP_AUTOSTART", "0") not in ("0", "false", "False"),
-        agent_runtime_env_passthrough=_csv(os.getenv("AGENT_RUNTIME_ENV_PASSTHROUGH")),
         aiteam_env=os.getenv("AITEAM_ENV"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )

@@ -83,22 +83,17 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.agent
-      args:
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: aiteam-agent:dev
     container_name: aiteam-agent
     ports:
       - "8003:8000"
     environment:
-      APP_TIER: agent
-      # 用户端本地库（dev 单机时复用同一 PG，生产为每用户本机独立库）。
-      DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
-      # 用户端主动访问企业端（05 §5.5 窄通信面；Operator/Manager 绝不向用户机器入站）。
-      MANAGER_URL: http://manager:8000
-      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
-      SERVICE_TOKEN: dev-service-token-placeholder
-      LOG_LEVEL: INFO
-      EXPOSE_PUBLIC_DOCS: "1"
+      HOST: 0.0.0.0
+      PORT: 8000
+      AITEAM_AGENT_DATA_DIR: /app/data
+      AITEAM_AGENT_DEV_AUTH: "true"
+      AITEAM_PI_FAKE: "true"
+      AITEAM_ENV: dev
     depends_on:
       postgres:
         condition: service_healthy

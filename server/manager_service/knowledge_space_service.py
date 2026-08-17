@@ -3,7 +3,7 @@
 编排三个 repository（均为租户隔离）：
 - KnowledgeSpaceRepository：知识空间 CRUD（rag_workspace 表，workspace 由 ManagerRagService 派生）。
 - KnowledgeSpaceBindingRepository：知识空间 → 部门/成员 绑定（仅元数据，不做检索执行）。
-- ExpertKnowledgeBinding：专家 → 知识空间 绑定（真相态 = employee.knowledge_refs，M2 字段）。
+- ExpertKnowledgeBinding：专家 → 知识空间 绑定（真相态 = employee_knowledge_binding）。
 
 红线（D21）：
 - workspace 只由 ManagerRagService.derive_workspace 推导，业务层不接受/不回显外部直传 workspace。
@@ -95,7 +95,7 @@ class KnowledgeSpaceService:
         self._clear_expert_refs(ctx, knowledge_space_id)
 
     def _clear_expert_refs(self, ctx: TenantContext, knowledge_space_id: str) -> None:
-        """删除知识空间后，把所有引用它的 employee.knowledge_refs 清掉（保持真相态一致）。"""
+        """删除知识空间后，禁用所有 employee_knowledge_binding 引用（保持真相态一致）。"""
         for emp_id in self._expert_binding.list_experts_by_space(
             ctx, knowledge_space_id=knowledge_space_id
         ):
@@ -120,7 +120,7 @@ class KnowledgeSpaceService:
     def _bind_expert(
         self, ctx: TenantContext, body: KnowledgeSpaceBindingCreate
     ) -> KnowledgeSpaceBindingOut:
-        """专家绑定真相态 = employee.knowledge_refs（M2 字段，供 M7 快照消费）。"""
+        """专家绑定真相态 = employee_knowledge_binding（供 M7 快照消费）。"""
         if not self._expert_binding.bind(
             ctx, employee_id=body.resource_id, knowledge_space_id=body.knowledge_space_id
         ):
@@ -155,7 +155,7 @@ class KnowledgeSpaceService:
         # 部门/成员绑定（knowledge_space_binding 表）。
         for r in self._binding_repo.list_by_space(ctx, knowledge_space_id=knowledge_space_id):
             out.append(_to_binding_out(r, tenant_id=ctx.tenant_id))
-        # 专家绑定（从 employee.knowledge_refs 派生）。
+        # 专家绑定（从 employee_knowledge_binding 派生）。
         for emp_id in self._expert_binding.list_experts_by_space(
             ctx, knowledge_space_id=knowledge_space_id
         ):
@@ -202,7 +202,7 @@ def _ensure_can_write(ctx: TenantContext) -> None:
 def _validate_binding_resource_type(resource_type: str) -> None:
     """绑定目标白名单（expert|department|member）。
 
-    expert 走 employee.knowledge_refs；department/member 走 knowledge_space_binding 表。
+    expert 走 employee_knowledge_binding；department/member 走 knowledge_space_binding 表。
     抛 ValidationProblem（422），schema 层 Literal 双保险。
     """
     if resource_type not in ("expert",) + BINDING_RESOURCE_TYPES:

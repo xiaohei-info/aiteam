@@ -21,7 +21,7 @@ import logging
 from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
-from shared.contracts.snapshot import EmployeeExecutionSnapshot
+from shared.contracts.snapshot import EmployeeExecutionSnapshot, RuntimePolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
 
@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 # 越权拦截审计动作名（05 F16）。
 _SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
+
+
+class KnowledgeBindingReader(Protocol):
+    def list_all(self, ctx: TenantContext, *, employee_id: str): ...
 
 
 class AuditRecorder(Protocol):
@@ -66,12 +70,14 @@ class SnapshotService:
         grant_service: GrantService,
         member_service: MemberDeptService,
         audit_recorder: AuditRecorder | None = None,
+        knowledge_binding: KnowledgeBindingReader | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
         self._members = member_service
         # 可选：None → 不写审计（骨架/单测降级）；真实路由注入 EnterpriseAuditRepository。
         self._audit = audit_recorder
+        self._knowledge_binding = knowledge_binding
 
     def generate(
         self,
@@ -99,7 +105,14 @@ class SnapshotService:
                 f"(current version is {current_version})"
             )
 
-        return _to_snapshot(config, version=current_version)
+        knowledge_refs = []
+        if self._knowledge_binding is not None:
+            knowledge_refs = [
+                row.knowledge_space_id
+                for row in self._knowledge_binding.list_all(ctx, employee_id=employee_id)
+                if row.enabled
+            ]
+        return _to_snapshot(config, version=current_version, knowledge_refs=knowledge_refs)
 
     def _authorize(self, ctx: TenantContext, *, member_id: str, employee_id: str) -> None:
         """成员级授权 enforcement（04 §6.2 / 05 F16）。
@@ -155,13 +168,15 @@ class SnapshotService:
         return False
 
 
-def _to_snapshot(config: EmployeeConfigOut, *, version: str) -> EmployeeExecutionSnapshot:
+def _to_snapshot(
+    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str]
+) -> EmployeeExecutionSnapshot:
     """EmployeeConfigOut（中立配置真相）→ EmployeeExecutionSnapshot（只读执行投影）。
 
     snapshot_version 为内容确定性派生：同 (employee_id, version, 配置内容) → 同值，
     保证幂等与对账（05 §5.1 只读可幂等重试）。
     """
-    snapshot_version = _derive_snapshot_version(config, version=version)
+    snapshot_version = _derive_snapshot_version(config, version=version, knowledge_refs=knowledge_refs)
     return EmployeeExecutionSnapshot(
         employee_id=config.employee_id,
         version=version,
@@ -169,16 +184,19 @@ def _to_snapshot(config: EmployeeConfigOut, *, version: str) -> EmployeeExecutio
         display_name=config.display_name,
         persona=config.persona,
         model_policy=config.model_policy,
-        runtime_policy=config.runtime_policy,
+        # Runtime selection belongs to the Agent Gateway; snapshots carry no binding.
+        runtime_policy=RuntimePolicy(timeout_seconds=config.runtime_policy.timeout_seconds),
         tools=list(config.tools),
         skills=list(config.skills),
-        knowledge_refs=list(config.knowledge_refs),
+        knowledge_refs=knowledge_refs,
         connector_refs=list(config.connector_refs),
         memory_policy=config.memory_policy,
     )
 
 
-def _derive_snapshot_version(config: EmployeeConfigOut, *, version: str) -> str:
+def _derive_snapshot_version(
+    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str]
+) -> str:
     """确定性派生 snapshot_version：sha256(employee_id|version|规范化配置内容) 前 16 hex。
 
     用 Pydantic 规范化 JSON（排序键、剔除快照专属字段）作内容指纹——
@@ -186,8 +204,11 @@ def _derive_snapshot_version(config: EmployeeConfigOut, *, version: str) -> str:
     """
     payload = config.model_dump(
         mode="json",
-        exclude={"employee_id", "employee_slug", "version"},
+        exclude={"employee_id", "employee_slug", "version", "knowledge_refs"},
     )
+    payload["knowledge_refs"] = sorted(knowledge_refs)
+    if isinstance(payload.get("runtime_policy"), dict):
+        payload["runtime_policy"].pop("runtime_binding", None)
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(f"{config.employee_id}|{version}|{canonical}".encode()).hexdigest()
     return f"snap_{version}_{digest[:16]}"
@@ -199,10 +220,12 @@ def build_snapshot_service(
     grant_service: GrantService,
     member_service: MemberDeptService,
     audit_recorder: AuditRecorder | None = None,
+    knowledge_binding: KnowledgeBindingReader | None = None,
 ) -> SnapshotService:
     return SnapshotService(
         config_service=config_service,
         grant_service=grant_service,
         member_service=member_service,
         audit_recorder=audit_recorder,
+        knowledge_binding=knowledge_binding,
     )

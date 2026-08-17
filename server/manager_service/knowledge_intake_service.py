@@ -342,11 +342,8 @@ class KnowledgeIntakeService:
         self, ctx: TenantContext, *, knowledge_space_id: str, document_id: str
     ) -> int:
         """向 knowledge_space 已绑员工传播索引绑定（幂等）。返回传播数。"""
-        # 合并两个来源：employee.knowledge_refs（legacy）+ employee_knowledge_binding（M2 实体）
-        employee_ids = set(self._expert_binding.list_experts_by_space(
-            ctx, knowledge_space_id=knowledge_space_id
-        ))
-        employee_ids.update(self._employee_index_port.list_employees_by_space(
+        # Authorization truth is employee_knowledge_binding only.
+        employee_ids = set(self._employee_index_port.list_employees_by_space(
             ctx, knowledge_space_id=knowledge_space_id
         ))
         now = datetime.now(timezone.utc)

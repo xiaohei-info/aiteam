@@ -1,7 +1,7 @@
 """Billing 账户余额与充值记录的租户作用域数据访问。
 
 新表 billing_balance / recharge_record（migration 0010）。tenant_id 只从 TenantContext 读（D22）。
-本模块同时承载 usage overview / records 的聚合查询（复用 usage_rollup / usage_ledger 的脱敏聚合数据）。
+本模块同时承载 usage overview / records 的聚合查询（复用 usage_rollup 脱敏聚合数据）。
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _row_to_recharge(row: Any) -> RechargeRecordRow:
 def _period_to_window(period: str) -> tuple[datetime | None, datetime | None]:
     """将前端 period 参数（month / last_month / all）转换为 (window_start, window_end)。
 
-    None 端表示无边界（all 时两端都为 None）。时区对齐 UTC，与 usage_rollup / usage_ledger 一致。
+    None 端表示无边界（all 时两端都为 None）。时区对齐 UTC，与 usage_rollup 一致。
     """
     now = datetime.now(timezone.utc)
     if period == "month":
@@ -127,7 +127,7 @@ class BillingRepository:
             ).fetchall()
         return [_row_to_recharge(r) for r in rows]
 
-    # ---- usage overview / records：复用 usage_rollup / usage_ledger 的脱敏聚合数据 ----
+    # ---- usage overview / records：复用 usage_rollup 的脱敏聚合数据 ----
 
     def get_usage_overview(
         self, ctx: TenantContext, *, period: str,
@@ -197,42 +197,35 @@ class BillingRepository:
     def list_usage_records(
         self, ctx: TenantContext, *, period: str, employee_id: str | None = None,
     ) -> list[dict]:
-        """按 tenant + period 窗口列 usage 明细（员工维度用量记录），可选按 employee_id 过滤。
-
-        数据源：usage_ledger（逐 run 计费明细，对齐 issue #292）。tenant_id 全程经 TenantContext（D22）。
-        employee_name 经 employee 表脱敏 display_name 关联；未匹配时回退到 employee_id。
-        """
+        """列脱敏 usage_rollup 摘要；不读取 runtime/run 明细。"""
         window_start, window_end = _period_to_window(period)
         clauses: list[str] = []
         params: list[Any] = []
         if window_start is not None:
-            clauses.append("ul.occurred_at >= %s::timestamptz")
-            params.append(window_start.isoformat())
+            clauses.append("window_start >= %s")
+            params.append(window_start)
         if window_end is not None:
-            clauses.append("ul.occurred_at < %s::timestamptz")
-            params.append(window_end.isoformat())
+            clauses.append("window_end <= %s")
+            params.append(window_end)
         if employee_id is not None:
-            clauses.append("ul.employee_id = %s::uuid")
+            clauses.append("employee_id = %s::uuid")
             params.append(employee_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._router.session(ctx) as s:
             rows = s.execute(
-                "SELECT ul.id, ul.employee_id, COALESCE(e.display_name, ul.employee_id::text) "
-                "AS employee_name, ul.occurred_at, ul.input_tokens, ul.output_tokens, "
-                "(ul.cost_cents::numeric / 100) AS cost "
-                "FROM usage_ledger ul LEFT JOIN employee e ON e.id = ul.employee_id"
-                + where + " ORDER BY ul.occurred_at DESC LIMIT 500",
+                "SELECT id, employee_id, window_start, token_total, cost_total "
+                "FROM usage_rollup" + where + " ORDER BY window_start DESC LIMIT 500",
                 tuple(params),
             ).fetchall()
         return [
             {
                 "record_id": str(r[0]),
                 "employee_id": str(r[1]),
-                "employee_name": r[2],
-                "date": r[3].isoformat() if r[3] else None,
-                "input_tokens": int(r[4]),
-                "output_tokens": int(r[5]),
-                "cost": Decimal(str(r[6])),
+                "employee_name": str(r[1]),
+                "date": r[2].isoformat() if r[2] else None,
+                "input_tokens": 0,
+                "output_tokens": int(r[3]),
+                "cost": Decimal(str(r[4])),
             }
             for r in rows
         ]
