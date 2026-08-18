@@ -205,7 +205,9 @@ def _decode_rs256(token: str, public_pem: str) -> TokenClaims:
     "token expired" / "bad signature" / "undecodable token"。
     """
     try:
-        payload = jwt.decode(token, public_pem, algorithms=[_ALG])
+        # Audience is enforced by the Agent JWKS boundary; Manager accepts its own
+        # signed user token here without requiring a second static audience setting.
+        payload = jwt.decode(token, public_pem, algorithms=[_ALG], options={"verify_aud": False})
     except jwt.ExpiredSignatureError as exc:
         raise Unauthorized("token expired") from exc
     except jwt.PyJWTError as exc:
