@@ -100,7 +100,7 @@ class EmployeeConfigRepository:
                     thinking_level, timeout_seconds, tools, skills,
                     knowledge_refs, connector_refs, memory_policy
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING """ + _CONFIG_COLUMNS,
                 (
