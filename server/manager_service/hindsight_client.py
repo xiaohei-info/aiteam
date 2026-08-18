@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -68,7 +69,7 @@ class HindsightClient:
             raise HindsightUnavailable(
                 "HINDSIGHT_URL, HINDSIGHT_SERVICE_TOKEN and operation paths must be configured"
             )
-        client = self._client or httpx.Client(base_url=settings.base_url.rstrip("/"), timeout=10.0)
+        client = self._client or httpx.Client(base_url=settings.base_url.rstrip("/"), timeout=60.0)
         headers = {
             "X-Tenant-ID": ctx.tenant_id,
             "X-Member-ID": ctx.user_id,
@@ -77,8 +78,32 @@ class HindsightClient:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
+        native = "/v1/default/" in path and "{bank_id}" in path
         try:
-            target = path.format(bank_id=bank_id, employee_id=employee_id, memory_id=memory_id or "")
+            encoded_bank_id = quote(bank_id, safe="")
+            target = path.format(
+                bank_id=encoded_bank_id,
+                employee_id=quote(employee_id, safe=""),
+                memory_id=quote(memory_id or "", safe=""),
+            )
+            if native:
+                # Hindsight creates banks via PUT; making this idempotent call before
+                # each operation keeps first-use employees working after a fresh deploy.
+                bank_response = client.put(
+                    f"{self._settings.base_url.rstrip('/')}/v1/default/banks/{encoded_bank_id}",
+                    json={"name": bank_id},
+                    headers=headers,
+                )
+                if bank_response.status_code >= 400:
+                    raise HindsightUnavailable(
+                        f"Hindsight bank initialization returned HTTP {bank_response.status_code}"
+                    )
+            if native and method == "DELETE":
+                # Hindsight exposes reversible invalidation (PATCH), not a per-memory
+                # DELETE endpoint.  Keep the Manager delete contract destructive to
+                # callers while preserving the upstream audit trail.
+                method = "PATCH"
+                payload = {"state": "invalidated", "reason": "deleted by Manager"}
             response = client.request(
                 method,
                 f"{self._settings.base_url.rstrip('/')}/{target.lstrip('/')}",
@@ -90,7 +115,7 @@ class HindsightClient:
             return response.json() if response.content else {}
         except HindsightUnavailable:
             raise
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
             raise HindsightUnavailable("Hindsight request failed") from exc
         finally:
             if self._client is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import Mock
 
 import httpx
@@ -174,4 +175,4 @@ def test_hindsight_delete_sends_employee_scope_and_stable_idempotency_key():
     assert seen["headers"]["authorization"] == "Bearer service-token"
     assert seen["headers"]["idempotency-key"] == "stable-key"
     assert seen["headers"]["x-member-id"] == "member-a"
-    assert seen["body"] == b""
+    assert json.loads(seen["body"]) == {"state": "invalidated", "reason": "deleted by Manager"}

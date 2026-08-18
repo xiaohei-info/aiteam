@@ -8,9 +8,10 @@ from shared.contracts.tenancy import TenantContext
 
 
 def test_hindsight_client_sends_tenant_context_and_never_falls_back():
-    seen = {}
+    seen = {"methods": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen["methods"].append(request.method)
         seen["path"] = request.url.path
         seen["tenant"] = request.headers["X-Tenant-ID"]
         seen["member"] = request.headers["X-Member-ID"]
@@ -24,6 +25,7 @@ def test_hindsight_client_sends_tenant_context_and_never_falls_back():
     result = client.recall(TenantContext(tenant_id="tenant-a", user_id="u", roles=[]),
                            employee_id="employee-a", query="hello", limit=3)
     assert result == {"items": []}
+    assert seen["methods"] == ["PUT", "POST"]
     assert seen["path"] == "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/memories/recall"
     assert seen["tenant"] == "tenant-a"
     assert seen["member"] == "u"
