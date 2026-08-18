@@ -80,7 +80,7 @@ export default defineConfig({
     },
     {
       command:
-        `cd .. && MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} ${E2E_PYTHON} server/run.py --tier agent --host 127.0.0.1 --port 8180`,
+        `cd .. && PORT=8180 HOST=127.0.0.1 AITEAM_ENV=development AITEAM_PI_FAKE=true AITEAM_AGENT_DEV_AUTH=true AITEAM_MANAGER_URL=${MANAGER_URL} AITEAM_AGENT_DATA_DIR=./.state/e2e-agent pnpm --dir server/agent_service start`,
       url: "http://127.0.0.1:8180/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,

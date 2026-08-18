@@ -47,10 +47,7 @@ const sessionHost = new SessionHost({
 });
 
 const authenticate = useDevAuth
-  ? (request: import("node:http").IncomingMessage) => {
-      if (request.headers.authorization !== "Bearer local-development") throw new HttpProblem(401, "unauthenticated", "Invalid development bearer token");
-      return { callerId: "local-development", userId: process.env.AITEAM_AGENT_DEV_MEMBER ?? "local-development", tenantId: process.env.AITEAM_AGENT_DEV_TENANT ?? "local-development", roles: ["member"] };
-    }
+  ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
   : createJwtAuthenticator(loadJwtOptions());
 
 const usageFlush = new UsageFlushService(store, managerClient);
@@ -82,6 +79,36 @@ const shutdown = async () => {
 };
 process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
+
+function authenticateDevelopment(request: import("node:http").IncomingMessage) {
+  const header = request.headers.authorization;
+  if (!header?.startsWith("Bearer ")) throw new HttpProblem(401, "unauthenticated", "Development bearer token is required");
+  const token = header.slice("Bearer ".length);
+  if (token === "local-development") {
+    return {
+      callerId: "local-development",
+      userId: process.env.AITEAM_AGENT_DEV_MEMBER ?? "local-development",
+      tenantId: process.env.AITEAM_AGENT_DEV_TENANT ?? "local-development",
+      roles: ["member"],
+    };
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
+    const userId = typeof payload.user_id === "string" ? payload.user_id : typeof payload.sub === "string" ? payload.sub : undefined;
+    const tenantId = typeof payload.tenant_id === "string" ? payload.tenant_id : undefined;
+    if (!userId || !tenantId) throw new Error("identity claims missing");
+    return {
+      callerId: userId,
+      userId,
+      tenantId,
+      roles: Array.isArray(payload.roles) ? payload.roles.filter((role): role is string => typeof role === "string") : [],
+      claims: payload as import("./http/auth.js").JwtClaims,
+      accessToken: token,
+    };
+  } catch {
+    throw new HttpProblem(401, "unauthenticated", "Invalid development bearer token");
+  }
+}
 
 function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   if (!authorization) return "You are an AI Team digital employee. Be concise.";
