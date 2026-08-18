@@ -51,8 +51,11 @@ class HindsightClient:
         self,
         ctx: TenantContext,
         path: str | None,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None,
         *,
+        employee_id: str,
+        method: str = "POST",
+        memory_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict:
         settings = self._settings
@@ -73,10 +76,14 @@ class HindsightClient:
         }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
         try:
-            response = client.post(
-                f"{self._settings.base_url.rstrip('/')}/{path.lstrip('/')}",
-                json=payload, headers=headers,
+            target = path.format(bank_id=bank_id, employee_id=employee_id, memory_id=memory_id or "")
+            response = client.request(
+                method,
+                f"{self._settings.base_url.rstrip('/')}/{target.lstrip('/')}",
+                json=payload,
+                headers=headers,
             )
             if response.status_code >= 400:
                 raise HindsightUnavailable(f"Hindsight returned HTTP {response.status_code}")
@@ -91,13 +98,19 @@ class HindsightClient:
 
     def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
         return self._request(ctx, self._settings.recall_path, {
-            "employee_id": employee_id, "query": query, "limit": limit,
-        })
+            "query": query, "max_tokens": max(256, min(limit * 256, 8192)),
+        }, employee_id=employee_id)
 
     def retain(self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict) -> dict:
+        context = metadata.get("context") if isinstance(metadata.get("context"), str) else None
+        item = {"content": content}
+        if context:
+            item["context"] = context
+        if isinstance(metadata.get("document_id"), str):
+            item["document_id"] = metadata["document_id"]
         return self._request(ctx, self._settings.retain_path, {
-            "employee_id": employee_id, "content": content, "metadata": metadata,
-        })
+            "items": [item], "async": False,
+        }, employee_id=employee_id)
 
     def delete(
         self,
@@ -110,6 +123,9 @@ class HindsightClient:
         return self._request(
             ctx,
             self._settings.delete_path,
-            {"employee_id": employee_id, "memory_id": memory_id},
+            None,
+            employee_id=employee_id,
+            memory_id=memory_id,
+            method="DELETE",
             idempotency_key=idempotency_key,
         )

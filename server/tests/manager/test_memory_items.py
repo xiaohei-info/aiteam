@@ -162,7 +162,7 @@ def test_hindsight_delete_sends_employee_scope_and_stable_idempotency_key():
         return httpx.Response(200, json={"status": "pending"})
 
     client = HindsightClient(
-        HindsightSettings("http://hindsight", "service-token", "/recall", "/retain", "/delete"),
+        HindsightSettings("http://hindsight", "service-token", "/recall", "/retain", "/v1/default/banks/{bank_id}/memories/{memory_id}"),
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
     result = client.delete(
@@ -173,5 +173,5 @@ def test_hindsight_delete_sends_employee_scope_and_stable_idempotency_key():
     assert result == {"status": "pending"}
     assert seen["headers"]["authorization"] == "Bearer service-token"
     assert seen["headers"]["idempotency-key"] == "stable-key"
-    assert b'"employee_id": "employee-a"' in seen["body"]
-    assert b'"memory_id": "memory-from-employee-b"' in seen["body"]
+    assert seen["headers"]["x-member-id"] == "member-a"
+    assert seen["body"] == b""
