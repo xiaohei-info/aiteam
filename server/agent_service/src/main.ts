@@ -13,6 +13,7 @@ import { aggregateUsage } from "./usage.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache } from "./skills.js";
+import { SqliteKnowledgeIndex } from "./tools/knowledge.js";
 
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
@@ -37,6 +38,7 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ agentDir, useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = process.env.AITEAM_MANAGER_URL ? new HttpManagerClient(process.env.AITEAM_MANAGER_URL) : undefined;
+const localKnowledgeIndex = new SqliteKnowledgeIndex(store);
 const sandbox = new LocalSandbox();
 const sessionHost = new SessionHost({
   cwdRoot,
@@ -46,6 +48,7 @@ const sessionHost = new SessionHost({
   modelRuntime: configured.runtime,
   model: configured.model,
   managerClient,
+  localKnowledgeIndex,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization),

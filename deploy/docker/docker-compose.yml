@@ -65,6 +65,8 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     image: aiteam-manager:dev
     container_name: aiteam-manager
+    volumes:
+      - managerdata:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +76,8 @@ services:
       APP_TIER: manager
       # 业务连接（受约束 app_rw 角色 + RLS）。
       DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      # Manager 知识源持久化根（bundle exporter 读取此卷，不上传会话内容）。
+      AITEAM_MANAGER_DATA_ROOT: /app/data
       # 迁移走管理连接（超管/DDL owner，#60）。
       ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       APP_RW_PASSWORD: aiteam_test
@@ -119,6 +123,10 @@ services:
         condition: service_healthy
 
 volumes:
+  # 实际卷名由 ENV 的 MANAGER_DATA_VOLUME 决定（ctl.sh 缺省注入 managerdata_<env>，
+  # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 managerdata。
+  managerdata:
+    name: ${MANAGER_DATA_VOLUME:-managerdata}
   # 实际卷名由 ENV 的 POSTGRES_VOLUME 决定（ctl.sh 缺省注入 aiteam_pg_data_<env>，
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 aiteam_pg_data。
   pgdata:

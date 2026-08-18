@@ -32,6 +32,30 @@ test("projection ownership schema migrates legacy local databases additively", (
   }
 });
 
+test("knowledge artifacts survive SQLite reopen alongside a legacy database", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-knowledge-reopen-test-"));
+  const path = join(root, "agent.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY)");
+  legacy.close();
+  const artifact = {
+    tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1", knowledge_space_id: "space-1",
+    document_id: "doc-1", artifact_version: "v1", source_hash: "a".repeat(64), citation_id: "citation-1",
+    chunk_index: 0, title: "Title", source: { type: "file", name: "doc.txt", mime_type: "text/plain" }, content: "content",
+  };
+  const store = new AgentSqliteStore(path);
+  store.replaceKnowledgeArtifacts([artifact], { tenantId: "tenant-1", memberId: "member-1" });
+  store.close();
+  const reopened = new AgentSqliteStore(path);
+  try {
+    assert.deepEqual(reopened.listKnowledgeArtifacts("tenant-1", "member-1")[0], artifact);
+    assert.equal((reopened.db.prepare("SELECT COUNT(*) AS count FROM legacy_marker").get() as { count: number }).count, 0);
+  } finally {
+    reopened.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("local files are metadata-owned, atomically stored, and deleted by conversation", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-local-file-test-"));
   const store = new AgentSqliteStore(join(root, "agent.sqlite"));

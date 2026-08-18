@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -179,7 +180,7 @@ class KnowledgeIntakeService:
                 detail=f"file exceeds max upload size ({_MAX_UPLOAD_BYTES} bytes)",
                 errors=None,
             )
-        storage_key = _store_bytes(self._storage_root, knowledge_space_id, file_name, content)
+        storage_key = _store_bytes(self._storage_root, knowledge_space_id, file_name, content, tenant_id=ctx.tenant_id)
         return self._create_and_advance(
             ctx,
             knowledge_space_id=knowledge_space_id,
@@ -206,7 +207,7 @@ class KnowledgeIntakeService:
         text, name, mime, title = fetch_url_text(url)
         chosen_name = display_name or title or name or "web page"
         storage_key = _store_text(
-            self._storage_root, knowledge_space_id, name, text
+            self._storage_root, knowledge_space_id, name, text, tenant_id=ctx.tenant_id
         )
         return self._create_and_advance(
             ctx,
@@ -426,31 +427,98 @@ def _to_bind_out(row) -> KnowledgeDocumentBindingOut:
 # ─────────────────────────────── 存储 ───────────────────────────────
 
 
-def _store_bytes(root: Path, knowledge_space_id: str, file_name: str, content: bytes) -> str:
-    """把上传字节落盘到 root/knowledge/<ks>/<uuid>/<filename>，返回 storage_key（相对 root）。"""
-    target = root / "knowledge" / knowledge_space_id / uuid.uuid4().hex[:12]
-    target.mkdir(parents=True, exist_ok=True)
+def _storage_component(value: str | None, fallback: str) -> str:
+    candidate = value or fallback
+    if Path(candidate).name != candidate or candidate in {".", ".."}:
+        raise ValueError("invalid knowledge namespace component")
+    return candidate
+
+
+def manager_storage_root(settings) -> Path:
+    """Return the canonical durable Manager document root from Settings."""
+    return Path(settings.manager_data_root).resolve()
+
+
+def ensure_storage_root(root: Path) -> Path:
+    """Create and repair the private Manager storage tree (directories 0700, files 0600)."""
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root, 0o700)
+    for current, directories, files in os.walk(root, followlinks=False):
+        os.chmod(current, 0o700)
+        for name in directories:
+            path = Path(current) / name
+            if not path.is_symlink():
+                os.chmod(path, 0o700)
+        for name in files:
+            path = Path(current) / name
+            if not path.is_symlink():
+                os.chmod(path, 0o600)
+    return root
+
+
+def _store_bytes(root: Path, knowledge_space_id: str, file_name: str, content: bytes, *, tenant_id: str | None = None) -> str:
+    """把上传字节落盘到 root/knowledge/<tenant>/<ks>/<uuid>/<filename>。"""
+    root = ensure_storage_root(root)
+    target = _storage_target(root, tenant_id, knowledge_space_id)
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _repair_directory_chain(target, root)
     # 防路径穿越：只取 basename
     safe_name = Path(file_name).name or "upload.bin"
-    (target / safe_name).write_bytes(content)
-    return str((target / safe_name).relative_to(root))
+    path = target / safe_name
+    path.write_bytes(content)
+    os.chmod(path, 0o600)
+    return str(path.relative_to(root))
 
 
-def _store_text(root: Path, knowledge_space_id: str, file_name: str, text: str) -> str:
-    target = root / "knowledge" / knowledge_space_id / uuid.uuid4().hex[:12]
-    target.mkdir(parents=True, exist_ok=True)
+def _store_text(root: Path, knowledge_space_id: str, file_name: str, text: str, *, tenant_id: str | None = None) -> str:
+    root = ensure_storage_root(root)
+    target = _storage_target(root, tenant_id, knowledge_space_id)
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _repair_directory_chain(target, root)
     safe_name = (Path(file_name).name or "page.html")
     if not safe_name.lower().endswith((".txt", ".html", ".md")):
         safe_name = safe_name + ".txt"
-    (target / safe_name).write_text(text, encoding="utf-8")
-    return str((target / safe_name).relative_to(root))
+    path = target / safe_name
+    path.write_text(text, encoding="utf-8")
+    os.chmod(path, 0o600)
+    return str(path.relative_to(root))
+
+
+def _storage_target(root: Path, tenant_id: str | None, knowledge_space_id: str) -> Path:
+    tenant = _storage_component(tenant_id, "_legacy")
+    space = _storage_component(knowledge_space_id, "_space")
+    namespace = root / "knowledge"
+    for component in (namespace, namespace / tenant, namespace / tenant / space):
+        if component.is_symlink():
+            raise ValueError("symlinked knowledge namespace component is not allowed")
+    target = namespace / tenant / space / uuid.uuid4().hex[:12]
+    _assert_private_target(target, root)
+    return target
+
+
+def _assert_private_target(path: Path, root: Path) -> None:
+    try:
+        path.resolve().relative_to(root)
+    except ValueError as exc:
+        raise ValueError("storage target escapes configured knowledge root") from exc
+
+
+def _repair_directory_chain(path: Path, root: Path) -> None:
+    current = path
+    while current != root:
+        os.chmod(current, 0o700)
+        current = current.parent
 
 
 def _resolve_path(root: Path, storage_key: str) -> Path:
-    """解析 storage_key 为绝对路径（防路径穿越：确保解析结果在 root 下）。"""
-    resolved = (root / storage_key).resolve()
-    if not str(resolved).startswith(str(root.resolve())):
-        raise ValueError(f"storage_key escapes root: {storage_key!r}")
+    """解析 storage_key 为绝对路径（防路径穿越及 root 前缀碰撞）。"""
+    root_resolved = root.resolve()
+    resolved = (root_resolved / storage_key).resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError(f"storage_key escapes root: {storage_key!r}") from exc
     return resolved
 
 

@@ -100,10 +100,10 @@ load_env() {
   ADMIN_DB_URL="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${POSTGRES_DB}}"
   APP_RW_PASSWORD="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD}}"
 
-  # PG 数据卷名默认带 env 后缀（aiteam_pg_data_<env>），使 dev/test/prod 各用各卷、
-  # 互不覆盖；.env 里显式设了 POSTGRES_VOLUME 时以其为准（可指向共用卷）。显式 export
-  # 让 docker compose 子进程能插值到（compose 侧缺省仍回退共用卷 aiteam_pg_data）。
+  # PG/Manager 数据卷名默认带 env 后缀，使 dev/test/prod 各用各卷、互不覆盖；
+  # .env 里显式设置时以其为准（可指向共用卷）。显式 export 让 docker compose 子进程插值。
   export POSTGRES_VOLUME="${POSTGRES_VOLUME:-aiteam_pg_data_${ENV_CONFIG}}"
+  export MANAGER_DATA_VOLUME="${MANAGER_DATA_VOLUME:-managerdata_${ENV_CONFIG}}"
 
   # 启动前最小 env 校验：占位分支（routes_member.py:39 等）是正确的安全门；
   # 触发 503 的真正原因是 DB_URL/ADMIN_DB_URL 未注入 .env.*，应在部署侧修，
@@ -626,7 +626,7 @@ main() {
       else
         start_local
       fi
-        (( DAEMON )) && _daemon_wait_loop
+      if (( DAEMON )); then _daemon_wait_loop; fi
       ;;
     stop)
       if [[ "${DEPLOY_MODE}" == "docker" ]]; then
@@ -645,7 +645,7 @@ main() {
         sleep 1
         start_local
       fi
-        (( DAEMON )) && _daemon_wait_loop
+      if (( DAEMON )); then _daemon_wait_loop; fi
       ;;
     status)
       if [[ "${DEPLOY_MODE}" == "docker" ]]; then

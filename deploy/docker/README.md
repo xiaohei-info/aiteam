@@ -124,12 +124,12 @@ docker run --rm aiteam-agent:dev sh -c \
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
-| `KNOWLEDGE_INDEX_URL` | Manager 外部知识 artifact/index 地址 | `https://knowledge-index.example.com` |
-| `KNOWLEDGE_INDEX_SERVICE_TOKEN` | Manager→artifact/index bearer token | `<secret>` |
-| `KNOWLEDGE_INDEX_SEARCH_PATH` | artifact/index 搜索路径 | `/artifacts/search` |
-| `KNOWLEDGE_INDEX_GET_PATH` | artifact/index citation 路径 | `/artifacts/get` |
+| `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
+| `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
 
-> 变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
+> 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
+>
+> 知识 bundle exporter 目前直接读取 Manager 持久化文档源；LightRAG exporter 是保留的未来接入 seam，当前不提供查询上传路径。Manager v1 是 clean install：不会迁移任何旧知识文件，已有旧部署必须重新 intake 文档。变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
 
 ---
 

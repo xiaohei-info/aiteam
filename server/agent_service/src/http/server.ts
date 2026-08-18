@@ -7,10 +7,10 @@ import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient } from "../manager-client.js";
+import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, type ManagerClient } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEvent } from "../pi/event-sse.js";
-import type { ConversationState, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
+import type { ConversationState, KnowledgeArtifact, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, verifySignedSkillPackage } from "../skills.js";
@@ -348,6 +348,7 @@ export class AgentHttpServer {
     try {
       const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions as Record<string, string>), caller.tenantId, caller.userId ?? caller.callerId);
       const snapshots = config.snapshots ?? (this.options.managerClient.pullSnapshots ? await this.options.managerClient.pullSnapshots(caller, config.experts ?? []) : []);
+      const memberId = caller.userId ?? caller.callerId;
       const skillPackagesAuthoritative = config.skill_packages !== undefined;
       const signedPackages = config.skill_packages ?? [];
       const publicKey = process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY;
@@ -355,7 +356,6 @@ export class AgentHttpServer {
       // Verify every envelope before changing projections or cache. Missing key means
       // package sync is disabled, not an invitation to accept unsigned content.
       if (signedPackages.length && (!publicKey || !keyId)) throw new HttpProblem(503, "skill_signing_unconfigured", "Signed skill verification is not configured");
-      const memberId = caller.userId ?? caller.callerId;
       if (signedPackages.length) {
         try {
           for (const envelope of signedPackages) {
@@ -366,7 +366,18 @@ export class AgentHttpServer {
           throw error;
         }
       }
-      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
+      let bundleArtifacts = [] as KnowledgeArtifact[];
+      let bundleAuthoritative = false;
+      if (this.options.managerClient.pullKnowledgeArtifacts) {
+        const bundle = await this.options.managerClient.pullKnowledgeArtifacts(caller, {});
+        if (typeof bundle.authoritative !== "boolean" || !Array.isArray(bundle.artifacts)) throw new ManagerUnavailableError("Manager returned an invalid knowledge bundle");
+        bundleArtifacts = bundle.artifacts.map((artifact) => normalizeKnowledgeArtifact(artifact, caller.tenantId, memberId));
+        bundleAuthoritative = bundle.authoritative;
+      }
+      const result = bundleAuthoritative
+        ? this.options.store.replaceProjectionsAndKnowledge(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], bundleArtifacts, { tenantId: caller.tenantId!, memberId })
+        : { ...this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId }), knowledge: undefined };
+      const knowledge = result.knowledge;
       if (skillPackagesAuthoritative && this.options.skillCache && (signedPackages.length === 0 || (publicKey && keyId))) {
         const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
         const currentEmployeeIds = new Set(experts.filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
@@ -377,7 +388,7 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, { publicKey, keyId });
       }
-      this.writeJson(response, 200, { data: { ok: true, ...result } });
+      this.writeJson(response, 200, { data: { ok: true, ...result, ...(knowledge ? { knowledge } : {}) } });
     } catch (error) {
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
       throw error;

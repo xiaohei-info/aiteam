@@ -12,8 +12,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from fastapi.responses import Response
@@ -24,7 +22,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
-from .knowledge_intake_service import KnowledgeIntakeService, build_knowledge_intake_service
+from .knowledge_intake_service import KnowledgeIntakeService, build_knowledge_intake_service, ensure_storage_root, manager_storage_root
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
@@ -40,14 +38,14 @@ class _ManagerNotConfigured(AppError):
 
 
 def _service(request: Request) -> KnowledgeIntakeService:
-    """从端配置构造 KnowledgeIntakeService；未配置业务 DB → 503。文档存储根：临时目录（M0）。"""
+    """从端配置构造 KnowledgeIntakeService；存储根为持久化配置目录。"""
     dsn = request.app.state.settings.db_url
     if not dsn:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_knowledge_intake_service", None)
     if cache is None:
         router = PgTenantRouter(dsn)
-        root = Path(tempfile.mkdtemp(prefix="aiteam-kb-"))
+        root = ensure_storage_root(manager_storage_root(request.app.state.settings))
         cache = build_knowledge_intake_service(router, storage_root=root)
         request.app.state._knowledge_intake_service = cache
     return cache

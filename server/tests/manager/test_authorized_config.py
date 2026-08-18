@@ -200,6 +200,25 @@ def test_revoked_ids_for_no_longer_authorized():
     assert "old-eid" in resp.revoked_ids
 
 
+def test_bundle_citation_versions_are_not_projection_versions():
+    config_svc, _gs, _member_svc, svc = _services()
+    ctx = _ctx("t-a", roles=["owner"], user_id="owner-1")
+    config_svc.create(ctx, _body(), employee_slug="exp-x")
+    citation_id = "citation-1"
+
+    # Real AuthorizedConfigService treats unknown keys as revoked projection IDs.
+    polluted = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="owner-1", known_versions={citation_id: "v1"},
+    ))
+    assert citation_id in polluted.revoked_ids
+
+    # The bundle pull must therefore call this service with its own empty map.
+    clean = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="owner-1", known_versions={},
+    ))
+    assert citation_id not in clean.revoked_ids
+
+
 # ---- HTTP 端点（非 integration）----
 
 def _token(tenant_id: str, roles: list[str], user_id: str) -> str:

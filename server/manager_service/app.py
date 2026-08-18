@@ -133,7 +133,7 @@ app.include_router(grants_router)
 app.include_router(build_knowledge_space_router(_verifier))
 # 知识文档 intake 生命周期 + 索引绑定（/api/manager/knowledge-spaces/{id}/documents/* 与 /ingestions/*，issue #416）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_intake_router(_verifier))
-# 外部知识索引 facade（/api/manager/knowledge/artifacts/*）；授权后仅转发至索引服务。
+# Manager durable knowledge bundle exporter（/api/manager/knowledge/artifacts/*）；不提供查询或上传路径。
 app.include_router(build_knowledge_artifact_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))

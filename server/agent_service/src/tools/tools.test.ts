@@ -32,10 +32,7 @@ test("custom tools bind employee and authorized knowledge refs outside model par
 
 test("knowledge tools never invoke Manager and fail closed without a local index", async () => {
   let remoteCalls = 0;
-  const manager = {
-    knowledgeSearch: async () => (remoteCalls++, { citations: ["remote"] }),
-    knowledgeGet: async () => (remoteCalls++, { citation: "remote" }),
-  };
+  const manager = {};
   const tools = createKnowledgeTools({ caller, employeeId: "employee-1", knowledgeRefs: ["set-authorized"], managerClient: manager } as unknown as KnowledgeToolContext);
 
   const search = await tools[0].execute("call-1", { query: "q", limit: 1 }, undefined, undefined, {} as never);

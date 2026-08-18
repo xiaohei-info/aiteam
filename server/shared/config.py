@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +36,8 @@ class Settings(BaseModel):
         default=None,
         description="迁移时为 app_rw 设置的 LOGIN 口令（来源 env，禁止硬编码）；业务 DSN 已内含该口令，本项仅供管理连接在迁移中下发",
     )
+    # Manager durable knowledge source. Compose mounts the named managerdata volume here.
+    manager_data_root: Path = Field(default_factory=lambda: Path.cwd() / ".data" / "manager")
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
@@ -64,6 +67,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
         db_url=os.getenv("DB_URL"),
         admin_db_url=os.getenv("ADMIN_DB_URL"),
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
+        manager_data_root=Path(os.getenv("AITEAM_MANAGER_DATA_ROOT") or (Path.cwd() / ".data" / "manager")),
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),

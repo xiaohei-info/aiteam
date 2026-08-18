@@ -2,6 +2,7 @@ import type { AuthenticatedCaller } from "./http/auth.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
 import type { UsageSummary } from "./usage.js";
 import type { SignedSkillPackage } from "./skills.js";
+import type { KnowledgeArtifact } from "./storage/sqlite.js";
 
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
@@ -30,13 +31,12 @@ export interface ManagerClient {
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
+  pullKnowledgeArtifacts?(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   memoryRecall?(caller: AuthenticatedCaller, employeeId: string, query: string, limit: number): Promise<unknown>;
   memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown>): Promise<unknown>;
   memoryDelete?(caller: AuthenticatedCaller, memoryId: string): Promise<void>;
-  knowledgeSearch?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown>;
-  knowledgeGet?(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
@@ -99,6 +99,24 @@ export class HttpManagerClient implements ManagerClient {
     return snapshots;
   }
 
+  async pullKnowledgeArtifacts(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }> {
+    const response = await this.requestResponse("/api/manager/knowledge/artifacts/bundle", caller, { known_versions: knownVersions });
+    let value: unknown;
+    try {
+      value = JSON.parse(await readBoundedBody(response, MAX_KNOWLEDGE_RESPONSE_BYTES));
+    } catch (error) {
+      if (error instanceof ManagerUnavailableError) throw error;
+      throw new ManagerUnavailableError("Manager returned an invalid response", { cause: error });
+    }
+    value = this.unwrap(value);
+    if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid knowledge bundle");
+    const body = value as { artifacts?: unknown; authoritative?: unknown };
+    if (typeof body.authoritative !== "boolean" || !Array.isArray(body.artifacts) || body.artifacts.length > MAX_KNOWLEDGE_ARTIFACTS) throw new ManagerUnavailableError("Manager returned an oversized knowledge bundle");
+    const artifacts = body.artifacts.map((item) => normalizeKnowledgeArtifact(item, caller.tenantId, caller.userId ?? caller.callerId));
+    if (artifacts.reduce((total, artifact) => total + Buffer.byteLength(artifact.content, "utf8"), 0) > MAX_KNOWLEDGE_ARTIFACT_BYTES) throw new ManagerUnavailableError("Manager knowledge bundle artifacts exceed byte limit");
+    return { artifacts, authoritative: body.authoritative };
+  }
+
   async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {
     const response = await this.request("/api/manager/org/tree", caller);
     return this.unwrap(response);
@@ -126,25 +144,6 @@ export class HttpManagerClient implements ManagerClient {
     await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, undefined, "DELETE");
   }
 
-  async knowledgeSearch(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown> {
-    const response = await this.request("/api/manager/knowledge/artifacts/search", caller, {
-      employee_id: employeeId,
-      knowledge_refs: [...knowledgeRefs],
-      query,
-      limit,
-    });
-    return this.unwrap(response);
-  }
-
-  async knowledgeGet(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown> {
-    const response = await this.request("/api/manager/knowledge/artifacts/get", caller, {
-      employee_id: employeeId,
-      knowledge_refs: [...knowledgeRefs],
-      citation_id: citationId,
-    });
-    return this.unwrap(response);
-  }
-
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
     return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [summary], audits: [] }, undefined, "POST", summary.summary_id));
   }
@@ -157,6 +156,23 @@ export class HttpManagerClient implements ManagerClient {
     method?: "GET" | "POST" | "DELETE",
     idempotencyKey?: string,
   ): Promise<unknown> {
+    const response = await this.requestResponse(path, caller, body, query, method, idempotencyKey);
+    if (response.status === 204) return undefined;
+    try {
+      return await response.json();
+    } catch (error) {
+      throw new ManagerUnavailableError("Manager returned an invalid response", { cause: error });
+    }
+  }
+
+  private async requestResponse(
+    path: string,
+    caller: AuthenticatedCaller,
+    body?: unknown,
+    query?: Record<string, string>,
+    method?: "GET" | "POST" | "DELETE",
+    idempotencyKey?: string,
+  ): Promise<Response> {
     const url = new URL(path, this.baseUrl);
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
     const requestMethod = method ?? (body === undefined ? "GET" : "POST");
@@ -176,12 +192,7 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerUnavailableError("Manager request failed", { cause: error });
     }
     if (!response.ok) throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
-    if (response.status === 204) return undefined;
-    try {
-      return await response.json();
-    } catch (error) {
-      throw new ManagerUnavailableError("Manager returned an invalid response", { cause: error });
-    }
+    return response;
   }
 
   private unwrap(value: unknown): unknown {
@@ -198,6 +209,30 @@ export class ManagerUnavailableError extends Error {
   }
 }
 
+async function readBoundedBody(response: Response, limit: number): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/u.test(contentLength) && Number(contentLength) > limit) {
+    throw new ManagerUnavailableError("Manager knowledge bundle response exceeds limit");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > limit) throw new ManagerUnavailableError("Manager knowledge bundle response exceeds limit");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
 export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, memberId?: string): AuthorizedConfig {
   if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid authorized config");
   const body = value as Record<string, unknown>;
@@ -209,6 +244,43 @@ export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, mem
   const skillPackagesAuthoritative = body.skill_packages_authoritative !== false;
   const skill_packages = skillPackagesAuthoritative && Array.isArray(body.skill_packages) ? body.skill_packages.map(normalizeSignedSkillPackage) : undefined;
   return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(hasSkillPackages && skill_packages ? { skill_packages } : {}) };
+}
+
+const MAX_KNOWLEDGE_ARTIFACTS = 4_096;
+const MAX_KNOWLEDGE_ARTIFACT_BYTES = 32 * 1024 * 1024;
+const MAX_KNOWLEDGE_RESPONSE_BYTES = 48 * 1024 * 1024;
+
+const KNOWLEDGE_ARTIFACT_FIELDS = new Set([
+  "tenant_id", "member_id", "employee_id", "knowledge_space_id", "document_id", "artifact_version",
+  "source_hash", "citation_id", "chunk_index", "title", "source", "content",
+]);
+const KNOWLEDGE_SOURCE_FIELDS = new Set(["type", "name", "mime_type"]);
+const KNOWLEDGE_FIELD_LIMITS: Record<string, number> = {
+  tenant_id: 256, member_id: 256, employee_id: 256, knowledge_space_id: 256, document_id: 256,
+  artifact_version: 512, citation_id: 256, title: 512, content: 1_048_576,
+};
+
+export function normalizeKnowledgeArtifact(value: unknown, tenantId?: string, memberId?: string): KnowledgeArtifact {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact");
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !KNOWLEDGE_ARTIFACT_FIELDS.has(key))) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact field");
+  for (const [key, limit] of Object.entries(KNOWLEDGE_FIELD_LIMITS)) {
+    if (typeof raw[key] !== "string" || raw[key].length === 0 || raw[key].length > limit) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact field");
+  }
+  if (typeof raw.source_hash !== "string" || !/^[a-f0-9]{64}$/u.test(raw.source_hash)) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact hash");
+  if (typeof raw.chunk_index !== "number" || !Number.isFinite(raw.chunk_index) || !Number.isInteger(raw.chunk_index) || raw.chunk_index < 0 || raw.chunk_index > 1_000_000) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact chunk_index");
+  if (!raw.source || typeof raw.source !== "object" || Array.isArray(raw.source)) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact source");
+  const source = raw.source as Record<string, unknown>;
+  if (Object.keys(source).some((key) => !KNOWLEDGE_SOURCE_FIELDS.has(key)) || ["type", "name", "mime_type"].some((key) => typeof source[key] !== "string" || source[key].length === 0 || source[key].length > (key === "name" ? 1024 : 256))) throw new ManagerUnavailableError("Manager returned an invalid knowledge artifact source");
+  assertOwnership(raw, tenantId, memberId);
+  return {
+    tenant_id: raw.tenant_id as string, member_id: raw.member_id as string, employee_id: raw.employee_id as string,
+    knowledge_space_id: raw.knowledge_space_id as string, document_id: raw.document_id as string,
+    artifact_version: raw.artifact_version as string, source_hash: raw.source_hash as string,
+    citation_id: raw.citation_id as string, chunk_index: raw.chunk_index, title: raw.title as string,
+    source: { type: source.type as string, name: source.name as string, mime_type: source.mime_type as string },
+    content: raw.content as string,
+  };
 }
 
 function normalizeSignedSkillPackage(value: unknown): SignedSkillPackage {
