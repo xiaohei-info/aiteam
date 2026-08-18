@@ -7,6 +7,8 @@ implement a local fallback: an unconfigured or unavailable upstream is surfaced 
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -133,8 +135,16 @@ class HindsightClient:
             item["context"] = context
         if isinstance(metadata.get("document_id"), str):
             item["document_id"] = metadata["document_id"]
+        operation_id = hashlib.sha256(
+            f"{ctx.tenant_id}:{ctx.user_id}:{employee_id}:"
+            f"{content}:{json.dumps(metadata, sort_keys=True, default=str)}".encode()
+        ).hexdigest()
+        operation_id = (
+            f"{operation_id[:8]}-{operation_id[8:12]}-{operation_id[12:16]}-"
+            f"{operation_id[16:20]}-{operation_id[20:32]}"
+        )
         return self._request(ctx, self._settings.retain_path, {
-            "items": [item], "async": False,
+            "items": [item], "async": True, "operation_id": operation_id,
         }, employee_id=employee_id)
 
     def delete(
