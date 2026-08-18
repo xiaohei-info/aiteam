@@ -19,7 +19,7 @@ import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
-import { createKnowledgeTools } from "../tools/knowledge.js";
+import { createKnowledgeTools, type LocalKnowledgeIndex } from "../tools/knowledge.js";
 import { createMemoryTools } from "../tools/memory.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
@@ -54,6 +54,7 @@ export interface SessionAuthorization {
   snapshot: FrozenSnapshot;
   mentionedEmployeeIds?: ReadonlySet<string>;
   managerClient?: ManagerClient;
+  localKnowledgeIndex?: LocalKnowledgeIndex;
 }
 
 export interface SessionHostOptions {
@@ -65,6 +66,7 @@ export interface SessionHostOptions {
   model: Model<any>;
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
   managerClient?: ManagerClient;
+  localKnowledgeIndex?: LocalKnowledgeIndex;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   usageRecorder?: (capture: UsageCapture) => void | Promise<void>;
@@ -354,7 +356,7 @@ export class SessionHost {
       ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
       ...codingTools,
       ...createMemoryTools({ caller: authorization.caller, employeeId: authorization.employeeId, managerClient: authorization.managerClient }),
-      ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), managerClient: authorization.managerClient }),
+      ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), localKnowledgeIndex: authorization.localKnowledgeIndex }),
       ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
     return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -393,7 +395,7 @@ export class SessionHost {
     const mentionedEmployeeIds = mentions.length
       ? new Set(this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((item) => mentions.includes(item.handle)).map((item) => item.employee_id))
       : undefined;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient };
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient, localKnowledgeIndex: this.options.localKnowledgeIndex };
   }
 
   private disposeSession(record: SessionRecord): void {

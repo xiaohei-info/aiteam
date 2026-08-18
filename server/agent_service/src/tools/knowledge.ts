@@ -1,13 +1,18 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AuthenticatedCaller } from "../http/auth.js";
-import { ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
+
+/** Local-only knowledge seam; implementations must enforce the bound employee/ref closure. */
+export interface LocalKnowledgeIndex {
+  search(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], query: string, limit: number): Promise<unknown>;
+  get(caller: AuthenticatedCaller, employeeId: string, knowledgeRefs: readonly string[], citationId: string): Promise<unknown>;
+}
 
 export interface KnowledgeToolContext {
   caller: AuthenticatedCaller;
   employeeId: string;
   knowledgeRefs: readonly string[];
-  managerClient?: ManagerClient;
+  localKnowledgeIndex?: LocalKnowledgeIndex;
 }
 
 const searchParameters = Type.Object({
@@ -27,20 +32,15 @@ export function createKnowledgeTools(context: KnowledgeToolContext): ToolDefinit
       promptSnippet: "knowledge_search(query, limit)",
       parameters: searchParameters,
       execute: async (_toolCallId, params) => {
-        if (!context.managerClient?.knowledgeSearch) return unavailableResult();
-        try {
-          const data = await context.managerClient.knowledgeSearch(
-            context.caller,
-            context.employeeId,
-            context.knowledgeRefs,
-            params.query,
-            params.limit,
-          );
-          return { content: [{ type: "text", text: JSON.stringify(data) }], details: undefined };
-        } catch (error) {
-          if (error instanceof ManagerUnavailableError) return unavailableResult();
-          throw error;
-        }
+        if (!context.localKnowledgeIndex) return unavailableResult();
+        const data = await context.localKnowledgeIndex.search(
+          context.caller,
+          context.employeeId,
+          context.knowledgeRefs,
+          params.query,
+          params.limit,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(data) }], details: undefined };
       },
     }),
     defineTool({
@@ -50,19 +50,14 @@ export function createKnowledgeTools(context: KnowledgeToolContext): ToolDefinit
       promptSnippet: "knowledge_get(citation_id)",
       parameters: getParameters,
       execute: async (_toolCallId, params) => {
-        if (!context.managerClient?.knowledgeGet) return unavailableResult();
-        try {
-          const data = await context.managerClient.knowledgeGet(
-            context.caller,
-            context.employeeId,
-            context.knowledgeRefs,
-            params.citation_id,
-          );
-          return { content: [{ type: "text", text: JSON.stringify(data) }], details: undefined };
-        } catch (error) {
-          if (error instanceof ManagerUnavailableError) return unavailableResult();
-          throw error;
-        }
+        if (!context.localKnowledgeIndex) return unavailableResult();
+        const data = await context.localKnowledgeIndex.get(
+          context.caller,
+          context.employeeId,
+          context.knowledgeRefs,
+          params.citation_id,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(data) }], details: undefined };
       },
     }),
   ];
