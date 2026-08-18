@@ -19,7 +19,7 @@ def test_manager_data_root_keeps_local_fallback_and_compose_path(monkeypatch):
     text = compose.read_text(encoding="utf-8")
     assert "- managerdata:/app/data" in text
     assert "AITEAM_MANAGER_DATA_ROOT: /app/data" in text
-    assert "name: ${MANAGER_DATA_VOLUME:-managerdata}" in text
+    assert "name: ${MANAGER_DATA_VOLUME:-managerdata_${AITEAM_ENV:-dev}}" in text
     assert "KNOWLEDGE_DATA_ROOT" not in text
 
     local_env = (root / ".env.example").read_text(encoding="utf-8")

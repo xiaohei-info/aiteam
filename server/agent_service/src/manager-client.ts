@@ -227,6 +227,9 @@ async function readBoundedBody(response: Response, limit: number): Promise<strin
       if (size > limit) throw new ManagerUnavailableError("Manager knowledge bundle response exceeds limit");
       chunks.push(value);
     }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }

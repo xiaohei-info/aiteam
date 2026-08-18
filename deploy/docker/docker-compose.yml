@@ -126,8 +126,8 @@ volumes:
   # 实际卷名由 ENV 的 MANAGER_DATA_VOLUME 决定（ctl.sh 缺省注入 managerdata_<env>，
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 managerdata。
   managerdata:
-    name: ${MANAGER_DATA_VOLUME:-managerdata}
+    name: ${MANAGER_DATA_VOLUME:-managerdata_${AITEAM_ENV:-dev}}
   # 实际卷名由 ENV 的 POSTGRES_VOLUME 决定（ctl.sh 缺省注入 aiteam_pg_data_<env>，
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 aiteam_pg_data。
   pgdata:
-    name: ${POSTGRES_VOLUME:-aiteam_pg_data}
+    name: ${POSTGRES_VOLUME:-aiteam_pg_data_${AITEAM_ENV:-dev}}

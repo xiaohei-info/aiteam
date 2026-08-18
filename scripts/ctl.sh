@@ -317,6 +317,7 @@ get_pid() {
 start_service_local() {
   local service="$1"
   get_service_paths "${service}"
+  cd "${REPO_ROOT}"
 
   # 检查是否已运行
   if get_pid "${service}" >/dev/null 2>&1; then
@@ -357,6 +358,7 @@ start_service_local() {
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}" \
+        AITEAM_MANAGER_DATA_ROOT="${AITEAM_MANAGER_DATA_ROOT:-${REPO_ROOT}/.data/manager}" \
         OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \

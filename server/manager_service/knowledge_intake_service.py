@@ -49,6 +49,9 @@ _INTAKE_WRITE_ROLES = [
 
 # 单文档上传上限（字节）— 4 MB，与旧 app/ 口径一致。
 _MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+_MAX_DISPLAY_NAME = 512
+_MAX_FILE_NAME = 1024
+_MAX_FILE_TYPE = 256
 
 
 class _EmployeeIndexBindingPort(Protocol):
@@ -180,6 +183,9 @@ class KnowledgeIntakeService:
                 detail=f"file exceeds max upload size ({_MAX_UPLOAD_BYTES} bytes)",
                 errors=None,
             )
+        display_name, file_name, file_type = _normalize_document_metadata(
+            display_name, file_name, file_type
+        )
         storage_key = _store_bytes(self._storage_root, knowledge_space_id, file_name, content, tenant_id=ctx.tenant_id)
         return self._create_and_advance(
             ctx,
@@ -206,6 +212,9 @@ class KnowledgeIntakeService:
         from .document_parser_url import fetch_url_text
         text, name, mime, title = fetch_url_text(url)
         chosen_name = display_name or title or name or "web page"
+        chosen_name, name, mime = _normalize_document_metadata(
+            chosen_name, name, mime or "text/plain"
+        )
         storage_key = _store_text(
             self._storage_root, knowledge_space_id, name, text, tenant_id=ctx.tenant_id
         )
@@ -215,7 +224,7 @@ class KnowledgeIntakeService:
             display_name=chosen_name,
             source_type="url",
             file_name=name,
-            file_type=mime or "text/plain",
+            file_type=mime,
             file_size=len(text),
             storage_key=storage_key,
         )
@@ -455,6 +464,26 @@ def ensure_storage_root(root: Path) -> Path:
             if not path.is_symlink():
                 os.chmod(path, 0o600)
     return root
+
+
+def _normalize_document_metadata(
+    display_name: str, file_name: str, file_type: str
+) -> tuple[str, str, str]:
+    safe_display = display_name.strip()
+    safe_name = Path(file_name).name or "upload.bin"
+    if not safe_display or len(safe_display) > _MAX_DISPLAY_NAME:
+        raise ValidationProblem(
+            detail=f"display_name must be 1-{_MAX_DISPLAY_NAME} characters", errors=None
+        )
+    if len(safe_name) > _MAX_FILE_NAME:
+        raise ValidationProblem(
+            detail=f"file_name must be <= {_MAX_FILE_NAME} characters", errors=None
+        )
+    if not isinstance(file_type, str) or not file_type or len(file_type) > _MAX_FILE_TYPE:
+        raise ValidationProblem(
+            detail=f"file_type must be 1-{_MAX_FILE_TYPE} characters", errors=None
+        )
+    return safe_display, safe_name, file_type
 
 
 def _store_bytes(root: Path, knowledge_space_id: str, file_name: str, content: bytes, *, tenant_id: str | None = None) -> str:
