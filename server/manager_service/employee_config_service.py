@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 
-from shared.contracts.enums import EnterpriseRole
+from shared.contracts.enums import EmployeeStatus, EnterpriseRole
 from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Conflict, Forbidden, NotFound
 from shared.db import PgTenantRouter
 
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
+from .employee_lifecycle import can_write_config, is_provisionable, is_runnable, target_status
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 
 # 配置写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
