@@ -93,7 +93,7 @@ class HindsightClient:
                 # each operation keeps first-use employees working after a fresh deploy.
                 bank_response = client.put(
                     f"{self._settings.base_url.rstrip('/')}/v1/default/banks/{encoded_bank_id}",
-                    json={"name": bank_id},
+                    json={"name": bank_id, "retain_extraction_mode": "verbatim"},
                     headers=headers,
                 )
                 if bank_response.status_code >= 400:
