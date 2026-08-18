@@ -355,6 +355,7 @@ start_service_local() {
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}" \
+        AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}" \
         OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}" \
         LOG_LEVEL="${LOG_LEVEL}" \
@@ -381,6 +382,8 @@ start_service_local() {
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
         MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
+        AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
+        AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
         LOG_LEVEL="${LOG_LEVEL}" \
         EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
         "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
@@ -414,6 +417,7 @@ start_service_local() {
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
+        AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}" \
         AITEAM_AGENT_JWKS_JSON="${AITEAM_AGENT_JWKS_JSON:-}" \
