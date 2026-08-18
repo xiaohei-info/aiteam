@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, chmodSync, rmSync, realpathSync } from "node:fs"
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
   type AgentSession,
   type AgentSessionEvent,
   type ResourceLoader,
@@ -20,6 +24,7 @@ import { createMemoryTools } from "../tools/memory.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
+import { LocalSandbox } from "./sandbox.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -61,7 +66,7 @@ export interface SessionHostOptions {
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
-  sandboxAvailable?: () => boolean;
+  sandbox?: LocalSandbox;
   usageRecorder?: (capture: UsageCapture) => void | Promise<void>;
 }
 
@@ -305,10 +310,11 @@ export class SessionHost {
     if (record.session) return record.session;
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization);
     await resourceLoader.reload();
-    const customTools = this.toolsFor(authorization, true, record);
-    if (authorization && this.hasCodingTools(authorization.snapshot) && !this.options.sandboxAvailable?.()) {
-      throw new SessionAuthorizationError("Coding tools require an available external sandbox");
+    if (authorization && this.hasCodingTools(authorization.snapshot)) {
+      if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
+      await this.options.sandbox.assertAvailable(record.workspace);
     }
+    const customTools = this.toolsFor(authorization, true, record, record.workspace);
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
@@ -330,16 +336,28 @@ export class SessionHost {
     return result.session;
   }
 
-  private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord): ToolDefinition[] {
+  private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord, workspace?: string, sessionId?: string): ToolDefinition[] {
     if (!authorization) return this.options.customTools ?? [];
     const allowed = this.allowedTools(authorization.snapshot);
+    const operations = this.options.sandbox && workspace
+      ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId())
+      : undefined;
+    const codingTools = operations && workspace
+      ? [
+          createBashToolDefinition(workspace, { operations: operations.bash }),
+          createReadToolDefinition(workspace, { operations: operations.read }),
+          createWriteToolDefinition(workspace, { operations: operations.write }),
+          createEditToolDefinition(workspace, { operations: operations.edit }),
+        ]
+      : [];
     const tools = [
       ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
+      ...codingTools,
       ...createMemoryTools({ caller: authorization.caller, employeeId: authorization.employeeId, managerClient: authorization.managerClient }),
       ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), managerClient: authorization.managerClient }),
       ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
-    return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index);
+    return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
   }
 
   private allowedTools(snapshot: FrozenSnapshot): Set<string> {
@@ -416,13 +434,21 @@ export class SessionHost {
     const child: ChildSession = { aborted: false, abort: async () => { child.aborted = true; await child.session?.abort(); } };
     record.activeDelegates.add(child);
     const sourceRef = createHash("sha256").update(`${record.conversationId}:${toolCallId}:${Date.now()}`).digest("hex").slice(0, 24);
+    let childWorkspace: string | undefined;
     try {
-      const sessionManager = SessionManager.inMemory(record.workspace);
+      childWorkspace = join(record.workspace, ".delegates", sourceRef);
+      mkdirSync(childWorkspace, { recursive: true, mode: 0o700 });
+      chmodSync(childWorkspace, 0o700);
+      if (this.hasCodingTools(snapshot)) {
+        if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
+        await this.options.sandbox.assertAvailable(childWorkspace);
+      }
+      const sessionManager = SessionManager.inMemory(childWorkspace);
       const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, { ...authorization, employeeId: snapshot.employee_id, snapshot });
       await resourceLoader.reload();
-      const childTools = this.toolsFor({ ...authorization, employeeId: snapshot.employee_id, snapshot }, false);
+      const childTools = this.toolsFor({ ...authorization, employeeId: snapshot.employee_id, snapshot }, false, undefined, childWorkspace, sessionManager.getSessionId());
       const result = await createAgentSession({
-        cwd: record.workspace,
+        cwd: childWorkspace,
         agentDir: this.options.agentDir,
         model: this.modelFor(snapshot),
         thinkingLevel: this.thinkingLevelFor({ ...authorization, snapshot }),
@@ -445,6 +471,7 @@ export class SessionHost {
         result.session.dispose();
       }
     } finally {
+      if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
       record.activeDelegates.delete(child);
     }
   }

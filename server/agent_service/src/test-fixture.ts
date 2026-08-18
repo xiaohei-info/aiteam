@@ -32,7 +32,6 @@ export async function createFixture() {
       model,
       managerClient,
       resourceLoaderFactory: () => createControlledResourceLoader("test system prompt"),
-      sandboxAvailable: () => false,
     });
   const host = createHost();
   return {

@@ -6,6 +6,7 @@ import { createJwtAuthenticator, type JwtJwk } from "./http/auth.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
+import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 import { HttpManagerClient } from "./manager-client.js";
 import { aggregateUsage } from "./usage.js";
@@ -33,6 +34,7 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ agentDir, useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = process.env.AITEAM_MANAGER_URL ? new HttpManagerClient(process.env.AITEAM_MANAGER_URL) : undefined;
+const sandbox = new LocalSandbox();
 const sessionHost = new SessionHost({
   cwdRoot,
   agentDir,
@@ -41,7 +43,7 @@ const sessionHost = new SessionHost({
   modelRuntime: configured.runtime,
   model: configured.model,
   managerClient,
-  sandboxAvailable: () => process.env.AITEAM_AGENT_SANDBOX_READY === "true",
+  sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization)),
 });
