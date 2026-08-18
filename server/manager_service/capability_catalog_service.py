@@ -27,6 +27,7 @@ from .schemas import (
     MemoryPolicyCatalogOut,
     SkillCatalogIn,
     SkillCatalogOut,
+    SkillFileIn,
 )
 
 # 目录写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
@@ -68,6 +69,8 @@ class CapabilityCatalogService:
             ctx, catalog_id=catalog_id, display_name=body.display_name, version=body.version,
             install_policy=body.install_policy, binding_policy=body.binding_policy,
             visibility=body.visibility, config=body.config,
+            files=[f.model_dump(mode="json") for f in body.files],
+            content_hash=body.content_hash,
         )
         if row is None:  # 双保险：RLS 下跨 tenant 不可见
             raise NotFound("skill not found in this tenant")
