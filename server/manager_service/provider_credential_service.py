@@ -122,17 +122,22 @@ class ProviderCredentialService:
             raise NotFound("provider credential not found in this tenant")
 
     def list_all(self, ctx: TenantContext) -> list[ProviderCredentialOut]:
-        return [_to_out(r) for r in self._repo.list_all(ctx)]
+        rows = _visible_rows(ctx, self._repo.list_all(ctx))
+        return [_to_out(r) for r in rows]
 
     def list_providers_supporting_model(
         self, ctx: TenantContext, *, model: str
     ) -> list[ProviderCredentialOut]:
-        """返回本 tenant 内 enabled 且支持指定 model 的 provider 列表（供招募自动匹配 provider_ref）。"""
-        return [_to_out(r) for r in self._repo.list_providers_supporting_model(ctx, model=model)]
+        """返回当前用户可见且 enabled 且支持指定 model 的 provider 列表。"""
+        rows = _visible_rows(
+            ctx, self._repo.list_providers_supporting_model(ctx, model=model)
+        )
+        return [_to_out(r) for r in rows]
 
     def _require(self, ctx: TenantContext, credential_id: str) -> ProviderCredentialRow:
         row = self._repo.get(ctx, credential_id=credential_id)
-        if row is None:
+        if row is None or not _is_visible(ctx, row):
+            # 隐藏无权访问的行，避免通过 get 枚举凭据。
             raise NotFound("provider credential not found in this tenant")
         return row
 
@@ -147,6 +152,28 @@ def _ensure_visibility_members(visibility: str, allowed_member_ids: list[str]) -
     """可见性语义守卫：visibility=members 时 allowed_member_ids 须非空。"""
     if visibility == "members" and not allowed_member_ids:
         raise Conflict("visibility=members requires non-empty allowed_member_ids")
+
+
+def _can_view_all(ctx: TenantContext) -> bool:
+    """owner/enterprise_admin 可查看本租户全部凭据。"""
+    return bool(set(ctx.roles) & set(_CRED_WRITE_ROLES))
+
+
+def _is_visible(ctx: TenantContext, row: ProviderCredentialRow) -> bool:
+    """按凭据可见性判断当前用户是否可见。"""
+    return _can_view_all(ctx) or (
+        row.visibility == "tenant"
+        or row.visibility == "members" and ctx.user_id in row.allowed_member_ids
+    )
+
+
+def _visible_rows(
+    ctx: TenantContext, rows: list[ProviderCredentialRow]
+) -> list[ProviderCredentialRow]:
+    """过滤本租户查询结果；租户边界仍由 repository/RLS 负责。"""
+    if _can_view_all(ctx):
+        return rows
+    return [row for row in rows if _is_visible(ctx, row)]
 
 
 def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:

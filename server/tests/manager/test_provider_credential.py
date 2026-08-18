@@ -160,8 +160,8 @@ def _crypto() -> CryptoService:
     return CryptoService(Fernet(Fernet.generate_key()))
 
 
-def _ctx(tid: str, roles=None) -> TenantContext:
-    return TenantContext(tenant_id=tid, user_id="u", roles=roles or ["owner"])
+def _ctx(tid: str, roles=None, user_id="u") -> TenantContext:
+    return TenantContext(tenant_id=tid, user_id=user_id, roles=roles or ["owner"])
 
 
 def _create_body(**overrides) -> ProviderCredentialCreate:
@@ -229,6 +229,83 @@ def test_crud_roundtrip_plaintext_never_stored_or_returned():
     svc.delete(ctx, credential_id=created.credential_id)
     with pytest.raises(NotFound):
         svc.get(ctx, credential_id=created.credential_id)
+
+
+def test_member_visibility_allows_only_authorized_member_and_tenant_rows():
+    svc = ProviderCredentialService(_FakeRepo(), _crypto())
+    owner = _ctx("t-a")
+    members_only = svc.create(
+        owner,
+        _create_body(
+            provider_ref="p-members",
+            visibility="members",
+            allowed_member_ids=["u-allowed"],
+        ),
+    )
+    svc.create(owner, _create_body(provider_ref="p-tenant"))
+
+    allowed = _ctx("t-a", roles=["member"], user_id="u-allowed")
+    assert svc.get(allowed, credential_id=members_only.credential_id).provider_ref == "p-members"
+    assert [p.provider_ref for p in svc.list_all(allowed)] == ["p-members", "p-tenant"]
+
+    disallowed = _ctx("t-a", roles=["member"], user_id="u-denied")
+    with pytest.raises(NotFound):
+        svc.get(disallowed, credential_id=members_only.credential_id)
+    assert [p.provider_ref for p in svc.list_all(disallowed)] == ["p-tenant"]
+
+
+def test_owner_and_enterprise_admin_can_view_all_tenant_credentials():
+    svc = ProviderCredentialService(_FakeRepo(), _crypto())
+    owner = _ctx("t-a")
+    hidden = svc.create(
+        owner,
+        _create_body(
+            provider_ref="p-members",
+            visibility="members",
+            allowed_member_ids=["u-other"],
+        ),
+    )
+    svc.create(owner, _create_body(provider_ref="p-tenant"))
+
+    for role in ("owner", "enterprise_admin"):
+        ctx = _ctx("t-a", roles=[role], user_id="u-admin")
+        assert {p.provider_ref for p in svc.list_all(ctx)} == {"p-members", "p-tenant"}
+        assert svc.get(ctx, credential_id=hidden.credential_id).provider_ref == "p-members"
+
+
+def test_supporting_model_respects_visibility_for_members():
+    svc = ProviderCredentialService(_FakeRepo(), _crypto())
+    owner = _ctx("t-a")
+    svc.create(
+        owner,
+        _create_body(
+            provider_ref="p-allowed",
+            visibility="members",
+            allowed_member_ids=["u-allowed"],
+            supported_models=[ProviderModelCapability(model="gpt-4o", enabled=True)],
+        ),
+    )
+    svc.create(
+        owner,
+        _create_body(
+            provider_ref="p-denied",
+            visibility="members",
+            allowed_member_ids=["u-denied"],
+            supported_models=[ProviderModelCapability(model="gpt-4o", enabled=True)],
+        ),
+    )
+    svc.create(
+        owner,
+        _create_body(
+            provider_ref="p-disabled",
+            supported_models=[ProviderModelCapability(model="gpt-4o", enabled=False)],
+        ),
+    )
+
+    allowed = _ctx("t-a", roles=["member"], user_id="u-allowed")
+    assert [p.provider_ref for p in svc.list_providers_supporting_model(allowed, model="gpt-4o")] == [
+        "p-allowed"
+    ]
 
 
 def test_list_providers_supporting_model_filters_by_enabled_model():
