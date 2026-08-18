@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
@@ -30,6 +33,7 @@ from manager_service.employee_config_service import EmployeeConfigService
 from manager_service.member_service import GrantService, MemberDeptService
 from manager_service.repository_member import GrantRow, MemberRow
 from manager_service.schemas import EmployeeConfigIn
+from manager_service.skill_signing import SkillPackageSigner
 
 from .test_employee_config import _FakeRepo
 from .test_snapshot import _FakeGrantService, _FakeMemberService
@@ -62,6 +66,32 @@ def _services():
 
 
 # ---- 成员级授权裁剪 ----
+
+def test_legacy_catalog_without_skill_md_is_skipped_without_breaking_config():
+    class _CatalogRepo:
+        def get_skill_by_skill_id(self, ctx, *, skill_id):
+            return SimpleNamespace(
+                skill_id=skill_id, display_name="Legacy", version="1", files=[{"path": "references/legacy.md", "content": "legacy"}],
+                content_hash="", catalog_id="legacy", install_policy="on_demand", binding_policy="opt_in", visibility="private", config={}, catalog_version=1,
+            )
+
+    class _Catalog:
+        _repo = _CatalogRepo()
+
+    service = AuthorizedConfigService(
+        config_service=EmployeeConfigService(_FakeRepo()), grant_service=_FakeGrantService(), member_service=_FakeMemberService(),
+        capability_catalog=_Catalog(), skill_signer=SkillPackageSigner(Ed25519PrivateKey.generate(), "test"),
+    )
+    result = service._resolve_skill_packages(_ctx("t-a", user_id="m-1"), [{"skills": ["legacy"]}])
+    assert result == []
+
+
+def test_missing_skill_catalog_marks_empty_response_non_authoritative():
+    _, _, _, svc = _services()
+    response = svc.pull(_ctx("t-a", user_id="m-1"), AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1"))
+    assert response.skill_packages == []
+    assert response.skill_packages_authoritative is False
+
 
 def test_member_with_grant_sees_expert():
     config_svc, grant_svc, member_svc, svc = _services()

@@ -39,6 +39,7 @@ from .envelope import Envelope, ListEnvelope, Page, Problem, ProblemFieldError
 from .grants import LoadedExpertProjection, MemberGrant
 from .snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
 from .summary import AuditSummaryEvent, UsageSummary
+from .skill import SignedSkillPackage, SkillFile, SkillPackage
 from .tenancy import TenantContext
 
 __all__ = [
@@ -74,4 +75,7 @@ __all__ = [
     "AuditSummaryEvent",
     "UsageSummary",
     "TenantContext",
+    "SignedSkillPackage",
+    "SkillFile",
+    "SkillPackage",
 ]

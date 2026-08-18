@@ -46,6 +46,11 @@ test("normalizes the Manager AuthorizedConfig contract into local projection fie
   assert.deepEqual(config.snapshots?.[0].tool_policy, { allowed_tools: ["memory_recall"] });
 });
 
+test("empty skill package responses remain authoritative unless explicitly downgraded", () => {
+  assert.deepEqual(normalizeAuthorizedConfig({ skill_packages: [] }).skill_packages, []);
+  assert.equal(normalizeAuthorizedConfig({ skill_packages: [], skill_packages_authoritative: false }).skill_packages, undefined);
+});
+
 test("Manager projection normalization rejects a tenant or member mismatch", () => {
   assert.throws(() => normalizeAuthorizedConfig({ experts: [{ employee_id: "employee-1", tenant_id: "other-tenant", member_id: "member-1", version: "1" }] }, "tenant-1", "member-1"), /different tenant/);
   assert.throws(() => normalizeAuthorizedConfig({ experts: [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-2", version: "1" }] }, "tenant-1", "member-1"), /different member/);

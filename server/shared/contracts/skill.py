@@ -1,99 +1,110 @@
-"""技能包契约（M2，04 §6.6 / 06 §7.5.4）。
-
-中立技能分发契约：
-- SkillPackage：Manager 投送给 Agent 的完整技能真相（skill_id/version/content_hash/
-  display_name/description + 文件列表）。Manager 是技能真相源（D5），Agent 本地只缓存授权投影。
-- SkillFile：单个技能文件（相对路径 + 内容 + 内容哈希），供本地 Pi ResourceLoader
-  按 version/hash 判断更新。
-
-架构边界（M2）：
-- 技能真相在 Manager（capability_catalog.skill_catalog）；用户端 Agent 只缓存「被授权专家引用的」
-  技能包的本地副本（~/.aiteam-agent/capabilities/skills/{skill_id}/{version}/）。
-- 技能包只加载到受控 Pi ResourceLoader，不发现用户全局配置（D16）。
-- Agent 负责授权、版本和 hash 校验；技能内容不携带执行器参数。
-"""
+"""Manager → Agent signed, text-only Skill package contract."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class SkillFile(BaseModel):
-    """单个技能文件（M2：相对路径 + 内容 + 内容哈希）。
-
-    path 是技能目录内的相对路径（posix 风格，例 "SKILL.md"、"references/foo.md"），
-    永不含前导 "/" 或 "../"；projector 据此写进 workDir 原生 skill 目录。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md）")
-    content: str = Field(description="文件文本内容（utf-8）")
-    content_hash: str = Field(description="内容 sha256 前 16 hex，供 cache 判断更新")
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _sha16(text: str) -> str:
-    """sha256(text)[:16]；cache 用前 16 hex 当作内容指纹，避免全量比对。"""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def normalize_skill_file_path(path: str) -> str:
-    """把任意路径归一为安全的 posix 相对路径；拒绝逃逸到外部。
+    """Validate the deliberately small, POSIX-only skill file namespace."""
+    if not path or "\\" in path or path.startswith("/") or path.startswith("./") or "//" in path or not re.fullmatch(r"[A-Za-z0-9._/-]+", path):
+        raise ValueError("skill file path must be canonical POSIX text")
+    parts = path.split("/")
+    if any(not part or part in {".", ".."} for part in parts):
+        raise ValueError("skill file path must not contain traversal or empty segments")
+    if path != "SKILL.md" and (not path.startswith("references/") or not path.endswith(".md")):
+        raise ValueError("only SKILL.md and references/*.md are accepted")
+    return path
 
-    抛 ValueError 当路径含 `..`、绝对路径、空段——projector/cache 只接受
-    skill 目录内的本分路径，绝不许穿越到缓存/workDir 之外（D6/§13）。
-    """
-    if not path or not isinstance(path, str):
-        raise ValueError("skill file path 不能为空")
-    raw = path.strip()
-    if raw.startswith("/"):
-        raise ValueError(f"非法技能文件路径（绝对路径）：{path!r}")
-    p = raw.replace("\\", "/")
-    if p.startswith("/") or p.startswith("./"):
-        p = p.lstrip("/").lstrip(".")
-        p = p.lstrip("/")
-    parts = [seg for seg in p.split("/") if seg and seg != "."]
-    for seg in parts:
-        if seg == "..":
-            raise ValueError(f"非法技能文件路径（逃逸）：{path!r}")
-    if not parts:
-        raise ValueError(f"非法技能文件路径（空）：{path!r}")
-    return "/".join(parts)
+
+def _safe_segment(value: str, name: str) -> None:
+    if not value or not _SAFE_SEGMENT.fullmatch(value) or value in {".", ".."}:
+        raise ValueError(f"invalid {name}")
+
+
+class SkillFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    content: str
+    content_hash: str
+
+    @model_validator(mode="after")
+    def validate_file(self) -> "SkillFile":
+        normalize_skill_file_path(self.path)
+        if self.content_hash != _sha16(self.content):
+            raise ValueError("skill file content_hash mismatch")
+        return self
 
 
 class SkillPackage(BaseModel):
-    """完整技能真相快照（M2：Manager 投送给 Agent 的授权投影真相）。
-
-    一旦取得即与 Manager 解耦：Agent 本地只缓存此包的副本；run 期间引用缓存版本，
-    不随 Manager 离线失效（D14）。按 (skill_id + version) 唯一；同 key 重复 store 按
-    内容 hash 决定覆盖（真更新）或跳过（幂等）（M2 #2）。
-    """
-
     model_config = ConfigDict(extra="forbid")
 
-    skill_id: str = Field(description="租户内技能标识（中立引用，与 capability_catalog.skill_catalog.skill_id 对齐）")
-    version: str = Field(description="技能版本（语义版本或自定标识；与 catalog.version 对齐）")
-    content_hash: str = Field(description="包级内容指纹：normalize 后所有文件的 sha256 前 16 hex")
-    display_name: str = Field(default="", description="技能显示名")
-    description: str = Field(default="", description="技能描述/摘要")
-    files: list[SkillFile] = Field(default_factory=list, description="技能文件列表（含 SKILL.md）")
+    skill_id: str
+    version: str
+    content_hash: str
+    display_name: str = ""
+    description: str = ""
+    files: list[SkillFile] = Field(default_factory=list)
 
     def compute_content_hash(self) -> str:
-        """由文件列表确定性派生包级内容指纹（path 排序规范化，避免顺序影响）。"""
-        normalized = sorted(
-            (normalize_skill_file_path(f.path), f.content) for f in self.files
-        )
-        canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        normalized = sorted((normalize_skill_file_path(f.path), f.content) for f in self.files)
+        if len({path for path, _ in normalized}) != len(normalized):
+            raise ValueError("duplicate skill file path")
+        return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+
+    @model_validator(mode="after")
+    def validate_package(self) -> "SkillPackage":
+        _safe_segment(self.skill_id, "skill_id")
+        _safe_segment(self.version, "version")
+        if not self.files or not any(file.path == "SKILL.md" for file in self.files):
+            raise ValueError("skill package requires SKILL.md")
+        if self.content_hash and self.content_hash != self.compute_content_hash():
+            raise ValueError("skill package content_hash mismatch")
+        return self
 
     def with_computed_hash(self) -> "SkillPackage":
-        """返回 content_hash 由 files 重算的副本（入站校验/M2 #2）。"""
         return self.model_copy(update={"content_hash": self.compute_content_hash()})
 
 
+class SignedSkillPackage(BaseModel):
+    """Dedicated Ed25519 envelope; the signature is scoped to tenant and member."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package: SkillPackage
+    tenant_id: str = Field(min_length=1)
+    member_id: str = Field(min_length=1)
+    key_id: str = Field(min_length=1)
+    algorithm: Literal["Ed25519"] = "Ed25519"
+    signature: str = Field(min_length=1)
+
+    @property
+    def skill_package(self) -> SkillPackage:
+        return self.package
+
+
+def canonical_skill_package_bytes(package: SkillPackage, tenant_id: str, member_id: str) -> bytes:
+    """Canonical UTF-8 JSON bytes shared byte-for-byte with the Node verifier."""
+    return json.dumps(
+        {"member_id": member_id, "package": package.model_dump(mode="json"), "tenant_id": tenant_id},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def derive_file_hash(content: str) -> str:
-    """单个文件内容指纹：sha256(content)[:16]。"""
     return _sha16(content)

@@ -1,12 +1,15 @@
 import type { AuthenticatedCaller } from "./http/auth.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
 import type { UsageSummary } from "./usage.js";
+import type { SignedSkillPackage } from "./skills.js";
 
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
   solutions: LoadedSolutionProjection[];
   snapshots?: FrozenSnapshot[];
   revoked_ids?: string[];
+  skill_packages?: SignedSkillPackage[];
+  skill_packages_authoritative?: boolean;
 }
 
 export interface ManagerAuthInput {
@@ -202,7 +205,18 @@ export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, mem
   const solutions = Array.isArray(body.solutions) ? body.solutions.map((item) => normalizeSolution(item, tenantId, memberId)) : [];
   const snapshots = Array.isArray(body.snapshots) ? body.snapshots.map((item) => normalizeSnapshot(item, tenantId, memberId)) : undefined;
   const revoked_ids = Array.isArray(body.revoked_ids) ? body.revoked_ids.filter((id): id is string => typeof id === "string") : [];
-  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids };
+  const hasSkillPackages = Object.prototype.hasOwnProperty.call(body, "skill_packages");
+  const skillPackagesAuthoritative = body.skill_packages_authoritative !== false;
+  const skill_packages = skillPackagesAuthoritative && Array.isArray(body.skill_packages) ? body.skill_packages.map(normalizeSignedSkillPackage) : undefined;
+  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(hasSkillPackages && skill_packages ? { skill_packages } : {}) };
+}
+
+function normalizeSignedSkillPackage(value: unknown): SignedSkillPackage {
+  if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid signed skill package");
+  const raw = value as Record<string, unknown>;
+  if (raw.algorithm !== "Ed25519" || typeof raw.key_id !== "string" || typeof raw.signature !== "string" || typeof raw.tenant_id !== "string" || typeof raw.member_id !== "string" || !raw.package || typeof raw.package !== "object") throw new ManagerUnavailableError("Manager returned an unsigned or invalid skill package");
+  if (raw.tenant_id.length === 0 || raw.member_id.length === 0) throw new ManagerUnavailableError("Manager returned an unscoped skill package");
+  return { package: raw.package as SignedSkillPackage["package"], tenant_id: raw.tenant_id, member_id: raw.member_id, key_id: raw.key_id, algorithm: "Ed25519", signature: raw.signature };
 }
 
 function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): LoadedExpertProjection {

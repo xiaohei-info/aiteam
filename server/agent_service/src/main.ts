@@ -12,6 +12,7 @@ import { HttpManagerClient } from "./manager-client.js";
 import { aggregateUsage } from "./usage.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
+import { SkillCache } from "./skills.js";
 
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
@@ -24,12 +25,14 @@ if (environment === "production" && useFauxModel) throw new Error("AITEAM_PI_FAK
 if (environment === "production" && useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
 if (environment === "production" && (!process.env.AITEAM_AGENT_JWT_ISSUER || !process.env.AITEAM_AGENT_JWT_AUDIENCE)) throw new Error("Production Agent JWT issuer and audience are required");
 if (environment === "production" && !process.env.AITEAM_MANAGER_URL) throw new Error("Production Agent Manager URL is required");
+if (environment === "production" && (!process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY || !process.env.AITEAM_SKILL_SIGNING_KEY_ID)) throw new Error("Production Agent Skill signing public key and key id are required");
 
 mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
 chmodSync(dataRoot, 0o700);
 const agentDir = join(dataRoot, "pi");
 const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
+const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"));
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ agentDir, useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
@@ -45,7 +48,7 @@ const sessionHost = new SessionHost({
   managerClient,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
-  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization)),
+  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization),
 });
 
 const authenticate = useDevAuth
@@ -60,6 +63,7 @@ const http = new AgentHttpServer({
   authenticate,
   managerClient,
   usageFlush,
+  skillCache,
   localReady: () => {
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
     return true;

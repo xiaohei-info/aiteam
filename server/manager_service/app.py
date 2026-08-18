@@ -43,6 +43,7 @@ from .routes_mfa import (
     passkey_router,
 )
 from .operator_catalog import OperatorCatalogClient
+from .skill_signing import SkillPackageSigner
 
 
 def _build_operator_catalog():
@@ -101,6 +102,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 settings = load_settings("manager")
+if settings.is_production and SkillPackageSigner.from_env() is None:
+    raise RuntimeError("Production Manager Skill signing requires AITEAM_SKILL_SIGNING_PRIVATE_KEY and AITEAM_SKILL_SIGNING_KEY_ID")
 app = create_app(settings, router)
 # 启动即应用控制库迁移（fail-fast；/readyz 绿时 schema 必已就绪）。此前 manager 运行时
 # 无任何 apply_migrations 调用，全新部署无法自建控制库（tenant_registry 等表 + app_rw 角色）；

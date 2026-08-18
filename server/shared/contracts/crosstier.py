@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .skill import SkillPackage
+from .skill import SignedSkillPackage
 from .snapshot import EmployeeExecutionSnapshot
 from .summary import AuditSummaryEvent, UsageSummary
 
@@ -153,9 +153,13 @@ class AuthorizedConfigPullResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experts: list[dict] = Field(default_factory=list, description="可见专家配置（投影源）")
-    skill_packages: list[SkillPackage] = Field(
+    skill_packages: list[SignedSkillPackage] = Field(
         default_factory=list,
         description="授权给本 member 的技能包真相（增量快照，供 Agent cache 按 version/hash 更新/删除）",
+    )
+    skill_packages_authoritative: bool = Field(
+        default=True,
+        description="False 表示本次 Manager 响应不可用于撤销本地技能缓存",
     )
     solutions: list[dict] = Field(default_factory=list, description="方案实例列表")
     revoked_ids: list[str] = Field(default_factory=list, description="已撤销/不可见，需本地失效移除")

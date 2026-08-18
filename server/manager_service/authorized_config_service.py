@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
 from shared.contracts.enums import EnterpriseRole
-from shared.contracts.skill import SkillPackage
+from shared.contracts.skill import SignedSkillPackage
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound
 
@@ -19,6 +19,7 @@ from .capability_catalog_service import CapabilityCatalogService
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
+from .skill_signing import SkillPackageSigner
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -59,12 +60,14 @@ class AuthorizedConfigService:
         member_service: MemberDeptService,
         recruit_repository: RecruitRepository | None = None,
         capability_catalog: CapabilityCatalogService | None = None,
+        skill_signer: SkillPackageSigner | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
         self._members = member_service
         self._recruit_repo = recruit_repository
         self._capability = capability_catalog
+        self._skill_signer = skill_signer if skill_signer is not None else SkillPackageSigner.from_env()
 
     def pull(
         self, ctx: TenantContext, req: AuthorizedConfigPullRequest
@@ -91,10 +94,9 @@ class AuthorizedConfigService:
             authorized_employee_ids = self._authorized_employee_ids(ctx, req.member_id)
             authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id)
 
+        authorized_configs = [cfg for cfg in all_configs if cfg.employee_id in authorized_employee_ids]
         experts: list[dict] = []
-        for cfg in all_configs:
-            if cfg.employee_id not in authorized_employee_ids:
-                continue
+        for cfg in authorized_configs:
             known_ver = req.known_versions.get(cfg.employee_id)
             if known_ver != str(cfg.version):
                 experts.append(cfg.model_dump(mode="json"))
@@ -129,23 +131,30 @@ class AuthorizedConfigService:
             or (rid not in all_employee_ids and rid not in all_solution_ids)
         ]
 
-        # M2：按 authorized experts 引用的 skill_id 集合，从 capability_catalog 取技能真相。
-        skill_packages = self._resolve_skill_packages(ctx, experts)
+        # Packages are catalog truth, not configuration deltas: unchanged employee
+        # versions must still receive a newly published catalog version.
+        skill_packages = self._resolve_skill_packages(
+            ctx, [cfg.model_dump(mode="json") for cfg in authorized_configs]
+        )
 
         return AuthorizedConfigPullResponse(
             experts=experts, solutions=solutions, revoked_ids=revoked_ids,
             skill_packages=skill_packages,
+            skill_packages_authoritative=self._capability is not None and self._skill_signer is not None,
         )
 
-    def _resolve_skill_packages(self, ctx: TenantContext, experts: list[dict]) -> list[SkillPackage]:
+    def _resolve_skill_packages(self, ctx: TenantContext, experts: list[dict]) -> list[SignedSkillPackage]:
         """按 experts[].skills 的 skill_id 集合，从 Manager capability_catalog 解析技能包真相。
 
-        没配 capability_catalog（D14 降级/本地测试/管理库未连）→ 返回 []：Agent 保持既有缓存，
-        按离线降级处理，不阻断 sync。仅 Manager 有记录的 skill_id 返回技能包——不泄漏未授权技能。
+        没配 capability_catalog 或专用 signer（D14 降级/本地测试）→ 返回 []，由响应的
+        skill_packages_authoritative=false 明确表示 Agent 保持既有缓存，不阻断 sync。
+        仅 Manager 有记录的 skill_id 返回技能包——不泄漏未授权技能。
         """
-        from shared.contracts.skill import SkillFile, SkillPackage
+        from shared.contracts.skill import SkillFile, SkillPackage, derive_file_hash
 
-        if self._capability is None:
+        # Missing signing configuration is an intentional fail-closed downgrade:
+        # never send a package that the Agent would have to treat as unsigned.
+        if self._capability is None or self._skill_signer is None:
             return []
         skill_ids: list[str] = []
         seen: set[str] = set()
@@ -156,26 +165,31 @@ class AuthorizedConfigService:
                     skill_ids.append(sid)
         if not skill_ids:
             return []
-        packages: list[SkillPackage] = []
+        packages: list[SignedSkillPackage] = []
         for sid in skill_ids:
             out = self._capability_get(ctx, skill_id=sid)
-            if out is None:
+            if out is None or out.skill_id != sid:
                 continue
-            files = [
-                SkillFile(
-                    path=str(getf("path", "")),
-                    content=str(getf("content", "")),
-                    content_hash=str(getf("content_hash", "") or out.content_hash),                )
-                for f in (out.files or [])
-                for getf in [lambda k, d="": (f.get(k, d) if isinstance(f, dict) else getattr(f, k, d))]
-            ]
-            pkg = SkillPackage(
-                skill_id=out.skill_id, version=out.version,
-                content_hash=out.content_hash,
-                display_name=out.display_name, description=str(out.description) if hasattr(out, "description") else "",
-                files=files,
-            )
-            packages.append(pkg)
+            try:
+                files = [
+                    SkillFile(
+                        path=str(getf("path", "")),
+                        content=str(getf("content", "")),
+                        content_hash=derive_file_hash(str(getf("content", ""))),
+                    )
+                    for f in (out.files or [])
+                    for getf in [lambda k, d="": (f.get(k, d) if isinstance(f, dict) else getattr(f, k, d))]
+                ]
+                pkg = SkillPackage(
+                    skill_id=out.skill_id, version=out.version, content_hash="",
+                    display_name=out.display_name, description=str(out.description) if hasattr(out, "description") else "",
+                    files=files,
+                ).with_computed_hash()
+                packages.append(self._skill_signer.sign(pkg, tenant_id=ctx.tenant_id, member_id=ctx.user_id))
+            except (TypeError, ValueError):
+                # Legacy catalog rows without SKILL.md are not executable packages;
+                # skip them while preserving the rest of the authorized config.
+                continue
         return packages
 
     def _capability_get(self, ctx: TenantContext, skill_id: str):

@@ -7,6 +7,9 @@
 # 镜像内绝不出现 operation_service/manager_service/web/operation/web/manager（由
 # server/tests/integration/test_verification_matrix.py::test_user_client_build_excludes_control_plane
 # 静态断言 Dockerfile COPY 指令钉死）。
+# Direct production Compose invocation must be explicit: set AITEAM_ENV=production
+# when supplying signing/JWT/faux production settings; the interpolation guards below
+# fail instead of silently treating that invocation as dev. ctl.sh keeps its own --env guard.
 
 services:
   postgres:
@@ -43,7 +46,8 @@ services:
       - "8001:8000"
     environment:
       APP_TIER: operation
-      # 控制面表（签名私钥、enterprise、跨企业 rollup 等）走管理连接。
+      AITEAM_ENV: ${AITEAM_ENV:-dev}
+      # 控制面表（enterprise、跨企业 rollup 等）走管理连接。
       ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       APP_RW_PASSWORD: aiteam_test
       # 云侧服务间调用：运营端调企业端开通 tenant。
@@ -76,6 +80,10 @@ services:
       OPERATOR_URL: http://operation:8000
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
+      AITEAM_ENV: ${AITEAM_ENV:-dev}
+      AITEAM_SKILL_SIGNING_PRIVATE_KEY: ${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}
+      AITEAM_SKILL_SIGNING_KEY_ID: ${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}
+      AITEAM_COMPOSE_ENV_GUARD_SKILL: ${AITEAM_SKILL_SIGNING_PRIVATE_KEY:+${AITEAM_ENV:?AITEAM_ENV must be explicitly set when skill signing settings are supplied}}
       LOG_LEVEL: INFO
       EXPOSE_PUBLIC_DOCS: "1"
 
@@ -95,10 +103,15 @@ services:
       AITEAM_PI_FAKE: ${AITEAM_PI_FAKE:-true}
       AITEAM_ENV: ${AITEAM_ENV:-dev}
       AITEAM_MANAGER_URL: ${AITEAM_MANAGER_URL:-http://manager:8000}
+      AITEAM_SKILL_SIGNING_PUBLIC_KEY: ${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}
+      AITEAM_SKILL_SIGNING_KEY_ID: ${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}
       AITEAM_AGENT_JWKS_JSON: ${AITEAM_AGENT_JWKS_JSON:-}
       AITEAM_AGENT_JWKS_PATH: ${AITEAM_AGENT_JWKS_PATH:-}
       AITEAM_AGENT_JWT_ISSUER: ${AITEAM_AGENT_JWT_ISSUER:-}
       AITEAM_AGENT_JWT_AUDIENCE: ${AITEAM_AGENT_JWT_AUDIENCE:-}
+      AITEAM_COMPOSE_ENV_GUARD_SKILL: ${AITEAM_SKILL_SIGNING_PUBLIC_KEY:+${AITEAM_ENV:?AITEAM_ENV must be explicitly set when skill signing settings are supplied}}
+      AITEAM_COMPOSE_ENV_GUARD_JWT: ${AITEAM_AGENT_JWT_ISSUER:+${AITEAM_ENV:?AITEAM_ENV must be explicitly set when JWT settings are supplied}}
+      AITEAM_COMPOSE_ENV_GUARD_FAUX: ${AITEAM_PI_FAKE:+${AITEAM_ENV:?AITEAM_ENV must be explicitly set when faux runtime settings are supplied}}
       AITEAM_AGENT_SANDBOX_READY: ${AITEAM_AGENT_SANDBOX_READY:-false}
       AITEAM_AGENT_SPA_ROOT: /app/web/agent/dist
     depends_on:
