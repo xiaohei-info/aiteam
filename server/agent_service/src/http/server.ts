@@ -10,12 +10,21 @@ import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEvent } from "../pi/event-sse.js";
-import type { ConversationState, LoadedExpertProjection } from "../storage/sqlite.js";
+import type { ConversationState, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_LOCAL_FILE_NAME = 255;
+const MAX_PROMPT_IMAGES = 8;
+const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_JSON_BYTES = Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4 + 64 * 1024;
+const ALLOWED_FILE_MIMES = new Set([
+  "application/json", "application/pdf", "application/octet-stream", "image/gif", "image/jpeg", "image/png", "image/webp", "text/markdown", "text/plain",
+]);
+const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 export interface AgentHttpServerOptions {
   host: SessionHost;
@@ -122,6 +131,10 @@ export class AgentHttpServer {
       if (platformRoute === "conversation" && request.method === "GET") return this.getConversation(response, url.pathname, caller);
       if (platformRoute === "conversation" && (request.method === "PATCH" || request.method === "PUT")) return await this.updateConversation(request, response, url.pathname, caller);
       if (platformRoute === "conversation" && request.method === "DELETE") return await this.deleteConversation(response, url.pathname, caller);
+      if (route?.action === "files" && request.method === "GET") return this.listLocalFiles(response, route, caller);
+      if (route?.action === "files" && request.method === "POST") return await this.uploadLocalFile(request, response, route, caller);
+      if (route?.action === "file" && request.method === "GET") return this.downloadLocalFile(response, route, caller);
+      if (route?.action === "file" && request.method === "DELETE") return this.deleteLocalFile(response, route, caller);
       if (platformRoute === "state" && request.method === "GET") return this.getConversationState(response, url.pathname, caller);
       if (platformRoute === "state" && request.method === "PUT") return await this.updateConversationState(request, response, url.pathname, caller);
       if (platformRoute === "experts" && request.method === "GET") return this.listExperts(response, caller);
@@ -390,35 +403,54 @@ export class AgentHttpServer {
     if (!key || key.length > 256) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required and must be <= 256 characters");
     const conversation = this.options.store.getOwnedConversation(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
-    const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
-    const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
-    if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
     const payload = await this.readJson(request);
     const text = payload.text;
     if (typeof text !== "string" || text.trim().length === 0 || text.length > 200_000) {
       throw new HttpProblem(422, "invalid_prompt", "text must be a non-empty string <= 200000 characters");
     }
-    const images = payload.images;
-    if (images !== undefined && (!Array.isArray(images) || images.length > 8 || images.some((image) => !image || typeof image !== "object" || (image as Record<string, unknown>).type !== "image" || typeof (image as Record<string, unknown>).data !== "string" || typeof (image as Record<string, unknown>).mimeType !== "string"))) {
-      throw new HttpProblem(422, "invalid_images", "images must contain at most 8 {type, data, mimeType} objects");
-    }
+    const images = this.validateInlineImages(payload.images);
+    const attachmentIds = payload.attachment_ids === undefined ? [] : this.stringArray(payload.attachment_ids, "attachment_ids", MAX_PROMPT_IMAGES);
+    if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
-    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images: images ?? [], mentions })).digest("hex");
+    // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
+    const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
-    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, images, mentions);
-    this.promptWorkers.add(worker);
-    void worker.finally(() => this.promptWorkers.delete(worker));
-    this.writeReceipt(response, conversationId, key, "accepted");
+    try {
+      const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
+      const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
+      const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
+      if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      const loadedImages: ImageContent[] = [];
+      let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
+      for (const attachmentId of attachmentIds) {
+        const loaded = this.options.store.readOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+        if (!loaded) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
+        if (loaded.record.kind !== "attachment" || !IMAGE_MIMES.has(loaded.record.mime_type) || !hasImageSignature(loaded.record.mime_type, loaded.data)) throw new HttpProblem(422, "invalid_attachment", "Only valid image attachments can be sent to Pi");
+        decodedImageBytes += loaded.data.byteLength;
+        loadedImages.push({ type: "image", data: loaded.data.toString("base64"), mimeType: loaded.record.mime_type });
+      }
+      if (loadedImages.length + images.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "A prompt may contain at most 8 images");
+      if (decodedImageBytes > MAX_PROMPT_IMAGE_BYTES) throw new HttpProblem(413, "prompt_images_too_large", "Decoded prompt images exceed 20 MiB");
+      const promptImages = [...images, ...loadedImages];
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, promptImages, mentions, attachmentIds);
+      this.promptWorkers.add(worker);
+      void worker.finally(() => this.promptWorkers.delete(worker));
+      this.writeReceipt(response, conversationId, key, "accepted");
+    } catch (error) {
+      this.options.store.markUnknown(conversationId, callerId, key, receipt.ownerInstance);
+      throw error;
+    }
+    return;
   }
 
-  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: unknown, mentions: string[]): Promise<void> {
+  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: ImageContent[], mentions: string[], attachmentIds: string[]): Promise<void> {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, this.asImages(images), caller, mentions);
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions);
+      this.options.store.markLocalFilesReferenced(attachmentIds, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {
       this.options.store.markUnknown(conversationId, callerId, key, ownerInstance);
@@ -484,19 +516,63 @@ export class AgentHttpServer {
     return undefined;
   }
 
-  private matchConversationRoute(pathname: string): { conversationId: string; action: "prompt" | "events" | "abort" | "entries" } | undefined {
+  private matchConversationRoute(pathname: string): { conversationId: string; action: "prompt" | "events" | "abort" | "entries" | "files" | "file"; kind?: LocalFileKind; fileId?: string } | undefined {
     const match = pathname.match(/^\/api\/agent\/conversations\/([^/]+)\/(prompt|events|abort|entries)$/);
-    if (!match) return undefined;
-    return { conversationId: decodeURIComponent(match[1]), action: match[2] as "prompt" | "events" | "abort" | "entries" };
+    if (match) return { conversationId: decodeURIComponent(match[1]), action: match[2] as "prompt" | "events" | "abort" | "entries" };
+    const files = pathname.match(/^\/api\/agent\/conversations\/([^/]+)\/(attachments|artifacts)(?:\/([^/]+))?$/);
+    if (!files) return undefined;
+    return { conversationId: decodeURIComponent(files[1]), action: files[3] ? "file" : "files", kind: files[2] === "artifacts" ? "artifact" : "attachment", ...(files[3] ? { fileId: decodeURIComponent(files[3]) } : {}) };
   }
 
-  private async readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  private listLocalFiles(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): void {
+    this.requireOwnedConversation(route.conversationId, caller);
+    const items = this.options.store.listOwnedLocalFiles(route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId, route.kind);
+    this.writeJson(response, 200, { data: { items, page: { next_cursor: null, has_more: false } } });
+  }
+
+  private async uploadLocalFile(request: IncomingMessage, response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): Promise<void> {
+    this.requireOwnedConversation(route.conversationId, caller);
+    const body = await this.readJson(request, MAX_UPLOAD_JSON_BYTES);
+    const filename = this.stringField(body.filename, "filename", MAX_LOCAL_FILE_NAME);
+    if (filename.includes("/") || filename.includes("\\") || /[\x00-\x1f\x7f]/u.test(filename)) throw new HttpProblem(422, "invalid_filename", "filename must be a safe basename");
+    const mimeType = body.mime_type ?? body.mimeType;
+    if (typeof mimeType !== "string" || !ALLOWED_FILE_MIMES.has(mimeType)) throw new HttpProblem(422, "invalid_mime_type", "Unsupported MIME type");
+    const encoded = this.stringField(body.data, "data", Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4);
+    const data = decodeBase64(encoded);
+    if (!data) throw new HttpProblem(422, "invalid_file_data", "data must be canonical base64");
+    if (data.byteLength > MAX_LOCAL_FILE_BYTES) throw new HttpProblem(413, "file_too_large", "Decoded file exceeds 5 MiB");
+    if (mimeType.startsWith("image/") && (!IMAGE_MIMES.has(mimeType) || !hasImageSignature(mimeType, data))) throw new HttpProblem(422, "invalid_image_content", "Image MIME type does not match its content");
+    try {
+      const record = this.options.store.createLocalFile({ conversationId: route.conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId, kind: route.kind ?? "attachment", filename, mimeType, data });
+      this.writeJson(response, 201, { data: record });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("maximum size")) throw new HttpProblem(413, "file_too_large", error.message);
+      if (error instanceof Error && (error.message.includes("Local file count limit") || error.message.includes("Local file storage limit"))) throw new HttpProblem(413, "local_file_storage_limit", error.message);
+      throw error;
+    }
+  }
+
+  private downloadLocalFile(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind; fileId?: string }, caller: AuthenticatedCaller): void {
+    if (!route.fileId) throw new HttpProblem(404, "file_not_found", "File not found");
+    const loaded = this.options.store.readOwnedLocalFile(route.fileId, route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+    if (!loaded || loaded.record.kind !== route.kind) throw new HttpProblem(404, "file_not_found", "File not found");
+    this.writeBytes(response, 200, loaded.data, loaded.record.mime_type, loaded.record.filename);
+  }
+
+  private deleteLocalFile(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind; fileId?: string }, caller: AuthenticatedCaller): void {
+    const existing = route.fileId ? this.options.store.getOwnedLocalFile(route.fileId, route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId) : undefined;
+    if (!route.fileId || !existing || existing.kind !== route.kind || !this.options.store.deleteOwnedLocalFile(route.fileId, route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId)) throw new HttpProblem(404, "file_not_found", "File not found");
+    this.writeJson(response, 200, { data: { deleted: true, id: route.fileId } });
+  }
+
+
+  private async readJson(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       size += buffer.length;
-      if (size > MAX_BODY_BYTES) throw new HttpProblem(413, "request_too_large", "Request body is too large");
+      if (size > maxBytes) throw new HttpProblem(413, "request_too_large", "Request body is too large");
       chunks.push(buffer);
     }
     if (chunks.length === 0) return {};
@@ -509,8 +585,19 @@ export class AgentHttpServer {
     }
   }
 
-  private asImages(value: unknown): ImageContent[] | undefined {
-    return Array.isArray(value) ? value as ImageContent[] : undefined;
+  private validateInlineImages(value: unknown): ImageContent[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "images must contain at most 8 image objects");
+    return value.map((image) => {
+      if (!image || typeof image !== "object") throw new HttpProblem(422, "invalid_images", "Invalid image object");
+      const candidate = image as Record<string, unknown>;
+      if (candidate.type !== "image" || typeof candidate.data !== "string" || typeof candidate.mimeType !== "string" || !IMAGE_MIMES.has(candidate.mimeType)) throw new HttpProblem(422, "invalid_images", "Unsupported image attachment");
+      const bytes = decodeBase64(candidate.data);
+      if (!bytes) throw new HttpProblem(422, "invalid_images", "Image data must be canonical base64");
+      if (bytes.byteLength > MAX_LOCAL_FILE_BYTES) throw new HttpProblem(413, "image_too_large", "Decoded image exceeds 5 MiB");
+      if (!hasImageSignature(candidate.mimeType, bytes)) throw new HttpProblem(422, "invalid_image_content", "Image MIME type does not match its content");
+      return { type: "image", data: bytes.toString("base64"), mimeType: candidate.mimeType } as ImageContent;
+    });
   }
 
   private header(request: IncomingMessage, name: string): string | undefined {
@@ -551,6 +638,12 @@ export class AgentHttpServer {
     response.end(body);
   }
 
+  private writeBytes(response: ServerResponse, status: number, body: Buffer, contentType: string, filename: string): void {
+    if (response.writableEnded) return;
+    response.writeHead(status, { "Content-Length": body.byteLength, "Content-Type": contentType, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}` });
+    response.end(body);
+  }
+
   private serveSpa(pathname: string, response: ServerResponse): boolean {
     const root = this.options.spaRoot;
     if (!root || pathname.startsWith("/api/") || pathname === "/api") return false;
@@ -583,18 +676,50 @@ export class AgentHttpServer {
   }
 }
 
+function decodeBase64(value: string): Buffer | undefined {
+  if (!value || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return undefined;
+  const decoded = Buffer.from(value, "base64");
+  return decoded.toString("base64") === value ? decoded : undefined;
+}
+
+function hasImageSignature(mimeType: string, data: Buffer): boolean {
+  if (mimeType === "image/png") return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === "image/jpeg") return data.length >= 3 && data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mimeType === "image/gif") return data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a");
+  if (mimeType === "image/webp") return data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP";
+  return false;
+}
+
+const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, {}]));
+
 const OPENAPI = {
   openapi: "3.1.0",
   info: { title: "AI Team Agent Service", version: "0.1.0" },
   paths: {
     "/healthz": { get: { operationId: "healthz", responses: { "200": { description: "Alive" } } } },
     "/readyz": { get: { operationId: "readyz", responses: { "200": { description: "Ready" }, "503": { description: "Not ready" } } } },
-    "/api/agent/conversations/{conversation_id}/prompt": { post: { operationId: "promptConversation", parameters: [{ name: "conversation_id", in: "path", required: true }], responses: { "202": { description: "Accepted" }, "409": { description: "Conflict" }, "422": { description: "Validation error" } } } },
-    "/api/agent/conversations/{conversation_id}/events": { get: { operationId: "subscribeConversationEvents", parameters: [{ name: "conversation_id", in: "path", required: true }, { name: "after", in: "query" }], responses: { "200": { description: "Pi event stream" } } } },
-    "/api/agent/conversations/{conversation_id}/entries": { get: { operationId: "listConversationEntries", responses: { "200": { description: "Pi entries" } } } },
+    "/api/agent/conversations/{conversation_id}/prompt": { post: { operationId: "promptConversation", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/PromptRequest" } } } }, responses: { "202": { description: "Accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/PromptAcceptedEnvelope" } } } }, "409": { description: "Conflict" }, "422": { description: "Validation error" } } } },
+    "/api/agent/conversations/{conversation_id}/events": { get: { operationId: "subscribeConversationEvents", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "after", in: "query", required: false, schema: { type: "string" } }], responses: { "200": { description: "Pi event stream" } } } },
+    "/api/agent/conversations/{conversation_id}/entries": { get: { operationId: "listConversationEntries", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Pi entries" } } } },
     "/api/agent/conversations": { get: { operationId: "listConversations", responses: { "200": { description: "Conversation metadata" } } }, post: { operationId: "createConversation", responses: { "201": { description: "Conversation metadata" } } } },
-    "/api/agent/conversations/{conversation_id}": { get: { operationId: "getConversation", responses: { "200": { description: "Conversation metadata" } } }, patch: { operationId: "updateConversation", responses: { "200": { description: "Conversation metadata" } } }, delete: { operationId: "deleteConversation", responses: { "200": { description: "Deleted" } } } },
-    "/api/agent/conversations/{conversation_id}/state": { put: { operationId: "setConversationState", responses: { "200": { description: "Conversation metadata" } } } },
+    "/api/agent/conversations/{conversation_id}": { parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], get: { operationId: "getConversation", responses: { "200": { description: "Conversation metadata" } } }, patch: { operationId: "updateConversation", responses: { "200": { description: "Conversation metadata" } } }, delete: { operationId: "deleteConversation", responses: { "200": { description: "Deleted" } } } },
+    "/api/agent/conversations/{conversation_id}/state": { put: { operationId: "setConversationState", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Conversation metadata" } } } },
+    "/api/agent/conversations/{conversation_id}/attachments": {
+      get: { operationId: "listAttachments", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local attachment metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileListEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+      post: { operationId: "uploadAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileUpload" } } } }, responses: { "201": { description: "Stored local attachment metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" }, "413": { $ref: "#/components/responses/TooLarge" }, "422": { $ref: "#/components/responses/ValidationError" } } },
+    },
+    "/api/agent/conversations/{conversation_id}/attachments/{attachment_id}": {
+      get: { operationId: "downloadAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "attachment_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local attachment bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+      delete: { operationId: "deleteAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "attachment_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Deleted", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileDeleteEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+    },
+    "/api/agent/conversations/{conversation_id}/artifacts": {
+      get: { operationId: "listArtifacts", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local artifact metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileListEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+      post: { operationId: "uploadArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileUpload" } } } }, responses: { "201": { description: "Stored local artifact metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" }, "413": { $ref: "#/components/responses/TooLarge" }, "422": { $ref: "#/components/responses/ValidationError" } } },
+    },
+    "/api/agent/conversations/{conversation_id}/artifacts/{artifact_id}": {
+      get: { operationId: "downloadArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "artifact_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local artifact bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+      delete: { operationId: "deleteArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "artifact_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Deleted", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileDeleteEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
+    },
     "/api/auth/resolve-tenant-by-account": { post: { operationId: "resolveTenantByAccount", responses: { "200": { description: "Resolved tenant" }, "503": { description: "Manager unavailable" } } } },
     "/api/agent/login": { post: { operationId: "login", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Authentication failed" } } } },
     "/api/agent/reset-password": { post: { operationId: "resetPassword", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Reset failed" } } } },
@@ -604,7 +729,7 @@ const OPENAPI = {
     "/api/agent/grants/solutions": { get: { operationId: "listAuthorizedSolutions", responses: { "200": { description: "Local projection" } } } },
     "/api/agent/grants/snapshots": { get: { operationId: "listFrozenSnapshots", responses: { "200": { description: "Frozen snapshots" } } } },
     "/api/agent/grants/readiness": { get: { operationId: "grantsReadiness", responses: { "200": { description: "Readiness" } } } },
-    "/api/agent/grants/experts/{employee_id}/readiness": { get: { operationId: "expertReadiness", responses: { "200": { description: "Readiness" } } } },
+    "/api/agent/grants/experts/{employee_id}/readiness": { get: { operationId: "expertReadiness", parameters: [{ name: "employee_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Readiness" } } } },
     "/api/agent/grants/sync": { post: { operationId: "syncGrants", responses: { "200": { description: "Sync result" }, "503": { description: "Manager unavailable" } } } },
     "/api/agent/usage/outbox": { get: { operationId: "listUsageOutbox", responses: { "200": { description: "Usage summaries" } } } },
     "/api/agent/usage/flush": { post: { operationId: "flushUsage", responses: { "200": { description: "Usage flush result" }, "503": { description: "Manager unavailable" } } } },
@@ -613,6 +738,25 @@ const OPENAPI = {
     "/api/agent/org/tree":  { get: { operationId: "orgTree", responses: { "200": { description: "Organization tree" } } } },
     "/api/agent/office/scene": { get: { operationId: "officeScene", responses: { "200": { description: "Office scene" } } } },
     "/api/agent/office/feed": { get: { operationId: "officeFeed", responses: { "200": { description: "Office feed" } } } },
+  },
+  components: {
+    schemas: {
+      PromptRequest: { type: "object", required: ["text"], properties: { text: { type: "string", minLength: 1, maxLength: 200000 }, images: { type: "array", maxItems: 8, items: { type: "object", required: ["type", "data", "mimeType"], properties: { type: { const: "image" }, data: { type: "string", contentEncoding: "base64" }, mimeType: { type: "string", enum: ["image/gif", "image/jpeg", "image/png", "image/webp"] } } } }, attachment_ids: { type: "array", maxItems: 8, uniqueItems: true, items: { type: "string" } }, mentions: { type: "array", maxItems: 16, items: { type: "string" } } } },
+      PromptAccepted: { type: "object", required: ["conversation_id", "accepted", "state", "idempotency_key"], properties: { conversation_id: { type: "string" }, accepted: { type: "boolean" }, state: { type: "string", enum: ["accepted", "completed"] }, idempotency_key: { type: "string" } } },
+      PromptAcceptedEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/PromptAccepted" } } },
+      LocalFileUpload: { type: "object", required: ["filename", "mime_type", "data"], properties: { filename: { type: "string", maxLength: 255 }, mime_type: { type: "string" }, data: { type: "string", contentEncoding: "base64" } } },
+      LocalFileMetadata: { type: "object", required: ["id", "conversation_id", "tenant_id", "member_id", "kind", "filename", "mime_type", "byte_size", "sha256", "created_at", "referenced_at"], properties: { id: { type: "string" }, conversation_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, kind: { type: "string", enum: ["attachment", "artifact"] }, filename: { type: "string" }, mime_type: { type: "string" }, byte_size: { type: "integer", minimum: 0 }, sha256: { type: "string" }, created_at: { type: "string", format: "date-time" }, referenced_at: { type: ["string", "null"], format: "date-time" } } },
+      LocalFileEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/LocalFileMetadata" } } },
+      LocalFileListEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["items", "page"], properties: { items: { type: "array", items: { $ref: "#/components/schemas/LocalFileMetadata" } }, page: { type: "object", properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } } } },
+      LocalFileDeleteEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["deleted", "id"], properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } },
+      Problem: { type: "object", required: ["type", "title", "status", "code", "detail", "instance", "request_id"], properties: { type: { type: "string" }, title: { type: "string" }, status: { type: "integer" }, code: { type: "string" }, detail: { type: "string" }, instance: { type: "string" }, request_id: { type: "string" } } },
+    },
+    responses: {
+      Unauthorized: { description: "Authentication required", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+      NotFound: { description: "Conversation or file not found", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+      TooLarge: { description: "File or request exceeds a limit", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+      ValidationError: { description: "Validation error", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+    },
   },
 };
 

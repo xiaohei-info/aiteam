@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
-import { createConversation, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
+import { ApiError } from "@aiteam/shared/api-client";
+import { createConversation, deleteAttachment, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
+import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -41,6 +43,25 @@ describe("Pi chat contract", () => {
     await expect(submitPrompt(client(fetchMock as unknown as typeof fetch), "c1", { text: "hello" }, "prompt-1"))
       .resolves.toMatchObject({ accepted: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets only the key after idempotency_unknown and preserves uploaded prompt data", () => {
+    const pending: PendingSubmission = { key: "old-key", text: "inspect", uploaded: [{ id: "a1" } as PendingSubmission["uploaded"][number]], uploadsComplete: true, promptAttempted: true };
+    const error = new ApiError("unknown", 409, "idempotency_unknown");
+    const retry = resetPendingSubmissionKey(pending);
+    expect(isIdempotencyUnknownError(error)).toBe(true);
+    expect(retry.key).not.toBe("old-key");
+    expect(retry).toMatchObject({ text: "inspect", uploaded: pending.uploaded, uploadsComplete: true, promptAttempted: false });
+    expect(isIdempotencyUnknownError(new ApiError("transient", 503, "manager_unavailable"))).toBe(false);
+  });
+
+  it("provides a local attachment delete seam for composer cleanup", async () => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      expect(url).toBe("http://agent.test/api/agent/conversations/c1/attachments/a1");
+      expect(init?.method).toBe("DELETE");
+      return new Response(JSON.stringify({ data: { deleted: true, id: "a1" } }), { headers: { "content-type": "application/json" } });
+    });
+    await expect(deleteAttachment(client(fetchMock as unknown as typeof fetch), "c1", "a1")).resolves.toBeUndefined();
   });
 
   it("loads persisted entries without numeric timeline cursors", async () => {

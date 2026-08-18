@@ -1,8 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { UsageSummary } from "../usage.js";
-import { dirname } from "node:path";
-import { chmodSync, mkdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+
+function createSha256(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
 
 export type ReceiptState = "accepted" | "completed" | "unknown";
 
@@ -88,6 +92,26 @@ export interface UsageOutboxItem {
   claim_token?: string | null;
 }
 
+export type LocalFileKind = "attachment" | "artifact";
+
+export interface LocalFileRecord {
+  id: string;
+  conversation_id: string;
+  tenant_id: string;
+  member_id: string;
+  kind: LocalFileKind;
+  filename: string;
+  mime_type: string;
+  byte_size: number;
+  sha256: string;
+  created_at: string;
+  referenced_at: string | null;
+}
+
+interface LocalFileRow extends LocalFileRecord {
+  storage_path: string;
+}
+
 export interface IdempotencyReceipt {
   conversationId: string;
   callerId: string;
@@ -144,13 +168,24 @@ interface ConversationRow {
 }
 
 const DEFAULT_LEASE_MS = 30_000;
+const LOCAL_FILE_MAX_BYTES = 5 * 1024 * 1024;
+const LOCAL_FILE_MAX_NAME = 255;
+// Conservative local-file quota per tenant/member and conversation, shared by both kinds.
+const MAX_LOCAL_FILES_PER_CONVERSATION = 32;
+const MAX_LOCAL_FILE_BYTES_PER_CONVERSATION = 50 * 1024 * 1024;
+// Unreferenced uploads are retained briefly so a delayed prompt can still use them.
+const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export class AgentSqliteStore {
   readonly db: DatabaseSync;
+  readonly attachmentRoot: string;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
+    this.attachmentRoot = join(dirname(path), "attachments");
+    mkdirSync(this.attachmentRoot, { recursive: true, mode: 0o700 });
+    chmodSync(this.attachmentRoot, 0o700);
     this.db = new DatabaseSync(path);
     try { chmodSync(path, 0o600); } catch { /* database may be created by SQLite after open */ }
     this.db.exec(`
@@ -233,6 +268,22 @@ export class AgentSqliteStore {
         claimed_at TEXT
       );
       CREATE INDEX IF NOT EXISTS usage_outbox_status_idx ON usage_summary_outbox(status, created_at);
+
+      CREATE TABLE IF NOT EXISTS local_file (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('attachment', 'artifact')),
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0 AND byte_size <= ${LOCAL_FILE_MAX_BYTES}),
+        sha256 TEXT NOT NULL,
+        storage_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        referenced_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
     `);
     // Pi Session JSONL is the sole content fact source; remove any pre-cutover raw event table.
     this.db.exec("DROP TABLE IF EXISTS pi_event");
@@ -252,11 +303,13 @@ export class AgentSqliteStore {
       "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
+      "ALTER TABLE local_file ADD COLUMN referenced_at TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
     this.db.prepare("UPDATE usage_summary_outbox SET member_id = COALESCE(NULLIF(member_id, ''), json_extract(payload_json, '$.member_id'), '') WHERE member_id = ''").run();
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', last_error = COALESCE(last_error, 'Recovered unfinished usage upload'), claim_token = NULL, claimed_at = NULL WHERE status = 'sending'").run();
+    this.cleanupAttachmentRoot();
   }
 
   private migrateOwnershipTables(): void {
@@ -376,9 +429,157 @@ export class AgentSqliteStore {
   }
 
   deleteConversation(id: string, tenantId?: string, memberId?: string): boolean {
+    const existing = this.getConversation(id);
     const result = this.db.prepare("DELETE FROM conversation WHERE id = ? AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)").run(id, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null);
+    const ownerTenant = existing?.tenantId ?? tenantId;
+    const ownerMember = existing?.memberId ?? memberId;
+    if (result.changes > 0 && ownerTenant && ownerMember) this.deleteConversationLocalFiles(id, ownerTenant, ownerMember);
     this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
     return result.changes > 0;
+  }
+
+  createLocalFile(input: {
+    conversationId: string;
+    tenantId: string;
+    memberId: string;
+    kind: LocalFileKind;
+    filename: string;
+    mimeType: string;
+    data: Buffer;
+  }): LocalFileRecord {
+    if (input.data.byteLength > LOCAL_FILE_MAX_BYTES) throw new Error("Local file exceeds maximum size");
+    if (!input.filename || input.filename.length > LOCAL_FILE_MAX_NAME || input.filename.includes("/") || input.filename.includes("\\") || /[\u0000-\u001f\u007f]/u.test(input.filename)) throw new Error("Invalid local file name");
+    const id = randomUUID();
+    const storagePath = join(this.attachmentRoot, `${id}.bin`);
+    const temporaryPath = join(this.attachmentRoot, `.${id}.tmp`);
+    const fd = openSync(temporaryPath, "wx", 0o600);
+    try {
+      let offset = 0;
+      while (offset < input.data.byteLength) offset += writeSync(fd, input.data, offset, input.data.byteLength - offset);
+      fsyncSync(fd);
+      closeSync(fd);
+      chmodSync(temporaryPath, 0o600);
+      renameSync(temporaryPath, storagePath);
+    } catch (error) {
+      try { closeSync(fd); } catch { /* already closed */ }
+      rmSync(temporaryPath, { force: true });
+      throw error;
+    }
+    const createdAt = new Date().toISOString();
+    const row = { id, conversation_id: input.conversationId, tenant_id: input.tenantId, member_id: input.memberId, kind: input.kind, filename: input.filename, mime_type: input.mimeType, byte_size: input.data.byteLength, sha256: createSha256(input.data), storage_path: storagePath, created_at: createdAt, referenced_at: null };
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      const quota = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(byte_size), 0) AS bytes FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").get(input.conversationId, input.tenantId, input.memberId) as { count: number; bytes: number };
+      if (quota.count >= MAX_LOCAL_FILES_PER_CONVERSATION) throw new Error(`Local file count limit is ${MAX_LOCAL_FILES_PER_CONVERSATION} per conversation`);
+      if (quota.bytes + input.data.byteLength > MAX_LOCAL_FILE_BYTES_PER_CONVERSATION) throw new Error(`Local file storage limit is ${MAX_LOCAL_FILE_BYTES_PER_CONVERSATION} bytes per conversation`);
+      this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at, referenced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
+      rmSync(storagePath, { force: true });
+      throw error;
+    }
+    return this.publicLocalFile(row);
+  }
+
+  listOwnedLocalFiles(conversationId: string, tenantId: string, memberId: string, kind?: LocalFileKind): LocalFileRecord[] {
+    const rows = this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, created_at, referenced_at FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND (? IS NULL OR kind = ?) ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId, kind ?? null, kind ?? null) as unknown as LocalFileRecord[];
+    return rows;
+  }
+
+  getOwnedLocalFile(id: string, conversationId: string, tenantId: string, memberId: string): LocalFileRow | undefined {
+    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at, referenced_at FROM local_file WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ?").get(id, conversationId, tenantId, memberId) as LocalFileRow | undefined;
+  }
+
+  readOwnedLocalFile(id: string, conversationId: string, tenantId: string, memberId: string): { record: LocalFileRecord; data: Buffer } | undefined {
+    const row = this.getOwnedLocalFile(id, conversationId, tenantId, memberId);
+    if (!row) return undefined;
+    const resolved = this.managedFilePath(row.storage_path);
+    if (!resolved) return undefined;
+    return { record: this.publicLocalFile(row), data: readFileSync(resolved) };
+  }
+
+  deleteOwnedLocalFile(id: string, conversationId: string, tenantId: string, memberId: string): boolean {
+    const row = this.getOwnedLocalFile(id, conversationId, tenantId, memberId);
+    if (!row) return false;
+    const resolved = this.managedFilePath(row.storage_path);
+    this.db.prepare("DELETE FROM local_file WHERE id = ?").run(id);
+    if (resolved) rmSync(resolved, { force: true });
+    return true;
+  }
+
+  markLocalFilesReferenced(ids: string[], conversationId: string, tenantId: string, memberId: string): void {
+    if (ids.length === 0) return;
+    const now = new Date().toISOString();
+    const mark = this.db.prepare("UPDATE local_file SET referenced_at = ? WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ? AND kind = 'attachment'");
+    for (const id of ids) mark.run(now, id, conversationId, tenantId, memberId);
+  }
+
+  deleteConversationLocalFiles(conversationId: string, tenantId: string, memberId: string): void {
+    const rows = this.db.prepare("SELECT storage_path FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").all(conversationId, tenantId, memberId) as { storage_path: string }[];
+    const paths = rows.map((row) => this.managedFilePath(row.storage_path));
+    this.db.prepare("DELETE FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").run(conversationId, tenantId, memberId);
+    for (const path of paths) if (path) rmSync(path, { force: true });
+  }
+
+  private managedFilePath(storagePath: string): string | undefined {
+    const root = realpathSync(this.attachmentRoot);
+    let resolved: string;
+    try { resolved = realpathSync(storagePath); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    const pathFromRoot = relative(root, resolved);
+    if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot) || !statSync(resolved).isFile()) throw new Error("Local file path escaped managed root");
+    return resolved;
+  }
+
+  private cleanupAttachmentRoot(): void {
+    const staleBefore = new Date(Date.now() - UNREFERENCED_LOCAL_FILE_RETENTION_MS).toISOString();
+    const staleRows = this.db.prepare(`
+      SELECT id, storage_path FROM local_file
+      WHERE referenced_at IS NULL AND created_at < ?
+        AND NOT EXISTS (
+          SELECT 1 FROM idempotency_receipt
+          WHERE idempotency_receipt.conversation_id = local_file.conversation_id
+            AND idempotency_receipt.state IN ('accepted', 'unknown')
+        )
+    `).all(staleBefore) as { id: string; storage_path: string }[];
+    for (const row of staleRows) {
+      try {
+        const resolved = this.managedFilePath(row.storage_path);
+        this.db.prepare("DELETE FROM local_file WHERE id = ? AND referenced_at IS NULL").run(row.id);
+        if (resolved) rmSync(resolved, { force: true });
+      } catch {
+        // Invalid metadata is retained for diagnosis; never follow it during cleanup.
+      }
+    }
+    const indexed = new Set<string>();
+    const rows = this.db.prepare("SELECT id, storage_path FROM local_file").all() as { id: string; storage_path: string }[];
+    for (const row of rows) {
+      try {
+        const resolved = this.managedFilePath(row.storage_path);
+        if (resolved) indexed.add(resolved);
+        else this.db.prepare("DELETE FROM local_file WHERE id = ?").run(row.id);
+      } catch {
+        // Invalid metadata is retained for diagnosis; never follow it during cleanup.
+      }
+    }
+    for (const entry of readdirSync(this.attachmentRoot, { withFileTypes: true })) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const candidate = join(this.attachmentRoot, entry.name);
+      const temporary = /^\\..+\\.tmp$/u.test(entry.name);
+      let resolved: string | undefined;
+      try { resolved = this.managedFilePath(candidate); } catch { /* symlink/path escape: remove only the root entry below */ }
+      if (!temporary && resolved && indexed.has(resolved)) continue;
+      rmSync(candidate, { force: true });
+    }
+  }
+
+  private publicLocalFile(row: LocalFileRow): LocalFileRecord {
+    const { storage_path: _storagePath, ...record } = row;
+    return record;
   }
 
   getConversationMetadata(id: string): ConversationMetadata | undefined {

@@ -62,7 +62,38 @@ export async function createConversation(
 export interface PromptInput {
   text: string;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  attachment_ids?: string[];
   mentions?: string[];
+}
+
+export interface LocalFile {
+  id: string;
+  conversation_id: string;
+  tenant_id: string;
+  member_id: string;
+  kind: "attachment" | "artifact";
+  filename: string;
+  mime_type: string;
+  byte_size: number;
+  sha256: string;
+  created_at: string;
+  referenced_at: string | null;
+}
+
+export async function uploadAttachment(client: AgentApiClient, conversationId: string, file: File): Promise<LocalFile> {
+  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error("Only PNG, JPEG, WEBP, and GIF attachments are supported");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let data = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) data += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  const result = await client.post<LocalFile>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments`, {
+    body: { filename: file.name, mime_type: file.type, data: btoa(data) },
+  });
+  if (!result) throw new Error("attachment upload: empty response");
+  return result;
+}
+
+export async function deleteAttachment(client: AgentApiClient, conversationId: string, attachmentId: string): Promise<void> {
+  await client.del(`/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
 export interface PromptAccepted {

@@ -34,8 +34,9 @@ import { Popover } from "@astryxdesign/core/Popover";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
+import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, submitPrompt } from "./useChatApi";
+import { abortPrompt, deleteAttachment, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
@@ -47,6 +48,16 @@ const SKILL_OPTIONS = [
 ] as const;
 
 const TOAST_TTL_MS = 2500;
+
+export type PendingSubmission = { key: string; text: string; uploaded: LocalFile[]; uploadsComplete: boolean; promptAttempted: boolean };
+
+export function isIdempotencyUnknownError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.code === "idempotency_unknown";
+}
+
+export function resetPendingSubmissionKey(pending: PendingSubmission): PendingSubmission {
+  return { ...pending, key: crypto.randomUUID(), promptAttempted: false };
+}
 
 export interface MessageComposerProps {
   conversationId: string;
@@ -67,6 +78,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerInputRef = useRef<ChatComposerInputHandle>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSubmission = useRef<PendingSubmission | null>(null);
 
   // roster 真实数据源（grants/experts：本地已装载/已授权专家投影）。
   useEffect(() => {
@@ -105,9 +117,9 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
 
   function handleFileChange(ev: ChangeEvent<HTMLInputElement>) {
     const files = ev.target.files ? Array.from(ev.target.files) : [];
-    if (files.length > 0) {
-      setAttachments((prev) => [...prev, ...files]);
-    }
+    const accepted = files.filter((file) => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type));
+    if (accepted.length > 0) setAttachments((prev) => [...prev, ...accepted]);
+    if (accepted.length !== files.length) showToast("仅支持 PNG、JPEG、WEBP 或 GIF 图片");
     // 清空 value 使同一文件再次可选。
     ev.target.value = "";
   }
@@ -147,14 +159,32 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     if ((!text && attachments.length === 0) || sending) return;
     setSending(true);
     setError(null);
+    const pending = pendingSubmission.current ?? { key: crypto.randomUUID(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
+    pendingSubmission.current = pending;
     try {
-      // Prompt submission is atomic; the Agent owns execution after acceptance.
-      await submitPrompt(client, conversationId, { text: text + attachedNote });
+      // Upload bytes to Agent storage first; Manager never sees attachment content.
+      if (!pending.uploadsComplete) {
+        for (const file of attachments) pending.uploaded.push(await uploadAttachment(client, conversationId, file));
+        pending.uploadsComplete = true;
+      }
+      // Keep the key and local IDs stable: a lost response may mean the Agent accepted the prompt.
+      pending.promptAttempted = true;
+      await submitPrompt(client, conversationId, { text: pending.text, attachment_ids: pending.uploaded.map((file) => file.id) }, pending.key);
+      pendingSubmission.current = null;
       setContent("");
       setAttachments([]);
       onSent();
     } catch (err) {
-      setError(toMessage(err));
+      if (!pending.promptAttempted) {
+        // Upload failed before any prompt attempt; these IDs are definitely orphaned.
+        await Promise.all(pending.uploaded.map((file) => deleteAttachment(client, conversationId, file.id).catch(() => undefined)));
+        pendingSubmission.current = null;
+      } else if (isIdempotencyUnknownError(err)) {
+        // Unknown execution may have been accepted: preserve uploads/text, but require a new explicit key.
+        pendingSubmission.current = resetPendingSubmissionKey(pending);
+        setError("执行状态未知，请确认对话未重复执行后点击发送，以新的幂等键重试；已保留附件。");
+      }
+      if (!isIdempotencyUnknownError(err)) setError(toMessage(err));
     } finally {
       setSending(false);
     }
@@ -352,6 +382,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         ref={fileInputRef}
         type="file"
         multiple
+        accept="image/png,image/jpeg,image/webp,image/gif"
         hidden
         onChange={handleFileChange}
         aria-hidden="true"
