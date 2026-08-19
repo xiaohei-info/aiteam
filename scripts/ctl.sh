@@ -360,6 +360,10 @@ start_service_local() {
         HINDSIGHT_RECALL_PATH="${HINDSIGHT_RECALL_PATH:-}" \
         HINDSIGHT_RETAIN_PATH="${HINDSIGHT_RETAIN_PATH:-}" \
         HINDSIGHT_DELETE_PATH="${HINDSIGHT_DELETE_PATH:-}" \
+        LIGHTRAG_URL="${LIGHTRAG_URL:-}" \
+        LIGHTRAG_API_KEY="${LIGHTRAG_API_KEY:-}" \
+        LIGHTRAG_TIMEOUT_MS="${LIGHTRAG_TIMEOUT_MS:-5000}" \
+        LIGHTRAG_QUERY_MODE="${LIGHTRAG_QUERY_MODE:-naive}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
@@ -417,7 +421,10 @@ start_service_local() {
         [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
         [[ -n "${AITEAM_PI_FAKE:-}" ]] || agent_fake=false
       fi
+      # ctl sources the whole .env.* file; explicitly remove Manager-only RAG
+      # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
+        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_QUERY_MODE \
         PORT="${AGENT_PORT}" \
         HOST="${AGENT_HOST:-127.0.0.1}" \
         AITEAM_AGENT_DATA_DIR="${AGENT_DATA_DIR:-${REPO_ROOT}/.state/agent}" \
@@ -425,6 +432,7 @@ start_service_local() {
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
+        AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}/api/manager/rag/mcp}" \
         AITEAM_HINDSIGHT_URL="${AITEAM_HINDSIGHT_URL:-}" \
         HINDSIGHT_API_TOKEN="${HINDSIGHT_API_TOKEN:-}" \
         HINDSIGHT_API_KEY="${HINDSIGHT_API_KEY:-}" \

@@ -2,6 +2,8 @@
 # 契约层只需 pydantic；三端服务壳与 shared 底座需 fastapi/uvicorn；service_client 需 httpx。
 pydantic>=2.11,<3
 fastapi>=0.115
+# Official MCP Python SDK; FastMCP Streamable HTTP facade.
+mcp==1.13.1
 uvicorn>=0.30
 httpx>=0.27
 # 认证：RS256 非对称签名 + JWKS（shared/auth，D23）。

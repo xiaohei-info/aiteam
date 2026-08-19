@@ -88,6 +88,11 @@ services:
       HINDSIGHT_RETAIN_PATH: ${HINDSIGHT_RETAIN_PATH:-}
       HINDSIGHT_DELETE_PATH: ${HINDSIGHT_DELETE_PATH:-}
       OPERATOR_URL: http://operation:8000
+      # Manager-only LightRAG credentials; never copied to the Agent container.
+      LIGHTRAG_URL: ${LIGHTRAG_URL:-http://lightrag:9621}
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      LIGHTRAG_TIMEOUT_MS: ${LIGHTRAG_TIMEOUT_MS:-5000}
+      LIGHTRAG_QUERY_MODE: ${LIGHTRAG_QUERY_MODE:-naive}
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
       AITEAM_ENV: ${AITEAM_ENV:-dev}
@@ -113,6 +118,7 @@ services:
       AITEAM_PI_FAKE: ${AITEAM_PI_FAKE:-true}
       AITEAM_ENV: ${AITEAM_ENV:-dev}
       AITEAM_MANAGER_URL: ${AITEAM_MANAGER_URL:-http://manager:8000}
+      AITEAM_RAG_MCP_URL: ${AITEAM_RAG_MCP_URL:-http://manager:8000/api/manager/rag/mcp}
       AITEAM_HINDSIGHT_URL: ${AITEAM_HINDSIGHT_URL:-}
       HINDSIGHT_API_TOKEN: ${HINDSIGHT_API_TOKEN:-}
       HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}

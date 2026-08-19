@@ -44,6 +44,17 @@ from .routes_mfa import (
 )
 from .operator_catalog import OperatorCatalogClient
 from .skill_signing import SkillPackageSigner
+from .employee_config_service import build_employee_config_service
+from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
+from .enterprise_audit_repository import build_enterprise_audit_repository
+from .knowledge_intake_repository import build_knowledge_intake_repositories
+from .knowledge_space_repository import KnowledgeSpaceRepository
+from .member_service import GrantService, MemberDeptService
+from .rag import PgManagerRagService
+from .rag_mcp import RagAccessService, LightRagClient, build_rag_mcp, install_rag_mcp_lifespan
+from .repository_member import GrantRepository, MemberDeptRepository
+from .snapshot_service import build_snapshot_service
+from shared.db import PgTenantRouter
 
 
 def _build_operator_catalog():
@@ -169,6 +180,36 @@ app.include_router(passkey_router)
 app.include_router(passkey_mgmt_router)
 app.include_router(oauth_router)
 app.include_router(oauth_mgmt_router)
+
+# Manager-owned read-only RAG MCP facade. It is unavailable (rather than
+# bypassed) when the Manager business database is not configured.
+if settings.db_url:
+    _rag_router = PgTenantRouter(settings.db_url)
+    _rag_member_repo = MemberDeptRepository(_rag_router)
+    _rag_config = build_employee_config_service(_rag_router)
+    _rag_snapshot = build_snapshot_service(
+        config_service=_rag_config,
+        grant_service=GrantService(repo=GrantRepository(_rag_router), members=_rag_member_repo),
+        member_service=MemberDeptService(repo=_rag_member_repo),
+        audit_recorder=build_enterprise_audit_repository(_rag_router),
+        knowledge_binding=EmployeeKnowledgeBindingRepository(_rag_router),
+    )
+    _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
+    _rag_light = LightRagClient()
+    _rag_access = RagAccessService(
+        snapshot_service=_rag_snapshot,
+        member_repository=_rag_member_repo,
+        employee_config=_rag_config,
+        binding_repository=_rag_doc_binding,
+        rag_service=PgManagerRagService(settings.db_url),
+        light_rag=_rag_light,
+        space_repository=KnowledgeSpaceRepository(_rag_router),
+        document_repository=_rag_doc_repo,
+    )
+    _rag_mcp, _rag_mcp_app = build_rag_mcp(verifier=_verifier, access=_rag_access)
+    app.mount("/api/manager/rag", _rag_mcp_app)
+    install_rag_mcp_lifespan(app, _rag_mcp, close=_rag_light.aclose)
+
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
 # 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。
 mount_frontend(app, settings.tier)

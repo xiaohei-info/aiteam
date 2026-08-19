@@ -19,13 +19,12 @@ import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
-import { createKnowledgeTools, type LocalKnowledgeIndex } from "../tools/knowledge.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider } from "./model-runtime.js";
-import { memoryToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
+import { memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -55,7 +54,6 @@ export interface SessionAuthorization {
   snapshot: FrozenSnapshot;
   mentionedEmployeeIds?: ReadonlySet<string>;
   managerClient?: ManagerClient;
-  localKnowledgeIndex?: LocalKnowledgeIndex;
   runtimeProviderId?: string;
   runtimeScope?: string;
 }
@@ -69,7 +67,6 @@ export interface SessionHostOptions {
   model?: Model<any>;
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string) => ResourceLoader;
   managerClient?: ManagerClient;
-  localKnowledgeIndex?: LocalKnowledgeIndex;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   usageRecorder?: (capture: UsageCapture) => void | Promise<void>;
@@ -354,7 +351,7 @@ export class SessionHost {
         compaction: { enabled: false },
         retry: { enabled: false },
       }),
-      tools: [...customTools.map((tool) => tool.name), ...(authorization ? memoryToolNames(authorization.snapshot) : [])],
+      tools: [...customTools.map((tool) => tool.name), ...(authorization ? [...memoryToolNames(authorization.snapshot), ...ragToolNames(authorization.snapshot)] : [])],
       customTools,
     });
     record.session = result.session;
@@ -380,7 +377,6 @@ export class SessionHost {
     const tools = [
       ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
       ...codingTools,
-      ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), localKnowledgeIndex: authorization.localKnowledgeIndex }),
       ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
     return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -394,10 +390,6 @@ export class SessionHost {
     if (names.includes("memory_recall")) names.push("hindsight_recall");
     if (names.includes("memory_retain")) names.push("hindsight_retain");
     return new Set(names);
-  }
-
-  private knowledgeRefs(snapshot: FrozenSnapshot): string[] {
-    return Array.isArray(snapshot.knowledge_refs) ? snapshot.knowledge_refs.filter((ref): ref is string => typeof ref === "string") : [];
   }
 
   private thinkingLevelFor(authorization?: SessionAuthorization): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" {
@@ -422,7 +414,7 @@ export class SessionHost {
     const mentionedEmployeeIds = mentions.length
       ? new Set(this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((item) => mentions.includes(item.handle)).map((item) => item.employee_id))
       : undefined;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient, localKnowledgeIndex: this.options.localKnowledgeIndex };
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -522,7 +514,7 @@ export class SessionHost {
         resourceLoader,
         sessionManager,
         settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot)],
+        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot), ...ragToolNames(childAuthorization.snapshot)],
         customTools: childTools,
       });
       child.session = result.session;

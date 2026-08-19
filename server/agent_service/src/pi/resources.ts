@@ -15,6 +15,7 @@ import { registerTools } from "@luxusai/pi-hindsight/extensions/operations/tools
 import { skillResourcePaths, SkillCache } from "../skills.js";
 import type { FrozenSnapshot } from "../storage/sqlite.js";
 import type { SessionAuthorization } from "./session-host.js";
+import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
 
 const HINDSIGHT_TOOLS = new Set(["hindsight_recall", "hindsight_retain"]);
 const AGENT_IGNORED_HINDSIGHT_ENV = [
@@ -62,6 +63,7 @@ export function createControlledResourceLoader(
   workspace = process.cwd(),
   // Hindsight config and queues are Agent state, never coding-workspace state.
   agentDir = join(homedir(), ".aiteam", "agent"),
+  managerUrl = process.env.AITEAM_MANAGER_URL,
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -77,6 +79,7 @@ export function createControlledResourceLoader(
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
   const lifecycle = memoryPolicy?.enabled && baseUrl ? createHindsightFactory(configDir) : undefined;
+  const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir,
@@ -88,7 +91,10 @@ export function createControlledResourceLoader(
     noContextFiles: true,
     systemPrompt,
     skillsOverride: () => skills,
-    extensionFactories: lifecycle ? [lifecycle.factory] : [],
+    extensionFactories: [
+      ...(lifecycle ? [lifecycle.factory] : []),
+      ...(rag ? [rag] : []),
+    ],
   });
   let shutdownPromise: Promise<void> | undefined;
   return Object.assign(loader, {
@@ -103,6 +109,8 @@ export function createControlledResourceLoader(
     },
   });
 }
+
+export { ragToolNames };
 
 export function memoryToolNames(snapshot: FrozenSnapshot): string[] {
   const policy = snapshot.tool_policy;
