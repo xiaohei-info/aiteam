@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fauxProvider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createControlledResourceLoader } from "./pi/resources.js";
-import { SessionHost } from "./pi/session-host.js";
+import { SessionHost, type SessionAuthorization, type SessionHostOptions } from "./pi/session-host.js";
 import type { ManagerClient } from "./manager-client.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
@@ -22,7 +22,7 @@ export async function createFixture() {
   for (const id of ["c1", "conversation-1", "conversation-2"]) {
     store.createConversation({ id, sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
   }
-  const createHost = (model = faux.getModel(), managerClient?: ManagerClient) =>
+  const createHost = (model = faux.getModel(), managerClient?: ManagerClient, resourceLoaderFactory: SessionHostOptions["resourceLoaderFactory"] = (_conversationId: string, _authorization?: SessionAuthorization, _workspace?: string, _agentDir?: string) => createControlledResourceLoader("test system prompt")) =>
     new SessionHost({
       cwdRoot: join(dataRoot, "workspaces"),
       agentDir: join(dataRoot, "pi"),
@@ -31,7 +31,7 @@ export async function createFixture() {
       modelRuntime,
       model,
       managerClient,
-      resourceLoaderFactory: () => createControlledResourceLoader("test system prompt"),
+      resourceLoaderFactory,
     });
   const host = createHost();
   return {

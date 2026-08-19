@@ -20,12 +20,12 @@ import type { AuthenticatedCaller } from "../http/auth.js";
 import type { ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createKnowledgeTools, type LocalKnowledgeIndex } from "../tools/knowledge.js";
-import { createMemoryTools } from "../tools/memory.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider } from "./model-runtime.js";
+import { memoryToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -67,7 +67,7 @@ export interface SessionHostOptions {
   store: AgentSqliteStore;
   modelRuntime: ModelRuntime;
   model?: Model<any>;
-  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
+  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string) => ResourceLoader;
   managerClient?: ManagerClient;
   localKnowledgeIndex?: LocalKnowledgeIndex;
   customTools?: ToolDefinition[];
@@ -83,6 +83,9 @@ interface Subscriber {
 
 interface ChildSession {
   session?: AgentSession;
+  resourceLoader?: ResourceLoader;
+  done: Promise<void>;
+  resolveDone: () => void;
   aborted: boolean;
   abort: () => Promise<void>;
 }
@@ -92,6 +95,7 @@ interface SessionRecord {
   workspace: string;
   sessionManager: SessionManager;
   session?: AgentSession;
+  resourceLoader?: ResourceLoader;
   sessionReady?: Promise<AgentSession>;
   promptPromise?: Promise<string | undefined>;
   unsubscribe?: () => void;
@@ -102,6 +106,8 @@ interface SessionRecord {
   activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
   runtimeProviderId?: string;
+  hindsightWorkspaces: Set<string>;
+  disposing?: Promise<void>;
 }
 
 const MAX_DELEGATE_CALLS = 4;
@@ -140,7 +146,7 @@ export class SessionHost {
     listener: (envelope: PiEventEnvelope) => void,
     after?: string,
   ): Promise<() => void> {
-    const record = await this.ensureRecord(conversationId);
+    const record = this.ensureRecord(conversationId);
     const subscriber: Subscriber = { listener, replaying: true, queued: [] };
     record.listeners.add(subscriber);
     try {
@@ -158,7 +164,9 @@ export class SessionHost {
   }
 
   async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[]): Promise<string | undefined> {
-    const record = await this.ensureRecord(conversationId);
+    // Keep record creation and the prompting marker in the same synchronous turn. An
+    // immediate delete must see the initialization lock before prompt yields.
+    const record = this.ensureRecord(conversationId);
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
     record.aborting = false;
@@ -217,12 +225,18 @@ export class SessionHost {
     const record = this.records.get(conversationId);
     if (record) {
       record.aborting = true;
+      const sessionReady = record.sessionReady;
       await this.abortChildren(record);
+      // Initialization may still be constructing the session/resource loader. Wait for
+      // it before disposal and workspace deletion so no resource is created afterward.
+      await sessionReady?.catch(() => undefined);
       await record.session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
       await this.disposeSession(record);
+      for (const workspace of record.hindsightWorkspaces) removeHindsightState(this.options.agentDir, workspace);
       this.records.delete(conversationId);
     }
+    if (!record && indexed.workspace) removeHindsightState(this.options.agentDir, indexed.workspace);
     for (const path of [indexed.sessionFile, indexed.workspace]) {
       if (!path) continue;
       this.assertManagedPathEither(path, path === indexed.workspace ? this.options.cwdRoot : this.options.sessionDir, this.options.cwdRoot);
@@ -242,7 +256,7 @@ export class SessionHost {
   }
 
   async entries(conversationId: string) {
-    const record = await this.ensureRecord(conversationId);
+    const record = this.ensureRecord(conversationId);
     return record.sessionManager.getEntries();
   }
 
@@ -271,7 +285,7 @@ export class SessionHost {
     });
   }
 
-  private async ensureRecord(conversationId: string): Promise<SessionRecord> {
+  private ensureRecord(conversationId: string): SessionRecord {
     const existing = this.records.get(conversationId);
     if (existing) return existing;
 
@@ -307,6 +321,7 @@ export class SessionHost {
       delegatePromptChars: 0,
       activeDelegates: new Set(),
       listeners: new Set(),
+      hindsightWorkspaces: new Set([workspace]),
     };
     this.records.set(conversationId, record);
     return record;
@@ -314,7 +329,8 @@ export class SessionHost {
 
   private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
     if (record.session) return record.session;
-    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization);
+    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir);
+    record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
     if (authorization && this.hasCodingTools(authorization.snapshot)) {
       if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
@@ -338,7 +354,7 @@ export class SessionHost {
         compaction: { enabled: false },
         retry: { enabled: false },
       }),
-      tools: customTools.map((tool) => tool.name),
+      tools: [...customTools.map((tool) => tool.name), ...(authorization ? memoryToolNames(authorization.snapshot) : [])],
       customTools,
     });
     record.session = result.session;
@@ -364,7 +380,6 @@ export class SessionHost {
     const tools = [
       ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
       ...codingTools,
-      ...createMemoryTools({ caller: authorization.caller, employeeId: authorization.employeeId, managerClient: authorization.managerClient }),
       ...createKnowledgeTools({ caller: authorization.caller, employeeId: authorization.employeeId, knowledgeRefs: this.knowledgeRefs(authorization.snapshot), localKnowledgeIndex: authorization.localKnowledgeIndex }),
       ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
@@ -375,7 +390,10 @@ export class SessionHost {
     const policy = snapshot.tool_policy;
     if (!policy || typeof policy !== "object") return new Set();
     const allowed = (policy as Record<string, unknown>).allowed_tools;
-    return new Set(Array.isArray(allowed) ? allowed.filter((name): name is string => typeof name === "string") : []);
+    const names = Array.isArray(allowed) ? allowed.filter((name): name is string => typeof name === "string") : [];
+    if (names.includes("memory_recall")) names.push("hindsight_recall");
+    if (names.includes("memory_retain")) names.push("hindsight_retain");
+    return new Set(names);
   }
 
   private knowledgeRefs(snapshot: FrozenSnapshot): string[] {
@@ -408,22 +426,40 @@ export class SessionHost {
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
-    record.unsubscribe?.();
-    record.unsubscribe = undefined;
-    record.session?.dispose();
-    record.session = undefined;
-    const providerId = record.runtimeProviderId;
-    record.runtimeProviderId = undefined;
-    if (providerId) {
-      await this.options.modelRuntime.removeRuntimeApiKey(providerId).catch(() => undefined);
-      this.options.modelRuntime.unregisterProvider(providerId);
+    if (record.disposing) return record.disposing;
+    record.disposing = (async () => {
+      record.unsubscribe?.();
+      record.unsubscribe = undefined;
+      await this.flushResourceLoader(record.resourceLoader);
+      record.session?.dispose();
+      record.session = undefined;
+      record.resourceLoader = undefined;
+      const providerId = record.runtimeProviderId;
+      record.runtimeProviderId = undefined;
+      if (providerId) {
+        await this.options.modelRuntime.removeRuntimeApiKey(providerId).catch(() => undefined);
+        this.options.modelRuntime.unregisterProvider(providerId);
+      }
+    })();
+    try {
+      await record.disposing;
+    } finally {
+      record.disposing = undefined;
     }
   }
 
   private async abortChildren(record: SessionRecord): Promise<number> {
     const children = [...record.activeDelegates];
-    await Promise.all(children.map((child) => child.abort().catch(() => undefined)));
+    await Promise.all(children.map(async (child) => {
+      await child.abort().catch(() => undefined);
+      await child.done.catch(() => undefined);
+    }));
     return children.length;
+  }
+
+  private async flushResourceLoader(loader?: ResourceLoader): Promise<void> {
+    const controlled = loader as ControlledResourceLoader | undefined;
+    await controlled?.shutdown?.();
   }
 
   private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
@@ -448,13 +484,21 @@ export class SessionHost {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    const child: ChildSession = { aborted: false, abort: async () => { child.aborted = true; await child.session?.abort(); } };
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+    const child: ChildSession = {
+      aborted: false,
+      done,
+      resolveDone,
+      abort: async () => { child.aborted = true; await child.session?.abort(); },
+    };
     record.activeDelegates.add(child);
     const sourceRef = createHash("sha256").update(`${record.conversationId}:${toolCallId}:${Date.now()}`).digest("hex").slice(0, 24);
     let childWorkspace: string | undefined;
     let childProviderId: string | undefined;
     try {
       childWorkspace = join(record.workspace, ".delegates", sourceRef);
+      record.hindsightWorkspaces.add(childWorkspace);
       mkdirSync(childWorkspace, { recursive: true, mode: 0o700 });
       chmodSync(childWorkspace, 0o700);
       if (this.hasCodingTools(snapshot)) {
@@ -463,7 +507,8 @@ export class SessionHost {
       }
       const sessionManager = SessionManager.inMemory(childWorkspace);
       const childAuthorization = { ...authorization, employeeId: snapshot.employee_id, snapshot, runtimeScope: sourceRef };
-      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization);
+      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization, childWorkspace, this.options.agentDir);
+      child.resourceLoader = resourceLoader;
       await resourceLoader.reload();
       const childTools = this.toolsFor(childAuthorization, false, undefined, childWorkspace, sessionManager.getSessionId());
       const childRuntime = await this.ensureRuntimeModel(childAuthorization);
@@ -477,7 +522,7 @@ export class SessionHost {
         resourceLoader,
         sessionManager,
         settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-        tools: childTools.map((tool) => tool.name),
+        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot)],
         customTools: childTools,
       });
       child.session = result.session;
@@ -489,15 +534,21 @@ export class SessionHost {
       } finally {
         unsubscribe();
         await child.abort();
+        await this.flushResourceLoader(resourceLoader);
         result.session.dispose();
       }
     } finally {
-      if (childProviderId) {
-        await this.options.modelRuntime.removeRuntimeApiKey(childProviderId).catch(() => undefined);
-        this.options.modelRuntime.unregisterProvider(childProviderId);
+      try {
+        if (childProviderId) {
+          await this.options.modelRuntime.removeRuntimeApiKey(childProviderId).catch(() => undefined);
+          this.options.modelRuntime.unregisterProvider(childProviderId);
+        }
+        await this.flushResourceLoader(child.resourceLoader);
+      } finally {
+        if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
+        record.activeDelegates.delete(child);
+        child.resolveDone();
       }
-      if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
-      record.activeDelegates.delete(child);
     }
   }
 

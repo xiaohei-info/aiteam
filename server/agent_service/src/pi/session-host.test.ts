@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
-import type { ManagerClient } from "../manager-client.js";
+import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
 
 test("SessionHost persists a Pi session and replays entries", async () => {
   const fixture = await createFixture();
@@ -41,34 +42,84 @@ test("SessionHost persists a Pi session and replays entries", async () => {
   }
 });
 
-test("SessionHost binds authorized snapshot tools and emits Pi tool events", async () => {
+test("SessionHost flushes a controlled lifecycle once before disposing the parent session", async () => {
+  const fixture = await createFixture();
+  let shutdowns = 0;
+  try {
+    fixture.faux.setResponses([fauxAssistantMessage("shutdown check")]);
+    const host = fixture.createHost(undefined, undefined, () => {
+      const loader = createControlledResourceLoader("test system prompt");
+      const shutdown = loader.shutdown.bind(loader);
+      loader.shutdown = async () => { shutdowns += 1; await shutdown(); };
+      return loader;
+    });
+    await host.prompt("conversation-1", "shutdown");
+    assert.equal(shutdowns, 1);
+    await host.dispose();
+    assert.equal(shutdowns, 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost.delete waits for pending session initialization before cleanup", async () => {
   const fixture = await createFixture();
   try {
-    const calls: unknown[][] = [];
-    const manager = {
-      memoryRecall: async (...args: unknown[]) => (calls.push(args), { memories: [{ content: "remembered" }] }),
-    };
-    fixture.store.replaceProjections([
-      { employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } },
-    ], [], [{ employee_id: "employee-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", persona: "Be helpful", skill_refs: ["skill-authorized"], tool_policy: { allowed_tools: ["memory_recall"] }, knowledge_refs: ["knowledge-authorized"] }]);
-    fixture.store.createConversation({ id: "authorized-conversation", sessionFile: "", workspace: "", entryEmployeeId: "employee-1" });
-    const host = fixture.createHost(undefined, manager as ManagerClient);
-    const events: string[] = [];
-    await host.subscribe("authorized-conversation", (envelope) => events.push(envelope.event.type));
-    fixture.faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("memory_recall", { query: "remembered", limit: 1 }), { stopReason: "toolUse" }),
-      fauxAssistantMessage("done"),
-    ]);
-    await host.prompt("authorized-conversation", "Use memory", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" });
-    const entries = await host.entries("authorized-conversation");
-    assert.deepEqual(calls[0]?.slice(1), ["employee-1", "remembered", 1], `${events.join(",")} ${JSON.stringify(entries)}`);
-    assert(events.includes("tool_execution_start"));
-    assert(events.includes("tool_execution_end"));
-    await assert.rejects(
-      host.prompt("authorized-conversation", "No cross-tenant access", undefined, { callerId: "member-2", userId: "member-2", tenantId: "other-tenant" }),
-      /not authorized locally/,
-    );
-    await host.dispose();
+    let startReload!: () => void;
+    let releaseReload!: () => void;
+    const reloadStarted = new Promise<void>((resolve) => { startReload = resolve; });
+    const reloadGate = new Promise<void>((resolve) => { releaseReload = resolve; });
+    const host = fixture.createHost(undefined, undefined, () => {
+      const loader = createControlledResourceLoader("test system prompt");
+      loader.reload = async () => {
+        startReload();
+        await reloadGate;
+        throw new Error("initialization stopped");
+      };
+      return loader;
+    });
+    const pendingPrompt = host.prompt("conversation-1", "delete while loading");
+    const workspace = fixture.store.getConversation("conversation-1")?.workspace;
+    assert(workspace);
+    let deleted = false;
+    const pendingDelete = host.delete("conversation-1", "tenant-1", "member-1").then((value) => {
+      deleted = true;
+      return value;
+    });
+    await reloadStarted;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(deleted, false);
+    releaseReload();
+    await assert.rejects(pendingPrompt, /initialization stopped/);
+    assert.equal(await pendingDelete, true);
+    assert.equal(existsSync(workspace), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost.delete removes Agent-owned Hindsight state after lifecycle flush", async () => {
+  const fixture = await createFixture();
+  let shutdowns = 0;
+  let stateDir = "";
+  try {
+    const host = fixture.createHost(undefined, undefined, (_conversationId, _authorization, workspace, agentDir) => {
+      assert(workspace);
+      assert(agentDir);
+      stateDir = hindsightStateDir(agentDir, workspace);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(`${stateDir}/retain-queue.jsonl`, "failed-retry\n");
+      const loader = createControlledResourceLoader("test system prompt");
+      const shutdown = loader.shutdown.bind(loader);
+      loader.shutdown = async () => { shutdowns += 1; await shutdown(); };
+      return loader;
+    });
+    fixture.faux.setResponses([fauxAssistantMessage("delete cleanup")]);
+    await host.prompt("conversation-1", "delete me");
+    assert.equal(existsSync(`${stateDir}/retain-queue.jsonl`), true);
+    assert.equal(await host.delete("conversation-1", "tenant-1", "member-1"), true);
+    assert.equal(shutdowns, 1);
+    assert.equal(existsSync(stateDir), false);
   } finally {
     await fixture.close();
   }

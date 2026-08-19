@@ -36,8 +36,6 @@ export interface ManagerClient {
   pullKnowledgeArtifacts?(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
-  memoryRecall?(caller: AuthenticatedCaller, employeeId: string, query: string, limit: number): Promise<unknown>;
-  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown>): Promise<unknown>;
   memoryDelete?(caller: AuthenticatedCaller, memoryId: string): Promise<void>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
@@ -126,24 +124,6 @@ export class HttpManagerClient implements ManagerClient {
 
   async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {
     const response = await this.request("/api/manager/org/tree", caller);
-    return this.unwrap(response);
-  }
-
-  async memoryRecall(caller: AuthenticatedCaller, employeeId: string, query: string, limit: number): Promise<unknown> {
-    const response = await this.request("/api/manager/memories/recall", caller, undefined, {
-      employee_id: employeeId,
-      query,
-      limit: String(limit),
-    });
-    return this.unwrap(response);
-  }
-
-  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown>): Promise<unknown> {
-    const response = await this.request("/api/manager/memories/retain", caller, {
-      employee_id: employeeId,
-      content,
-      metadata,
-    });
     return this.unwrap(response);
   }
 

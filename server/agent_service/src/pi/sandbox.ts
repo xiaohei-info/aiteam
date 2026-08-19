@@ -88,13 +88,18 @@ export function assertWorkspacePath(path: string, workspaceRoot: string): string
   return candidate;
 }
 
+function scrubSandboxEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const blocked = /(?:^|_)(?:API_?KEY|PASSWORD|CREDENTIALS?|AUTHORIZATION|AUTH_(?:TOKEN|KEY|SECRET)|(?:[A-Z0-9]+_)?PRIVATE_KEY|(?:DATABASE|DB|POSTGRES|MYSQL|REDIS|MONGO)_(?:URL|URI|DSN|CONNECTION_STRING)|DSN|CONNECTION_STRING)(?:_|$)|(?:^|_)(?:TOKEN|SECRET)$|(?:^|_)(?:ACCESS_KEY(?:_ID)?|SECRET_ACCESS_KEY)(?:_|$)/i;
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !blocked.test(name.replaceAll("-", "_"))));
+}
+
 async function run(
   argv: string[],
   cwd: string,
   options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ exitCode: number | null }> {
   if (options.signal?.aborted) throw new Error("aborted");
-  const child = spawn(argv[0]!, argv.slice(1), { cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd, env: scrubSandboxEnvironment(options.env ?? process.env), stdio: ["ignore", "pipe", "pipe"] });
   return new Promise((resolveRun, reject) => {
     let timeoutHandle: NodeJS.Timeout | undefined;
     let settled = false;

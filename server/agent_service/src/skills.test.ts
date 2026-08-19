@@ -115,7 +115,7 @@ test("authoritative empty Manager sync prunes revoked cached skills", async () =
   }
 });
 
-test("resource loader uses only the current snapshot skill allowlist", () => {
+test("resource loader uses only the current snapshot skill allowlist", async () => {
   const key = generateKeyPairSync("ed25519");
   const publicKey = key.publicKey.export({ format: "der", type: "spki" }).toString("base64");
   const root = mkdtempSync(join(realpathSync(tmpdir()), "aiteam-skill-loader-"));
@@ -125,6 +125,7 @@ test("resource loader uses only the current snapshot skill allowlist", () => {
     process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY = publicKey;
     process.env.AITEAM_SKILL_SIGNING_KEY_ID = "skill-key-1";
     const loader = createControlledResourceLoader("system", cache, { caller: { callerId: "member-a", userId: "member-a", tenantId: "tenant-a", roles: [] }, employeeId: "e1", snapshot: { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", skill_refs: ["review"] } });
+    await loader.reload();
     assert.deepEqual(loader.getSkills().skills.map((skill) => skill.name), ["review"]);
     delete process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY;
     delete process.env.AITEAM_SKILL_SIGNING_KEY_ID;

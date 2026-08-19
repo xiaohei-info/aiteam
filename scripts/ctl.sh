@@ -419,6 +419,9 @@ start_service_local() {
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
+        AITEAM_HINDSIGHT_URL="${AITEAM_HINDSIGHT_URL:-}" \
+        HINDSIGHT_API_TOKEN="${HINDSIGHT_API_TOKEN:-}" \
+        HINDSIGHT_API_KEY="${HINDSIGHT_API_KEY:-}" \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}" \

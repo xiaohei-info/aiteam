@@ -126,6 +126,8 @@ docker run --rm aiteam-agent:dev sh -c \
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
+| `AITEAM_HINDSIGHT_URL` | Agent Pi Hindsight Extension endpoint（未设置则 memory disabled） | `http://hindsight:9290` |
+| `HINDSIGHT_API_TOKEN` | Agent Hindsight bank/API token（可选，禁止写入配置文件） | `***` |
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >

@@ -51,7 +51,7 @@ const sessionHost = new SessionHost({
   localKnowledgeIndex,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
-  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization),
+  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir),
 });
 
 const authenticate = useDevAuth
