@@ -81,6 +81,12 @@ services:
       # 迁移走管理连接（超管/DDL owner，#60）。
       ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       APP_RW_PASSWORD: aiteam_test
+      MANAGER_CREDENTIAL_KEY: ${MANAGER_CREDENTIAL_KEY:-}
+      HINDSIGHT_URL: ${HINDSIGHT_URL:-}
+      HINDSIGHT_SERVICE_TOKEN: ${HINDSIGHT_SERVICE_TOKEN:-}
+      HINDSIGHT_RECALL_PATH: ${HINDSIGHT_RECALL_PATH:-}
+      HINDSIGHT_RETAIN_PATH: ${HINDSIGHT_RETAIN_PATH:-}
+      HINDSIGHT_DELETE_PATH: ${HINDSIGHT_DELETE_PATH:-}
       OPERATOR_URL: http://operation:8000
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
