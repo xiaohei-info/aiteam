@@ -32,6 +32,13 @@ caf29a40  feat: add signed skill distribution
 - Compose 配置、`bash -n scripts/ctl.sh`、`git diff --check` 已通过；
 - pnpm wrapper 在本环境会被 ignored-build approval 阻断，使用仓库已有 `tsc/tsx` 直接二进制验证；不要借此修改 lockfile 或安装新运行时依赖。
 
+## 0.1 本轮范围确认（用户确认，2026-08-18）
+
+- 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份、生产 Relay 等不作为本轮阻塞项。
+- taiyi 是 Linux x86_64（Ubuntu kernel 6.8），且已安装 `/usr/bin/bwrap`；本轮直接在 taiyi 验证 Linux sandbox，不再要求额外 Linux 主机。
+- 本轮不迁移旧库数据；知识数据通过重新 intake 进入新知识空间。
+- macOS/Windows 原生 sandbox 验证、生产运维和正式 key rotation 延后到后续 hardening。
+
 ## 1. 已完成内容（不要重复实现）
 
 ### 1.1 Pi Agent 核心
@@ -117,7 +124,11 @@ Manager durable source document
 
 **完成标准**：taiyi 真实上传知识文档 → LightRAG 索引 → bundle sync → Agent 本地检索返回真实 citation；全程无 Manager query 请求。
 
-### P0-2：Provider authorized capability + Relay secret transport
+### P0-2：Provider authorized capability + secret transport
+
+**Relay 是什么**：Relay 是 Agent 和真实模型 Provider 之间的受控中转层。Agent 不持久化 Provider API key，而是使用短期、按 tenant/member/provider/session 绑定的 token 请求 Relay；Relay 在服务端注入真实 key 并调用 NewAPI/Provider。Relay 可统一做轮换、撤销、审计和限流。它不是 Pi runtime，也不是消息总线。
+
+**当前范围决策**：本轮是测试环境验证。若只验证真实 Pi/Provider 链路，可以使用 taiyi Agent 本地 `auth.json/models.json` 的测试配置；该方式仅为 test-only，不代表生产 secret transport 已完成。若要把 Relay 本身纳入本轮验收，必须额外提供/部署 Relay endpoint 和 token exchange 契约。
 
 **当前状态**：
 
@@ -135,7 +146,7 @@ Manager durable source document
 - `server/agent_service/src/pi/session-host.ts`
 - `server/agent_service/src/main.ts`
 
-**建议默认方案**：只实现 relay mode，禁止 direct provider key 先行落地。
+**后续生产建议**：只实现 relay mode，禁止 direct provider key 进入生产。
 
 **必须先冻结的契约**：
 
@@ -153,11 +164,11 @@ Manager durable source document
 5. 日志/SSE/error/usage 脱敏；
 6. rotation/revocation/expiry/cross-tenant negative tests。
 
-**完成标准**：taiyi 关闭 `AITEAM_PI_FAKE` 后，真实 Pi prompt 经 Relay 成功执行；Manager/Agent 日志和 SQLite 不出现 provider secret。
+**测试环境完成标准**：taiyi 关闭 `AITEAM_PI_FAKE` 后，真实 Pi prompt 成功执行；Manager/Agent 日志和 SQLite 不出现 provider secret。若本轮验收 Relay，则额外要求 prompt 经 Relay 成功执行；否则只记录 direct local test configuration 为 test-only。
 
-### P0-3：真实环境最终联调
+### P0-3：taiyi 测试环境最终联调
 
-在 P0-1/P0-2 之后，串行使用共享 taiyi 环境：
+在 P0-1/P0-2 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
 
 1. health/readiness/auth/JWKS；
 2. Agent grants/snapshot/signed skill sync；
@@ -222,16 +233,15 @@ lightrag:   9621 (loopback)
 - artifact 的前端浏览/预览和非图片处理策略；
 - 端到端截图上传/预览/删除验证。
 
-### P1-4：Sandbox 多平台真实验证
+### P1-4：Sandbox 多平台真实验证（本轮只做 taiyi Linux）
 
-代码已有 Linux bwrap/Landlock、macOS Seatbelt、Windows restricted-token/ACL 选择和 fail-closed 测试，但开发主机无法完成全部原生验证。
+代码已有 Linux bwrap/Landlock、macOS Seatbelt、Windows restricted-token/ACL 选择和 fail-closed 测试。本轮直接在 taiyi Linux 验证：
 
-需要在真实客户端执行：
-
-- Linux：bwrap/Landlock 正向执行、网络关闭、workspace 越界拒绝；
-- macOS：Seatbelt 正向/越界；
-- Windows：restricted token/ACL 正向/越界；
+- bwrap/Landlock 正向执行；
+- 网络关闭、workspace 越界拒绝；
 - 凭据剥离、资源限制、取消和超时。
+
+macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 
 ### P1-5：运营/前端真实投影
 
@@ -240,13 +250,13 @@ lightrag:   9621 (loopback)
 - Office/feed/usage outbox 不再只返回 schema 空数据；
 - Skills UI 仅展示 Manager 授权、版本、签名状态，不直接发现用户全局 Skill。
 
-## 4. P2：运维与清理
+## 4. P2：后续生产运维与清理（不阻塞本轮测试环境）
 
 - `scripts/ctl.sh` 当前已能传递 root/volume，但 Agent 旧子进程可能导致重启时 `EADDRINUSE`；改为 process-group 管理并增加 stale PID 清理。
 - 为 Hindsight、LightRAG、Manager data volume 做备份/恢复/容量监控。
 - 生产环境的 `AITEAM_ENV=production`、JWT/JWKS、Skill key、Provider/Relay secret、sandbox readiness 做启动前检查。
 - 完整 deployment smoke、rollback 和 upgrade/runbook。
-- 旧知识文件采用 clean-install/no-migration 口径；若要升级旧测试数据，提供一次性 re-intake/migration 工具，不能静默继续使用旧 namespace。
+- 本轮不迁移旧知识/旧库；若未来需要升级旧数据，提供一次性 re-intake/migration 工具，不能静默继续使用旧 namespace。
 
 ## 5. 全局验收红线
 
