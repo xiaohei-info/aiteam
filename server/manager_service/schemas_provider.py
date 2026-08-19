@@ -13,6 +13,24 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+_SENSITIVE_CAPABILITY_KEY_PARTS = (
+    "secret", "token", "password", "credential", "apikey", "privatekey", "authorization",
+)
+
+
+def _contains_sensitive_capability_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = "".join(char for char in str(key).casefold() if char.isalnum())
+            if any(part in normalized for part in _SENSITIVE_CAPABILITY_KEY_PARTS):
+                return True
+            if _contains_sensitive_capability_key(nested):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_capability_key(item) for item in value)
+    return False
+
+
 class ProviderModelCapability(BaseModel):
     """provider 支持的单个模型能力声明（非敏感，允许回显）。
 
@@ -27,8 +45,14 @@ class ProviderModelCapability(BaseModel):
     enabled: bool = Field(default=True, description="该模型是否启用（未启用的模型不参与自动匹配）")
     capabilities: dict[str, Any] = Field(
         default_factory=dict,
-        description="能力扩展键值（如 context_window、supports_vision）；本卡不做严格校验",
+        description="能力扩展键值（如 context_window、supports_vision）；禁止递归敏感键",
     )
+
+    @model_validator(mode="after")
+    def _reject_sensitive_capability_keys(self) -> "ProviderModelCapability":
+        if _contains_sensitive_capability_key(self.capabilities):
+            raise ValueError("capabilities contains a prohibited sensitive key")
+        return self
 
 
 class ProviderCredentialBase(BaseModel):
@@ -37,10 +61,10 @@ class ProviderCredentialBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display_name: str = ""
-    # mode：relay（默认，企业级令牌走 AI Relay）| direct（可选，直连 provider API key）（04 §6.7）。
-    mode: Literal["relay", "direct"] = Field(default="relay")
-    # endpoint：AI Relay 或直连 provider 的接入端点（非敏感，允许回显）。
+    # endpoint：provider 接入端点（非敏感，允许回显）。
     endpoint: str | None = Field(default=None)
+    # Supported Pi API protocols in this runtime contract. Unsupported Pi APIs are rejected at the boundary.
+    api_protocol: Literal["openai-completions", "openai-responses", "anthropic-messages"] = Field(default="openai-completions")
     # 可见性：tenant（租户内全员可用）| members（仅 allowed_member_ids 列出的成员）。
     visibility: Literal["tenant", "members"] = Field(default="tenant")
     # 成员级授权真相态：visibility=members 时生效（app_user.id 列表）。
@@ -77,6 +101,25 @@ class ProviderCredentialUpdate(ProviderCredentialBase):
     secret: str = Field(description="明文凭据（全量替换；入库前加密，不回显）")
 
 
+class RuntimeProviderConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str
+
+
+class RuntimeProviderConfigOut(BaseModel):
+    """最小运行时配置；仅受保护 runtime-config 端点可返回 api_key。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str
+    api_protocol: Literal["openai-completions", "openai-responses", "anthropic-messages"]
+    api_key: str
+    model: str
+    provider_ref: str
+    version: int
+
+
 class ProviderCredentialOut(BaseModel):
     """读取响应体。**绝不含明文 secret / 密文**（红线：不下发明文 key）。
 
@@ -90,8 +133,8 @@ class ProviderCredentialOut(BaseModel):
     credential_id: str
     provider_ref: str
     display_name: str
-    mode: str
     endpoint: str | None
+    api_protocol: str = "openai-completions"
     visibility: str
     allowed_member_ids: list[str] = Field(default_factory=list)
     supported_models: list[ProviderModelCapability] = Field(

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact } from "./manager-client.js";
+import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -21,6 +21,35 @@ test("HttpManagerClient forwards authenticated, employee-scoped memory and knowl
   assert.match(requests[2].url, /\/api\/manager\/memories\/memory-1$/);
   assert.equal(requests[2].init.method, "DELETE");
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
+});
+
+test("HttpManagerClient pulls only the employee-scoped runtime provider config", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    request = { url: String(input), init: init ?? {} };
+    return new Response(JSON.stringify({ data: {
+      base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "secret",
+      model: "m1", provider_ref: "p1", version: 2,
+    } }), { status: 200 });
+  });
+  const config = await client.pullRuntimeConfig(caller, "employee-1");
+  assert.equal(config.model, "m1");
+  assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/runtime-config");
+  assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
+  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+});
+
+test("runtime config accepts only the Pi protocols implemented by this contract", () => {
+  for (const api_protocol of ["openai-completions", "openai-responses", "anthropic-messages"] as const) {
+    assert.equal(normalizeRuntimeProviderConfig({
+      base_url: "https://newapi.test/v1", api_protocol, api_key: "secret",
+      model: "m1", provider_ref: "p1", version: 1,
+    }).api_protocol, api_protocol);
+  }
+  assert.throws(() => normalizeRuntimeProviderConfig({
+    base_url: "https://newapi.test/v1", api_protocol: "pi-messages", api_key: "secret",
+    model: "m1", provider_ref: "p1", version: 1,
+  }), /invalid runtime provider protocol/);
 });
 
 test("HttpManagerClient pulls the local bundle with URL/auth and rejects malformed responses", async () => {

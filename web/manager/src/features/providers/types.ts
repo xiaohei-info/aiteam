@@ -14,8 +14,8 @@ export interface ProviderCredential {
   credential_id: string;
   provider_ref: string;
   display_name: string;
-  mode: string;
   endpoint: string | null;
+  api_protocol: "openai-completions" | "openai-responses" | "anthropic-messages";
   visibility: string;
   allowed_member_ids: string[];
   version: number;
@@ -26,8 +26,8 @@ export interface CreateProviderInput {
   provider_ref: string;
   secret: string;
   display_name?: string;
-  mode?: "relay" | "direct";
   endpoint?: string;
+  api_protocol?: "openai-completions" | "openai-responses" | "anthropic-messages";
   visibility?: "tenant" | "members";
   allowed_member_ids?: string[];
   /** 该 provider 支持的模型能力目录（非敏感）；用于招募时按 default_model 自动匹配 provider_ref。 */

@@ -20,13 +20,13 @@ def _models(models=None):
     ]
 
 
-def _cred_row(cid="c-1", ref="relay-default", name="Default", mode="relay",
-              endpoint="https://relay.local", secret=b"encrypted", vis="tenant",
+def _cred_row(cid="c-1", ref="relay-default", name="Default",
+              endpoint="https://relay.local", api_protocol="openai-completions", secret=b"encrypted", vis="tenant",
               mems=None, models=None, catalog="manual", ver=1):
     # 列顺序必须与 repository _COLUMNS 一致：
-    # id, provider_ref, display_name, mode, endpoint, encrypted_secret,
+    # id, provider_ref, display_name, endpoint, api_protocol, encrypted_secret,
     # visibility, allowed_member_ids, supported_models, model_catalog_source, version
-    return (cid, ref, name, mode, endpoint, secret, vis,
+    return (cid, ref, name, endpoint, api_protocol, secret, vis,
             mems or ["m-1"], models or _models(), catalog, ver)
 
 
@@ -34,7 +34,7 @@ def test_create_returns_row():
     router = FakeRouter()
     router.queue(FakeCursor(fetchone=_cred_row()))
     row = ProviderCredentialRepository(router).create(
-        ctx(), provider_ref="relay-default", display_name="Default", mode="relay",
+        ctx(), provider_ref="relay-default", display_name="Default",
         endpoint="https://relay.local", encrypted_secret=b"encrypted", visibility="tenant",
         allowed_member_ids=["m-1"], supported_models=_models(), model_catalog_source="manual",
     )
@@ -51,8 +51,8 @@ def test_create_serializes_supported_models():
     router = FakeRouter()
     router.queue(FakeCursor(fetchone=_cred_row()))
     ProviderCredentialRepository(router).create(
-        ctx(), provider_ref="r", display_name="D", mode="relay",
-        endpoint=None, encrypted_secret=b"x", visibility="tenant",
+        ctx(), provider_ref="r", display_name="D",
+        endpoint=None, api_protocol="openai-completions", encrypted_secret=b"x", visibility="tenant",
         allowed_member_ids=[], supported_models=_models([{"model": "gpt-4o"}]),
         model_catalog_source="discovery",
     )
@@ -95,8 +95,8 @@ def test_update_found():
     router = FakeRouter()
     router.queue(FakeCursor(fetchone=_cred_row(name="Updated", ver=2)))
     row = ProviderCredentialRepository(router).update(
-        ctx(), credential_id="c-1", display_name="Updated", mode="direct",
-        endpoint="https://api.local", encrypted_secret=b"new", visibility="members",
+        ctx(), credential_id="c-1", display_name="Updated",
+        endpoint="https://api.local", api_protocol="openai-completions", encrypted_secret=b"new", visibility="members",
         allowed_member_ids=["m-2"], supported_models=_models(), model_catalog_source="manual",
     )
     assert row is not None
@@ -110,8 +110,8 @@ def test_update_passes_new_columns():
     router = FakeRouter()
     router.queue(FakeCursor(fetchone=_cred_row()))
     ProviderCredentialRepository(router).update(
-        ctx(), credential_id="c-1", display_name="x", mode="relay",
-        endpoint=None, encrypted_secret=b"x", visibility="tenant", allowed_member_ids=[],
+        ctx(), credential_id="c-1", display_name="x",
+        endpoint=None, api_protocol="openai-completions", encrypted_secret=b"x", visibility="tenant", allowed_member_ids=[],
         supported_models=_models([{"model": "claude-3-5-sonnet"}]), model_catalog_source="discovery",
     )
     sql, params = router.executed[-1]
@@ -123,8 +123,8 @@ def test_update_not_found():
     router = FakeRouter()
     router.queue(FakeCursor(fetchone=None))
     row = ProviderCredentialRepository(router).update(
-        ctx(), credential_id="x", display_name="X", mode="relay",
-        endpoint=None, encrypted_secret=b"x", visibility="tenant", allowed_member_ids=[],
+        ctx(), credential_id="x", display_name="X",
+        endpoint=None, api_protocol="openai-completions", encrypted_secret=b"x", visibility="tenant", allowed_member_ids=[],
         supported_models=[], model_catalog_source="manual",
     )
     assert row is None

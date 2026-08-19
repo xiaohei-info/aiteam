@@ -76,7 +76,6 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     config = {
         "provider_ref": "relay-default",
         "display_name": "默认 AI Relay",
-        "mode": "relay",
         "endpoint": "https://relay.example.local/v1",
         "visibility": "tenant",
         "secret": _PLAINTEXT_SECRET,
@@ -92,7 +91,6 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     assert r.status_code == 201, r.text
     created = r.json()["data"]
     assert created["provider_ref"] == "relay-default"
-    assert created["mode"] == "relay"
     assert created["version"] == 1
     # 能力目录透传
     assert len(created["supported_models"]) == 2
@@ -139,7 +137,6 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     # update supported_models -> version 应自增（触发器 BEFORE UPDATE OF 含 supported_models）
     update_body = {
         "display_name": "改名",
-        "mode": "direct",
         "endpoint": "https://api.openai.example/v1",
         "visibility": "tenant",
         "secret": "sk-new-plain-int-777",

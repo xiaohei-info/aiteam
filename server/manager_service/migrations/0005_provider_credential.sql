@@ -46,7 +46,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_provider_credential_touch ON provider_credential;
 CREATE TRIGGER trg_provider_credential_touch
-BEFORE UPDATE OF display_name, mode, endpoint, encrypted_secret,
+BEFORE UPDATE OF display_name, endpoint, encrypted_secret,
                  visibility, allowed_member_ids
 ON provider_credential
 FOR EACH ROW

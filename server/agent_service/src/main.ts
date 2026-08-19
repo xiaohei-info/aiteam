@@ -35,7 +35,7 @@ const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"));
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
-const configured = await createConfiguredModelRuntime({ agentDir, useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
+const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = process.env.AITEAM_MANAGER_URL ? new HttpManagerClient(process.env.AITEAM_MANAGER_URL) : undefined;
 const localKnowledgeIndex = new SqliteKnowledgeIndex(store);

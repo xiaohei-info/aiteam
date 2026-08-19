@@ -142,7 +142,6 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
         data: {
           provider_ref: providerRef,
           display_name: `E2E Provider ${uniqueTag}`,
-          mode: "relay",
           endpoint: "https://api.example.com/v1",
           secret: `sk-e2e-${uniqueTag}`,
           visibility: "tenant",

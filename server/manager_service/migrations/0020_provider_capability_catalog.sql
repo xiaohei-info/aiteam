@@ -18,7 +18,7 @@ ALTER TABLE provider_credential
 -- 使能力目录变更同样推进 version（触发器函数本身只递增 version，无需改函数体）。
 DROP TRIGGER IF EXISTS trg_provider_credential_touch ON provider_credential;
 CREATE TRIGGER trg_provider_credential_touch
-BEFORE UPDATE OF display_name, mode, endpoint, encrypted_secret,
+BEFORE UPDATE OF display_name, endpoint, encrypted_secret,
                  visibility, allowed_member_ids,
                  supported_models, model_catalog_source
 ON provider_credential

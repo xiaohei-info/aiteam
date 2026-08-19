@@ -1,20 +1,71 @@
-import { fauxAssistantMessage, fauxProvider, type Model } from "@earendil-works/pi-ai";
-import { chmodSync, existsSync } from "node:fs";
+import type { Credential, CredentialInfo, CredentialStore, Model, Api } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export interface ConfiguredModelRuntime {
   runtime: ModelRuntime;
-  model: Model<any>;
+  model?: Model<any>;
   mode: "provider" | "faux";
 }
 
+class MemoryCredentialStore implements CredentialStore {
+  private readonly values = new Map<string, Credential>();
+  async read(providerId: string): Promise<Credential | undefined> { return this.values.get(providerId); }
+  async list(): Promise<readonly CredentialInfo[]> { return [...this.values.entries()].map(([providerId, credential]) => ({ providerId, type: credential.type })); }
+  async modify(providerId: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>): Promise<Credential | undefined> {
+    const next = await fn(this.values.get(providerId));
+    if (next) this.values.set(providerId, next);
+    return next;
+  }
+  async delete(providerId: string): Promise<void> { this.values.delete(providerId); }
+}
+
+export interface RuntimeProviderConfig {
+  base_url: string;
+  api_protocol: "openai-completions" | "openai-responses" | "anthropic-messages";
+  api_key: string;
+  model: string;
+  provider_ref: string;
+  version: number;
+}
+
+/** Register one Manager-authorized provider in memory and bind its runtime key. */
+export async function registerRuntimeProvider(runtime: ModelRuntime, config: RuntimeProviderConfig, providerId: string): Promise<Model<any>> {
+  if (!config.base_url || !config.api_key || !config.model || !config.provider_ref) throw new Error("Manager runtime provider config is incomplete");
+  try {
+    runtime.registerProvider(providerId, {
+      name: config.provider_ref,
+      baseUrl: config.base_url,
+      api: config.api_protocol as Api,
+      authHeader: true,
+      models: [{
+        id: config.model,
+        name: config.model,
+        api: config.api_protocol as Api,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 32_768,
+      }],
+    });
+    await runtime.setRuntimeApiKey(providerId, config.api_key);
+    const model = runtime.getModel(providerId, config.model);
+    if (!model) throw new Error(`Manager runtime model is unavailable: ${config.model}`);
+    return model;
+  } catch (error) {
+    await runtime.removeRuntimeApiKey(providerId).catch(() => undefined);
+    try { runtime.unregisterProvider(providerId); } catch { /* preserve the registration error */ }
+    throw error;
+  }
+}
+
 export async function createConfiguredModelRuntime(options: {
-  agentDir: string;
   useFaux?: boolean;
   modelId?: string;
 }): Promise<ConfiguredModelRuntime> {
+  const runtime = await ModelRuntime.create({ credentials: new MemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
   if (options.useFaux) {
-    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
     const faux = fauxProvider({
       api: "aiteam-dev-faux-api",
       provider: "aiteam-dev-faux",
@@ -24,20 +75,5 @@ export async function createConfiguredModelRuntime(options: {
     faux.setResponses([fauxAssistantMessage("AI Team Pi Agent development response")]);
     return { runtime, model: faux.getModel(), mode: "faux" };
   }
-
-  const authPath = `${options.agentDir}/auth.json`;
-  const modelsPath = `${options.agentDir}/models.json`;
-  for (const path of [authPath, modelsPath]) if (existsSync(path)) chmodSync(path, 0o600);
-  const runtime = await ModelRuntime.create({
-    authPath,
-    modelsPath,
-    refreshOnCreate: false,
-  });
-  for (const path of [authPath, modelsPath]) if (existsSync(path)) chmodSync(path, 0o600);
-  const available = await runtime.getAvailable();
-  const model = options.modelId
-    ? available.find((candidate) => candidate.id === options.modelId)
-    : available[0];
-  if (!model) throw new Error(options.modelId ? `Configured Pi model is unavailable: ${options.modelId}` : "No authenticated Pi model is configured");
-  return { runtime, model, mode: "provider" };
+  return { runtime, mode: "provider" };
 }

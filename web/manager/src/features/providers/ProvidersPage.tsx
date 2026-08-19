@@ -77,7 +77,7 @@ export function ProvidersPage(): ReactNode {
         renderCell: (provider) => <Code>{provider.provider_ref}</Code>,
       },
       { key: "display_name", header: "名称", width: proportional(1), renderCell: (provider) => provider.display_name || "—" },
-      { key: "mode", header: "模式", width: pixel(110) },
+      { key: "api_protocol", header: "API 协议", width: pixel(160) },
       { key: "visibility", header: "可见性", width: pixel(110) },
       { key: "version", header: "版本", width: pixel(80) },
     ];
@@ -153,6 +153,22 @@ export function ProvidersPage(): ReactNode {
                         placeholder="OpenAI Key"
                         isDisabled={submitting}
                         isOptional
+                      />
+                      <TextInput
+                        label="Base URL（可选）"
+                        value={form.endpoint ?? ""}
+                        onChange={(value) => setForm((previous) => ({ ...previous, endpoint: value }))}
+                        placeholder="https://api.example.com/v1"
+                        isDisabled={submitting}
+                        isOptional
+                      />
+                      <TextInput
+                        label="API 协议"
+                        value={form.api_protocol ?? "openai-completions"}
+                        onChange={(value) => setForm((previous) => ({ ...previous, api_protocol: value as CreateProviderInput["api_protocol"] }))}
+                        placeholder="openai-completions"
+                        isDisabled={submitting}
+                        isRequired
                       />
                       <TextInput
                         label="Secret（明文，仅本次）"

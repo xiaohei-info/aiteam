@@ -15,6 +15,7 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inme
 from manager_service.schemas_provider import (
     ProviderCredentialOut,
     ProviderModelCapability,
+    RuntimeProviderConfigOut,
 )
 
 
@@ -48,8 +49,7 @@ def _cap(model="gpt-4o", display_name="", enabled=True, capabilities=None):
 
 
 def _out(**kw):
-    base = dict(credential_id="c-1", provider_ref="relay", display_name="AI Relay",
-                mode="relay", endpoint="https://r", visibility="tenant",
+    base = dict(credential_id="c-1", provider_ref="relay", display_name="AI Relay", endpoint="https://r", api_protocol="openai-completions", visibility="tenant",
                 allowed_member_ids=[],
                 supported_models=[_cap()], model_catalog_source="manual",
                 version=1)
@@ -60,6 +60,10 @@ def _out(**kw):
 def _fake_svc():
     svc = MagicMock()
     o = _out()
+    svc.runtime_config.return_value = RuntimeProviderConfigOut(
+        base_url="https://relay.example/v1", api_protocol="openai-completions",
+        api_key="runtime-secret", model="gpt-4o", provider_ref="relay", version=1,
+    )
     svc.create.return_value = o
     svc.list_all.return_value = [o]
     svc.get.return_value = o
@@ -85,6 +89,51 @@ def test_no_token_401(method, path):
         {"secret": "s"} if method == "PUT" else None)
     r = client.request(method, path, json=body)
     assert r.status_code == 401
+
+
+def test_runtime_config_requires_auth():
+    client = _client("postgresql://fake/fake")
+    r = client.post(
+        "/api/manager/provider-credentials/runtime-config",
+        json={"employee_id": "e1"},
+    )
+    assert r.status_code == 401
+
+
+def test_runtime_config_rejects_malformed_request():
+    client = _client("postgresql://fake/fake")
+    r = client.post(
+        "/api/manager/provider-credentials/runtime-config",
+        json={"employee_id": "e1", "credential_id": "must-not-be-accepted"},
+        headers=_hdr(),
+    )
+    assert r.status_code == 422
+
+
+def test_runtime_config_sets_no_store_and_preserves_scope_error():
+    fake = _fake_svc()
+    fake.runtime_config.side_effect = Forbidden("member is not authorized for this expert")
+    with patch("manager_service.routes_provider.build_provider_credential_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        r = c.post(
+            "/api/manager/provider-credentials/runtime-config",
+            json={"employee_id": "e1"}, headers=_hdr(roles=["member"]),
+        )
+        assert r.status_code == 403
+
+
+def test_runtime_config_happy_path_sets_no_store():
+    fake = _fake_svc()
+    with patch("manager_service.routes_provider.build_provider_credential_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        r = c.post(
+            "/api/manager/provider-credentials/runtime-config",
+            json={"employee_id": "e1"}, headers=_hdr(),
+        )
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-store"
+        assert r.json()["data"]["api_key"] == "runtime-secret"
+        fake.runtime_config.assert_called_once()
 
 
 def test_create_no_db_503():

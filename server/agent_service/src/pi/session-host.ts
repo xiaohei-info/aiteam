@@ -25,6 +25,7 @@ import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
+import { registerRuntimeProvider } from "./model-runtime.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -55,6 +56,8 @@ export interface SessionAuthorization {
   mentionedEmployeeIds?: ReadonlySet<string>;
   managerClient?: ManagerClient;
   localKnowledgeIndex?: LocalKnowledgeIndex;
+  runtimeProviderId?: string;
+  runtimeScope?: string;
 }
 
 export interface SessionHostOptions {
@@ -63,7 +66,7 @@ export interface SessionHostOptions {
   sessionDir: string;
   store: AgentSqliteStore;
   modelRuntime: ModelRuntime;
-  model: Model<any>;
+  model?: Model<any>;
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization) => ResourceLoader;
   managerClient?: ManagerClient;
   localKnowledgeIndex?: LocalKnowledgeIndex;
@@ -98,6 +101,7 @@ interface SessionRecord {
   delegatePromptChars: number;
   activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
+  runtimeProviderId?: string;
 }
 
 const MAX_DELEGATE_CALLS = 4;
@@ -188,7 +192,7 @@ export class SessionHost {
       record.prompting = false;
       record.aborting = false;
       await this.abortChildren(record);
-      this.disposeSession(record);
+      await this.disposeSession(record);
     }
   }
 
@@ -216,7 +220,7 @@ export class SessionHost {
       await this.abortChildren(record);
       await record.session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
-      this.disposeSession(record);
+      await this.disposeSession(record);
       this.records.delete(conversationId);
     }
     for (const path of [indexed.sessionFile, indexed.workspace]) {
@@ -248,7 +252,7 @@ export class SessionHost {
       const session = record.session ?? await record.sessionReady?.catch(() => undefined);
       await session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
-      this.disposeSession(record);
+      await this.disposeSession(record);
     }
     this.records.clear();
   }
@@ -317,10 +321,15 @@ export class SessionHost {
       await this.options.sandbox.assertAvailable(record.workspace);
     }
     const customTools = this.toolsFor(authorization, true, record, record.workspace);
+    if (authorization) {
+      authorization.runtimeScope = record.conversationId;
+      await this.ensureRuntimeModel(authorization);
+      record.runtimeProviderId = authorization.runtimeProviderId;
+    }
     const result = await createAgentSession({
       cwd: record.workspace,
       agentDir: this.options.agentDir,
-      model: authorization ? this.modelFor(authorization.snapshot) : this.options.model,
+      model: authorization ? this.modelFor(authorization.snapshot, authorization.runtimeProviderId) : this.requireDefaultModel(),
       thinkingLevel: this.thinkingLevelFor(authorization),
       modelRuntime: this.options.modelRuntime,
       resourceLoader,
@@ -398,11 +407,17 @@ export class SessionHost {
     return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient, localKnowledgeIndex: this.options.localKnowledgeIndex };
   }
 
-  private disposeSession(record: SessionRecord): void {
+  private async disposeSession(record: SessionRecord): Promise<void> {
     record.unsubscribe?.();
     record.unsubscribe = undefined;
     record.session?.dispose();
     record.session = undefined;
+    const providerId = record.runtimeProviderId;
+    record.runtimeProviderId = undefined;
+    if (providerId) {
+      await this.options.modelRuntime.removeRuntimeApiKey(providerId).catch(() => undefined);
+      this.options.modelRuntime.unregisterProvider(providerId);
+    }
   }
 
   private async abortChildren(record: SessionRecord): Promise<number> {
@@ -437,6 +452,7 @@ export class SessionHost {
     record.activeDelegates.add(child);
     const sourceRef = createHash("sha256").update(`${record.conversationId}:${toolCallId}:${Date.now()}`).digest("hex").slice(0, 24);
     let childWorkspace: string | undefined;
+    let childProviderId: string | undefined;
     try {
       childWorkspace = join(record.workspace, ".delegates", sourceRef);
       mkdirSync(childWorkspace, { recursive: true, mode: 0o700 });
@@ -446,13 +462,16 @@ export class SessionHost {
         await this.options.sandbox.assertAvailable(childWorkspace);
       }
       const sessionManager = SessionManager.inMemory(childWorkspace);
-      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, { ...authorization, employeeId: snapshot.employee_id, snapshot });
+      const childAuthorization = { ...authorization, employeeId: snapshot.employee_id, snapshot, runtimeScope: sourceRef };
+      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization);
       await resourceLoader.reload();
-      const childTools = this.toolsFor({ ...authorization, employeeId: snapshot.employee_id, snapshot }, false, undefined, childWorkspace, sessionManager.getSessionId());
+      const childTools = this.toolsFor(childAuthorization, false, undefined, childWorkspace, sessionManager.getSessionId());
+      const childRuntime = await this.ensureRuntimeModel(childAuthorization);
+      childProviderId = childRuntime.providerId;
       const result = await createAgentSession({
         cwd: childWorkspace,
         agentDir: this.options.agentDir,
-        model: this.modelFor(snapshot),
+        model: childRuntime.model,
         thinkingLevel: this.thinkingLevelFor({ ...authorization, snapshot }),
         modelRuntime: this.options.modelRuntime,
         resourceLoader,
@@ -473,19 +492,45 @@ export class SessionHost {
         result.session.dispose();
       }
     } finally {
+      if (childProviderId) {
+        await this.options.modelRuntime.removeRuntimeApiKey(childProviderId).catch(() => undefined);
+        this.options.modelRuntime.unregisterProvider(childProviderId);
+      }
       if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
       record.activeDelegates.delete(child);
     }
   }
 
-  private modelFor(snapshot: FrozenSnapshot): Model<any> {
+  private async ensureRuntimeModel(authorization: SessionAuthorization): Promise<{ model: Model<any>; providerId?: string }> {
+    if (!authorization.managerClient?.pullRuntimeConfig) {
+      if (!this.options.model) throw new SessionAuthorizationError("No authenticated Pi model is available");
+      return { model: this.options.model };
+    }
+    const memberId = authorization.caller.userId ?? authorization.caller.callerId;
+    const config = await authorization.managerClient.pullRuntimeConfig(authorization.caller, authorization.employeeId);
+    const policy = authorization.snapshot.model_policy;
+    const expectedModel = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).model === "string" ? (policy as Record<string, unknown>).model : undefined;
+    const expectedProvider = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).provider_ref === "string" ? (policy as Record<string, unknown>).provider_ref : undefined;
+    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
+    const providerId = `aiteam:${createHash("sha256").update(`${authorization.caller.tenantId}:${memberId}:${authorization.employeeId}:${config.version}:${authorization.runtimeScope ?? "session"}`).digest("hex").slice(0, 32)}`;
+    const model = await registerRuntimeProvider(this.options.modelRuntime, config, providerId);
+    authorization.runtimeProviderId = providerId;
+    return { model, providerId };
+  }
+
+  private modelFor(snapshot: FrozenSnapshot, runtimeProviderId?: string): Model<any> {
     const policy = snapshot.model_policy;
     if (policy && typeof policy === "object") {
       const values = policy as Record<string, unknown>;
-      const provider = typeof values.provider === "string" ? values.provider : typeof values.provider_ref === "string" ? values.provider_ref : undefined;
+      const provider = runtimeProviderId ?? (typeof values.provider === "string" ? values.provider : typeof values.provider_ref === "string" ? values.provider_ref : undefined);
       const model = typeof values.model === "string" ? values.model : typeof values.model_id === "string" ? values.model_id : undefined;
-      if (provider && model) return this.options.modelRuntime.getModel(provider, model) ?? this.options.model;
+      if (provider && model) return this.options.modelRuntime.getModel(provider, model) ?? this.requireDefaultModel();
     }
+    return this.options.model ?? this.requireDefaultModel();
+  }
+
+  private requireDefaultModel(): Model<any> {
+    if (!this.options.model) throw new SessionAuthorizationError("No authenticated Pi model is available");
     return this.options.model;
   }
 

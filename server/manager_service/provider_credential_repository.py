@@ -24,8 +24,8 @@ class ProviderCredentialRow:
     credential_id: str
     provider_ref: str
     display_name: str
-    mode: str
     endpoint: str | None
+    api_protocol: str
     encrypted_secret: bytes  # 密文，绝不下发明文
     visibility: str
     allowed_member_ids: list[str]
@@ -35,7 +35,7 @@ class ProviderCredentialRow:
 
 
 _COLUMNS = (
-    "id, provider_ref, display_name, mode, endpoint, encrypted_secret, "
+    "id, provider_ref, display_name, endpoint, api_protocol, encrypted_secret, "
     "visibility, allowed_member_ids, supported_models, model_catalog_source, version"
 )
 
@@ -45,8 +45,8 @@ def _row_to_credential(row: Any) -> ProviderCredentialRow:
         credential_id=str(row[0]),
         provider_ref=row[1],
         display_name=row[2],
-        mode=row[3],
-        endpoint=row[4],
+        endpoint=row[3],
+        api_protocol=row[4] or "openai-completions",
         encrypted_secret=bytes(row[5]) if row[5] is not None else b"",
         visibility=row[6],
         allowed_member_ids=list(row[7] or []),
@@ -73,20 +73,20 @@ class ProviderCredentialRepository:
         *,
         provider_ref: str,
         display_name: str,
-        mode: str,
         endpoint: str | None,
         encrypted_secret: bytes,
         visibility: str,
         allowed_member_ids: list[str],
         supported_models: list[dict[str, Any]],
         model_catalog_source: str,
+        api_protocol: str = "openai-completions",
     ) -> ProviderCredentialRow:
         """在本 tenant 建 provider 凭据行。tenant_id 取自 ctx（D22，RLS WITH CHECK 兜底）。"""
         with self._router.session(ctx) as s:
             row = s.execute(
                 """
                 INSERT INTO provider_credential (
-                    tenant_id, provider_ref, display_name, mode, endpoint,
+                    tenant_id, provider_ref, display_name, endpoint, api_protocol,
                     encrypted_secret, visibility, allowed_member_ids,
                     supported_models, model_catalog_source
                 ) VALUES (
@@ -94,7 +94,7 @@ class ProviderCredentialRepository:
                 )
                 RETURNING """ + _COLUMNS,
                 (
-                    ctx.tenant_id, provider_ref, display_name, mode, endpoint,
+                    ctx.tenant_id, provider_ref, display_name, endpoint, api_protocol,
                     encrypted_secret, visibility, json.dumps(allowed_member_ids),
                     _dump_supported_models(supported_models), model_catalog_source,
                 ),
@@ -124,26 +124,26 @@ class ProviderCredentialRepository:
         *,
         credential_id: str,
         display_name: str,
-        mode: str,
         endpoint: str | None,
         encrypted_secret: bytes,
         visibility: str,
         allowed_member_ids: list[str],
         supported_models: list[dict[str, Any]],
         model_catalog_source: str,
+        api_protocol: str = "openai-completions",
     ) -> ProviderCredentialRow | None:
         """改写本 tenant 内凭据（version 由触发器自增）。跨 tenant 行 RLS 不可见。"""
         with self._router.session(ctx) as s:
             row = s.execute(
                 """
                 UPDATE provider_credential SET
-                    display_name = %s, mode = %s, endpoint = %s,
+                    display_name = %s, endpoint = %s, api_protocol = %s,
                     encrypted_secret = %s, visibility = %s, allowed_member_ids = %s,
                     supported_models = %s, model_catalog_source = %s
                 WHERE id = %s
                 RETURNING """ + _COLUMNS,
                 (
-                    display_name, mode, endpoint, encrypted_secret, visibility,
+                    display_name, endpoint, api_protocol, encrypted_secret, visibility,
                     json.dumps(allowed_member_ids), _dump_supported_models(supported_models),
                     model_catalog_source, credential_id,
                 ),

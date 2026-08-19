@@ -28,6 +28,7 @@ from .schemas_provider import (
     ProviderCredentialOut,
     ProviderCredentialUpdate,
     ProviderModelCapability,
+    RuntimeProviderConfigOut,
 )
 
 # 配置写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
@@ -60,9 +61,10 @@ def _capability_from_dict(raw: dict[str, Any]) -> ProviderModelCapability:
 class ProviderCredentialService:
     """provider 凭据 CRUD 编排 + 加密 + 明文不下发。"""
 
-    def __init__(self, repo: ProviderCredentialRepository, crypto: CryptoService):
+    def __init__(self, repo: ProviderCredentialRepository, crypto: CryptoService, snapshot_service=None):
         self._repo = repo
         self._crypto = crypto
+        self._snapshot_service = snapshot_service
 
     def create(self, ctx: TenantContext, body: ProviderCredentialCreate) -> ProviderCredentialOut:
         _ensure_can_write(ctx)
@@ -74,8 +76,8 @@ class ProviderCredentialService:
             ctx,
             provider_ref=body.provider_ref,
             display_name=body.display_name,
-            mode=body.mode,
             endpoint=body.endpoint,
+            api_protocol=body.api_protocol,
             encrypted_secret=encrypted,
             visibility=body.visibility,
             allowed_member_ids=body.allowed_member_ids,
@@ -104,8 +106,8 @@ class ProviderCredentialService:
             ctx,
             credential_id=credential_id,
             display_name=body.display_name,
-            mode=body.mode,
             endpoint=body.endpoint,
+            api_protocol=body.api_protocol,
             encrypted_secret=encrypted,
             visibility=body.visibility,
             allowed_member_ids=body.allowed_member_ids,
@@ -133,6 +135,37 @@ class ProviderCredentialService:
             ctx, self._repo.list_providers_supporting_model(ctx, model=model)
         )
         return [_to_out(r) for r in rows]
+
+    def runtime_config(self, ctx: TenantContext, *, employee_id: str) -> RuntimeProviderConfigOut:
+        if self._snapshot_service is None:
+            raise NotFound("runtime provider config is unavailable")
+        ensure_runnable = getattr(self._snapshot_service, "_ensure_runnable", None)
+        if ensure_runnable is None:
+            raise NotFound("runtime provider config is unavailable")
+        ensure_runnable(ctx, employee_id=employee_id)
+        snapshot = self._snapshot_service.generate(ctx, member_id=ctx.user_id, employee_id=employee_id)
+        policy = snapshot.model_policy
+        provider_ref = policy.provider_ref
+        model = policy.model
+        if not provider_ref or not model:
+            raise NotFound("runtime provider config is unavailable")
+        row = self._repo.get_by_ref(ctx, provider_ref=provider_ref)
+        if row is None or not _is_visible(ctx, row) or not row.endpoint or not row.encrypted_secret:
+            raise NotFound("runtime provider config is unavailable")
+        if not any(cap.get("model") == model and cap.get("enabled", True) for cap in row.supported_models):
+            raise NotFound("runtime provider model is unavailable")
+        try:
+            api_key = self._crypto.decrypt(row.encrypted_secret)
+        except Exception as exc:  # noqa: BLE001 - fail closed without exposing crypto details
+            raise NotFound("runtime provider config is unavailable") from exc
+        return RuntimeProviderConfigOut(
+            base_url=row.endpoint,
+            api_protocol=row.api_protocol,
+            api_key=api_key,
+            model=model,
+            provider_ref=row.provider_ref,
+            version=row.version,
+        )
 
     def _require(self, ctx: TenantContext, credential_id: str) -> ProviderCredentialRow:
         row = self._repo.get(ctx, credential_id=credential_id)
@@ -182,8 +215,8 @@ def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:
         credential_id=row.credential_id,
         provider_ref=row.provider_ref,
         display_name=row.display_name,
-        mode=row.mode,
         endpoint=row.endpoint,
+        api_protocol=row.api_protocol,
         visibility=row.visibility,
         allowed_member_ids=row.allowed_member_ids,
         supported_models=[_capability_from_dict(c) for c in row.supported_models],
@@ -192,5 +225,5 @@ def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:
     )
 
 
-def build_provider_credential_service(router: PgTenantRouter, crypto: CryptoService) -> ProviderCredentialService:
-    return ProviderCredentialService(ProviderCredentialRepository(router), crypto)
+def build_provider_credential_service(router: PgTenantRouter, crypto: CryptoService, snapshot_service=None) -> ProviderCredentialService:
+    return ProviderCredentialService(ProviderCredentialRepository(router), crypto, snapshot_service)

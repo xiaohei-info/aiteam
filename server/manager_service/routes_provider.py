@@ -18,15 +18,43 @@ from shared.crypto import CryptoService, build_crypto_service
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
+from .employee_config_service import build_employee_config_service
+from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
+from .member_service import GrantService, MemberDeptService
+from .repository_member import GrantRepository, MemberDeptRepository
+from .snapshot_service import build_snapshot_service
+
 from .provider_credential_service import (
     ProviderCredentialService,
     build_provider_credential_service,
 )
-from .schemas_provider import ProviderCredentialCreate, ProviderCredentialOut, ProviderCredentialUpdate
+from .schemas_provider import (
+    ProviderCredentialCreate,
+    ProviderCredentialOut,
+    ProviderCredentialUpdate,
+    RuntimeProviderConfigOut,
+    RuntimeProviderConfigRequest,
+)
 
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+def _snapshot_service(request: Request):
+    cache = getattr(request.app.state, "_snapshot_service", None)
+    if cache is None:
+        dsn = request.app.state.settings.db_url
+        router = PgTenantRouter(dsn)
+        member_repo = MemberDeptRepository(router)
+        cache = build_snapshot_service(
+            config_service=build_employee_config_service(router),
+            grant_service=GrantService(repo=GrantRepository(router), members=member_repo),
+            member_service=MemberDeptService(repo=member_repo),
+            knowledge_binding=EmployeeKnowledgeBindingRepository(router),
+        )
+        request.app.state._snapshot_service = cache
+    return cache
 
 
 def _service(request: Request) -> ProviderCredentialService:
@@ -43,7 +71,7 @@ def _service(request: Request) -> ProviderCredentialService:
         if crypto is None:
             crypto = build_crypto_service()
             request.app.state._crypto_service = crypto
-        cache = build_provider_credential_service(PgTenantRouter(dsn), crypto)
+        cache = build_provider_credential_service(PgTenantRouter(dsn), crypto, _snapshot_service(request))
         request.app.state._provider_credential_service = cache
     return cache
 
@@ -69,6 +97,22 @@ def build_provider_credential_router(verifier) -> APIRouter:
         svc = _service(request)
         return Envelope[ProviderCredentialOut](
             data=svc.create(tenant_context_from(claims), body)
+        )
+
+    @router.post(
+        "/runtime-config", summary="按授权 employee 拉取 Pi 最小运行时配置",
+        operation_id="manager_provider_runtime_config",
+    )
+    async def get_runtime_config(
+        body: RuntimeProviderConfigRequest,
+        request: Request,
+        response: Response,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[RuntimeProviderConfigOut]:
+        response.headers["Cache-Control"] = "no-store"
+        svc = _service(request)
+        return Envelope[RuntimeProviderConfigOut](
+            data=svc.runtime_config(tenant_context_from(claims), employee_id=body.employee_id)
         )
 
     @router.get(

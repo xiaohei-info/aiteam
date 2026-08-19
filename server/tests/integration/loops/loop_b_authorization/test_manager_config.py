@@ -254,8 +254,7 @@ def test_manager_config_provider_credential_post_no_secret_in_response(
     hdr = {"Authorization": f"Bearer {tok}"}
 
     r = client.post("/api/manager/provider-credentials", json={
-        "provider_ref": "relay-default", "display_name": "AI Relay",
-        "mode": "relay", "endpoint": "https://relay.local/v1",
+        "provider_ref": "relay-default", "display_name": "AI Relay", "endpoint": "https://relay.local/v1",
         "visibility": "tenant", "secret": "sk-超机密-9876543210",
     }, headers=hdr)
     assert r.status_code == 201, r.text

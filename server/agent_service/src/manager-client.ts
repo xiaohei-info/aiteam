@@ -3,6 +3,7 @@ import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection }
 import type { UsageSummary } from "./usage.js";
 import type { SignedSkillPackage } from "./skills.js";
 import type { KnowledgeArtifact } from "./storage/sqlite.js";
+import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
@@ -31,6 +32,7 @@ export interface ManagerClient {
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
+  pullRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig>;
   pullKnowledgeArtifacts?(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
@@ -81,6 +83,11 @@ export class HttpManagerClient implements ManagerClient {
       known_versions: knownVersions,
     });
     return normalizeAuthorizedConfig(this.unwrap(response), caller.tenantId, caller.userId ?? caller.callerId);
+  }
+
+  async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
+    const response = await this.request("/api/manager/provider-credentials/runtime-config", caller, { employee_id: employeeId });
+    return normalizeRuntimeProviderConfig(this.unwrap(response));
   }
 
   async pullSnapshots(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]> {
@@ -329,6 +336,16 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
   const version = String(raw.version ?? (raw.solution_version !== undefined && raw.config_version !== undefined ? `${raw.solution_version}:${raw.config_version}` : raw.solution_version ?? raw.config_version ?? ""));
   assertOwnership(raw, tenantId, memberId);
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };
+}
+
+export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "version"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
+  if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
+  if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
+  if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
+  return raw as unknown as RuntimeProviderConfig;
 }
 
 function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string): FrozenSnapshot {

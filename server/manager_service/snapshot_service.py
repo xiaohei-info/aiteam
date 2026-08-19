@@ -79,6 +79,17 @@ class SnapshotService:
         self._audit = audit_recorder
         self._knowledge_binding = knowledge_binding
 
+    def _ensure_runnable(self, ctx: TenantContext, *, employee_id: str) -> None:
+        """Reject non-active employees for execution-only callers.
+
+        Snapshot generation intentionally remains a read-only projection and may be
+        used by draft-focused configuration tests; runtime pulls must opt into this
+        lifecycle gate explicitly.
+        """
+        config = self._config.get(ctx, employee_id=employee_id)
+        if config.status != "active":
+            raise NotFound("employee is not runnable")
+
     def generate(
         self,
         ctx: TenantContext,

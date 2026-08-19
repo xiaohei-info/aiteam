@@ -71,6 +71,15 @@ def test_model_catalog_source_manual_default():
         ProviderCredentialCreate(provider_ref="r", secret="x", model_catalog_source="bogus")
 
 
+@pytest.mark.parametrize("key", ["secret", "nested_token", "password", "credential", "api_key", "private_key", "authorization"])
+def test_capabilities_reject_recursive_sensitive_keys(key):
+    """能力目录可扩展，但不得把敏感元数据带入存储或管理面响应。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ProviderModelCapability(model="gpt-4o", capabilities={"nested": [{key: "must-not-leak"}]})
+
+
 def test_supported_models_roundtrip_in_schema():
     """supported_models 入参结构化、Out 字段同名字段保留。"""
     cap = ProviderModelCapability(model="gpt-4o", enabled=True)
@@ -104,7 +113,7 @@ class _FakeRepo:
         import uuid
         row = ProviderCredentialRow(
             credential_id=str(uuid.uuid4()), provider_ref=kw["provider_ref"],
-            display_name=kw["display_name"], mode=kw["mode"], endpoint=kw["endpoint"],
+            display_name=kw["display_name"], endpoint=kw["endpoint"], api_protocol=kw.get("api_protocol", "openai-completions"),
             encrypted_secret=kw["encrypted_secret"], visibility=kw["visibility"],
             allowed_member_ids=kw["allowed_member_ids"],
             supported_models=[dict(m) for m in kw["supported_models"]],
@@ -130,7 +139,7 @@ class _FakeRepo:
         old = b[credential_id]
         row = ProviderCredentialRow(
             credential_id=old.credential_id, provider_ref=old.provider_ref,
-            display_name=kw["display_name"], mode=kw["mode"], endpoint=kw["endpoint"],
+            display_name=kw["display_name"], endpoint=kw["endpoint"], api_protocol=kw.get("api_protocol", "openai-completions"),
             encrypted_secret=kw["encrypted_secret"], visibility=kw["visibility"],
             allowed_member_ids=kw["allowed_member_ids"],
             supported_models=[dict(m) for m in kw["supported_models"]],
@@ -168,8 +177,7 @@ def _create_body(**overrides) -> ProviderCredentialCreate:
     base = {
         "provider_ref": "relay-default",
         "display_name": "默认 AI Relay",
-        "mode": "relay",
-        "endpoint": "https://relay.example.local/v1",
+                "endpoint": "https://relay.example.local/v1",
         "visibility": "tenant",
         "secret": _PLAINTEXT_SECRET,
     }
@@ -212,7 +220,7 @@ def test_crud_roundtrip_plaintext_never_stored_or_returned():
     updated = svc.update(
         ctx,
         ProviderCredentialUpdate(
-            display_name="改名", mode="direct", endpoint="https://api.openai.example/v1",
+            display_name="改名", endpoint="https://api.openai.example/v1",
             visibility="tenant", secret="sk-new-plain-987",
             supported_models=[ProviderModelCapability(model="gpt-4o-mini", enabled=True)],
             model_catalog_source="manual",
@@ -360,7 +368,7 @@ def test_cross_tenant_isolation_not_visible():
         svc.update(
             ctx_b,
             ProviderCredentialUpdate(
-                display_name="hack", mode="relay", endpoint=None,
+                display_name="hack", endpoint=None,
                 visibility="tenant", secret="x",
             ),
             credential_id=created.credential_id,
