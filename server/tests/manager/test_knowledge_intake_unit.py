@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import replace as _dc_replace
 
@@ -35,6 +36,9 @@ from manager_service.knowledge_intake_repository import (
     KnowledgeIngestionJobRow,
 )
 from manager_service.knowledge_intake_service import KnowledgeIntakeService
+from manager_service.employee_bindings_services import EmployeeKnowledgeBindingService
+from manager_service.employee_bindings_repositories import KnowledgeBindingRow
+from manager_service.rag_ingestion import RagIngestionResult, RagIngestionUnavailable
 from manager_service.schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
@@ -216,21 +220,33 @@ class _FakeJobRepo:
 
 
 class _FakeBindingRepo:
-    def __init__(self):
+    def __init__(self, doc_repo=None, job_repo=None):
         self.bindings: list[KnowledgeDocumentBindingOut] = []
         self.upserts = 0
+        self._doc_repo = doc_repo
+        self._job_repo = job_repo
 
-    def upsert_ready(self, ctx, *, knowledge_space_id, document_id, employee_id,
-                     rag_document_id, synced_at):
-        self.upserts += 1
-        bid = f"bind_{uuid.uuid4().hex[:8]}"
-        row = KnowledgeDocumentBindingOut(
-            id=bid, tenant_id=ctx.tenant_id, knowledge_space_id=knowledge_space_id,
-            document_id=document_id, employee_id=employee_id, rag_document_id=rag_document_id,
-            status="ready", last_synced_at=synced_at, created_at=None,
+    def upsert_ready_many(self, ctx, *, knowledge_space_id, document_id, employee_ids,
+                          rag_document_id, synced_at):
+        for employee_id in employee_ids:
+            self.upserts += 1
+            bid = f"bind_{uuid.uuid4().hex[:8]}"
+            self.bindings.append(KnowledgeDocumentBindingOut(
+                id=bid, tenant_id=ctx.tenant_id, knowledge_space_id=knowledge_space_id,
+                document_id=document_id, employee_id=employee_id, rag_document_id=rag_document_id,
+                status="ready", last_synced_at=synced_at, created_at=None,
+            ))
+        return len(employee_ids)
+
+    def publish_ready(self, ctx, *, knowledge_space_id, document_id, employee_ids,
+                      rag_document_id, job_id, chunk_count, text_chars, completed_at, synced_at):
+        self.upsert_ready_many(
+            ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+            employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at,
         )
-        self.bindings.append(row)
-        return row
+        self._job_repo.mark_done(ctx, job_id, chunk_count=chunk_count, completed_at=completed_at)
+        self._doc_repo.update_status(ctx, document_id, status="ready", text_chars=text_chars)
+        return len(employee_ids)
 
     def mark_stale_by_document(self, ctx, *, document_id):
         return 0
@@ -258,6 +274,28 @@ class _FakeEmployeeIdx:
         return list(self._employees)
 
 
+class _FakeRag:
+    def get(self, ctx, knowledge_space_id):
+        return type("Handle", (), {
+            "tenant_id": ctx.tenant_id,
+            "knowledge_space_id": knowledge_space_id,
+            "workspace": f"t{ctx.tenant_id}__{knowledge_space_id}",
+        })()
+
+
+class _FakeIngestion:
+    def __init__(self, *, result=None, error=None):
+        self.calls = []
+        self.result = result or RagIngestionResult("doc-placeholder", 1)
+        self.error = error
+
+    def ingest_text(self, *, workspace, file_source, text):
+        self.calls.append((workspace, file_source, text))
+        if self.error:
+            raise self.error
+        return RagIngestionResult(file_source, self.result.chunk_count)
+
+
 class _FakeSpaceExists:
     def __init__(self, existing: set[str] | None = None):
         self._existing = existing or set()
@@ -269,15 +307,19 @@ class _FakeSpaceExists:
 # ─────────────────────────────── 服务层状态机 ───────────────────────────────
 
 
-def _make_service(*, space_root: Path, experts=None, employees=None, existing_spaces=None):
+def _make_service(*, space_root: Path, experts=None, employees=None, existing_spaces=None, ingestion=None):
+    doc_repo = _FakeDocRepo()
+    job_repo = _FakeJobRepo()
     return KnowledgeIntakeService(
-        doc_repo=_FakeDocRepo(),
-        job_repo=_FakeJobRepo(),
-        binding_repo=_FakeBindingRepo(),
+        doc_repo=doc_repo,
+        job_repo=job_repo,
+        binding_repo=_FakeBindingRepo(doc_repo, job_repo),
         expert_binding=_FakeExpertBinding(experts),
         employee_index_port=_FakeEmployeeIdx(employees),
         space_exists=_FakeSpaceExists(existing_spaces),
         storage_root=space_root,
+        rag_service=_FakeRag(),
+        ingestion_client=ingestion or _FakeIngestion(),
     )
 
 
@@ -296,7 +338,117 @@ def test_ingest_upload_happy_path(tmp_path: Path) -> None:
     assert doc.status == "ready"
     assert doc.text_chars and doc.text_chars > 0
     assert job.status == "done"
-    assert job.chunk_count and job.chunk_count >= 1
+    assert job.chunk_count == 1
+
+
+def test_binding_propagation_failure_fails_closed_without_ready_state(tmp_path: Path) -> None:
+    class FailingBindingRepo(_FakeBindingRepo):
+        def publish_ready(self, **kwargs):
+            raise RuntimeError("db unavailable")
+
+    svc = _make_service(space_root=tmp_path / "store", employees=["emp-1"], existing_spaces={"ks"})
+    svc._binding_repo = FailingBindingRepo()
+    doc, job = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="failed", file_name="a.txt",
+        file_type="text/plain", content=b"text",
+    )
+    assert doc.status == "failed"
+    assert job.status == "failed"
+    assert job.error_code == "BINDING_PROPAGATION_FAILED"
+    assert svc.list_bindings(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id) == []
+
+
+def test_ingest_upstream_failure_fails_closed_without_binding(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(error=RagIngestionUnavailable("upstream secret must not leak"))
+    svc = _make_service(space_root=tmp_path / "store", employees=["emp-1"], existing_spaces={"ks"}, ingestion=ingestion)
+    doc, job = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="failed", file_name="a.txt",
+        file_type="text/plain", content=b"text",
+    )
+    assert doc.status == "failed"
+    assert job.status == "failed"
+    assert doc.error_code == "INDEX_FAILED"
+    assert doc.error_message == "knowledge indexing unavailable"
+    assert svc.list_bindings(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id) == []
+    assert svc._job_repo.done_count == 0
+    assert all(status != "ready" for _, status in svc._doc_repo.status_updates)
+
+
+def test_binding_upsert_propagation_is_single_conflict_statement():
+    class Cursor:
+        rowcount = 2
+
+    class Session:
+        def __init__(self):
+            self.sql = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            self.sql.append(sql)
+            return Cursor()
+
+    class Router:
+        def __init__(self):
+            self.session_obj = Session()
+
+        def session(self, ctx):
+            return self.session_obj
+
+    router = Router()
+    count = KnowledgeDocumentBindingRepository(router).upsert_ready_many(
+        _owner_ctx(), knowledge_space_id="ks", document_id="doc", employee_ids=["e1", "e2"],
+        rag_document_id="doc", synced_at=datetime.now(timezone.utc),
+    )
+    assert count == 2
+    assert len(router.session_obj.sql) == 1
+    assert "INSERT INTO knowledge_document_binding" in router.session_obj.sql[0]
+    assert "ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE" in router.session_obj.sql[0]
+    assert "UPDATE knowledge_document_binding" not in router.session_obj.sql[0]
+
+
+def test_atomic_publish_rolls_back_when_document_ready_update_fails():
+    class Cursor:
+        def __init__(self, rowcount):
+            self.rowcount = rowcount
+
+    class Session:
+        def __init__(self):
+            self.sql = []
+            self.exit = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.exit = exc_type
+            return False
+
+        def execute(self, sql, params=None):
+            self.sql.append(sql)
+            return Cursor(1 if len(self.sql) < 3 else 0)
+
+    class Router:
+        def __init__(self):
+            self.session_obj = Session()
+
+        def session(self, ctx):
+            return self.session_obj
+
+    router = Router()
+    repo = KnowledgeDocumentBindingRepository(router)
+    with pytest.raises(RuntimeError):
+        repo.publish_ready(
+            _owner_ctx(), knowledge_space_id="ks", document_id="doc", employee_ids=["e1"],
+            rag_document_id="doc", job_id="job", chunk_count=1, text_chars=4,
+            completed_at=datetime.now(timezone.utc), synced_at=datetime.now(timezone.utc),
+        )
+    assert router.session_obj.exit is RuntimeError
+    assert len(router.session_obj.sql) == 3
 
 
 def test_ingest_upload_unsupported_format_fails(tmp_path: Path) -> None:
@@ -334,6 +486,7 @@ def test_ingest_creates_index_bindings_for_bound_experts(tmp_path: Path) -> None
     emp_ids = {b.employee_id for b in binding_rows}
     assert emp_ids == {"emp-2"}
     assert all(b.status == "ready" for b in binding_rows)
+    assert all(b.rag_document_id == doc.id for b in binding_rows)
 
 
 def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
@@ -367,6 +520,29 @@ def test_ingest_url_schema_requires_url() -> None:
 
 
 # ─────────────────────────────── 路由契约（注册） ───────────────────────────────
+
+
+def test_enabling_existing_employee_binding_backfills_ready_documents():
+    class EmployeeRepo:
+        def update(self, ctx, *, binding_id, enabled, config):
+            return KnowledgeBindingRow(
+                binding_id=binding_id, employee_id="emp-1", knowledge_space_id="ks",
+                enabled=enabled, config=config, created_at=None, updated_at=None,
+            )
+
+    class ReadyDocuments:
+        def __init__(self):
+            self.calls = []
+
+        def backfill_ready_for_employee(self, ctx, *, knowledge_space_id, employee_id):
+            self.calls.append((knowledge_space_id, employee_id))
+            return 1
+
+    ready = ReadyDocuments()
+    service = EmployeeKnowledgeBindingService(EmployeeRepo(), ready)
+    result = service.update(_owner_ctx(), binding_id="binding-1", enabled=True, config={})
+    assert result["enabled"] is True
+    assert ready.calls == [("ks", "emp-1")]
 
 
 def test_routes_registered() -> None:

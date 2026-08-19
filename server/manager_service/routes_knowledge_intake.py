@@ -5,7 +5,7 @@
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22）。
 
 红线（D21）：
-- 不直连 LightRAG Server；索引步骤为占位（M0，留 M1+）。
+- LightRAG 写入只由 Manager-owned ingestion client 执行，HTTP 入参不接受凭据。
 - workspace 只由 ManagerRagService 推导，HTTP 入参不接受 workspace。
 """
 
@@ -23,6 +23,8 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .knowledge_intake_service import KnowledgeIntakeService, build_knowledge_intake_service, ensure_storage_root, manager_storage_root
+from .rag import PgManagerRagService
+from .rag_ingestion import LightRagIngestionClient
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
@@ -46,7 +48,15 @@ def _service(request: Request) -> KnowledgeIntakeService:
     if cache is None:
         router = PgTenantRouter(dsn)
         root = ensure_storage_root(manager_storage_root(request.app.state.settings))
-        cache = build_knowledge_intake_service(router, storage_root=root)
+        ingestion_client = getattr(request.app.state, "_knowledge_intake_ingestion_client", None)
+        if ingestion_client is None:
+            ingestion_client = LightRagIngestionClient()
+        cache = build_knowledge_intake_service(
+            router,
+            storage_root=root,
+            rag_service=PgManagerRagService(dsn),
+            ingestion_client=ingestion_client,
+        )
         request.app.state._knowledge_intake_service = cache
     return cache
 

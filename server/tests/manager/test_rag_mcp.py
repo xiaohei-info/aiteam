@@ -190,6 +190,40 @@ def test_access_derives_workspace_and_filters_unowned_citations():
     assert "secret" not in str(result)
 
 
+def test_access_does_not_use_duplicate_filename_as_citation_alias():
+    class DuplicateBindings(FakeBindings):
+        def list_by_employee(self, ctx: TenantContext, *, employee_id: str, status=None):
+            return [Binding("space-a", "doc-1", "rag-1"), Binding("space-a", "doc-2", "rag-2")]
+
+    class DuplicateDocs:
+        def get(self, ctx: TenantContext, *, document_id: str):
+            return Document(
+                document_id, "space-a", document_id, storage_key=f"docs/{document_id}",
+                file_name="duplicate.txt",
+            )
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {"references": [
+            {"file_path": "duplicate.txt", "content": "ambiguous", "score": 0.9},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=DuplicateBindings(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=DuplicateDocs(),
+    )
+
+    async def run():
+        try:
+            auth = access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+            return await access.search(auth, "duplicate", 5)
+        finally:
+            await light.aclose()
+
+    assert asyncio.run(run())["items"] == []
+
+
 def test_access_joins_reference_metadata_with_chunk_content():
     async def handler(request: httpx.Request):
         return httpx.Response(200, json={"status": "success", "data": {

@@ -237,7 +237,7 @@ class KnowledgeIngestionJobRepository:
         ctx: TenantContext,
         ingestion_id: str,
         *,
-        chunk_count: int,
+        chunk_count: int | None,
         completed_at: datetime,
     ) -> bool:
         with self._router.session(ctx) as s:
@@ -261,7 +261,7 @@ class KnowledgeIngestionJobRepository:
             cur = s.execute(
                 "UPDATE knowledge_ingestion_job SET status = 'failed', error_code = %s, "
                 "error_message = %s, completed_at = %s WHERE id = %s AND status NOT IN ('done', 'failed')",
-                (error_message[:500], error_message[:2000], completed_at, ingestion_id),
+                (error_code, error_message[:2000], completed_at, ingestion_id),
             )
             return cur.rowcount > 0
 
@@ -310,6 +310,90 @@ class KnowledgeDocumentBindingRepository:
     def __init__(self, router: PgTenantRouter):
         self._router = router
 
+    def _upsert_ready_many_in_session(
+        self,
+        s: Any,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        employee_ids: list[str],
+        rag_document_id: str,
+        synced_at: datetime,
+    ) -> int:
+        if not employee_ids:
+            return 0
+        values = ", ".join(["(%s, %s, %s, %s, %s, 'ready', %s)"] * len(employee_ids))
+        params: list[Any] = []
+        for employee_id in employee_ids:
+            params.extend((ctx.tenant_id, knowledge_space_id, document_id, employee_id,
+                           rag_document_id, synced_at))
+        cur = s.execute(
+            "INSERT INTO knowledge_document_binding "
+            "(tenant_id, knowledge_space_id, document_id, employee_id, "
+            "rag_document_id, status, last_synced_at) VALUES " + values +
+            " ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE SET "
+            "knowledge_space_id = EXCLUDED.knowledge_space_id, "
+            "rag_document_id = EXCLUDED.rag_document_id, status = 'ready', "
+            "last_synced_at = EXCLUDED.last_synced_at",
+            tuple(params),
+        )
+        return cur.rowcount
+
+    def upsert_ready_many(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        employee_ids: list[str],
+        rag_document_id: str,
+        synced_at: datetime,
+    ) -> int:
+        """Bulk upsert propagation in one INSERT ... ON CONFLICT statement."""
+        with self._router.session(ctx) as s:
+            return self._upsert_ready_many_in_session(
+                s, ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at,
+            )
+
+    def publish_ready(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        employee_ids: list[str],
+        rag_document_id: str,
+        job_id: str,
+        chunk_count: int | None,
+        text_chars: int,
+        completed_at: datetime,
+        synced_at: datetime,
+    ) -> int:
+        """Publish bindings, job completion, and document readiness atomically."""
+        with self._router.session(ctx) as s:
+            count = self._upsert_ready_many_in_session(
+                s, ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at,
+            )
+            job = s.execute(
+                "UPDATE knowledge_ingestion_job SET status = 'done', chunk_count = %s, "
+                "completed_at = %s WHERE id = %s AND status = 'indexing'",
+                (chunk_count, completed_at, job_id),
+            )
+            if job.rowcount != 1:
+                raise RuntimeError("ingestion job publication failed")
+            document = s.execute(
+                "UPDATE knowledge_document SET status = 'ready', text_chars = %s, "
+                "error_code = NULL, error_message = NULL, updated_at = now() "
+                "WHERE id = %s AND status = 'indexing'",
+                (text_chars, document_id),
+            )
+            if document.rowcount != 1:
+                raise RuntimeError("knowledge document publication failed")
+            return count
+
     def upsert_ready(
         self,
         ctx: TenantContext,
@@ -322,28 +406,41 @@ class KnowledgeDocumentBindingRepository:
     ) -> KnowledgeDocumentBindingRow:
         """幂等 upsert：存在则刷新为 ready + rag_document_id；不存在则新建。"""
         with self._router.session(ctx) as s:
-            # 先尝试更新
+            # Use one INSERT ... ON CONFLICT statement so concurrent propagation cannot race.
             cur = s.execute(
-                "UPDATE knowledge_document_binding "
-                "SET rag_document_id = %s,	status = 'ready', last_synced_at = %s "
-                "WHERE tenant_id = %s AND document_id = %s AND employee_id = %s "
+                "INSERT INTO knowledge_document_binding "
+                "(tenant_id, knowledge_space_id, document_id, employee_id, "
+                "rag_document_id, status, last_synced_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'ready', %s) "
+                "ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE SET "
+                "knowledge_space_id = EXCLUDED.knowledge_space_id, "
+                "rag_document_id = EXCLUDED.rag_document_id, status = 'ready', "
+                "last_synced_at = EXCLUDED.last_synced_at "
                 "RETURNING " + _BIND_COLUMNS,
-                (rag_document_id, synced_at, ctx.tenant_id, document_id, employee_id),
+                (ctx.tenant_id, knowledge_space_id, document_id, employee_id,
+                 rag_document_id, synced_at),
             )
             row = cur.fetchone()
-            if row is None:
-                cur = s.execute(
-                    "INSERT INTO knowledge_document_binding "
-                    "(tenant_id, knowledge_space_id, document_id, employee_id, "
-                    "rag_document_id, status, last_synced_at) "
-                    "VALUES (%s, %s, %s, %s, %s, 'ready', %s) "
-                    "RETURNING " + _BIND_COLUMNS,
-                    (ctx.tenant_id, knowledge_space_id, document_id, employee_id,
-                     rag_document_id, synced_at),
-                )
-                row = cur.fetchone()
         assert row is not None
         return _row_to_bind(row)
+
+    def backfill_ready_for_employee(
+        self, ctx: TenantContext, *, knowledge_space_id: str, employee_id: str,
+    ) -> int:
+        """Create read bindings for ready documents when an employee is newly bound."""
+        with self._router.session(ctx) as s:
+            cur = s.execute(
+                "INSERT INTO knowledge_document_binding "
+                "(tenant_id, knowledge_space_id, document_id, employee_id, rag_document_id, status, last_synced_at) "
+                "SELECT %s, d.knowledge_space_id, d.id, %s, d.id, 'ready', now() "
+                "FROM knowledge_document d "
+                "WHERE d.knowledge_space_id = %s AND d.status = 'ready' "
+                "ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE SET "
+                "rag_document_id = EXCLUDED.rag_document_id, status = 'ready', "
+                "last_synced_at = EXCLUDED.last_synced_at",
+                (ctx.tenant_id, employee_id, knowledge_space_id),
+            )
+            return cur.rowcount
 
     def mark_stale_by_document(self, ctx: TenantContext, *, document_id: str) -> int:
         """文档重新 intake 时将其已有 binding 标 stale（避免下游读到过期 rag_document_id）。"""

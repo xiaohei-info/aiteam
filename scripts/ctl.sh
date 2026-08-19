@@ -363,6 +363,8 @@ start_service_local() {
         LIGHTRAG_URL="${LIGHTRAG_URL:-}" \
         LIGHTRAG_API_KEY="${LIGHTRAG_API_KEY:-}" \
         LIGHTRAG_TIMEOUT_MS="${LIGHTRAG_TIMEOUT_MS:-5000}" \
+        LIGHTRAG_PIPELINE_TIMEOUT_MS="${LIGHTRAG_PIPELINE_TIMEOUT_MS:-120000}" \
+        LIGHTRAG_POLL_INTERVAL_MS="${LIGHTRAG_POLL_INTERVAL_MS:-250}" \
         LIGHTRAG_QUERY_MODE="${LIGHTRAG_QUERY_MODE:-naive}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}" \
@@ -424,7 +426,7 @@ start_service_local() {
       # ctl sources the whole .env.* file; explicitly remove Manager-only RAG
       # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
-        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_QUERY_MODE \
+        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
         PORT="${AGENT_PORT}" \
         HOST="${AGENT_HOST:-127.0.0.1}" \
         AITEAM_AGENT_DATA_DIR="${AGENT_DATA_DIR:-${REPO_ROOT}/.state/agent}" \

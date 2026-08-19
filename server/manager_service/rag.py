@@ -3,7 +3,7 @@
 workspace = derive(tenant_id, knowledge_space_id)，只能从 TenantContext 推导；前端/Agent/业务 API
 都不得直传 workspace。PG workspace/tenant 映射表加 RLS 作第二防线（§6.1.2 第 6 条）。
 
-M0 不接真实 LightRAG Server（属 M1+ RAG 内容）；本服务先落隔离边界：派生 + 可审计映射表 + RLS。
+本服务负责 Manager-owned workspace 派生与可审计映射表 + RLS；LightRAG 写入/读取均在此隔离边界外以受控客户端执行。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from shared.db import ManagerRagService, PgTenantRouter
 
 @dataclass(frozen=True)
 class RagHandle:
-    """RAG 访问句柄。M0 只承载隔离后的 workspace；真实 LightRAG 实例接入留 M1+。"""
+    """RAG 访问句柄，携带仅由 Manager 推导的 workspace。"""
 
     tenant_id: str
     knowledge_space_id: str

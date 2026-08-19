@@ -275,7 +275,6 @@ class RagAccessService:
                 str(document_id),
                 str(getattr(binding, "rag_document_id", "") or ""),
                 str(getattr(doc, "storage_key", "") or ""),
-                str(getattr(doc, "file_name", "") or ""),
             }
             for alias in aliases - {""}:
                 allowed[alias] = (document_id, doc)

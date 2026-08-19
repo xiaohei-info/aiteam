@@ -4,9 +4,8 @@
 完成时向 knowledge_space 已绑员工传播索引绑定（knowledge_document_binding）。
 
 红线（D21）：
-- 不直连 LightRAG Server；索引步骤为占位（M0 不接真实 LightRAG，属 M1+ RAG 内容，见 rag.py）。
-  当前实现：解析文本 → 切块计数（按段落/长度估算）→ 标 ready；真实 LightRAG 接入留 M1+。
-- workspace 只由 ManagerRagService 推导，本服务不传 workspace。
+- 真实 LightRAG 写入只经 Manager-owned ingestion client；API key 不进入 Agent 或业务状态。
+- workspace 只由 ManagerRagService 推导，本服务不接受外部 workspace。
 - tenant_id 全程经 TenantContext（D22），不手写过滤。
 """
 
@@ -21,7 +20,7 @@ from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from shared.db import PgTenantRouter
+from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
 from .document_parser import UnsupportedFormatError, extract_text
@@ -32,6 +31,7 @@ from .knowledge_intake_repository import (
     build_knowledge_intake_repositories,
 )
 from .knowledge_space_repository import ExpertKnowledgeBinding
+from .rag_ingestion import RagIngestionPort, RagIngestionUnavailable
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentCreate,
@@ -99,13 +99,6 @@ class _EmployeeKnowledgeBindingQuery:
         return [str(r[0]) for r in rows]
 
 
-def _chunk_count(text: str) -> int:
-    """估算切块数（M0 占位：按 ~500 字符/块粗估；真实切块留 M1+ LightRAG）。"""
-    if not text:
-        return 0
-    return max(1, len(text) // 500)
-
-
 class KnowledgeIntakeService:
     """知识文档 intake 编排。tenant_id 全程经 TenantContext（D22）。"""
 
@@ -119,6 +112,8 @@ class KnowledgeIntakeService:
         employee_index_port: _EmployeeIndexBindingPort,
         space_exists: "_SpaceExistsPort",
         storage_root: Path,
+        rag_service: ManagerRagService,
+        ingestion_client: RagIngestionPort,
     ):
         self._doc_repo = doc_repo
         self._job_repo = job_repo
@@ -127,6 +122,8 @@ class KnowledgeIntakeService:
         self._employee_index_port = employee_index_port
         self._space_exists = space_exists
         self._storage_root = storage_root
+        self._rag_service = rag_service
+        self._ingestion_client = ingestion_client
 
     # ─────────────────────────────── 查询 ───────────────────────────────
 
@@ -330,45 +327,50 @@ class KnowledgeIntakeService:
             return
         self._doc_repo.update_status(ctx, document_id, status="indexing", text_chars=len(text))
         self._job_repo.update_status(ctx, job_id, status="indexing")
-        # indexing（M0 占位：切块计数；真实 LightRAG 接入留 M1+）
+        # Indexing is Manager-owned: derive the workspace from tenant context,
+        # then wait for LightRAG before publishing any ready state.
         try:
-            chunk_count = _chunk_count(text)
-        except Exception as exc:
-            logger.exception("[kb] index failed for %s", document_id)
-            self._fail(ctx, document_id=document_id, job_id=job_id,
-                       error_code="INDEX_FAILED", message=str(exc)[:500])
-            return
-        now = datetime.now(timezone.utc)
-        self._job_repo.mark_done(ctx, job_id, chunk_count=chunk_count, completed_at=now)
-        self._doc_repo.update_status(ctx, document_id, status="ready", text_chars=len(text))
-        # 传播索引绑定（best-effort：不因传播失败回滚 intake 完成）
-        try:
-            self._propagate_bindings(ctx, knowledge_space_id=knowledge_space_id,
-                                     document_id=document_id)
-        except Exception as exc:
-            logger.warning("[kb] index binding propagation failed for %s: %s", document_id, exc)
-
-    def _propagate_bindings(
-        self, ctx: TenantContext, *, knowledge_space_id: str, document_id: str
-    ) -> int:
-        """向 knowledge_space 已绑员工传播索引绑定（幂等）。返回传播数。"""
-        # Authorization truth is employee_knowledge_binding only.
-        employee_ids = set(self._employee_index_port.list_employees_by_space(
-            ctx, knowledge_space_id=knowledge_space_id
-        ))
-        now = datetime.now(timezone.utc)
-        n = 0
-        for emp_id in employee_ids:
-            self._binding_repo.upsert_ready(
-                ctx,
-                knowledge_space_id=knowledge_space_id,
-                document_id=document_id,
-                employee_id=emp_id,
-                rag_document_id=None,  # M0 占位；M1+ 由 LightRAG 回填
-                synced_at=now,
+            handle = self._rag_service.get(ctx, knowledge_space_id)
+            if (
+                handle is None
+                or handle.tenant_id != ctx.tenant_id
+                or handle.knowledge_space_id != knowledge_space_id
+                or not isinstance(handle.workspace, str)
+                or not handle.workspace.strip()
+            ):
+                raise RagIngestionUnavailable("knowledge indexing unavailable")
+            result = self._ingestion_client.ingest_text(
+                workspace=handle.workspace, file_source=document_id, text=text
             )
-            n += 1
-        return n
+            if not result or result.rag_document_id != document_id:
+                raise RagIngestionUnavailable("knowledge indexing unavailable")
+        except Exception as exc:
+            if not isinstance(exc, RagIngestionUnavailable):
+                logger.warning("[kb] index failed for %s: %s", document_id, type(exc).__name__)
+            self._fail(
+                ctx, document_id=document_id, job_id=job_id,
+                error_code="INDEX_FAILED", message="knowledge indexing unavailable",
+            )
+            return
+        # Bindings, job completion, and Manager ready are one DB transaction.
+        try:
+            employee_ids = sorted(set(self._employee_index_port.list_employees_by_space(
+                ctx, knowledge_space_id=knowledge_space_id
+            )))
+            published_at = datetime.now(timezone.utc)
+            self._binding_repo.publish_ready(
+                ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                employee_ids=employee_ids, rag_document_id=result.rag_document_id,
+                job_id=job_id, chunk_count=result.chunk_count, text_chars=len(text),
+                completed_at=published_at, synced_at=published_at,
+            )
+        except Exception as exc:
+            logger.warning("[kb] index publication failed for %s: %s", document_id, type(exc).__name__)
+            self._fail(
+                ctx, document_id=document_id, job_id=job_id,
+                error_code="BINDING_PROPAGATION_FAILED", message="knowledge binding propagation unavailable",
+            )
+            return
 
     def _fail(
         self,
@@ -564,9 +566,11 @@ def _ensure_can_write(ctx: TenantContext) -> None:
 
 
 def build_knowledge_intake_service(
-    router: PgTenantRouter, *, storage_root: Path
+    router: PgTenantRouter, *, storage_root: Path,
+    rag_service: ManagerRagService,
+    ingestion_client: RagIngestionPort,
 ) -> KnowledgeIntakeService:
-    """组装知识文档 intake 服务。三个 repository + expert_binding + employee_index_port 共享同一 router。"""
+    """组装 intake 服务；workspace 与 Manager ingestion client 显式注入。"""
     doc_repo, job_repo, binding_repo = build_knowledge_intake_repositories(router)
     return KnowledgeIntakeService(
         doc_repo=doc_repo,
@@ -576,6 +580,8 @@ def build_knowledge_intake_service(
         employee_index_port=_EmployeeKnowledgeBindingQuery(router),
         space_exists=_KnowledgeSpaceExists(router),
         storage_root=storage_root,
+        rag_service=rag_service,
+        ingestion_client=ingestion_client,
     )
 
 

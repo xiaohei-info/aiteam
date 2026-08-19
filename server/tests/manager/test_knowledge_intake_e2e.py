@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
+from manager_service.rag_ingestion import RagIngestionResult
 from tests.manager._auth_helper import (
     make_inmem_verifier_and_signer,
     make_verifier,
@@ -24,11 +25,17 @@ pytestmark = pytest.mark.integration
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
+class _FakeIngestion:
+    def ingest_text(self, *, workspace, file_source, text):
+        return RagIngestionResult(rag_document_id=file_source, chunk_count=1)
+
+
 def _client(db_url, admin_url=None):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.routes_employee import build_employee_router
+    from manager_service.routes_employee_bindings import build_employee_bindings_router
     from manager_service.routes_knowledge_space import build_knowledge_space_router
     from manager_service.routes_knowledge_intake import build_knowledge_intake_router
 
@@ -37,8 +44,12 @@ def _client(db_url, admin_url=None):
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
     app.include_router(build_employee_router(verifier))
+    app.include_router(build_employee_bindings_router(verifier))
     app.include_router(build_knowledge_space_router(verifier))
     app.include_router(build_knowledge_intake_router(verifier))
+    # Integration tests exercise Manager DB/RLS, while upstream LightRAG is an
+    # explicit fake transport boundary rather than an accidental live dependency.
+    app.state._knowledge_intake_ingestion_client = _FakeIngestion()
     return TestClient(app)
 
 
@@ -105,6 +116,38 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     r = client.get("/api/manager/knowledge-spaces/ks_default/documents",
                    headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 404
+
+
+def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, two_tenants):
+    tid_a, _ = two_tenants
+    client = _client(migrated_db, admin_url=admin_url)
+    owner = _token(tid_a, ["owner"], user_id="owner-backfill", admin_url=admin_url)
+    auth = {"Authorization": f"Bearer {owner}"}
+    _make_space(client, owner, ks_id="ks_backfill", name="Backfill")
+    uploaded = client.post(
+        "/api/manager/knowledge-spaces/ks_backfill/documents",
+        files={"file": ("ready.txt", b"already indexed", "text/plain")}, headers=auth,
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["data"]["id"]
+    employee = client.post(
+        f"/api/manager/employees?employee_slug=backfill-{uuid.uuid4().hex[:8]}",
+        json={"display_name": "Backfill employee", "persona": "p"}, headers=auth,
+    )
+    assert employee.status_code == 201, employee.text
+    employee_id = employee.json()["data"]["employee_id"]
+    bound = client.post(
+        f"/api/manager/employees/{employee_id}/knowledge-bindings",
+        json={"knowledge_space_id": "ks_backfill", "enabled": True}, headers=auth,
+    )
+    assert bound.status_code == 201, bound.text
+    bindings = client.get(
+        f"/api/manager/knowledge-spaces/ks_backfill/documents/{document_id}/bindings", headers=auth,
+    )
+    assert bindings.status_code == 200, bindings.text
+    assert [(row["employee_id"], row["status"], row["rag_document_id"]) for row in bindings.json()["data"]] == [
+        (employee_id, "ready", document_id)
+    ]
 
 
 def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):

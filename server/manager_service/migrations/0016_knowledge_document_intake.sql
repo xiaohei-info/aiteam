@@ -6,7 +6,7 @@
 --     其下新增文档级 intake 实体 + intake 任务跟踪 + 索引绑定传播，不新建 KB 概念。
 --   - 文档状态机：uploaded → parsing → indexing → ready | failed。
 --   - 索引绑定完成态走 knowledge_document_binding（employee ↔ document，含 rag_document_id）。
---     Manager 不直连 LightRAG Server（D21），rag_document_id 为占位/用户端同步后回填。
+--     Manager 通过受控 LightRAG ingestion client 写入，rag_document_id 为稳定 file_source/source alias。
 --   - tenant_id 唯一来源是 TenantContext（D22），业务 SQL 不接受手写 tenant 过滤。
 --   - RLS：ENABLE + FORCE + 策略基于 current_setting('app.tenant_id')，app_rw 读写。
 --

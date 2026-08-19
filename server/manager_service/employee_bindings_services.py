@@ -18,6 +18,7 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound
 
+from .knowledge_intake_repository import KnowledgeDocumentBindingRepository
 from .employee_bindings_repositories import (
     EmployeeConnectorBindingRepository,
     EmployeeKnowledgeBindingRepository,
@@ -185,8 +186,10 @@ def build_skill_binding_service(router: PgTenantRouter) -> EmployeeSkillBindingS
 class EmployeeKnowledgeBindingService:
     """employee ↔ knowledge_space 绑定 CRUD 编排。tenant_id 全程经 TenantContext。"""
 
-    def __init__(self, repo: EmployeeKnowledgeBindingRepository):
+    def __init__(self, repo: EmployeeKnowledgeBindingRepository,
+                 ready_documents: KnowledgeDocumentBindingRepository | None = None):
         self._repo = repo
+        self._ready_documents = ready_documents
 
     def create(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str,
                enabled: bool, config: dict) -> dict:
@@ -198,6 +201,12 @@ class EmployeeKnowledgeBindingService:
         row = self._repo.create(ctx, employee_id=employee_id,
                                 knowledge_space_id=knowledge_space_id,
                                 enabled=enabled, config=config or {})
+        if enabled and self._ready_documents is not None:
+            # Synthetic ready bindings make existing indexed documents visible
+            # immediately; the SQL runs under the same TenantContext/RLS.
+            self._ready_documents.backfill_ready_for_employee(
+                ctx, knowledge_space_id=knowledge_space_id, employee_id=employee_id,
+            )
         return _know_to_dict(row)
 
     def get(self, ctx: TenantContext, *, binding_id: str) -> dict:
@@ -216,6 +225,11 @@ class EmployeeKnowledgeBindingService:
                                 config=config or {})
         if row is None:
             raise NotFound("knowledge binding not found in this tenant")
+        if enabled and self._ready_documents is not None:
+            # Re-enabling an existing binding must expose documents indexed while it was disabled.
+            self._ready_documents.backfill_ready_for_employee(
+                ctx, knowledge_space_id=row.knowledge_space_id, employee_id=row.employee_id,
+            )
         return _know_to_dict(row)
 
     def delete(self, ctx: TenantContext, *, binding_id: str) -> None:
@@ -237,7 +251,9 @@ def _know_to_dict(row: KnowledgeBindingRow) -> dict:
 
 
 def build_knowledge_binding_service(router: PgTenantRouter) -> EmployeeKnowledgeBindingService:
-    return EmployeeKnowledgeBindingService(EmployeeKnowledgeBindingRepository(router))
+    return EmployeeKnowledgeBindingService(
+        EmployeeKnowledgeBindingRepository(router), KnowledgeDocumentBindingRepository(router)
+    )
 
 
 # ============================= MemorySetting =============================
