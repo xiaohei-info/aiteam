@@ -60,9 +60,10 @@ caf29a40  feat: add signed skill distribution
 ### 1.3 Hindsight
 
 - Manager 已部署独立 Hindsight；taiyi 已完成真实 retain → operation completed → recall。
-- 现有 Manager facade、tenant/member/employee 隔离和管理面能力可复用。
-- 运行时路线已改为 Agent 受控注入 `@luxusai/pi-hindsight@0.12.0` 并直连 Hindsight；当前自定义 memory tools 尚待替换。
-- 已用 Pi SDK `0.84.2` 实测 inline Extension 加载成功且无加载错误。
+- 运行时已接入 `@luxusai/pi-hindsight@0.12.0`，Agent 通过受控 inline Extension 直连 Hindsight。
+- 已完成 Agent-owned 配置/queue、bank 隔离、shutdown flush、删除清理、sandbox credential scrub 和 ambient config 禁用。
+- 已用 Pi SDK `0.84.2` 实测 Extension 加载、真实 recall、显式 retain 和后续 recall。
+- 生产级 Manager bank-scoped token provisioning 仍是后续安全增强；当前 taiyi 使用测试 Hindsight endpoint。
 
 ### 1.4 签名 Skill
 
@@ -152,7 +153,7 @@ Pi Session
 
 **完成标准**：taiyi 真实上传知识文档 → LightRAG 索引 → Agent Pi 调用 knowledge tool → Manager query → 返回真实 citation；全程不在 Agent 保存企业知识索引。
 
-### P0-2：Provider runtime config 下发与真实 Pi 请求
+### P0-2：Provider runtime config 下发与真实 Pi 请求（已完成测试环境主链）
 
 **最终裁决**：删除 `mode=relay|direct`。未来自建中转站对 AI Team 仍只是 `base_url + api_key + api_protocol`；保留 `api_protocol`，因为中转站支持多种 Pi API 协议。
 
@@ -184,9 +185,9 @@ Pi Session
 5. 若一个 Agent 进程允许多个 member，provider ID/credential store/ModelRuntime 必须按 tenant/member 隔离；
 6. rotation/revoke 后更新或移除 runtime key；日志/SSE/error/usage/crash 全面脱敏。
 
-**测试环境完成标准**：taiyi 关闭 `AITEAM_PI_FAKE`，从 Manager 拉取 NewAPI 测试配置，使用 `minimax-m3` 完成真实 Pi prompt/stream/tool-call；扫描日志、SQLite、Session JSONL、SSE，均不得出现 API key。
+**测试环境完成标准**：taiyi 已关闭 `AITEAM_PI_FAKE`，Manager 配置 NewAPI 测试 key，Agent 拉取 runtime config 后使用 `minimax-m3` 完成真实 Pi prompt/stream；日志、SQLite、Session JSONL、SSE 未发现 API key。真实测试返回 `BLUEBIRD`。
 
-### P0-3：Pi Hindsight Extension 直连
+### P0-3：Pi Hindsight Extension 直连（已完成测试环境主链）
 
 **当前状态**：Manager/Hindsight HTTP facade 和 Agent 自定义 memory tools 已可运行，但不是最终 Pi 原生路线；`@luxusai/pi-hindsight@0.12.0` 与 Pi SDK `0.84.2` 的受控 inline 加载 spike 已通过。
 
@@ -199,18 +200,19 @@ Pi Session
 5. 删除 Agent 自定义 `src/tools/memory.ts` 和 runtime `ManagerClient.memoryRecall/memoryRetain` 主链，避免两套 retain/recall；
 6. Manager 管理面 list/delete/disable/retention 可继续调用 Hindsight，不与 Extension runtime 重复写入。
 
-**完成标准**：taiyi 新 Session 自动 recall，完成 turn 后异步 retain，服务重启后 queue 可恢复；跨 tenant/member/employee bank 负向测试通过，Hindsight 不可达时 Pi 主链明确降级且不阻塞。
+**完成标准**：taiyi 新 Session 已触发 Hindsight recall，显式 retain operation 完成且后续 recall 返回 marker；Extension shutdown/queue/隔离测试通过。Manager bank-scoped token provisioning 和完整自动 retain 仍需后续 live hardening。
 
-### P0-4：taiyi 测试环境最终联调
+### P0-4：taiyi 测试环境最终联调（Provider/Memory 已完成，E2E 待执行）
 
 在 P0-2/P0-3 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
 
 1. health/readiness/auth/JWKS；
 2. Agent grants/snapshot/signed skill sync；
 3. [暂缓] knowledge intake → ManagerRagService → LightRAG → Agent knowledge tool query；
-4. Manager provider runtime-config → Pi ModelRuntime → real Pi prompt；
-5. attachment upload/prompt/delete；
-6. revoke/rotation/offline/restart recovery。
+4. Manager provider runtime-config → Pi ModelRuntime → real Pi prompt（已完成）；
+5. Hindsight Extension direct recall/retain（已完成）；
+6. attachment upload/prompt/delete；
+7. revoke/rotation/offline/restart recovery。
 
 当前 taiyi 资源：
 
