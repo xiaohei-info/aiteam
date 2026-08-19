@@ -37,6 +37,8 @@ caf29a40  feat: add signed skill distribution
 - 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份、生产 Relay 等不作为本轮阻塞项。
 - taiyi 是 Linux x86_64（Ubuntu kernel 6.8），且已安装 `/usr/bin/bwrap`；本轮直接在 taiyi 验证 Linux sandbox，不再要求额外 Linux 主机。
 - 本轮不迁移旧库数据；知识数据通过重新 intake 进入新知识空间。
+- **最新路线修订**：RAG 检索和长期 memory 都由 Manager 处理；Agent 只运行 Pi Agent 任务并通过受认证 custom tools 调 Manager。Agent 不建立企业知识本地索引。
+- 详细修订见 `docs/superpowers/specs/2026-08-18-pi-agent-manager-rag与provider路线修订.md`；该修订覆盖本文件早先的 local knowledge bundle 段落。
 - macOS/Windows 原生 sandbox 验证、生产运维和正式 key rotation 延后到后续 hardening。
 
 ## 1. 已完成内容（不要重复实现）
@@ -70,59 +72,82 @@ caf29a40  feat: add signed skill distribution
 - Compose/ctl 密钥隔离：private 仅 Manager，public 仅 Agent，Operation 不接收。
 - taiyi 已实测 signed package sync、本地 manifest 和 Skill session 启动。
 
-### 1.5 本地知识 bundle（当前非 LightRAG 实现）
+### 1.5 Manager RAG / Memory 路线（当前 local bundle 实现需回退）
 
-当前主链：
+最新目标主链：
 
 ```text
-Manager durable source document
-  → Agent authenticated POST /api/manager/knowledge/artifacts/bundle
-  → Agent SQLite knowledge_artifact
-  → SqliteKnowledgeIndex
-  → Pi knowledge_search / knowledge_get
+Pi knowledge_search / knowledge_get custom tool
+  → Agent HttpManagerClient
+  → Manager authenticated RAG facade
+  → ManagerRagService
+  → LightRAG(derived tenant workspace)
+  → citation/result
 ```
 
-已完成：
+Memory 已采用同类路线：
 
-- Agent 不再发送 query/citation 到 Manager；旧 Manager `/search`、`/get` 和对应 client 已删除。
-- bundle 请求只接受 `known_versions`，tenant/member 从 token claims 得出，不接受 workspace/query。
-- Manager 当前 snapshot/grant、employee knowledge binding、document binding、tenant/space/path 一致性校验。
-- bundle count/content/response size 限制；Agent strict normalization；projection + artifact 原子替换；authoritative empty revoke。
-- Manager data root 持久化、租户/知识空间目录隔离、0700/0600、Compose `managerdata_<env>` volume。
-- Agent SQLite 本地 deterministic token-overlap search/get，可在 Manager 离线时继续检索。
-- taiyi 已实测文档 intake、bundle sync、Agent 本地 SQLite 检索。
+```text
+Pi memory_recall / memory_retain / memory_delete
+  → Agent HttpManagerClient
+  → Manager memory facade
+  → Hindsight
+```
+
+当前已完成：
+
+- Manager Hindsight facade 和 Agent memory tools 方向正确；
+- Manager knowledge intake、knowledge space、employee binding 和 durable source 已完成基础；
+- tenant/member/snapshot authorization 基础已完成。
+
+需要回退/替换：
+
+- `pullKnowledgeArtifacts` bundle 主链；
+- Agent `knowledge_artifact` 企业知识真相；
+- `SqliteKnowledgeIndex`；
+- “Agent offline 本地企业知识检索”语义；
+- Manager 旧 query/search/get 被删除的部分。
+
+目标约束：
+
+- Agent custom tools 不接受 `workspace` 或可扩大权限的 `knowledge_refs`；
+- Manager 从 token + employee snapshot + knowledge binding 推导 LightRAG workspace；
+- Manager 返回最小 citation/result；
+- Manager/LighRAG 不可用时 Agent tool 明确降级，不偷偷改用本地企业知识索引；
+- 普通会话/Pi JSONL/raw runtime event 仍不上 Manager，知识和 memory tool 调用是明确授权的窄通道。
 
 ## 2. P0：必须继续完成
 
-### P0-1：真正接入 LightRAG exporter/index
+### P0-1：Manager RAG query/search/get
 
-**当前状态**：LightRAG 容器已部署并可访问，但当前 bundle exporter 使用 `extract_text()` + 固定字符切块，Agent 使用本地 token-overlap index；这不是最终 LightRAG 集成。
+**当前状态**：LightRAG 容器已部署并可访问；Manager 目前有知识 intake/绑定和 bundle exporter，但 Agent 本地 bundle/index 不是目标路线。
 
 **主要文件**：
 
-- `server/manager_service/knowledge_artifact_service.py`
 - `server/manager_service/knowledge_intake_service.py`
+- `server/manager_service/knowledge_space_service.py`
 - `server/manager_service/rag.py`
 - `server/manager_service/routes_knowledge_artifacts.py`
 - `server/agent_service/src/manager-client.ts`
-- `server/agent_service/src/storage/sqlite.ts`
 - `server/agent_service/src/tools/knowledge.ts`
+- `server/agent_service/src/pi/session-host.ts`
 
 **实施要求**：
 
-- 定义最小 `KnowledgeArtifactExporter` protocol；保留当前 fixed-text exporter 作为测试实现。
-- 新增 LightRAG exporter 实现，workspace 只能由 `TenantContext.tenant_id + knowledge_space_id` 推导，禁止 HTTP/client 传入 workspace。
-- LightRAG 只负责 Manager 侧索引/导出，不恢复 Agent→Manager query/search/get。
-- artifact_version 必须包含 exporter/chunker/index generation 版本；citation_id 稳定且包含 document/source hash/chunk provenance。
-- Manager→Agent 仍走 bundle pull；Agent 仍在本地 search/get。
+- 在 Manager 增加受认证 `knowledge_search` / `knowledge_get` facade，真实调用 `ManagerRagService → LightRAG`。
+- Agent `HttpManagerClient` 增加 query/get 方法；Pi custom tools 只传 query/limit/citation_id，employee/snapshot/caller 在闭包中绑定。
+- Manager 从 TenantContext、member grant、employee snapshot 和 knowledge binding 推导 workspace；HTTP 不接受 workspace 或任意 knowledge_refs。
+- 删除 `pullKnowledgeArtifacts`、Agent `knowledge_artifact` 主链和 `SqliteKnowledgeIndex`；不保留本地企业知识索引 fallback。
+- 返回最小、可展示的 citation；不泄漏内部 workspace、storage path 或跨 tenant 数据。
+- Manager/Lightrag 不可用时 tool 明确返回 unavailable；不宣称离线 RAG 可用。
 - 测试：
   - 两个 tenant 使用相同 knowledge_space_id 时 workspace/storage 不相同；
   - binding/document/space/tenant 不一致时 fail-closed；
-  - LightRAG 索引真实产生 chunk/vector 状态，不以“估算 chunk 数”标 ready；
-  - Agent offline search/get 不访问 Manager；
-  - revoke/re-index 会清理旧 artifact。
+  - Agent query 必须到 Manager，不能读取本地企业索引；
+  - citation get 必须验证当前 employee 授权；
+  - revoke/disable 后 query/get 立即拒绝或不返回结果。
 
-**完成标准**：taiyi 真实上传知识文档 → LightRAG 索引 → bundle sync → Agent 本地检索返回真实 citation；全程无 Manager query 请求。
+**完成标准**：taiyi 真实上传知识文档 → LightRAG 索引 → Agent Pi 调用 knowledge tool → Manager query → 返回真实 citation；全程不在 Agent 保存企业知识索引。
 
 ### P0-2：Provider authorized capability + secret transport
 
@@ -172,8 +197,8 @@ Manager durable source document
 
 1. health/readiness/auth/JWKS；
 2. Agent grants/snapshot/signed skill sync；
-3. knowledge intake → LightRAG → bundle → offline local search；
-4. Relay provider → real Pi prompt；
+3. knowledge intake → ManagerRagService → LightRAG → Agent knowledge tool query；
+4. Provider/Relay or test provider → real Pi prompt；
 5. attachment upload/prompt/delete；
 6. revoke/rotation/offline/restart recovery。
 
@@ -213,15 +238,15 @@ lightrag:   9621 (loopback)
 - Agent 缓存重验证、旧 key 处理和离线策略；
 - 不复用 JWT signing key。
 
-### P1-2：知识 bundle 大规模传输
+### P1-2：Manager RAG 查询性能与 citation 生命周期
 
-当前 bundle 有 count/byte/response 上限，但仍是同步完整 bundle。后续：
+Manager RAG query 是目标路线，不建设 Agent 本地企业知识 bundle。后续：
 
-- manifest/cursor/增量 artifact；
-- streaming pull 或后台 export job；
-- resumable download、hash verification、retry/lease；
-- Agent SQLite 分批事务和 quota；
-- 不允许把 query 作为“增量”发送给 Manager。
+- LightRAG query 超时、取消、限流和结果大小上限；
+- citation/version/re-index/delete 生命周期；
+- query/get 的 tenant/member/employee negative tests；
+- Manager 离线时明确 unavailable，不返回过期本地企业索引；
+- 大结果分页或受控摘要，避免把完整文档正文写入 Pi tool result。
 
 ### P1-3：附件/Artifact 完整产品化
 
@@ -262,7 +287,7 @@ macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 
 以下任何一项失败都不能宣称完成：
 
-- Agent 将 prompt、query、citation-get、附件字节、raw runtime event 发给 Manager/Operator；
+- Agent 将普通 prompt、Session JSONL、附件字节、raw runtime event 发给 Manager/Operator；knowledge/memory custom tool 的明确授权请求除外；
 - Agent 接受 unsigned Skill、错误 tenant/member 的 Skill、symlink/traversal Skill 或未授权 snapshot ref；
 - Provider plaintext/ciphertext 进入 Snapshot/AuthorizedConfig/SQLite/log/SSE；
 - LightRAG workspace 由客户端传入或跨 tenant 共用；
@@ -274,8 +299,8 @@ macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 
 如果只剩一轮实施，按此顺序：
 
-1. 先完成 P0-1 LightRAG exporter + taiyi offline citation 验证；
-2. 再完成 P0-2 relay-only provider injection；
+1. 先完成 P0-1 Manager RAG query/get + taiyi citation 验证；
+2. 再完成 P0-2 provider/Relay authorized injection；
 3. 串行跑 P0-3 真实环境验收；
 4. 最后跑 P0-4 Playwright 三端全量；
 5. P1/P2 作为后续 hardening，不得用其未完成掩盖 P0 未通过。
