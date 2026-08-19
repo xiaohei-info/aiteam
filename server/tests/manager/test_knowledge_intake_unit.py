@@ -545,6 +545,35 @@ def test_enabling_existing_employee_binding_backfills_ready_documents():
     assert ready.calls == [("ks", "emp-1")]
 
 
+@pytest.mark.asyncio
+async def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) -> None:
+    import manager_service.routes_knowledge_intake as routes
+    from shared.auth import RejectingTokenVerifier
+
+    calls = []
+
+    class Service:
+        def ingest_url(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise RuntimeError("called in worker")
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "_service", lambda request: Service())
+    monkeypatch.setattr(routes, "tenant_context_from", lambda claims: "ctx")
+    monkeypatch.setattr(routes.asyncio, "to_thread", fake_to_thread)
+    router = routes.build_knowledge_intake_router(RejectingTokenVerifier("x"))
+    endpoint = next(r.endpoint for r in router.routes if r.path.endswith("/documents/url"))
+
+    with pytest.raises(RuntimeError, match="called in worker"):
+        await endpoint(
+            "ks", KnowledgeDocumentImportUrl(url="https://public.example/page"), object(), object()
+        )
+    assert calls[0] == "ingest_url"
+
+
 def test_routes_registered() -> None:
     from manager_service.routes_knowledge_intake import build_knowledge_intake_router
     from shared.auth import RejectingTokenVerifier

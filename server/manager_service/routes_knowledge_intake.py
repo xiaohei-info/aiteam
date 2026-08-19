@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
@@ -77,7 +78,9 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[KnowledgeDocumentOut]:
         svc = _service(request)
-        items = svc.list_documents(tenant_context_from(claims), knowledge_space_id=knowledge_space_id)
+        items = await asyncio.to_thread(
+            svc.list_documents, tenant_context_from(claims), knowledge_space_id=knowledge_space_id
+        )
         return ListEnvelope[KnowledgeDocumentOut](data=items)
 
     @router.post(
@@ -97,7 +100,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         if not content:
             from shared.errors import ValidationProblem
             raise ValidationProblem(detail="empty file", errors=None)
-        doc, _job = svc.ingest_upload(
+        doc, _job = await asyncio.to_thread(
+            svc.ingest_upload,
             tenant_context_from(claims),
             knowledge_space_id=knowledge_space_id,
             display_name=(file.filename or "untitled"),
@@ -121,7 +125,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
     ) -> Envelope[KnowledgeDocumentOut]:
         svc = _service(request)
         try:
-            doc, _job = svc.ingest_url(
+            doc, _job = await asyncio.to_thread(
+                svc.ingest_url,
                 tenant_context_from(claims),
                 knowledge_space_id=knowledge_space_id,
                 url=body.url,
@@ -145,7 +150,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeDocumentOut]:
         svc = _service(request)
-        doc, _job = svc.retry(
+        doc, _job = await asyncio.to_thread(
+            svc.retry,
             tenant_context_from(claims),
             knowledge_space_id=knowledge_space_id,
             document_id=document_id,
@@ -164,7 +170,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeIngestionJobOut]:
         svc = _service(request)
-        job = svc.get_ingestion(
+        job = await asyncio.to_thread(
+            svc.get_ingestion,
             tenant_context_from(claims), knowledge_space_id=knowledge_space_id, document_id=document_id
         )
         return Envelope[KnowledgeIngestionJobOut](data=job)
@@ -180,7 +187,9 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[KnowledgeIngestionJobOut]:
         svc = _service(request)
-        items = svc.list_ingestions(tenant_context_from(claims), knowledge_space_id=knowledge_space_id)
+        items = await asyncio.to_thread(
+            svc.list_ingestions, tenant_context_from(claims), knowledge_space_id=knowledge_space_id
+        )
         return ListEnvelope[KnowledgeIngestionJobOut](data=items)
 
     @router.get(
@@ -195,7 +204,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[KnowledgeDocumentBindingOut]:
         svc = _service(request)
-        items = svc.list_bindings(
+        items = await asyncio.to_thread(
+            svc.list_bindings,
             tenant_context_from(claims), knowledge_space_id=knowledge_space_id, document_id=document_id
         )
         return ListEnvelope[KnowledgeDocumentBindingOut](data=items)
