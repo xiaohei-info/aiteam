@@ -292,6 +292,138 @@ def test_access_fails_closed_when_snapshot_and_binding_disagree():
         access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
 
 
+@pytest.mark.parametrize("binding_attrs", [
+    {"tenant_id": "tenant-b", "employee_id": "employee-a", "status": "ready"},
+    {"tenant_id": "tenant-a", "employee_id": "employee-a", "status": "stale"},
+])
+def test_access_rejects_cross_tenant_or_stale_space_binding(binding_attrs):
+    class UnsafeBindings(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [type("UnsafeBinding", (), {
+                "knowledge_space_id": "space-a", "document_id": "doc-1", "rag_document_id": "rag-1",
+                "enabled": True, **binding_attrs,
+            })()]
+
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=UnsafeBindings(), rag_service=FakeRag(),
+        light_rag=LightRagClient(LightRagSettings("http://rag", "secret")),
+        space_repository=FakeSpaces(), document_repository=FakeDocs(),
+    )
+    with pytest.raises(Forbidden):
+        access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+
+
+def test_access_fans_out_spaces_merges_deterministically_and_honors_limit():
+    class MultiSnapshots(FakeSnapshots):
+        def generate(self, ctx, *, member_id, employee_id, employee_version=None):
+            return Snapshot(employee_id, ["space-a", "space-b"])
+
+    class MultiBindings(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-a", "rag-a"), Binding("space-b", "doc-b", "rag-b")]
+
+    class MultiDocs:
+        def get(self, ctx, *, document_id):
+            space = {"doc-a": "space-a", "doc-b": "space-b"}.get(document_id)
+            return Document(document_id, space, document_id) if space else None
+
+    seen_workspaces = []
+
+    async def handler(request: httpx.Request):
+        workspace = request.headers["lightrag-workspace"]
+        seen_workspaces.append(workspace)
+        ref = "rag-a" if workspace.endswith("space-a") else "rag-b"
+        score = 0.8 if ref == "rag-a" else 0.9
+        return httpx.Response(200, json={"status": "success", "data": {"references": [
+            {"reference_id": ref, "content": ref, "score": score},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+    )
+
+    async def run():
+        try:
+            auth = access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+            result = await access.search(auth, "policy", 1)
+            return auth, result
+        finally:
+            await light.aclose()
+
+    auth, result = asyncio.run(run())
+    assert [handle.knowledge_space_id for handle in auth.handles] == ["space-a", "space-b"]
+    assert sorted(seen_workspaces) == ["ttenant-a__space-a", "ttenant-a__space-b"]
+    assert [item["document_id"] for item in result["items"]] == ["doc-b"]
+    assert result["items"][0]["knowledge_space_id"] == "space-b"
+    assert "degraded" not in result
+
+
+def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable():
+    class MultiSnapshots(FakeSnapshots):
+        def generate(self, ctx, *, member_id, employee_id, employee_version=None):
+            return Snapshot(employee_id, ["space-a", "space-b"])
+
+    class MultiBindings(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-a", "rag-a"), Binding("space-b", "doc-b", "rag-b")]
+
+    class MultiDocs:
+        def get(self, ctx, *, document_id):
+            space = {"doc-a": "space-a", "doc-b": "space-b"}.get(document_id)
+            return Document(document_id, space, document_id) if space else None
+
+    async def handler(request: httpx.Request):
+        if request.headers["lightrag-workspace"].endswith("space-b"):
+            return httpx.Response(503, text="upstream key leaked")
+        return httpx.Response(200, json={"status": "success", "data": {"references": [
+            {"reference_id": "rag-a", "content": "available", "score": 0.5},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+    )
+    claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
+
+    async def run_partial():
+        auth = access.authorize(claims, "employee-a")
+        return await access.search(auth, "policy", 10)
+
+    try:
+        result = asyncio.run(run_partial())
+        assert result["degraded"] is True
+        assert [item["document_id"] for item in result["items"]] == ["doc-a"]
+        assert "upstream key leaked" not in str(result)
+    finally:
+        asyncio.run(light.aclose())
+
+    async def all_failed(request: httpx.Request):
+        raise httpx.ConnectError("secret workspace failure", request=request)
+
+    failed_light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(all_failed))
+    failed_access = RagAccessService(
+        snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=failed_light,
+        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+    )
+
+    async def run_all_failed():
+        try:
+            auth = failed_access.authorize(claims, "employee-a")
+            await failed_access.search(auth, "policy", 10)
+        finally:
+            await failed_light.aclose()
+
+    with pytest.raises(RuntimeError, match="knowledge service unavailable"):
+        asyncio.run(run_all_failed())
+
+
 def test_mcp_inventory_is_read_only_knowledge_search_only():
     mcp, _ = build_rag_mcp(verifier=DevTokenService(), access=object())
     tools = mcp._tool_manager.list_tools()

@@ -4,6 +4,7 @@ The facade is the only northbound RAG surface.  It derives the LightRAG
 workspace after checking the current employee snapshot and bindings; callers
 never provide a workspace or LightRAG credential.
 """
+import asyncio
 import contextlib
 import contextvars
 import json
@@ -129,6 +130,10 @@ class BindingPort(Protocol):
     def list_by_employee(self, ctx: TenantContext, *, employee_id: str, status: str | None = None): ...
 
 
+class RagServicePort(Protocol):
+    def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle | None: ...
+
+
 class SpacePort(Protocol):
     def get(self, ctx: TenantContext, *, knowledge_space_id: str): ...
 
@@ -140,12 +145,15 @@ class AuthorizedRagRequest:
     member_id: str
     employee_id: str
     snapshot: Any
+    # ``handle`` remains the first handle for compatibility with existing
+    # callers; ``handles`` is the complete authorized set.
     handle: RagHandle
     bindings: tuple[Any, ...]
+    handles: tuple[RagHandle, ...] = ()
 
 
 class RagAccessService:
-    """Resolve one currently bound knowledge space, then query it."""
+    """Resolve all currently bound knowledge spaces, then query them."""
 
     def __init__(
         self,
@@ -154,7 +162,7 @@ class RagAccessService:
         member_repository: MemberPort,
         employee_config: EmployeeConfigPort,
         binding_repository: BindingPort,
-        rag_service: Any,
+        rag_service: RagServicePort,
         light_rag: LightRagClient,
         space_repository: SpacePort | None = None,
         document_repository: KnowledgeDocumentRepository | None = None,
@@ -173,45 +181,85 @@ class RagAccessService:
             raise Unauthorized("invalid RAG identity")
         ctx = tenant_context_from(claims)
         member = self._members.get_member(ctx, member_id=claims.user_id)
-        if member is None or getattr(member, "status", None) != "active":
+        if (
+            member is None
+            or getattr(member, "status", None) != "active"
+            or getattr(member, "tenant_id", ctx.tenant_id) != ctx.tenant_id
+            or getattr(member, "id", claims.user_id) != claims.user_id
+        ):
             raise Forbidden("member is not active")
         config = self._employees.get(ctx, employee_id=employee_id)
-        if config is None or not employee_runnable(config):
+        if (
+            config is None
+            or getattr(config, "tenant_id", ctx.tenant_id) != ctx.tenant_id
+            or not employee_runnable(config)
+        ):
             raise Forbidden("employee is not runnable")
         snapshot = self._snapshots.generate(ctx, member_id=claims.user_id, employee_id=employee_id)
-        if getattr(snapshot, "employee_id", None) != employee_id:
+        if (
+            getattr(snapshot, "tenant_id", ctx.tenant_id) != ctx.tenant_id
+            or getattr(snapshot, "employee_id", None) != employee_id
+        ):
             raise Forbidden("employee is not authorized")
-        refs = [ref for ref in getattr(snapshot, "knowledge_refs", []) if isinstance(ref, str) and ref]
-        if len(refs) != 1:
+        refs = list(dict.fromkeys(
+            ref for ref in getattr(snapshot, "knowledge_refs", [])
+            if isinstance(ref, str) and ref
+        ))
+        if not refs:
             raise Forbidden("employee knowledge binding is unavailable")
-        bindings = tuple(
-            row for row in self._bindings.list_by_employee(ctx, employee_id=employee_id)
-            if self._valid_binding(row, ctx=ctx, employee_id=employee_id, space_id=refs[0])
-        )
-        spaces = {str(row.knowledge_space_id) for row in bindings}
-        if len(spaces) != 1 or spaces != {refs[0]}:
-            raise Forbidden("employee knowledge binding is unavailable")
-        space_id = refs[0]
-        if self._spaces is not None:
-            space = self._spaces.get(ctx, knowledge_space_id=space_id)
-            if (
-                space is None
-                or (getattr(space, "tenant_id", ctx.tenant_id) != ctx.tenant_id)
-                or (getattr(space, "knowledge_space_id", space_id) != space_id)
-            ):
+        all_bindings = tuple(self._bindings.list_by_employee(ctx, employee_id=employee_id))
+        handles: list[RagHandle] = []
+        valid_bindings: list[Any] = []
+        for space_id in refs:
+            space_bindings = tuple(
+                row for row in all_bindings
+                if self._valid_binding(row, ctx=ctx, employee_id=employee_id, space_id=space_id)
+            )
+            if not space_bindings:
                 raise Forbidden("employee knowledge binding is unavailable")
-        handle = self._rag.get(ctx, space_id)
-        if not handle or handle.tenant_id != ctx.tenant_id or handle.knowledge_space_id != space_id:
-            raise Forbidden("employee knowledge binding is unavailable")
-        return AuthorizedRagRequest(claims, ctx, claims.user_id, employee_id, snapshot, handle, bindings)
+            if self._spaces is not None:
+                space = self._spaces.get(ctx, knowledge_space_id=space_id)
+                if (
+                    space is None
+                    or getattr(space, "tenant_id", ctx.tenant_id) != ctx.tenant_id
+                    or getattr(space, "knowledge_space_id", space_id) != space_id
+                ):
+                    raise Forbidden("employee knowledge binding is unavailable")
+            handle = self._rag.get(ctx, space_id)
+            if not handle or handle.tenant_id != ctx.tenant_id or handle.knowledge_space_id != space_id:
+                raise Forbidden("employee knowledge binding is unavailable")
+            handles.append(handle)
+            valid_bindings.extend(space_bindings)
+        return AuthorizedRagRequest(
+            claims, ctx, claims.user_id, employee_id, snapshot, handles[0], tuple(valid_bindings), tuple(handles)
+        )
 
     async def search(self, auth: AuthorizedRagRequest, query: str, limit: int) -> dict[str, Any]:
         if not isinstance(query, str) or not query.strip() or len(query) > _MAX_QUERY_CHARS:
             raise RagUnavailable("knowledge service unavailable")
-        limit = max(1, min(int(limit), _MAX_LIMIT))
-        payload = await self._light_rag.query(workspace=auth.handle.workspace, query=query, limit=limit)
-        items = self._citations(auth, payload)[:limit]
+        try:
+            limit = max(1, min(int(limit), _MAX_LIMIT))
+        except (TypeError, ValueError):
+            raise RagUnavailable("knowledge service unavailable")
+        handles = auth.handles or (auth.handle,)
+
+        async def query_space(handle: RagHandle):
+            try:
+                payload = await self._light_rag.query(workspace=handle.workspace, query=query, limit=limit)
+                return handle, self._citations(auth, handle, payload), None
+            except Exception:  # noqa: BLE001 - never expose upstream details
+                return handle, [], RagUnavailable("knowledge service unavailable")
+
+        results = await asyncio.gather(*(query_space(handle) for handle in handles))
+        successful = [result for result in results if result[2] is None]
+        if not successful:
+            raise RagUnavailable("knowledge service unavailable")
+        items = self._merge_citations(
+            citation for _, citations, _ in successful for citation in citations
+        )[:limit]
         result = {"query": query, "items": items}
+        if len(successful) != len(results):
+            result["degraded"] = True
         # Keep the MCP result bounded even if an upstream adds unexpectedly large metadata.
         while len(json.dumps(result, ensure_ascii=False).encode()) > _MAX_RESPONSE_BYTES and items:
             items.pop()
@@ -230,7 +278,7 @@ class RagAccessService:
             and bool(getattr(row, "document_id", None))
         )
 
-    def _citations(self, auth: AuthorizedRagRequest, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def _citations(self, auth: AuthorizedRagRequest, handle: RagHandle, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = payload.get("data") if isinstance(payload.get("data"), (dict, list)) else payload
         if isinstance(data, dict):
             references = data.get("references") if isinstance(data.get("references"), list) else []
@@ -259,15 +307,16 @@ class RagAccessService:
         # Resolve every bound document first.  A LightRAG reference is never
         # trusted on its own: file_path/reference_id must alias a Manager row.
         allowed: dict[str, tuple[str, Any]] = {}
+        ambiguous: set[str] = set()
         for binding in auth.bindings:
-            if not self._valid_binding(binding, ctx=auth.ctx, employee_id=auth.employee_id, space_id=auth.handle.knowledge_space_id):
+            if not self._valid_binding(binding, ctx=auth.ctx, employee_id=auth.employee_id, space_id=handle.knowledge_space_id):
                 continue
             document_id = str(binding.document_id)
             doc = self._documents.get(auth.ctx, document_id=document_id) if self._documents else None
             if (
                 doc is None
                 or getattr(doc, "tenant_id", auth.ctx.tenant_id) != auth.ctx.tenant_id
-                or getattr(doc, "knowledge_space_id", None) != auth.handle.knowledge_space_id
+                or getattr(doc, "knowledge_space_id", None) != handle.knowledge_space_id
                 or getattr(doc, "status", None) != "ready"
             ):
                 continue
@@ -277,10 +326,12 @@ class RagAccessService:
                 str(getattr(doc, "storage_key", "") or ""),
             }
             for alias in aliases - {""}:
-                allowed[alias] = (document_id, doc)
+                if alias in allowed and allowed[alias][0] != document_id:
+                    ambiguous.add(alias)
+                else:
+                    allowed[alias] = (document_id, doc)
 
-        output = []
-        seen: set[str] = set()
+        output: dict[tuple[str, str], dict[str, Any]] = {}
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -295,13 +346,15 @@ class RagAccessService:
                 metadata.get("document_id"),
                 metadata.get("full_doc_id"),
             )
-            bound = next((allowed.get(str(value)) for value in candidates if value is not None), None)
+            bound = next(
+                (allowed.get(str(value)) for value in candidates
+                 if value is not None and str(value) not in ambiguous),
+                None,
+            )
             if bound is None:
                 continue
             document_id, doc = bound
-            if document_id in seen:
-                continue
-            seen.add(document_id)
+            citation_key = (handle.knowledge_space_id, document_id)
             content = item.get("content", item.get("text", ""))
             if isinstance(content, str):
                 text = content
@@ -316,16 +369,37 @@ class RagAccessService:
                         break
             source_type = str(getattr(doc, "source_type", "file"))
             display_name = str(getattr(doc, "display_name", ""))[:512]
-            output.append({
-                "citation_id": f"citation:{document_id}",
+            citation = {
+                "citation_id": f"citation:{handle.knowledge_space_id}:{document_id}",
                 "document_id": document_id,
-                "knowledge_space_id": auth.handle.knowledge_space_id,
+                "knowledge_space_id": handle.knowledge_space_id,
                 "title": display_name,
                 "text": text[:_MAX_CHUNK_CHARS],
                 "score": float(item["score"]) if isinstance(item.get("score"), (int, float)) else 0.0,
                 "source": {"type": source_type if source_type in {"file", "url"} else "file", "display_name": display_name},
-            })
-        return output
+            }
+            previous = output.get(citation_key)
+            if previous is None or citation["score"] > previous["score"]:
+                output[citation_key] = citation
+        return list(output.values())
+
+    @staticmethod
+    def _merge_citations(items) -> list[dict[str, Any]]:
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in items:
+            key = (str(item.get("knowledge_space_id", "")), str(item.get("document_id", "")))
+            current = merged.get(key)
+            if current is None or float(item.get("score", 0.0)) > float(current.get("score", 0.0)):
+                merged[key] = item
+        return sorted(
+            merged.values(),
+            key=lambda item: (
+                -float(item.get("score", 0.0)),
+                str(item.get("knowledge_space_id", "")),
+                str(item.get("document_id", "")),
+                str(item.get("citation_id", "")),
+            ),
+        )
 
 
 _current_rag_request: contextvars.ContextVar[AuthorizedRagRequest | None] = contextvars.ContextVar("aiteam_rag_request", default=None)

@@ -196,12 +196,13 @@ if settings.db_url:
     )
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
     _rag_light = LightRagClient()
+    _rag_service = PgManagerRagService(settings.db_url)
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,
         member_repository=_rag_member_repo,
         employee_config=_rag_config,
         binding_repository=_rag_doc_binding,
-        rag_service=PgManagerRagService(settings.db_url),
+        rag_service=_rag_service,
         light_rag=_rag_light,
         space_repository=KnowledgeSpaceRepository(_rag_router),
         document_repository=_rag_doc_repo,
