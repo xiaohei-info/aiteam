@@ -1,13 +1,13 @@
 ---
 created: 2026-08-19
 status: design-supplement
-implementation: deferred-by-user
+implementation: first-read-and-ingestion-slices-live
 scope: aiteam-rag
 ---
 
 # AI Team RAG 详细设计
 
-> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前 RAG/MCP 实现按用户要求暂缓，本文只冻结数据模型、授权边界、部署和读写流程，后续恢复开发时以本文为设计输入。
+> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片；多 workspace fan-out、存储升级和完整前端仍按本文后续章节推进。
 >
 > 本文不修改冻结的 `app/`、`./.hermes/hermes-agent/`，也不迁移旧库/旧知识数据。
 
@@ -51,7 +51,7 @@ Manager 通过 binding/grant 控制谁可以查询同一个 workspace。不同 t
 
 ### 0.3 当前目标路线
 
-RAG 路线后续可采用 Agent 直连 MCP，但不能把原始 LightRAG Server 直接暴露给 Agent：
+首个 Agent 直连 MCP 垂直切片已经落地。Agent 不能连接原始 LightRAG Server，而是连接 Manager-owned MCP facade：
 
 ```text
 Agent Pi
@@ -62,7 +62,7 @@ Agent Pi
 
 Manager-owned MCP facade 不是第二套业务 RAG；它只是把 LightRAG 的 query/data 能力包装成受控 MCP 工具，负责身份、workspace、工具白名单和 citation 授权。
 
-本轮暂不实现该链路。
+当前已实现 `knowledge_search` 只读工具；`knowledge_get`、多 workspace fan-out 和更大规模存储升级仍是后续切片。
 
 ---
 
@@ -86,7 +86,7 @@ Manager-owned MCP facade 不是第二套业务 RAG；它只是把 LightRAG 的 q
 - 不把 LightRAG WebUI 当作 AI Team 的权限管理面。
 - 不把 LightRAG 原生文档写入/删除/图谱修改工具暴露给 Pi。
 - 不迁移旧 MVP 知识数据；旧文档需要重新 intake。
-- 不在本轮实现 RAG/MCP 代码；本轮只补设计。
+- 当前切片只实现 `knowledge_search` 只读 MCP 和 Manager ingestion；不在本阶段实现多 workspace fan-out、完整 `knowledge_get`、存储迁移和 RAG 前端。
 
 ---
 
@@ -864,17 +864,18 @@ LightRAG 内部路径
 
 ---
 
-## 12. 当前暂缓项
+## 12. 后续 RAG 切片
 
-本轮用户明确暂停：
+当前已完成：
 
-- Agent → LightRAG MCP 的具体实现；
-- LightRAG MCP package 选型；
-- Manager-owned MCP facade 的接口冻结；
-- RAG query/get API；
-- 当前 Agent local knowledge bundle/index 的清理。
+- Manager-owned FastMCP Streamable HTTP facade；
+- Agent controlled MCP client；
+- `knowledge_search` 只读工具；
+- LightRAG `/query/data` 检索和引用映射；
+- Manager 文档 intake → LightRAG per-document track status → ready/binding；
+- taiyi live intake → MCP citation smoke。
 
-恢复 RAG 工作时，优先做一个小型 spike：
+后续优先做：
 
 1. 用当前 LightRAG `1.5.6` 验证 workspace header/query/graph/vector 是否完全按 workspace 隔离；
 2. 验证 `query_data` 的引用结构和 chunk provenance；
