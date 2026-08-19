@@ -37,7 +37,7 @@ caf29a40  feat: add signed skill distribution
 - 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份等不作为本轮阻塞项。
 - taiyi 是 Linux x86_64（Ubuntu kernel 6.8），且已安装 `/usr/bin/bwrap`；本轮直接在 taiyi 验证 Linux sandbox，不再要求额外 Linux 主机。
 - 本轮不迁移旧库数据；知识数据通过重新 intake 进入新知识空间。
-- **最新路线修订**：RAG 由 Agent Pi custom tools 调 Manager LightRAG；长期 memory 直接使用受控注入的 `@luxusai/pi-hindsight` Extension 访问 Manager 部署的 Hindsight。Agent 不建立企业知识本地索引。
+- **最新路线修订**：长期 memory 直接使用受控注入的 `@luxusai/pi-hindsight` Extension 访问 Manager 部署的 Hindsight。RAG/MCP 路线本轮暂缓，不进入当前实现和测试验收；Agent 不建立企业知识本地索引。
 - 详细修订见 `docs/superpowers/specs/2026-08-18-pi-agent-manager-rag与provider路线修订.md`；该修订覆盖本文件早先的 local knowledge bundle 段落。
 - macOS/Windows 原生 sandbox 验证、生产运维和正式 key rotation 延后到后续 hardening。
 
@@ -121,9 +121,9 @@ Pi Session
 
 ## 2. P0：必须继续完成
 
-### P0-1：Manager RAG query/search/get
+### HOLD：Manager RAG query/search/get（本轮暂缓）
 
-**当前状态**：LightRAG 容器已部署并可访问；Manager 目前有知识 intake/绑定和 bundle exporter，但 Agent 本地 bundle/index 不是目标路线。
+**当前状态**：LightRAG/MCP 路线尚未最终裁决。本轮明确暂停，不修改 RAG 路由、MCP 接入、bundle/index 代码，也不把 RAG 纳入 taiyi 当前验收。
 
 **主要文件**：
 
@@ -203,11 +203,11 @@ Pi Session
 
 ### P0-4：taiyi 测试环境最终联调
 
-在 P0-1/P0-2/P0-3 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
+在 P0-2/P0-3 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
 
 1. health/readiness/auth/JWKS；
 2. Agent grants/snapshot/signed skill sync；
-3. knowledge intake → ManagerRagService → LightRAG → Agent knowledge tool query；
+3. [暂缓] knowledge intake → ManagerRagService → LightRAG → Agent knowledge tool query；
 4. Manager provider runtime-config → Pi ModelRuntime → real Pi prompt；
 5. attachment upload/prompt/delete；
 6. revoke/rotation/offline/restart recovery。
@@ -230,7 +230,7 @@ lightrag:   9621 (loopback)
 
 当前只完成了服务 smoke 和局部脚本验证；仍需执行：
 
-- `web/e2e` 三端登录、授权同步、私聊、群聊委托、知识、技能、附件、Office；
+- `web/e2e` 三端登录、授权同步、私聊、群聊委托、Provider、Memory、技能、附件、Office；知识/RAG 场景本轮暂缓；
 - 真实 Agent auth/binding，不允许测试绕过 Agent 登录或只断言 `202`；
 - 检查最终 Pi entries/assistant output、SSE、citation、错误和浏览器 console；
 - 跨 tenant、跨 member、撤权、删除、Manager offline、重启恢复。
@@ -309,9 +309,9 @@ macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 
 如果只剩一轮实施，按此顺序：
 
-1. 先完成 P0-1 Manager RAG query/get + taiyi citation 验证；
+1. RAG/MCP 任务本轮暂缓，不修改相关代码；
 2. 完成 P0-2 provider runtime-config pull/injection；
 3. 完成 P0-3 Pi Hindsight Extension 直连；
-4. 串行跑 P0-4 taiyi 测试环境验收；
-5. 最后跑 P0-5 Playwright 三端全量；
+4. 串行跑 P0-4 taiyi 测试环境验收（不含 RAG）；
+5. 最后跑 P0-5 Playwright 三端全量（不含 RAG）；
 5. P1/P2 作为后续 hardening，不得用其未完成掩盖 P0 未通过。
