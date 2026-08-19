@@ -60,53 +60,81 @@ GET  /api/manager/knowledge/citations/{citation_id}
 
 ## 3. Memory 路线
 
-Memory 与 RAG 同属 Manager 能力面：
+Memory 直接复用成熟的 Pi Hindsight Extension：
 
 ```text
 Pi Session
-  → Agent memory_recall / memory_retain / memory_delete custom tool
-  → Agent HttpManagerClient
-  → Manager memory facade
-  → Hindsight
+  → @luxusai/pi-hindsight
+  → Manager 部署的 Hindsight service
 ```
 
-当前代码的 Manager Hindsight memory client/facade 方向正确，应保留；Agent 不部署本地 Hindsight，不暴露 bank id，不建立第二套本地长期 memory backend。
+裁决：
 
-## 4. Provider 配置与 Relay
+- 固定 `@luxusai/pi-hindsight@0.12.0`；已实测可通过 `DefaultResourceLoader.extensionFactories` 注入 Pi SDK `0.84.2`。
+- Extension 负责 context 前自动 recall、`agent_end` 后 retain、队列、flush、显式 recall/retain/reflect 工具；不再重写同类生命周期。
+- Agent 不部署 Hindsight server，但可直接访问随 Manager 部署的 Hindsight endpoint。
+- Manager 负责创建/授权 bank、memory policy、管理面 list/delete/disable/retention，并下发当前成员获授权的 Hindsight URL、bank ID 和 bank-scoped credential。
+- 禁止向 Agent 下发能访问全部 tenant/bank 的全局 service token；若当前 self-hosted Hindsight 不支持 bank-scoped credential，先补 Manager 侧签发/鉴权层。
+- Extension 只激活产品允许的工具；模型不能选择任意 bank。
+- 完成 Extension 接入后，删除 Agent 自定义 `memory.ts` 和运行时 `ManagerClient.memoryRecall/memoryRetain` 主链；Manager 管理面 API 可继续保留。
 
-### 4.1 当前 Manager 配置流程
+## 4. Provider 配置
 
-Provider 真相在 Manager：
+### 4.1 最终配置模型
 
-1. owner/enterprise_admin 调用 `POST /api/manager/provider-credentials`；
-2. 请求包含 `provider_ref`、`mode`（`relay`/`direct`）、`endpoint`、明文 `secret`、可见性和 supported models；
-3. Manager 使用 `MANAGER_CREDENTIAL_KEY` 加密 secret 写入 `provider_credential`；
-4. API 响应只返回 provider_ref、endpoint、mode、可见性、版本和模型能力，不返回明文或密文；
-5. Employee model policy 只引用 `provider_ref + model`；
-6. authorized-config/snapshot 只下发引用和非敏感模型策略。
+Provider 真相在 Manager。删除 `mode=relay|direct`：对 AI Team 而言，官方 Provider、NewAPI 或未来自建中转站都只是不同的 `base_url` 和 credential。
 
-当前代码已完成的是 1–6 的管理面和可见性控制；Agent runtime 的 provider credential pull/injection 尚未完成。
-
-### 4.2 Relay 定义
-
-Relay 是一个 OpenAI/Anthropic 兼容的模型出站服务：
+保留多协议字段，因为未来中转站支持多种 API 协议：
 
 ```text
-Agent Pi ModelRuntime → AI Relay → 实际 Provider/NewAPI
+provider_ref
+base_url
+api_protocol          # Pi Api，例如 openai-completions / openai-responses / anthropic-messages
+api_key               # Manager 加密保存
+supported_models[]
+visibility / allowed_member_ids[]
+version
 ```
 
-Manager 负责配置 Relay endpoint、企业级 token、provider_ref 和成员授权；Manager 本身不执行用户 prompt，也不代替 Agent 调用模型。默认模式下真实 provider key 留在 Relay，Agent 只拿受限 token。
+Employee model policy 只引用 `provider_ref + model + thinking_level`。未来内部中转站通过修改 `base_url/api_key/api_protocol` 接入，不增加新的 mode 分支。
 
-当前仓库没有独立 Relay 服务实现；当前 `mode=relay` 只是 Manager 的配置语义和加密存储，不能宣称已经完成 Relay 执行链。
+### 4.2 当前实现缺口
 
-### 4.3 测试环境执行
+当前代码：
 
-本轮目标是 taiyi 测试部署与验证：
+- Manager 已实现 provider credential CRUD、Fernet 加密、成员可见性和 `provider_ref/model` snapshot；
+- Agent `createConfiguredModelRuntime()` 仍只读取本地 `<agentDir>/auth.json`、`models.json`，或使用 `AITEAM_PI_FAKE=true`；
+- Manager 尚未向 Agent 下发可执行的 `base_url/api_protocol/api_key/model`；
+- 因此未手工配置本地 Pi auth/models 且未启用 faux 时，Agent **无法发起真实 LLM 请求**。
 
-- 可以使用现有测试 provider/NewAPI 配置验证真实 Pi prompt；
-- 测试 direct 或现有兼容 Relay 端点必须显式标为 test-only；
-- 不能把测试环境的本地 `auth.json/models.json` 配置写成生产架构；
-- 生产实现仍需完成 Manager 授权 → Agent secure store/短期 Relay token → Pi ModelRuntime 最小作用域注入；secret 不进入 Session、SSE、日志、SQLite 或 crash report。
+目标执行链：
+
+```text
+Agent 使用当前用户 token + employee_id 请求 runtime provider config
+  → Manager 验证 tenant/member grant 和 fresh employee snapshot
+  → Manager 从 snapshot 得到 provider_ref/model
+  → Manager 解密该 provider 的 api_key
+  → TLS 专用响应返回 base_url/api_protocol/api_key/model/version
+  → Agent 注册 Pi provider/model
+  → ModelRuntime.setRuntimeApiKey(providerId, apiKey)
+  → Agent 发起 LLM 请求
+```
+
+约束：
+
+- Agent 请求不能指定任意 credential_id；Manager 必须从已授权 employee snapshot 解析 provider_ref。
+- secret 不进入普通 authorized-config/snapshot、SQLite、Pi Session、SSE、日志、trace 或 crash report。
+- 本轮测试环境使用进程内 credential；Agent 重启后重新向 Manager 拉取，不写 `auth.json`。
+- 非敏感 provider/model/version 可缓存；API key 只保存在进程内，替换或 shutdown 时清理。
+- 同一 Agent 进程若允许多个 member 登录，Provider/ModelRuntime 必须按 tenant/member 隔离，不能共享一个 provider ID 的 runtime key。
+- Manager 不代理普通 LLM prompt；Agent 直接请求配置中的 `base_url`。
+
+### 4.3 taiyi 测试环境执行
+
+- 关闭 `AITEAM_PI_FAKE`；
+- 使用 Manager 中已配置的 NewAPI base URL、测试 key、`minimax-m3` 和对应 `api_protocol`；
+- 验证 provider config pull → Pi ModelRuntime 注册 → 真实 prompt/stream/tool call；
+- 扫描 Manager/Agent 日志、SQLite、Session JSONL 和 SSE，确认没有 API key。
 
 ## 5. 需要删除/替换的当前实现
 

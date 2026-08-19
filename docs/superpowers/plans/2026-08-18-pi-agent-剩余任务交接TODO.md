@@ -34,10 +34,10 @@ caf29a40  feat: add signed skill distribution
 
 ## 0.1 本轮范围确认（用户确认，2026-08-18）
 
-- 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份、生产 Relay 等不作为本轮阻塞项。
+- 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份等不作为本轮阻塞项。
 - taiyi 是 Linux x86_64（Ubuntu kernel 6.8），且已安装 `/usr/bin/bwrap`；本轮直接在 taiyi 验证 Linux sandbox，不再要求额外 Linux 主机。
 - 本轮不迁移旧库数据；知识数据通过重新 intake 进入新知识空间。
-- **最新路线修订**：RAG 检索和长期 memory 都由 Manager 处理；Agent 只运行 Pi Agent 任务并通过受认证 custom tools 调 Manager。Agent 不建立企业知识本地索引。
+- **最新路线修订**：RAG 由 Agent Pi custom tools 调 Manager LightRAG；长期 memory 直接使用受控注入的 `@luxusai/pi-hindsight` Extension 访问 Manager 部署的 Hindsight。Agent 不建立企业知识本地索引。
 - 详细修订见 `docs/superpowers/specs/2026-08-18-pi-agent-manager-rag与provider路线修订.md`；该修订覆盖本文件早先的 local knowledge bundle 段落。
 - macOS/Windows 原生 sandbox 验证、生产运维和正式 key rotation 延后到后续 hardening。
 
@@ -59,9 +59,10 @@ caf29a40  feat: add signed skill distribution
 
 ### 1.3 Hindsight
 
-- Manager 部署独立 Hindsight，Agent 不直接连接。
-- Manager 原生 bank 适配、tenant/member/employee 隔离、异步幂等 retain、recall、invalidation 已完成。
-- taiyi 上已经完成真实 retain → operation completed → recall。
+- Manager 已部署独立 Hindsight；taiyi 已完成真实 retain → operation completed → recall。
+- 现有 Manager facade、tenant/member/employee 隔离和管理面能力可复用。
+- 运行时路线已改为 Agent 受控注入 `@luxusai/pi-hindsight@0.12.0` 并直连 Hindsight；当前自定义 memory tools 尚待替换。
+- 已用 Pi SDK `0.84.2` 实测 inline Extension 加载成功且无加载错误。
 
 ### 1.4 签名 Skill
 
@@ -85,20 +86,22 @@ Pi knowledge_search / knowledge_get custom tool
   → citation/result
 ```
 
-Memory 已采用同类路线：
+Memory 采用成熟 Extension 路线：
 
 ```text
-Pi memory_recall / memory_retain / memory_delete
-  → Agent HttpManagerClient
-  → Manager memory facade
-  → Hindsight
+Pi Session
+  → @luxusai/pi-hindsight
+  → Manager 部署的 Hindsight
 ```
 
 当前已完成：
 
-- Manager Hindsight facade 和 Agent memory tools 方向正确；
-- Manager knowledge intake、knowledge space、employee binding 和 durable source 已完成基础；
-- tenant/member/snapshot authorization 基础已完成。
+- Manager Hindsight 部署/facade 和管理面基础；
+- Manager knowledge intake、knowledge space、employee binding 和 durable source 基础；
+- tenant/member/snapshot authorization 基础；
+- Hindsight Extension 与当前 Pi SDK 的最小加载 spike。
+
+仍需完成：Manager 下发 bank-scoped Hindsight 配置、受控 ResourceLoader 注入、工具 allowlist，以及删除自定义 Agent memory tools。
 
 需要回退/替换：
 
@@ -149,56 +152,63 @@ Pi memory_recall / memory_retain / memory_delete
 
 **完成标准**：taiyi 真实上传知识文档 → LightRAG 索引 → Agent Pi 调用 knowledge tool → Manager query → 返回真实 citation；全程不在 Agent 保存企业知识索引。
 
-### P0-2：Provider authorized capability + secret transport
+### P0-2：Provider runtime config 下发与真实 Pi 请求
 
-**Relay 是什么**：Relay 是 Agent 和真实模型 Provider 之间的受控中转层。Agent 不持久化 Provider API key，而是使用短期、按 tenant/member/provider/session 绑定的 token 请求 Relay；Relay 在服务端注入真实 key 并调用 NewAPI/Provider。Relay 可统一做轮换、撤销、审计和限流。它不是 Pi runtime，也不是消息总线。
-
-**当前范围决策**：本轮是测试环境验证。若只验证真实 Pi/Provider 链路，可以使用 taiyi Agent 本地 `auth.json/models.json` 的测试配置；该方式仅为 test-only，不代表生产 secret transport 已完成。若要把 Relay 本身纳入本轮验收，必须额外提供/部署 Relay endpoint 和 token exchange 契约。
+**最终裁决**：删除 `mode=relay|direct`。未来自建中转站对 AI Team 仍只是 `base_url + api_key + api_protocol`；保留 `api_protocol`，因为中转站支持多种 Pi API 协议。
 
 **当前状态**：
 
-- `provider_credential_service.py` 已有 Fernet 加密 CRUD；成员可见性已修复；响应不含明文/密文。
-- Agent 仍主要依赖本地 `auth.json/models.json`；没有真正的 Manager provider pull、Relay token exchange 或 per-session secret injection。
+- Manager 已有 Fernet 加密 CRUD、成员可见性、supported models 和 `provider_ref/model` snapshot；
+- Agent 仍只读取本地 `auth.json/models.json` 或 `AITEAM_PI_FAKE=true`；
+- Manager→Agent 的可执行 provider credential 下发未实现；没有 API key 时 Agent 不能发起真实 LLM 请求。
 
 **主要文件**：
 
+- `server/manager_service/schemas_provider.py`
 - `server/manager_service/provider_credential_service.py`
-- `server/manager_service/routes_provider.py`
 - `server/manager_service/provider_credential_repository.py`
+- `server/manager_service/routes_provider.py`
 - `server/shared/contracts/crosstier.py`
 - `server/agent_service/src/manager-client.ts`
 - `server/agent_service/src/pi/model-runtime.ts`
 - `server/agent_service/src/pi/session-host.ts`
 - `server/agent_service/src/main.ts`
+- `web/manager/src/features/providers/*`
 
-**后续生产建议**：只实现 relay mode，禁止 direct provider key 进入生产。
+**实施要求**：
 
-**必须先冻结的契约**：
+1. 从 Pydantic/API/repository/DB/UI/tests 删除 provider `mode`，保留 `base_url`、`api_protocol`、加密 `api_key`、models、visibility、version；
+2. 增加专用 authenticated runtime-config pull（具体路径需冻结）：Agent 只提交 `employee_id`，Manager 从 fresh snapshot 解析 provider_ref/model，不能让 Agent指定 credential_id；
+3. Manager 验证 tenant/member grant 后解密 api_key，通过 TLS 返回 `base_url/api_protocol/api_key/model/version`；普通 authorized-config/snapshot 继续不含 secret；
+4. Agent 使用 `ModelRuntime`/native provider registration + `setRuntimeApiKey` 进程内装配，不写 `auth.json`、SQLite、Session 或全局环境变量；
+5. 若一个 Agent 进程允许多个 member，provider ID/credential store/ModelRuntime 必须按 tenant/member 隔离；
+6. rotation/revoke 后更新或移除 runtime key；日志/SSE/error/usage/crash 全面脱敏。
 
-- Agent 只能 pull 当前 snapshot/provider_ref 对应的 metadata；不接受任意 credential_id。
-- secret 不放入 AuthorizedConfig/Snapshot；不能下发 DB ciphertext。
-- Relay token 必须短期、audience/provider_ref/tenant/member/run scope 绑定，明确 TTL、rotation、revocation、audit 和 Manager offline 语义。
-- Direct provider mode 暂时明确为 unsupported/fail-closed。
+**测试环境完成标准**：taiyi 关闭 `AITEAM_PI_FAKE`，从 Manager 拉取 NewAPI 测试配置，使用 `minimax-m3` 完成真实 Pi prompt/stream/tool-call；扫描日志、SQLite、Session JSONL、SSE，均不得出现 API key。
 
-**实施顺序**：
+### P0-3：Pi Hindsight Extension 直连
 
-1. Manager authorized provider metadata pull + visibility/version tests；
-2. Relay exchange/short-lived token contract；
-3. Agent per-session provider injection，不修改 `auth.json`/`models.json`，不使用进程全局共享环境变量；
-4. 取消、崩溃、超时后清理 secret；
-5. 日志/SSE/error/usage 脱敏；
-6. rotation/revocation/expiry/cross-tenant negative tests。
+**当前状态**：Manager/Hindsight HTTP facade 和 Agent 自定义 memory tools 已可运行，但不是最终 Pi 原生路线；`@luxusai/pi-hindsight@0.12.0` 与 Pi SDK `0.84.2` 的受控 inline 加载 spike 已通过。
 
-**测试环境完成标准**：taiyi 关闭 `AITEAM_PI_FAKE` 后，真实 Pi prompt 成功执行；Manager/Agent 日志和 SQLite 不出现 provider secret。若本轮验收 Relay，则额外要求 prompt 经 Relay 成功执行；否则只记录 direct local test configuration 为 test-only。
+**实施要求**：
 
-### P0-3：taiyi 测试环境最终联调
+1. 固定依赖版本并通过受控 ResourceLoader `extensionFactories` 注入，继续禁止 ambient extension discovery；
+2. Manager 为当前 tenant/member/employee provisioning Hindsight bank、policy、URL 和 bank-scoped credential；不得下发全局 service token；
+3. 每个 Session 绑定正确的 bank/scope，模型不能通过工具参数改到任意 bank；
+4. 只激活产品允许的 recall/retain/reflect 工具；保留 Extension 的自动 recall、agent_end retain、queue 和 shutdown flush；
+5. 删除 Agent 自定义 `src/tools/memory.ts` 和 runtime `ManagerClient.memoryRecall/memoryRetain` 主链，避免两套 retain/recall；
+6. Manager 管理面 list/delete/disable/retention 可继续调用 Hindsight，不与 Extension runtime 重复写入。
 
-在 P0-1/P0-2 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
+**完成标准**：taiyi 新 Session 自动 recall，完成 turn 后异步 retain，服务重启后 queue 可恢复；跨 tenant/member/employee bank 负向测试通过，Hindsight 不可达时 Pi 主链明确降级且不阻塞。
+
+### P0-4：taiyi 测试环境最终联调
+
+在 P0-1/P0-2/P0-3 之后，串行使用共享 taiyi 环境；本轮结果不表述为生产验收：
 
 1. health/readiness/auth/JWKS；
 2. Agent grants/snapshot/signed skill sync；
 3. knowledge intake → ManagerRagService → LightRAG → Agent knowledge tool query；
-4. Provider/Relay or test provider → real Pi prompt；
+4. Manager provider runtime-config → Pi ModelRuntime → real Pi prompt；
 5. attachment upload/prompt/delete；
 6. revoke/rotation/offline/restart recovery。
 
@@ -216,7 +226,7 @@ lightrag:   9621 (loopback)
 
 不要在共享环境并行重启服务或并发修改同一 tenant/knowledge workspace。
 
-### P0-4：完整 Playwright / 三端 E2E
+### P0-5：完整 Playwright / 三端 E2E
 
 当前只完成了服务 smoke 和局部脚本验证；仍需执行：
 
@@ -279,7 +289,7 @@ macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 
 - `scripts/ctl.sh` 当前已能传递 root/volume，但 Agent 旧子进程可能导致重启时 `EADDRINUSE`；改为 process-group 管理并增加 stale PID 清理。
 - 为 Hindsight、LightRAG、Manager data volume 做备份/恢复/容量监控。
-- 生产环境的 `AITEAM_ENV=production`、JWT/JWKS、Skill key、Provider/Relay secret、sandbox readiness 做启动前检查。
+- 生产环境的 `AITEAM_ENV=production`、JWT/JWKS、Skill key、Provider secret、sandbox readiness 做启动前检查。
 - 完整 deployment smoke、rollback 和 upgrade/runbook。
 - 本轮不迁移旧知识/旧库；若未来需要升级旧数据，提供一次性 re-intake/migration 工具，不能静默继续使用旧 namespace。
 
@@ -300,7 +310,8 @@ macOS/Windows 原生验证延后，不阻塞本轮测试环境交付。
 如果只剩一轮实施，按此顺序：
 
 1. 先完成 P0-1 Manager RAG query/get + taiyi citation 验证；
-2. 再完成 P0-2 provider/Relay authorized injection；
-3. 串行跑 P0-3 真实环境验收；
-4. 最后跑 P0-4 Playwright 三端全量；
+2. 完成 P0-2 provider runtime-config pull/injection；
+3. 完成 P0-3 Pi Hindsight Extension 直连；
+4. 串行跑 P0-4 taiyi 测试环境验收；
+5. 最后跑 P0-5 Playwright 三端全量；
 5. P1/P2 作为后续 hardening，不得用其未完成掩盖 P0 未通过。
