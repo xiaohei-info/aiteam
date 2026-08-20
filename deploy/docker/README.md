@@ -131,7 +131,7 @@ docker run --rm aiteam-agent:dev sh -c \
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
-> 知识 bundle exporter 目前直接读取 Manager 持久化文档源；LightRAG exporter 是保留的未来接入 seam，当前不提供查询上传路径。Manager v1 是 clean install：不会迁移任何旧知识文件，已有旧部署必须重新 intake 文档。变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
+> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；测试和目标生产统一使用 PostgreSQL + pgvector（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。Manager v1 是 clean install：不会迁移任何旧知识文件，已有旧部署必须重新 intake 文档。变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
 
 ---
 

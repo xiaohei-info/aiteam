@@ -47,6 +47,7 @@ class LightRagSettings:
     api_key: str
     timeout_ms: int = 5_000
     query_mode: str = "naive"
+    workspace: str | None = None
 
     @classmethod
     def from_env(cls) -> "LightRagSettings | None":
@@ -61,7 +62,8 @@ class LightRagSettings:
         query_mode = os.getenv("LIGHTRAG_QUERY_MODE", "naive").strip().lower()
         if query_mode not in {"local", "global", "hybrid", "naive", "mix"}:
             query_mode = "naive"
-        return cls(url=url, api_key=key, timeout_ms=timeout_ms, query_mode=query_mode)
+        workspace = os.getenv("LIGHTRAG_WORKSPACE", "").strip() or None
+        return cls(url=url, api_key=key, timeout_ms=timeout_ms, query_mode=query_mode, workspace=workspace)
 
 
 class LightRagClient:
@@ -77,6 +79,8 @@ class LightRagClient:
     async def query(self, *, workspace: str, query: str, limit: int) -> dict[str, Any]:
         settings = self.settings
         if settings is None:
+            raise RagUnavailable("knowledge service unavailable")
+        if settings.workspace is not None and workspace != settings.workspace:
             raise RagUnavailable("knowledge service unavailable")
         if len(query) > _MAX_QUERY_CHARS:
             raise RagUnavailable("knowledge service unavailable")

@@ -37,7 +37,7 @@ caf29a40  feat: add signed skill distribution
 - 本次目标是 **taiyi 测试环境部署与验证**，不是生产上线验收；生产域名、TLS、备份等不作为本轮阻塞项。
 - taiyi 是 Linux x86_64（Ubuntu kernel 6.8），且已安装 `/usr/bin/bwrap`；本轮直接在 taiyi 验证 Linux sandbox，不再要求额外 Linux 主机。
 - 本轮不迁移旧库数据；知识数据通过重新 intake 进入新知识空间。
-- **最新路线修订**：长期 memory 直接使用受控注入的 `@luxusai/pi-hindsight` Extension 访问 Manager 部署的 Hindsight；RAG 已完成首个 Manager-owned MCP + LightRAG ingestion/query 切片，后续 fan-out/storage/UI 仍在队列中。
+- **最新路线修订**：长期 memory 直接使用受控注入的 `@luxusai/pi-hindsight` Extension 访问 Manager 部署的 Hindsight；RAG 已完成 Manager-owned MCP、LightRAG ingestion/query、BGE embedding/reranker 和 PostgreSQL/pgvector 存储切片，后续多实例 workspace 编排、knowledge_get/UI 仍在队列中。
 - 详细修订见 `docs/superpowers/specs/2026-08-18-pi-agent-manager-rag与provider路线修订.md`；该修订覆盖本文件早先的 local knowledge bundle 段落。
 - macOS/Windows 原生 sandbox 验证、生产运维和正式 key rotation 延后到后续 hardening。
 
@@ -124,7 +124,7 @@ Pi Session
 
 ### RAG 首个切片（已完成，后续增强待做）
 
-**当前状态**：Manager-owned FastMCP + Agent controlled MCP + LightRAG query/data 已完成；Manager intake 已真实写入 LightRAG 并按 track status 发布 ready/binding。后续 fan-out、knowledge_get、存储升级和前端仍未完成。
+**当前状态**：Manager-owned FastMCP + Agent controlled MCP + LightRAG query/data 已完成；Manager intake 已真实写入 LightRAG 并按 track status 发布 ready/binding；BGE-M3/BGE-Reranker 和 PostgreSQL/pgvector 已在 taiyi 运行。后续多实例 workspace 编排、knowledge_get 和前端仍未完成。
 
 **主要文件**：
 

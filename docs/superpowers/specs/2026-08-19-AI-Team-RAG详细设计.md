@@ -7,7 +7,7 @@ scope: aiteam-rag
 
 # AI Team RAG 详细设计
 
-> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片；多 workspace fan-out、存储升级和完整前端仍按本文后续章节推进。
+> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片、多 workspace fan-out，以及 taiyi/目标部署统一的 PostgreSQL + pgvector 存储切换；完整前端仍按本文后续章节推进。
 >
 > 本文不修改冻结的 `app/`、`./.hermes/hermes-agent/`，也不迁移旧库/旧知识数据。
 
@@ -86,7 +86,7 @@ Manager-owned MCP facade 不是第二套业务 RAG；它只是把 LightRAG 的 q
 - 不把 LightRAG WebUI 当作 AI Team 的权限管理面。
 - 不把 LightRAG 原生文档写入/删除/图谱修改工具暴露给 Pi。
 - 不迁移旧 MVP 知识数据；旧文档需要重新 intake。
-- 当前切片只实现 `knowledge_search` 只读 MCP 和 Manager ingestion；不在本阶段实现多 workspace fan-out、完整 `knowledge_get`、存储迁移和 RAG 前端。
+- 当前切片只实现 `knowledge_search` 只读 MCP 和 Manager ingestion；`knowledge_get`、完整 RAG 前端和多实例 workspace 编排仍未完成。
 
 ---
 
@@ -110,34 +110,24 @@ PORT=9621
 LLM_BINDING=openai
 LLM_MODEL=gpt-5.3-codex-spark
 EMBEDDING_BINDING=openai
-EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
-EMBEDDING_DIM=4096
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024
 EMBEDDING_MAX_TOKEN_SIZE=8192
+RERANK_BINDING=cohere
+RERANK_BINDING_HOST=https://api.siliconflow.cn/v1/rerank
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
+LIGHTRAG_KV_STORAGE=PGKVStorage
+LIGHTRAG_DOC_STATUS_STORAGE=PGDocStatusStorage
+LIGHTRAG_GRAPH_STORAGE=PGTableGraphStorage
+LIGHTRAG_VECTOR_STORAGE=PGVectorStorage
+POSTGRES_WORKSPACE=<derived workspace for the LightRAG instance>
 LOG_LEVEL=INFO
 WHITELIST_PATHS=/health
 ```
 
-当前没有显式设置：
+当前 taiyi 已使用带 `pgvector` 扩展的 PostgreSQL 数据库，LightRAG 四类存储均落 PG；旧 Qwen/JSON 索引只作为备份保留，不参与查询。
 
-```text
-LIGHTRAG_KV_STORAGE
-LIGHTRAG_DOC_STATUS_STORAGE
-LIGHTRAG_GRAPH_STORAGE
-LIGHTRAG_VECTOR_STORAGE
-WORKSPACE
-RERANK_BINDING
-```
-
-因此按 LightRAG 官方默认配置，当前属于测试型 JSON/Nano/NetworkX 存储组合，通常对应：
-
-```text
-JsonKVStorage
-JsonDocStatusStorage
-NetworkXStorage
-NanoVectorDBStorage
-```
-
-它适合单机测试，不适合多副本、并发写入、正式备份和企业共享知识规模化运行。
+`PGTableGraphStorage` 不需要 Apache AGE；`PGVectorStorage` 使用 `vector(1024)` 和 HNSW 索引。每个 LightRAG 实例固定一个 `POSTGRES_WORKSPACE`，多 workspace 通过 Manager-owned fan-out 和实例编排扩展，不能依赖单实例请求头动态切换固定 PG workspace。
 
 ---
 
@@ -515,39 +505,40 @@ query(q)
 
 #### 测试环境
 
-可以：
+测试也使用与生产相同的 PG-backed LightRAG 组件拓扑：
 
 ```text
-一个 LightRAG 实例
-多个 tenant/workspace
+一个 LightRAG instance
+一个固定 POSTGRES_WORKSPACE
+PostgreSQL + pgvector
 ```
 
-但必须做跨 workspace 负向测试，尤其是 query、query/data、graph 和 document APIs。
+当前 LightRAG 1.5.6 Server 的 query/document 路由固定绑定进程启动时的 RAG 实例；`LIGHTRAG-WORKSPACE` header 不能把同一个固定 PG 实例动态切换到另一个 workspace。因此测试环境不伪造“一个实例多 workspace”，跨 workspace 测试必须通过实例池或独立实例完成。
 
 #### 小规模生产
 
 推荐：
 
 ```text
-一个 tenant 一个 LightRAG instance
-一个 tenant 内多个 knowledge_space/workspace
+一个 tenant/knowledge-space 一个 LightRAG instance
+每个 instance 一个固定 POSTGRES_WORKSPACE
+共享 PostgreSQL/pgvector 集群
 ```
 
-优点是网络、文件、API key 和数据目录更容易隔离。
+Manager 维护 `knowledge_space_id → LightRAG endpoint/workspace` 映射，Agent 仍只访问 Manager-owned MCP。
 
 #### 大规模生产
 
 推荐：
 
 ```text
-LightRAG 多副本
+LightRAG 多副本/实例池
 PostgreSQL/PGVector 等共享存储
 Manager-owned MCP gateway
 workspace + tenant capability mapping
 ```
 
 LightRAG 官方的 multi-site 方案是多个实例、不同 prefix、不同 working directory 和 API key；这说明 `workspace`/实例隔离是有效的存储边界，但仍不是 AI Team 的成员级 RBAC。
-
 ---
 
 ## 7. LightRAG 读写流程
@@ -760,19 +751,16 @@ LightRAG  :9621
 
 ### 9.3 存储建议
 
-测试：
-
-```text
-JSON/Nano/NetworkX
-```
-
-企业共享知识库：
+测试与目标生产统一使用 PostgreSQL + pgvector，不再以 JSON/Nano/NetworkX 作为测试部署基线：
 
 ```text
 LIGHTRAG_KV_STORAGE=PGKVStorage
 LIGHTRAG_DOC_STATUS_STORAGE=PGDocStatusStorage
 LIGHTRAG_GRAPH_STORAGE=PGTableGraphStorage
 LIGHTRAG_VECTOR_STORAGE=PGVectorStorage
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
 ```
 
 或者大规模向量检索使用 Milvus/Qdrant 等专用 vector backend。
@@ -873,7 +861,10 @@ LightRAG 内部路径
 - `knowledge_search` 只读工具；
 - LightRAG `/query/data` 检索和引用映射；
 - Manager 文档 intake → LightRAG per-document track status → ready/binding；
-- taiyi live intake → MCP citation smoke。
+- taiyi live intake → MCP citation smoke；
+- BGE-M3 + BGE-Reranker-v2-M3；
+- PostgreSQL/pgvector/PGTableGraph/PGDocStatus 存储；
+- PG workspace 持久化和重启恢复。
 
 后续优先做：
 

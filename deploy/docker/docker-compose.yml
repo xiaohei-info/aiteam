@@ -1,6 +1,6 @@
 # 单机模拟三端（dev / test / 单机联调，09 §14 / D15）。
 #
-# 三个 service：operation（:8001）manager（:8002）agent（:8003）+ postgres（主机端口取 ENV 的 POSTGRES_PORT，缺省 5433 对齐 SOP）。
+# 三个 service：operation（:8001）manager（:8002）agent（:8003）+ PostgreSQL/pgvector（主机端口取 ENV 的 POSTGRES_PORT，缺省 5433 对齐 SOP）。
 # 每个 service 用各自 Dockerfile.<tier> 构建——产物在镜像层即按端精简，互不含对方后端/前端。
 #
 # 红线（D15）：agent 服务镜像构建上下文虽是整个仓库，但 Dockerfile.agent 的 COPY 严格限定，
@@ -13,7 +13,7 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: aiteam-pg
     environment:
       POSTGRES_USER: aiteam
@@ -93,6 +93,7 @@ services:
       # explicitly reachable Manager-side URL or leave unset (fail closed).
       LIGHTRAG_URL: ${LIGHTRAG_URL:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      LIGHTRAG_WORKSPACE: ${LIGHTRAG_WORKSPACE:-}
       LIGHTRAG_TIMEOUT_MS: ${LIGHTRAG_TIMEOUT_MS:-5000}
       LIGHTRAG_PIPELINE_TIMEOUT_MS: ${LIGHTRAG_PIPELINE_TIMEOUT_MS:-120000}
       LIGHTRAG_POLL_INTERVAL_MS: ${LIGHTRAG_POLL_INTERVAL_MS:-250}

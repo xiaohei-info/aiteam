@@ -77,6 +77,18 @@ def test_ingestion_fails_on_missing_config(monkeypatch: pytest.MonkeyPatch):
         client.close()
 
 
+def test_ingestion_rejects_workspace_not_owned_by_fixed_instance():
+    client = LightRagIngestionClient(
+        _settings(workspace="fixed-workspace"),
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable, match="knowledge indexing unavailable"):
+            client.ingest_text(workspace="other-workspace", file_source="doc-1", text="hello")
+    finally:
+        client.close()
+
+
 def test_ingestion_fails_on_upstream_error_without_details():
     def handler(request: httpx.Request):
         return httpx.Response(502, text="provider token manager-secret")

@@ -36,6 +36,7 @@ class LightRagIngestionSettings:
     request_timeout_ms: int
     pipeline_timeout_ms: int
     poll_interval_ms: int = 250
+    workspace: str | None = None
 
     @classmethod
     def from_env(cls) -> "LightRagIngestionSettings | None":
@@ -60,7 +61,8 @@ class LightRagIngestionSettings:
         except ValueError:
             poll_interval_ms = 250
         poll_interval_ms = max(10, min(poll_interval_ms, _MAX_POLL_INTERVAL_MS))
-        return cls(url, key, request_timeout_ms, pipeline_timeout_ms, poll_interval_ms)
+        workspace = os.getenv("LIGHTRAG_WORKSPACE", "").strip() or None
+        return cls(url, key, request_timeout_ms, pipeline_timeout_ms, poll_interval_ms, workspace)
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,12 @@ class LightRagIngestionClient:
 
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult:
         settings = self.settings
-        if settings is None or not workspace.strip() or not file_source.strip():
+        if (
+            settings is None
+            or not workspace.strip()
+            or not file_source.strip()
+            or (settings.workspace is not None and workspace != settings.workspace)
+        ):
             raise RagIngestionUnavailable("knowledge indexing unavailable")
         if not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
             raise RagIngestionUnavailable("knowledge indexing unavailable")

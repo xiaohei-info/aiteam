@@ -1,6 +1,6 @@
 ---
 created: 2026-08-20
-status: approved-by-user
+status: completed-taiyi-test
 scope: rag-postgres-storage
 ---
 
@@ -45,10 +45,18 @@ LightRAG 使用独立 PostgreSQL database/schema/role 命名空间，避免直�
 - LightRAG 当前镜像的 PG 后端必须在 clean install 上通过；
 - 若共享 `aiteam-pg` 仍无 pgvector，必须先升级镜像并做 dump/恢复验证。
 
-## 完成标准
+## 完成结果
 
-- taiyi LightRAG 日志显示四个 PG storage backend；
-- `vector` extension 与 `vector(1024)` 表存在；
-- 容器重启后文档和 query 仍可用；
-- Manager/MCP/Pi 全链路成功；
-- 测试与未来生产使用相同 LightRAG + PG 拓扑，只有数据不同。
+- taiyi PostgreSQL 容器已切换为 `pgvector/pgvector:pg16`，保留原业务卷和端口；
+- 创建独立 `aiteam_lightrag_test` database 与 `lightrag_test` role，未把 LightRAG 原生表并入 Manager 业务数据库；
+- `vector` extension 为 0.8.6，LightRAG 创建 `vector(1024)` HNSW 表；
+- LightRAG 日志显示 `PGKVStorage`、`PGDocStatusStorage`、`PGTableGraphStorage`、`PGVectorStorage`；
+- 固定 `POSTGRES_WORKSPACE=tcb0f0687d2354eb7b59c75b8cdb889a5__smoke-space`，3 个文档已重新索引到该 PG workspace；
+- LightRAG 重启后 Manager MCP query 仍成功，reranker 日志显示 `Successfully reranked`，Agent Pi citation smoke 通过；
+- 旧 LightRAG JSON/Qwen 数据与 PostgreSQL cluster 已分别备份；
+- `deploy/docker/docker-compose.yml` 已将三端基础 PostgreSQL 镜像切换为 `pgvector/pgvector:pg16`，保持未来部署拓扑一致。
+
+## 剩余注意
+
+- 当前单个 LightRAG 进程的 PG workspace 在启动时固定；多 workspace 需要 Manager endpoint/instance pool 编排，不能依赖请求 header 动态切换同一进程。
+- `knowledge_get`、PG workspace instance pool、完整 Playwright 仍未完成。

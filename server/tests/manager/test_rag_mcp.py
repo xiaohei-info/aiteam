@@ -13,6 +13,7 @@ from manager_service.rag_mcp import (
     LightRagClient,
     LightRagSettings,
     RagAccessService,
+    RagUnavailable,
     build_rag_mcp,
     install_rag_mcp_lifespan,
 )
@@ -126,6 +127,22 @@ def test_lightrag_client_uses_manager_headers_and_bounded_query():
     assert seen["x-api-key"] == "manager-secret"
     assert seen["lightrag-workspace"] == "derived-space"
     assert request_body["include_references"] is True
+
+
+def test_lightrag_client_rejects_workspace_not_owned_by_fixed_instance():
+    client = LightRagClient(
+        LightRagSettings("http://rag", "secret", workspace="fixed-space"),
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    async def run():
+        try:
+            with pytest.raises(RagUnavailable, match="knowledge service unavailable"):
+                await client.query(workspace="other-space", query="hello", limit=5)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
 
 
 def test_lightrag_documented_no_context_response_is_empty_success():
