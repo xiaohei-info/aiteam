@@ -1,6 +1,6 @@
 ---
 created: 2026-08-20
-status: approved-by-user
+status: completed-taiyi-test
 scope: taiyi-test-rag-model-switch
 ---
 
@@ -30,9 +30,17 @@ scope: taiyi-test-rag-model-switch
 5. 重新 intake 一个 smoke 文档，等待 per-document `PROCESSED`，经 Manager → Agent MCP 查询 citation。
 6. 记录真实请求、结果和剩余风险；不把 key 写入仓库。
 
-## 完成标准
+## 完成结果
 
-- LightRAG 使用 1024 维 BGE-M3，不再读取 Qwen 4096 配置。
-- reranker health/config 显示已启用，查询能正常返回 citation。
-- taiyi Agent MCP/真实 Pi 查询通过。
-- 旧数据有备份；仓库无敏感值、无未提交意外变更。
+- LightRAG 已切换为 `BAAI/bge-m3`、1024 维、8192 token 上限。
+- `BAAI/bge-reranker-v2-m3` 已通过 Cohere-compatible SiliconFlow endpoint 启用。
+- 旧 Qwen 索引已备份至 taiyi `/root/app/backups/lightrag-qwen-before-bge-20260820144755`。
+- smoke-space 三个 ready 文档已按 BGE-M3 重新索引。
+- LightRAG 日志确认 `Successfully reranked`；Agent MCP 与真实 Pi 查询均成功。
+- BGE embedding/rerank 最小 API 请求均返回 200。
+- Git 仓库没有写入任何 key；远程测试环境仍为测试数据。
+
+## 剩余注意
+
+- 当前 LightRAG 仍使用 JSON/NanoVectorDB/NetworkX 测试存储，PG/PGVector 迁移仍未做。
+- 旧索引保留在备份目录，未删除；后续确认新索引稳定后再清理。
