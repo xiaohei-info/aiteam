@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import json
 import pytest
 
 from manager_service.hindsight_client import HindsightClient, HindsightSettings, HindsightUnavailable
@@ -29,7 +30,7 @@ def test_hindsight_client_sends_tenant_context_and_never_falls_back():
     assert seen["path"] == "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/memories/recall"
     assert seen["tenant"] == "tenant-a"
     assert seen["member"] == "u"
-    assert b'"query": "hello"' in seen["body"]
+    assert json.loads(seen["body"]) == {"query": "hello", "max_tokens": 768}
 
 
 def test_hindsight_unconfigured_fails_closed():
