@@ -1,0 +1,32 @@
+---
+created: 2026-08-21
+status: approved-by-current-request
+scope: taiyi-playwright
+---
+
+# taiyi 外部部署 Playwright profile
+
+## 目标
+
+让同一套 `web/e2e` 通过环境变量连接已部署的 taiyi Operation/Manager/Agent，而不是强制启动本地 dev webServer。默认本地 DAG 行为不变。
+
+## 约束
+
+- `E2E_EXTERNAL=true` 时不启动 Playwright webServer、不执行本地 DB seed；使用显式 `E2E_TENANT_ID` 和三端凭据。
+- UI/API origin 必须分别可配置；taiyi 单机可通过 SSH port-forward 暴露 8781/8782/8783。
+- 不绕过 Agent 登录；storageState 仍通过真实三端 login API 生成。
+- 默认配置和 harness origin invariant 测试保持不变。
+
+## 实施
+
+- `web/e2e/support/auth.ts`：UI/API origin 使用环境变量覆盖。
+- `web/e2e/support/globalSetup.ts`：external 模式跳过 seed，仅使用既有 tenant；仍构建 shared 并真实登录。
+- `web/playwright.config.ts`：external 模式关闭 webServer，smoke/cross-tier 使用配置 origin；本地模式完全不变。
+- 增加 external 配置/命令文档和最小 profile 检查。
+
+## 验收
+
+- 本地 harness/smoke 配置默认不回归；
+- taiyi external profile 能连接三端 root/health/login；
+- 至少 Operation/Manager/Agent smoke 项目真实执行；
+- 失败时记录是部署数据/契约问题，不把登录失败静默转成通过。
