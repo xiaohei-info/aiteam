@@ -21,6 +21,8 @@
 LIGHTRAG_URL=https://lightrag.manager.internal
 LIGHTRAG_API_KEY=<secret-store>
 LIGHTRAG_WORKSPACE=<manager-derived-fixed-workspace>
+# 可选多实例配置；设置后优先于上面三项 legacy 变量（JSON 仍只由 Manager 进程读取）
+# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag-a.manager.internal","api_key":"<secret-store>","workspace":"<manager-derived-fixed-workspace>"}]
 LIGHTRAG_IMAGE=ghcr.io/hkuds/lightrag:1.5.6
 
 # LightRAG 专用 PG；管理员凭据只给 bootstrap，运行时使用 lightrag role
@@ -36,14 +38,20 @@ LIGHTRAG_DB_ADMIN_PASSWORD=<secret-store>
 # 容器内连接参数通常为 LIGHTRAG_CLIENT_DB_HOST=127.0.0.1 / PORT=5432
 ```
 
-`LIGHTRAG_WORKSPACE` 必须是 Manager 已推导并固定的实例 namespace（例如 `tenant-hash__ks_default`），不能由前端/Agent 请求覆盖。生产校验：
+legacy 三变量模式下，`LIGHTRAG_WORKSPACE` 必须是 Manager 已推导并固定的实例 namespace（例如 `tenant-hash__ks_default`），不能由前端/Agent 请求覆盖；多实例模式下同一约束适用于 `LIGHTRAG_INSTANCES` 每个条目的 `workspace`。生产校验：
 
 ```bash
 # taiyi/生产；只读校验，不调用 LightRAG，不打印 key/password
 bash scripts/validate-lightrag-env.sh --production --env-file /etc/aiteam/manager.env
 ```
 
-URL、API key、workspace 任一缺失时 Manager 应保持 fail-closed；不要用空 key 作为生产默认值。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 profile 前必须由 secret store 注入真实值。
+legacy 三变量模式下 URL、API key、workspace 任一缺失时 Manager 应保持 fail-closed；多实例模式下每个 registry 条目的四个字段都必须完整有效。不要用空 key 作为生产默认值。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 profile 前必须由 secret store 注入真实值。
+
+### 1.1 Manager `rag_workspace` 映射的边界
+
+Manager 控制库的 `rag_workspace.instance_id` 是 `tenant_id + knowledge_space_id + 派生 workspace` 的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 和实例固定 workspace 仍只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy 三变量）registry；数据库不保存这些值，客户端也不能传入 `workspace`/`instance_id`。
+
+首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行可以先保持 NULL 并由可信 registry bootstrap；已写入的 instance、tenant 或 derived workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作路由或凭据来源。
 
 ## 2. 初始化独立数据库、role、pgvector
 

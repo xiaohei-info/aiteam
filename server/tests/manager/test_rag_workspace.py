@@ -9,9 +9,10 @@ import uuid
 import pytest
 
 from shared.contracts.tenancy import TenantContext
-from shared.db import ManagerRagService  # 派生规则（纯函数）
+from shared.db import ManagerRagService, PgTenantRouter  # 派生规则（纯函数）
 
 from manager_service.rag import PgManagerRagService
+from manager_service.rag_instances import RagInstance, RagInstanceRegistry
 
 pytestmark = pytest.mark.integration
 
@@ -42,6 +43,33 @@ def test_workspace_mapping_isolated_across_tenants(two_tenants, migrated_db):
     assert ManagerRagService.derive_workspace(tid_a, "ks_shared_name") in a_ws
     # tenant B 看不到 tenant A 的 workspace 映射。
     assert ManagerRagService.derive_workspace(tid_a, "ks_shared_name") not in b_ws
+
+
+def test_instance_mapping_bootstraps_legacy_row_and_replays_without_drift(two_tenants, migrated_db):
+    tid_a, _ = two_tenants
+    context = _ctx(tid_a)
+    knowledge_space_id = f"ks_mapping_{uuid.uuid4().hex[:8]}"
+    workspace = ManagerRagService.derive_workspace(tid_a, knowledge_space_id)
+    registry = RagInstanceRegistry((RagInstance("rag-a", "http://rag", "secret", workspace),))
+    router = PgTenantRouter(migrated_db)
+    with router.session(context) as session:
+        session.execute(
+            "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace) VALUES (%s, %s, %s)",
+            (tid_a, knowledge_space_id, workspace),
+        )
+
+    first = PgManagerRagService(migrated_db, instance_registry=registry).get(context, knowledge_space_id)
+    second = PgManagerRagService(migrated_db, instance_registry=registry).get(context, knowledge_space_id)
+    assert first.instance_id == second.instance_id == "rag-a"
+    with router.session(context) as session:
+        row = session.execute(
+            "SELECT tenant_id, knowledge_space_id, workspace, instance_id "
+            "FROM rag_workspace WHERE knowledge_space_id = %s",
+            (knowledge_space_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row[0]) == tid_a
+    assert tuple(row[1:]) == (knowledge_space_id, workspace, "rag-a")
 
 
 def test_derive_workspace_is_pure_no_external_input():

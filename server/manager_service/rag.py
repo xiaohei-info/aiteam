@@ -18,7 +18,7 @@ from .rag_instances import RagInstance, RagInstanceConfigurationError, RagInstan
 
 @dataclass(frozen=True)
 class RagHandle:
-    """RAG 访问句柄，携带仅由 Manager 推导的 workspace。"""
+    """RAG 访问句柄，携带派生 workspace 与已验证的 startup instance_id。"""
 
     tenant_id: str
     knowledge_space_id: str
@@ -36,20 +36,41 @@ class PgManagerRagService(ManagerRagService):
         self._instances = instance_registry if instance_registry is not None else RagInstanceRegistry.from_env()
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
-        # 唯一派生入口：禁止外部直传 workspace（D21）。
+        # 唯一派生入口：禁止外部直传 workspace（D21）。先解析可信 startup
+        # registry，未知 workspace 不得在审计表留下半成品映射。
         workspace = self.derive_workspace(ctx.tenant_id, knowledge_space_id)
-        with self._router.session(ctx) as s:
-            s.execute(
-                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace) "
-                "VALUES (%s, %s, %s) ON CONFLICT (tenant_id, knowledge_space_id) DO NOTHING",
-                (ctx.tenant_id, knowledge_space_id, workspace),
-            )
         instance = self._resolve_instance(workspace)
+        instance_id = instance.instance_id if instance is not None else "legacy"
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO rag_workspace AS target "
+                "(tenant_id, knowledge_space_id, workspace, instance_id) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE "
+                "SET instance_id = CASE "
+                "WHEN target.workspace = EXCLUDED.workspace "
+                "THEN COALESCE(target.instance_id, EXCLUDED.instance_id) "
+                "ELSE target.instance_id END "
+                "RETURNING tenant_id, knowledge_space_id, workspace, instance_id",
+                (ctx.tenant_id, knowledge_space_id, workspace, instance_id),
+            ).fetchone()
+            if (
+                row is None
+                or len(row) < 4
+                or str(row[0]) != str(ctx.tenant_id)
+                or row[1] != knowledge_space_id
+                or row[2] != workspace
+                or row[3] != instance_id
+            ):
+                # Existing non-null instance_id is immutable evidence of the
+                # startup binding.  Never overwrite it after a restart/config
+                # change; a workspace/tenant/instance drift fails closed.
+                raise ValueError("knowledge service unavailable")
         return RagHandle(
             tenant_id=ctx.tenant_id,
             knowledge_space_id=knowledge_space_id,
             workspace=workspace,
-            instance_id=instance.instance_id if instance is not None else "legacy",
+            instance_id=instance_id,
         )
 
     def _resolve_instance(self, workspace: str) -> RagInstance | None:
