@@ -441,10 +441,103 @@ def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable
         asyncio.run(run_all_failed())
 
 
-def test_mcp_inventory_is_read_only_knowledge_search_only():
+def test_mcp_inventory_is_read_only_search_and_bounded_get():
     mcp, _ = build_rag_mcp(verifier=DevTokenService(), access=object())
     tools = mcp._tool_manager.list_tools()
-    assert [tool.name for tool in tools] == ["knowledge_search"]
+    assert [tool.name for tool in tools] == ["knowledge_search", "knowledge_get"]
+
+
+def test_access_get_reads_current_authorized_document_with_bounded_text(tmp_path):
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text("x" * 5_000, encoding="utf-8")
+
+    class StoredDocs(FakeDocs):
+        def get(self, ctx, *, document_id):
+            return Document(document_id, "space-a", "Policy", storage_key=storage_key)
+
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=FakeBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=StoredDocs(), storage_root=tmp_path,
+    )
+    auth = access.authorize(
+        TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a"
+    )
+    result = access.get(auth, "citation:space-a:doc-1")
+    assert result["citation_id"] == "citation:space-a:doc-1"
+    assert result["text"] == "x" * 4_000
+    assert len(result["text"]) == 4_000
+    assert str(tmp_path) not in json.dumps(result)
+    assert "workspace" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("citation_id", [
+    "", "doc-1", "citation:space-a", "citation:space-a:doc-1:extra", "citation:space-b:doc-1",
+])
+def test_access_get_rejects_malformed_or_foreign_citations(tmp_path, citation_id):
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=FakeBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=FakeDocs(), storage_root=tmp_path,
+    )
+    auth = access.authorize(
+        TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a"
+    )
+    with pytest.raises(RagUnavailable):
+        access.get(auth, citation_id)
+
+
+def test_access_get_reauthorizes_revoked_binding(tmp_path):
+    class RevokedBindings(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-1", "rag-1", status="revoked")]
+
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=RevokedBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=FakeDocs(), storage_root=tmp_path,
+    )
+    auth = AuthorizedRagRequest(
+        TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000),
+        TenantContext(tenant_id="tenant-a", user_id="member-a"), "member-a", "employee-a",
+        Snapshot("employee-a", ["space-a"]), Handle("tenant-a", "space-a", "workspace"), (),
+    )
+    with pytest.raises(Forbidden):
+        access.get(auth, "citation:space-a:doc-1")
+
+
+def test_access_get_rejects_path_escape_and_missing_document(tmp_path):
+    class UnsafeDocs(FakeDocs):
+        def __init__(self, storage_key):
+            self.storage_key = storage_key
+
+        def get(self, ctx, *, document_id):
+            return Document(document_id, "space-a", "Policy", storage_key=self.storage_key)
+
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=FakeBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=UnsafeDocs("../outside.txt"), storage_root=tmp_path,
+    )
+    auth = access.authorize(
+        TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a"
+    )
+    with pytest.raises(RagUnavailable):
+        access.get(auth, "citation:space-a:doc-1")
+
+    class MissingDocs(FakeDocs):
+        def get(self, ctx, *, document_id):
+            return None
+
+    missing = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=FakeBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=MissingDocs(), storage_root=tmp_path,
+    )
+    with pytest.raises(RagUnavailable):
+        missing.get(auth, "citation:space-a:doc-1")
 
 
 def test_mcp_auth_error_uses_problem_json_without_upstream_details():
@@ -511,6 +604,6 @@ def test_mcp_official_client_forwards_auth_and_employee_and_closes_lifespan():
                     return tools, result
 
     tools, result = asyncio.run(run())
-    assert [tool.name for tool in tools.tools] == ["knowledge_search"]
+    assert [tool.name for tool in tools.tools] == ["knowledge_search", "knowledge_get"]
     assert result.isError is not True
     assert seen == {"authorization": token, "employee_id": "employee-a", "user_id": "member-a", "query": "policy"}

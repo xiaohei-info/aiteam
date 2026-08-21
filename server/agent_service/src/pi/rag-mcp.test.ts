@@ -9,9 +9,20 @@ test("RAG MCP is enabled only by the snapshot allowlist and fixed endpoint", () 
   try {
     assert.equal(ragMcpUrl("http://manager.test/control"), "http://manager.test/api/manager/rag/mcp");
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }, "http://manager.test"), ["knowledge_search"]);
+    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get"] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_get"] } }, "http://manager.test"), []);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }), []);
     assert.equal(createRagMcpFactory({ caller: { callerId: "member" }, employeeId: "employee", snapshot: {} } as never, "http://manager.test"), undefined);
+  } finally {
+    delete process.env.AITEAM_RAG_MCP_URL;
+  }
+});
+
+test("RAG MCP requires search and exposes get only when the snapshot allows it", () => {
+  process.env.AITEAM_RAG_MCP_URL = "http://manager.test/api/manager/rag/mcp";
+  try {
+    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get", "unknown"] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
+    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_get", "unknown"] } }, "http://manager.test"), []);
   } finally {
     delete process.env.AITEAM_RAG_MCP_URL;
   }

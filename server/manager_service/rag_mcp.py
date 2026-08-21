@@ -10,6 +10,7 @@ import contextvars
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -25,8 +26,10 @@ from shared.contracts.envelope import Problem
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError, Forbidden, Unauthorized
 
+from .document_parser import extract_text
 from .employee_config_service import employee_runnable
 from .knowledge_intake_repository import KnowledgeDocumentRepository
+from .knowledge_intake_service import _resolve_path
 from .rag import RagHandle
 
 MCP_MOUNT_PATH = "/api/manager/rag"
@@ -170,6 +173,7 @@ class RagAccessService:
         light_rag: LightRagClient,
         space_repository: SpacePort | None = None,
         document_repository: KnowledgeDocumentRepository | None = None,
+        storage_root: os.PathLike[str] | str | None = None,
     ):
         self._snapshots = snapshot_service
         self._members = member_repository
@@ -179,6 +183,7 @@ class RagAccessService:
         self._light_rag = light_rag
         self._spaces = space_repository
         self._documents = document_repository
+        self._storage_root = Path(storage_root).resolve() if storage_root is not None else None
 
     def authorize(self, claims: TokenClaims, employee_id: str) -> AuthorizedRagRequest:
         if not claims.tenant_id or not claims.user_id or not employee_id or len(employee_id) > 256:
@@ -268,6 +273,76 @@ class RagAccessService:
         while len(json.dumps(result, ensure_ascii=False).encode()) > _MAX_RESPONSE_BYTES and items:
             items.pop()
         return result
+
+    def get(self, auth: AuthorizedRagRequest, citation_id: str) -> dict[str, Any]:
+        """Read one currently authorized Manager-owned document citation."""
+        if not isinstance(citation_id, str) or len(citation_id) > 1_024:
+            raise RagUnavailable("knowledge service unavailable")
+        parts = citation_id.split(":")
+        if (
+            len(parts) != 3
+            or parts[0] != "citation"
+            or not parts[1]
+            or not parts[2]
+            or parts[1].strip() != parts[1]
+            or parts[2].strip() != parts[2]
+        ):
+            raise RagUnavailable("knowledge service unavailable")
+        knowledge_space_id, document_id = parts[1], parts[2]
+
+        # A search authorization is a snapshot-time object. Rebuild it here so
+        # revoked bindings and employee changes take effect before every read.
+        current = self.authorize(auth.claims, auth.employee_id)
+        handle = next(
+            (candidate for candidate in (current.handles or (current.handle,))
+             if candidate.knowledge_space_id == knowledge_space_id),
+            None,
+        )
+        if handle is None or self._documents is None or self._storage_root is None:
+            raise RagUnavailable("knowledge service unavailable")
+        binding = next(
+            (row for row in current.bindings
+             if getattr(row, "document_id", None) == document_id
+             and self._valid_binding(
+                 row, ctx=current.ctx, employee_id=current.employee_id, space_id=knowledge_space_id
+             )),
+            None,
+        )
+        if binding is None:
+            raise RagUnavailable("knowledge service unavailable")
+        document = self._documents.get(current.ctx, document_id=document_id)
+        if (
+            document is None
+            or getattr(document, "id", document_id) != document_id
+            or getattr(document, "tenant_id", current.ctx.tenant_id) != current.ctx.tenant_id
+            or getattr(document, "knowledge_space_id", None) != knowledge_space_id
+            or getattr(document, "status", None) != "ready"
+        ):
+            raise RagUnavailable("knowledge service unavailable")
+        try:
+            path = _resolve_path(self._storage_root, document.storage_key)
+            relative = path.relative_to(self._storage_root)
+            expected = ("knowledge", current.ctx.tenant_id, knowledge_space_id)
+            if len(relative.parts) < 4 or relative.parts[:3] != expected or not path.is_file():
+                raise ValueError("document storage is unavailable")
+            text = extract_text(path)
+            if not isinstance(text, str):
+                raise ValueError("document parser returned invalid text")
+        except Exception as exc:  # noqa: BLE001 - no storage/parser details at MCP boundary
+            raise RagUnavailable("knowledge service unavailable") from exc
+        display_name = str(getattr(document, "display_name", ""))[:512]
+        source_type = str(getattr(document, "source_type", "file"))
+        return {
+            "citation_id": citation_id,
+            "document_id": document_id,
+            "knowledge_space_id": knowledge_space_id,
+            "title": display_name,
+            "text": text[:_MAX_CHUNK_CHARS],
+            "source": {
+                "type": source_type if source_type in {"file", "url"} else "file",
+                "display_name": display_name,
+            },
+        }
 
     @staticmethod
     def _valid_binding(row: Any, *, ctx: TenantContext, employee_id: str, space_id: str) -> bool:
@@ -467,6 +542,16 @@ def build_rag_mcp(*, verifier: TokenVerifier, access: RagAccessService) -> tuple
         if auth is None:
             raise RuntimeError("knowledge service unavailable")
         return json.dumps(await access.search(auth, query, limit), ensure_ascii=False)
+
+    @mcp.tool(name="knowledge_get", description="Get bounded text for an authorized citation.")
+    async def knowledge_get(citation_id: str) -> str:
+        auth = _current_rag_request.get()
+        if auth is None:
+            raise RuntimeError("knowledge service unavailable")
+        return json.dumps(
+            await asyncio.to_thread(access.get, auth, citation_id),
+            ensure_ascii=False,
+        )
 
     mounted = mcp.streamable_http_app()
     mounted.add_middleware(RagAuthMiddleware, verifier=verifier, access=access)

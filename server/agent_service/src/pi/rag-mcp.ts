@@ -4,10 +4,15 @@ import { defineTool, type ExtensionAPI, type ExtensionContext, type ToolDefiniti
 import { Type } from "typebox";
 import type { SessionAuthorization } from "./session-host.js";
 
-const RAG_TOOL = "knowledge_search";
-const input = Type.Object({
+const SEARCH_TOOL = "knowledge_search";
+const GET_TOOL = "knowledge_get";
+const RAG_TOOLS = new Set([SEARCH_TOOL, GET_TOOL]);
+const searchInput = Type.Object({
   query: Type.String({ minLength: 1, maxLength: 8_000 }),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10 })),
+}, { additionalProperties: false });
+const getInput = Type.Object({
+  citation_id: Type.String({ minLength: 1, maxLength: 1_024 }),
 }, { additionalProperties: false });
 
 class RagMcpClient {
@@ -32,11 +37,18 @@ class RagMcpClient {
     await this.client.connect(this.transport);
     const inventory = await this.client.listTools();
     const tools = inventory.tools.map((tool) => tool.name);
-    if (tools.length !== 1 || tools[0] !== RAG_TOOL) throw new Error("RAG MCP tool inventory is not allowed");
+    if (!tools.includes(SEARCH_TOOL) || tools.some((name) => !RAG_TOOLS.has(name)) || new Set(tools).size !== tools.length) {
+      throw new Error("RAG MCP tool inventory is not allowed");
+    }
   }
 
   async search(query: string, limit: number): Promise<unknown> {
-    const result = await this.client.callTool({ name: RAG_TOOL, arguments: { query, limit } });
+    const result = await this.client.callTool({ name: SEARCH_TOOL, arguments: { query, limit } });
+    return result;
+  }
+
+  async get(citation_id: string): Promise<unknown> {
+    const result = await this.client.callTool({ name: GET_TOOL, arguments: { citation_id } });
     return result;
   }
 
@@ -64,13 +76,15 @@ export function ragToolNames(snapshot: unknown, managerUrl?: string): string[] {
   const policy = snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>).tool_policy : undefined;
   const allowed: unknown[] = policy && typeof policy === "object" && Array.isArray((policy as Record<string, unknown>).allowed_tools)
     ? (policy as Record<string, unknown>).allowed_tools as unknown[] : [];
-  return ragMcpUrl(managerUrl) && (allowed as unknown[]).includes(RAG_TOOL) ? [RAG_TOOL] : [];
+  if (!ragMcpUrl(managerUrl) || !allowed.includes(SEARCH_TOOL)) return [];
+  return allowed.includes(GET_TOOL) ? [SEARCH_TOOL, GET_TOOL] : [SEARCH_TOOL];
 }
 
 /** Controlled extension: no .mcp.json, home-directory, or ambient server discovery. */
 export function createRagMcpFactory(authorization: SessionAuthorization, managerUrl?: string): ((pi: ExtensionAPI) => void) | undefined {
   const url = ragMcpUrl(managerUrl);
-  if (!url || !authorization.caller.accessToken) return undefined;
+  const toolNames = ragToolNames(authorization.snapshot, managerUrl);
+  if (!url || !toolNames.includes(SEARCH_TOOL) || !authorization.caller.accessToken) return undefined;
   let client: RagMcpClient | undefined;
   let connectPromise: Promise<RagMcpClient> | undefined;
   const getClient = async () => {
@@ -93,11 +107,11 @@ export function createRagMcpFactory(authorization: SessionAuthorization, manager
   };
   return (pi: ExtensionAPI) => {
     pi.registerTool(defineTool({
-      name: RAG_TOOL,
+      name: SEARCH_TOOL,
       label: "Search knowledge",
       description: "Search authorized enterprise knowledge and return explicit citations.",
       promptSnippet: "knowledge_search(query, limit)",
-      parameters: input,
+      parameters: searchInput,
       execute: async (_toolCallId, params) => {
         try {
           const values = params as { query: string; limit?: number };
@@ -108,6 +122,24 @@ export function createRagMcpFactory(authorization: SessionAuthorization, manager
         }
       },
     } as ToolDefinition));
+    if (toolNames.includes(GET_TOOL)) {
+      pi.registerTool(defineTool({
+        name: GET_TOOL,
+        label: "Get knowledge citation",
+        description: "Get bounded text for an authorized knowledge citation.",
+        promptSnippet: "knowledge_get(citation_id)",
+        parameters: getInput,
+        execute: async (_toolCallId, params) => {
+          try {
+            const values = params as { citation_id: string };
+            const result = await (await getClient()).get(values.citation_id);
+            return { content: [{ type: "text", text: JSON.stringify(result) }], details: undefined };
+          } catch {
+            return { content: [{ type: "text" as const, text: "Knowledge service unavailable; no local enterprise index was used." }], details: undefined, isError: true };
+          }
+        },
+      } as ToolDefinition));
+    }
     pi.on("session_shutdown", async (_event: unknown, _context: ExtensionContext) => shutdown());
   };
 }

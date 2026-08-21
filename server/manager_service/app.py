@@ -48,6 +48,7 @@ from .employee_config_service import build_employee_config_service
 from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import build_knowledge_intake_repositories
+from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .knowledge_space_repository import KnowledgeSpaceRepository
 from .member_service import GrantService, MemberDeptService
 from .rag import PgManagerRagService
@@ -206,6 +207,7 @@ if settings.db_url:
         light_rag=_rag_light,
         space_repository=KnowledgeSpaceRepository(_rag_router),
         document_repository=_rag_doc_repo,
+        storage_root=ensure_storage_root(manager_storage_root(settings)),
     )
     _rag_mcp, _rag_mcp_app = build_rag_mcp(verifier=_verifier, access=_rag_access)
     app.mount("/api/manager/rag", _rag_mcp_app)
