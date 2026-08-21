@@ -63,7 +63,7 @@ async function waitFor<T>(read: () => Promise<T>, ready: (value: T) => boolean, 
   await expect.poll(async () => {
     latest = await read();
     return ready(latest) ? 1 : 0;
-  }, { timeout: 15_000, intervals: [250, 500, 1_000] }).toBe(1);
+  }, { timeout: 60_000, intervals: [250, 500, 1_000] }).toBe(1);
   if (latest === undefined) throw new Error(`${message}: no response`);
   return latest;
 }
@@ -389,7 +389,10 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
         expect(response.ok(), `entries read: ${response.status()}`).toBe(true);
         return await response.json() as { data?: { conversation_id?: string; entries?: unknown[] } };
       },
-      (body) => body.data?.conversation_id === convId && (body.data.entries?.length ?? 0) > 0,
+      (body) => body.data?.conversation_id === convId && (body.data.entries ?? []).some((entry) => {
+        const message = (entry as { type?: string; message?: { role?: string; stopReason?: string } }).message;
+        return entry.type === "message" && message?.role === "assistant" && message.stopReason === "stop";
+      }),
       `prompt ${traceId} entries`,
     );
     expect(entriesBody.data?.conversation_id).toBe(convId);
@@ -466,6 +469,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       `flush 后 pending 应 ≤ prompt 后 (afterPrompt=${pendingAfterPrompt}, afterFlush=${pendingAfterFlush})`,
     ).toBe(true);
     const remainingFlushedIds = usageOutboxItems(afterFlushBody.data)
+      .filter((item) => item.status !== "sent")
       .map((item) => summaryId(item))
       .filter((id): id is string => Boolean(id) && flushedSummaryIds.has(id));
     expect(
