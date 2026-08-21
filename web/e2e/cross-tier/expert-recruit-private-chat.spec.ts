@@ -31,6 +31,7 @@ import { randomUUID } from "node:crypto";
 import {
   apiLogin,
   defaultCredentials,
+  seededEmployeeId,
   TIER_API_ORIGIN,
 } from "../support/auth";
 
@@ -458,48 +459,53 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     const realMemberId = whoami.user_id;
     stageExpect(Boolean(tenantId), "authz-gate-negative", "whoami 须含 tenant_id");
 
-    // 招募一个 employee（依赖 Operator catalog；未就绪则 skip）。
-    // 找不到已发布模板时跳过本用例（本用例聚焦 403 门禁，不重复完整发布链路）。
-    const recruitableResp = await request.get(
-      `${TIER_API_ORIGIN.manager}/api/manager/recruit/catalog/experts`,
-      {
-        headers: { Authorization: `Bearer ${mgrToken}` },
-        failOnStatusCode: false,
-      },
-    );
-    // 人才市场端点内部拉取 Operator 目录（服务间调用）：Operator 未就绪或拉取超时 → 5xx，此时 skip 整条门禁用例而非误判为失败。
-    if (!recruitableResp.ok()) {
+    // Prefer the run-scoped seeded employee; only fall back to Operator catalog when no
+    // seed employee exists, so the authz gate does not become an unrelated catalog skip.
+    let employeeId = seededEmployeeId();
+    let recruitable: Array<{ template_id?: string }> = [];
+    if (!employeeId) {
+      const recruitableResp = await request.get(
+        `${TIER_API_ORIGIN.manager}/api/manager/recruit/catalog/experts`,
+        {
+          headers: { Authorization: `Bearer ${mgrToken}` },
+          failOnStatusCode: false,
+        },
+      );
+      if (!recruitableResp.ok()) {
+        test.skip(
+          true,
+          `[authz-gate-negative] Manager 人才市场端点不可达（status=${recruitableResp.status()}，可能 OPERATOR_URL 未配置 / Operator 未就绪 / 拉取超时），且本次 seed 无 employee`,
+        );
+        return;
+      }
+      recruitable = ((await recruitableResp.json()) as { data?: Array<{ template_id?: string }> }).data ?? [];
+    }
+    if (!employeeId && recruitable.length === 0) {
       test.skip(
         true,
-        `[authz-gate-negative] Manager 人才市场端点不可达（status=${recruitableResp.status()}，可能 OPERATOR_URL 未配置 / Operator 未就绪 / 拉取超时），跳过 403 门禁用例`,
+        "[authz-gate-negative] Manager 无可招募模板且 seed 无 employee，无法建立 403 前置",
       );
       return;
     }
-    const recruitable = ((await recruitableResp.json()) as { data?: Array<{ template_id?: string }> }).data ?? [];
-    if (recruitable.length === 0) {
-      test.skip(
-        true,
-        "[authz-gate-negative] Manager 无可招募专家模板（Operator catalog 未拉取到数据，可能 OPERATOR_URL 未配置或 Operator 未就绪），跳过 403 门禁用例",
+    if (!employeeId) {
+      const templateId = recruitable[0]?.template_id!;
+      const recruitResp = await request.post(
+        `${TIER_API_ORIGIN.manager}/api/manager/recruit/experts`,
+        {
+          data: { template_id: templateId, display_name_override: `gate-neg-${uniqueTag}` },
+          headers: { Authorization: `Bearer ${mgrToken}`, "Content-Type": "application/json" },
+          failOnStatusCode: false,
+        },
       );
-      return;
+      if (!recruitResp.ok()) {
+        const text = await recruitResp.text();
+        test.skip(true, `[authz-gate-negative] 招募前置失败（依赖 Operator catalog）：${text.slice(0, 200)}`);
+        return;
+      }
+      employeeId = ((await recruitResp.json()) as { data?: { employee_id?: string } }).data?.employee_id;
     }
-    const templateId = recruitable[0]?.template_id!;
-
-    const recruitResp = await request.post(
-      `${TIER_API_ORIGIN.manager}/api/manager/recruit/experts`,
-      {
-        data: { template_id: templateId, display_name_override: `gate-neg-${uniqueTag}` },
-        headers: { Authorization: `Bearer ${mgrToken}`, "Content-Type": "application/json" },
-        failOnStatusCode: false,
-      },
-    );
-    if (!recruitResp.ok()) {
-      const text = await recruitResp.text();
-      test.skip(true, `[authz-gate-negative] 招募前置失败（依赖 Operator catalog）：${text.slice(0, 200)}`);
-      return;
-    }
-    const employeeId = ((await recruitResp.json()) as { data?: { employee_id?: string } }).data?.employee_id;
-    stageExpect(Boolean(employeeId), "authz-gate-negative", "招募前置须返回 employee_id");
+    stageExpect(Boolean(employeeId), "authz-gate-negative", "前置须返回 employee_id");
+    if (!employeeId) throw new Error("authz-gate-negative employee prerequisite missing");
 
     const grantResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/grants`, {
       data: { resource_type: "expert", resource_id: employeeId, member_ids: [realMemberId ?? ""] },
