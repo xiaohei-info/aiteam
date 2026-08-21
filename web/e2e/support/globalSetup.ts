@@ -41,7 +41,7 @@ const LOGIN_PATH: Record<Tier, string> = {
  * 无 DB 配置时脚本自身 skip（operation 端不依赖）；返回 seed stdout JSON。
  */
 function seedE2eTenant(): { tenant_id?: string; account?: string; skipped?: string } | null {
-  if (process.env.E2E_EXTERNAL === "true") {
+  if (process.env.E2E_EXTERNAL === "true" && process.env.E2E_EXTERNAL_SEED !== "true") {
     const tenant_id = process.env.E2E_TENANT_ID?.trim();
     if (!tenant_id) throw new Error("E2E_EXTERNAL requires E2E_TENANT_ID");
     return { tenant_id, skipped: "external deployment" };
