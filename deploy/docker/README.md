@@ -131,7 +131,7 @@ docker run --rm aiteam-agent:dev sh -c \
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
-> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；测试和目标生产统一使用 PostgreSQL + pgvector（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。Manager v1 是 clean install：不会迁移任何旧知识文件，已有旧部署必须重新 intake 文档。变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
+> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；测试和目标生产统一使用独立 PostgreSQL + pgvector 数据库/role（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。默认 Compose 不启动 LightRAG；目标联调显式使用 `--profile lightrag`。镜像固定为 `ghcr.io/hkuds/lightrag:1.5.6`（生产可替换为已验证 sha256 digest），禁止 `latest`。Manager-only 的 URL/key/workspace/PG secrets 绝不进入 Agent。bootstrap、校验、备份/恢复/升级/rollback 见 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md)；变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
 
 ---
 

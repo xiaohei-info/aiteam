@@ -1,0 +1,37 @@
+name: deployment-ops-checks
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths:
+      - "deploy/**"
+      - "scripts/**"
+      - "docs/部署运维/**"
+      - ".github/workflows/deploy-ops.yml"
+  pull_request:
+    branches: [main, "feature/**"]
+    paths:
+      - "deploy/**"
+      - "scripts/**"
+      - "docs/部署运维/**"
+      - ".github/workflows/deploy-ops.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deployment-checks:
+    name: deployment shell/compose/secret checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deployment artifacts
+        run: bash scripts/check-deploy.sh
+      - name: Check LightRAG dry-runs
+        run: |
+          bash deploy/lightrag/init-db.sh --dry-run \
+            >/tmp/lightrag-init.out
+          bash scripts/validate-lightrag-env.sh
+          bash scripts/lightrag-ops.sh --dry-run backup
+          bash scripts/lightrag-ops.sh --dry-run upgrade \
+            --image ghcr.io/hkuds/lightrag:1.5.6

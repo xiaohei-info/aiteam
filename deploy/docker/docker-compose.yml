@@ -31,6 +31,61 @@ services:
       timeout: 3s
       retries: 10
 
+  # Optional Manager-side LightRAG stack. It is not part of the default three-tier
+  # dev/test startup; enable explicitly with --profile lightrag after bootstrap.
+  # The database is separate from the AI Team control-plane database and is never
+  # attached to the Agent network/API surface.
+  lightrag-postgres:
+    profiles: [lightrag]
+    image: ${LIGHTRAG_PG_IMAGE:-pgvector/pgvector:pg16}
+    container_name: aiteam-lightrag-pg
+    environment:
+      POSTGRES_USER: ${LIGHTRAG_DB_ADMIN_USER:-lightrag_admin}
+      POSTGRES_PASSWORD: ${LIGHTRAG_DB_ADMIN_PASSWORD:-}
+      POSTGRES_DB: ${LIGHTRAG_DB_NAME:-lightrag}
+    ports:
+      - "127.0.0.1:${LIGHTRAG_PG_PORT:-55432}:5432"
+    volumes:
+      - lightrag_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  lightrag:
+    profiles: [lightrag]
+    image: ${LIGHTRAG_IMAGE:-ghcr.io/hkuds/lightrag:1.5.6}
+    container_name: aiteam-lightrag
+    depends_on:
+      lightrag-postgres:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 9621
+      # These are Manager-side only; do not copy them into the Agent service.
+      API_KEY: ${LIGHTRAG_API_KEY:-}
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      POSTGRES_HOST: lightrag-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${LIGHTRAG_DB_USER:-lightrag}
+      POSTGRES_PASSWORD: ${LIGHTRAG_DB_PASSWORD:-}
+      POSTGRES_DATABASE: ${LIGHTRAG_DB_NAME:-lightrag}
+      POSTGRES_WORKSPACE: ${LIGHTRAG_WORKSPACE:-}
+      LIGHTRAG_KV_STORAGE: PGKVStorage
+      LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
+      LIGHTRAG_GRAPH_STORAGE: PGTableGraphStorage
+      LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
+      EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-1024}
+      LOG_LEVEL: ${LIGHTRAG_LOG_LEVEL:-INFO}
+    expose:
+      - "9621"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:9621/health\", timeout=2)' "]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   operation:
     build:
       context: ../..
@@ -90,7 +145,7 @@ services:
       HINDSIGHT_DELETE_PATH: ${HINDSIGHT_DELETE_PATH:-}
       OPERATOR_URL: http://operation:8000
       # Manager-only LightRAG credentials; never copied to the Agent container.
-      # No LightRAG service is defined in this compose file; configure an
+      # The LightRAG service is opt-in (profile lightrag); configure an
       # explicitly reachable Manager-side URL or leave unset (fail closed).
       LIGHTRAG_URL: ${LIGHTRAG_URL:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
@@ -145,6 +200,8 @@ services:
         condition: service_healthy
 
 volumes:
+  lightrag_pgdata:
+    name: ${LIGHTRAG_PG_VOLUME:-aiteam_lightrag_pg_data_${AITEAM_ENV:-dev}}
   # 实际卷名由 ENV 的 MANAGER_DATA_VOLUME 决定（ctl.sh 缺省注入 managerdata_<env>，
   # 使 dev/test/prod 各用各卷）；未注入时回退共用卷 managerdata。
   managerdata:

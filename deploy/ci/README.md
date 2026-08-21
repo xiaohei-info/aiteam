@@ -77,6 +77,19 @@ cd web && pnpm install --frozen-lockfile && pnpm build
 - `~/.ssh/` 下有 GitHub repo 的 SSH key（git pull 走 SSH，HTTPS 不缓存凭证）
 - GitHub Secret `ENV_CONTENTS_<ENV>` = 该环境的完整 `.env.<env>` 内容
 
+## LightRAG 生产部署前置
+
+LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管。taiyi/生产发布前，按 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md) 在目标 PG 上执行独立 database/role/`vector` extension bootstrap，并将 Manager-only `LIGHTRAG_URL`、API key、固定 workspace 和已验证镜像引用放入部署机的 mode-600 secret env。不要把这些值放入 Agent 配置或 GitHub 日志。
+
+部署前只读检查：
+
+```bash
+bash scripts/check-deploy.sh
+bash scripts/validate-lightrag-env.sh --production --env-file /etc/aiteam/manager.env
+```
+
+`--dry-run` 仅用于演练；数据库初始化、恢复、升级和 rollback 的真实命令只在 taiyi/生产维护窗口执行。CI 的 `deployment-ops-checks` workflow 只运行 shell/Compose/static-secret 闸门和 dry-run，不连接生产 PG、不拉 LightRAG 镜像、不携带真实 secret。
+
 ## 调试
 
 ```bash
