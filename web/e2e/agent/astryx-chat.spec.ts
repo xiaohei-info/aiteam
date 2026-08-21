@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { authTest, expect } from "../support/fixtures";
+import { seededEmployeeId } from "../support/auth";
 import { collectBrowserErrors, expectKeyboardFocusVisible } from "../support/smoke";
 
 async function openChat(
@@ -13,7 +14,7 @@ async function openChat(
       id: conversation.id,
       title: conversation.title,
       kind: "private",
-      ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+      ...((process.env.E2E_AGENT_EMPLOYEE_ID ?? seededEmployeeId()) ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID ?? seededEmployeeId() } : {}),
     },
   });
   expect(response.status()).toBe(201);

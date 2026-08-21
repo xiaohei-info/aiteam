@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { authTest } from "../support/fixtures";
 import { expectUnknownRouteProblemJson } from "../support/api-assertions";
-import { apiLogin, defaultCredentials, TIER_API_ORIGIN } from "../support/auth";
+import { apiLogin, defaultCredentials, seededEmployeeId, TIER_API_ORIGIN } from "../support/auth";
 import { expectShellReady, collectBrowserErrors, expectLoginPageSmoke } from "../support/smoke";
 
 const TIER = "agent" as const;
@@ -54,12 +54,13 @@ authTest.describe("agent workspace", () => {
 authTest.describe("agent Pi prompt", () => {
   authTest("prompt → entries and abort use the Node Agent endpoints", async ({ authedRequest }) => {
     const conversationId = `e2e-pi-conversation-${Date.now()}`;
+    const employeeId = process.env.E2E_AGENT_EMPLOYEE_ID ?? seededEmployeeId();
     const created = await authedRequest.post("/api/agent/conversations", {
       data: {
         id: conversationId,
         title: "E2E Pi conversation",
         kind: "private",
-        ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+        ...(employeeId ? { entry_employee_id: employeeId } : {}),
       },
     });
     expect(created.status()).toBe(201);
