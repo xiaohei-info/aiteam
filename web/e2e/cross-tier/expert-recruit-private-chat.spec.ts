@@ -4,6 +4,10 @@
  * 业务闭环：Operator 发布专家模板 → Manager 创建 provider 并招募（按 model 自动匹配 provider）
  * → Manager 授权 member → Agent sync 拉取 → Agent 私聊 roster 出现该专家 → 创建私聊会话。
  *
+ * Provider 匹配隔离：产品允许 model-only 在多个 provider 命中时返回 ambiguous；本用例只在
+ * E2E_EXTERNAL_SEED 提供的独立 tenant 上运行，并在写入前确认该 tenant 没有其它 enabled gpt-4.1 provider，
+ * 因而验证的是 single-match，不会把共享环境污染误判成 deterministic match。
+ *
  * 验证命令：
  *   npx playwright test e2e/cross-tier/expert-recruit-private-chat.spec.ts --project=cross-tier
  *
@@ -137,6 +141,32 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     const mgrToken = mgrLogin.token;
     const agentToken = agentLogin.token;
     const providerRef = `newapi-main-${uniqueTag}`;
+
+    // This test intentionally exercises the resolver's single-match branch.  Do not
+    // silently pick one provider if a reused/shared tenant already has another match.
+    const existingProvidersResp = await request.get(
+      `${TIER_API_ORIGIN.manager}/api/manager/provider-credentials`,
+      {
+        headers: { Authorization: `Bearer ${mgrToken}` },
+        failOnStatusCode: false,
+      },
+    );
+    stageExpect(
+      existingProvidersResp.ok(),
+      "match",
+      `E2E_EXTERNAL_SEED tenant provider 列表应可达：status=${existingProvidersResp.status()}`,
+    );
+    const existingProvidersBody = (await existingProvidersResp.json()) as {
+      data?: Array<{ provider_ref?: string; supported_models?: Array<{ model?: string; enabled?: boolean }> }>;
+    };
+    const existingModelMatches = (existingProvidersBody.data ?? []).filter((provider) =>
+      (provider.supported_models ?? []).some((model) => model.model === "gpt-4.1" && model.enabled !== false),
+    );
+    stageExpect(
+      existingModelMatches.length === 0,
+      "match",
+      `E2E_EXTERNAL_SEED tenant 必须无预存 gpt-4.1 provider；发现=${existingModelMatches.map((p) => p.provider_ref).join(",") || "none"}`,
+    );
 
     const providerResp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/provider-credentials`,

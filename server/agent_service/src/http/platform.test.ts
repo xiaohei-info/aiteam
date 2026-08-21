@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentHttpServer } from "./server.js";
 import { createFixture } from "../test-fixture.js";
-import type { ManagerClient } from "../manager-client.js";
+import { ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
 
 async function start(managerClient?: ManagerClient) {
   const fixture = await createFixture();
@@ -124,8 +124,31 @@ test("Grant sync fails closed when Manager is not configured", async () => {
   try {
     const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
     assert.equal(response.status, 503);
-    assert.equal((await response.json() as { code: string }).code, "manager_unavailable");
+    assert.match(response.headers.get("content-type") ?? "", /application\/problem\+json/);
+    const problem = await response.json() as { code: string; status: number };
+    assert.equal(problem.code, "manager_unavailable");
+    assert.equal(problem.status, 503);
     assert.equal(fixture.store.listLoadedExperts().length, 1);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("Grant sync maps a Manager transport outage to the formal 503 problem contract", async () => {
+  const remote: ManagerClient = {
+    pullAuthorizedConfig: async () => { throw new ManagerUnavailableError("offline"); },
+    getOrgTree: async () => ({}),
+  };
+  const { fixture, http, base } = await start(remote);
+  try {
+    const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+    assert.equal(response.status, 503);
+    assert.match(response.headers.get("content-type") ?? "", /application\/problem\+json/);
+    const problem = await response.json() as { code: string; status: number };
+    assert.equal(problem.code, "manager_unavailable");
+    assert.equal(problem.status, 503);
+    assert.equal(fixture.store.listLoadedExperts().map((expert) => expert.employee_id).join(","), "e1");
   } finally {
     await http.close();
     await fixture.close();

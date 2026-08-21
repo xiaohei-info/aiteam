@@ -111,7 +111,7 @@ def _provision_initial_quota_policy(dsn: str, tenant_id: str, policy: dict) -> N
                     window_start, window_end, dimensions, enforcement, status
                 ) VALUES (
                     %s, %s, %s, %s, NULL,
-                    now(), now() + interval '%s days', %s, %s, 'active'
+                    now(), now() + (%s * interval '1 day'), %s, %s, 'active'
                 )
                 ON CONFLICT (tenant_id, policy_slug) DO NOTHING
                 """,

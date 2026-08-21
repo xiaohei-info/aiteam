@@ -120,6 +120,52 @@ def test_provision_with_quota_policy_only():
         assert mc.call_count == 2
 
 
+def test_quota_policy_window_uses_parameterized_interval():
+    """Provision quota must not quote a ``%s`` placeholder inside an interval literal.
+
+    PostgreSQL treats ``interval '%s days'`` as a malformed literal; the resulting
+    database error used to surface as a 500 from the Operation→Manager provision chain.
+    """
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, params=()):
+            calls.append((query, params))
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            return None
+
+    with patch("psycopg.connect", return_value=Connection()):
+        from manager_service.routes_tenant import _provision_initial_quota_policy
+
+        _provision_initial_quota_policy(
+            "postgresql://fake/fake",
+            "tenant-1",
+            {"policy_slug": "default", "window_days": 30},
+        )
+
+    insert_query, insert_params = calls[-1]
+    assert "interval '%s days'" not in insert_query
+    assert "(%s * interval '1 day')" in insert_query
+    assert insert_params[4] == 30
+
+
 def test_provision_with_visible_catalog_policy_only():
     """带 visible_catalog_policy → _provision_visible_catalog_policy 走 pass 分支。"""
     mc = _mock_psycopg()

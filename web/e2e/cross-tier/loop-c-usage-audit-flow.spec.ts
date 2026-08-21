@@ -246,33 +246,96 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     });
     expect(beforeResp.ok(), `outbox read: ${beforeResp.status()}`).toBe(true);
     const beforeBody = (await beforeResp.json()) as { data: unknown[] };
-    const pendingBefore = Array.isArray(beforeBody.data) ? beforeBody.data.length : 0;
     const usageBefore = usageOutboxItems(beforeBody.data);
     const beforeBySummaryId = new Map(
       usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
     );
 
-    // ── 阶段 2/6: 先取得本成员已授权的 employee，再创建并拥有 conversation ──
-    const claims = (agentLogin.claims ?? {}) as Record<string, unknown>;
-    const ownerTenantId = String(claims.tenant_id ?? "");
-    const ownerMemberId = String(claims.user_id ?? claims.sub ?? "");
-    expect(ownerTenantId, "Agent login claims must identify tenant").not.toBe("");
-    expect(ownerMemberId, "Agent login claims must identify member").not.toBe("");
-
-    const rosterResp = await request.get(`${agentOrigin}/api/agent/grants/experts`, {
+    // ── 阶段 2/6: 以 Agent 当前认证 caller 为 owner，准备可执行 employee + snapshot ──
+    // Login response claims are only a handoff hint.  whoami is the identity actually
+    // accepted by this Agent process and is the sole owner source for this flow.
+    const whoamiResp = await request.get(`${agentOrigin}/api/agent/whoami`, {
       headers: { Authorization: `Bearer ${agentLogin.token}` },
       failOnStatusCode: false,
     });
-    expect(rosterResp.ok(), `agent roster: ${rosterResp.status()}`).toBe(true);
-    const rosterBody = (await rosterResp.json()) as { data?: Array<{ employee_id?: string }> };
+    expect(whoamiResp.ok(), `agent whoami: ${whoamiResp.status()}`).toBe(true);
+    const whoamiBody = (await whoamiResp.json()) as {
+      data?: { tenant_id?: string; user_id?: string; sub?: string };
+    };
+    const ownerTenantId = String(whoamiBody.data?.tenant_id ?? "");
+    const ownerMemberId = String(whoamiBody.data?.user_id ?? whoamiBody.data?.sub ?? "");
+    expect(ownerTenantId, "Authenticated Agent caller must identify tenant").not.toBe("");
+    expect(ownerMemberId, "Authenticated Agent caller must identify member").not.toBe("");
+
+    const readRoster = async () => {
+      const response = await request.get(`${agentOrigin}/api/agent/grants/experts`, {
+        headers: { Authorization: `Bearer ${agentLogin.token}` },
+        failOnStatusCode: false,
+      });
+      expect(response.ok(), `agent roster: ${response.status()}`).toBe(true);
+      return (await response.json()) as {
+        data?: Array<{
+          employee_id?: string;
+          member_id?: string;
+          version?: string | number;
+          revoked?: boolean;
+          model_policy?: { model?: string; provider_ref?: string };
+        }>;
+      };
+    };
+    const readSnapshots = async () => {
+      const response = await request.get(`${agentOrigin}/api/agent/grants/snapshots`, {
+        headers: { Authorization: `Bearer ${agentLogin.token}` },
+        failOnStatusCode: false,
+      });
+      expect(response.ok(), `agent snapshots: ${response.status()}`).toBe(true);
+      return (await response.json()) as {
+        data?: Array<{ employee_id?: string; member_id?: string; version?: string | number }>;
+      };
+    };
     const configuredEmployeeId = process.env.E2E_AGENT_EMPLOYEE_ID;
-    const employeeId = configuredEmployeeId ?? rosterBody.data?.find((item) => item.employee_id)?.employee_id;
-    expect(employeeId, "Usage prompt requires an authorized local employee").toBeTruthy();
-    expect(
-      rosterBody.data?.some((item) => item.employee_id === employeeId),
-      "Configured usage employee must belong to this member's local roster",
-    ).toBe(true);
-    if (!employeeId) throw new Error("Usage prompt requires an authorized local employee");
+    let rosterBody = await readRoster();
+    let snapshotsBody = await readSnapshots();
+    const hasExecutableEmployee = () => {
+      const candidates = rosterBody.data ?? [];
+      return candidates.find((item) => {
+        if (!item.employee_id || item.revoked || (configuredEmployeeId && item.employee_id !== configuredEmployeeId)) return false;
+        const policy = item.model_policy ?? {};
+        if (!policy.model || !policy.provider_ref) return false;
+        return (snapshotsBody.data ?? []).some((snapshot) =>
+          snapshot.employee_id === item.employee_id
+          && String(snapshot.version) === String(item.version)
+          && (!snapshot.member_id || snapshot.member_id === ownerMemberId),
+        );
+      })?.employee_id;
+    };
+    let employeeId = hasExecutableEmployee();
+    if (!employeeId) {
+      // A clean Agent DB may have a roster projection without a frozen snapshot yet.
+      // Sync must either succeed with a real Manager response or fail with the formal
+      // 503 problem contract; do not turn an offline response into a fake success.
+      const syncResp = await request.post(`${agentOrigin}/api/agent/grants/sync`, {
+        data: { tenant_id: ownerTenantId, member_id: ownerMemberId },
+        headers: { Authorization: `Bearer ${agentLogin.token}`, "Content-Type": "application/json" },
+        failOnStatusCode: false,
+      });
+      if (syncResp.status() === 503) {
+        const contentType = syncResp.headers()["content-type"] ?? "";
+        expect(contentType, "offline usage sync must be problem+json").toContain("application/problem+json");
+        const problem = (await syncResp.json()) as { code?: string; status?: number };
+        expect(problem.code).toBe("manager_unavailable");
+        expect(problem.status).toBe(503);
+        throw new Error("Usage flow requires an online Manager to obtain an executable employee snapshot");
+      }
+      expect(syncResp.status(), `usage employee sync: ${syncResp.status()}`).toBe(200);
+      const syncBody = (await syncResp.json()) as { data?: { ok?: boolean } };
+      expect(syncBody.data?.ok, "usage employee sync must be a real successful pull").toBe(true);
+      rosterBody = await readRoster();
+      snapshotsBody = await readSnapshots();
+      employeeId = hasExecutableEmployee();
+    }
+    expect(employeeId, "Usage prompt requires a current caller-owned executable employee").toBeTruthy();
+    if (!employeeId) throw new Error("Usage prompt requires a current caller-owned executable employee");
 
     // Conversation creation is the ownership boundary; prompt must not invent an owner.
     const traceId = `e2e-loopc-${Date.now()}`;
@@ -359,21 +422,20 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     });
     expect(flushResp.ok(), `flush: ${flushResp.status()}`).toBe(true);
     const flushBody = (await flushResp.json()) as {
-      data: { sent: number; failed: number; batches: number };
+      data: { sent: string[]; failed: string[] };
     };
     expect(flushBody, "flush envelope has data").toHaveProperty("data");
 
-    // Manager 不可达时 reporter 会标记 failed，但 batch 仍 >0。在完整三端栈 CI 中 sent 应 >0。
-    // 若 sent===0 且 failed>0，说明 Manager 不可达——CI 应 fail（三端栈不全）。
-    const { sent, failed, batches } = flushBody.data;
-    expect(batches, "flush 至少发起一批").toBeGreaterThan(0);
-    if (failed > 0 && sent === 0) {
-      // Manager 不可达：在完整三端栈 CI 中此为失败信号。
-      throw new Error(
-        `flush failed to reach Manager: sent=${sent} failed=${failed} batches=${batches}。确认 MANAGER_URL 可达且三端栈已启动。`,
-      );
-    }
-    expect(sent, `flush sent 应 > 0 (failed=${failed} batches=${batches})`).toBeGreaterThan(0);
+    // UsageFlushService returns the real summary IDs, not synthetic counters/batches.
+    // A failed upload is an observable failure and must never be treated as success.
+    const { sent, failed } = flushBody.data;
+    expect(Array.isArray(sent), "flush.sent must be summary id array").toBe(true);
+    expect(Array.isArray(failed), "flush.failed must be summary id array").toBe(true);
+    expect(failed, "flush must not report a failed Manager upload").toHaveLength(0);
+    expect(
+      sent.filter((id) => flushedSummaryIds.has(id)),
+      "flush must send the summary created by this prompt",
+    ).not.toHaveLength(0);
 
     // ── 阶段 5/6: Flush 后本轮 summary 不再 pending（sent 出队）──
     const afterFlushResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
