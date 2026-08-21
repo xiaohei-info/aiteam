@@ -1,6 +1,6 @@
 ---
 created: 2026-08-21
-status: approved-by-current-request
+status: implemented-taiyi-smoke-partial
 scope: taiyi-playwright
 ---
 
@@ -24,9 +24,12 @@ scope: taiyi-playwright
 - `web/playwright.config.ts`：external 模式关闭 webServer，smoke/cross-tier 使用配置 origin；本地模式完全不变。
 - 增加 external 配置/命令文档和最小 profile 检查。
 
-## 验收
+## 验收结果
 
-- 本地 harness/smoke 配置默认不回归；
-- taiyi external profile 能连接三端 root/health/login；
-- 至少 Operation/Manager/Agent smoke 项目真实执行；
-- 失败时记录是部署数据/契约问题，不把登录失败静默转成通过。
+- 本地默认 Playwright 配置仍列出 114 tests / 17 files；
+- taiyi external profile 已连接三端 root/health/login；
+- Operation smoke：全部通过；
+- Manager smoke：全部通过；
+- Agent smoke：5/10 通过。
+
+Agent 剩余失败已定位：taiyi 当前 Agent 部署版本的 OpenAPI 尚未发布 abort path，Agent UI chat/keyboard gate 与当前部署静态前端不一致；不是 external profile 隐藏失败。下一步需先把最新 Agent server/UI 产物部署到 taiyi，再重跑 Agent/cross-tier。

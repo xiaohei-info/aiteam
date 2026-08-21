@@ -17,17 +17,19 @@ import { join } from "node:path";
 export type Tier = "operation" | "manager" | "agent";
 
 /** 前端 dev server 基址（对齐 playwright.config.ts projects.use.baseURL）。 */
+const origin = (name: string, fallback: string): string => process.env[name]?.trim() || fallback;
+
 export const TIER_BASE_URL: Record<Tier, string> = {
-  operation: "http://127.0.0.1:5173",
-  manager: "http://127.0.0.1:5174",
-  agent: "http://127.0.0.1:5180",
+  operation: origin("E2E_OPERATION_UI_ORIGIN", "http://127.0.0.1:5173"),
+  manager: origin("E2E_MANAGER_UI_ORIGIN", "http://127.0.0.1:5174"),
+  agent: origin("E2E_AGENT_UI_ORIGIN", "http://127.0.0.1:5180"),
 };
 
-/** 后端服务 origin（对齐 playwright.config.ts webServer 端口）。 */
+/** 后端服务 origin（本地 webServer 或 E2E_EXTERNAL 部署 profile）。 */
 export const TIER_API_ORIGIN: Record<Tier, string> = {
-  operation: "http://127.0.0.1:8000",
-  manager: "http://127.0.0.1:8001",
-  agent: "http://127.0.0.1:8180",
+  operation: origin("E2E_OPERATION_API_ORIGIN", "http://127.0.0.1:8000"),
+  manager: origin("E2E_MANAGER_API_ORIGIN", "http://127.0.0.1:8001"),
+  agent: origin("E2E_AGENT_API_ORIGIN", "http://127.0.0.1:8180"),
 };
 
 /**

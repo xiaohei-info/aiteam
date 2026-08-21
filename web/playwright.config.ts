@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { ARTIFACT_OUTPUT_DIR, artifactReporter, artifactUse } from "./e2e/support/artifacts";
 
 const isCI = Boolean(process.env.CI);
+const external = process.env.E2E_EXTERNAL === "true";
 
 /**
  * AITEAM-224 三端 BE2E 基座配置（最终执行 DAG §5.1）。
@@ -22,6 +23,9 @@ const OPERATION_SYSTEM_PASSWORD = process.env.OPERATION_SYSTEM_PASSWORD ?? "chan
 const MANAGER_URL = process.env.MANAGER_URL ?? "http://127.0.0.1:8001";
 const OPERATOR_URL = process.env.OPERATOR_URL ?? "http://127.0.0.1:8000";
 const E2E_PYTHON = process.env.E2E_PYTHON ?? ".venv/bin/python";
+const OPERATION_UI_ORIGIN = process.env.E2E_OPERATION_UI_ORIGIN ?? "http://127.0.0.1:5173";
+const MANAGER_UI_ORIGIN = process.env.E2E_MANAGER_UI_ORIGIN ?? "http://127.0.0.1:5174";
+const AGENT_UI_ORIGIN = process.env.E2E_AGENT_UI_ORIGIN ?? "http://127.0.0.1:5180";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -45,17 +49,17 @@ export default defineConfig({
     {
       name: "operation-smoke",
       testMatch: /operation\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5173" },
+      use: { ...devices["Desktop Chrome"], baseURL: OPERATION_UI_ORIGIN },
     },
     {
       name: "manager-smoke",
       testMatch: /manager\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5174" },
+      use: { ...devices["Desktop Chrome"], baseURL: MANAGER_UI_ORIGIN },
     },
     {
       name: "agent-smoke",
       testMatch: /agent\/.*\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], baseURL: "http://127.0.0.1:5180" },
+      use: { ...devices["Desktop Chrome"], baseURL: AGENT_UI_ORIGIN },
     },
     {
       name: "cross-tier",
@@ -63,7 +67,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: [
+  webServer: external ? undefined : [
     {
       command:
         `cd .. && OPERATION_SYSTEM_USERNAME=${OPERATION_SYSTEM_USERNAME} OPERATION_SYSTEM_PASSWORD=${OPERATION_SYSTEM_PASSWORD} MANAGER_URL=${MANAGER_URL} SERVICE_TOKEN=${SERVICE_TOKEN} ${E2E_PYTHON} server/run.py --tier operation --host 127.0.0.1 --port 8000`,

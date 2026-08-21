@@ -1,11 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { authTest } from "../support/fixtures";
 import { expectUnknownRouteProblemJson } from "../support/api-assertions";
-import { apiLogin, defaultCredentials } from "../support/auth";
+import { apiLogin, defaultCredentials, TIER_API_ORIGIN } from "../support/auth";
 import { expectShellReady, collectBrowserErrors, expectLoginPageSmoke } from "../support/smoke";
 
 const TIER = "agent" as const;
-const conversationId = "e2e-pi-conversation";
 
 // These are the only conversation endpoints owned by the refactored Node Agent.
 test.describe("agent auth", () => {
@@ -27,7 +26,7 @@ test.describe("agent api-contract", () => {
   });
 
   test("Node Agent publishes the Pi conversation contract", async ({ request }) => {
-    const response = await request.get("http://127.0.0.1:8180/openapi.json");
+    const response = await request.get(`${TIER_API_ORIGIN.agent}/openapi.json`);
     expect(response.ok()).toBeTruthy();
     const openapi = (await response.json()) as { paths: Record<string, unknown> };
     expect(Object.keys(openapi.paths)).toEqual(expect.arrayContaining([
@@ -54,6 +53,16 @@ authTest.describe("agent workspace", () => {
 
 authTest.describe("agent Pi prompt", () => {
   authTest("prompt → entries and abort use the Node Agent endpoints", async ({ authedRequest }) => {
+    const conversationId = `e2e-pi-conversation-${Date.now()}`;
+    const created = await authedRequest.post("/api/agent/conversations", {
+      data: {
+        id: conversationId,
+        title: "E2E Pi conversation",
+        kind: "private",
+        ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+      },
+    });
+    expect(created.status()).toBe(201);
     const prompt = await authedRequest.post(`/api/agent/conversations/${conversationId}/prompt`, {
       data: { text: "e2e prompt" },
       headers: { "Idempotency-Key": `e2e-${Date.now()}` },
@@ -68,5 +77,7 @@ authTest.describe("agent Pi prompt", () => {
 
     const abort = await authedRequest.post(`/api/agent/conversations/${conversationId}/abort`);
     expect(abort.ok()).toBeTruthy();
+    const deleted = await authedRequest.delete(`/api/agent/conversations/${conversationId}`);
+    expect(deleted.ok()).toBeTruthy();
   });
 });

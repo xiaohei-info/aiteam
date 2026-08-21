@@ -8,7 +8,12 @@ async function openChat(
 ): Promise<{ id: string; title: string }> {
   const conversation = { id: `astryx-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`, title: "Astryx 设计评审" };
   const response = await request.post("/api/agent/conversations", {
-    data: { id: conversation.id, title: conversation.title, kind: "private" },
+    data: {
+      id: conversation.id,
+      title: conversation.title,
+      kind: "private",
+      ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+    },
   });
   expect(response.status()).toBe(201);
   await page.goto("/chat");

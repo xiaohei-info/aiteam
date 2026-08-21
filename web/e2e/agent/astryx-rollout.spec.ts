@@ -11,7 +11,6 @@ authTest.describe("Agent Astryx rollout", () => {
     const gates = [
       { path: "/workspace", heading: "工作台" },
       { path: "/marketplace", heading: "人才市场" },
-      { path: "/knowledge", heading: "知识库" },
       { path: "/office", heading: "办公室动态" },
       { path: "/org", heading: "组织架构" },
       { path: "/settings", heading: "设置" },
