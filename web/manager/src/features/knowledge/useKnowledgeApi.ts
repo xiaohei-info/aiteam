@@ -24,6 +24,7 @@ export interface KnowledgeApi {
   retryDocument: (id: string, docId: string) => Promise<KnowledgeDocument | null>;
   getIngestion: (id: string, docId: string) => Promise<KnowledgeIngestionJob | null>;
   listDocumentBindings: (id: string, docId: string) => Promise<KnowledgeDocumentBinding[]>;
+  // Manager exposes document intake/binding APIs only; citation text is read by Agent Pi knowledge_get.
 }
 export function useKnowledgeApi(): KnowledgeApi {
   const { token, onUnauthorized } = useSession();

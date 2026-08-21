@@ -272,15 +272,59 @@ describe("KnowledgePage Astryx contract", () => {
     const client = makeClient();
     render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
     expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
-    expect(screen.getByText("完成")).toBeTruthy();
+    expect(screen.getByText("已就绪")).toBeTruthy();
     expect(screen.getByText("失败")).toBeTruthy();
+    expect(screen.getByText("文档已就绪")).toBeTruthy();
+    expect(screen.getByLabelText(/引用状态：文档已就绪/)).toBeTruthy();
+    expect(screen.getByText("引用不可用")).toBeTruthy();
+    expect(screen.getByText("citation:ks-sales:doc-ready")).toBeTruthy();
+    expect(screen.getByText(/通过 Agent Pi knowledge_get 获取/)).toBeTruthy();
+    expect(client.get).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "重建索引销售 FAQ.md" }));
     await waitFor(() => expect(client.post).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/documents/doc-ready/retry"));
 
+    expect(screen.queryByRole("button", { name: /删除销售 FAQ\.md/ })).toBeNull();
+    expect(client.del).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
+    const bindingDialog = await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" });
+    expect(within(bindingDialog).getByText("已就绪")).toBeTruthy();
+    expect(within(bindingDialog).getByText(/引用可用/)).toBeTruthy();
+    expect(within(bindingDialog).getByText("rag-1")).toBeTruthy();
+  });
+
+  it("keeps enterprise admins writable while citation content stays out of Manager HTTP", async () => {
+    const client = makeClient();
+    render(<KnowledgePage />, { wrapper: ({ children }) => (
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={sessionValue(["enterprise_admin"])}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>
+    ) });
+    await screen.findByRole("table", { name: "知识空间" });
+    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库文档" }));
+    expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
+    expect(screen.getByRole("form", { name: "上传文件" })).toBeTruthy();
+    expect(screen.getByRole("form", { name: "从 URL 导入" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /删除销售手册\.pdf/ })).toBeNull();
+    expect(client.get).not.toHaveBeenCalled();
+    expect(client.listGet.mock.calls.flat().some((url) => String(url).includes("citation") || String(url).includes("/rag"))).toBe(false);
+  });
+
+  it("explains unavailable citation when a ready document has no binding", async () => {
+    makeClient({ listGet: (url) => {
+      if (url.includes("/documents/") && url.endsWith("/bindings")) return { items: [], page: PAGE };
+      return defaultListGet(url);
+    } });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite={false} onClose={() => {}} />, { wrapper: Providers });
+    expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
     expect(await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" })).toBeTruthy();
-    expect(await screen.findByText("已就绪")).toBeTruthy();
+    expect(await screen.findByText(/暂无可用绑定/)).toBeTruthy();
+    expect(screen.getByText("暂无索引绑定")).toBeTruthy();
+    expect(screen.getByText(/knowledge_get 获取引用/)).toBeTruthy();
   });
 
   it("shows explicit document loading, empty, and error states", async () => {
@@ -315,6 +359,9 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
     expect(screen.queryByRole("form", { name: "上传文件" })).toBeNull();
     expect(screen.queryByRole("form", { name: "从 URL 导入" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /重试|重建索引/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /删除销售手册\.pdf/ })).toBeNull();
+    expect(screen.getByText(/引用正文不通过 Manager HTTP 页面加载/)).toBeTruthy();
   });
 
   it("does not let an older document request overwrite a new space", async () => {

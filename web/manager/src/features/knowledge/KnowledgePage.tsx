@@ -307,7 +307,10 @@ export function KnowledgePage(): ReactNode {
   return (
     <VStack as="section" gap={6}>
       <HStack justify="between" align="center">
-        <Heading level={1}>企业 RAG 知识库</Heading>
+        <VStack gap={1}>
+          <Heading level={1}>企业 RAG 知识库</Heading>
+          <Text type="supporting">此页面管理文档来源、就绪状态和授权绑定；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
+        </VStack>
         {canWrite && <Button label="新建知识空间" variant="primary" onClick={() => setShowCreate(true)} />}
       </HStack>
 
