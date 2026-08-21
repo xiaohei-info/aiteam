@@ -69,6 +69,9 @@ done
 : "${LIGHTRAG_DB_PASSWORD:=}"
 : "${LIGHTRAG_SERVICE:=lightrag}"
 : "${LIGHTRAG_BACKUP_DIR:=/var/backups/aiteam/lightrag}"
+: "${LIGHTRAG_PG_CLIENT_CONTAINER:=}"
+: "${LIGHTRAG_CLIENT_DB_HOST:=${LIGHTRAG_DB_HOST}}"
+: "${LIGHTRAG_CLIENT_DB_PORT:=${LIGHTRAG_DB_PORT}}"
 
 valid_image() {
   local image="$1"
@@ -142,11 +145,21 @@ run_backup() {
   fi
   [[ -n "${LIGHTRAG_DB_PASSWORD}" ]] || { echo "[lightrag-ops][ERR] LIGHTRAG_DB_PASSWORD is required" >&2; exit 1; }
   mkdir -p "$(dirname "${output}")"
-  PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_dump \
-    --format=custom --no-owner --no-privileges \
-    --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
-    --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" \
-    --file="${output}"
+  if command -v pg_dump >/dev/null 2>&1; then
+    PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_dump \
+      --format=custom --no-owner --no-privileges \
+      --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
+      --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" \
+      --file="${output}"
+  elif [[ -n "${LIGHTRAG_PG_CLIENT_CONTAINER}" ]]; then
+    docker exec -e "PGPASSWORD=${LIGHTRAG_DB_PASSWORD}" "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
+      pg_dump --format=custom --no-owner --no-privileges \
+      --host="${LIGHTRAG_CLIENT_DB_HOST}" --port="${LIGHTRAG_CLIENT_DB_PORT}" \
+      --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" >"${output}"
+  else
+    echo "[lightrag-ops][ERR] pg_dump is not installed; set LIGHTRAG_PG_CLIENT_CONTAINER" >&2
+    exit 1
+  fi
   chmod 600 "${output}"
   printf '%s\n' "[lightrag-ops] backup written: ${output}"
 }
@@ -165,10 +178,20 @@ case "${COMMAND}" in
     else
       [[ -n "${LIGHTRAG_DB_PASSWORD}" ]] || { echo "[lightrag-ops][ERR] LIGHTRAG_DB_PASSWORD is required" >&2; exit 1; }
       compose stop "${LIGHTRAG_SERVICE}"
-      PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_restore \
-        --clean --if-exists --no-owner --no-privileges --exit-on-error \
-        --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
-        --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" "${INPUT}"
+      if command -v pg_restore >/dev/null 2>&1; then
+        PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_restore \
+          --clean --if-exists --no-owner --no-privileges --exit-on-error \
+          --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
+          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" "${INPUT}"
+      elif [[ -n "${LIGHTRAG_PG_CLIENT_CONTAINER}" ]]; then
+        docker exec -i -e "PGPASSWORD=${LIGHTRAG_DB_PASSWORD}" "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
+          pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error \
+          --host="${LIGHTRAG_CLIENT_DB_HOST}" --port="${LIGHTRAG_CLIENT_DB_PORT}" \
+          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" <"${INPUT}"
+      else
+        echo "[lightrag-ops][ERR] pg_restore is not installed; set LIGHTRAG_PG_CLIENT_CONTAINER" >&2
+        exit 1
+      fi
       compose up -d "${LIGHTRAG_SERVICE}"
       echo "[lightrag-ops] restore complete"
     fi

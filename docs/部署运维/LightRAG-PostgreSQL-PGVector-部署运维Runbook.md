@@ -31,6 +31,9 @@ LIGHTRAG_DB_USER=lightrag
 LIGHTRAG_DB_PASSWORD=<secret-store>
 LIGHTRAG_DB_ADMIN_USER=<secret-store>
 LIGHTRAG_DB_ADMIN_PASSWORD=<secret-store>
+# pg_dump/pg_restore 未安装在宿主机时，可指定带 PostgreSQL client 的容器
+# LIGHTRAG_PG_CLIENT_CONTAINER=aiteam-lightrag-pg
+# 容器内连接参数通常为 LIGHTRAG_CLIENT_DB_HOST=127.0.0.1 / PORT=5432
 ```
 
 `LIGHTRAG_WORKSPACE` 必须是 Manager 已推导并固定的实例 namespace（例如 `tenant-hash__ks_default`），不能由前端/Agent 请求覆盖。生产校验：
