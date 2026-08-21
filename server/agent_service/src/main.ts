@@ -1,3 +1,4 @@
+import { createPublicKey } from "node:crypto";
 import { accessSync, chmodSync, constants, readFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -13,18 +14,16 @@ import { aggregateUsage } from "./usage.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
+import { assertAgentLaunchConfiguration } from "./launch-guards.js";
 
+const launchConfiguration = assertAgentLaunchConfiguration();
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
 const hostAddress = process.env.HOST ?? "127.0.0.1";
-const environment = process.env.AITEAM_ENV ?? "development";
-const useFauxModel = process.env.AITEAM_PI_FAKE === "true";
-const useDevAuth = process.env.AITEAM_AGENT_DEV_AUTH === "true";
+const environment = launchConfiguration.environment;
+const useFauxModel = launchConfiguration.useFauxModel;
+const useDevAuth = launchConfiguration.useDevAuth;
 
-if (environment === "production" && useFauxModel) throw new Error("AITEAM_PI_FAKE=true is forbidden in production");
-if (environment === "production" && useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
-if (environment === "production" && (!process.env.AITEAM_AGENT_JWT_ISSUER || !process.env.AITEAM_AGENT_JWT_AUDIENCE)) throw new Error("Production Agent JWT issuer and audience are required");
-if (environment === "production" && !process.env.AITEAM_MANAGER_URL) throw new Error("Production Agent Manager URL is required");
 if (process.env.AITEAM_SKILL_SIGNING_PRIVATE_KEY || process.env.AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY || process.env.AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY) throw new Error("Agent must not receive Skill signing private key material");
 const skillVerification = skillSigningVerificationFromEnv();
 if (environment === "production" && !((skillVerification.publicKeys?.length ?? 0) > 0 || (skillVerification.publicKey && skillVerification.keyId))) throw new Error("Production Agent Skill signing public key metadata is required");
@@ -34,12 +33,15 @@ chmodSync(dataRoot, 0o700);
 const agentDir = join(dataRoot, "pi");
 const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
+const managerUrl = process.env.AITEAM_MANAGER_URL?.trim();
+const sandbox = new LocalSandbox();
+mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
+if (environment === "production") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
-const managerClient = process.env.AITEAM_MANAGER_URL ? new HttpManagerClient(process.env.AITEAM_MANAGER_URL) : undefined;
-const sandbox = new LocalSandbox();
+const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
 const sessionHost = new SessionHost({
   cwdRoot,
   agentDir,
@@ -50,7 +52,7 @@ const sessionHost = new SessionHost({
   managerClient,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
-  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, process.env.AITEAM_MANAGER_URL, hindsightRuntimeConfig),
+  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl, hindsightRuntimeConfig),
 });
 
 const authenticate = useDevAuth
@@ -66,9 +68,9 @@ const http = new AgentHttpServer({
   managerClient,
   usageFlush,
   skillCache,
-  localReady: () => {
+  localReady: async () => {
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
-    return true;
+    return sandbox.isAvailable(cwdRoot);
   },
   runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
@@ -127,7 +129,8 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
 }
 
 function loadJwtOptions() {
-  const raw = process.env.AITEAM_AGENT_JWKS_JSON ?? (process.env.AITEAM_AGENT_JWKS_PATH ? readFileSync(process.env.AITEAM_AGENT_JWKS_PATH, "utf8") : undefined);
+  const inline = process.env.AITEAM_AGENT_JWKS_JSON?.trim();
+  const raw = inline || (process.env.AITEAM_AGENT_JWKS_PATH ? readFileSync(process.env.AITEAM_AGENT_JWKS_PATH, "utf8") : undefined);
   if (!raw) throw new Error("Agent JWT auth is not configured; set AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
   let jwks: { keys: JwtJwk[] };
   try {
@@ -136,8 +139,17 @@ function loadJwtOptions() {
     throw new Error("AITEAM_AGENT_JWKS_JSON must be valid JSON");
   }
   if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) throw new Error("Agent JWKS must contain at least one key");
-  const issuer = process.env.AITEAM_AGENT_JWT_ISSUER;
-  const audience = process.env.AITEAM_AGENT_JWT_AUDIENCE;
+  const usableKeys = jwks.keys.filter((key) => key.kty === "RSA" && key.alg === "RS256" && typeof key.kid === "string" && typeof key.n === "string" && typeof key.e === "string");
+  if (!usableKeys.length || !usableKeys.every((key) => {
+    try {
+      createPublicKey({ key: key as unknown as import("node:crypto").JsonWebKey, format: "jwk" });
+      return true;
+    } catch {
+      return false;
+    }
+  })) throw new Error("Agent JWKS must contain a valid RSA RS256 key with kid, n, and e");
+  const issuer = process.env.AITEAM_AGENT_JWT_ISSUER?.trim();
+  const audience = process.env.AITEAM_AGENT_JWT_AUDIENCE?.trim();
   if (!issuer || !audience) throw new Error("Agent JWT issuer and audience are required");
   return { jwks, issuer, audience };
 }

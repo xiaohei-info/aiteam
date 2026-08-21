@@ -85,10 +85,11 @@ LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管�
 
 ```bash
 bash scripts/check-deploy.sh
+bash scripts/check-agent-sandbox.sh --dry-run
 bash scripts/validate-lightrag-env.sh --production --env-file /etc/aiteam/manager.env
 ```
 
-`--dry-run` 仅用于演练；数据库初始化、恢复、升级和 rollback 的真实命令只在 taiyi/生产维护窗口执行。CI 的 `deployment-ops-checks` workflow 只运行 shell/Compose/static-secret 闸门和 dry-run，不连接生产 PG、不拉 LightRAG 镜像、不携带真实 secret。
+在目标 Linux 主机的发布维护窗口，再执行 `bash scripts/check-agent-sandbox.sh --linux-matrix`；该命令只运行短命 bwrap/Landlock 正负向测试，不重启 Agent。`--dry-run` 仅用于演练；数据库初始化、恢复、升级和 rollback 的真实命令只在 taiyi/生产维护窗口执行。CI 的 `deployment-ops-checks` workflow 只运行 shell/Compose/static-secret 闸门和 dry-run，不连接生产 PG、不拉 LightRAG 镜像、不携带真实 secret。完整 Agent/P2 清单见 [`docs/部署运维/Agent-Sandbox-生产发布Runbook.md`](../../docs/部署运维/Agent-Sandbox-生产发布Runbook.md)。
 
 ## 调试
 

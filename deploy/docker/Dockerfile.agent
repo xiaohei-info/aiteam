@@ -15,7 +15,11 @@ RUN pnpm --filter @aiteam/shared build && pnpm --filter @aiteam/agent build
 FROM node:22-alpine AS runtime
 WORKDIR /app/server/agent_service
 
-COPY server/agent_service/package.json server/agent_service/pnpm-lock.yaml ./
+# bwrap is the preferred Linux runner; Landlock remains the provider fallback.
+# If neither runner is functionally usable, production startup fails closed.
+RUN apk add --no-cache bubblewrap
+
+COPY server/agent_service/package.json server/agent_service/pnpm-lock.yaml server/agent_service/pnpm-workspace.yaml ./
 RUN corepack enable && corepack prepare pnpm@11.4.0 --activate \
     && pnpm install --frozen-lockfile --prod=false
 COPY server/agent_service/src/ ./src/
@@ -24,7 +28,8 @@ COPY --from=web-builder /build/agent/dist /app/web/agent/dist
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8000 \
-    AITEAM_AGENT_DATA_DIR=/app/data
+    AITEAM_AGENT_DATA_DIR=/app/data \
+    AITEAM_AGENT_SANDBOX_READY=false
 
 EXPOSE 8000
 ENTRYPOINT ["pnpm", "start"]

@@ -13,7 +13,7 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
     container_name: aiteam-pg
     environment:
       POSTGRES_USER: aiteam
@@ -92,7 +92,7 @@ services:
       dockerfile: deploy/docker/Dockerfile.operation
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: aiteam-operation:dev
+    image: ${AITEAM_OPERATION_IMAGE:-aiteam-operation:0.1.0}
     container_name: aiteam-operation
     depends_on:
       postgres:
@@ -119,7 +119,7 @@ services:
       dockerfile: deploy/docker/Dockerfile.manager
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: aiteam-manager:dev
+    image: ${AITEAM_MANAGER_IMAGE:-aiteam-manager:0.1.0}
     container_name: aiteam-manager
     volumes:
       - managerdata:/app/data
@@ -183,7 +183,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.agent
-    image: aiteam-agent:dev
+    image: ${AITEAM_AGENT_IMAGE:-aiteam-agent:0.1.0}
     container_name: aiteam-agent
     ports:
       - "8003:8000"

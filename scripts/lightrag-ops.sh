@@ -72,7 +72,7 @@ done
 
 valid_image() {
   local image="$1"
-  [[ -n "${image}" && "${image}" != *:latest && "${image}" != */latest ]] || return 1
+  [[ -n "${image}" && "${image}" != *:latest && "${image}" != */latest && "${image}" != *:dev && "${image}" != *:test && "${image}" != *:edge ]] || return 1
   [[ "${image}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ ]]
 }
 
@@ -81,6 +81,14 @@ require_yes() {
     echo "[lightrag-ops][ERR] destructive operation requires --yes (or use --dry-run)" >&2
     exit 2
   fi
+}
+
+require_secret_env_file() {
+  (( DRY_RUN )) && return 0
+  [[ -n "${ENV_FILE}" ]] || { echo "[lightrag-ops][ERR] real release operations require --env-file" >&2; exit 2; }
+  local mode
+  mode="$(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}")"
+  [[ "${mode}" == "600" ]] || { echo "[lightrag-ops][ERR] env file must be mode 600" >&2; exit 1; }
 }
 
 compose() {
@@ -145,14 +153,17 @@ run_backup() {
 
 case "${COMMAND}" in
   backup)
+    require_secret_env_file
     run_backup "$(backup_path)"
     ;;
   restore)
     [[ -n "${INPUT}" && -f "${INPUT}" ]] || { echo "[lightrag-ops][ERR] --input must name an existing dump" >&2; exit 2; }
     require_yes
+    require_secret_env_file
     if (( DRY_RUN )); then
       printf '%s\n' "[lightrag-ops][dry-run] stop ${LIGHTRAG_SERVICE}; pg_restore --clean --if-exists ${INPUT}; start ${LIGHTRAG_SERVICE}"
     else
+      [[ -n "${LIGHTRAG_DB_PASSWORD}" ]] || { echo "[lightrag-ops][ERR] LIGHTRAG_DB_PASSWORD is required" >&2; exit 1; }
       compose stop "${LIGHTRAG_SERVICE}"
       PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_restore \
         --clean --if-exists --no-owner --no-privileges --exit-on-error \
@@ -163,17 +174,18 @@ case "${COMMAND}" in
     fi
     ;;
   upgrade|rollback)
-    valid_image "${IMAGE}" || { echo "[lightrag-ops][ERR] --image must use a version tag or sha256 digest (not latest)" >&2; exit 2; }
+    valid_image "${IMAGE}" || { echo "[lightrag-ops][ERR] --image must use a fixed version tag or sha256 digest (not latest/dev/test)" >&2; exit 2; }
     require_yes
+    require_secret_env_file
     backup="$(backup_path)"
     if (( DRY_RUN )); then
       printf '%s\n' "[lightrag-ops][dry-run] backup -> ${backup}" \
-        "[lightrag-ops][dry-run] ${COMMAND}: pull ${IMAGE}; stop ${LIGHTRAG_SERVICE}; start with pinned image"
+        "[lightrag-ops][dry-run] ${COMMAND}: pull ${IMAGE}; stop ${LIGHTRAG_SERVICE}; start with pinned image under --profile lightrag"
     else
       run_backup "${backup}"
-      persist_image
       export LIGHTRAG_IMAGE="${IMAGE}"
       compose pull "${LIGHTRAG_SERVICE}"
+      persist_image
       compose up -d --no-deps "${LIGHTRAG_SERVICE}"
       printf '%s\n' "[lightrag-ops] ${COMMAND} complete: ${IMAGE}; backup=${backup}"
     fi

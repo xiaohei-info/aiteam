@@ -100,7 +100,7 @@ cd deploy
 ./docker-utils.sh build agent   # 构建用户端镜像
 
 # 验证镜像内不含控制面代码：
-docker run --rm aiteam-agent:dev sh -c \
+docker run --rm aiteam-agent:0.1.0 sh -c \
   'ls /app/server && echo --- && ls /app/web'
 
 # 预期输出：

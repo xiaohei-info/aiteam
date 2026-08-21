@@ -44,9 +44,9 @@
 openssl rand -hex 32
 ```
 
-输出示例：
+输出示例（不要把真实输出提交到仓库）：
 ```
-a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678
+<generated-secret>
 ```
 
 ### 2. 配置环境变量
@@ -59,17 +59,17 @@ a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678
 services:
   operation:
     environment:
-      SERVICE_TOKEN: a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678
+      SERVICE_TOKEN: <generated-secret>
       # ... 其他配置
 
   manager:
     environment:
-      SERVICE_TOKEN: a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678
+      SERVICE_TOKEN: <generated-secret>
       # ... 其他配置
 
   agent:
     environment:
-      SERVICE_TOKEN: a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678
+      SERVICE_TOKEN: <generated-secret>
       # ... 其他配置
 ```
 
@@ -80,7 +80,7 @@ services:
 直接在宿主环境中设置：
 
 ```bash
-export SERVICE_TOKEN="a3f8c9d2e1b4567890abcdef1234567890abcdef1234567890abcdef12345678"
+export SERVICE_TOKEN="<generated-secret>"
 ```
 
 #### Kubernetes 部署
@@ -94,7 +94,7 @@ metadata:
   name: aiteam-service-token
 type: Opaque
 stringData:
-  SERVICE_TOKEN: a3f8c9d2e1b4567890abcdef1234567890abcdef12345678
+  SERVICE_TOKEN: <generated-secret>
 ---
 apiVersion: apps/v1
 kind: Deployment

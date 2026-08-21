@@ -27,7 +27,9 @@ export class LocalSandbox {
   async isAvailable(workspaceRoot: string): Promise<boolean> {
     try {
       const confined = this.provider.confine(["true"], this.policy(workspaceRoot));
-      return (await run(confined.argv, resolve(workspaceRoot), { onData: () => undefined })).exitCode === 0;
+      if (confined.enforcement !== "full") return false;
+      const argv = networkIsolatedArgv(confined.argv);
+      return (await run(argv, resolve(workspaceRoot), { onData: () => undefined })).exitCode === 0;
     } catch (error) {
       if (error instanceof SandboxUnavailableError) return false;
       return false;
@@ -46,7 +48,8 @@ export class LocalSandbox {
         exec: async (command, cwd, options) => {
           const actualCwd = assertWorkspacePath(cwd, root);
           const confined = this.provider.confine(["bash", "-c", command], { ...policy, workspaceRoot: root });
-          return run(confined.argv, actualCwd, options);
+          if (confined.enforcement !== "full") throw new SandboxUnavailableError("workspace-write", "Sandbox backend provides only partial enforcement");
+          return run(networkIsolatedArgv(confined.argv), actualCwd, options);
         },
       },
       read: {
@@ -70,6 +73,35 @@ export class LocalSandbox {
   }
 }
 
+/**
+ * Add the platform's network deny to the provider-owned argv.
+ *
+ * dsh-sandbox deliberately owns filesystem effects only. Agent coding tools add
+ * network isolation at this final spawn seam so a successful filesystem probe
+ * cannot be reported ready while the child still has ambient network access.
+ */
+export function networkIsolatedArgv(argv: string[]): string[] {
+  const separator = argv.indexOf("--");
+  if (separator < 1) throw new SandboxUnavailableError("workspace-write", "Sandbox runner did not return a command separator");
+
+  if (process.platform === "linux") {
+    if (argv[0] === "bwrap") return [...argv.slice(0, separator), "--unshare-net", ...argv.slice(separator)];
+    if (argv[0]?.endsWith("/landlock-run") || argv[0] === "landlock-run") return ["unshare", "--net", "--", ...argv];
+    throw new SandboxUnavailableError("workspace-write", "Linux sandbox runner has no network isolation");
+  }
+
+  if (process.platform === "darwin" && argv[0]?.endsWith("sandbox-exec")) {
+    const profileIndex = argv.indexOf("-p");
+    const profile = profileIndex >= 0 ? argv[profileIndex + 1] : undefined;
+    if (!profile) throw new SandboxUnavailableError("workspace-write", "Seatbelt profile is missing");
+    const hardened = [...argv];
+    hardened[profileIndex + 1] = `${profile} (deny network*)`;
+    return hardened;
+  }
+
+  throw new SandboxUnavailableError("workspace-write", "Sandbox runner has no network isolation");
+}
+
 /** Resolve a tool path through its nearest existing parent, rejecting symlink escapes. */
 export function assertWorkspacePath(path: string, workspaceRoot: string): string {
   const absolute = resolve(workspaceRoot, path);
@@ -89,7 +121,7 @@ export function assertWorkspacePath(path: string, workspaceRoot: string): string
 }
 
 function scrubSandboxEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const blocked = /(?:^|_)(?:API_?KEY|PASSWORD|CREDENTIALS?|AUTHORIZATION|AUTH_(?:TOKEN|KEY|SECRET)|(?:[A-Z0-9]+_)?PRIVATE_KEY|(?:DATABASE|DB|POSTGRES|MYSQL|REDIS|MONGO)_(?:URL|URI|DSN|CONNECTION_STRING)|DSN|CONNECTION_STRING)(?:_|$)|(?:^|_)(?:TOKEN|SECRET)$|(?:^|_)(?:ACCESS_KEY(?:_ID)?|SECRET_ACCESS_KEY)(?:_|$)/i;
+  const blocked = /(?:^|_)(?:API_?KEY|PASSWORD|PASSWD|CREDENTIALS?|AUTHORIZATION|AUTH_(?:TOKEN|KEY|SECRET)|(?:[A-Z0-9]+_)?PRIVATE_?KEY|(?:DATABASE|DB|POSTGRES|MYSQL|REDIS|MONGO)_(?:URL|URI|DSN|CONNECTION_STRING)|DSN|CONNECTION_STRING)(?:_|$)|(?:^|_)(?:TOKEN|SECRET)$|(?:^|_)(?:ACCESS_?KEY(?:_ID)?|SECRET_ACCESS_KEY)(?:_|$)/i;
   return Object.fromEntries(Object.entries(env).filter(([name]) => !blocked.test(name.replaceAll("-", "_"))));
 }
 
@@ -99,32 +131,51 @@ async function run(
   options: { onData: (data: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ exitCode: number | null }> {
   if (options.signal?.aborted) throw new Error("aborted");
-  const child = spawn(argv[0]!, argv.slice(1), { cwd, env: scrubSandboxEnvironment(options.env ?? process.env), stdio: ["ignore", "pipe", "pipe"] });
+  if (options.timeout !== undefined && (!Number.isFinite(options.timeout) || options.timeout <= 0)) throw new Error("Invalid timeout");
+  const child = spawn(argv[0]!, argv.slice(1), {
+    cwd,
+    detached: process.platform !== "win32",
+    env: scrubSandboxEnvironment(options.env ?? process.env),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   return new Promise((resolveRun, reject) => {
     let timeoutHandle: NodeJS.Timeout | undefined;
+    let killHandle: NodeJS.Timeout | undefined;
+    let terminationError: Error | undefined;
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (killHandle) clearTimeout(killHandle);
       options.signal?.removeEventListener("abort", abort);
       fn();
     };
-    const abort = () => {
-      child.kill("SIGTERM");
-      finish(() => reject(new Error("aborted")));
+    const kill = (signal: NodeJS.Signals) => {
+      if (child.pid && process.platform !== "win32") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The process group may have exited between the close check and kill.
+        }
+      }
+      child.kill(signal);
     };
+    const terminate = (error: Error) => {
+      if (terminationError || settled) return;
+      terminationError = error;
+      kill("SIGTERM");
+      killHandle = setTimeout(() => kill("SIGKILL"), 100);
+    };
+    const abort = () => terminate(new Error("aborted"));
     child.stdout?.on("data", options.onData);
     child.stderr?.on("data", options.onData);
     child.once("error", (error) => finish(() => reject(error)));
-    child.once("close", (code) => finish(() => resolveRun({ exitCode: code })));
+    child.once("close", (code) => finish(() => terminationError ? reject(terminationError) : resolveRun({ exitCode: code })));
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.timeout !== undefined) {
-      if (!Number.isFinite(options.timeout) || options.timeout <= 0) return finish(() => reject(new Error("Invalid timeout")));
-      timeoutHandle = setTimeout(() => {
-        child.kill("SIGTERM");
-        finish(() => reject(new Error(`timeout:${options.timeout}`)));
-      }, options.timeout * 1000);
+      timeoutHandle = setTimeout(() => terminate(new Error(`timeout:${options.timeout}`)), options.timeout * 1000);
     }
   });
 }

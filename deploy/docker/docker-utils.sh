@@ -69,7 +69,7 @@ cmd_build() {
                 if [[ "${tier}" == "agent" ]]; then
                     log ""
                     log "验证用户端产物隔离（D15 红线）："
-                    log "  docker run --rm aiteam-agent:dev sh -c 'ls /app/server && echo --- && ls /app/web'"
+                    log "  docker run --rm aiteam-agent:0.1.0 sh -c 'ls /app/server && echo --- && ls /app/web'"
                     log "  应只见: agent_service | agent"
                 fi
                 ;;

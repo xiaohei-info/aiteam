@@ -117,6 +117,8 @@ load_env() {
     exit 1
   fi
 
+  validate_agent_production_env
+
   # 自动探测 Python 解释器：优先 venv 内的 python（能直接获得 venv 依赖），
   # 否则 fallback 到系统 python3。避免部署必须 source .venv/bin/activate。
   if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
@@ -125,6 +127,32 @@ load_env() {
     VENV_PYTHON="$(command -v python3)"
   else
     echo "[ctl] ERROR: 找不到 Python 解释器（.venv/bin/python 或系统 python3）" >&2
+    exit 1
+  fi
+}
+
+validate_agent_production_env() {
+  [[ "${ENV_CONFIG}" == "prod" ]] || return 0
+
+  local dev_auth="${AITEAM_AGENT_DEV_AUTH:-false}"
+  local faux="${AITEAM_PI_FAKE:-false}"
+  dev_auth="$(printf '%s' "${dev_auth}" | tr '[:upper:]' '[:lower:]')"
+  faux="$(printf '%s' "${faux}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${dev_auth}" != "true" ]] || { echo "[ctl] ERROR: AITEAM_AGENT_DEV_AUTH=true is forbidden for --env prod" >&2; exit 1; }
+  [[ "${faux}" != "true" ]] || { echo "[ctl] ERROR: AITEAM_PI_FAKE=true is forbidden for --env prod" >&2; exit 1; }
+  [[ "${AITEAM_AGENT_SANDBOX_READY:-false}" == "true" ]] || { echo "[ctl] ERROR: AITEAM_AGENT_SANDBOX_READY=true is required for --env prod" >&2; exit 1; }
+
+  local manager_url="${AITEAM_MANAGER_URL:-${MANAGER_URL:-}}"
+  [[ "${manager_url}" =~ ^https?://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: AITEAM_MANAGER_URL (or MANAGER_URL) must be an absolute http(s) URL for --env prod" >&2; exit 1; }
+  [[ -n "${AITEAM_AGENT_JWT_ISSUER:-}" && -n "${AITEAM_AGENT_JWT_AUDIENCE:-}" ]] || { echo "[ctl] ERROR: production Agent JWT issuer and audience are required" >&2; exit 1; }
+  if [[ -n "${AITEAM_AGENT_JWKS_PATH:-}" ]]; then
+    [[ -r "${AITEAM_AGENT_JWKS_PATH}" ]] || { echo "[ctl] ERROR: production Agent JWKS path is not readable" >&2; exit 1; }
+  elif [[ -n "${AITEAM_AGENT_JWKS_JSON:-}" ]]; then
+    python3 -c 'import json, os; value=json.loads(os.environ["AITEAM_AGENT_JWKS_JSON"]); assert isinstance(value.get("keys"), list) and value["keys"]' || {
+      echo "[ctl] ERROR: production AITEAM_AGENT_JWKS_JSON is invalid" >&2; exit 1;
+    }
+  else
+    echo "[ctl] ERROR: production Agent JWKS is required" >&2
     exit 1
   fi
 }
@@ -285,6 +313,40 @@ get_service_paths() {
   esac
 }
 
+# PID/进程组清理：ctl 用 setsid 启动服务，PID 同时是服务进程组 leader。
+# 只向「PGID == PID」的组发信号，避免 stale PID 被系统复用时误杀无关进程。
+process_group_alive() {
+  local pid="$1"
+  [[ "${pid}" =~ ^[0-9]+$ && "${pid}" -gt 1 ]] || return 1
+  kill -0 -- "-${pid}" 2>/dev/null
+}
+
+terminate_process_group() {
+  local pid="$1"
+  [[ "${pid}" =~ ^[0-9]+$ && "${pid}" -gt 1 ]] || return 0
+  local pgid=""
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+  if [[ "${pgid}" == "${pid}" ]]; then
+    kill -TERM -- "-${pid}" 2>/dev/null || true
+    return 0
+  fi
+  # The leader may already be gone while a stale child remains; the PID file
+  # is the only ownership record, so use the group id only in that case.
+  if process_group_alive "${pid}"; then
+    kill -TERM -- "-${pid}" 2>/dev/null || true
+  fi
+}
+
+reap_stale_process_group() {
+  local pid="$1"
+  terminate_process_group "${pid}"
+  for _ in {1..10}; do
+    process_group_alive "${pid}" || return 0
+    sleep 0.1
+  done
+  if process_group_alive "${pid}"; then kill -KILL -- "-${pid}" 2>/dev/null || true; fi
+}
+
 # 获取服务 PID
 get_pid() {
   local service="$1"
@@ -302,13 +364,14 @@ get_pid() {
   if [[ -f "${PID_FILE}" ]]; then
     local pid
     pid="$(cat "${PID_FILE}")"
-    if kill -0 "${pid}" 2>/dev/null; then
+    if process_group_alive "${pid}"; then
       echo "${pid}"
       return 0
-    else
-      # PID 文件存在但进程已死
-      rm -f "${PID_FILE}"
     fi
+    # PID 文件存在但 leader 已死 (或内容损坏)：先清理残留进程组，
+    # 再删除文件，避免下一次 start 继承旧 Agent 子进程。
+    reap_stale_process_group "${pid}" || true
+    rm -f "${PID_FILE}"
   fi
   return 1
 }
@@ -442,7 +505,12 @@ start_service_local() {
       # ctl sources the whole .env.* file; explicitly remove Manager-only
       # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
+        -u DB_URL -u ADMIN_DB_URL -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u SERVICE_TOKEN -u MANAGER_CREDENTIAL_KEY \
+        -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY \
         -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
+        -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE \
+        -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_URL -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
+        -u AITEAM_SKILL_SIGNING_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY \
         PORT="${AGENT_PORT}" \
         HOST="${AGENT_HOST:-127.0.0.1}" \
         AITEAM_AGENT_DATA_DIR="${AGENT_DATA_DIR:-${REPO_ROOT}/.state/agent}" \
@@ -451,10 +519,6 @@ start_service_local() {
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
         AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}/api/manager/rag/mcp}" \
-        -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
-        AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
-        AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="" \
-        AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY="" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEYS="${AITEAM_SKILL_SIGNING_PUBLIC_KEYS:-}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev-current}" \
@@ -498,12 +562,12 @@ stop_service_local() {
     return 0
   fi
 
-  echo "[ctl] Stopping ${service} (PID ${pid})..."
-  kill "${pid}" 2>/dev/null || true
+  echo "[ctl] Stopping ${service} (PID ${pid}, process-group aware)..."
+  terminate_process_group "${pid}"
 
-  # 等待进程结束
+  # 等待 leader 与其 process-group 一起结束。
   for i in {1..50}; do
-    if ! kill -0 "${pid}" 2>/dev/null; then
+    if ! process_group_alive "${pid}"; then
       rm -f "${PID_FILE}"
       echo "[ctl] Stopped ${service}"
       return 0
@@ -511,9 +575,9 @@ stop_service_local() {
     sleep 0.1
   done
 
-  # 强制结束
-  echo "[ctl] Process did not exit after SIGTERM; sending SIGKILL" >&2
-  kill -KILL "${pid}" 2>/dev/null || true
+  # 强制结束整个服务组，而不是只杀 pnpm/setsid leader。
+  echo "[ctl] Process group did not exit after SIGTERM; sending SIGKILL" >&2
+  if process_group_alive "${pid}"; then kill -KILL -- "-${pid}" 2>/dev/null || true; fi
   rm -f "${PID_FILE}"
   echo "[ctl] Stopped ${service} (forced)"
 }
@@ -623,10 +687,8 @@ _daemon_wait_loop() {
   trap 'stop_local 2>/dev/null || true; exit 0' SIGTERM SIGINT
   while true; do
     for _svc in manager operation agent; do
-      get_service_paths "${_svc}"
-      _pid="$(cat "${PID_FILE}" 2>/dev/null || echo)"
-      if [[ -n "${_pid}" ]] && ! kill -0 "${_pid}" 2>/dev/null; then
-        echo "[ctl][daemon] ${_svc} (pid ${_pid}) exited unexpectedly — tearing down" >&2
+      if ! get_pid "${_svc}" >/dev/null 2>&1; then
+        echo "[ctl][daemon] ${_svc} exited unexpectedly (leader/process-group missing) — tearing down" >&2
         stop_local 2>/dev/null || true
         exit 1
       fi

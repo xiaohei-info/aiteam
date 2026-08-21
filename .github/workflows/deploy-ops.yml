@@ -27,11 +27,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check deployment artifacts
         run: bash scripts/check-deploy.sh
-      - name: Check LightRAG dry-runs
+      - name: Check Agent sandbox dry-run entrypoint
+        run: bash scripts/check-agent-sandbox.sh --dry-run
+      - name: Check LightRAG bootstrap and release dry-runs
         run: |
-          bash deploy/lightrag/init-db.sh --dry-run \
-            >/tmp/lightrag-init.out
+          bash deploy/lightrag/init-db.sh --dry-run >/tmp/lightrag-init.out
           bash scripts/validate-lightrag-env.sh
           bash scripts/lightrag-ops.sh --dry-run backup
-          bash scripts/lightrag-ops.sh --dry-run upgrade \
-            --image ghcr.io/hkuds/lightrag:1.5.6
+          bash scripts/lightrag-ops.sh --dry-run upgrade --image ghcr.io/hkuds/lightrag:1.5.6
+          bash scripts/lightrag-ops.sh --dry-run rollback --image ghcr.io/hkuds/lightrag:1.5.6
