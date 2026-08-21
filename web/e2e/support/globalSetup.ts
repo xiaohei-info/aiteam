@@ -130,6 +130,11 @@ export default async function globalSetup(): Promise<void> {
   const seed = seedE2eTenant();
   if (seed?.tenant_id) {
     process.env.E2E_TENANT_ID = seed.tenant_id;
+    writeFileSync(
+      join(STORAGE_STATE_DIR, "e2e-tenant.json"),
+      JSON.stringify({ tenant_id: seed.tenant_id, account: seed.account ?? null }),
+      "utf-8",
+    );
   }
 
   // 2. 三端 API 登录产出 storageState。

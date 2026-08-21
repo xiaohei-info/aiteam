@@ -71,6 +71,7 @@ def get_manager_gateway() -> ManagerGateway:
         settings.manager_url or "http://manager.invalid",
         service_identity=settings.service_name,
         service_token=settings.service_token,
+        timeout=settings.service_client_timeout_ms / 1000,
     )
     return HttpManagerGateway(client)
 

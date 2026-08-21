@@ -11,6 +11,7 @@
  */
 
 import { type APIRequestContext, type Page, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** 三端 tier（对齐 @aiteam/shared ApiClient.Tier / 后端 §4 命名映射）。 */
@@ -67,6 +68,16 @@ export interface TierCredentials {
  * manager/agent 取 globalSetup 注入的 E2E 租户成员账号（见 globalSetup.ts）。
  * 凭据经 env 覆盖（E2E_OPERATION_USERNAME 等），便于不同部署复用同一 harness。
  */
+function seededTenantId(): string | undefined {
+  if (process.env.E2E_TENANT_ID?.trim()) return process.env.E2E_TENANT_ID.trim();
+  try {
+    const value = JSON.parse(readFileSync(join(STORAGE_STATE_DIR, "e2e-tenant.json"), "utf-8")) as { tenant_id?: unknown };
+    return typeof value.tenant_id === "string" && value.tenant_id.trim() ? value.tenant_id.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function defaultCredentials(tier: Tier): TierCredentials {
   if (tier === "operation") {
     return {
@@ -74,7 +85,7 @@ export function defaultCredentials(tier: Tier): TierCredentials {
       password: process.env.E2E_OPERATION_PASSWORD ?? "changeme-me",
     };
   }
-  const tenantId = process.env.E2E_TENANT_ID ?? "00000000-0000-0000-0000-00000000e2e0";
+  const tenantId = seededTenantId() ?? "00000000-0000-0000-0000-00000000e2e0";
   const phone = process.env.E2E_MEMBER_ACCOUNT ?? "13800000001";
   const password = process.env.E2E_MEMBER_PASSWORD ?? "E2e-Pass-2024";
   return { account: phone, password, tenant_id: tenantId };

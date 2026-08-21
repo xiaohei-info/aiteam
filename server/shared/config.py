@@ -45,6 +45,7 @@ class Settings(BaseModel):
     # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
     # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
     service_token: str | None = Field(default=None)
+    service_client_timeout_ms: int = Field(default=30_000, ge=1_000, le=120_000)
     # 部署环境标记。取值 dev | test | production；未配置按 dev 处理。
     aiteam_env: str | None = Field(default=None, description="部署环境：dev | test | production；未配置=dev")
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
@@ -53,6 +54,13 @@ class Settings(BaseModel):
     def is_production(self) -> bool:
         """是否生产部署：AITEAM_ENV=production（runtime 必须真实，禁止 Fake）。"""
         return self.aiteam_env == "production"
+
+
+def _bounded_timeout_ms(raw: str | None) -> int:
+    try:
+        return max(1_000, min(int(raw or "30000"), 120_000))
+    except ValueError:
+        return 30_000
 
 
 def load_settings(tier: Tier | None = None) -> Settings:
@@ -72,6 +80,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
+        service_client_timeout_ms=_bounded_timeout_ms(os.getenv("SERVICE_CLIENT_TIMEOUT_MS")),
         aiteam_env=os.getenv("AITEAM_ENV"),
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )

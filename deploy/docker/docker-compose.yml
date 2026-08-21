@@ -54,6 +54,7 @@ services:
       MANAGER_URL: http://manager:8000
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
+      SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
       LOG_LEVEL: INFO
       EXPOSE_PUBLIC_DOCS: "1"
 
@@ -100,6 +101,7 @@ services:
       LIGHTRAG_QUERY_MODE: ${LIGHTRAG_QUERY_MODE:-naive}
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
+      SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
       AITEAM_ENV: ${AITEAM_ENV:-dev}
       AITEAM_SKILL_SIGNING_PRIVATE_KEY: ${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}
       AITEAM_SKILL_SIGNING_KEY_ID: ${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev}
