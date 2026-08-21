@@ -159,7 +159,7 @@ class HindsightLeaseRepository:
                 "INSERT INTO hindsight_lease "
                 "(lease_id, token_sha256, tenant_id, member_id, employee_id, "
                 " snapshot_version, policy_fingerprint, bank_id, version, issued_at, expires_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "RETURNING " + _LEASE_COLUMNS,
                 (
                     lease_id,
@@ -331,7 +331,7 @@ class HindsightLeaseRepository:
 
 
 def _scope_key(tenant_id: str, member_id: str, employee_id: str) -> str:
-    return f"hindsight-lease\x00{tenant_id}\x00{member_id}\x00{employee_id}"
+    return f"hindsight-lease:{tenant_id}:{member_id}:{employee_id}"
 
 
 def _row_to_lease(row, *, token: str, now: Callable[[], datetime]):
