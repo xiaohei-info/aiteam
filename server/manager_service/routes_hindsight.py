@@ -10,8 +10,9 @@ from shared.contracts.envelope import Envelope
 from shared.errors import AppError
 
 from .hindsight_client import HindsightSettings
-from .hindsight_credentials import HindsightLeaseStore, HindsightRuntimeService
+from .hindsight_credentials import HindsightRuntimeService
 from .hindsight_facade import HindsightFacade
+from .hindsight_lease_repository import HindsightLeaseRepository
 from .schemas_hindsight import (
     HindsightLeaseRevocationOut,
     HindsightRuntimeConfigOut,
@@ -31,17 +32,32 @@ def _snapshot_service(request: Request):
     return build_snapshot(request)
 
 
-def _runtime_service(request: Request) -> HindsightRuntimeService:
-    dsn = request.app.state.settings.db_url
-    if not dsn:
+def _lease_store(request: Request, settings: HindsightSettings):
+    """Use the durable store for configured Manager instances; never fall back."""
+
+    leases = getattr(request.app.state, "_hindsight_lease_store", None)
+    if leases is not None:
+        return leases
+    business_dsn = request.app.state.settings.db_url
+    admin_dsn = request.app.state.settings.admin_db_url
+    if not business_dsn:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    if not admin_dsn:
+        raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
+    leases = HindsightLeaseRepository(
+        business_dsn,
+        admin_dsn,
+        settings.lease_ttl_seconds,
+    )
+    request.app.state._hindsight_lease_store = leases
+    return leases
+
+
+def _runtime_service(request: Request) -> HindsightRuntimeService:
     cache = getattr(request.app.state, "_hindsight_runtime_service", None)
     if cache is None:
         settings = HindsightSettings.from_env()
-        leases = getattr(request.app.state, "_hindsight_lease_store", None)
-        if leases is None:
-            leases = HindsightLeaseStore(settings.lease_ttl_seconds)
-            request.app.state._hindsight_lease_store = leases
+        leases = _lease_store(request, settings)
         cache = HindsightRuntimeService(
             snapshot_service=_snapshot_service(request),
             settings=settings,
@@ -58,13 +74,7 @@ def _facade(request: Request) -> HindsightFacade:
         settings = (
             runtime.settings if runtime is not None else HindsightSettings.from_env()
         )
-        if runtime is not None:
-            leases = runtime.leases
-        else:
-            leases = getattr(request.app.state, "_hindsight_lease_store", None)
-            if leases is None:
-                leases = HindsightLeaseStore(settings.lease_ttl_seconds)
-                request.app.state._hindsight_lease_store = leases
+        leases = runtime.leases if runtime is not None else _lease_store(request, settings)
         cache = HindsightFacade(settings=settings, leases=leases)
         request.app.state._hindsight_facade = cache
     return cache

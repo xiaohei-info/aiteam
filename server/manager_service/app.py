@@ -32,6 +32,7 @@ from .routes_billing import build_billing_router
 from .routes_llm import build_llm_router
 from .routes_memory_items import build_memory_items_router
 from .routes_hindsight import build_hindsight_router
+from .hindsight_client import HindsightSettings
 from .routes_connector_ops import build_connector_ops_router
 from .routes_org import build_org_router
 from .routes_settings import build_settings_router
@@ -132,6 +133,19 @@ if settings.admin_db_url:
     from shared.db import apply_migrations as _apply_control_migrations
 
     _apply_control_migrations(settings.admin_db_url, settings.app_rw_password)
+# Hindsight lease metadata is durable whenever both Manager DB boundaries are
+# configured.  Cleanup is an admin read/write maintenance operation; issue,
+# rotate, and revoke continue to use the app_rw TenantContext path.
+if settings.db_url and settings.admin_db_url:
+    from .hindsight_lease_repository import HindsightLeaseRepository
+
+    _hindsight_lease_store = HindsightLeaseRepository(
+        settings.db_url,
+        settings.admin_db_url,
+        HindsightSettings.from_env().lease_ttl_seconds,
+    )
+    _hindsight_lease_store.cleanup_expired()
+    app.state._hindsight_lease_store = _hindsight_lease_store
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
 # Operator 目录拉取端口（05 F06/F07，#176）。OPERATOR_URL 必填，否则 fail-closed（AITEAM-331 C1）。

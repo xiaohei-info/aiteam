@@ -131,7 +131,7 @@ services:
     environment:
       APP_TIER: manager
       # 业务连接（受约束 app_rw 角色 + RLS）。
-      DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
+      DB_URL: postgresql://app_rw:aiteam_test@postgres:5432/aiteam_v1
       # Manager 知识源持久化根（bundle exporter 读取此卷，不上传会话内容）。
       AITEAM_MANAGER_DATA_ROOT: /app/data
       # 迁移走管理连接（超管/DDL owner，#60）。

@@ -47,6 +47,27 @@ def _client():
     return TestClient(app), signer, service
 
 
+def test_facade_fails_closed_without_manager_db_and_redacts_request_details():
+    verifier, _signer = make_inmem_verifier_and_signer()
+    app = create_app(
+        Settings(tier="manager", service_name="m", db_url=None),
+        APIRouter(),
+    )
+    app.include_router(build_hindsight_router(verifier))
+    client = TestClient(app)
+    secret = "opaque-lease-secret"
+    response = client.post(
+        "/api/manager/hindsight/v1/default/banks/bank-a/memories/recall/"
+        + secret,
+        headers={"Authorization": f"Bearer {secret}"},
+        json={"query": "hello"},
+    )
+    assert response.status_code == 503
+    assert secret not in response.text
+    assert "hindsight.internal" not in response.text
+    assert "/v1/default/banks" not in response.text
+
+
 def test_runtime_config_route_has_no_store_and_revoke_never_returns_token():
     client, signer, service = _client()
     headers = {

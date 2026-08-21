@@ -18,10 +18,14 @@ import httpx
 from fastapi import Request
 from starlette.responses import Response
 
-from shared.errors import Forbidden, Unauthorized
-
 from .hindsight_client import HindsightSettings, HindsightUnavailable
-from .hindsight_credentials import HindsightLeaseStore
+from .hindsight_credentials import (
+    HindsightLeaseBackend,
+    HindsightLeaseForbidden,
+    HindsightLeaseStore,
+    HindsightLeaseUnauthorized,
+    derive_hindsight_bank_id,
+)
 
 
 _BANK_PATH = re.compile(r"^v1/default/banks/([^/]+)(?:/.*)?$")
@@ -36,7 +40,7 @@ class HindsightFacade:
         self,
         *,
         settings: HindsightSettings | None = None,
-        leases: HindsightLeaseStore | None = None,
+        leases: HindsightLeaseBackend | None = None,
         client: httpx.AsyncClient | None = None,
     ):
         self.settings = settings or HindsightSettings.from_env()
@@ -56,6 +60,20 @@ class HindsightFacade:
         if not authorization.startswith("Bearer ") or not authorization[7:].strip():
             raise HindsightLeaseUnauthorized("Hindsight lease is required")
         lease = self.leases.resolve(authorization[7:].strip(), bank_id=bank_id)
+        # The URL bank is untrusted input: use it only as a candidate and bind
+        # it to the lease's complete Manager-owned scope before proxying.
+        scope_values = (lease.tenant_id, lease.member_id, lease.employee_id)
+        derived_bank = (
+            derive_hindsight_bank_id(*scope_values)
+            if all(isinstance(value, str) and value.strip() for value in scope_values)
+            else None
+        )
+        if (
+            lease.bank_id != bank_id
+            or not all(isinstance(value, str) and value.strip() for value in scope_values)
+            or (lease.bank_id.startswith("aiteam-") and lease.bank_id != derived_bank)
+        ):
+            raise HindsightLeaseScopeError("Hindsight lease scope is not valid")
         self._require_upstream()
 
         body = await request.body()
@@ -119,16 +137,7 @@ class HindsightFacade:
             )
 
 
-class HindsightLeaseUnauthorized(Unauthorized):
-    status, code, title = 401, "hindsight_lease_invalid", "Hindsight lease invalid"
-
-
-class HindsightLeaseScopeError(Forbidden):
-    status, code, title = (
-        403,
-        "hindsight_lease_scope_denied",
-        "Hindsight lease scope denied",
-    )
+HindsightLeaseScopeError = HindsightLeaseForbidden
 
 
 def _body_contains_bank_selector(request: Request, body: bytes) -> bool:

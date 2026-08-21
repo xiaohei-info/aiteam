@@ -57,9 +57,16 @@ revoke 后会递增 `version`。旧 lease 在 revoke/expiry 后由 facade 拒绝
 从 Manager 拉取当前 lease。正常 shutdown/child disposal 仍先调用 Hindsight lifecycle
 flush；队列失败保留在 Agent state 供后续重试。
 
+Manager 将 lease metadata 与 token SHA-256 digest 持久化到业务库：明文 token 不入库。
+业务写路径使用 app_rw + TenantContext；facade bearer digest lookup 使用受控管理读路径并
+重新校验 tenant/member/employee/bank scope。Manager 重启后旧 digest 会按 expiry/revoke
+状态继续生效；由于明文 token 不可重建，重启后的同 scope runtime-config 请求会安全轮换
+新 token，旧 token 仍只按其持久化状态处理。
+
 ## 已知阻塞
 
 这只是 Manager facade/lease seam，不等于 Hindsight 原生 bank credential。多进程
-Manager 当前使用进程内 lease registry；重启会让既有 lease 全部失效（fail-closed）。
-在 Hindsight 提供原生 scoped token + revoke 后，应替换 facade 的 upstream auth 适配并保留
-wire contract；在此之前禁止把 Manager service token 下发给 Agent。
+Manager 仍不具备 Hindsight upstream 的 native token/revoke 能力；数据库中的 lease revoke
+只是 Manager facade authorization。若 Hindsight 提供原生 scoped token + revoke，应替换
+facade 的 upstream auth 适配并保留 wire contract；在此之前禁止把 Manager service token
+下发给 Agent。

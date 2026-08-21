@@ -88,11 +88,18 @@ def install_exception_handlers(app: FastAPI) -> None:
     def _request_id(request: Request) -> str | None:
         return getattr(request.state, "request_id", None)
 
+    def _instance(request: Request) -> str | None:
+        # Hindsight bearer requests may put an opaque secret in the catch-all
+        # path; never echo that route instance in a problem response.
+        if request.url.path.startswith("/api/manager/hindsight"):
+            return None
+        return request.url.path
+
     @app.exception_handler(AppError)
     async def _handle_app_error(request: Request, exc: AppError):  # noqa: ANN202
         return _response(_to_problem(
             status=exc.status, code=exc.code, title=exc.title, detail=exc.detail,
-            instance=request.url.path, request_id=_request_id(request), errors=exc.errors,
+            instance=_instance(request), request_id=_request_id(request), errors=exc.errors,
         ))
 
     @app.exception_handler(StarletteHTTPException)
@@ -102,7 +109,7 @@ def install_exception_handlers(app: FastAPI) -> None:
         detail = exc.detail if isinstance(exc.detail, str) else None
         return _response(_to_problem(
             status=exc.status_code, code=code, title=title, detail=detail,
-            instance=request.url.path, request_id=_request_id(request), errors=None,
+            instance=_instance(request), request_id=_request_id(request), errors=None,
         ))
 
     @app.exception_handler(RequestValidationError)
@@ -113,7 +120,7 @@ def install_exception_handlers(app: FastAPI) -> None:
         ]
         return _response(_to_problem(
             status=422, code="validation_error", title="Validation error",
-            detail="Request validation failed.", instance=request.url.path,
+            detail="Request validation failed.", instance=_instance(request),
             request_id=_request_id(request), errors=field_errors,
         ))
 
@@ -122,6 +129,6 @@ def install_exception_handlers(app: FastAPI) -> None:
         # 详细堆栈只进受控日志，不入响应体（02 §11.2）。
         return _response(_to_problem(
             status=500, code="internal_error", title="Internal Server Error",
-            detail="Unexpected server error.", instance=request.url.path,
+            detail="Unexpected server error.", instance=_instance(request),
             request_id=_request_id(request), errors=None,
         ))

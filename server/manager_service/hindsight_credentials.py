@@ -3,15 +3,17 @@
 Hindsight 0.12.0 only understands the service API key; it does not expose a
 bank-scoped token or token-revocation API. Until that upstream capability exists,
 the Manager keeps the service key private and enforces an opaque, short-lived
-bank lease at its own facade boundary. The registry is intentionally in-memory:
-a Manager restart forgets every lease and therefore fails closed.
+bank lease at its own facade boundary. ``HindsightLeaseStore`` remains the
+process-local test double; production wires the PostgreSQL implementation from
+``hindsight_lease_repository``.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
+import hmac
 import secrets
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
@@ -19,9 +21,15 @@ from urllib.parse import urlsplit
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from shared.errors import Forbidden, NotFound, Unauthorized
+from shared.errors import Forbidden, NotFound
 
 from .hindsight_client import HindsightSettings, HindsightUnavailable
+from .hindsight_lease_repository import (
+    HindsightLeaseForbidden,
+    HindsightLeaseUnauthorized,
+    policy_fingerprint,
+    token_sha256,
+)
 from .schemas_hindsight import HindsightLeaseRevocationOut, HindsightRuntimeConfigOut
 
 
@@ -46,18 +54,6 @@ class SnapshotAuthorizer(Protocol):
         employee_id: str,
         employee_version: str | None = None,
     ): ...
-
-
-class HindsightLeaseUnauthorized(Unauthorized):
-    status, code, title = 401, "hindsight_lease_invalid", "Hindsight lease invalid"
-
-
-class HindsightLeaseForbidden(Forbidden):
-    status, code, title = (
-        403,
-        "hindsight_lease_scope_denied",
-        "Hindsight lease scope denied",
-    )
 
 
 @dataclass
@@ -86,8 +82,39 @@ class HindsightLease:
         return self.revoked_at is None and not self.expired
 
 
+class HindsightLeaseBackend(Protocol):
+    def issue(
+        self,
+        *,
+        tenant_id: str,
+        member_id: str,
+        employee_id: str,
+        snapshot_version: str,
+        policy: dict,
+        bank_id: str,
+        force_rotate: bool = False,
+    ) -> HindsightLease: ...
+
+    def get(self, lease_id: str) -> HindsightLease | None: ...
+
+    def revoke(
+        self,
+        lease_id: str,
+        *,
+        tenant_id: str | None = None,
+        member_id: str | None = None,
+        employee_id: str | None = None,
+    ) -> HindsightLease | None: ...
+
+    def revoke_scope(
+        self, tenant_id: str, member_id: str, employee_id: str
+    ) -> HindsightLease | None: ...
+
+    def resolve(self, token: str, *, bank_id: str) -> HindsightLease: ...
+
+
 class HindsightLeaseStore:
-    """Small process-local lease registry with fail-closed lookup semantics."""
+    """Thread-safe process-local test store with the production store's semantics."""
 
     def __init__(
         self,
@@ -103,10 +130,11 @@ class HindsightLeaseStore:
         self._now = now
         self._token_factory = token_factory
         self._lease_id_factory = lease_id_factory
-        self._by_token: dict[str, HindsightLease] = {}
+        self._by_token_hash: dict[str, HindsightLease] = {}
         self._by_id: dict[str, HindsightLease] = {}
         self._active_by_scope: dict[tuple[str, str, str], HindsightLease] = {}
         self._versions: dict[tuple[str, str, str], int] = {}
+        self._lock = threading.RLock()
 
     def issue(
         self,
@@ -119,72 +147,95 @@ class HindsightLeaseStore:
         bank_id: str,
         force_rotate: bool = False,
     ) -> HindsightLease:
-        scope = (tenant_id, member_id, employee_id)
-        fingerprint = _policy_fingerprint(snapshot_version, policy)
-        current = self._active_by_scope.get(scope)
-        if (
-            current is not None
-            and current.active
-            and not force_rotate
-            and current.policy_fingerprint == fingerprint
-            and current.bank_id == bank_id
-        ):
-            return current
+        with self._lock:
+            scope = (tenant_id, member_id, employee_id)
+            fingerprint = _policy_fingerprint(snapshot_version, policy)
+            current = self._active_by_scope.get(scope)
+            if (
+                current is not None
+                and current.active
+                and not force_rotate
+                and current.policy_fingerprint == fingerprint
+                and current.bank_id == bank_id
+            ):
+                return current
 
-        if current is not None and current.revoked_at is None:
-            current.revoked_at = self._now()
-        version = self._versions.get(scope, 0) + 1
-        self._versions[scope] = version
-        issued_at = self._now()
-        lease = HindsightLease(
-            lease_id=self._lease_id_factory(),
-            token=self._token_factory(),
-            tenant_id=tenant_id,
-            member_id=member_id,
-            employee_id=employee_id,
-            snapshot_version=snapshot_version,
-            policy_fingerprint=fingerprint,
-            bank_id=bank_id,
-            version=version,
-            issued_at=issued_at,
-            expires_at=issued_at + timedelta(seconds=self._ttl),
-            _now=self._now,
-        )
-        self._by_token[lease.token] = lease
-        self._by_id[lease.lease_id] = lease
-        self._active_by_scope[scope] = lease
-        return lease
+            if current is not None and current.revoked_at is None:
+                current.revoked_at = self._now()
+            version = self._versions.get(scope, 0) + 1
+            self._versions[scope] = version
+            issued_at = self._now()
+            lease = HindsightLease(
+                lease_id=self._lease_id_factory(),
+                token=self._token_factory(),
+                tenant_id=tenant_id,
+                member_id=member_id,
+                employee_id=employee_id,
+                snapshot_version=snapshot_version,
+                policy_fingerprint=fingerprint,
+                bank_id=bank_id,
+                version=version,
+                issued_at=issued_at,
+                expires_at=issued_at + timedelta(seconds=self._ttl),
+                _now=self._now,
+            )
+            self._by_token_hash[token_sha256(lease.token)] = lease
+            self._by_id[lease.lease_id] = lease
+            self._active_by_scope[scope] = lease
+            return lease
 
     def get(self, lease_id: str) -> HindsightLease | None:
-        return self._by_id.get(lease_id)
+        with self._lock:
+            return self._by_id.get(lease_id)
 
-    def revoke(self, lease_id: str) -> HindsightLease | None:
-        lease = self._by_id.get(lease_id)
-        if lease is None:
-            return None
-        if lease.revoked_at is None:
-            lease.revoked_at = self._now()
-        scope = (lease.tenant_id, lease.member_id, lease.employee_id)
-        if self._active_by_scope.get(scope) is lease:
-            self._active_by_scope.pop(scope, None)
-        return lease
+    def revoke(
+        self,
+        lease_id: str,
+        *,
+        tenant_id: str | None = None,
+        member_id: str | None = None,
+        employee_id: str | None = None,
+    ) -> HindsightLease | None:
+        with self._lock:
+            lease = self._by_id.get(lease_id)
+            if lease is None:
+                return None
+            if (
+                (tenant_id is not None and lease.tenant_id != tenant_id)
+                or (member_id is not None and lease.member_id != member_id)
+                or (employee_id is not None and lease.employee_id != employee_id)
+            ):
+                return None
+            if lease.revoked_at is None:
+                lease.revoked_at = self._now()
+            scope = (lease.tenant_id, lease.member_id, lease.employee_id)
+            if self._active_by_scope.get(scope) is lease:
+                self._active_by_scope.pop(scope, None)
+            return lease
 
     def revoke_scope(
         self, tenant_id: str, member_id: str, employee_id: str
     ) -> HindsightLease | None:
-        scope = (tenant_id, member_id, employee_id)
-        lease = self._active_by_scope.pop(scope, None)
-        if lease is not None and lease.revoked_at is None:
-            lease.revoked_at = self._now()
-        return lease
+        with self._lock:
+            scope = (tenant_id, member_id, employee_id)
+            lease = self._active_by_scope.pop(scope, None)
+            if lease is not None and lease.revoked_at is None:
+                lease.revoked_at = self._now()
+            return lease
 
     def resolve(self, token: str, *, bank_id: str) -> HindsightLease:
-        lease = self._by_token.get(token)
-        if lease is None or not lease.active:
-            raise HindsightLeaseUnauthorized("Hindsight lease is expired or revoked")
-        if lease.bank_id != bank_id:
-            raise HindsightLeaseForbidden("Hindsight lease is not valid for this bank")
-        return lease
+        with self._lock:
+            digest = token_sha256(token)
+            lease = self._by_token_hash.get(digest)
+            if (
+                lease is None
+                or not hmac.compare_digest(digest, token_sha256(lease.token))
+                or not lease.active
+            ):
+                raise HindsightLeaseUnauthorized("Hindsight lease is expired or revoked")
+            if lease.bank_id != bank_id:
+                raise HindsightLeaseForbidden("Hindsight lease is not valid for this bank")
+            return lease
 
 
 class HindsightRuntimeService:
@@ -195,7 +246,7 @@ class HindsightRuntimeService:
         *,
         snapshot_service: SnapshotAuthorizer,
         settings: HindsightSettings | None = None,
-        leases: HindsightLeaseStore | None = None,
+        leases: HindsightLeaseBackend | None = None,
         facade_url: str | None = None,
     ):
         self._snapshot = snapshot_service
@@ -264,8 +315,14 @@ class HindsightRuntimeService:
             raise NotFound("Hindsight lease not found")
         if lease.member_id != ctx.user_id and not set(ctx.roles) & _LEASE_OWNER_ROLES:
             raise NotFound("Hindsight lease not found")
-        revoked = self.leases.revoke(lease_id)
-        assert revoked is not None
+        revoked = self.leases.revoke(
+            lease_id,
+            tenant_id=lease.tenant_id,
+            member_id=lease.member_id,
+            employee_id=lease.employee_id,
+        )
+        if revoked is None:
+            raise NotFound("Hindsight lease not found")
         return _revocation_out(revoked)
 
     def _require_upstream(self) -> None:
@@ -290,14 +347,7 @@ def derive_hindsight_bank_id(tenant_id: str, member_id: str, employee_id: str) -
 
 
 def _policy_fingerprint(snapshot_version: str, policy: dict) -> str:
-    canonical = json.dumps(
-        {"snapshot_version": snapshot_version, "policy": policy},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return policy_fingerprint(snapshot_version, policy)
 
 
 def _revocation_out(lease: HindsightLease) -> HindsightLeaseRevocationOut:
@@ -305,7 +355,7 @@ def _revocation_out(lease: HindsightLease) -> HindsightLeaseRevocationOut:
         lease_id=lease.lease_id,
         bank_id=lease.bank_id,
         version=lease.version,
-        status="expired" if lease.expired and lease.revoked_at is None else "revoked",
+        status="expired" if lease.expired else "revoked",
         revoked_at=lease.revoked_at or lease.expires_at,
     )
 
