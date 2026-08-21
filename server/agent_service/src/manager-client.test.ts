@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, normalizeRuntimeProviderConfig } from "./manager-client.js";
+import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeKnowledgeArtifact, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -34,6 +34,38 @@ test("HttpManagerClient pulls only the employee-scoped runtime provider config",
   assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+});
+
+test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank input", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    request = { url: String(input), init: init ?? {} };
+    return new Response(JSON.stringify({ data: {
+      base_url: "/api/manager/hindsight", bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      token: "opaque-lease-secret", lease_id: "lease-1", version: 3,
+      issued_at: new Date().toISOString(), expires_at: expiresAt,
+    } }), { status: 200 });
+  });
+  const lease = await client.pullHindsightRuntimeConfig(caller, "employee-1");
+  assert.equal(lease.base_url, "https://manager.test/api/manager/hindsight");
+  assert.equal(lease.bank_id, "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(request?.url, "https://manager.test/api/manager/hindsight/runtime-config");
+  assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
+  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.doesNotMatch(String(request?.init.body), /opaque-lease-secret|bank_id/);
+});
+
+test("Hindsight lease normalization rejects direct upstream URLs, extra fields, and expiry", () => {
+  const valid = {
+    base_url: "/api/manager/hindsight", bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token: "opaque", lease_id: "lease-1", version: 1,
+    issued_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60_000).toISOString(),
+  };
+  assert.doesNotThrow(() => normalizeHindsightRuntimeConfig(valid, "https://manager.test"));
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...valid, base_url: "https://hindsight.test/api/manager/hindsight" }, "https://manager.test"), /facade URL/);
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...valid, unexpected: "secret" }, "https://manager.test"), /runtime config/);
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...valid, expires_at: new Date(Date.now() - 1_000).toISOString() }, "https://manager.test"), /expired/);
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...valid, bank_id: "other-bank" }, "https://manager.test"), /bank scope/);
 });
 
 test("runtime config accepts only the Pi protocols implemented by this contract", () => {

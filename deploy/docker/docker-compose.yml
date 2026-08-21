@@ -143,6 +143,8 @@ services:
       HINDSIGHT_RECALL_PATH: ${HINDSIGHT_RECALL_PATH:-}
       HINDSIGHT_RETAIN_PATH: ${HINDSIGHT_RETAIN_PATH:-}
       HINDSIGHT_DELETE_PATH: ${HINDSIGHT_DELETE_PATH:-}
+      HINDSIGHT_FACADE_URL: ${HINDSIGHT_FACADE_URL:-/api/manager/hindsight}
+      HINDSIGHT_LEASE_TTL_SECONDS: ${HINDSIGHT_LEASE_TTL_SECONDS:-300}
       OPERATOR_URL: http://operation:8000
       # Manager-only LightRAG credentials; never copied to the Agent container.
       # The LightRAG service is opt-in (profile lightrag); configure an
@@ -194,9 +196,7 @@ services:
       AITEAM_ENV: ${AITEAM_ENV:-dev}
       AITEAM_MANAGER_URL: ${AITEAM_MANAGER_URL:-http://manager:8000}
       AITEAM_RAG_MCP_URL: ${AITEAM_RAG_MCP_URL:-http://manager:8000/api/manager/rag/mcp}
-      AITEAM_HINDSIGHT_URL: ${AITEAM_HINDSIGHT_URL:-}
-      HINDSIGHT_API_TOKEN: ${HINDSIGHT_API_TOKEN:-}
-      HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}
+      # Hindsight credentials are issued per employee by Manager; no global token is mounted here.
       # Public key metadata only; no skill signing private key is mounted in Agent.
       AITEAM_SKILL_SIGNING_PUBLIC_KEYS: ${AITEAM_SKILL_SIGNING_PUBLIC_KEYS:-}
       AITEAM_SKILL_SIGNING_PUBLIC_KEY: ${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}

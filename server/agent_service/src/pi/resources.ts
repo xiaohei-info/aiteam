@@ -14,6 +14,7 @@ import { createMemoryLifecycle } from "@luxusai/pi-hindsight/extensions/lifecycl
 import { registerTools } from "@luxusai/pi-hindsight/extensions/operations/tools.js";
 import { skillResourcePaths, skillSigningVerificationFromEnv, SkillCache } from "../skills.js";
 import type { FrozenSnapshot } from "../storage/sqlite.js";
+import { normalizeHindsightRuntimeConfig, type HindsightRuntimeConfig } from "../manager-client.js";
 import type { SessionAuthorization } from "./session-host.js";
 import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
 
@@ -24,6 +25,10 @@ const AGENT_IGNORED_HINDSIGHT_ENV = [
   "PI_HINDSIGHT_USER_BANK_ID",
   "PI_HINDSIGHT_GLOBAL_BANK_ID",
   "HINDSIGHT_BASE_URL",
+  "HINDSIGHT_API_KEY_REF",
+  "HINDSIGHT_API_TOKEN",
+  "HINDSIGHT_API_KEY",
+  "HOME",
 ] as const;
 
 export interface ControlledResourceLoader extends ResourceLoader {
@@ -47,10 +52,6 @@ export function removeHindsightState(agentDir: string, workspace: string): void 
   rmSync(stateDir, { recursive: true, force: true });
 }
 
-function hindsightBaseUrl(): string | undefined {
-  const value = process.env.AITEAM_HINDSIGHT_URL?.trim();
-  return value || undefined;
-}
 const LEGACY_MEMORY_TOOLS = new Map([
   ["memory_recall", "hindsight_recall"],
   ["memory_retain", "hindsight_retain"],
@@ -64,6 +65,7 @@ export function createControlledResourceLoader(
   // Hindsight config and queues are Agent state, never coding-workspace state.
   agentDir = join(homedir(), ".aiteam", "agent"),
   managerUrl = process.env.AITEAM_MANAGER_URL,
+  hindsightRuntimeConfig?: HindsightRuntimeConfig,
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -73,14 +75,20 @@ export function createControlledResourceLoader(
   const snapshotKeys = authorization && Array.isArray(authorization.snapshot.skill_signing_keys) ? authorization.snapshot.skill_signing_keys : [];
   const verification = snapshotKeys.length ? { ...envVerification, publicKeys: snapshotKeys } : envVerification;
   const memoryPolicy = authorization ? getMemoryPolicy(authorization.snapshot) : undefined;
-  const baseUrl = hindsightBaseUrl();
+  const leaseConfig = hindsightRuntimeConfig ? normalizeHindsightRuntimeConfig(hindsightRuntimeConfig, managerUrl) : undefined;
+  const baseUrl = leaseConfig?.base_url;
   const stateDir = hindsightStateDir(agentDir, workspace);
   const configDir = join(stateDir, "config");
-  if (authorization && memoryPolicy?.enabled && baseUrl) materializeHindsightConfig(configDir, stateDir, authorization, memoryPolicy, baseUrl);
+  const leaseEnvName = leaseConfig ? hindsightLeaseEnvName(stateDir) : undefined;
+  if (authorization && memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName) {
+    materializeHindsightConfig(configDir, stateDir, memoryPolicy, baseUrl, leaseConfig, leaseEnvName);
+  }
   const skills = skillScope && cache
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
-  const lifecycle = memoryPolicy?.enabled && baseUrl ? createHindsightFactory(configDir) : undefined;
+  const lifecycle = memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName
+    ? createHindsightFactory(configDir, leaseEnvName, leaseConfig.token)
+    : undefined;
   const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
   const loader = new DefaultResourceLoader({
     cwd: workspace,
@@ -114,7 +122,7 @@ export function createControlledResourceLoader(
 
 export { ragToolNames };
 
-export function memoryToolNames(snapshot: FrozenSnapshot): string[] {
+export function memoryToolNames(snapshot: FrozenSnapshot, hindsightRuntimeConfig?: HindsightRuntimeConfig): string[] {
   const policy = snapshot.tool_policy;
   const rawAllowed: unknown[] = policy && typeof policy === "object" && Array.isArray((policy as Record<string, unknown>).allowed_tools)
     ? (policy as Record<string, unknown>).allowed_tools as unknown[]
@@ -122,7 +130,7 @@ export function memoryToolNames(snapshot: FrozenSnapshot): string[] {
   const allowed = rawAllowed.filter((name): name is string => typeof name === "string");
   const names = new Set(allowed.map((name) => LEGACY_MEMORY_TOOLS.get(name) ?? name));
   const memory = getMemoryPolicy(snapshot);
-  if (!hindsightBaseUrl()) return [];
+  if (!hindsightRuntimeConfig) return [];
   return [...HINDSIGHT_TOOLS].filter((name) => names.has(name) && (name === "hindsight_recall" ? memory?.recall : memory?.retain));
 }
 
@@ -157,15 +165,36 @@ export function withAgentHindsightEnvironment<T>(callback: () => T): T {
   }
 }
 
-export function createAgentControlledReloadConfig(configDir: string, reloadConfig: (cwd: string) => void): (cwd: string) => void {
-  return () => withAgentHindsightEnvironment(() => reloadConfig(configDir));
+export function createAgentControlledReloadConfig(
+  configDir: string,
+  reloadConfig: (cwd: string) => void,
+  leaseEnvName?: string,
+  leaseToken?: string,
+): (cwd: string) => void {
+  return () => withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => reloadConfig(configDir)));
 }
 
-function createHindsightFactory(configDir: string) {
-  const lifecycle = withAgentHindsightEnvironment(() => createMemoryLifecycle(configDir));
+function hindsightLeaseEnvName(stateDir: string): string {
+  return `AITEAM_HINDSIGHT_LEASE_${createHash("sha256").update(stateDir).digest("hex").slice(0, 24).toUpperCase()}`;
+}
+
+function withHindsightLeaseEnvironment<T>(envName: string | undefined, token: string | undefined, callback: () => T): T {
+  if (!envName || !token) return callback();
+  const previous = process.env[envName];
+  process.env[envName] = token;
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) delete process.env[envName];
+    else process.env[envName] = previous;
+  }
+}
+
+function createHindsightFactory(configDir: string, leaseEnvName?: string, leaseToken?: string) {
+  const lifecycle = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => createMemoryLifecycle(configDir)));
   const deps = {
     ...lifecycle.deps,
-    reloadConfig: createAgentControlledReloadConfig(configDir, lifecycle.deps.reloadConfig),
+    reloadConfig: createAgentControlledReloadConfig(configDir, lifecycle.deps.reloadConfig, leaseEnvName, leaseToken),
   };
   let context: ExtensionContext | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -196,7 +225,7 @@ function createHindsightFactory(configDir: string) {
       context = ctx;
       // Config reload must use the Agent-controlled directory; runtime events retain
       // the real workspace context for session identity and UI.
-      const initialization = withAgentHindsightEnvironment(() => lifecycle.initialize({ ...ctx, cwd: configDir }));
+      const initialization = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => lifecycle.initialize({ ...ctx, cwd: configDir })));
       await initialization;
     });
     pi.on("context", async (event, ctx) => lifecycle.recall(event, ctx));
@@ -212,20 +241,21 @@ function createHindsightFactory(configDir: string) {
   return { factory, shutdown: () => shutdown() };
 }
 
-function materializeHindsightConfig(configDir: string, stateDir: string, authorization: SessionAuthorization, policy: { recall: boolean; retain: boolean }, baseUrl: string): void {
+function materializeHindsightConfig(
+  configDir: string,
+  stateDir: string,
+  policy: { recall: boolean; retain: boolean },
+  baseUrl: string,
+  runtimeConfig: HindsightRuntimeConfig,
+  leaseEnvName: string,
+): void {
   mkdirSync(join(configDir, ".pi"), { recursive: true, mode: 0o700 });
   chmodSync(configDir, 0o700);
   chmodSync(join(configDir, ".pi"), 0o700);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   chmodSync(stateDir, 0o700);
-  const tenantId = authorization.caller.tenantId ?? "unknown-tenant";
-  const memberId = authorization.caller.userId ?? authorization.caller.callerId;
-  const bankId = `aiteam-${createHash("sha256").update(`${tenantId}:${memberId}:${authorization.employeeId}`).digest("hex").slice(0, 32)}`;
-  const tokenRef = process.env.HINDSIGHT_API_TOKEN?.trim()
-    ? "env:HINDSIGHT_API_TOKEN"
-    : process.env.HINDSIGHT_API_KEY?.trim()
-      ? "env:HINDSIGHT_API_KEY"
-      : undefined;
+  const bankId = runtimeConfig.bank_id;
+  const tokenRef = `env:${leaseEnvName}`;
   const config = {
     enabled: true,
     setupComplete: true,
@@ -233,7 +263,7 @@ function materializeHindsightConfig(configDir: string, stateDir: string, authori
     hindsight: {
       baseUrl,
       timeoutMs: 1_000,
-      ...(tokenRef ? { apiKeyRef: tokenRef } : {}),
+      apiKeyRef: tokenRef,
     },
     banks: { project: { enabled: true, derive: "manual", bankId }, user: { enabled: false } },
     recall: { enabled: policy.recall, budget: "low", maxTokens: 600, topK: 6, timeoutMs: 1_000 },

@@ -5,6 +5,19 @@ import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, type 
 import type { KnowledgeArtifact } from "./storage/sqlite.js";
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
+export interface HindsightRuntimeConfig {
+  /** Manager facade URL; never a direct Hindsight service URL. */
+  base_url: string;
+  /** Bank selected by Manager; never supplied by a Pi model/tool call. */
+  bank_id: string;
+  /** Opaque short-lived Manager facade lease token. Keep in process memory only. */
+  token: string;
+  lease_id: string;
+  version: number;
+  issued_at: string;
+  expires_at: string;
+}
+
 export interface AuthorizedConfig {
   experts: LoadedExpertProjection[];
   solutions: LoadedSolutionProjection[];
@@ -34,6 +47,7 @@ export interface ManagerClient {
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
   pullRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig>;
+  pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
   pullKnowledgeArtifacts?(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
@@ -87,6 +101,15 @@ export class HttpManagerClient implements ManagerClient {
   async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
     const response = await this.request("/api/manager/provider-credentials/runtime-config", caller, { employee_id: employeeId });
     return normalizeRuntimeProviderConfig(this.unwrap(response));
+  }
+
+  async pullHindsightRuntimeConfig(caller: AuthenticatedCaller, employeeId: string, rotate = false): Promise<HindsightRuntimeConfig> {
+    const response = await this.request(
+      "/api/manager/hindsight/runtime-config",
+      caller,
+      rotate ? { employee_id: employeeId, rotate: true } : { employee_id: employeeId },
+    );
+    return normalizeHindsightRuntimeConfig(this.unwrap(response), this.baseUrl);
   }
 
   async pullSnapshots(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]> {
@@ -324,6 +347,39 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
   const version = String(raw.version ?? (raw.solution_version !== undefined && raw.config_version !== undefined ? `${raw.solution_version}:${raw.config_version}` : raw.solution_version ?? raw.config_version ?? ""));
   assertOwnership(raw, tenantId, memberId);
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };
+}
+
+export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: string): HindsightRuntimeConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid Hindsight runtime config");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["base_url", "bank_id", "token", "lease_id", "version", "issued_at", "expires_at"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid Hindsight runtime config");
+  const baseUrlValue = raw.base_url;
+  const bankId = raw.bank_id;
+  const token = raw.token;
+  const leaseId = raw.lease_id;
+  const issuedAtValue = raw.issued_at;
+  const expiresAtValue = raw.expires_at;
+  if ([baseUrlValue, bankId, token, leaseId, issuedAtValue, expiresAtValue].some((item) => typeof item !== "string" || item.trim() === "")) throw new ManagerUnavailableError("Manager returned an incomplete Hindsight runtime config");
+  if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) throw new ManagerUnavailableError("Manager returned an invalid Hindsight lease version");
+  if (!/^aiteam-[0-9a-f]{32}$/u.test(bankId as string)) throw new ManagerUnavailableError("Manager returned an invalid Hindsight bank scope");
+  if (/\s/u.test(token as string) || /[\\/]/u.test(leaseId as string)) throw new ManagerUnavailableError("Manager returned an invalid Hindsight lease");
+  const issuedAt = Date.parse(issuedAtValue as string);
+  const expiresAt = Date.parse(expiresAtValue as string);
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt || expiresAt <= Date.now()) throw new ManagerUnavailableError("Manager returned an expired Hindsight lease");
+  let baseUrl: string;
+  try {
+    const parsed = new URL(baseUrlValue as string, managerUrl);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.replace(/\/$/u, "") !== "/api/manager/hindsight") throw new Error("invalid facade URL");
+    if (managerUrl) {
+      const manager = new URL(managerUrl);
+      if (parsed.origin !== manager.origin) throw new Error("facade URL is not Manager-owned");
+    }
+    baseUrl = parsed.toString().replace(/\/$/u, "");
+  } catch {
+    throw new ManagerUnavailableError("Manager returned an invalid Hindsight facade URL");
+  }
+  return { base_url: baseUrl, bank_id: bankId as string, token: token as string, lease_id: leaseId as string, version: raw.version, issued_at: issuedAtValue as string, expires_at: expiresAtValue as string };
 }
 
 export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {

@@ -1,9 +1,88 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
 import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
+import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
+
+function lease(version: number, token: string): HindsightRuntimeConfig {
+  return {
+    base_url: "https://manager.test/api/manager/hindsight",
+    bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    token,
+    lease_id: `lease-${version}`,
+    version,
+    issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  };
+}
+
+test("SessionHost pulls a fresh Hindsight lease for each new session without persisting the secret", async () => {
+  const fixture = await createFixture();
+  const leases: HindsightRuntimeConfig[] = [lease(1, "lease-one-secret"), lease(2, "lease-two-secret")];
+  const received: HindsightRuntimeConfig[] = [];
+  let leaseIndex = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    pullHindsightRuntimeConfig: async () => leases[leaseIndex++]!,
+  };
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "Helper", memory_policy: { enabled: true }, tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost(undefined, manager, (_id, auth, workspace, agentDir, config) => {
+      assert(config);
+      received.push(config);
+      const loader = createControlledResourceLoader("prompt", undefined, auth, workspace, agentDir, undefined, config);
+      loader.reload = async () => {};
+      loader.shutdown = async () => {};
+      return loader;
+    });
+    fixture.faux.setResponses([fauxAssistantMessage("first")]);
+    await host.prompt("conversation-1", "one", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    fixture.faux.setResponses([fauxAssistantMessage("second")]);
+    await host.prompt("conversation-1", "two", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.deepEqual(received.map((item) => item.version), [1, 2]);
+    assert.equal(received.some((item) => item.token === "lease-one-secret"), true);
+    assert.equal(received.some((item) => item.token === "lease-two-secret"), true);
+    const sessionFile = fixture.store.getConversation("conversation-1")?.sessionFile;
+    assert(sessionFile);
+    assert.equal(readFileSync(sessionFile, "utf8").includes("lease-one-secret"), false);
+    assert.equal(readFileSync(sessionFile, "utf8").includes("lease-two-secret"), false);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("production SessionHost fails closed when an enabled memory policy has no Manager lease", async () => {
+  const fixture = await createFixture();
+  const previousEnvironment = process.env.AITEAM_ENV;
+  process.env.AITEAM_ENV = "production";
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "Helper", memory_policy: { enabled: true }, tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const manager: ManagerClient = {
+      pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+      getOrgTree: async () => ({}),
+    };
+    const host = fixture.createHost(undefined, manager);
+    await assert.rejects(
+      host.prompt("conversation-1", "must fail", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" }),
+      /Hindsight lease is unavailable/,
+    );
+    await host.dispose();
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.AITEAM_ENV;
+    else process.env.AITEAM_ENV = previousEnvironment;
+    await fixture.close();
+  }
+});
 
 test("SessionHost persists a Pi session and replays entries", async () => {
   const fixture = await createFixture();
@@ -195,6 +274,47 @@ test("delegate_employee forwards child events with opaque attribution and bounds
     assert(childEvents.length > 0);
     assert(childEvents.every((envelope) => envelope.source_ref && envelope.tool_call_id));
     assert.equal(new Set(childEvents.map((envelope) => envelope.tool_call_id)).size, 4);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost pulls and disposes a separate Hindsight lease for delegated children", async () => {
+  const fixture = await createFixture();
+  const received: HindsightRuntimeConfig[] = [];
+  let nextVersion = 1;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    pullHindsightRuntimeConfig: async () => lease(nextVersion++, `child-lease-${nextVersion}`),
+  };
+  let shutdowns = 0;
+  try {
+    const snapshot = (employeeId: string, tools: string[]) => ({ employee_id: employeeId, version: "1", snapshot_version: `snapshot-${employeeId}`, display_name: employeeId, memory_policy: { enabled: true }, tool_policy: { allowed_tools: tools } });
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: new Date().toISOString() },
+      { employee_id: "worker", tenant_id: "tenant-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [snapshot("coordinator", ["delegate_employee"]), snapshot("worker", [])]);
+    fixture.store.createConversation({ id: "group-lease-child", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
+    const host = fixture.createHost(undefined, manager, (_id, auth, workspace, agentDir, config) => {
+      assert(config);
+      received.push(config);
+      const loader = createControlledResourceLoader("prompt", undefined, auth, workspace, agentDir, undefined, config);
+      loader.reload = async () => {};
+      const shutdown = loader.shutdown.bind(loader);
+      loader.shutdown = async () => { shutdowns += 1; await shutdown(); };
+      return loader;
+    });
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("delegate_employee", { employee_id: "worker", task: "child task" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("child result"),
+      fauxAssistantMessage("parent result"),
+    ]);
+    await host.prompt("group-lease-child", "delegate", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert(received.length >= 2);
+    assert(new Set(received.map((item) => item.lease_id)).size >= 2);
+    assert(shutdowns >= 2);
     await host.dispose();
   } finally {
     await fixture.close();

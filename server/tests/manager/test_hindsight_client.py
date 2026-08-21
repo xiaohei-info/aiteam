@@ -33,6 +33,25 @@ def test_hindsight_client_sends_tenant_context_and_never_falls_back():
     assert json.loads(seen["body"]) == {"query": "hello", "max_tokens": 768}
 
 
+def test_env_backed_hindsight_client_uses_manager_derived_bank_scope(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"items": []})
+
+    monkeypatch.setenv("HINDSIGHT_URL", "http://hindsight")
+    monkeypatch.setenv("HINDSIGHT_SERVICE_TOKEN", "manager-secret")
+    monkeypatch.setenv("HINDSIGHT_RECALL_PATH", "/v1/default/banks/{bank_id}/memories/recall")
+    client = HindsightClient(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    client.recall(TenantContext(tenant_id="tenant-a", user_id="u", roles=[]), employee_id="employee-a", query="q", limit=1)
+    from manager_service.hindsight_credentials import derive_hindsight_bank_id
+
+    assert seen["path"] == f"/v1/default/banks/{derive_hindsight_bank_id('tenant-a', 'u', 'employee-a')}/memories/recall"
+
+
 def test_hindsight_unconfigured_fails_closed():
     client = HindsightClient(HindsightSettings(None, None, None, None, None))
     with pytest.raises(HindsightUnavailable):

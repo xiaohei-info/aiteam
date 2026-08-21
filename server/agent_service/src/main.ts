@@ -50,7 +50,7 @@ const sessionHost = new SessionHost({
   managerClient,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
-  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, process.env.AITEAM_MANAGER_URL),
+  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, process.env.AITEAM_MANAGER_URL, hindsightRuntimeConfig),
 });
 
 const authenticate = useDevAuth

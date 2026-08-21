@@ -17,14 +17,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
-import type { ManagerClient } from "../manager-client.js";
+import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider } from "./model-runtime.js";
-import { memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
+import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -65,7 +65,7 @@ export interface SessionHostOptions {
   store: AgentSqliteStore;
   modelRuntime: ModelRuntime;
   model?: Model<any>;
-  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string) => ResourceLoader;
+  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string, hindsightRuntimeConfig?: HindsightRuntimeConfig) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
@@ -81,6 +81,7 @@ interface Subscriber {
 interface ChildSession {
   session?: AgentSession;
   resourceLoader?: ResourceLoader;
+  resourceLoaderShutdown?: Promise<void>;
   done: Promise<void>;
   resolveDone: () => void;
   aborted: boolean;
@@ -326,7 +327,8 @@ export class SessionHost {
 
   private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
     if (record.session) return record.session;
-    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir);
+    const hindsightRuntimeConfig = await this.resolveHindsightRuntimeConfig(authorization);
+    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig);
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
     if (authorization && this.hasCodingTools(authorization.snapshot)) {
@@ -351,7 +353,7 @@ export class SessionHost {
         compaction: { enabled: false },
         retry: { enabled: false },
       }),
-      tools: [...customTools.map((tool) => tool.name), ...(authorization ? [...memoryToolNames(authorization.snapshot), ...ragToolNames(authorization.snapshot)] : [])],
+      tools: [...customTools.map((tool) => tool.name), ...(authorization ? [...memoryToolNames(authorization.snapshot, hindsightRuntimeConfig), ...ragToolNames(authorization.snapshot)] : [])],
       customTools,
     });
     record.session = result.session;
@@ -454,6 +456,13 @@ export class SessionHost {
     await controlled?.shutdown?.();
   }
 
+  private async flushChildResourceLoader(child: ChildSession): Promise<void> {
+    if (!child.resourceLoaderShutdown) {
+      child.resourceLoaderShutdown = this.flushResourceLoader(child.resourceLoader);
+    }
+    await child.resourceLoaderShutdown;
+  }
+
   private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
     if (!authorization.caller.tenantId) throw new Error("Authenticated tenant is required for delegation");
     const memberId = authorization.caller.userId ?? authorization.caller.callerId;
@@ -499,7 +508,8 @@ export class SessionHost {
       }
       const sessionManager = SessionManager.inMemory(childWorkspace);
       const childAuthorization = { ...authorization, employeeId: snapshot.employee_id, snapshot, runtimeScope: sourceRef };
-      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization, childWorkspace, this.options.agentDir);
+      const hindsightRuntimeConfig = await this.resolveHindsightRuntimeConfig(childAuthorization);
+      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization, childWorkspace, this.options.agentDir, hindsightRuntimeConfig);
       child.resourceLoader = resourceLoader;
       await resourceLoader.reload();
       const childTools = this.toolsFor(childAuthorization, false, undefined, childWorkspace, sessionManager.getSessionId());
@@ -514,7 +524,7 @@ export class SessionHost {
         resourceLoader,
         sessionManager,
         settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot), ...ragToolNames(childAuthorization.snapshot)],
+        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot, hindsightRuntimeConfig), ...ragToolNames(childAuthorization.snapshot)],
         customTools: childTools,
       });
       child.session = result.session;
@@ -526,7 +536,7 @@ export class SessionHost {
       } finally {
         unsubscribe();
         await child.abort();
-        await this.flushResourceLoader(resourceLoader);
+        await this.flushChildResourceLoader(child);
         result.session.dispose();
       }
     } finally {
@@ -535,13 +545,28 @@ export class SessionHost {
           await this.options.modelRuntime.removeRuntimeApiKey(childProviderId).catch(() => undefined);
           this.options.modelRuntime.unregisterProvider(childProviderId);
         }
-        await this.flushResourceLoader(child.resourceLoader);
+        await this.flushChildResourceLoader(child);
       } finally {
         if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
         record.activeDelegates.delete(child);
         child.resolveDone();
       }
     }
+  }
+
+  private async resolveHindsightRuntimeConfig(authorization?: SessionAuthorization): Promise<HindsightRuntimeConfig | undefined> {
+    if (!authorization || !isMemoryPolicyEnabled(authorization.snapshot)) return undefined;
+    if (authorization.managerClient?.pullHindsightRuntimeConfig) {
+      const config = await authorization.managerClient.pullHindsightRuntimeConfig(authorization.caller, authorization.employeeId);
+      if (!config) throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
+      return config;
+    }
+    if (process.env.AITEAM_ENV === "production") {
+      throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
+    }
+    // Development/faux sessions may omit the external memory lease; no Hindsight
+    // tools or local bank are created in that case.
+    return undefined;
   }
 
   private async ensureRuntimeModel(authorization: SessionAuthorization): Promise<{ model: Model<any>; providerId?: string }> {

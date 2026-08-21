@@ -439,7 +439,7 @@ start_service_local() {
         [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
         [[ -n "${AITEAM_PI_FAKE:-}" ]] || agent_fake=false
       fi
-      # ctl sources the whole .env.* file; explicitly remove Manager-only RAG
+      # ctl sources the whole .env.* file; explicitly remove Manager-only
       # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
         -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
@@ -451,9 +451,7 @@ start_service_local() {
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
         AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}/api/manager/rag/mcp}" \
-        AITEAM_HINDSIGHT_URL="${AITEAM_HINDSIGHT_URL:-}" \
-        HINDSIGHT_API_TOKEN="${HINDSIGHT_API_TOKEN:-}" \
-        HINDSIGHT_API_KEY="${HINDSIGHT_API_KEY:-}" \
+        -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
         AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="" \
         AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY="" \

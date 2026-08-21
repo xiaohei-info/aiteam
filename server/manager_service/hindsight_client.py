@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
@@ -24,13 +24,26 @@ class HindsightUnavailable(AppError):
     status, code, title = 503, "hindsight_unavailable", "Memory service unavailable"
 
 
+def _lease_ttl_seconds(raw: str | None) -> int:
+    try:
+        return max(30, min(int(raw or "300"), 3600))
+    except (TypeError, ValueError):
+        return 300
+
+
 @dataclass(frozen=True)
 class HindsightSettings:
     base_url: str | None
-    token: str | None
+    token: str | None = field(repr=False)
     recall_path: str | None
     retain_path: str | None
     delete_path: str | None
+    # Agent receives this Manager facade URL, never the direct Hindsight URL.
+    facade_url: str | None = None
+    lease_ttl_seconds: int = 300
+    # Positional test/legacy settings retain the old bank shape; env-backed
+    # production clients use the same deterministic bank id as Agent leases.
+    bank_id_mode: str = "legacy"
 
     @classmethod
     def from_env(cls) -> "HindsightSettings":
@@ -40,6 +53,9 @@ class HindsightSettings:
             recall_path=os.getenv("HINDSIGHT_RECALL_PATH"),
             retain_path=os.getenv("HINDSIGHT_RETAIN_PATH"),
             delete_path=os.getenv("HINDSIGHT_DELETE_PATH"),
+            facade_url=os.getenv("HINDSIGHT_FACADE_URL") or "/api/manager/hindsight",
+            lease_ttl_seconds=_lease_ttl_seconds(os.getenv("HINDSIGHT_LEASE_TTL_SECONDS")),
+            bank_id_mode="scoped",
         )
 
 
@@ -79,7 +95,14 @@ class HindsightClient:
         }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
-        bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
+        if settings.bank_id_mode == "scoped":
+            # Import lazily to keep the transport module usable by the lease
+            # module without an import cycle during Manager startup.
+            from .hindsight_credentials import derive_hindsight_bank_id
+
+            bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id)
+        else:
+            bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
         native = "/v1/default/" in path and "{bank_id}" in path
         try:
             encoded_bank_id = quote(bank_id, safe="")
