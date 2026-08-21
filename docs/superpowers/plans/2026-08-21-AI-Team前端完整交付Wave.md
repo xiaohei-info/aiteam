@@ -1,6 +1,6 @@
 ---
 created: 2026-08-21
-status: active
+status: completed-baseline-residuals
 scope: frontend-complete-wave
 ---
 
@@ -44,12 +44,22 @@ scope: frontend-complete-wave
 - 仅通过当前 Agent API 和 Pi MCP；
 - no localStorage truth、no old run/task/timeline。
 
-## 验收
+## 验收结果
 
 - web workspace typecheck/test/build 全通过；
 - 三端 smoke 48 项全通过；
 - cross-tier 55 项全通过；
-- 各端 no-legacy/static endpoint gate 通过；
-- Manager Knowledge 221 tests、Agent 现有 tests 不回归；
-- taiyi latest static dist 部署后 Operation/Manager/Agent 页面 smoke 通过；
-- 输出完整页面矩阵：已完成、明确 unavailable、尚未实现后端能力和生产残余风险。
+- Agent-local knowledge 页面、旧 endpoint/nav 已清理；
+- Manager Knowledge 221 tests、Agent 85 tests 不回归；
+- taiyi latest static dist 已部署并 smoke 通过；
+- Manager Knowledge 文档/binding/citation 状态、retry/reindex、unavailable 语义已落地；
+- Office/Marketplace/Org/Usage/Sync 投影契约和空/错误态已收口。
+
+## 明确残余
+
+- exact chunk citation 和浏览器端 citation get；
+- Manager document delete API/UI；
+- 多实例 RAG 管理页面；
+- 真实非空 Office/Marketplace/Org/Usage 数据矩阵；
+- 群聊 delegation 完整视觉交互；
+- 生产域名/TLS/最终浏览器矩阵。
