@@ -1,9 +1,9 @@
 /**
- * W-A.3 群聊页（#68）—— 单机多专家 @提及协作 + 多 run 并入同一时间线（06 §7.6 / D19）。
+ * W-A.3 群聊页（#68）—— 单机多专家 @提及协作，共享本地 Pi conversation 事件流（06 §7.6 / D19）。
  *
  * 组合（最大化复用 chat 模块）：
  *   左：ConversationList（复用，headerLabel="群聊"）
- *   右：TimelineView（复用——TimelineStore 按 cursor 归并，多 run 事件天然并入同一时间线）
+ *   右：TimelineView（复用——消费本地 Pi conversation entries 与 event stream）
  *       + GroupExpertRoster（只读 roster 投影）
  *       + MentionComposer（@提及 -> coordinator prompt）
  *
@@ -66,10 +66,10 @@ function toGroupExpert(p: {
 export function GroupPage() {
   const { client } = useApp();
   const [selected, setSelected] = useState<Conversation | null>(null);
-  // 已装载专家原始投影列表（含 employee_id 供方案绑定 roster 过滤）。
+  // 已装载专家原始投影列表；employee_id 用于选择 coordinator。
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
-  // 一轮编排完成后 +1，触发列表刷新 + timeline catchUp（补拉 since highWater 的新事件）。
+  // A submitted prompt increments this signal so the conversation list and local Pi entries refresh.
   const [dispatchSignal, setDispatchSignal] = useState(0);
   // "从解决方案创建群聊" 固定编排入口：列表+弹窗状态
   const [solutions, setSolutions] = useState<SolutionProjection[] | null>(null);
@@ -106,15 +106,15 @@ export function GroupPage() {
     [experts],
   );
 
-  // 方案绑定会话的 roster 动态过滤：仅展示 solution_expert_employee_ids 中的专家。
-  // 已用 stable handle（backend ASCII / employee_id）直接匹配，不再通过 display_name 反查。
+  // Filter only when the read-only solution projection explicitly supplies member IDs;
+  // otherwise keep the full locally authorized roster instead of inventing a scope.
   const rosterForSelected = useMemo(() => {
-    const ids = selected?.solution_expert_employee_ids;
-    if (!selected || !ids || ids.length === 0) return roster;
-    const allowed = new Set(ids);
-    const filtered = roster.filter((e) => allowed.has(e.handle));
-    return filtered.length > 0 ? filtered : roster;
-  }, [selected, roster]);
+    const solutionId = selected?.solution_instance_id;
+    const solution = solutionId ? solutions?.find((item) => item.solution_instance_id === solutionId) : undefined;
+    if (!solution || !Array.isArray(solution.expert_employee_ids)) return roster;
+    const allowed = new Set(solution.expert_employee_ids);
+    return roster.filter((expert) => expert.employee_id !== undefined && allowed.has(expert.employee_id));
+  }, [roster, selected?.solution_instance_id, solutions]);
 
   const handleDispatched = useCallback(() => {
     setDispatchSignal((n) => n + 1);
@@ -134,6 +134,10 @@ export function GroupPage() {
       setSolutionsError("加载方案列表失败");
     }
   }, [client]);
+
+  useEffect(() => {
+    void refreshSolutions();
+  }, [refreshSolutions]);
 
   const handleOpenCreate = useCallback(() => {
     setSelectedSolutionId(null);
@@ -286,8 +290,8 @@ export function GroupPage() {
         <VStack gap={4}>
             <Heading level={2}>从解决方案创建群聊</Heading>
             <Text as="p">
-              选择一个行业方案实例，将以其自带的三阶段固定编排规则（planner / subtask / aggregate）创建群聊。
-              创建后编排规则只读，不可在会话中覆盖。
+              选择一个已授权方案实例创建群聊；消息仍由本地 coordinator 的 Pi
+              conversation/tool/event 语义处理，用户端不提交方案编排 payload。
             </Text>
             {solutions === null ? (
               <Text type="supporting">加载中…</Text>

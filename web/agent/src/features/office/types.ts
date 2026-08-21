@@ -1,7 +1,7 @@
 export interface OfficeEmployee { employee_id: string; display_name: string; status: string; task: string | null; avatar_url: string | null; }
 export interface OfficeScene { employees: OfficeEmployee[]; summary: Record<string, number>; }
 
-/** A schedule is Conversation metadata; execution state belongs to Pi events, not a Loop record. */
+/** A schedule is Conversation metadata; execution state belongs to the Pi event stream. */
 export interface ConversationSchedule {
   type: "conversation_schedule";
   conversation_id: string;

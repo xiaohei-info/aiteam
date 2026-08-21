@@ -4,8 +4,8 @@
  * 群聊与私聊统一走 coordinator Conversation 的 prompt 入口；roster 仅用于本地 @提及提示。
  * @解析只认 roster 内已知 handle，不把 roster 或 planner payload 发送给 Agent。
  *
- * 发送后清空输入并回调 onDispatched（父组件据此触发 timeline catchUp + 展示
- * triggered_handles）。展示态不入持久化主状态（D6）。
+ * 发送后清空输入并回调 onDispatched（父组件据此刷新本地 Pi entries）。
+ * 展示态不入持久化主状态（D6）。
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";

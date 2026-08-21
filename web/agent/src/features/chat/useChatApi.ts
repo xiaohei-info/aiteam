@@ -12,7 +12,6 @@ export interface Conversation {
   entry_employee_id: string | null;
   coordinator_employee_id: string | null;
   solution_instance_id: string | null;
-  solution_expert_employee_ids?: string[];
   schedule: Record<string, unknown> | null;
   last_read_entry_id: string | null;
   created_at: string;
@@ -26,9 +25,12 @@ export async function listConversations(
   const result = await client.listGet<Conversation>("/api/agent/conversations", {
     query: { limit: 50, cursor },
   });
+  if (!Array.isArray(result.items) || !result.page || typeof result.page.has_more !== "boolean") {
+    throw new Error("conversation list: invalid response");
+  }
   return {
     items: result.items,
-    nextCursor: result.page.next_cursor,
+    nextCursor: result.page.next_cursor ?? null,
     hasMore: result.page.has_more,
   };
 }

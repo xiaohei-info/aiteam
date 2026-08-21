@@ -102,7 +102,8 @@ export function useResync(): {
       const r = await client.post<SyncGrantsResult>("/api/agent/grants/sync", {
         body: { tenant_id: session.claims.tenant_id ?? "", member_id: session.claims.user_id },
       });
-      setResult(r ?? { ok: false, upserted: 0, revoked: 0, error: null });
+      if (!r) throw new Error("grant sync: empty response");
+      setResult(r);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "同步失败");
     } finally {

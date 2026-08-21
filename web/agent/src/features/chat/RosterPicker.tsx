@@ -28,7 +28,7 @@ export interface RosterPickerProps {
 const isConfigured = (expert: LoadedExpertProjection) => !!(expert.model_policy?.model && expert.model_policy?.provider_ref);
 
 /**
- * 执行快照在首次提交 Run 时才在线拉取并冻结；没有本地快照只代表不能离线回退，
+ * 执行快照在首次提交 prompt 时才在线拉取并冻结；没有本地快照只代表不能离线回退，
  * 不能在在线首跑前把专家选择入口封死。
  */
 function needsInitialSnapshot(report: ExpertReadiness | undefined): boolean {

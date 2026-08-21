@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentApiClient } from "../../lib/api-client";
 import { listLoadedExperts, listSolutionInstances, createGroupConversation } from "./useGroupApi";
+import { parseMentions } from "./MentionComposer";
+import { footerHandles } from "../chat/MessageComposer";
 
 describe("useGroupApi read-only projections", () => {
   it("reads the authorized roster projection", async () => {
@@ -15,6 +17,13 @@ describe("useGroupApi read-only projections", () => {
     const client = { listGet: vi.fn(async () => ({ items: data, page: { next_cursor: null, has_more: false } })) } as unknown as AgentApiClient;
     await expect(listSolutionInstances(client)).resolves.toEqual(data);
     expect(client.listGet).toHaveBeenCalledWith("/api/agent/grants/solutions");
+  });
+
+  it("keeps delegation mentions on the Pi stable handle, not display_name", () => {
+    const roster = [{ employee_id: "e1", tenant_id: "t1", version: "v1", handle: "alice", display_name: "Alice", revoked: false }];
+    expect(footerHandles(roster)).toEqual(["alice"]);
+    expect(parseMentions("请 @alice 处理", new Set(["alice"]))).toEqual(["alice"]);
+    expect(parseMentions("请 @Alice 处理", new Set(["alice"]))).toEqual([]);
   });
 
   it("creates a server-owned group metadata record with coordinator authorization", async () => {

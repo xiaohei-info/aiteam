@@ -1,4 +1,4 @@
-/** 本地私聊工作区：保持会话、时间线与 message → run 行为，视图直接使用 Astryx。 */
+/** 本地私聊工作区：保持会话、Pi prompt/event 行为，视图直接使用 Astryx。 */
 import { useCallback, useState } from "react";
 import { Card } from "@astryxdesign/core/Card";
 import { ChatLayout } from "@astryxdesign/core/Chat";

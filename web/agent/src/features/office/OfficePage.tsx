@@ -38,24 +38,29 @@ export function OfficePage() {
   }, [client]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadFeed(); }, [loadFeed]);
 
   if (loading) return <Banner status="info" title="加载中…" />;
   if (error) return <Banner status="error" title={error} />;
-  if (!scene) return null;
+  if (!scene) return <EmptyState title="办公室投影不可用" description="Agent 当前没有可用的办公室数据。" />;
+
+  const summaryEntries = Object.entries(scene.summary);
 
   return (
     <VStack gap={4} role="region" aria-label="办公室动态">
       <Heading level={1}>办公室动态</Heading>
 
-      <HStack gap={3} wrap="wrap">
-        {Object.entries(scene.summary).map(([key, val]) => (
-          <Card key={key} padding={3} width={180}><VStack gap={1}><Text type="supporting">{key}</Text><Text weight="semibold">{val}</Text></VStack></Card>
-        ))}
-      </HStack>
+      {summaryEntries.length > 0 ? (
+        <HStack gap={3} wrap="wrap" data-testid="office-summary">
+          {summaryEntries.map(([key, val]) => (
+            <Card key={key} padding={3} width={180}><VStack gap={1}><Text type="supporting">{key}</Text><Text weight="semibold">{val}</Text></VStack></Card>
+          ))}
+        </HStack>
+      ) : <EmptyState title="暂无状态摘要" data-testid="office-summary-empty" />}
 
-      <HStack gap={3} wrap="wrap">
+      <HStack gap={3} wrap="wrap" data-testid="office-employees">
         {scene.employees.map((emp) => (
-          <Card key={emp.employee_id} data-testid="office-employee" padding={3} width={180}><VStack gap={1}><Text>{STATUS_ICONS[emp.status] ?? "●"}</Text><Text weight="semibold">{emp.display_name}</Text><Text type="supporting">{emp.status}</Text>{emp.task && <Text type="supporting">{emp.task}</Text>}</VStack></Card>
+          <Card key={emp.employee_id} data-testid="office-employee" padding={3} width={180}><VStack gap={1}><Text>{STATUS_ICONS[emp.status] ?? "●"}</Text><Text weight="semibold">{emp.display_name}</Text><Text type="supporting">{emp.status}</Text><Text type="supporting">{emp.task ?? "当前无任务"}</Text></VStack></Card>
         ))}
       </HStack>
 
@@ -67,9 +72,11 @@ export function OfficePage() {
 
       {feedLoading && <Banner status="info" title="加载中…" />}
 
-      {feed && !feedLoading && (
+      {feed && !feedLoading ? (
         <ScheduledJobs jobs={feed.events.filter((e) => e.type === "conversation_schedule")} />
-      )}
+      ) : !feedLoading && !feedError ? (
+        <EmptyState title="办公室动态不可用" description="Agent 当前没有可用的动态 Feed。" data-testid="office-feed-unavailable" />
+      ) : null}
     </VStack>
   );
 }

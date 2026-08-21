@@ -20,13 +20,34 @@ function login() {
 }
 
 describe("MarketplacePage", () => {
-  it("renders a read-only catalog without a recruitment action", async () => {
+  it("renders a read-only catalog without a recruitment or publishing action", async () => {
     login();
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [template], page: { next_cursor: null, has_more: false } }), { status: 200 })) as typeof fetch;
     renderPage();
     await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
     expect(screen.getByText("请在 Manager 端配置")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "招募" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "发布需求" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /上架/ })).toBeNull();
+    const urls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.endsWith("/api/agent/marketplace/templates"))).toBe(true);
+    expect(urls.some((url) => url.includes("/templates/"))).toBe(false);
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
+  });
+
+  it("projects an empty Agent catalog explicitly", async () => {
+    login();
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 })) as typeof fetch;
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("marketplace-empty")).toBeInTheDocument());
+    expect(screen.getByText(/没有收到可读取的目录投影/)).toBeInTheDocument();
+  });
+
+  it("projects a catalog problem response as an error", async () => {
+    login();
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ type: "about:blank", title: "Unavailable", status: 503, code: "manager_unavailable", detail: "目录暂不可用" }), { status: 503, headers: { "content-type": "application/problem+json" } })) as typeof fetch;
+    renderPage();
+    await waitFor(() => expect(screen.getByText("目录暂不可用")).toBeInTheDocument());
+    expect(screen.queryByTestId("marketplace-empty")).toBeNull();
   });
 });

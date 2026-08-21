@@ -35,6 +35,7 @@ export interface GroupExpert {
 
 export async function listLoadedExperts(client: AgentApiClient): Promise<LoadedExpertProjection[]> {
   const result = await client.listGet<LoadedExpertProjection>("/api/agent/grants/experts");
+  if (!Array.isArray(result.items)) throw new Error("expert roster: invalid response");
   return result.items;
 }
 
@@ -56,6 +57,7 @@ export async function syncGrants(
 
 export async function listSolutionInstances(client: AgentApiClient): Promise<SolutionProjection[]> {
   const result = await client.listGet<SolutionProjection>("/api/agent/grants/solutions");
+  if (!Array.isArray(result.items)) throw new Error("solution list: invalid response");
   return result.items;
 }
 

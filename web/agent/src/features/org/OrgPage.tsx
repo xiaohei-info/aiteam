@@ -10,6 +10,7 @@ import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
@@ -196,7 +197,7 @@ export function OrgPage() {
 
   if (loading) return <Banner status="info" title={i18n.t("agent.org.loading")} />;
   if (error) return <Banner status="error" title={error} data-testid="org-error" />;
-  if (!tree) return null;
+  if (!tree) return <EmptyState title="组织投影不可用" description="Agent 当前没有收到 Manager 的组织树。" data-testid="org-empty" />;
 
   return (
     <VStack gap={4} role="region" aria-label={i18n.t("agent.org.title")} data-testid="org-page">

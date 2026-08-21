@@ -236,18 +236,15 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
             <Text type="supporting">暂无可召唤的智能体</Text>
           ) : (
             <VStack gap={1}>
-              {roster.map((p) => {
-                const handle = p.display_name;
-                return (
-                  <Button
-                    key={p.employee_id}
-                    label={`@${handle}（点击召唤）`}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => pickHandle(handle)}
-                  />
-                );
-              })}
+              {roster.map((p) => (
+                <Button
+                  key={p.employee_id}
+                  label={`@${p.display_name || p.handle}（点击召唤）`}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => pickHandle(p.handle)}
+                />
+              ))}
             </VStack>
           )
         }
@@ -391,11 +388,11 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   );
 }
 
-/** 把 roster 投影成 @提及 handle 集合。handle 取 display_name（与 MentionComposer+GroupPage 口径一致）。 */
-function footerHandles(roster: LoadedExpertProjection[]): string[] {
+/** 把 roster 投影成 @提及 handle 集合；delegation 只接受 Agent 投影的 stable handle。 */
+export function footerHandles(roster: LoadedExpertProjection[]): string[] {
   const seen = new Set<string>();
   for (const p of roster) {
-    if (p.display_name) seen.add(p.display_name);
+    if (p.handle) seen.add(p.handle);
   }
   return [...seen];
 }

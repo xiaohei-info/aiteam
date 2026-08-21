@@ -97,6 +97,32 @@ describe("OfficePage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("专家A")).toBeInTheDocument());
     expect(screen.getByText("数据清洗中")).toBeInTheDocument();
+    expect(screen.getAllByText("当前无任务")).toHaveLength(2);
+  });
+
+  it("Feed 返回 null 时展示不可用态而不是空白", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/office/scene")) return new Response(envelope(scene), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(envelope(null), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("office-feed-unavailable")).toBeInTheDocument());
+  });
+
+  it("空场景返回可用 envelope 时展示摘要和员工空态", async () => {
+    loginStorage();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/office/scene")) return new Response(envelope({ employees: [], summary: {} }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(envelope({ events: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("暂无员工")).toBeInTheDocument());
+    expect(screen.getByTestId("office-summary-empty")).toBeInTheDocument();
   });
 
   it("点击刷新加载 Feed → 展示动态列表", async () => {
@@ -178,7 +204,7 @@ describe("OfficePage", () => {
     });
   });
 
-  it("Feed renders Conversation.schedule metadata without Loop retry state", async () => {
+  it("Feed renders Conversation.schedule metadata without execution retry state", async () => {
     loginStorage();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();

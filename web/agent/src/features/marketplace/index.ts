@@ -1,2 +1,2 @@
 export { MarketplacePage } from "./MarketplacePage";
-export { listTemplates, getTemplateDetail } from "./useMarketplaceApi.js";
+export { listTemplates } from "./useMarketplaceApi.js";

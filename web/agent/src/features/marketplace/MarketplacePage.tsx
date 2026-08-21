@@ -21,18 +21,22 @@ export function MarketplacePage() {
   const [categories, setCategories] = useState<string[]>(["全部"]);
   const [keyword, setKeyword] = useState("");
   const [category, setCategory] = useState("全部");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [actionInfo, setActionInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const list = await listTemplates(client, { keyword: keyword || undefined, category: category !== "全部" ? category : undefined });
-      setTemplates(list);
+      const list = await listTemplates(client);
+      const normalizedKeyword = keyword.trim().toLocaleLowerCase();
+      const filtered = list.filter((template) => {
+        const matchesCategory = category === "全部" || template.category === category;
+        const searchable = [template.display_name, template.category, ...template.tags].join(" ").toLocaleLowerCase();
+        return matchesCategory && (!normalizedKeyword || searchable.includes(normalizedKeyword));
+      });
+      setTemplates(filtered);
       // 分类来自后端真实模板（Manager 端招募到的专家分类），不再写死。
-      // 仅在全量视图（无分类、无关键字过滤）刷新分类栏，保证选中某分类后栏位稳定。
-      if (category === "全部" && !keyword) {
+      if (category === "全部" && !normalizedKeyword) {
         const cats = Array.from(new Set(list.map((t) => t.category).filter(Boolean)));
         setCategories(["全部", ...cats]);
       }
@@ -42,22 +46,13 @@ export function MarketplacePage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const handlePublishRequirement = useCallback(() => {
-    setActionInfo(i18n.t("agent.marketplace.publish_requirement_hint"));
-  }, [i18n]);
-
-  const handleListMyAgent = useCallback(() => {
-    setActionInfo(i18n.t("agent.marketplace.list_my_agent_hint"));
-  }, [i18n]);
-
   return (
     <VStack gap={4} role="region" aria-label="人才市场">
       <HStack justify="between" align="center" wrap="wrap">
-        <Heading level={1}>人才市场</Heading>
-        <HStack gap={1}>
-          <Button label={i18n.t("agent.marketplace.publish_requirement")} variant="secondary" onClick={() => void handlePublishRequirement()} />
-          <Button label={i18n.t("agent.marketplace.list_my_agent")} variant="primary" onClick={() => void handleListMyAgent()} />
-        </HStack>
+        <VStack gap={1}>
+          <Heading level={1}>人才市场</Heading>
+          <Text type="supporting">用户端只读取 Agent API 提供的目录投影；招募与发布由 Manager/Operation 管理。</Text>
+        </VStack>
       </HStack>
 
       <HStack gap={2} align="end">
@@ -71,11 +66,9 @@ export function MarketplacePage() {
         ))}
       </HStack>
 
-      {actionInfo && <Banner status="info" title={actionInfo} />}
-
       {loading ? <Banner status="info" title="加载中…" /> :
         error ? <Banner status="error" title={error} /> :
-        templates.length === 0 ? <EmptyState title="暂无可招募专家" /> :
+        templates.length === 0 ? <EmptyState title="人才市场暂无可用目录" description="当前 Agent 没有收到可读取的目录投影，请在 Manager/Operation 配置后重试。" data-testid="marketplace-empty" /> :
         <HStack gap={3} wrap="wrap">
           {templates.map((t) => (
             <Card key={t.template_id} padding={3} width={280}>

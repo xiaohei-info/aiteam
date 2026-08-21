@@ -97,6 +97,15 @@ describe("OrgPage 组织架构", () => {
     expect(urls.some((u) => u.includes("/api/agent/org/tree"))).toBe(true);
   });
 
+  it("空 envelope 展示组织投影不可用态而不是空白", async () => {
+    globalThis.fetch = mockFetch((url) => {
+      if (url.includes("/api/agent/org/tree")) return envelope(null);
+      return envelope(null);
+    }) as typeof fetch;
+    renderOrg();
+    await waitFor(() => expect(screen.getByTestId("org-empty")).toBeInTheDocument());
+  });
+
   it("错误态：后端异常时展示错误信息", async () => {
     globalThis.fetch = mockFetch(() => {
       throw new Error("boom");

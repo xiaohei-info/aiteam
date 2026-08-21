@@ -13,22 +13,25 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
-import { listSnapshots, syncGrants, listOutbox, type FrozenSnapshot, type OutboxItem, type SyncResult } from "./useSyncApi";
+import { flushUsage, listSnapshots, syncGrants, listOutbox, type FrozenSnapshot, type OutboxItem, type SyncResult, type UsageFlushResult } from "./useSyncApi";
 
 export function SyncPage(): ReactNode {
-  const { client, session, i18n } = useApp();
+  const { client, session } = useApp();
   const [snapshots, setSnapshots] = useState<FrozenSnapshot[]>([]);
   const [outbox, setOutbox] = useState<OutboxItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [flushing, setFlushing] = useState(false);
+  const [flushResult, setFlushResult] = useState<UsageFlushResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const [s, o] = await Promise.all([listSnapshots(client), listOutbox(client)]);
-      setSnapshots(s); setOutbox(o);
+      setSnapshots(s); setOutbox(o); setDataLoaded(true);
     } catch (err) { setError(err instanceof ApiError ? err.message : "加载失败"); }
     finally { setLoading(false); }
   }, [client]);
@@ -41,24 +44,48 @@ export function SyncPage(): ReactNode {
     try {
       const r = await syncGrants(client, session.claims.tenant_id ?? "", session.claims.user_id);
       setSyncResult(r);
-      void load();
+      await load();
     } catch (err) { setError(err instanceof ApiError ? err.message : "同步失败"); }
     finally { setSyncing(false); }
+  }
+
+  async function handleFlush(): Promise<void> {
+    if (!session) return;
+    setFlushing(true);
+    setError(null);
+    setFlushResult(null);
+    try {
+      const result = await flushUsage(client);
+      setFlushResult(result);
+      await load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : "用量上报失败"); }
+    finally { setFlushing(false); }
   }
 
   return (
     <VStack gap={4} role="region" aria-label="同步与用量">
       <HStack justify="between" align="center">
         <Heading level={1}>同步与用量</Heading>
-        <Button type="button" label="立即同步" variant="primary" size="sm" onClick={handleSync} isLoading={syncing} isDisabled={!session} />
+        <HStack gap={2}>
+          <Button type="button" label="立即同步" variant="primary" size="sm" onClick={handleSync} isLoading={syncing} isDisabled={!session || flushing} />
+          <Button type="button" label="上报用量" variant="secondary" size="sm" onClick={handleFlush} isLoading={flushing} isDisabled={!session || syncing} />
+        </HStack>
       </HStack>
       {syncResult && (
         <Banner status={syncResult.ok ? "success" : "warning"} title={`同步${syncResult.ok ? "成功" : "失败"}`} description={`新增 ${syncResult.upserted}，撤销 ${syncResult.revoked}${syncResult.error ? `（${syncResult.error}）` : ""}`} />
       )}
+      {flushResult && (
+        <Banner
+          status={flushResult.failed.length > 0 ? "warning" : "success"}
+          title="用量上报完成"
+          description={`已上报 ${flushResult.sent.length}，失败 ${flushResult.failed.length}`}
+          data-testid="usage-flush-result"
+        />
+      )}
       {error && <Banner status="error" title={error} />}
       {loading ? (
         <Banner status="info" title="加载中…" />
-      ) : (
+      ) : !dataLoaded ? null : (
         <>
           <Card padding={4}>
             <VStack gap={2}>
@@ -74,10 +101,10 @@ export function SyncPage(): ReactNode {
           <Card padding={4}>
             <VStack gap={2}>
             <Heading level={2}>用量 Outbox（{outbox.length}）</Heading>
-            {outbox.length === 0 ? <EmptyState title="暂无待发摘要" headingLevel={3} isCompact /> : (
+            {outbox.length === 0 ? <EmptyState title="暂无用量摘要" headingLevel={3} isCompact /> : (
                 <table>
-                  <thead><tr><th>类型</th><th>状态</th><th>尝试</th></tr></thead>
-                  <tbody>{outbox.map((o) => <tr key={o.summary_id}><td>{o.kind}</td><td>{o.status}</td><td>{o.attempts}</td></tr>)}</tbody>
+                  <thead><tr><th>类型</th><th>状态</th><th>尝试</th><th>错误</th></tr></thead>
+                  <tbody>{outbox.map((o) => <tr key={o.summary_id}><td>{o.kind}</td><td>{o.status}</td><td>{o.attempts}</td><td>{o.last_error ?? "—"}</td></tr>)}</tbody>
                 </table>
             )}
             </VStack>
