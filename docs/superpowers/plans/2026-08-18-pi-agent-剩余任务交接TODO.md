@@ -102,15 +102,15 @@ Pi Session
 - tenant/member/snapshot authorization 基础；
 - Hindsight Extension 与当前 Pi SDK 的最小加载 spike。
 
-仍需完成：Manager 下发 bank-scoped Hindsight 配置、受控 ResourceLoader 注入、工具 allowlist，以及删除自定义 Agent memory tools。
+测试环境已完成：Manager/Hindsight 配置、受控 ResourceLoader、工具 allowlist、Extension recall/retain 和自定义 Agent memory 主链清理。生产 bank-scoped credential provisioning/rotation 仍待 hardening。
 
-需要回退/替换：
+需要继续清理/替换：
 
 - `pullKnowledgeArtifacts` bundle 主链；
 - Agent `knowledge_artifact` 企业知识真相；
-- `SqliteKnowledgeIndex`；
+- `SqliteKnowledgeIndex` 遗留源文件；
 - “Agent offline 本地企业知识检索”语义；
-- Manager 旧 query/search/get 被删除的部分。
+- Manager/Agent 当前已完成 `knowledge_search` + `knowledge_get`，但仍需多实例 workspace 编排和前端产品化。
 
 目标约束：
 
@@ -124,7 +124,7 @@ Pi Session
 
 ### RAG 首个切片（已完成，后续增强待做）
 
-**当前状态**：Manager-owned FastMCP + Agent controlled MCP + LightRAG query/data 已完成；Manager intake 已真实写入 LightRAG 并按 track status 发布 ready/binding；BGE-M3/BGE-Reranker 和 PostgreSQL/pgvector 已在 taiyi 运行。后续多实例 workspace 编排、knowledge_get 和前端仍未完成。
+**当前状态**：Manager-owned FastMCP + Agent controlled MCP + LightRAG query/data、Manager-authorized `knowledge_get` 已完成；Manager intake 已真实写入 LightRAG 并按 track status 发布 ready/binding；BGE-M3/BGE-Reranker 和 PostgreSQL/pgvector 已在 taiyi 运行。后续多实例 workspace 编排、exact chunk citation 和前端仍未完成。
 
 **主要文件**：
 
@@ -157,11 +157,7 @@ Pi Session
 
 **最终裁决**：删除 `mode=relay|direct`。未来自建中转站对 AI Team 仍只是 `base_url + api_key + api_protocol`；保留 `api_protocol`，因为中转站支持多种 Pi API 协议。
 
-**当前状态**：
-
-- Manager 已有 Fernet 加密 CRUD、成员可见性、supported models 和 `provider_ref/model` snapshot；
-- Agent 仍只读取本地 `auth.json/models.json` 或 `AITEAM_PI_FAKE=true`；
-- Manager→Agent 的可执行 provider credential 下发未实现；没有 API key 时 Agent 不能发起真实 LLM 请求。
+**当前状态**：taiyi 测试环境已完成 Manager runtime-config pull、进程内 Pi provider registration/key binding，关闭 faux 后真实 Pi prompt 成功；生产级 credential vault、rotation 和多 provider 长期运维仍待 hardening。
 
 **主要文件**：
 
@@ -189,7 +185,7 @@ Pi Session
 
 ### P0-3：Pi Hindsight Extension 直连（已完成测试环境主链）
 
-**当前状态**：Manager/Hindsight HTTP facade 和 Agent 自定义 memory tools 已可运行，但不是最终 Pi 原生路线；`@luxusai/pi-hindsight@0.12.0` 与 Pi SDK `0.84.2` 的受控 inline 加载 spike 已通过。
+**当前状态**：`@luxusai/pi-hindsight@0.12.0` 已通过受控 inline 加载并在 taiyi 完成真实 recall/retain；生产 bank-scoped token provisioning、rotation、完整自动 retain 和多成员并发 hardening 仍待完成。
 
 **实施要求**：
 
@@ -230,7 +226,9 @@ lightrag:   9621 (loopback)
 
 ### P0-5：完整 Playwright / 三端 E2E
 
-当前只完成了服务 smoke 和局部脚本验证；仍需执行：
+taiyi external Playwright profile 已加入；Operation/Manager/Agent smoke 已 `48 passed`。cross-tier 首次共享环境运行达到 `49 passed / 55`，剩余失败主要是共享测试数据污染、服务重启/登录状态、Operator→Manager 超时和部分旧测试断言，尚未达到完整通过。
+
+仍需执行：
 
 - `web/e2e` 三端登录、授权同步、私聊、群聊委托、Provider、Memory、技能、附件、Office、RAG MCP citation；
 - 真实 Agent auth/binding，不允许测试绕过 Agent 登录或只断言 `202`；
