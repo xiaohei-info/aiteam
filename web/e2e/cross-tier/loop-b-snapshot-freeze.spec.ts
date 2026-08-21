@@ -108,13 +108,18 @@ test.describe("Loop-B snapshot freeze（跨端）", () => {
     const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
     const token = agentLogin.token;
     const origin = TIER_API_ORIGIN.agent;
+    const memberId = String(
+      (agentLogin.claims as Record<string, unknown> | undefined)?.user_id
+      ?? (agentLogin.claims as Record<string, unknown> | undefined)?.sub
+      ?? "test-member-id",
+    );
 
     // sync 端点也可达（Agent pull Manager 的主动入口）
     const syncPath = "/api/agent/grants/sync";
     const syncResp = await request.post(`${origin}${syncPath}`, {
       data: {
         tenant_id: defaultCredentials("agent").tenant_id,
-        member_id: "test-member-id",
+        member_id: memberId,
       },
       headers: {
         Authorization: `Bearer ${token}`,
