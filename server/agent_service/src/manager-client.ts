@@ -1,7 +1,7 @@
 import type { AuthenticatedCaller } from "./http/auth.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
 import type { UsageSummary } from "./usage.js";
-import type { SignedSkillPackage } from "./skills.js";
+import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
 import type { KnowledgeArtifact } from "./storage/sqlite.js";
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
@@ -12,6 +12,7 @@ export interface AuthorizedConfig {
   revoked_ids?: string[];
   skill_packages?: SignedSkillPackage[];
   skill_packages_authoritative?: boolean;
+  skill_signing_keys?: SkillSigningKeyMetadata[];
 }
 
 export interface ManagerAuthInput {
@@ -233,7 +234,9 @@ export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, mem
   const hasSkillPackages = Object.prototype.hasOwnProperty.call(body, "skill_packages");
   const skillPackagesAuthoritative = body.skill_packages_authoritative !== false;
   const skill_packages = skillPackagesAuthoritative && Array.isArray(body.skill_packages) ? body.skill_packages.map(normalizeSignedSkillPackage) : undefined;
-  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(hasSkillPackages && skill_packages ? { skill_packages } : {}) };
+  if (body.skill_signing_keys !== undefined && !Array.isArray(body.skill_signing_keys)) throw new ManagerUnavailableError("Manager returned invalid skill signing key metadata");
+  const skill_signing_keys = Array.isArray(body.skill_signing_keys) ? body.skill_signing_keys.map(normalizeSkillSigningKey) : undefined;
+  return { experts, solutions, ...(snapshots ? { snapshots } : {}), revoked_ids, ...(hasSkillPackages && skill_packages ? { skill_packages } : {}), ...(skill_signing_keys ? { skill_signing_keys } : {}) };
 }
 
 const MAX_KNOWLEDGE_ARTIFACTS = 4_096;
@@ -271,6 +274,11 @@ export function normalizeKnowledgeArtifact(value: unknown, tenantId?: string, me
     source: { type: source.type as string, name: source.name as string, mime_type: source.mime_type as string },
     content: raw.content as string,
   };
+}
+
+function normalizeSkillSigningKey(value: unknown): SkillSigningKeyMetadata {
+  try { return parseSkillSigningKeyMetadata(value); }
+  catch { throw new ManagerUnavailableError("Manager returned invalid skill signing key metadata"); }
 }
 
 function normalizeSignedSkillPackage(value: unknown): SignedSkillPackage {
@@ -336,6 +344,8 @@ function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string)
   const snapshotVersion = stringValue(raw.snapshot_version, "snapshot_version");
   if (!version) throw new ManagerUnavailableError("Manager snapshot is missing version");
   assertOwnership(raw, tenantId, memberId);
+  if (raw.skill_signing_keys !== undefined && !Array.isArray(raw.skill_signing_keys)) throw new ManagerUnavailableError("Manager returned invalid snapshot skill signing key metadata");
+  const skillSigningKeys = Array.isArray(raw.skill_signing_keys) ? raw.skill_signing_keys.map(normalizeSkillSigningKey) : [];
   return {
     ...raw,
     employee_id: employeeId,
@@ -345,6 +355,7 @@ function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string)
     model_policy: objectValue(raw.model_policy) ?? {},
     tools: stringArray(raw.tools),
     skill_refs: stringArray(raw.skill_refs ?? raw.skills),
+    skill_signing_keys: skillSigningKeys,
     tool_policy: objectValue(raw.tool_policy) ?? { allowed_tools: stringArray(raw.tools) },
     ...(tenantId ? { tenant_id: tenantId } : (typeof raw.tenant_id === "string" ? { tenant_id: raw.tenant_id } : {})),
     ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})),

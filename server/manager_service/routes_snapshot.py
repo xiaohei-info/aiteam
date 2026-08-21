@@ -82,6 +82,10 @@ def build_snapshot_router(verifier) -> APIRouter:
             employee_id=body.employee_id,
             employee_version=body.employee_version,
         )
+        signer = getattr(request.app.state, "_skill_signer", None)
+        if signer is not None:
+            # Snapshot carries verification metadata only; private key material stays in Manager.
+            snapshot = snapshot.model_copy(update={"skill_signing_keys": signer.public_metadata()})
         return Envelope[SnapshotPullResponse](data=SnapshotPullResponse(snapshot=snapshot))
 
     return router

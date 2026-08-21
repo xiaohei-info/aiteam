@@ -4,21 +4,28 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpa
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { canonicalSignedSkillPackageBytes, SkillCache, SkillVerificationError, skillRefsForSnapshot, verifySignedSkillPackage } from "./skills.js";
+import { canonicalSignedSkillPackageBytes, SkillCache, SkillVerificationError, skillRefsForSnapshot, type SkillSigningKeyMetadata, verifySignedSkillPackage } from "./skills.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { AgentHttpServer } from "./http/server.js";
 import { createFixture } from "./test-fixture.js";
 
 const sortJson = (value: unknown): unknown => Array.isArray(value) ? value.map(sortJson) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => [k, sortJson(v)])) : value;
 const sha16 = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
-function signed(key: KeyPairKeyObjectResult, skillId = "review") {
+function signed(key: KeyPairKeyObjectResult, skillId = "review", keyId = "skill-key-1", tenantId = "tenant-a", memberId = "member-a") {
   const content = "---\nname: review\ndescription: Review text\n---\n# Review\n";
   const file = { path: "SKILL.md", content, content_hash: sha16(content) };
   const pkg = { skill_id: skillId, version: "1", content_hash: sha16(JSON.stringify([[file.path, file.content]])), display_name: "Review", description: "", files: [file] };
-  const bytes = canonicalSignedSkillPackageBytes(pkg, "tenant-a", "member-a");
-  return { package: pkg, tenant_id: "tenant-a", member_id: "member-a", key_id: "skill-key-1", algorithm: "Ed25519" as const, signature: sign(null, bytes, key.privateKey).toString("base64") };
+  const bytes = canonicalSignedSkillPackageBytes(pkg, tenantId, memberId);
+  return { package: pkg, tenant_id: tenantId, member_id: memberId, key_id: keyId, algorithm: "Ed25519" as const, signature: sign(null, bytes, key.privateKey).toString("base64") };
 }
 const verification = (publicKey: string) => ({ publicKey, keyId: "skill-key-1" });
+const metadata = (key: KeyPairKeyObjectResult, keyId: string, status: SkillSigningKeyMetadata["status"] = "current", extra: Partial<SkillSigningKeyMetadata> = {}): SkillSigningKeyMetadata => ({
+  key_id: keyId,
+  public_key: key.publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+  algorithm: "Ed25519",
+  status,
+  ...extra,
+});
 
 test("Python-compatible package hash sorts mixed-case reference paths", () => {
   const key = generateKeyPairSync("ed25519");
@@ -31,6 +38,24 @@ test("Python-compatible package hash sorts mixed-case reference paths", () => {
   const bytes = canonicalSignedSkillPackageBytes(pkg, "tenant-a", "member-a");
   const envelope = { package: pkg, tenant_id: "tenant-a", member_id: "member-a", key_id: "skill-key-1", algorithm: "Ed25519" as const, signature: sign(null, bytes, key.privateKey).toString("base64") };
   assert.equal(verifySignedSkillPackage(envelope, { publicKey: key.publicKey.export({ format: "der", type: "spki" }).toString("base64"), keyId: "skill-key-1" }).package.content_hash, "24eacde1fda51f39");
+});
+
+test("rotation overlap selects envelope key_id and rejects revoked or unknown keys", () => {
+  const current = generateKeyPairSync("ed25519");
+  const next = generateKeyPairSync("ed25519");
+  const unknown = generateKeyPairSync("ed25519");
+  const keys = [metadata(current, "skill-current"), metadata(next, "skill-next", "next")];
+  assert.equal(verifySignedSkillPackage(signed(current, "review", "skill-current"), { publicKeys: keys }).key_id, "skill-current");
+  assert.equal(verifySignedSkillPackage(signed(next, "review", "skill-next"), { publicKeys: keys }).key_id, "skill-next");
+  assert.throws(() => verifySignedSkillPackage(signed(unknown, "review", "skill-unknown"), { publicKeys: keys }), /unknown skill signing key id/);
+  assert.throws(() => verifySignedSkillPackage(signed(current, "review", "skill-current"), {
+    publicKeys: [metadata(current, "skill-current", "revoked", { revoked_at: "2026-01-01T00:00:00Z" })],
+    now: "2026-01-02T00:00:00Z",
+  }), /revoked or expired/);
+  assert.throws(() => verifySignedSkillPackage(signed(next, "review", "skill-next"), {
+    publicKeys: [metadata(next, "skill-next", "current", { expires_at: "2026-01-01T00:00:00Z" })],
+    now: "2026-01-02T00:00:00Z",
+  }), /revoked or expired/);
 });
 
 test("snapshot skill references accept both current and legacy field names", () => {
@@ -129,6 +154,23 @@ test("resource loader uses only the current snapshot skill allowlist", async () 
     assert.deepEqual(loader.getSkills().skills.map((skill) => skill.name), ["review"]);
     delete process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY;
     delete process.env.AITEAM_SKILL_SIGNING_KEY_ID;
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("offline key cache revalidates within TTL and rejects revoked or stale keys", () => {
+  const key = generateKeyPairSync("ed25519");
+  const scope = { tenantId: "tenant-a", memberId: "member-a" };
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "aiteam-skill-rotation-cache-"));
+  const cache = new SkillCache(root, { offlineTtlSeconds: 3600 });
+  const current = metadata(key, "skill-current");
+  try {
+    cache.reconcile(scope, [signed(key, "review", "skill-current")], ["review"], { publicKeys: [current], now: "2026-01-01T00:00:00Z" });
+    assert.equal(cache.pathsFor(scope, ["review"], { now: "2026-01-01T00:30:00Z" }).length, 1);
+    assert.deepEqual(cache.pathsFor(scope, ["review"], { now: "2026-01-01T02:00:00Z" }), []);
+
+    const revoked = metadata(key, "skill-current", "revoked", { revoked_at: "2026-01-01T00:45:00Z" });
+    cache.reconcile(scope, [], ["review"], { publicKeys: [revoked], now: "2026-01-01T01:00:00Z" });
+    assert.deepEqual(cache.pathsFor(scope, ["review"], { now: "2026-01-01T01:01:00Z" }), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

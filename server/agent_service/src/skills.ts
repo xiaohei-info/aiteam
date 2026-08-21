@@ -3,6 +3,32 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { loadSkillsFromDir, type ResourceDiagnostic, type Skill } from "@earendil-works/pi-coding-agent";
 
+export type SkillSigningKeyStatus = "current" | "next" | "revoked" | "expired";
+export interface SkillSigningKeyMetadata {
+  key_id: string;
+  public_key: string;
+  algorithm: "Ed25519";
+  status: SkillSigningKeyStatus;
+  not_before?: string | null;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+}
+export interface SkillSigningKeySet {
+  tenant_id: string;
+  member_id: string;
+  cached_at: string;
+  keys: SkillSigningKeyMetadata[];
+}
+export interface SkillVerificationOptions {
+  publicKey?: string;
+  keyId?: string;
+  publicKeys?: readonly SkillSigningKeyMetadata[];
+  tenantId?: string;
+  memberId?: string;
+  now?: Date | string | number;
+  offlineTtlSeconds?: number;
+}
+
 export interface SignedSkillPackage {
   package: SkillPackage;
   tenant_id: string;
@@ -30,7 +56,7 @@ export class SkillVerificationError extends Error {
 
 function sha16(content: string): string { return createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex").slice(0, 16); }
 function safeSegment(value: string, name: string): void {
-  if (!value || value === "." || value === ".." || /[\\/]/u.test(value) || !/^[A-Za-z0-9._-]+$/u.test(value)) throw new SkillVerificationError(`invalid ${name}`);
+  if (!value || value === "." || value === ".." || value === ".aiteam-keyring" || /[\\/]/u.test(value) || !/^[A-Za-z0-9._-]+$/u.test(value)) throw new SkillVerificationError(`invalid ${name}`);
 }
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path);
@@ -63,14 +89,114 @@ export function canonicalSignedSkillPackageBytes(pkg: SkillPackage, tenantId: st
   return canonicalJson({ member_id: memberId, package: pkg, tenant_id: tenantId });
 }
 
-export function verifySignedSkillPackage(value: unknown, options: { publicKey?: string; keyId?: string; tenantId?: string; memberId?: string } = {}): SignedSkillPackage {
+const KEYRING_FILE = ".aiteam-keyring.json";
+const DEFAULT_OFFLINE_TTL_SECONDS = 24 * 60 * 60;
+const KEY_METADATA_FIELDS = new Set(["key_id", "public_key", "algorithm", "status", "not_before", "expires_at", "revoked_at"]);
+
+function verificationNow(options: Pick<SkillVerificationOptions, "now"> = {}): Date {
+  const value = options.now === undefined ? new Date() : new Date(options.now);
+  if (!Number.isFinite(value.getTime())) throw new SkillVerificationError("invalid skill signing key clock");
+  return value;
+}
+
+function parseOptionalDate(value: unknown, name: string): Date | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw new SkillVerificationError(`invalid skill signing key ${name}`);
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) throw new SkillVerificationError(`invalid skill signing key ${name}`);
+  return parsed;
+}
+
+export function normalizeSkillSigningKeyMetadata(value: unknown): SkillSigningKeyMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SkillVerificationError("invalid skill signing key metadata");
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !KEY_METADATA_FIELDS.has(key))) throw new SkillVerificationError("skill signing metadata contains private or unknown fields");
+  if (typeof raw.key_id !== "string" || raw.key_id.length === 0 || raw.key_id.length > 200) throw new SkillVerificationError("invalid skill signing key id");
+  if (raw.algorithm !== "Ed25519") throw new SkillVerificationError("skill signing key algorithm must be Ed25519");
+  if (raw.status !== "current" && raw.status !== "next" && raw.status !== "revoked" && raw.status !== "expired") throw new SkillVerificationError("invalid skill signing key status");
+  if (typeof raw.public_key !== "string" || (raw.status !== "revoked" && raw.public_key.length === 0)) throw new SkillVerificationError("invalid skill signing public key metadata");
+  if (raw.public_key) {
+    try {
+      const decoded = Buffer.from(raw.public_key, "base64");
+      if (!decoded.length || decoded.toString("base64") !== raw.public_key) throw new Error("invalid base64");
+      const key = createPublicKey({ key: decoded, format: "der", type: "spki" });
+      if (key.asymmetricKeyType !== "ed25519") throw new Error("wrong key type");
+    } catch { throw new SkillVerificationError("invalid skill signing public key metadata"); }
+  }
+  parseOptionalDate(raw.not_before, "not_before");
+  parseOptionalDate(raw.expires_at, "expires_at");
+  parseOptionalDate(raw.revoked_at, "revoked_at");
+  return {
+    key_id: raw.key_id,
+    public_key: raw.public_key,
+    algorithm: "Ed25519",
+    status: raw.status,
+    ...(raw.not_before === undefined || raw.not_before === null ? {} : { not_before: raw.not_before as string }),
+    ...(raw.expires_at === undefined || raw.expires_at === null ? {} : { expires_at: raw.expires_at as string }),
+    ...(raw.revoked_at === undefined || raw.revoked_at === null ? {} : { revoked_at: raw.revoked_at as string }),
+  };
+}
+
+function normalizeKeySet(keys: readonly SkillSigningKeyMetadata[]): SkillSigningKeyMetadata[] {
+  const normalized = keys.map(normalizeSkillSigningKeyMetadata);
+  if (new Set(normalized.map((key) => key.key_id)).size !== normalized.length) throw new SkillVerificationError("duplicate skill signing key id");
+  return normalized;
+}
+
+export function skillSigningVerificationFromEnv(): SkillVerificationOptions {
+  const raw = process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEYS;
+  let publicKeys: SkillSigningKeyMetadata[] | undefined;
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      const values = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).keys) ? (parsed as { keys: unknown[] }).keys : undefined;
+      if (!values) throw new Error("expected key list");
+      publicKeys = normalizeKeySet(values as unknown as SkillSigningKeyMetadata[]);
+    } catch (error) {
+      if (error instanceof SkillVerificationError) throw error;
+      throw new SkillVerificationError("AITEAM_SKILL_SIGNING_PUBLIC_KEYS must be valid public metadata JSON");
+    }
+  }
+  const rawTtl = process.env.AITEAM_SKILL_SIGNING_OFFLINE_TTL_SECONDS;
+  const offlineTtlSeconds = rawTtl === undefined ? DEFAULT_OFFLINE_TTL_SECONDS : Number(rawTtl);
+  if (!Number.isInteger(offlineTtlSeconds) || offlineTtlSeconds < 0 || offlineTtlSeconds > 31_536_000) throw new SkillVerificationError("invalid skill signing offline TTL");
+  return {
+    ...(publicKeys ? { publicKeys } : {}),
+    ...(process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY ? { publicKey: process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY } : {}),
+    ...(process.env.AITEAM_SKILL_SIGNING_KEY_ID ? { keyId: process.env.AITEAM_SKILL_SIGNING_KEY_ID } : {}),
+    offlineTtlSeconds,
+  };
+}
+
+function usableKey(key: SkillSigningKeyMetadata, now: Date): boolean {
+  if (key.status === "revoked" || key.status === "expired") return false;
+  const notBefore = parseOptionalDate(key.not_before, "not_before");
+  const expiresAt = parseOptionalDate(key.expires_at, "expires_at");
+  const revokedAt = parseOptionalDate(key.revoked_at, "revoked_at");
+  return (!notBefore || notBefore <= now) && (!expiresAt || expiresAt > now) && (!revokedAt || revokedAt > now);
+}
+
+function keyForEnvelope(envelope: Record<string, unknown>, options: SkillVerificationOptions, now: Date): string {
+  if (typeof envelope.key_id !== "string" || envelope.key_id.length === 0) throw new SkillVerificationError("invalid skill signature envelope");
+  if (options.publicKeys !== undefined) {
+    const key = normalizeKeySet(options.publicKeys).find((item) => item.key_id === envelope.key_id);
+    if (!key) throw new SkillVerificationError("unknown skill signing key id");
+    if (!usableKey(key, now)) throw new SkillVerificationError("skill signing key is revoked or expired");
+    return key.public_key;
+  }
+  if (!options.keyId) throw new SkillVerificationError("skill signing key id is not configured");
+  if (envelope.key_id !== options.keyId) throw new SkillVerificationError("skill signing key id mismatch");
+  if (!options.publicKey) throw new SkillVerificationError("skill signing public key is not configured");
+  return options.publicKey;
+}
+
+export function verifySignedSkillPackage(value: unknown, options: SkillVerificationOptions = {}): SignedSkillPackage {
   if (!value || typeof value !== "object") throw new SkillVerificationError("invalid signed skill package");
   const envelope = value as Record<string, unknown>;
   if (envelope.algorithm !== "Ed25519" || typeof envelope.key_id !== "string" || typeof envelope.signature !== "string" || typeof envelope.tenant_id !== "string" || typeof envelope.member_id !== "string") throw new SkillVerificationError("invalid skill signature envelope");
-  if (options.keyId !== undefined && envelope.key_id !== options.keyId) throw new SkillVerificationError("skill signing key id mismatch");
   if (options.tenantId !== undefined && envelope.tenant_id !== options.tenantId) throw new SkillVerificationError("skill package tenant mismatch");
   if (options.memberId !== undefined && envelope.member_id !== options.memberId) throw new SkillVerificationError("skill package member mismatch");
-  if (!options.publicKey) throw new SkillVerificationError("skill signing public key is not configured");
+  const selectedPublicKey = keyForEnvelope(envelope, options, verificationNow(options));
   const raw = envelope.package;
   if (!raw || typeof raw !== "object") throw new SkillVerificationError("unsigned skill package");
   const p = raw as Record<string, unknown>;
@@ -94,23 +220,27 @@ export function verifySignedSkillPackage(value: unknown, options: { publicKey?: 
     if (!signature.length || signature.toString("base64") !== envelope.signature) throw new Error("invalid base64");
   } catch { throw new SkillVerificationError("invalid skill signature encoding"); }
   let publicKey;
-  try { publicKey = createPublicKey({ key: Buffer.from(options.publicKey, "base64"), format: "der", type: "spki" }); } catch { throw new SkillVerificationError("invalid skill signing public key"); }
+  try { publicKey = createPublicKey({ key: Buffer.from(selectedPublicKey, "base64"), format: "der", type: "spki" }); } catch { throw new SkillVerificationError("invalid skill signing public key"); }
   if (!verify(null, canonicalSignedSkillPackageBytes(p as unknown as SkillPackage, envelope.tenant_id, envelope.member_id), publicKey, signature)) throw new SkillVerificationError("skill signature verification failed");
   return { package: p as unknown as SkillPackage, tenant_id: envelope.tenant_id, member_id: envelope.member_id, key_id: envelope.key_id, algorithm: "Ed25519", signature: envelope.signature };
 }
 
 export class SkillCache {
   private readonly root: string;
+  private readonly offlineTtlSeconds: number;
 
-  constructor(root: string) {
+  constructor(root: string, options: { offlineTtlSeconds?: number } = {}) {
     this.root = resolve(root);
+    this.offlineTtlSeconds = options.offlineTtlSeconds ?? DEFAULT_OFFLINE_TTL_SECONDS;
+    if (!Number.isInteger(this.offlineTtlSeconds) || this.offlineTtlSeconds < 0) throw new SkillVerificationError("invalid skill signing offline TTL");
     this.assertNoSymlink(this.root);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.assertDirectory(this.root);
   }
 
-  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: { publicKey?: string; keyId?: string }, options: { authoritative?: boolean } = {}): void {
-    const verified = packages.map((pkg) => verifySignedSkillPackage(pkg, { ...verification, tenantId: scope.tenantId, memberId: scope.memberId }));
+  reconcile(scope: SkillScope, packages: SignedSkillPackage[], allowedRefs: readonly string[], verification: SkillVerificationOptions, options: { authoritative?: boolean } = {}): void {
+    const resolved = this.verificationFor(scope, verification, true);
+    const verified = packages.map((pkg) => verifySignedSkillPackage(pkg, { ...resolved, tenantId: scope.tenantId, memberId: scope.memberId }));
     const requestedVersions = new Map<string, Set<string>>();
     const unversioned = new Set<string>();
     for (const ref of allowedRefs) {
@@ -129,11 +259,14 @@ export class SkillCache {
       const skillId = envelope.package.skill_id;
       const versions = requestedVersions.get(skillId);
       if (!allowed.has(skillId) || (versions && !versions.has(envelope.package.version))) continue;
-      this.materialize(scope, envelope, verification);
+      this.materialize(scope, envelope, resolved);
       const retainedVersions = retained.get(skillId) ?? new Set<string>();
       retainedVersions.add(envelope.package.version);
       retained.set(skillId, retainedVersions);
     }
+    // Persist a complete online key set only after every package has verified. The
+    // cache is scoped to tenant/member and is the offline revalidation source.
+    if (verification.publicKeys !== undefined) this.writeKeyring(scope, normalizeKeySet(verification.publicKeys), verificationNow(verification));
     // An explicit non-authoritative response may add verified packages but must not
     // revoke cache entries. A verified authoritative empty response does prune.
     if (options.authoritative === false) return;
@@ -149,21 +282,28 @@ export class SkillCache {
           if (version.isSymbolicLink()) throw new SkillVerificationError("symlink in skill cache");
           if (!version.isDirectory() || !keep.has(version.name)) rmSync(join(scopeRoot, entry.name, version.name), { recursive: true, force: true });
         }
-      } else if (entry.isFile() && entry.name.endsWith(".json") && !allowed.has(entry.name.slice(0, -".json".length))) {
+      } else if (entry.isFile() && entry.name !== KEYRING_FILE && entry.name.endsWith(".json") && !allowed.has(entry.name.slice(0, -".json".length))) {
         rmSync(join(scopeRoot, entry.name), { force: true });
       }
     }
     for (const skillId of allowed) {
       const pointerPath = join(scopeRoot, `${skillId}.json`);
       if (!existsSync(pointerPath)) continue;
-      const pointerVersion = this.readCurrent(scope, skillId, verification);
+      const pointerVersion = this.readCurrent(scope, skillId, resolved);
       if (!pointerVersion || !retained.get(skillId)?.has(pointerVersion)) rmSync(pointerPath, { force: true });
     }
   }
 
-  pathsFor(scope: SkillScope, refs: readonly string[], verification: { publicKey?: string; keyId?: string }): string[] {
+  pathsFor(scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): string[] {
     const scopeRoot = this.scopeRoot(scope);
     if (!existsSync(scopeRoot)) return [];
+    let resolved: SkillVerificationOptions;
+    try {
+      resolved = this.verificationFor(scope, verification, false);
+    } catch (error) {
+      if (error instanceof SkillVerificationError && error.message === "offline skill signing key cache expired") return [];
+      throw error;
+    }
     this.assertDirectory(scopeRoot);
     this.assertTree(scopeRoot);
     const paths: string[] = [];
@@ -172,17 +312,17 @@ export class SkillCache {
       const skillRoot = join(scopeRoot, skillId);
       if (!contained(scopeRoot, skillRoot) || !existsSync(skillRoot)) continue;
       this.assertDirectory(skillRoot);
-      const version = requested ?? this.readCurrent(scope, skillId, verification);
+      const version = requested ?? this.readCurrent(scope, skillId, resolved);
       if (!version) continue;
       safeSegment(version, "version");
       const path = join(skillRoot, version);
       if (!contained(skillRoot, path)) continue;
-      if (this.validCacheRoot(path, scope, verification, skillId, version)) paths.push(path);
+      if (this.validCacheRoot(path, scope, resolved, skillId, version)) paths.push(path);
     }
     return paths;
   }
 
-  private materialize(scope: SkillScope, envelope: SignedSkillPackage, verification: { publicKey?: string; keyId?: string }): void {
+  private materialize(scope: SkillScope, envelope: SignedSkillPackage, verification: SkillVerificationOptions): void {
     const pkg = envelope.package;
     safeSegment(pkg.skill_id, "skill_id"); safeSegment(pkg.version, "version");
     const parent = this.scopeRoot(scope);
@@ -219,7 +359,7 @@ export class SkillCache {
     renameSync(temp, path);
   }
 
-  private readCurrent(scope: SkillScope, skillId: string, verification: { publicKey?: string; keyId?: string }): string | undefined {
+  private readCurrent(scope: SkillScope, skillId: string, verification: SkillVerificationOptions): string | undefined {
     const path = join(this.scopeRoot(scope), `${skillId}.json`);
     this.assertNoSymlink(path);
     try {
@@ -240,7 +380,7 @@ export class SkillCache {
     return manifest.package;
   }
 
-  private validCacheRoot(root: string, scope: SkillScope, verification: { publicKey?: string; keyId?: string }, expectedSkillId?: string, expectedVersion?: string): boolean {
+  private validCacheRoot(root: string, scope: SkillScope, verification: SkillVerificationOptions, expectedSkillId?: string, expectedVersion?: string): boolean {
     try {
       const scopeRoot = this.scopeRoot(scope);
       if (!contained(scopeRoot, root)) return false;
@@ -261,12 +401,49 @@ export class SkillCache {
     } catch { return false; }
   }
 
-  private validMaterialized(root: string, scope: SkillScope, envelope: SignedSkillPackage, verification: { publicKey?: string; keyId?: string }): boolean {
+  private validMaterialized(root: string, scope: SkillScope, envelope: SignedSkillPackage, verification: SkillVerificationOptions): boolean {
     try {
       const manifest = JSON.parse(readFileSync(join(root, ".aiteam-manifest.json"), "utf8")) as SkillManifest;
       verifySignedSkillPackage(manifest, { ...verification, tenantId: scope.tenantId, memberId: scope.memberId });
       return manifest.signature === envelope.signature && manifest.package.skill_id === envelope.package.skill_id && manifest.package.version === envelope.package.version && manifest.package.content_hash === envelope.package.content_hash && this.validCacheRoot(root, scope, verification, envelope.package.skill_id, envelope.package.version);
     } catch { return false; }
+  }
+
+  private verificationFor(scope: SkillScope, verification: SkillVerificationOptions, online: boolean): SkillVerificationOptions {
+    if (online && verification.publicKeys !== undefined) return { ...verification, publicKeys: normalizeKeySet(verification.publicKeys) };
+    const cached = this.readKeyring(scope);
+    if (cached) {
+      const now = verificationNow(verification);
+      const ttl = verification.offlineTtlSeconds ?? this.offlineTtlSeconds;
+      const age = now.getTime() - new Date(cached.cached_at).getTime();
+      if (!Number.isFinite(age) || age < 0 || age > ttl * 1000) throw new SkillVerificationError("offline skill signing key cache expired");
+      return { ...verification, publicKey: undefined, keyId: undefined, publicKeys: cached.keys };
+    }
+    return verification.publicKeys !== undefined ? { ...verification, publicKeys: normalizeKeySet(verification.publicKeys) } : verification;
+  }
+
+  private readKeyring(scope: SkillScope): SkillSigningKeySet | undefined {
+    const scopeRoot = this.scopeRoot(scope);
+    const path = join(scopeRoot, KEYRING_FILE);
+    this.assertNoSymlink(path);
+    if (!existsSync(path)) return undefined;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    if (raw.tenant_id !== scope.tenantId || raw.member_id !== scope.memberId || typeof raw.cached_at !== "string" || !Array.isArray(raw.keys)) throw new SkillVerificationError("invalid skill signing key cache");
+    const cachedAt = new Date(raw.cached_at);
+    if (!Number.isFinite(cachedAt.getTime())) throw new SkillVerificationError("invalid skill signing key cache timestamp");
+    return { tenant_id: scope.tenantId, member_id: scope.memberId, cached_at: raw.cached_at, keys: normalizeKeySet(raw.keys as unknown as SkillSigningKeyMetadata[]) };
+  }
+
+  private writeKeyring(scope: SkillScope, keys: readonly SkillSigningKeyMetadata[], now: Date): void {
+    const scopeRoot = this.scopeRoot(scope);
+    this.assertNoSymlink(scopeRoot);
+    mkdirSync(scopeRoot, { recursive: true, mode: 0o700 });
+    this.assertDirectory(scopeRoot);
+    const path = join(scopeRoot, KEYRING_FILE);
+    this.assertNoSymlink(path);
+    const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(temp, JSON.stringify({ tenant_id: scope.tenantId, member_id: scope.memberId, cached_at: now.toISOString(), keys: normalizeKeySet(keys) }), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(temp, path);
   }
 
   private assertTree(root: string, expected?: Set<string>, base = root): void {
@@ -313,7 +490,7 @@ export function skillRefsForSnapshot(snapshot: { skill_refs?: unknown; skills?: 
   return Array.isArray(refs) ? refs.filter((ref): ref is string => typeof ref === "string" && ref.length > 0) : [];
 }
 
-export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: readonly string[], verification: { publicKey?: string; keyId?: string }): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
+export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
   const skills: Skill[] = []; const diagnostics: ResourceDiagnostic[] = [];
   for (const path of cache.pathsFor(scope, refs, verification)) {
     const result = loadSkillsFromDir({ dir: path, source: "aiteam-manager" });

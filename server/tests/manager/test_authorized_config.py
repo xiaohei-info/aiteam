@@ -86,6 +86,21 @@ def test_legacy_catalog_without_skill_md_is_skipped_without_breaking_config():
     assert result == []
 
 
+def test_authorized_config_publishes_only_public_skill_signing_key_metadata():
+    class _Catalog:
+        _repo = object()
+
+    signer = SkillPackageSigner(Ed25519PrivateKey.generate(), "current", next_private_key=Ed25519PrivateKey.generate(), next_key_id="next")
+    service = AuthorizedConfigService(
+        config_service=EmployeeConfigService(_FakeRepo()), grant_service=_FakeGrantService(), member_service=_FakeMemberService(),
+        capability_catalog=_Catalog(), skill_signer=signer,
+    )
+    response = service.pull(_ctx("t-a", user_id="m-1"), AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1"))
+    assert [item.key_id for item in response.skill_signing_keys] == ["current", "next"]
+    assert all(item.public_key and item.algorithm == "Ed25519" for item in response.skill_signing_keys)
+    assert all("private_key" not in item.model_dump() for item in response.skill_signing_keys)
+
+
 def test_missing_skill_catalog_marks_empty_response_non_authoritative():
     _, _, _, svc = _services()
     response = svc.pull(_ctx("t-a", user_id="m-1"), AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1"))

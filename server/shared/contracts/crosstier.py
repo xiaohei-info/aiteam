@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .skill import SignedSkillPackage
+from .skill import SignedSkillPackage, SkillSigningKeyMetadata
 from .snapshot import EmployeeExecutionSnapshot
 from .summary import AuditSummaryEvent, UsageSummary
 
@@ -160,6 +160,10 @@ class AuthorizedConfigPullResponse(BaseModel):
     skill_packages_authoritative: bool = Field(
         default=True,
         description="False 表示本次 Manager 响应不可用于撤销本地技能缓存",
+    )
+    skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
+        default_factory=list,
+        description="当前/next/revoked 的公开 Ed25519 key metadata；绝不包含 private key",
     )
     solutions: list[dict] = Field(default_factory=list, description="方案实例列表")
     revoked_ids: list[str] = Field(default_factory=list, description="已撤销/不可见，需本地失效移除")

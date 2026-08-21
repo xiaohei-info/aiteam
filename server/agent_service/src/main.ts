@@ -12,7 +12,7 @@ import { HttpManagerClient } from "./manager-client.js";
 import { aggregateUsage } from "./usage.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
-import { SkillCache } from "./skills.js";
+import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
 
 const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
 const port = Number(process.env.PORT ?? 8000);
@@ -25,14 +25,16 @@ if (environment === "production" && useFauxModel) throw new Error("AITEAM_PI_FAK
 if (environment === "production" && useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
 if (environment === "production" && (!process.env.AITEAM_AGENT_JWT_ISSUER || !process.env.AITEAM_AGENT_JWT_AUDIENCE)) throw new Error("Production Agent JWT issuer and audience are required");
 if (environment === "production" && !process.env.AITEAM_MANAGER_URL) throw new Error("Production Agent Manager URL is required");
-if (environment === "production" && (!process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY || !process.env.AITEAM_SKILL_SIGNING_KEY_ID)) throw new Error("Production Agent Skill signing public key and key id are required");
+if (process.env.AITEAM_SKILL_SIGNING_PRIVATE_KEY || process.env.AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY || process.env.AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY) throw new Error("Agent must not receive Skill signing private key material");
+const skillVerification = skillSigningVerificationFromEnv();
+if (environment === "production" && !((skillVerification.publicKeys?.length ?? 0) > 0 || (skillVerification.publicKey && skillVerification.keyId))) throw new Error("Production Agent Skill signing public key metadata is required");
 
 mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
 chmodSync(dataRoot, 0o700);
 const agentDir = join(dataRoot, "pi");
 const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
-const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"));
+const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 

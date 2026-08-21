@@ -13,7 +13,7 @@ import { serializePiEvent } from "../pi/event-sse.js";
 import type { ConversationState, KnowledgeArtifact, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
-import { SkillCache, SkillVerificationError, skillRefsForSnapshot, verifySignedSkillPackage } from "../skills.js";
+import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -351,15 +351,17 @@ export class AgentHttpServer {
       const memberId = caller.userId ?? caller.callerId;
       const skillPackagesAuthoritative = config.skill_packages !== undefined;
       const signedPackages = config.skill_packages ?? [];
-      const publicKey = process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY;
-      const keyId = process.env.AITEAM_SKILL_SIGNING_KEY_ID;
+      const envVerification = skillSigningVerificationFromEnv();
+      const verification = config.skill_signing_keys?.length
+        ? { ...envVerification, publicKeys: config.skill_signing_keys }
+        : envVerification;
       // Verify every envelope before changing projections or cache. Missing key means
       // package sync is disabled, not an invitation to accept unsigned content.
-      if (signedPackages.length && (!publicKey || !keyId)) throw new HttpProblem(503, "skill_signing_unconfigured", "Signed skill verification is not configured");
+      if (signedPackages.length && !verification.publicKeys?.length && (!verification.publicKey || !verification.keyId)) throw new HttpProblem(503, "skill_signing_unconfigured", "Signed skill verification is not configured");
       if (signedPackages.length) {
         try {
           for (const envelope of signedPackages) {
-            verifySignedSkillPackage(envelope, { publicKey, keyId, tenantId: caller.tenantId, memberId });
+            verifySignedSkillPackage(envelope, { ...verification, tenantId: caller.tenantId, memberId });
           }
         } catch (error) {
           if (error instanceof SkillVerificationError) throw new HttpProblem(503, "skill_package_invalid", "Manager returned an invalid signed skill package");
@@ -378,7 +380,7 @@ export class AgentHttpServer {
         ? this.options.store.replaceProjectionsAndKnowledge(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], bundleArtifacts, { tenantId: caller.tenantId!, memberId })
         : { ...this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId }), knowledge: undefined };
       const knowledge = result.knowledge;
-      if (skillPackagesAuthoritative && this.options.skillCache && (signedPackages.length === 0 || (publicKey && keyId))) {
+      if ((skillPackagesAuthoritative || Boolean(config.skill_signing_keys?.length)) && this.options.skillCache && (signedPackages.length === 0 || verification.publicKeys?.length || (verification.publicKey && verification.keyId))) {
         const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
         const currentEmployeeIds = new Set(experts.filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
         const refs = experts.filter((expert) => currentEmployeeIds.has(expert.employee_id)).flatMap((expert) => {
@@ -386,7 +388,7 @@ export class AgentHttpServer {
           return Array.isArray(values) ? values.filter((ref): ref is string => typeof ref === "string") : [];
         });
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
-        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, { publicKey, keyId });
+        this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative });
       }
       this.writeJson(response, 200, { data: { ok: true, ...result, ...(knowledge ? { knowledge } : {}) } });
     } catch (error) {

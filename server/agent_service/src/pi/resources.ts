@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createMemoryLifecycle } from "@luxusai/pi-hindsight/extensions/lifecycle/memory-lifecycle.js";
 import { registerTools } from "@luxusai/pi-hindsight/extensions/operations/tools.js";
-import { skillResourcePaths, SkillCache } from "../skills.js";
+import { skillResourcePaths, skillSigningVerificationFromEnv, SkillCache } from "../skills.js";
 import type { FrozenSnapshot } from "../storage/sqlite.js";
 import type { SessionAuthorization } from "./session-host.js";
 import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
@@ -69,13 +69,15 @@ export function createControlledResourceLoader(
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
     : undefined;
   const skillRefs = authorization ? (Array.isArray(authorization.snapshot.skill_refs) ? authorization.snapshot.skill_refs.filter((ref): ref is string => typeof ref === "string") : []) : [];
-  const verification = { publicKey: process.env.AITEAM_SKILL_SIGNING_PUBLIC_KEY, keyId: process.env.AITEAM_SKILL_SIGNING_KEY_ID };
+  const envVerification = skillSigningVerificationFromEnv();
+  const snapshotKeys = authorization && Array.isArray(authorization.snapshot.skill_signing_keys) ? authorization.snapshot.skill_signing_keys : [];
+  const verification = snapshotKeys.length ? { ...envVerification, publicKeys: snapshotKeys } : envVerification;
   const memoryPolicy = authorization ? getMemoryPolicy(authorization.snapshot) : undefined;
   const baseUrl = hindsightBaseUrl();
   const stateDir = hindsightStateDir(agentDir, workspace);
   const configDir = join(stateDir, "config");
   if (authorization && memoryPolicy?.enabled && baseUrl) materializeHindsightConfig(configDir, stateDir, authorization, memoryPolicy, baseUrl);
-  const skills = skillScope && cache && verification.publicKey && verification.keyId
+  const skills = skillScope && cache
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
   const lifecycle = memoryPolicy?.enabled && baseUrl ? createHindsightFactory(configDir) : undefined;

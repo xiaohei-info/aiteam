@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .skill import SkillSigningKeyMetadata
+
 
 class ModelPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -42,3 +44,7 @@ class EmployeeExecutionSnapshot(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
     memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
+    skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
+        default_factory=list,
+        description="仅用于 Agent 离线验签的公开 key metadata；不含 private key/JWT/HMAC secret",
+    )

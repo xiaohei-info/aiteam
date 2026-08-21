@@ -141,6 +141,7 @@ class AuthorizedConfigService:
             experts=experts, solutions=solutions, revoked_ids=revoked_ids,
             skill_packages=skill_packages,
             skill_packages_authoritative=self._capability is not None and self._skill_signer is not None,
+            skill_signing_keys=self._skill_signer.public_metadata() if self._skill_signer is not None else [],
         )
 
     def _resolve_skill_packages(self, ctx: TenantContext, experts: list[dict]) -> list[SignedSkillPackage]:

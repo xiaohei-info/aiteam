@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import { HttpManagerClient, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
@@ -101,6 +102,15 @@ test("normalizes the Manager AuthorizedConfig contract into local projection fie
   assert.equal(config.snapshots?.[0].version, "7");
   assert.deepEqual(config.snapshots?.[0].skill_refs, ["skill-1"]);
   assert.deepEqual(config.snapshots?.[0].tool_policy, { allowed_tools: ["memory_recall"] });
+});
+
+test("authorized config and snapshot accept only public skill signing metadata", () => {
+  const keyPair = generateKeyPairSync("ed25519");
+  const key = { key_id: "skill-current", public_key: keyPair.publicKey.export({ format: "der", type: "spki" }).toString("base64"), algorithm: "Ed25519", status: "current" };
+  const config = normalizeAuthorizedConfig({ skill_signing_keys: [key] }, "tenant-1", "member-1");
+  assert.equal(config.skill_signing_keys?.[0].key_id, "skill-current");
+  assert.throws(() => normalizeAuthorizedConfig({ skill_signing_keys: [{ ...key, private_key: "must-not-cross-boundary" }] }, "tenant-1", "member-1"), /invalid skill signing key metadata/);
+  assert.throws(() => normalizeAuthorizedConfig({ skill_signing_keys: [{ ...key, algorithm: "HMAC" }] }, "tenant-1", "member-1"), /invalid skill signing key metadata/);
 });
 
 test("empty skill package responses remain authoritative unless explicitly downgraded", () => {

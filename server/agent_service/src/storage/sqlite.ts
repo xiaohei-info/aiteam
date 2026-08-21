@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { UsageSummary } from "../usage.js";
+import type { SkillSigningKeyMetadata } from "../skills.js";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 
@@ -75,6 +76,7 @@ export interface FrozenSnapshot {
   version: string;
   snapshot_version: string;
   display_name: string;
+  skill_signing_keys?: SkillSigningKeyMetadata[];
   tenant_id?: string;
   member_id?: string;
   [key: string]: unknown;

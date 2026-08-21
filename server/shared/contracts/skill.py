@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -30,7 +31,7 @@ def normalize_skill_file_path(path: str) -> str:
 
 
 def _safe_segment(value: str, name: str) -> None:
-    if not value or not _SAFE_SEGMENT.fullmatch(value) or value in {".", ".."}:
+    if not value or not _SAFE_SEGMENT.fullmatch(value) or value in {".", "..", ".aiteam-keyring"}:
         raise ValueError(f"invalid {name}")
 
 
@@ -77,6 +78,40 @@ class SkillPackage(BaseModel):
 
     def with_computed_hash(self) -> "SkillPackage":
         return self.model_copy(update={"content_hash": self.compute_content_hash()})
+
+
+class SkillSigningKeyMetadata(BaseModel):
+    """Public-only metadata used to rotate skill package verification keys.
+
+    Private key material is intentionally not representable by this contract.  The
+    Manager may publish ``current`` and ``next`` keys together during overlap;
+    ``revoked`` metadata lets an Agent invalidate an already cached key without
+    receiving any signing secret.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str = Field(min_length=1, max_length=200)
+    public_key: str = Field(default="", description="base64 DER SubjectPublicKeyInfo")
+    algorithm: Literal["Ed25519"] = "Ed25519"
+    status: Literal["current", "next", "revoked", "expired"] = "current"
+    not_before: str | None = None
+    expires_at: str | None = None
+    revoked_at: str | None = None
+
+    @model_validator(mode="after")
+    def validate_metadata(self) -> "SkillSigningKeyMetadata":
+        if self.status != "revoked" and not self.public_key:
+            raise ValueError("active skill signing key metadata requires a public key")
+        for name in ("not_before", "expires_at", "revoked_at"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            try:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(f"invalid skill signing key {name}") from exc
+        return self
 
 
 class SignedSkillPackage(BaseModel):
