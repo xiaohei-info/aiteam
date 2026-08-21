@@ -246,7 +246,7 @@ export class AgentHttpServer {
     const cursor = query.get("cursor") ?? undefined;
     if (cursor !== undefined && !this.options.store.getOwnedConversationMetadata(cursor, caller.tenantId!, caller.userId ?? caller.callerId)) throw new HttpProblem(422, "invalid_cursor", "cursor does not identify a conversation");
     const result = this.options.store.listConversations(limit, cursor, caller.tenantId, caller.userId ?? caller.callerId);
-    this.writeJson(response, 200, { data: { items: result.items, page: { next_cursor: result.nextCursor, has_more: result.hasMore } } });
+    this.writeJson(response, 200, { data: result.items, page: { next_cursor: result.nextCursor, has_more: result.hasMore } });
   }
 
   private async createConversation(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -321,13 +321,13 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
-  private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
-  private listMarketplaceTemplates(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
-  private listKnowledgeBases(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
-  private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: { items: [], page: { next_cursor: null, has_more: false } } }); }
-  private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
-  private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: { items: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
+  private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
+  private listMarketplaceTemplates(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
+  private listKnowledgeBases(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
+  private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
+  private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
+  private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
 
   private async flushUsage(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.usageFlush) throw new HttpProblem(503, "manager_unavailable", "Manager usage upload is not configured");
@@ -568,7 +568,7 @@ export class AgentHttpServer {
   private listLocalFiles(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): void {
     this.requireOwnedConversation(route.conversationId, caller);
     const items = this.options.store.listOwnedLocalFiles(route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId, route.kind);
-    this.writeJson(response, 200, { data: { items, page: { next_cursor: null, has_more: false } } });
+    this.writeJson(response, 200, { data: items, page: { next_cursor: null, has_more: false } });
   }
 
   private async uploadLocalFile(request: IncomingMessage, response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): Promise<void> {
@@ -741,6 +741,7 @@ const OPENAPI = {
     "/readyz": { get: { operationId: "readyz", responses: { "200": { description: "Ready" }, "503": { description: "Not ready" } } } },
     "/api/agent/conversations/{conversation_id}/prompt": { post: { operationId: "promptConversation", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/PromptRequest" } } } }, responses: { "202": { description: "Accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/PromptAcceptedEnvelope" } } } }, "409": { description: "Conflict" }, "422": { description: "Validation error" } } } },
     "/api/agent/conversations/{conversation_id}/events": { get: { operationId: "subscribeConversationEvents", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "after", in: "query", required: false, schema: { type: "string" } }], responses: { "200": { description: "Pi event stream" } } } },
+    "/api/agent/conversations/{conversation_id}/abort": { post: { operationId: "abortConversation", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Abort result" }, "404": { description: "Not found" } } } },
     "/api/agent/conversations/{conversation_id}/entries": { get: { operationId: "listConversationEntries", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Pi entries" } } } },
     "/api/agent/conversations": { get: { operationId: "listConversations", responses: { "200": { description: "Conversation metadata" } } }, post: { operationId: "createConversation", responses: { "201": { description: "Conversation metadata" } } } },
     "/api/agent/conversations/{conversation_id}": { parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], get: { operationId: "getConversation", responses: { "200": { description: "Conversation metadata" } } }, patch: { operationId: "updateConversation", responses: { "200": { description: "Conversation metadata" } } }, delete: { operationId: "deleteConversation", responses: { "200": { description: "Deleted" } } } },
@@ -788,7 +789,7 @@ const OPENAPI = {
       LocalFileUpload: { type: "object", required: ["filename", "mime_type", "data"], properties: { filename: { type: "string", maxLength: 255 }, mime_type: { type: "string" }, data: { type: "string", contentEncoding: "base64" } } },
       LocalFileMetadata: { type: "object", required: ["id", "conversation_id", "tenant_id", "member_id", "kind", "filename", "mime_type", "byte_size", "sha256", "created_at", "referenced_at"], properties: { id: { type: "string" }, conversation_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, kind: { type: "string", enum: ["attachment", "artifact"] }, filename: { type: "string" }, mime_type: { type: "string" }, byte_size: { type: "integer", minimum: 0 }, sha256: { type: "string" }, created_at: { type: "string", format: "date-time" }, referenced_at: { type: ["string", "null"], format: "date-time" } } },
       LocalFileEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/LocalFileMetadata" } } },
-      LocalFileListEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["items", "page"], properties: { items: { type: "array", items: { $ref: "#/components/schemas/LocalFileMetadata" } }, page: { type: "object", properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } } } },
+      LocalFileListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/LocalFileMetadata" } }, page: { type: "object", properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
       LocalFileDeleteEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["deleted", "id"], properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } },
       Problem: { type: "object", required: ["type", "title", "status", "code", "detail", "instance", "request_id"], properties: { type: { type: "string" }, title: { type: "string" }, status: { type: "integer" }, code: { type: "string" }, detail: { type: "string" }, instance: { type: "string" }, request_id: { type: "string" } } },
     },

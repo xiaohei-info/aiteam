@@ -103,6 +103,7 @@ export function ConversationList({
                       label={title}
                       variant={selected ? "secondary" : "ghost"}
                       aria-pressed={selected}
+                      data-testid={`conversation-${conversation.id}`}
                       onClick={() => onSelect(conversation)}
                     />
                     <Badge label={conversation.state} variant={selected ? "info" : "neutral"} />

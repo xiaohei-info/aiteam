@@ -43,7 +43,7 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
 
     const list = await fetch(`${base}/api/agent/conversations/c1/attachments`, { headers: { Authorization: "Bearer test" } });
     assert.equal(list.status, 200);
-    assert.equal(((await list.json()) as { data: { items: unknown[] } }).data.items.length, 1);
+    assert.equal(((await list.json()) as { data: unknown[] }).data.length, 1);
     const download = await fetch(`${base}/api/agent/conversations/c1/attachments/${uploaded.data.id}`, { headers: { Authorization: "Bearer test" } });
     assert.equal(download.status, 200);
     assert.equal(download.headers.get("content-type"), "image/png");

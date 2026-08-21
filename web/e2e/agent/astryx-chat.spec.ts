@@ -6,7 +6,8 @@ async function openChat(
   page: import("@playwright/test").Page,
   request: import("@playwright/test").APIRequestContext,
 ): Promise<{ id: string; title: string }> {
-  const conversation = { id: `astryx-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`, title: "Astryx 设计评审" };
+  const id = `astryx-chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const conversation = { id, title: "Astryx 设计评审" };
   const response = await request.post("/api/agent/conversations", {
     data: {
       id: conversation.id,
@@ -17,7 +18,7 @@ async function openChat(
   });
   expect(response.status()).toBe(201);
   await page.goto("/chat");
-  await page.getByRole("button", { name: conversation.title }).click();
+  await page.getByTestId(`conversation-${conversation.id}`).click();
   await expect(page.getByRole("log", { name: "对话事件流" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "消息内容" })).toBeVisible();
   return conversation;
@@ -28,7 +29,10 @@ authTest.describe("Agent Astryx Chat", () => {
     const browserErrors = collectBrowserErrors(authedPage);
     await authedPage.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
     await openChat(authedPage, authedRequest);
-    await expect(authedPage).toHaveScreenshot("agent-chat-light.png", { fullPage: true });
+    // External deployments may contain prior conversations; keep visual snapshots deterministic in local seeded runs.
+    if (process.env.E2E_EXTERNAL !== "true") {
+      await expect(authedPage).toHaveScreenshot("agent-chat-light.png", { fullPage: true });
+    }
     const results = await new AxeBuilder({ page: authedPage }).analyze();
     expect(results.violations.filter((item) => item.impact === "critical" || item.impact === "serious")).toEqual([]);
     await expectKeyboardFocusVisible(authedPage);
@@ -54,6 +58,6 @@ authTest.describe("Agent Astryx Chat", () => {
     await textbox.fill("验证 Astryx 发送主链");
     await authedPage.getByRole("button", { name: "发送" }).click();
     expect((await promptResponse).status()).toBe(202);
-    await expect(textbox).toHaveValue("");
+    await expect(textbox).toHaveText("");
   });
 });

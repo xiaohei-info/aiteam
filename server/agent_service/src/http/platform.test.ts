@@ -30,7 +30,7 @@ test("Agent platform metadata, local projections, readiness, office, identity an
     const conversation = (await created.json() as { data: { id: string; state: string } }).data;
     assert.equal(conversation.state, "active");
     const listed = await fetch(`${base}/api/agent/conversations`, { headers: auth });
-    assert.equal((await listed.json() as { data: { items: unknown[] } }).data.items.length, 1);
+    assert.equal((await listed.json() as { data: unknown[] }).data.length, 1);
     const updated = await fetch(`${base}/api/agent/conversations/${conversation.id}/state`, { method: "PUT", headers: auth, body: JSON.stringify({ state: "paused" }) });
     assert.equal((await updated.json() as { data: { state: string } }).data.state, "paused");
     fixture.faux.setResponses([]);
@@ -41,7 +41,7 @@ test("Agent platform metadata, local projections, readiness, office, identity an
       const response = await fetch(`${base}/api/agent/${path}`, { headers: auth });
       assert.equal(response.status, 200, path);
     }
-    assert.equal((await (await fetch(`${base}/api/agent/grants/experts`, { headers: auth })).json() as { data: { items: unknown[] } }).data.items.length, 1);
+    assert.equal((await (await fetch(`${base}/api/agent/grants/experts`, { headers: auth })).json() as { data: unknown[] }).data.length, 1);
     assert.equal((await (await fetch(`${base}/api/agent/org/tree`, { headers: auth })).json() as { data: { name: string } }).data.name, "Tenant");
     assert.equal((await (await fetch(`${base}/api/agent/whoami`, { headers: auth })).json() as { data: { user_id: string } }).data.user_id, "m1");
     assert.deepEqual((await (await fetch(`${base}/api/agent/ping`, { headers: auth })).json() as { data: { pong: boolean } }).data, { pong: true });
