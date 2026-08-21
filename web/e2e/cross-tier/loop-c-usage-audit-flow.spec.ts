@@ -2,7 +2,10 @@
  * AITEAM-226 Wave2 跨端 E2E：Loop-C usage audit flow 浏览器链路验证。
  *
  * 覆盖：Agent usage 记录 → outbox flush → Manager ingest → 聚合可见。
- * 验证命令：npx playwright test e2e/cross-tier/loop-c-usage-audit-flow.spec.ts --project=cross-tier
+ * 验证命令：
+ *   E2E_PROVIDER_ENDPOINT=https://<test-relay>/v1 E2E_PROVIDER_SECRET="$E2E_TEST_SECRET" \
+ *   MANAGER_CREDENTIAL_KEY="$MANAGER_CREDENTIAL_KEY" \
+ *   npx playwright test e2e/cross-tier/loop-c-usage-audit-flow.spec.ts --project=cross-tier
  *
  * 验收锚点（DAG contract）：
  * - Loop-C 浏览器链路验证 usage-audit-flow，且摘要不泄露会话内容。
@@ -12,9 +15,11 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { createHash } from "node:crypto";
 import {
   apiLogin,
   defaultCredentials,
+  seededEmployeeId,
   TIER_API_ORIGIN,
 } from "../support/auth";
 import {
@@ -26,8 +31,9 @@ type UsageOutboxItem = {
   kind?: string;
   member_id?: string;
   tenant_id?: string;
-  usage?: Record<string, unknown> | null;
-  updated_at?: string;
+  status?: string;
+  attempts?: number;
+  last_error?: string | null;
 };
 
 function usageOutboxItems(data: unknown): UsageOutboxItem[] {
@@ -35,22 +41,21 @@ function usageOutboxItems(data: unknown): UsageOutboxItem[] {
   return data.filter((item): item is UsageOutboxItem => {
     if (typeof item !== "object" || item === null) return false;
     const record = item as UsageOutboxItem;
-    return record.kind === "usage" && typeof summaryId(record) === "string";
+    return record.kind === "usage" && typeof record.summary_id === "string";
   });
 }
 
 function summaryId(item: UsageOutboxItem): string | undefined {
-  const nested = item.usage?.summary_id;
-  if (typeof nested === "string") return nested;
   return typeof item.summary_id === "string" ? item.summary_id : undefined;
 }
 
-function outboxFingerprint(item: UsageOutboxItem): string {
-  return JSON.stringify({
-    summary_id: summaryId(item),
-    usage: item.usage ?? null,
-    updated_at: item.updated_at ?? null,
-  });
+/** Usage summaries are aggregated by UTC hour; derive the ID without reading private payloads. */
+function usageSummaryId(tenantId: string, memberId: string, employeeId: string, at: number): string {
+  const windowStart = new Date(at);
+  windowStart.setUTCMinutes(0, 0, 0);
+  return createHash("sha256")
+    .update(`${tenantId}:${memberId}:${employeeId}:${windowStart.toISOString()}`)
+    .digest("hex");
 }
 
 async function waitFor<T>(read: () => Promise<T>, ready: (value: T) => boolean, message: string): Promise<T> {
@@ -239,19 +244,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     const agentOrigin = TIER_API_ORIGIN.agent;
     const mgrOrigin = TIER_API_ORIGIN.manager;
 
-    // ── 阶段 1/6: outbox pending 基线 ──
-    const beforeResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
-      headers: { Authorization: `Bearer ${agentLogin.token}` },
-      failOnStatusCode: false,
-    });
-    expect(beforeResp.ok(), `outbox read: ${beforeResp.status()}`).toBe(true);
-    const beforeBody = (await beforeResp.json()) as { data: unknown[] };
-    const usageBefore = usageOutboxItems(beforeBody.data);
-    const beforeBySummaryId = new Map(
-      usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
-    );
-
-    // ── 阶段 2/6: 以 Agent 当前认证 caller 为 owner，准备可执行 employee + snapshot ──
+    // ── 阶段 1/6: 以 Agent 当前认证 caller 为 owner，准备可执行 employee + snapshot ──
     // Login response claims are only a handoff hint.  whoami is the identity actually
     // accepted by this Agent process and is the sole owner source for this flow.
     const whoamiResp = await request.get(`${agentOrigin}/api/agent/whoami`, {
@@ -279,6 +272,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
           member_id?: string;
           version?: string | number;
           revoked?: boolean;
+          status?: string;
           model_policy?: { model?: string; provider_ref?: string };
         }>;
       };
@@ -290,22 +284,29 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       });
       expect(response.ok(), `agent snapshots: ${response.status()}`).toBe(true);
       return (await response.json()) as {
-        data?: Array<{ employee_id?: string; member_id?: string; version?: string | number }>;
+        data?: Array<{
+          employee_id?: string;
+          member_id?: string;
+          version?: string | number;
+          snapshot_version?: string;
+          model_policy?: { model?: string; provider_ref?: string };
+        }>;
       };
     };
-    const configuredEmployeeId = process.env.E2E_AGENT_EMPLOYEE_ID;
+    const configuredEmployeeId = process.env.E2E_AGENT_EMPLOYEE_ID ?? seededEmployeeId();
     let rosterBody = await readRoster();
     let snapshotsBody = await readSnapshots();
     const hasExecutableEmployee = () => {
       const candidates = rosterBody.data ?? [];
       return candidates.find((item) => {
-        if (!item.employee_id || item.revoked || (configuredEmployeeId && item.employee_id !== configuredEmployeeId)) return false;
+        if (!item.employee_id || item.revoked || item.status !== "active" || (configuredEmployeeId && item.employee_id !== configuredEmployeeId)) return false;
         const policy = item.model_policy ?? {};
         if (!policy.model || !policy.provider_ref) return false;
         return (snapshotsBody.data ?? []).some((snapshot) =>
           snapshot.employee_id === item.employee_id
           && String(snapshot.version) === String(item.version)
-          && (!snapshot.member_id || snapshot.member_id === ownerMemberId),
+          && snapshot.member_id === ownerMemberId
+          && Boolean(snapshot.snapshot_version),
         );
       })?.employee_id;
     };
@@ -361,6 +362,13 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     expect(createBody.data?.tenant_id).toBe(ownerTenantId);
     expect(createBody.data?.member_id).toBe(ownerMemberId);
     expect(createBody.data?.entry_employee_id).toBe(employeeId);
+    // The Agent outbox intentionally exposes only aggregate metadata.  Derive the
+    // deterministic hourly summary ID instead of comparing a private payload/fingerprint.
+    const promptStartedAt = Date.now();
+    const candidateSummaryIds = new Set([
+      usageSummaryId(ownerTenantId, ownerMemberId, employeeId, promptStartedAt),
+      usageSummaryId(ownerTenantId, ownerMemberId, employeeId, promptStartedAt + 60 * 60 * 1000),
+    ]);
     const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
       data: { text: `E2E usage cross-tier: ${traceId}` },
       headers: {
@@ -397,14 +405,21 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       },
       (body) => usageOutboxItems(body.data).some((item) => {
         const id = summaryId(item);
-        return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
+        return id !== undefined
+          && candidateSummaryIds.has(id)
+          && item.tenant_id === ownerTenantId
+          && item.member_id === ownerMemberId
+          && (item.status === "pending" || item.status === "failed");
       }),
       `prompt ${traceId} usage outbox`,
     );
     const pendingAfterPrompt = Array.isArray(afterPromptBody.data) ? afterPromptBody.data.length : 0;
     const changedUsageItems = usageOutboxItems(afterPromptBody.data).filter((item) => {
       const id = summaryId(item);
-      return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
+      return id !== undefined
+        && candidateSummaryIds.has(id)
+        && item.tenant_id === ownerTenantId
+        && item.member_id === ownerMemberId;
     });
     const flushedSummaryIds = new Set(
       changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
@@ -413,6 +428,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     for (const item of changedUsageItems) {
       expect(item.tenant_id, "usage outbox tenant owner").toBe(ownerTenantId);
       expect(item.member_id, "usage outbox member owner").toBe(ownerMemberId);
+      expect(["pending", "failed"], "usage summary must remain flushable").toContain(item.status);
     }
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──

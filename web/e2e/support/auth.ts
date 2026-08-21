@@ -72,6 +72,7 @@ interface SeedMetadata {
   tenant_id?: unknown;
   account?: unknown;
   password?: unknown;
+  employee_id?: unknown;
 }
 
 /**
@@ -85,6 +86,12 @@ function seedMetadata(): SeedMetadata {
   } catch {
     return {};
   }
+}
+
+/** Run-scoped employee handoff written by globalSetup after Manager seed. */
+export function seededEmployeeId(): string | undefined {
+  const value = seedMetadata().employee_id;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function defaultCredentials(tier: Tier): TierCredentials {

@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""AITEAM-224 E2E 租户/成员 seed（globalSetup 调用）。
+"""Prepare the run-scoped Manager tenant used by browser E2E.
 
-为 Browser E2E 三端 smoke 准备一个确定的 E2E 租户 + 成员账号（must_reset=False，
-可直接登录），供 manager / agent 端 smoke 登录使用。operation 端用系统账号，无需 seed。
+The seed is deliberately fail-closed: a local cross-tier run must have a real test
+provider configuration.  The provider secret is read only from the process
+environment, encrypted before it reaches PostgreSQL, and never included in output.
 
-幂等：重跑不报错（tenant 已存在则复用，member 已存在则重置密码为已知值）。
-隔离：globalSetup 默认每次运行传入唯一 slug/member/password；仅显式 E2E_REUSE_SEED=true 时复用固定 seed。
+Required provider environment:
+  E2E_PROVIDER_ENDPOINT  provider/relay URL used by the E2E runtime
+  E2E_PROVIDER_SECRET    test-only provider credential (never commit it)
+  MANAGER_CREDENTIAL_KEY Fernet key used by Manager provider credential storage
 
-环境变量（与 e2e/support/auth.ts defaultCredentials 对齐）：
-  E2E_TENANT_SLUG (globalSetup 默认追加 run id；standalone default e2e-smoke)
-  E2E_MEMBER_ACCOUNT (globalSetup 默认生成唯一手机号；standalone default 13800000001)
-  E2E_MEMBER_PASSWORD (globalSetup 默认生成唯一密码；standalone default E2e-Pass-2024)
-  ADMIN_DB_URL / DB_URL (manager 控制面/业务连接串)
+Optional provider environment:
+  E2E_PROVIDER_REF       default: e2e-usage-provider
+  E2E_PROVIDER_MODEL     default: aiteam-e2e-model (kept separate from gpt-4.1)
+  E2E_PROVIDER_API_PROTOCOL  default: openai-completions
 
-输出（stdout，JSON）：{"tenant_id": "...", "account": "..."} 供 globalSetup 写入 worker handoff。
+The tenant/member values are supplied by globalSetup.  Running the script directly
+uses the same local PostgreSQL defaults as playwright.config.ts.
+
+Output (stdout, JSON): tenant/account/employee/provider identifiers only.
 """
 
 from __future__ import annotations
@@ -21,28 +26,71 @@ from __future__ import annotations
 import json
 import os
 import sys
+from urllib.parse import urlparse
+
+
+_DEFAULT_ADMIN_DB_URL = "postgresql://postgres:postgres@127.0.0.1:5433/manager_control_db"
+_DEFAULT_DB_URL = "postgresql://app_rw:aiteam_dev@127.0.0.1:5433/manager_control_db"
+_SUPPORTED_PROTOCOLS = {"openai-completions", "openai-responses", "anthropic-messages"}
+
+
+def _provider_settings() -> tuple[str, str, str, str, str]:
+    """Read E2E-only provider settings without ever echoing credential material."""
+    endpoint = os.getenv("E2E_PROVIDER_ENDPOINT", "").strip()
+    secret = os.getenv("E2E_PROVIDER_SECRET", "")
+    credential_key = os.getenv("MANAGER_CREDENTIAL_KEY", "").strip()
+    if not endpoint:
+        raise RuntimeError("E2E_PROVIDER_ENDPOINT is required to seed an executable employee")
+    parsed_endpoint = urlparse(endpoint)
+    if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
+        raise RuntimeError("E2E_PROVIDER_ENDPOINT must be an absolute http(s) URL")
+    if not secret:
+        raise RuntimeError(
+            "E2E_PROVIDER_SECRET is required; provide a test-only provider secret via the environment"
+        )
+    if not credential_key:
+        raise RuntimeError(
+            "MANAGER_CREDENTIAL_KEY is required to encrypt the E2E provider credential"
+        )
+
+    provider_ref = os.getenv("E2E_PROVIDER_REF", "e2e-usage-provider").strip()
+    model = os.getenv("E2E_PROVIDER_MODEL", "aiteam-e2e-model").strip()
+    protocol = os.getenv("E2E_PROVIDER_API_PROTOCOL", "openai-completions").strip()
+    if not provider_ref or not model:
+        raise RuntimeError("E2E_PROVIDER_REF and E2E_PROVIDER_MODEL must be non-empty")
+    if protocol not in _SUPPORTED_PROTOCOLS:
+        raise RuntimeError(
+            "E2E_PROVIDER_API_PROTOCOL must be openai-completions, openai-responses, or anthropic-messages"
+        )
+    return endpoint, secret, provider_ref, model, protocol
 
 
 def main() -> int:
-    admin_url = os.getenv("ADMIN_DB_URL")
-    biz_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL", _DEFAULT_ADMIN_DB_URL).strip()
+    biz_url = os.getenv("DB_URL", _DEFAULT_DB_URL).strip()
     if not admin_url or not biz_url:
-        print(json.dumps({"skipped": "ADMIN_DB_URL/DB_URL 未配置，跳过 manager/agent seed"}))
-        return 0
+        raise RuntimeError("ADMIN_DB_URL and DB_URL must be non-empty for a local E2E seed")
+    endpoint, provider_secret, provider_ref, model, api_protocol = _provider_settings()
 
-    slug = os.getenv("E2E_TENANT_SLUG", "e2e-smoke")
-    phone = os.getenv("E2E_MEMBER_ACCOUNT", "13800000001")
+    slug = os.getenv("E2E_TENANT_SLUG", "e2e-smoke").strip()
+    phone = os.getenv("E2E_MEMBER_ACCOUNT", "13800000001").strip()
     password = os.getenv("E2E_MEMBER_PASSWORD", "E2e-Pass-2024")
+    employee_slug = os.getenv("E2E_AGENT_EMPLOYEE_SLUG", "e2e-usage-employee").strip()
+    if not slug or not phone or not employee_slug:
+        raise RuntimeError("E2E tenant/member/employee identifiers must be non-empty")
 
-    # server/ 是 v1 包根；本脚本由 globalSetup 在 web/ 下以 PYTHONPATH=../server 调用。
-    server_root = os.path.join(os.getcwd(), "..", "server")
+    # Resolve server/ from this file so standalone runs do not depend on cwd.
+    server_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "server")
+    )
     if os.path.isdir(server_root) and server_root not in sys.path:
         sys.path.insert(0, os.path.abspath(server_root))
 
     import psycopg
 
-    # 1. 先跑迁移（幂等），再注册/复用 E2E 租户（控制面，管理连接）。
     from shared.db import apply_migrations
+
+    # 1. 先跑迁移（幂等），再注册/复用 E2E 租户（控制面，管理连接）。
     apply_migrations(admin_url, os.getenv("APP_RW_PASSWORD"))
 
     with psycopg.connect(admin_url, autocommit=True) as conn:
@@ -59,46 +107,214 @@ def main() -> int:
                 ).fetchone()[0]
             )
 
-    # 2. 落成员账号（must_reset=False，可直接登录）。已存在则重置密码 + 清 must_reset。
-    from shared.contracts.enums import EnterpriseRole
+    # 2. 落成员账号（must_reset=False，可直接登录）。
+    from shared.contracts.enums import AuthProvider, EnterpriseRole
     from manager_service.auth_password_policy import validate_password_complexity
-    from shared.contracts.tenancy import TenantContext
+    from manager_service.employee_config_repository import EmployeeConfigRepository
+    from manager_service.employee_config_service import EmployeeConfigService
+    from manager_service.member_service import GrantService, MemberDeptService
+    from manager_service.provider_credential_repository import ProviderCredentialRepository
     from manager_service.repository import TenantAuthRepository
-    from shared.db import PgTenantRouter
+    from manager_service.provider_credential_service import ProviderCredentialService
+    from manager_service.repository_member import GrantRepository, MemberDeptRepository
+    from manager_service.schemas import EmployeeConfigIn, MemberGrantCreate
+    from manager_service.schemas_provider import (
+        ProviderCredentialCreate,
+        ProviderCredentialUpdate,
+        ProviderModelCapability,
+    )
     from manager_service.security import hash_password
-    from shared.contracts.enums import AuthProvider
+    from manager_service.snapshot_service import build_snapshot_service
+    from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
+    from shared.contracts.tenancy import TenantContext
+    from shared.crypto import build_crypto_service
+    from shared.db import PgTenantRouter
 
     router = PgTenantRouter(biz_url)
-    repo = TenantAuthRepository(router)
-    ctx = TenantContext(tenant_id=tenant_id, user_id="e2e-seed", roles=[EnterpriseRole.MEMBER.value])
-    admin_roles = [EnterpriseRole.ENTERPRISE_ADMIN.value]
-    existing = repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
+    admin_ctx = TenantContext(
+        tenant_id=tenant_id,
+        user_id="e2e-seed",
+        roles=[EnterpriseRole.ENTERPRISE_ADMIN.value],
+    )
+    existing = TenantAuthRepository(router).find_identity(
+        admin_ctx, provider=AuthProvider.PHONE, external_id=phone
+    )
     if existing is None:
-        # 直接经 repository 落 enterprise_admin 角色：svc.create_member 硬编码 MEMBER，
-        # 而 smoke / cross-tier 全链路需要写 provider 凭据 / 招募 / 授权（门控 owner/enterprise_admin）。
         validate_password_complexity(password)
-        repo.create_user_with_identity(
-            ctx, provider=AuthProvider.PHONE, external_id=phone,
-            secret=hash_password(password), roles=admin_roles,
-            display_name="e2e-smoke-member", must_reset=False,
+        member_id = TenantAuthRepository(router).create_user_with_identity(
+            admin_ctx,
+            provider=AuthProvider.PHONE,
+            external_id=phone,
+            secret=hash_password(password),
+            roles=[EnterpriseRole.ENTERPRISE_ADMIN.value],
+            display_name="e2e-smoke-member",
+            must_reset=False,
         )
     else:
-        # 幂等：重置为已知密码并清 must_reset，保证可登录。
-        repo.update_secret(
-            ctx, provider=AuthProvider.PHONE, external_id=phone,
-            secret=hash_password(password), must_reset=False,
+        member_id = existing.user_id
+        # 幂等：重置为已知密码并清 must_reset，保证可登录；旧 seed 可能只有 member 角色。
+        TenantAuthRepository(router).update_secret(
+            admin_ctx,
+            provider=AuthProvider.PHONE,
+            external_id=phone,
+            secret=hash_password(password),
+            must_reset=False,
         )
-        # 兼容旧 seed 仅落 MEMBER 的历史数据：补齐 enterprise_admin，
-        # 避免跨端 E2E 写 provider/招募/授权时被 403 拒绝。
-        with router.session(ctx) as s:
-            s.execute(
-                "UPDATE app_user SET roles = %s WHERE id = %s",
-                (admin_roles, existing.user_id),
+        with router.session(admin_ctx) as session:
+            session.execute(
+                "UPDATE app_user SET roles = %s, status = 'active' WHERE id = %s",
+                ([EnterpriseRole.ENTERPRISE_ADMIN.value], member_id),
             )
 
-    print(json.dumps({"tenant_id": tenant_id, "account": phone}))
+    member_ctx = TenantContext(
+        tenant_id=tenant_id,
+        user_id=member_id,
+        roles=[EnterpriseRole.MEMBER.value],
+    )
+
+    # 3. Provider credential：明文只存在于本进程，ProviderCredentialService 加密后落库。
+    crypto = build_crypto_service()
+    provider_repo = ProviderCredentialRepository(router)
+    provider_service = ProviderCredentialService(provider_repo, crypto)
+    supported_models = [ProviderModelCapability(model=model, enabled=True)]
+    provider = provider_repo.get_by_ref(admin_ctx, provider_ref=provider_ref)
+    if provider is None:
+        provider_service.create(
+            admin_ctx,
+            ProviderCredentialCreate(
+                provider_ref=provider_ref,
+                display_name="E2E usage provider",
+                endpoint=endpoint,
+                api_protocol=api_protocol,
+                secret=provider_secret,
+                visibility="tenant",
+                supported_models=supported_models,
+                model_catalog_source="manual",
+            ),
+        )
+    else:
+        provider_service.update(
+            admin_ctx,
+            ProviderCredentialUpdate(
+                display_name="E2E usage provider",
+                endpoint=endpoint,
+                api_protocol=api_protocol,
+                secret=provider_secret,
+                visibility="tenant",
+                supported_models=supported_models,
+                model_catalog_source="manual",
+            ),
+            credential_id=provider.credential_id,
+        )
+
+    # 4. Employee 配置 + active 生命周期。
+    employee_repo = EmployeeConfigRepository(router)
+    employee_service = EmployeeConfigService(employee_repo)
+    employee_body = EmployeeConfigIn(
+        display_name="E2E Usage Employee",
+        persona="You are an E2E usage employee. Respond briefly.",
+        model_policy=ModelPolicy(model=model, provider_ref=provider_ref),
+        execution_policy=ExecutionPolicy(timeout_seconds=120),
+    )
+    employee = employee_repo.get_by_slug(admin_ctx, employee_slug=employee_slug)
+    if employee is None:
+        employee_out = employee_service.create(
+            admin_ctx, employee_body, employee_slug=employee_slug
+        )
+    else:
+        if employee.status == "archived":
+            raise RuntimeError(
+                "E2E_AGENT_EMPLOYEE_SLUG points to an archived employee; use a fresh tenant/slug"
+            )
+        employee_out = employee_service.update(
+            admin_ctx, employee_body, employee_id=employee.employee_id
+        )
+
+    if employee_out.status == "draft":
+        employee_out = employee_service.transition(
+            admin_ctx, employee_id=employee_out.employee_id, transition="activate"
+        )
+    elif employee_out.status == "provisioning":
+        employee_out = employee_service.transition(
+            admin_ctx, employee_id=employee_out.employee_id, transition="activate"
+        )
+    elif employee_out.status == "provisioning_failed":
+        employee_out = employee_service.transition(
+            admin_ctx, employee_id=employee_out.employee_id, transition="retry_provision"
+        )
+        employee_out = employee_service.transition(
+            admin_ctx, employee_id=employee_out.employee_id, transition="activate"
+        )
+    elif employee_out.status == "paused":
+        employee_out = employee_service.transition(
+            admin_ctx, employee_id=employee_out.employee_id, transition="resume"
+        )
+    if employee_out.status != "active":
+        raise RuntimeError(
+            f"E2E employee did not become active (status={employee_out.status})"
+        )
+
+    # 5. Member grant is the authorization source; generate a real member-scoped snapshot
+    # through the same services used by the Manager route.  Snapshot is derived/read-only,
+    # so it is intentionally not copied into Manager tables.
+    member_repo = MemberDeptRepository(router)
+    grant_service = GrantService(repo=GrantRepository(router), members=member_repo)
+    grant_service.create_grant(
+        admin_ctx,
+        MemberGrantCreate(
+            resource_type="expert",
+            resource_id=employee_out.employee_id,
+            member_ids=[member_id],
+            department_ids=[],
+        ),
+    )
+    snapshot_service = build_snapshot_service(
+        config_service=employee_service,
+        grant_service=grant_service,
+        member_service=MemberDeptService(repo=member_repo),
+    )
+    snapshot = snapshot_service.generate(
+        member_ctx,
+        member_id=member_id,
+        employee_id=employee_out.employee_id,
+        employee_version=str(employee_out.version),
+    )
+    if snapshot.model_policy.model != model or snapshot.model_policy.provider_ref != provider_ref:
+        raise RuntimeError("E2E employee snapshot does not match the seeded provider")
+
+    # Verify the runtime-config path can decrypt and authorize the provider without exposing
+    # the secret.  The returned api_key is intentionally discarded immediately.
+    runtime_service = ProviderCredentialService(provider_repo, crypto, snapshot_service)
+    runtime = runtime_service.runtime_config(member_ctx, employee_id=employee_out.employee_id)
+    if (
+        runtime.model != model
+        or runtime.provider_ref != provider_ref
+        or runtime.base_url != endpoint
+    ):
+        raise RuntimeError("E2E runtime provider config does not match the seeded snapshot")
+
+    print(
+        json.dumps(
+            {
+                "tenant_id": tenant_id,
+                "account": phone,
+                "employee_id": employee_out.employee_id,
+                "provider_ref": provider_ref,
+            }
+        )
+    )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Keep failure output actionable but never print provider secret or decrypted config.
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - globalSetup needs a fail-fast prerequisite
+        detail = str(exc)
+        for name in ("E2E_PROVIDER_SECRET", "MANAGER_CREDENTIAL_KEY"):
+            value = os.getenv(name)
+            if value:
+                detail = detail.replace(value, "[redacted]")
+        print(f"seed-e2e-tenant failed: {type(exc).__name__}: {detail}", file=sys.stderr)
+        raise SystemExit(1)

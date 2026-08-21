@@ -39,9 +39,10 @@ const LOGIN_PATH: Record<Tier, string> = {
 
 /**
  * seed E2E 租户 + 成员账号。调 e2e/support/seed-e2e-tenant.py（Python 子进程）。
- * 无 DB 配置时脚本自身 skip（operation 端不依赖）；返回 seed stdout JSON。
+ * 本地 profile 使用与 playwright.config.ts 一致的 DB 默认值；E2E_EXTERNAL profile 由外部租户前置条件接管。
+ * Provider/credential 缺失时 seed 明确 fail-fast，不把未授权或不可执行 employee 当作成功。
  */
-type SeedResult = { tenant_id?: string; account?: string; skipped?: string };
+type SeedResult = { tenant_id?: string; account?: string; employee_id?: string; provider_ref?: string; skipped?: string };
 type SeedIdentity = { slug: string; account: string; password: string };
 
 function runIdentity(): SeedIdentity | undefined {
@@ -173,6 +174,8 @@ export default async function globalSetup(): Promise<void> {
         tenant_id: seed.tenant_id,
         account: seed.account ?? identity?.account ?? process.env.E2E_MEMBER_ACCOUNT ?? null,
         password: identity?.password ?? process.env.E2E_MEMBER_PASSWORD ?? null,
+        ...(seed.employee_id ? { employee_id: seed.employee_id } : {}),
+        ...(seed.provider_ref ? { provider_ref: seed.provider_ref } : {}),
       }),
       "utf-8",
     );

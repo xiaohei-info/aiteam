@@ -755,7 +755,7 @@ export class AgentSqliteStore {
           'token_total', json_extract(usage_summary_outbox.payload_json, '$.token_total') + json_extract(excluded.payload_json, '$.token_total'),
           'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),
           'duration_seconds_total', json_extract(usage_summary_outbox.payload_json, '$.duration_seconds_total') + json_extract(excluded.payload_json, '$.duration_seconds_total')
-        ), status = CASE WHEN status = 'sent' THEN 'sent' ELSE 'pending' END, last_error = NULL
+        ), status = 'pending', last_error = NULL
     `).run(summary.summary_id, summary.tenant_id, summary.member_id, JSON.stringify(summary), now);
   }
 

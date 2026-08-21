@@ -97,6 +97,27 @@ test("authenticated HTTP usage flush delegates and reports explicit status", asy
   }
 });
 
+test("new usage in a sent hourly summary is requeued for flush", async () => {
+  const fixture = storeFixture();
+  try {
+    const summary = aggregateUsage({ tenantId: "tenant-1", memberId: "member-1", employeeId: "employee-1", startedAt: Date.now(), endedAt: Date.now(), settled: true, entries: [] });
+    let calls = 0;
+    const manager = { uploadUsage: async () => { calls += 1; } };
+    const flush = new UsageFlushService(fixture.store, manager as never);
+    fixture.store.upsertUsageSummary(summary);
+    assert.deepEqual(await flush.flush(caller), { sent: [summary.summary_id], failed: [] });
+    assert.equal(fixture.store.listUsageOutbox("tenant-1")[0].status, "sent");
+
+    fixture.store.upsertUsageSummary({ ...summary, prompt_count: 2 });
+    assert.equal(fixture.store.listUsageOutbox("tenant-1")[0].status, "pending");
+    assert.deepEqual(await flush.flush(caller), { sent: [summary.summary_id], failed: [] });
+    assert.equal(calls, 2);
+  } finally {
+    fixture.store.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("usage outbox flush marks sent and failed with stable summary ids", async () => {
   const fixture = storeFixture();
   try {
