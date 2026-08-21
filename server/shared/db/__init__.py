@@ -16,6 +16,7 @@ RLS + `SET LOCAL app.tenant_id` + 连接池租户边界（04 §6.1.1）。真实
 from __future__ import annotations
 
 import os
+import threading
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -104,6 +105,7 @@ class InMemoryTenantRouter(TenantRouter):
 # 保证 `import shared.db` 在无 psycopg 环境（纯契约/单测）下仍可用。
 
 _APP_ROLE = "app_rw"
+_MIGRATION_LOCK = threading.Lock()
 
 
 class PgTenantSession(TenantDataSession):
@@ -183,6 +185,16 @@ def _migrations_dir() -> str:
 
 
 def apply_migrations(db_url: str | None, app_rw_password: str | None = None) -> None:
+    """Serialize process-local migration callers before running DDL."""
+    if not db_url:
+        return None
+    # ponytail: one process-wide lock avoids concurrent ALTER ROLE/DDL races;
+    # split by DSN only if multiple databases are migrated concurrently.
+    with _MIGRATION_LOCK:
+        return _apply_migrations_unlocked(db_url, app_rw_password)
+
+
+def _apply_migrations_unlocked(db_url: str | None, app_rw_password: str | None = None) -> None:
     """首次连接自动应用迁移（04 §6.4：建表脚本，非数据迁移）。幂等。
 
     `db_url` 必须是**管理连接**（admin DSN：超管/DDL owner），用于建角色/DDL/RLS（#60）；
