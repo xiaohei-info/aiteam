@@ -145,8 +145,8 @@ class SkillPackageSigner:
         """Load dedicated current/next private keys; never JWT or symmetric material."""
         encoded = os.environ.get("AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY") or os.environ.get("AITEAM_SKILL_SIGNING_PRIVATE_KEY")
         key_id = os.environ.get("AITEAM_SKILL_SIGNING_CURRENT_KEY_ID") or os.environ.get("AITEAM_SKILL_SIGNING_KEY_ID")
-        next_encoded = os.environ.get("AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY")
-        next_key_id = os.environ.get("AITEAM_SKILL_SIGNING_NEXT_KEY_ID")
+        next_encoded = os.environ.get("AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY") or None
+        next_key_id = os.environ.get("AITEAM_SKILL_SIGNING_NEXT_KEY_ID") or None
         if not encoded and not key_id and not next_encoded and not next_key_id:
             return None
         if not encoded or not key_id:
