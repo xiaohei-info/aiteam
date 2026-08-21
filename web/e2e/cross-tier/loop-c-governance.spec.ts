@@ -27,11 +27,15 @@ function svcHeaders(): Record<string, string> {
   return { "X-Service-Token": serviceToken(), "Content-Type": "application/json" };
 }
 
+function uniquePhone(): string {
+  return `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
+}
+
 async function createOwnerToken(request: APIRequestContext): Promise<string> {
   const tenantId = randomUUID();
   const enterpriseId = randomUUID();
   const enterpriseCode = `gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const ownerPhone = `138${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const ownerPhone = uniquePhone();
   const bootstrapSecret = `Boot-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
   const newPassword = `New-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 

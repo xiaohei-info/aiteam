@@ -128,14 +128,23 @@ test.describe("Loop-B snapshot freeze（跨端）", () => {
       failOnStatusCode: false,
     });
 
-    // sync 是尽力而为端点——Manager 不可达时返回 ok=false（不 500）
-    // 响应应为 envelope JSON（非 text/html SPA fallback）
+    // Agent 的真实离线契约是 503 problem+json；在线时才返回 200 data.ok=true。
+    // 不把离线错误伪造成成功 envelope，否则会掩盖 Manager→Agent 断链。
     const ct = syncResp.headers()["content-type"] ?? "";
-    expect(ct, "sync 响应应为 JSON（非 text/html）").toMatch(/application\/(?:problem\+)?json/);
-    expect(ct).not.toContain("text/html");
+    if (syncResp.status() === 503) {
+      expect(ct, "离线 sync 响应应为 problem+json").toContain("application/problem+json");
+      expect(ct).not.toContain("text/html");
+      const problem = (await syncResp.json()) as { code?: string; status?: number };
+      expect(problem.code, "离线 sync problem 含 code").toBe("manager_unavailable");
+      expect(problem.status, "离线 sync problem 含 status").toBe(503);
+      return;
+    }
 
+    expect(syncResp.status(), `在线 sync 应 200，实际 ${syncResp.status()}`).toBe(200);
+    expect(ct, "在线 sync 响应应为 application/json").toContain("application/json");
+    expect(ct).not.toContain("text/html");
     const body = (await syncResp.json()) as { data?: { ok?: boolean; error?: string } };
-    // sync 端点返回 envelope（含 data 字段）
-    expect(body, "sync 响应含 data").toHaveProperty("data");
+    expect(body, "在线 sync 响应含 data").toHaveProperty("data");
+    expect(body.data?.ok, "在线 sync data.ok=true").toBe(true);
   });
 });

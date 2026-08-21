@@ -133,7 +133,9 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
 
     // ── 3. Manager 创建 provider 凭据（model=gpt-4.1）──
     const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
+    const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
     const mgrToken = mgrLogin.token;
+    const agentToken = agentLogin.token;
     const providerRef = `newapi-main-${uniqueTag}`;
 
     const providerResp = await request.post(
@@ -327,8 +329,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     // Agent 端 Bearer 经 Manager 校验后缓存（本地单用户），sync 走 pull 链路。
     const syncResp = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/grants/sync`, {
       data: { tenant_id: tenantId, member_id: memberId },
-      // Agent 端 grants/sync 不挂 require_claims（本地拉取），无需 Bearer。
-      headers: { "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json" },
       failOnStatusCode: false,
     });
     stageExpect(syncResp.ok(), "sync", `Agent grants sync 应可达：status=${syncResp.status()}`);
@@ -349,13 +350,13 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
 
     // ── 8. Agent 私聊 roster 出现该专家 ──
     const rosterResp = await request.get(`${TIER_API_ORIGIN.agent}/api/agent/grants/experts`, {
-      headers: { "Content-Type": "application/json" },
-      // roster 是本地投影只读列表，不挂 require_claims。
+      headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json" },
+      // roster 是当前成员的本地投影。
       failOnStatusCode: false,
     });
     stageExpect(rosterResp.ok(), "roster", `Agent roster（grants/experts）应可达：status=${rosterResp.status()}`);
-    const rosterBody = (await rosterResp.json()) as { data?: { items?: Array<{ employee_id?: string }> } };
-    const rosterItems = rosterBody.data?.items ?? [];
+    const rosterBody = (await rosterResp.json()) as { data?: Array<{ employee_id?: string }> };
+    const rosterItems = rosterBody.data ?? [];
     stageExpect(
       rosterItems.some((e) => e.employee_id === employeeId),
       "roster",
@@ -371,7 +372,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
         kind: "private",
         entry_employee_id: employeeId,
       },
-      headers: { "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json" },
       failOnStatusCode: false,
     });
     stageExpect(createResp.status() === 201, "conversation", `Agent conversation metadata 应创建：status=${createResp.status()}`);
@@ -381,7 +382,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}/prompt`,
       {
         data: { text: `@${employeeId} E2E private chat` },
-        headers: { "Content-Type": "application/json", "Idempotency-Key": `private-${uniqueTag}` },
+        headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json", "Idempotency-Key": `private-${uniqueTag}` },
         failOnStatusCode: false,
       },
     );
@@ -390,7 +391,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     // ── 11. Pi entries 是私聊的持久视图 ──
     const entriesResp = await request.get(
       `${TIER_API_ORIGIN.agent}/api/agent/conversations/${convId}/entries`,
-      { headers: { "Content-Type": "application/json" }, failOnStatusCode: false },
+      { headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json" }, failOnStatusCode: false },
     );
     stageExpect(entriesResp.ok(), "conversation", `Agent entries 应可达：status=${entriesResp.status()}`);
     const entriesBody = (await entriesResp.json()) as { data?: { entries?: unknown[] } };

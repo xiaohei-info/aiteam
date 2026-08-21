@@ -13,7 +13,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "@playwright/test";
 import {
@@ -40,11 +41,34 @@ const LOGIN_PATH: Record<Tier, string> = {
  * seed E2E 租户 + 成员账号。调 e2e/support/seed-e2e-tenant.py（Python 子进程）。
  * 无 DB 配置时脚本自身 skip（operation 端不依赖）；返回 seed stdout JSON。
  */
-function seedE2eTenant(): { tenant_id?: string; account?: string; skipped?: string } | null {
+type SeedResult = { tenant_id?: string; account?: string; skipped?: string };
+type SeedIdentity = { slug: string; account: string; password: string };
+
+function runIdentity(): SeedIdentity | undefined {
+  // An external profile without DB seeding deliberately uses its supplied tenant;
+  // seeded runs get a fresh slug/account/password so workers cannot share state.
+  if (process.env.E2E_EXTERNAL === "true" && process.env.E2E_EXTERNAL_SEED !== "true") return undefined;
+  if (process.env.E2E_REUSE_SEED === "true") {
+    return {
+      slug: process.env.E2E_TENANT_SLUG ?? "e2e-smoke",
+      account: process.env.E2E_MEMBER_ACCOUNT ?? "13800000001",
+      password: process.env.E2E_MEMBER_PASSWORD ?? "E2e-Pass-2024",
+    };
+  }
+  const runId = (process.env.E2E_RUN_ID ?? randomUUID()).replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
+  const digits = `${Date.now()}${randomUUID().replace(/\D/g, "")}`.slice(-8).padStart(8, "0");
+  return {
+    slug: `${process.env.E2E_TENANT_SLUG ?? "e2e-smoke"}-${runId}`,
+    account: `138${digits}`,
+    password: `E2e-Pass-${runId.slice(0, 12)}`,
+  };
+}
+
+function seedE2eTenant(identity?: SeedIdentity): SeedResult | null {
   if (process.env.E2E_EXTERNAL === "true" && process.env.E2E_EXTERNAL_SEED !== "true") {
     const tenant_id = process.env.E2E_TENANT_ID?.trim();
     if (!tenant_id) throw new Error("E2E_EXTERNAL requires E2E_TENANT_ID");
-    return { tenant_id, skipped: "external deployment" };
+    return { tenant_id, account: process.env.E2E_MEMBER_ACCOUNT, skipped: "external deployment" };
   }
   const script = join(process.cwd(), "e2e", "support", "seed-e2e-tenant.py");
   const py = process.env.E2E_PYTHON ?? join(process.cwd(), "..", ".venv", "bin", "python");
@@ -52,13 +76,17 @@ function seedE2eTenant(): { tenant_id?: string; account?: string; skipped?: stri
     encoding: "utf-8",
     env: {
       ...process.env,
-      // PYTHONPATH 指向 server/ 包根，使 import shared / manager_service 可用。
+      ...(identity ? {
+        E2E_TENANT_SLUG: identity.slug,
+        E2E_MEMBER_ACCOUNT: identity.account,
+        E2E_MEMBER_PASSWORD: identity.password,
+      } : {}),
       PYTHONPATH: join(process.cwd(), "..", "server"),
     },
     timeout: 30_000,
   });
   if (res.error || res.status !== 0) {
-        const msg = res.error?.message ?? res.stderr ?? res.stdout ?? "unknown";
+    const msg = res.error?.message ?? res.stderr ?? res.stdout ?? "unknown";
     console.error(`[globalSetup] seed-e2e-tenant FAILED: ${msg}`);
     throw new Error(`seed-e2e-tenant failed: ${msg}`);
   }
@@ -84,17 +112,22 @@ async function loginTier(tier: Tier, tenantId?: string): Promise<{ token: string
     } else {
       body = { account: creds.account ?? "", password: creds.password, tenant_id: creds.tenant_id };
     }
-    const response = await ctx.post(LOGIN_PATH[tier], { data: body, failOnStatusCode: false });
-    if (!response.ok()) {
-      console.warn(`[globalSetup] ${tier} api login 失败: ${response.status()}（spec 将回退页面登录）`);
+    try {
+      const response = await ctx.post(LOGIN_PATH[tier], { data: body, failOnStatusCode: false });
+      if (!response.ok()) {
+        console.warn(`[globalSetup] ${tier} api login 失败: ${response.status()}（spec 将回退页面登录）`);
+        return null;
+      }
+      const payload = (await response.json()) as { data: { token: string; claims?: Record<string, unknown> } };
+      if (!payload.data?.token) {
+        console.warn(`[globalSetup] ${tier} login envelope 缺 token`);
+        return null;
+      }
+      return payload.data;
+    } catch (error) {
+      console.warn(`[globalSetup] ${tier} api login 不可达（spec 将回退页面登录）: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
-    const payload = (await response.json()) as { data: { token: string; claims?: Record<string, unknown> } };
-    if (!payload.data?.token) {
-      console.warn(`[globalSetup] ${tier} login envelope 缺 token`);
-      return null;
-    }
-    return payload.data;
   } finally {
     await ctx.dispose();
   }
@@ -115,6 +148,9 @@ function writeStorageState(tier: Tier, token: string, claims?: Record<string, un
 
 export default async function globalSetup(): Promise<void> {
   mkdirSync(STORAGE_STATE_DIR, { recursive: true });
+  // Never let a failed login reuse a previous run's token or tenant handoff.
+  for (const tier of TIERS) rmSync(storageStatePath(tier), { force: true });
+  rmSync(join(STORAGE_STATE_DIR, "e2e-tenant.json"), { force: true });
 
   // 0. 构建共享包（@aiteam/shared），确保前端 dev server 可解析。
   console.log("[globalSetup] building @aiteam/shared ...");
@@ -126,13 +162,18 @@ export default async function globalSetup(): Promise<void> {
   }
   console.log("[globalSetup] @aiteam/shared built");
 
-  // 1. seed E2E 租户（manager/agent 登录前置）。tenant_id 注入 env 供 defaultCredentials 复用。
-  const seed = seedE2eTenant();
+  // 1. seed E2E 租户（manager/agent 登录前置）。写文件作为 worker 可靠 handoff。
+  const identity = runIdentity();
+  const seed = seedE2eTenant(identity);
   if (seed?.tenant_id) {
     process.env.E2E_TENANT_ID = seed.tenant_id;
     writeFileSync(
       join(STORAGE_STATE_DIR, "e2e-tenant.json"),
-      JSON.stringify({ tenant_id: seed.tenant_id, account: seed.account ?? null }),
+      JSON.stringify({
+        tenant_id: seed.tenant_id,
+        account: seed.account ?? identity?.account ?? process.env.E2E_MEMBER_ACCOUNT ?? null,
+        password: identity?.password ?? process.env.E2E_MEMBER_PASSWORD ?? null,
+      }),
       "utf-8",
     );
   }

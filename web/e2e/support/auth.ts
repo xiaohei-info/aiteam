@@ -65,29 +65,49 @@ export interface TierCredentials {
 
 /**
  * 默认凭据。operation 取 env（与 server/conftest 同源默认）。
- * manager/agent 取 globalSetup 注入的 E2E 租户成员账号（见 globalSetup.ts）。
- * 凭据经 env 覆盖（E2E_OPERATION_USERNAME 等），便于不同部署复用同一 harness。
+ * manager/agent 取 globalSetup 写入的本次运行租户成员账号（见 globalSetup.ts）；无 seed handoff
+ * 时回退到 env/default。operation 凭据经 env 覆盖，便于不同部署复用同一 harness。
  */
-function seededTenantId(): string | undefined {
-  if (process.env.E2E_TENANT_ID?.trim()) return process.env.E2E_TENANT_ID.trim();
+interface SeedMetadata {
+  tenant_id?: unknown;
+  account?: unknown;
+  password?: unknown;
+}
+
+/**
+ * Read the run-scoped seed written by globalSetup. Workers do not reliably inherit
+ * process.env mutations made by globalSetup, so this file is the worker handoff.
+ */
+function seedMetadata(): SeedMetadata {
   try {
-    const value = JSON.parse(readFileSync(join(STORAGE_STATE_DIR, "e2e-tenant.json"), "utf-8")) as { tenant_id?: unknown };
-    return typeof value.tenant_id === "string" && value.tenant_id.trim() ? value.tenant_id.trim() : undefined;
+    const value = JSON.parse(readFileSync(join(STORAGE_STATE_DIR, "e2e-tenant.json"), "utf-8")) as SeedMetadata;
+    return value;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
 export function defaultCredentials(tier: Tier): TierCredentials {
+  const seed = seedMetadata();
+  const seededTenantId = typeof seed.tenant_id === "string" && seed.tenant_id.trim()
+    ? seed.tenant_id.trim()
+    : process.env.E2E_TENANT_ID?.trim();
+  const seededAccount = typeof seed.account === "string" && seed.account.trim()
+    ? seed.account.trim()
+    : process.env.E2E_MEMBER_ACCOUNT;
+  const seededPassword = typeof seed.password === "string" && seed.password
+    ? seed.password
+    : process.env.E2E_MEMBER_PASSWORD;
+
   if (tier === "operation") {
     return {
       username: process.env.E2E_OPERATION_USERNAME ?? "sysadmin",
       password: process.env.E2E_OPERATION_PASSWORD ?? "changeme-me",
     };
   }
-  const tenantId = seededTenantId() ?? "00000000-0000-0000-0000-00000000e2e0";
-  const phone = process.env.E2E_MEMBER_ACCOUNT ?? "13800000001";
-  const password = process.env.E2E_MEMBER_PASSWORD ?? "E2e-Pass-2024";
+  const tenantId = seededTenantId ?? "00000000-0000-0000-0000-00000000e2e0";
+  const phone = seededAccount ?? "13800000001";
+  const password = seededPassword ?? "E2e-Pass-2024";
   return { account: phone, password, tenant_id: tenantId };
 }
 

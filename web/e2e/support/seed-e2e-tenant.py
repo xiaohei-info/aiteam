@@ -5,15 +5,15 @@
 可直接登录），供 manager / agent 端 smoke 登录使用。operation 端用系统账号，无需 seed。
 
 幂等：重跑不报错（tenant 已存在则复用，member 已存在则重置密码为已知值）。
-不清理：E2E 租户用固定 slug，跨 run 复用，避免每 run 漂移 tenant_id（登录需固定 tenant_id）。
+隔离：globalSetup 默认每次运行传入唯一 slug/member/password；仅显式 E2E_REUSE_SEED=true 时复用固定 seed。
 
 环境变量（与 e2e/support/auth.ts defaultCredentials 对齐）：
-  E2E_TENANT_SLUG (default e2e-smoke)
-  E2E_MEMBER_ACCOUNT (default 13800000001)
-  E2E_MEMBER_PASSWORD (default E2e-Pass-2024)
+  E2E_TENANT_SLUG (globalSetup 默认追加 run id；standalone default e2e-smoke)
+  E2E_MEMBER_ACCOUNT (globalSetup 默认生成唯一手机号；standalone default 13800000001)
+  E2E_MEMBER_PASSWORD (globalSetup 默认生成唯一密码；standalone default E2e-Pass-2024)
   ADMIN_DB_URL / DB_URL (manager 控制面/业务连接串)
 
-输出（stdout，JSON）：{"tenant_id": "...", "account": "..."} 供 globalSetup 注入 env。
+输出（stdout，JSON）：{"tenant_id": "...", "account": "..."} 供 globalSetup 写入 worker handoff。
 """
 
 from __future__ import annotations

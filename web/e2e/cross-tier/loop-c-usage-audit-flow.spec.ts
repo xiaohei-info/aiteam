@@ -24,6 +24,8 @@ import {
 type UsageOutboxItem = {
   summary_id?: string;
   kind?: string;
+  member_id?: string;
+  tenant_id?: string;
   usage?: Record<string, unknown> | null;
   updated_at?: string;
 };
@@ -49,6 +51,16 @@ function outboxFingerprint(item: UsageOutboxItem): string {
     usage: item.usage ?? null,
     updated_at: item.updated_at ?? null,
   });
+}
+
+async function waitFor<T>(read: () => Promise<T>, ready: (value: T) => boolean, message: string): Promise<T> {
+  let latest: T | undefined;
+  await expect.poll(async () => {
+    latest = await read();
+    return ready(latest) ? 1 : 0;
+  }, { timeout: 15_000, intervals: [250, 500, 1_000] }).toBe(1);
+  if (latest === undefined) throw new Error(`${message}: no response`);
+  return latest;
 }
 
 // ── Loop-C usage audit flow（跨端）──
@@ -240,7 +252,29 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       usageBefore.map((item) => [summaryId(item), outboxFingerprint(item)]),
     );
 
-    // ── 阶段 2/6: Node Agent Conversation prompt（Pi model 产生 usage → UsageRecorder 入 outbox）──
+    // ── 阶段 2/6: 先取得本成员已授权的 employee，再创建并拥有 conversation ──
+    const claims = (agentLogin.claims ?? {}) as Record<string, unknown>;
+    const ownerTenantId = String(claims.tenant_id ?? "");
+    const ownerMemberId = String(claims.user_id ?? claims.sub ?? "");
+    expect(ownerTenantId, "Agent login claims must identify tenant").not.toBe("");
+    expect(ownerMemberId, "Agent login claims must identify member").not.toBe("");
+
+    const rosterResp = await request.get(`${agentOrigin}/api/agent/grants/experts`, {
+      headers: { Authorization: `Bearer ${agentLogin.token}` },
+      failOnStatusCode: false,
+    });
+    expect(rosterResp.ok(), `agent roster: ${rosterResp.status()}`).toBe(true);
+    const rosterBody = (await rosterResp.json()) as { data?: Array<{ employee_id?: string }> };
+    const configuredEmployeeId = process.env.E2E_AGENT_EMPLOYEE_ID;
+    const employeeId = configuredEmployeeId ?? rosterBody.data?.find((item) => item.employee_id)?.employee_id;
+    expect(employeeId, "Usage prompt requires an authorized local employee").toBeTruthy();
+    expect(
+      rosterBody.data?.some((item) => item.employee_id === employeeId),
+      "Configured usage employee must belong to this member's local roster",
+    ).toBe(true);
+    if (!employeeId) throw new Error("Usage prompt requires an authorized local employee");
+
+    // Conversation creation is the ownership boundary; prompt must not invent an owner.
     const traceId = `e2e-loopc-${Date.now()}`;
     const convId = `e2e-usage-${traceId}`;
     const createResp = await request.post(`${agentOrigin}/api/agent/conversations`, {
@@ -248,7 +282,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
         id: convId,
         title: `E2E usage ${traceId}`,
         kind: "private",
-        ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+        entry_employee_id: employeeId,
       },
       headers: {
         Authorization: `Bearer ${agentLogin.token}`,
@@ -257,6 +291,13 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       failOnStatusCode: false,
     });
     expect(createResp.status(), `create conversation: ${createResp.status()}`).toBe(201);
+    const createBody = (await createResp.json()) as {
+      data?: { id?: string; tenant_id?: string; member_id?: string; entry_employee_id?: string };
+    };
+    expect(createBody.data?.id).toBe(convId);
+    expect(createBody.data?.tenant_id).toBe(ownerTenantId);
+    expect(createBody.data?.member_id).toBe(ownerMemberId);
+    expect(createBody.data?.entry_employee_id).toBe(employeeId);
     const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
       data: { text: `E2E usage cross-tier: ${traceId}` },
       headers: {
@@ -268,26 +309,48 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     });
     expect(promptResp.status(), `submit prompt: ${promptResp.status()}`).toBe(202);
 
-    // ── 阶段 3/6: 捕获本轮 prompt 写入/更新的 pending usage summary_id ──
-    const afterPromptResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
-      headers: { Authorization: `Bearer ${agentLogin.token}` },
-      failOnStatusCode: false,
-    });
-    expect(afterPromptResp.ok(), `outbox read after prompt: ${afterPromptResp.status()}`).toBe(true);
-    const afterPromptBody = (await afterPromptResp.json()) as { data: unknown[] };
+    // ── 阶段 3/6: 等待真实异步 prompt entry 与 pending usage summary ──
+    const entriesBody = await waitFor(
+      async () => {
+        const response = await request.get(`${agentOrigin}/api/agent/conversations/${convId}/entries`, {
+          headers: { Authorization: `Bearer ${agentLogin.token}` }, failOnStatusCode: false,
+        });
+        expect(response.ok(), `entries read: ${response.status()}`).toBe(true);
+        return await response.json() as { data?: { conversation_id?: string; entries?: unknown[] } };
+      },
+      (body) => body.data?.conversation_id === convId && (body.data.entries?.length ?? 0) > 0,
+      `prompt ${traceId} entries`,
+    );
+    expect(entriesBody.data?.conversation_id).toBe(convId);
+    expect(entriesBody.data?.entries?.length ?? 0).toBeGreaterThan(0);
+
+    const afterPromptBody = await waitFor(
+      async () => {
+        const response = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
+          headers: { Authorization: `Bearer ${agentLogin.token}` }, failOnStatusCode: false,
+        });
+        expect(response.ok(), `outbox read after prompt: ${response.status()}`).toBe(true);
+        return await response.json() as { data: unknown[] };
+      },
+      (body) => usageOutboxItems(body.data).some((item) => {
+        const id = summaryId(item);
+        return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
+      }),
+      `prompt ${traceId} usage outbox`,
+    );
     const pendingAfterPrompt = Array.isArray(afterPromptBody.data) ? afterPromptBody.data.length : 0;
-    const usageAfterPrompt = usageOutboxItems(afterPromptBody.data);
-    const changedUsageItems = usageAfterPrompt.filter((item) => {
+    const changedUsageItems = usageOutboxItems(afterPromptBody.data).filter((item) => {
       const id = summaryId(item);
       return id !== undefined && beforeBySummaryId.get(id) !== outboxFingerprint(item);
     });
     const flushedSummaryIds = new Set(
       changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
     );
-    expect(
-      flushedSummaryIds.size,
-      `prompt ${traceId} 后 outbox 应新增或更新至少一条 usage summary (pending before=${pendingBefore}, after=${pendingAfterPrompt})`,
-    ).toBeGreaterThan(0);
+    expect(flushedSummaryIds.size, `prompt ${traceId} 应产生 usage summary`).toBeGreaterThan(0);
+    for (const item of changedUsageItems) {
+      expect(item.tenant_id, "usage outbox tenant owner").toBe(ownerTenantId);
+      expect(item.member_id, "usage outbox member owner").toBe(ownerMemberId);
+    }
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
     const flushResp = await request.post(`${agentOrigin}/api/agent/usage/flush`, {

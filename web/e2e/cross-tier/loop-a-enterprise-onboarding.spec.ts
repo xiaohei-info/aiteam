@@ -47,6 +47,10 @@ function uniqueEnterpriseCode(): string {
   return `be2e-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 }
 
+function uniquePhone(): string {
+  return `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
+}
+
 // ── Loop-A 全链：Operator 开通 → Manager 收端 → 负责人 whoami ──
 
 test.describe("Loop-A enterprise onboarding（跨端）", () => {
@@ -58,7 +62,7 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
     // 等必要字段（对齐 ProvisionEnterpriseRequest schema）。
     const enterpriseCode = uniqueEnterpriseCode();
     const enterpriseName = `E2E Onboarding Corp ${enterpriseCode}`;
-    const ownerPhone = `138${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    const ownerPhone = uniquePhone();
 
     // 1a. Operator enterprise provision（POST /api/operation/enterprises）
     const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
@@ -83,13 +87,6 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
         failOnStatusCode: false,
       },
     );
-
-    // 需平台侧角色（system_admin / system_operator）的 token 才能成功 provision。
-    // CI 环境已配置对应 token；本地/缺 token 时 skip（无法打通全链）。
-    if (provisionResp.status() === 401 || provisionResp.status() === 403) {
-      test.skip(true, "Operator 开通企业需 system_admin/system_operator token（CI 环境）");
-      return;
-    }
 
     // provision 非 201 即为失败：必须 fail 测试而非静默 return（不再绕过验收主链）。
     // 同时采集 problem+json 诊断信息辅助定位。

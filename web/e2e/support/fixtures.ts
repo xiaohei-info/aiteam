@@ -21,6 +21,8 @@ import {
   defaultCredentials,
   storageStatePath,
   TIER_API_ORIGIN,
+  TIER_BASE_URL,
+  TOKEN_STORAGE_KEY,
 } from "./auth";
 import { loginViaPage } from "./auth";
 
@@ -85,8 +87,8 @@ export const authTest = base.extend<AuthFixtures>({
       const raw = JSON.parse(readFileSync(statePath, "utf-8")) as {
         origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>;
       };
-      const origin = raw.origins?.[0];
-      const entry = origin?.localStorage?.find((e) => e.name.startsWith("aiteam."));
+      const origin = raw.origins?.find((item) => item.origin === TIER_BASE_URL[tier]) ?? raw.origins?.[0];
+      const entry = origin?.localStorage?.find((e) => e.name === TOKEN_STORAGE_KEY[tier]);
       token = entry?.value;
     }
     if (!token) {
