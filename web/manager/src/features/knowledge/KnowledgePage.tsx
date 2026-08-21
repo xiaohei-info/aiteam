@@ -255,21 +255,26 @@ export function KnowledgePage(): ReactNode {
     }
   }
 
-  const bindingColumns = useMemo<TableColumn<KnowledgeBindingRow>[]>(() => [
-    { key: "resource_type", header: "类型", width: pixel(100), renderCell: (binding) => <Badge label={resourceTypeLabel(binding.resource_type)} variant="info" /> },
-    { key: "resource_id", header: "对象", width: proportional(1), renderCell: resolveResourceLabel },
-    {
-      key: "actions",
-      header: "操作",
-      width: pixel(100),
-      align: "end",
-      resizable: false,
-      renderCell: (binding) => {
-        const label = resolveResourceLabel(binding);
-        return <Button label={`解绑${label}`} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingUnbind(binding)} />;
-      },
-    },
-  ], [resolveResourceLabel, working]);
+  const bindingColumns = useMemo<TableColumn<KnowledgeBindingRow>[]>(() => {
+    const result: TableColumn<KnowledgeBindingRow>[] = [
+      { key: "resource_type", header: "类型", width: pixel(100), renderCell: (binding) => <Badge label={resourceTypeLabel(binding.resource_type)} variant="info" /> },
+      { key: "resource_id", header: "对象", width: proportional(1), renderCell: resolveResourceLabel },
+    ];
+    if (canWrite) {
+      result.push({
+        key: "actions",
+        header: "操作",
+        width: pixel(100),
+        align: "end",
+        resizable: false,
+        renderCell: (binding) => {
+          const label = resolveResourceLabel(binding);
+          return <Button label={`解绑${label}`} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingUnbind(binding)} />;
+        },
+      });
+    }
+    return result;
+  }, [canWrite, resolveResourceLabel, working]);
 
   const spaceColumns = useMemo<TableColumn<KnowledgeSpaceRow>[]>(() => {
     const result: TableColumn<KnowledgeSpaceRow>[] = [
@@ -277,25 +282,23 @@ export function KnowledgePage(): ReactNode {
       { key: "display_name", header: "名称", width: proportional(1), renderCell: (space) => <Text weight="bold">{space.display_name || "—"}</Text> },
       { key: "workspace", header: "Workspace", width: proportional(1), renderCell: (space) => <Code>{space.workspace}</Code> },
     ];
-    if (canWrite) {
-      result.push({
-        key: "actions",
-        header: "操作",
-        width: pixel(330),
-        align: "end",
-        resizable: false,
-        renderCell: (space) => {
-          const name = space.display_name || space.knowledge_space_id;
-          return (
-            <HStack gap={2} justify="end">
-              <Button label={`管理${name}文档`} variant="ghost" size="sm" onClick={() => setDocSpaceId(space.knowledge_space_id)} />
-              <Button label={`管理${name}绑定`} variant="ghost" size="sm" onClick={() => void openBindings(space.knowledge_space_id)} />
-              <Button label={`删除${name}`} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingDelete(space)} />
-            </HStack>
-          );
-        },
-      });
-    }
+    result.push({
+      key: "actions",
+      header: "操作",
+      width: pixel(canWrite ? 330 : 220),
+      align: "end",
+      resizable: false,
+      renderCell: (space) => {
+        const name = space.display_name || space.knowledge_space_id;
+        return (
+          <HStack gap={2} justify="end">
+            <Button label={`管理${name}文档`} variant="ghost" size="sm" onClick={() => setDocSpaceId(space.knowledge_space_id)} />
+            <Button label={`管理${name}绑定`} variant="ghost" size="sm" onClick={() => void openBindings(space.knowledge_space_id)} />
+            {canWrite && <Button label={`删除${name}`} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingDelete(space)} />}
+          </HStack>
+        );
+      },
+    });
     return result;
   }, [canWrite, openBindings, working]);
 
@@ -402,35 +405,39 @@ export function KnowledgePage(): ReactNode {
                   </Card>
                 )}
 
-                <Card>
-                  <form aria-label="新增绑定" onSubmit={(event) => void handleBind(event)}>
-                    <VStack gap={4}>
-                      <Heading level={3}>新增绑定</Heading>
-                      <FormLayout>
-                        <Grid columns={{ minWidth: 220, repeat: "fit" }} gap={3}>
-                          <Selector
-                            label="绑定类型"
-                            options={BIND_RESOURCE_TYPES.map((type) => ({ value: type, label: RESOURCE_TYPE_LABEL[type] }))}
-                            value={bindType}
-                            onChange={(value) => { setBindType(value as BindResourceType); setBindResourceId(""); }}
-                            isRequired
-                            isDisabled={bindingsLoading || working}
-                          />
-                          <Selector
-                            label="绑定对象"
-                            options={resourceOptions.map((option) => ({ value: option.id, label: option.label || option.id }))}
-                            value={bindResourceId || undefined}
-                            onChange={setBindResourceId}
-                            placeholder={resourceOptions.length === 0 ? "无可用目标" : "请选择"}
-                            isRequired
-                            isDisabled={bindingsLoading || working || resourceOptions.length === 0}
-                          />
-                        </Grid>
-                      </FormLayout>
-                      <HStack justify="end"><Button label="绑定" type="submit" variant="primary" isLoading={working} isDisabled={!bindResourceId} /></HStack>
-                    </VStack>
-                  </form>
-                </Card>
+                {canWrite ? (
+                  <Card>
+                    <form aria-label="新增绑定" onSubmit={(event) => void handleBind(event)}>
+                      <VStack gap={4}>
+                        <Heading level={3}>新增绑定</Heading>
+                        <FormLayout>
+                          <Grid columns={{ minWidth: 220, repeat: "fit" }} gap={3}>
+                            <Selector
+                              label="绑定类型"
+                              options={BIND_RESOURCE_TYPES.map((type) => ({ value: type, label: RESOURCE_TYPE_LABEL[type] }))}
+                              value={bindType}
+                              onChange={(value) => { setBindType(value as BindResourceType); setBindResourceId(""); }}
+                              isRequired
+                              isDisabled={bindingsLoading || working}
+                            />
+                            <Selector
+                              label="绑定对象"
+                              options={resourceOptions.map((option) => ({ value: option.id, label: option.label || option.id }))}
+                              value={bindResourceId || undefined}
+                              onChange={setBindResourceId}
+                              placeholder={resourceOptions.length === 0 ? "无可用目标" : "请选择"}
+                              isRequired
+                              isDisabled={bindingsLoading || working || resourceOptions.length === 0}
+                            />
+                          </Grid>
+                        </FormLayout>
+                        <HStack justify="end"><Button label="绑定" type="submit" variant="primary" isLoading={working} isDisabled={!bindResourceId} /></HStack>
+                      </VStack>
+                    </form>
+                  </Card>
+                ) : (
+                  <Banner status="info" title="当前账号仅可查看绑定；新增或解除绑定需要企业管理员权限。" />
+                )}
               </VStack>
             </LayoutContent>
           }

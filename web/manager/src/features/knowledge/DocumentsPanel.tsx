@@ -16,7 +16,12 @@ import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useKnowledgeApi } from "./useKnowledgeApi";
-import type { KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeImportUrl } from "./types";
+import type {
+  KnowledgeDocument,
+  KnowledgeDocumentBinding,
+  KnowledgeDocumentStatus,
+  KnowledgeImportUrl,
+} from "./types";
 
 const STATUS_LABEL: Record<KnowledgeDocumentStatus, string> = {
   uploaded: "待处理",
@@ -33,8 +38,19 @@ const STATUS_VARIANT: Record<KnowledgeDocumentStatus, BadgeVariant> = {
   ready: "success",
   failed: "error",
 };
+const BINDING_STATUS_LABEL: Record<KnowledgeDocumentBinding["status"], string> = {
+  pending: "同步中",
+  ready: "已就绪",
+  stale: "需同步",
+};
+const BINDING_STATUS_VARIANT: Record<KnowledgeDocumentBinding["status"], BadgeVariant> = {
+  pending: "warning",
+  ready: "success",
+  stale: "error",
+};
 
 type DocumentRow = KnowledgeDocument & Record<string, unknown>;
+type DocumentBindingRow = KnowledgeDocumentBinding & Record<string, unknown>;
 
 interface Props {
   spaceId: string;
@@ -57,6 +73,10 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [bindingDocument, setBindingDocument] = useState<KnowledgeDocument | null>(null);
+  const [documentBindings, setDocumentBindings] = useState<KnowledgeDocumentBinding[]>([]);
+  const [bindingsLoading, setBindingsLoading] = useState(false);
+  const [bindingsError, setBindingsError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const requestedSpaceId = spaceId;
@@ -129,6 +149,20 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     }
   }
 
+  async function openDocumentBindings(document: KnowledgeDocument): Promise<void> {
+    setBindingDocument(document);
+    setDocumentBindings([]);
+    setBindingsLoading(true);
+    setBindingsError(null);
+    try {
+      setDocumentBindings(await api.listDocumentBindings(spaceId, document.id));
+    } catch (err) {
+      setBindingsError(err instanceof ApiError ? err.message : "加载索引绑定失败");
+    } finally {
+      setBindingsLoading(false);
+    }
+  }
+
   async function handleRetry(document: KnowledgeDocument): Promise<void> {
     const actionSpaceId = spaceId;
     setBusy(true);
@@ -149,17 +183,30 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
       { key: "source_type", header: "来源", width: pixel(90), renderCell: (doc) => doc.source_type === "url" ? "URL" : "上传" },
       { key: "file_type", header: "类型", width: pixel(100), renderCell: (doc) => doc.file_type || doc.file_name },
       { key: "status", header: "状态", width: pixel(100), renderCell: (doc) => <Badge label={STATUS_LABEL[doc.status]} variant={STATUS_VARIANT[doc.status]} /> },
-      { key: "text_chars", header: "分词数", width: pixel(100), renderCell: (doc) => doc.text_chars ?? "—" },
+      {
+        key: "bindings",
+        header: "索引绑定",
+        width: pixel(120),
+        renderCell: (doc) => (
+          <Button
+            label={`查看${doc.display_name}绑定状态`}
+            variant="ghost"
+            size="sm"
+            isDisabled={busy}
+            onClick={() => void openDocumentBindings(doc)}
+          />
+        ),
+      },
     ];
     if (canWrite) {
       result.push({
         key: "actions",
         header: "操作",
-        width: pixel(100),
+        width: pixel(140),
         align: "end",
         resizable: false,
-        renderCell: (doc) => doc.status === "failed"
-          ? <Button label={`重试${doc.display_name}`} variant="ghost" size="sm" isDisabled={busy} onClick={() => void handleRetry(doc)} />
+        renderCell: (doc) => doc.status === "failed" || doc.status === "ready"
+          ? <Button label={doc.status === "failed" ? `重试${doc.display_name}` : `重建索引${doc.display_name}`} variant="ghost" size="sm" isDisabled={busy} onClick={() => void handleRetry(doc)} />
           : null,
       });
     }
@@ -182,6 +229,10 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
           <LayoutContent>
             <VStack gap={4}>
               {error && <Banner status="error" title={error} />}
+              <Banner
+                status="info"
+                title="删除文档暂不可用；完成或失败的文档可通过重建索引/重试更新，索引绑定状态可单独查看。"
+              />
               {loading ? (
                 <Card role="status" aria-label="正在加载文档">
                   <VStack gap={2}><Skeleton height={36} /><Skeleton height={36} index={1} /></VStack>
@@ -236,6 +287,60 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         }
         footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack></LayoutFooter>}
       />
+
+      <Dialog
+        isOpen={bindingDocument != null}
+        aria-label={bindingDocument ? `索引绑定 · ${bindingDocument.display_name}` : "索引绑定"}
+        onOpenChange={(isOpen) => { if (!isOpen && !bindingsLoading) setBindingDocument(null); }}
+        width={720}
+        maxHeight="80vh"
+        purpose="form"
+      >
+        <Layout
+          height="auto"
+          header={
+            <DialogHeader
+              title={bindingDocument ? `索引绑定 · ${bindingDocument.display_name}` : "索引绑定"}
+              onOpenChange={(isOpen) => { if (!isOpen && !bindingsLoading) setBindingDocument(null); }}
+            />
+          }
+          content={
+            <LayoutContent>
+              <VStack gap={3}>
+                {bindingsError && <Banner status="error" title={bindingsError} />}
+                {bindingsLoading ? (
+                  <Card role="status" aria-label="正在加载索引绑定">
+                    <VStack gap={2}><Skeleton height={36} /><Skeleton height={36} index={1} /></VStack>
+                  </Card>
+                ) : (
+                  <Card padding={0}>
+                    <Table
+                      aria-label="文档索引绑定"
+                      tableProps={{ "aria-label": "文档索引绑定" }}
+                      data={documentBindings as DocumentBindingRow[]}
+                      columns={[
+                        { key: "employee_id", header: "专家", width: proportional(1) },
+                        {
+                          key: "status",
+                          header: "状态",
+                          width: pixel(120),
+                          renderCell: (binding) => (
+                            <Badge label={BINDING_STATUS_LABEL[binding.status]} variant={BINDING_STATUS_VARIANT[binding.status]} />
+                          ),
+                        },
+                      ]}
+                      idKey="id"
+                      hasHover
+                      emptyState={<EmptyState title="暂无索引绑定" description="文档就绪后，Manager 会按授权配置同步索引绑定。" isCompact />}
+                    />
+                  </Card>
+                )}
+              </VStack>
+            </LayoutContent>
+          }
+          footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" isDisabled={bindingsLoading} onClick={() => setBindingDocument(null)} /></HStack></LayoutFooter>}
+        />
+      </Dialog>
     </Dialog>
   );
 }

@@ -2,7 +2,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import type { ApiClient } from "../../../api/client";
 import * as clientMod from "../../../api/client";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
@@ -35,6 +35,30 @@ const DOCUMENTS = [
     status: "failed",
     text_chars: null,
   },
+  {
+    id: "doc-ready",
+    tenant_id: "t1",
+    knowledge_space_id: "ks-sales",
+    display_name: "销售 FAQ.md",
+    source_type: "file",
+    file_name: "faq.md",
+    file_type: "text/markdown",
+    file_size: 64,
+    storage_key: "documents/faq.md",
+    status: "ready",
+    text_chars: 42,
+  },
+];
+const DOCUMENT_BINDINGS = [
+  {
+    id: "binding-doc-1",
+    tenant_id: "t1",
+    knowledge_space_id: "ks-sales",
+    document_id: "doc-ready",
+    employee_id: "e1",
+    rag_document_id: "rag-1",
+    status: "ready",
+  },
 ];
 
 interface ClientOverrides {
@@ -55,16 +79,17 @@ function makeI18n() {
   return i18n;
 }
 
-function sessionValue(): SessionContextValue {
+function sessionValue(roles: string[] = ["owner"], onUnauthorized: () => void = () => {}): SessionContextValue {
   const session = {
     principal: { id: "u1", tenant_id: "t1", display_name: "U", status: "active", roles: ["owner"] },
-    claims: { user_id: "u1", tenant_id: "t1", roles: ["owner"], exp: Math.floor(Date.now() / 1000) + 3600 },
+    claims: { user_id: "u1", tenant_id: "t1", roles, exp: Math.floor(Date.now() / 1000) + 3600 },
   } as AuthSession;
-  return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
+  return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized };
 }
 
 function defaultListGet(url: string) {
   if (url === "/api/manager/knowledge-spaces") return { items: SPACES, page: PAGE };
+  if (url.includes("/documents/") && url.endsWith("/bindings")) return { items: DOCUMENT_BINDINGS, page: PAGE };
   if (url.endsWith("/bindings")) return { items: BINDINGS, page: PAGE };
   if (url.endsWith("/documents")) return { items: DOCUMENTS, page: PAGE };
   if (url.endsWith("/employees")) return EMPLOYEES;
@@ -119,6 +144,21 @@ describe("KnowledgePage Astryx contract", () => {
     } });
     renderPage();
     expect(await screen.findByRole("alert")).toHaveTextContent("加载失败");
+  });
+
+  it("renders unauthorized API failures", async () => {
+    makeClient({ listGet: (url) => {
+      if (url === "/api/manager/knowledge-spaces") throw new ApiError("登录已过期", 401, "unauthorized");
+      return defaultListGet(url);
+    } });
+    render(<KnowledgePage />, { wrapper: ({ children }) => (
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={sessionValue(["member"])}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>
+    ) });
+    expect(await screen.findByRole("alert")).toHaveTextContent("登录已过期");
   });
 
   it("creates a knowledge space and confirms deletion before calling the API", async () => {
@@ -228,6 +268,21 @@ describe("KnowledgePage Astryx contract", () => {
     await waitFor(() => expect(client.post).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/documents/doc-failed/retry"));
   });
 
+  it("shows ready and failed status, rebuilds ready indexes, and projects binding status", async () => {
+    const client = makeClient();
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+    expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
+    expect(screen.getByText("完成")).toBeTruthy();
+    expect(screen.getByText("失败")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "重建索引销售 FAQ.md" }));
+    await waitFor(() => expect(client.post).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/documents/doc-ready/retry"));
+
+    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
+    expect(await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" })).toBeTruthy();
+    expect(await screen.findByText("已就绪")).toBeTruthy();
+  });
+
   it("shows explicit document loading, empty, and error states", async () => {
     const pending = deferred<{ items: never[]; page: typeof PAGE }>();
     makeClient({ listGet: (url) => url.endsWith("/documents") ? pending.promise : defaultListGet(url) });
@@ -243,6 +298,23 @@ describe("KnowledgePage Astryx contract", () => {
     } });
     render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
     expect(await screen.findByRole("alert")).toHaveTextContent("加载文档失败");
+  });
+
+  it("keeps member access read-only and does not expose write controls", async () => {
+    makeClient();
+    render(<KnowledgePage />, { wrapper: ({ children }) => (
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={sessionValue(["member"])}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>
+    ) });
+    await screen.findByRole("table", { name: "知识空间" });
+    expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库文档" }));
+    expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "上传文件" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "从 URL 导入" })).toBeNull();
   });
 
   it("does not let an older document request overwrite a new space", async () => {
