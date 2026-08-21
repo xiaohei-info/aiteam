@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,7 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
 # psycopg 延迟导入：保证 `import operation_service.repository` 在无 psycopg 环境下仍可用。
 
 _APP_ROLE = "app_rw"
+_MIGRATION_LOCK = threading.Lock()
 
 
 class PgEnterpriseRepository(EnterpriseRepository):
@@ -189,6 +191,14 @@ def _migrations_dir() -> Path:
 
 
 def apply_migrations(db_url: str | None, app_rw_password: str | None = None) -> None:
+    if not db_url:
+        return None
+    # Serialize first-request DDL/ALTER ROLE across concurrent Operator requests.
+    with _MIGRATION_LOCK:
+        return _apply_migrations_unlocked(db_url, app_rw_password)
+
+
+def _apply_migrations_unlocked(db_url: str | None, app_rw_password: str | None = None) -> None:
     """首次连接自动应用迁移（建表脚本）。幂等。
 
     `db_url` 必须是**管理连接**（admin DSN：超管/DDL owner），用于建角色/DDL；
