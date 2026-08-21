@@ -243,6 +243,20 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     // ── 阶段 2/6: Node Agent Conversation prompt（Pi model 产生 usage → UsageRecorder 入 outbox）──
     const traceId = `e2e-loopc-${Date.now()}`;
     const convId = `e2e-usage-${traceId}`;
+    const createResp = await request.post(`${agentOrigin}/api/agent/conversations`, {
+      data: {
+        id: convId,
+        title: `E2E usage ${traceId}`,
+        kind: "private",
+        ...(process.env.E2E_AGENT_EMPLOYEE_ID ? { entry_employee_id: process.env.E2E_AGENT_EMPLOYEE_ID } : {}),
+      },
+      headers: {
+        Authorization: `Bearer ${agentLogin.token}`,
+        "Content-Type": "application/json",
+      },
+      failOnStatusCode: false,
+    });
+    expect(createResp.status(), `create conversation: ${createResp.status()}`).toBe(201);
     const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
       data: { text: `E2E usage cross-tier: ${traceId}` },
       headers: {
@@ -354,5 +368,9 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
         expect(record, `rollup record must not contain "${key}"`).not.toHaveProperty(key);
       }
     }
+    await request.delete(`${agentOrigin}/api/agent/conversations/${convId}`, {
+      headers: { Authorization: `Bearer ${agentLogin.token}` },
+      failOnStatusCode: false,
+    });
   });
 });

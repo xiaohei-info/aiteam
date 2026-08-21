@@ -126,7 +126,7 @@ test.describe("Loop-B snapshot freeze（跨端）", () => {
     // sync 是尽力而为端点——Manager 不可达时返回 ok=false（不 500）
     // 响应应为 envelope JSON（非 text/html SPA fallback）
     const ct = syncResp.headers()["content-type"] ?? "";
-    expect(ct, "sync 响应应为 JSON（非 text/html）").toContain("application/json");
+    expect(ct, "sync 响应应为 JSON（非 text/html）").toMatch(/application\/(?:problem\+)?json/);
     expect(ct).not.toContain("text/html");
 
     const body = (await syncResp.json()) as { data?: { ok?: boolean; error?: string } };

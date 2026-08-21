@@ -134,7 +134,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     // ── 3. Manager 创建 provider 凭据（model=gpt-4.1）──
     const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
     const mgrToken = mgrLogin.token;
-    const providerRef = "newapi-main";
+    const providerRef = `newapi-main-${uniqueTag}`;
 
     const providerResp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/provider-credentials`,

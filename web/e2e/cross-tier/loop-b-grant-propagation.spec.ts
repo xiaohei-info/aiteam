@@ -129,10 +129,10 @@ test.describe("Loop-B snapshot freeze（跨端）", () => {
     if (body.data.length > 0) {
       const snap = body.data[0] as Record<string, unknown>;
       // snapshot 记录应含 employee_id、snapshot_version 等不可变标识
-      expect(snap, "snapshot 记录含 employee_id 或 snapshot_version").toSatisfy(
-        (s: Record<string, unknown>) =>
-          "employee_id" in s || "snapshot_version" in s,
-      );
+      expect(
+        "employee_id" in snap || "snapshot_version" in snap,
+        "snapshot 记录含 employee_id 或 snapshot_version",
+      ).toBe(true);
     }
   });
 
