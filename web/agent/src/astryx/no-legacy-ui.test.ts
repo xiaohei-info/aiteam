@@ -15,6 +15,7 @@ const forbiddenSourcePatterns = [
   /text-text-/,
   /rounded-window/,
   /className\s*=\s*["'`]/,
+  /\/api\/agent\/knowledge-bases(?:[\/"'`]|$)/,
 ];
 
 function sourceFiles(directory: string): string[] {

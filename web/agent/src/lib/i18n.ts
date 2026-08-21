@@ -15,7 +15,6 @@ const agentMessages = {
     "agent.nav.settings": "设置",
     "agent.nav.sync": "同步与用量",
     "agent.nav.marketplace": "人才市场",
-    "agent.nav.knowledge": "知识库",
     "agent.nav.office": "办公室",
     "agent.nav.org": "组织架构",
     "agent.login.title": "登录",
