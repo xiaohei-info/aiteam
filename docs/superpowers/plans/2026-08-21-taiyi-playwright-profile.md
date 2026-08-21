@@ -1,6 +1,6 @@
 ---
 created: 2026-08-21
-status: implemented-taiyi-smoke-partial
+status: completed-taiyi-smoke
 scope: taiyi-playwright
 ---
 
@@ -30,6 +30,7 @@ scope: taiyi-playwright
 - taiyi external profile 已连接三端 root/health/login；
 - Operation smoke：全部通过；
 - Manager smoke：全部通过；
-- Agent smoke：5/10 通过。
+- Agent smoke：全部通过；
+- 合计 `48 passed`，已在 taiyi 最新 Agent server/UI 产物上验证。
 
-Agent 剩余失败已定位：taiyi 当前 Agent 部署版本的 OpenAPI 尚未发布 abort path，Agent UI chat/keyboard gate 与当前部署静态前端不一致；不是 external profile 隐藏失败。下一步需先把最新 Agent server/UI 产物部署到 taiyi，再重跑 Agent/cross-tier。
+期间修复了 Agent list envelope 与前端 `listGet` 契约不一致、OpenAPI 缺少 abort path、E2E 动态会话选择和外部部署截图数据不稳定问题。
