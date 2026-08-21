@@ -11,10 +11,12 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import httpx
+
+from .rag_instances import RagInstance, RagInstanceConfigurationError, RagInstanceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +34,18 @@ class RagIngestionUnavailable(RuntimeError):
 @dataclass(frozen=True)
 class LightRagIngestionSettings:
     url: str
-    api_key: str
+    api_key: str = field(repr=False)
     request_timeout_ms: int
     pipeline_timeout_ms: int
     poll_interval_ms: int = 250
     workspace: str | None = None
+    instance_registry: RagInstanceRegistry | None = None
 
     @classmethod
     def from_env(cls) -> "LightRagIngestionSettings | None":
-        url = os.getenv("LIGHTRAG_URL", "").strip().rstrip("/")
-        key = os.getenv("LIGHTRAG_API_KEY", "").strip()
+        registry = RagInstanceRegistry.from_env()
         pipeline_raw = os.getenv("LIGHTRAG_PIPELINE_TIMEOUT_MS", "").strip()
-        if not url or not key or not pipeline_raw:
+        if registry is None or not pipeline_raw:
             return None
         try:
             pipeline_timeout_ms = int(pipeline_raw)
@@ -61,8 +63,11 @@ class LightRagIngestionSettings:
         except ValueError:
             poll_interval_ms = 250
         poll_interval_ms = max(10, min(poll_interval_ms, _MAX_POLL_INTERVAL_MS))
-        workspace = os.getenv("LIGHTRAG_WORKSPACE", "").strip() or None
-        return cls(url, key, request_timeout_ms, pipeline_timeout_ms, poll_interval_ms, workspace)
+        first = registry.instances[0]
+        return cls(
+            first.url, first.api_key, request_timeout_ms, pipeline_timeout_ms,
+            poll_interval_ms, first.workspace, registry,
+        )
 
 
 @dataclass(frozen=True)
@@ -102,34 +107,51 @@ class LightRagIngestionClient:
         self,
         settings: LightRagIngestionSettings | None = None,
         *,
+        instance_registry: RagInstanceRegistry | None = None,
         transport: httpx.BaseTransport | None = None,
         sleeper=time.sleep,
         clock=time.monotonic,
     ):
-        self.settings = settings if settings is not None else LightRagIngestionSettings.from_env()
+        resolved = settings if settings is not None else LightRagIngestionSettings.from_env()
+        if instance_registry is not None and resolved is not None:
+            resolved = replace(resolved, instance_registry=instance_registry)
+        self.settings = resolved
         self._http = httpx.Client(transport=transport) if transport else httpx.Client()
         self._sleep = sleeper
         self._clock = clock
+
+    @property
+    def instance_registry(self) -> RagInstanceRegistry | None:
+        return self.settings.instance_registry if self.settings is not None else None
+
+    def instance_for_workspace(self, workspace: str) -> RagInstance:
+        settings = self.settings
+        if settings is None:
+            raise RagIngestionUnavailable("knowledge indexing unavailable")
+        try:
+            if settings.instance_registry is not None:
+                return settings.instance_registry.resolve(workspace)
+            if settings.workspace is not None and workspace != settings.workspace:
+                raise RagInstanceConfigurationError("LightRAG workspace is not configured")
+            return RagInstance("legacy", settings.url, settings.api_key, workspace)
+        except RagInstanceConfigurationError as exc:
+            raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
 
     def close(self) -> None:
         self._http.close()
 
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult:
         settings = self.settings
-        if (
-            settings is None
-            or not workspace.strip()
-            or not file_source.strip()
-            or (settings.workspace is not None and workspace != settings.workspace)
-        ):
+        if settings is None or not workspace.strip() or not file_source.strip():
             raise RagIngestionUnavailable("knowledge indexing unavailable")
+        instance = self.instance_for_workspace(workspace)
         if not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
             raise RagIngestionUnavailable("knowledge indexing unavailable")
-        headers = {"X-API-Key": settings.api_key, "LIGHTRAG-WORKSPACE": workspace}
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
         timeout = settings.request_timeout_ms / 1000
         try:
             response = self._http.post(
-                f"{settings.url}/documents/text",
+                f"{instance.url}/documents/text",
                 headers=headers,
                 json={"text": text, "file_source": file_source},
                 timeout=timeout,
@@ -143,7 +165,7 @@ class LightRagIngestionClient:
             if not isinstance(track_id, str) or not track_id.strip():
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             pipeline_chunk_count = self._wait_until_ready(
-                settings, headers=headers, file_source=file_source, track_id=track_id,
+                instance, settings, headers=headers, file_source=file_source, track_id=track_id,
                 timeout=timeout,
             )
             chunk_count = payload.get("chunk_count")
@@ -160,6 +182,7 @@ class LightRagIngestionClient:
 
     def _wait_until_ready(
         self,
+        instance: RagInstance,
         settings: LightRagIngestionSettings,
         *,
         headers: dict[str, str],
@@ -174,7 +197,7 @@ class LightRagIngestionClient:
             if remaining <= 0:
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             response = self._http.get(
-                f"{settings.url}/documents/track_status/{track_id}",
+                f"{instance.url}/documents/track_status/{track_id}",
                 headers=headers,
                 timeout=min(timeout, remaining),
             )

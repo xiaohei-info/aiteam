@@ -52,7 +52,8 @@ from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .knowledge_space_repository import KnowledgeSpaceRepository
 from .member_service import GrantService, MemberDeptService
 from .rag import PgManagerRagService
-from .rag_mcp import RagAccessService, LightRagClient, build_rag_mcp, install_rag_mcp_lifespan
+from .rag_ingestion import LightRagIngestionClient
+from .rag_mcp import RagAccessService, LightRagClient, LightRagSettings, build_rag_mcp, install_rag_mcp_lifespan
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import build_snapshot_service
 from shared.db import PgTenantRouter
@@ -196,8 +197,18 @@ if settings.db_url:
         knowledge_binding=EmployeeKnowledgeBindingRepository(_rag_router),
     )
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
-    _rag_light = LightRagClient()
-    _rag_service = PgManagerRagService(settings.db_url)
+    # Load the static registry once at Manager startup and share that exact
+    # immutable routing map between query, ingestion, and workspace derivation.
+    _rag_settings = LightRagSettings.from_env()
+    _rag_light = LightRagClient(_rag_settings)
+    _rag_ingestion = LightRagIngestionClient(
+        instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+    )
+    app.state._knowledge_intake_ingestion_client = _rag_ingestion
+    _rag_service = PgManagerRagService(
+        settings.db_url,
+        instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+    )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,
         member_repository=_rag_member_repo,

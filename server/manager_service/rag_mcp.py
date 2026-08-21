@@ -9,7 +9,7 @@ import contextlib
 import contextvars
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,6 +31,7 @@ from .employee_config_service import employee_runnable
 from .knowledge_intake_repository import KnowledgeDocumentRepository
 from .knowledge_intake_service import _resolve_path
 from .rag import RagHandle
+from .rag_instances import RagInstance, RagInstanceConfigurationError, RagInstanceRegistry
 
 MCP_MOUNT_PATH = "/api/manager/rag"
 MCP_ENDPOINT_PATH = f"{MCP_MOUNT_PATH}/mcp"
@@ -47,17 +48,18 @@ class RagUnavailable(RuntimeError):
 @dataclass(frozen=True)
 class LightRagSettings:
     url: str
-    api_key: str
+    api_key: str = field(repr=False)
     timeout_ms: int = 5_000
     query_mode: str = "naive"
     workspace: str | None = None
+    instance_registry: RagInstanceRegistry | None = None
 
     @classmethod
     def from_env(cls) -> "LightRagSettings | None":
-        url = os.getenv("LIGHTRAG_URL", "").strip().rstrip("/")
-        key = os.getenv("LIGHTRAG_API_KEY", "").strip()
-        if not url or not key:
+        registry = RagInstanceRegistry.from_env()
+        if registry is None:
             return None
+        first = registry.instances[0]
         try:
             timeout_ms = max(100, min(int(os.getenv("LIGHTRAG_TIMEOUT_MS", "5000")), 30_000))
         except ValueError:
@@ -65,16 +67,34 @@ class LightRagSettings:
         query_mode = os.getenv("LIGHTRAG_QUERY_MODE", "naive").strip().lower()
         if query_mode not in {"local", "global", "hybrid", "naive", "mix"}:
             query_mode = "naive"
-        workspace = os.getenv("LIGHTRAG_WORKSPACE", "").strip() or None
-        return cls(url=url, api_key=key, timeout_ms=timeout_ms, query_mode=query_mode, workspace=workspace)
+        return cls(first.url, first.api_key, timeout_ms, query_mode, first.workspace, registry)
 
 
 class LightRagClient:
     """Small bounded client for LightRAG's structured, no-LLM query endpoint."""
 
     def __init__(self, settings: LightRagSettings | None = None, *, transport: httpx.AsyncBaseTransport | None = None):
-        self.settings = settings or LightRagSettings.from_env()
+        self.settings = settings if settings is not None else LightRagSettings.from_env()
         self._http = httpx.AsyncClient(transport=transport) if transport else httpx.AsyncClient()
+
+    @property
+    def instance_registry(self) -> RagInstanceRegistry | None:
+        return self.settings.instance_registry if self.settings is not None else None
+
+    def instance_for_workspace(self, workspace: str) -> RagInstance:
+        settings = self.settings
+        if settings is None:
+            raise RagUnavailable("knowledge service unavailable")
+        try:
+            if settings.instance_registry is not None:
+                return settings.instance_registry.resolve(workspace)
+            # Explicit constructor settings remain useful to tests and local
+            # callers. Environment-created settings always have a fixed map.
+            if settings.workspace is not None and workspace != settings.workspace:
+                raise RagInstanceConfigurationError("LightRAG workspace is not configured")
+            return RagInstance("legacy", settings.url, settings.api_key, workspace)
+        except RagInstanceConfigurationError as exc:
+            raise RagUnavailable("knowledge service unavailable") from exc
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -83,8 +103,10 @@ class LightRagClient:
         settings = self.settings
         if settings is None:
             raise RagUnavailable("knowledge service unavailable")
-        if settings.workspace is not None and workspace != settings.workspace:
-            raise RagUnavailable("knowledge service unavailable")
+        try:
+            instance = self.instance_for_workspace(workspace)
+        except RagUnavailable:
+            raise
         if len(query) > _MAX_QUERY_CHARS:
             raise RagUnavailable("knowledge service unavailable")
         body = {
@@ -98,8 +120,8 @@ class LightRagClient:
         }
         try:
             response = await self._http.post(
-                f"{settings.url}/query/data",
-                headers={"X-API-Key": settings.api_key, "LIGHTRAG-WORKSPACE": workspace},
+                f"{instance.url}/query/data",
+                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
                 json=body,
                 timeout=settings.timeout_ms / 1000,
             )
@@ -237,6 +259,14 @@ class RagAccessService:
             handle = self._rag.get(ctx, space_id)
             if not handle or handle.tenant_id != ctx.tenant_id or handle.knowledge_space_id != space_id:
                 raise Forbidden("employee knowledge binding is unavailable")
+            if self._light_rag.settings is not None:
+                try:
+                    instance = self._light_rag.instance_for_workspace(handle.workspace)
+                except RagUnavailable:
+                    raise Forbidden("employee knowledge binding is unavailable")
+                handle_instance_id = getattr(handle, "instance_id", "legacy")
+                if self._light_rag.instance_registry is not None and handle_instance_id != instance.instance_id:
+                    raise Forbidden("employee knowledge binding is unavailable")
             handles.append(handle)
             valid_bindings.extend(space_bindings)
         return AuthorizedRagRequest(

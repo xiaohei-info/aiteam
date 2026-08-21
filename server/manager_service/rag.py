@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 
+from .rag_instances import RagInstance, RagInstanceConfigurationError, RagInstanceRegistry
+
 
 @dataclass(frozen=True)
 class RagHandle:
@@ -21,13 +23,17 @@ class RagHandle:
     tenant_id: str
     knowledge_space_id: str
     workspace: str
+    instance_id: str = "legacy"
 
 
 class PgManagerRagService(ManagerRagService):
     """从 TenantContext 推导 workspace，并把映射落到加 RLS 的 PG 表（第二防线）。"""
 
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, *, instance_registry: RagInstanceRegistry | None = None):
         self._router = PgTenantRouter(dsn)
+        # Startup callers may inject the already-loaded registry.  The default
+        # path loads the same static Manager configuration used by the clients.
+        self._instances = instance_registry if instance_registry is not None else RagInstanceRegistry.from_env()
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
         # 唯一派生入口：禁止外部直传 workspace（D21）。
@@ -38,7 +44,22 @@ class PgManagerRagService(ManagerRagService):
                 "VALUES (%s, %s, %s) ON CONFLICT (tenant_id, knowledge_space_id) DO NOTHING",
                 (ctx.tenant_id, knowledge_space_id, workspace),
             )
-        return RagHandle(tenant_id=ctx.tenant_id, knowledge_space_id=knowledge_space_id, workspace=workspace)
+        instance = self._resolve_instance(workspace)
+        return RagHandle(
+            tenant_id=ctx.tenant_id,
+            knowledge_space_id=knowledge_space_id,
+            workspace=workspace,
+            instance_id=instance.instance_id if instance is not None else "legacy",
+        )
+
+    def _resolve_instance(self, workspace: str) -> RagInstance | None:
+        instances = getattr(self, "_instances", None)
+        if instances is None:
+            return None
+        try:
+            return instances.resolve(workspace)
+        except RagInstanceConfigurationError as exc:
+            raise ValueError("knowledge service unavailable") from exc
 
     def list_workspaces(self, ctx: TenantContext) -> list[dict]:
         """列出本 tenant 的 workspace 映射（受 RLS 约束，跨租户不可见）。"""

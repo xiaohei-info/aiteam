@@ -339,6 +339,11 @@ class KnowledgeIntakeService:
                 or not handle.workspace.strip()
             ):
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
+            registry = getattr(self._ingestion_client, "instance_registry", None)
+            if registry is not None:
+                instance = registry.resolve(handle.workspace)
+                if getattr(handle, "instance_id", "legacy") != instance.instance_id:
+                    raise RagIngestionUnavailable("knowledge indexing unavailable")
             result = self._ingestion_client.ingest_text(
                 workspace=handle.workspace, file_source=document_id, text=text
             )
