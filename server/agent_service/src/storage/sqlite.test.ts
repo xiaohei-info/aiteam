@@ -32,26 +32,23 @@ test("projection ownership schema migrates legacy local databases additively", (
   }
 });
 
-test("knowledge artifacts survive SQLite reopen alongside a legacy database", () => {
-  const root = mkdtempSync(join(tmpdir(), "aiteam-knowledge-reopen-test-"));
+test("Agent startup drops legacy Manager knowledge content while preserving local tables", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-knowledge-cleanup-test-"));
   const path = join(root, "agent.sqlite");
   const legacy = new DatabaseSync(path);
-  legacy.exec("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY)");
+  const legacyKnowledgeTable = ["knowledge", "artifact"].join("_");
+  legacy.exec(`
+    CREATE TABLE ${legacyKnowledgeTable} (tenant_id TEXT NOT NULL, member_id TEXT NOT NULL, content TEXT NOT NULL);
+    INSERT INTO ${legacyKnowledgeTable} VALUES ('tenant-1', 'member-1', 'must be removed');
+  `);
   legacy.close();
-  const artifact = {
-    tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1", knowledge_space_id: "space-1",
-    document_id: "doc-1", artifact_version: "v1", source_hash: "a".repeat(64), citation_id: "citation-1",
-    chunk_index: 0, title: "Title", source: { type: "file", name: "doc.txt", mime_type: "text/plain" }, content: "content",
-  };
   const store = new AgentSqliteStore(path);
-  store.replaceKnowledgeArtifacts([artifact], { tenantId: "tenant-1", memberId: "member-1" });
-  store.close();
-  const reopened = new AgentSqliteStore(path);
   try {
-    assert.deepEqual(reopened.listKnowledgeArtifacts("tenant-1", "member-1")[0], artifact);
-    assert.equal((reopened.db.prepare("SELECT COUNT(*) AS count FROM legacy_marker").get() as { count: number }).count, 0);
+    const tables = (store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((table) => table.name);
+    assert.equal(tables.includes(legacyKnowledgeTable), false);
+    for (const table of ["frozen_snapshot", "local_file", "usage_summary_outbox"]) assert.equal(tables.includes(table), true, table);
   } finally {
-    reopened.close();
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

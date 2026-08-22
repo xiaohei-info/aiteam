@@ -110,21 +110,6 @@ export interface UsageOutboxItem {
 
 export type LocalFileKind = "attachment" | "artifact";
 
-export interface KnowledgeArtifact {
-  tenant_id: string;
-  member_id: string;
-  employee_id: string;
-  knowledge_space_id: string;
-  document_id: string;
-  artifact_version: string;
-  source_hash: string;
-  citation_id: string;
-  chunk_index: number;
-  title: string;
-  source: { type: string; name: string; mime_type: string };
-  content: string;
-}
-
 export interface LocalFileRecord {
   id: string;
   conversation_id: string;
@@ -316,26 +301,11 @@ export class AgentSqliteStore {
       );
       CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
 
-      CREATE TABLE IF NOT EXISTS knowledge_artifact (
-        tenant_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        employee_id TEXT NOT NULL,
-        knowledge_space_id TEXT NOT NULL,
-        document_id TEXT NOT NULL,
-        artifact_version TEXT NOT NULL,
-        source_hash TEXT NOT NULL,
-        citation_id TEXT NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        title TEXT NOT NULL,
-        source_json TEXT NOT NULL,
-        content TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, member_id, employee_id, knowledge_space_id, document_id, artifact_version, chunk_index),
-        UNIQUE (tenant_id, member_id, citation_id)
-      );
-      CREATE INDEX IF NOT EXISTS knowledge_artifact_owner_idx ON knowledge_artifact(tenant_id, member_id, employee_id, knowledge_space_id);
     `);
     // Pi Session JSONL is the sole content fact source; remove any pre-cutover raw event table.
     this.db.exec("DROP TABLE IF EXISTS pi_event");
+    // Manager-owned enterprise knowledge must not survive in the Agent database.
+    this.db.exec("DROP TABLE IF EXISTS knowledge_artifact");
     this.migrateOwnershipTables();
     for (const statement of [
       "ALTER TABLE conversation ADD COLUMN title TEXT",
@@ -676,19 +646,6 @@ export class AgentSqliteStore {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  replaceProjectionsAndKnowledge(
-    experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[],
-    artifacts: KnowledgeArtifact[], owner: { tenantId: string; memberId: string },
-  ): { upserted: number; revoked: number; knowledge: { stored: number; removed: number } } {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = this.replaceProjectionRows(experts, solutions, snapshots, revokedIds, owner, new Date().toISOString());
-      const knowledge = this.replaceKnowledgeArtifactRows(artifacts, owner);
-      this.db.exec("COMMIT");
-      return { ...result, knowledge };
-    } catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
-  }
-
   private replaceProjectionRows(experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[], owner: { tenantId: string; memberId: string } | undefined, now: string): { upserted: number; revoked: number } {
     const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, member_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
     for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.member_id ?? "", expert.version, JSON.stringify({ ...expert, tenant_id: expert.tenant_id, ...(expert.member_id ? { member_id: expert.member_id } : {}), synced_at: expert.synced_at ?? now, revoked: false }), now);
@@ -718,52 +675,6 @@ export class AgentSqliteStore {
       }
     }
     return { upserted: experts.length + solutions.length + snapshots.length, revoked: revokedIds.length };
-  }
-
-  replaceKnowledgeArtifacts(artifacts: KnowledgeArtifact[], owner: { tenantId: string; memberId: string }): { stored: number; removed: number } {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = this.replaceKnowledgeArtifactRows(artifacts, owner);
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
-  }
-
-  private replaceKnowledgeArtifactRows(artifacts: KnowledgeArtifact[], owner: { tenantId: string; memberId: string }): { stored: number; removed: number } {
-    const before = this.db.prepare("SELECT COUNT(*) AS count FROM knowledge_artifact WHERE tenant_id = ? AND member_id = ?").get(owner.tenantId, owner.memberId) as { count: number };
-    this.db.prepare("DELETE FROM knowledge_artifact WHERE tenant_id = ? AND member_id = ?").run(owner.tenantId, owner.memberId);
-    const insert = this.db.prepare(`INSERT INTO knowledge_artifact
-      (tenant_id, member_id, employee_id, knowledge_space_id, document_id, artifact_version, source_hash, citation_id, chunk_index, title, source_json, content)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const artifact of artifacts) {
-      if (artifact.tenant_id !== owner.tenantId || artifact.member_id !== owner.memberId) throw new Error("Knowledge artifact ownership mismatch");
-      insert.run(artifact.tenant_id, artifact.member_id, artifact.employee_id, artifact.knowledge_space_id, artifact.document_id, artifact.artifact_version, artifact.source_hash, artifact.citation_id, artifact.chunk_index, artifact.title, JSON.stringify(artifact.source), artifact.content);
-    }
-    return { stored: artifacts.length, removed: Number(before.count) };
-  }
-
-  listKnowledgeArtifacts(tenantId: string, memberId: string, employeeId?: string, knowledgeSpaceId?: string): KnowledgeArtifact[] {
-    const rows = this.db.prepare(`SELECT tenant_id, member_id, employee_id, knowledge_space_id, document_id, artifact_version, source_hash, citation_id, chunk_index, title, source_json, content
-      FROM knowledge_artifact WHERE tenant_id = ? AND member_id = ? AND (? IS NULL OR employee_id = ?) AND (? IS NULL OR knowledge_space_id = ?)
-      ORDER BY employee_id, knowledge_space_id, document_id, chunk_index`).all(tenantId, memberId, employeeId ?? null, employeeId ?? null, knowledgeSpaceId ?? null, knowledgeSpaceId ?? null) as Array<Record<string, unknown>>;
-    return rows.map((row) => this.toKnowledgeArtifact(row));
-  }
-
-  getKnowledgeArtifact(tenantId: string, memberId: string, employeeId: string, knowledgeRefs: readonly string[], citationId: string): KnowledgeArtifact | undefined {
-    if (knowledgeRefs.length === 0) return undefined;
-    const row = this.db.prepare(`SELECT tenant_id, member_id, employee_id, knowledge_space_id, document_id, artifact_version, source_hash, citation_id, chunk_index, title, source_json, content
-      FROM knowledge_artifact WHERE tenant_id = ? AND member_id = ? AND employee_id = ? AND citation_id = ? AND knowledge_space_id IN (${knowledgeRefs.map(() => "?").join(",") || "NULL"})`).get(tenantId, memberId, employeeId, citationId, ...knowledgeRefs) as Record<string, unknown> | undefined;
-    return row ? this.toKnowledgeArtifact(row) : undefined;
-  }
-
-  private toKnowledgeArtifact(row: Record<string, unknown>): KnowledgeArtifact {
-    return {
-      tenant_id: String(row.tenant_id), member_id: String(row.member_id), employee_id: String(row.employee_id),
-      knowledge_space_id: String(row.knowledge_space_id), document_id: String(row.document_id),
-      artifact_version: String(row.artifact_version), source_hash: String(row.source_hash),
-      citation_id: String(row.citation_id), chunk_index: Number(row.chunk_index), title: String(row.title),
-      source: JSON.parse(String(row.source_json)) as KnowledgeArtifact["source"], content: String(row.content),
-    };
   }
 
   listUsageOutbox(tenantId?: string, memberId?: string): UsageOutboxItem[] {

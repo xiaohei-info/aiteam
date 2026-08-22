@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentHttpServer } from "./server.js";
 import { createFixture } from "../test-fixture.js";
-import { ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
+import { HttpManagerClient, ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
 import { aggregateUsage } from "../usage.js";
 import { validateSchedule } from "../schedule.js";
 
@@ -70,51 +70,34 @@ test("Grant sync stores only Manager-authorized projections", async () => {
   }
 });
 
-test("Grant sync validates the bundle before changing local projections", async () => {
+test("Grant sync validates Manager config before changing local projections", async () => {
   const remote: ManagerClient = {
-    pullAuthorizedConfig: async () => ({ experts: [{ employee_id: "remote", tenant_id: "t1", version: "2", handle: "remote", display_name: "Remote", revoked: false, synced_at: new Date().toISOString() }], solutions: [], snapshots: [], revoked_ids: ["e1"] }),
-    pullKnowledgeArtifacts: async () => ({ authoritative: true, artifacts: [{ tenant_id: "t1", member_id: "m1", employee_id: "remote", knowledge_space_id: "space-1", document_id: "doc-1", artifact_version: "v1", source_hash: "not-a-hash", citation_id: "c1", chunk_index: 0, title: "bad", source: { type: "file", name: "x.txt", mime_type: "text/plain" }, content: "bad" }] }),
+    pullAuthorizedConfig: async () => ({ experts: [{ version: "2" } as never], solutions: [], snapshots: [], revoked_ids: [] }),
     getOrgTree: async () => ({}),
   };
   const { fixture, http, base } = await start(remote);
-  fixture.store.replaceKnowledgeArtifacts([{
-    tenant_id: "t1", member_id: "m1", employee_id: "e1", knowledge_space_id: "space-1", document_id: "old-doc",
-    artifact_version: "v1", source_hash: "a".repeat(64), citation_id: "old-citation", chunk_index: 0, title: "old",
-    source: { type: "file", name: "old.txt", mime_type: "text/plain" }, content: "old content",
-  }], { tenantId: "t1", memberId: "m1" });
   try {
     const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
     assert.equal(response.status, 503);
     assert.deepEqual(fixture.store.listLoadedExperts().map((expert) => expert.employee_id), ["e1"]);
-    assert.deepEqual(fixture.store.listKnowledgeArtifacts("t1", "m1").map((artifact) => artifact.citation_id), ["old-citation"]);
   } finally {
     await http.close();
     await fixture.close();
   }
 });
 
-test("Grant sync keeps the authoritative knowledge roster on an unchanged second sync", async () => {
-  const artifact = {
-    tenant_id: "t1", member_id: "m1", employee_id: "e1", knowledge_space_id: "space-1", document_id: "doc-1",
-    artifact_version: "v1", source_hash: "a".repeat(64), citation_id: "citation-1", chunk_index: 0,
-    title: "Handbook", source: { type: "file", name: "handbook.txt", mime_type: "text/plain" }, content: "offline handbook",
-  };
-  const knownVersions: Record<string, string>[] = [];
-  const remote: ManagerClient = {
-    pullAuthorizedConfig: async () => ({ experts: [{ employee_id: "e1", tenant_id: "t1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() }], solutions: [], snapshots: [], revoked_ids: [] }),
-    pullKnowledgeArtifacts: async (_caller, known) => { knownVersions.push(known); return { authoritative: true, artifacts: [artifact] }; },
-    getOrgTree: async () => ({}),
-  };
+test("Grant sync never requests Manager enterprise document content", async () => {
+  const requests: string[] = [];
+  const remote = new HttpManagerClient("https://manager.test/base/", async (input) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({ data: { experts: [], solutions: [], snapshots: [], revoked_ids: [] } }), { status: 200 });
+  });
   const { fixture, http, base } = await start(remote);
   try {
-    for (let index = 0; index < 2; index += 1) {
-      const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1", ...(index === 1 ? { known_versions: { "citation-1": "v1" } } : {}) }) });
-      assert.equal(response.status, 200);
-    }
-    assert.equal(knownVersions.length, 2);
-    assert.deepEqual(knownVersions, [{}, {}]);
-    assert.equal(fixture.store.listKnowledgeArtifacts("t1", "m1")[0]?.citation_id, "citation-1");
-    assert.equal(fixture.store.listKnowledgeArtifacts("t1", "m1").length, 1);
+    const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(requests, ["https://manager.test/api/manager/grants/authorized-config"]);
+    assert.equal(requests.some((url) => url.includes("/knowledge/")), false);
   } finally {
     await http.close();
     await fixture.close();
