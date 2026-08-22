@@ -149,6 +149,13 @@ jobs:
         working-directory: web
         run: pnpm exec playwright install --with-deps chromium
 
+      # The Playwright webServer starts the real Node Agent via
+      # `pnpm --dir server/agent_service start`; install its tsx/runtime
+      # dependencies explicitly because the web workspace does not own them.
+      - name: Install Agent dependencies
+        working-directory: server/agent_service
+        run: pnpm install --frozen-lockfile
+
       - name: Build shared (prereq for consumers)
         working-directory: web
         run: pnpm --filter @aiteam/shared run build
