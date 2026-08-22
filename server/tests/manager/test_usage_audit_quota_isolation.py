@@ -93,7 +93,7 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, admin_url, two_ten
         }],
     }
     r = client.post(
-        "/api/manager/usage/upload", json=upload, headers={"X-Service-Token": "test-service-token"},
+        "/api/manager/usage/upload", json=upload, headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["data"] == {"usage_ingested": 2, "audits_ingested": 1}
@@ -123,7 +123,7 @@ def test_usage_audit_upload_and_cross_tenant_rls(migrated_db, admin_url, two_ten
 
     # 幂等：同 summary_id 重复上报不新增
     client.post(
-        "/api/manager/usage/upload", json=upload, headers={"X-Service-Token": "test-service-token"},
+        "/api/manager/usage/upload", json=upload, headers={"Authorization": f"Bearer {owner_a}"},
     )
     r = client.get(
         "/api/manager/usage/rollup/list", headers={"Authorization": f"Bearer {owner_a}"},
@@ -138,7 +138,7 @@ def test_usage_aggregate_by_window(migrated_db, admin_url, two_tenants):
     client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [_usage("s1", run_count=5, token_total=1000)]},
-        headers={"X-Service-Token": "test-service-token"},
+        headers={"Authorization": f"Bearer {owner_a}"},
     )
     r = client.get(
         "/api/manager/usage/rollup?window_start=2026-01-01T00:00:00Z&window_end=2026-02-01T00:00:00Z",
@@ -230,7 +230,7 @@ def test_quota_evaluate_soft_does_not_block(migrated_db, admin_url, two_tenants)
     upload_resp = client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [_usage("s1", run_count=10, cost_total="150.00")]},
-        headers={"X-Service-Token": "test-service-token"},
+        headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert upload_resp.status_code == 200, upload_resp.text
 
@@ -250,12 +250,13 @@ def test_ingest_rejects_conversation_content_at_http(migrated_db, admin_url, two
     """D13 红线（真库）：上报体含会话内容字段 → 422（service 层断言，经 HTTP 透传 problem+json）。"""
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
+    owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
     bad_usage = _usage("s-bad")
     bad_usage["message"] = "敏感会话内容"
     r = client.post(
         "/api/manager/usage/upload",
         json={"tenant_id": tid_a, "usage": [bad_usage]},
-        headers={"X-Service-Token": "test-service-token"},
+        headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 422
     assert r.headers["content-type"].startswith("application/problem+json")

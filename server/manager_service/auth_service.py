@@ -87,16 +87,23 @@ class AuthService:
         )
 
     def sync_owner_bootstrap(self, tenant_id, *, phone, bootstrap_password):
-        """控制面同步负责人一次性凭据。
+        """控制面同步负责人一次性凭据，兼容旧调用方仅返回 user_id。"""
+        user_id, _idempotent = self.sync_owner_bootstrap_result(
+            tenant_id, phone=phone, bootstrap_password=bootstrap_password
+        )
+        return user_id
 
-        初次开通创建 owner；Operator 重置凭据时覆盖已有 owner 的 hash，并重新要求首登重置。
-        不能把“账号已存在”当作无操作的幂等成功，否则新签发的 bootstrap 永远无法登录。
+    def sync_owner_bootstrap_result(self, tenant_id, *, phone, bootstrap_password):
+        """同步负责人凭据并返回 ``(user_id, replaced_existing)``。
+
+        初次开通创建 owner；重复同步明确是 replace（重新写入 bootstrap hash），
+        但响应可以标记该次调用为可重复的 existing-account 操作。
         """
         validate_password_complexity(bootstrap_password)
         ctx = TenantContext(tenant_id=tenant_id, user_id="system", roles=[EnterpriseRole.OWNER.value])
         existing = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
         if existing is None:
-            return self.provision_owner(tenant_id, phone=phone, bootstrap_password=bootstrap_password)
+            return self.provision_owner(tenant_id, phone=phone, bootstrap_password=bootstrap_password), False
         self._repo.update_secret(
             ctx,
             provider=AuthProvider.PHONE,
@@ -104,7 +111,7 @@ class AuthService:
             secret=hash_password(bootstrap_password),
             must_reset=True,
         )
-        return existing.user_id
+        return existing.user_id, True
 
     def create_member(
         self, tenant_id, *, phone, initial_password, display_name="", must_reset=True

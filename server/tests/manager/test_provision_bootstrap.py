@@ -162,14 +162,14 @@ def test_provision_tenant_and_owner_bootstrap_e2e(migrated_db, admin_url):
     # 响应体不含明文凭据
     assert bootstrap_secret not in r.text
 
-    # F02 幂等：重放返回 201（idempotent=true）
+    # F02 重放：Operator 同步是可重复的 replace 操作，仍返回同一个 user_id。
     r3 = client.post("/api/manager/owner-bootstrap", json={
         "tenant_id": tenant_id,
         "owner_phone": phone,
         "bootstrap_secret": bootstrap_secret,
     })
     assert r3.status_code == 201
-    assert r3.json()["data"].get("idempotent") is True
+    assert r3.json()["data"]["user_id"] == body["user_id"]
 
     # ── CRITICAL 回归：双重 hash 断链已修复 ──────────────────────────────────────
     # 直接直读 auth_identity 拿落库 scrypt hash，用明文 secret 验证 verify_password 通过。

@@ -209,7 +209,7 @@ def test_owner_bootstrap_creates_identity(
 def test_owner_bootstrap_idempotent(
     tenant_scope, service_token_headers,
 ):
-    """F02 幂等：重复 bootstrap 返回 idempotent=True。"""
+    """F02 可重复同步：重复 bootstrap 返回同一 user_id。"""
     from manager_service.app import app as manager_app
 
     new_tenant_id = str(uuid.uuid4())
@@ -240,14 +240,14 @@ def test_owner_bootstrap_idempotent(
     # 首次创建不应有 idempotent 标记
     assert not r2a.json()["data"].get("idempotent")
 
-    # F02 第二次（重复）
+    # F02 第二次（重复/可重复 replace）
     r2b = client.post(
         "/api/manager/owner-bootstrap",
         json={"tenant_id": new_tenant_id, "owner_phone": phone, "bootstrap_secret": bs, "must_reset": True},
         headers=service_token_headers,
     )
     assert r2b.status_code == 201
-    assert r2b.json()["data"].get("idempotent") is True
+    assert r2b.json()["data"]["user_id"] == r2a.json()["data"]["user_id"]
 
     # 清理
     import psycopg

@@ -14,6 +14,7 @@ from shared.contracts.envelope import Envelope
 from shared.errors import NotFound
 from shared.service_token import verify_service_token
 
+from .auth_service import AuthService
 from .exceptions import ManagerAdminDbNotConfigured
 
 router = APIRouter(tags=["manager", "control-plane"])
@@ -59,10 +60,23 @@ def owner_bootstrap(
         cache = build_auth_service(db_url, admin_dsn=admin_db_url)
         request.app.state._auth_service = cache
 
-    user_id = cache.sync_owner_bootstrap(
-        body.tenant_id,
-        phone=body.owner_phone,
-        bootstrap_password=body.bootstrap_secret,  # 明文传入，Manager 内单次 scrypt
-    )
+    result_method = getattr(cache, "sync_owner_bootstrap_result", None) if isinstance(cache, AuthService) else None
+    if result_method is not None:
+        user_id, idempotent = result_method(
+            body.tenant_id,
+            phone=body.owner_phone,
+            bootstrap_password=body.bootstrap_secret,  # 明文传入，Manager 内单次 scrypt
+        )
+    else:
+        # Compatibility for injected test doubles and older embedding callers.
+        user_id = cache.sync_owner_bootstrap(
+            body.tenant_id,
+            phone=body.owner_phone,
+            bootstrap_password=body.bootstrap_secret,
+        )
+        idempotent = False
 
-    return Envelope[dict](data={"tenant_id": body.tenant_id, "user_id": user_id})
+    data = {"tenant_id": body.tenant_id, "user_id": user_id}
+    if idempotent:
+        data["idempotent"] = True
+    return Envelope[dict](data=data)

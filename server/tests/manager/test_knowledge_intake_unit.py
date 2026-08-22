@@ -922,8 +922,8 @@ def test_enabling_existing_employee_binding_backfills_ready_documents():
     assert ready.calls == [("ks", "emp-1")]
 
 
-@pytest.mark.asyncio
-async def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
     import manager_service.routes_knowledge_intake as routes
     from shared.auth import RejectingTokenVerifier
 
@@ -944,10 +944,13 @@ async def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) 
     router = routes.build_knowledge_intake_router(RejectingTokenVerifier("x"))
     endpoint = next(r.endpoint for r in router.routes if r.path.endswith("/documents/url"))
 
-    with pytest.raises(RuntimeError, match="called in worker"):
-        await endpoint(
-            "ks", KnowledgeDocumentImportUrl(url="https://public.example/page"), object(), object()
-        )
+    async def invoke():
+        with pytest.raises(RuntimeError, match="called in worker"):
+            await endpoint(
+                "ks", KnowledgeDocumentImportUrl(url="https://public.example/page"), object(), object()
+            )
+
+    asyncio.run(invoke())
     assert calls[0] == "ingest_url"
 
 

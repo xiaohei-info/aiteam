@@ -179,11 +179,17 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201, r.text
-    # 验 employee.knowledge_refs 真相态被改写
+    # 专家知识绑定的真相态是 employee_knowledge_binding，不是 employee 配置里的
+    # legacy knowledge_refs 字段；通过知识空间绑定视图验证当前绑定。
     r = client.get(
-        f"/api/manager/employees/{employee_id}", headers={"Authorization": f"Bearer {owner_a}"}
+        "/api/manager/knowledge-spaces/ks_bind/bindings",
+        headers={"Authorization": f"Bearer {owner_a}"},
     )
-    assert "ks_bind" in r.json()["data"]["knowledge_refs"]
+    assert r.status_code == 200
+    assert any(
+        item["resource_type"] == "expert" and item["resource_id"] == employee_id
+        for item in r.json()["data"]
+    )
 
     # 绑定部门（id 用随机 uuid，knowledge_space_binding 不校验目标存在性，仅落元数据）
     dept_id = str(uuid.uuid4())
