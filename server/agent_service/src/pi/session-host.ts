@@ -264,6 +264,12 @@ export class SessionHost {
     // finish. Waiting for both in-flight phases prevents a transient 500 when
     // the client immediately replays entries after a 202 prompt response.
     await record.sessionReady?.catch(() => undefined);
+    // The prompt method assigns promptPromise immediately after the session
+    // promise resumes. Yield once so an entries request cannot observe the
+    // narrow gap between those two assignments.
+    if (record.prompting && !record.promptPromise) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     await record.promptPromise?.catch(() => undefined);
     return record.sessionManager.getEntries();
   }
