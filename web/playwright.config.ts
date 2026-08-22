@@ -64,6 +64,11 @@ export default defineConfig({
     {
       name: "cross-tier",
       testMatch: /cross-tier\/.*\.spec\.ts/,
+      // Cross-tier tests share one seeded PG/Agent projection and intentionally
+      // exercise mutations (provision, grants, usage). Parallel workers make
+      // those tests race and turn valid product behavior into stale 403/500s.
+      fullyParallel: false,
+      workers: 1,
       use: { ...devices["Desktop Chrome"] },
     },
   ],
