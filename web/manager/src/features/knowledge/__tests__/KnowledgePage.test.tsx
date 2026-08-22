@@ -240,6 +240,7 @@ describe("KnowledgePage Astryx contract", () => {
       "/api/manager/knowledge-spaces",
       { body: { knowledge_space_id: "ks-ops", display_name: "运营知识库" } },
     ));
+    await waitFor(() => expect(screen.getByRole("button", { name: "删除销售知识库" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "删除销售知识库" }));
     expect(screen.getByRole("alertdialog", { name: "删除知识空间" })).toBeTruthy();
@@ -405,8 +406,9 @@ describe("KnowledgePage Astryx contract", () => {
       { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
     ));
     expect(await screen.findByText("删除仍在处理中")).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("button", { name: "检查删除状态删除中.md" })).toBeEnabled());
 
-    fireEvent.click(await screen.findByRole("button", { name: "检查删除状态删除中.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查删除状态删除中.md" }));
     await waitFor(() => expect(client.post).toHaveBeenCalledTimes(2));
     expect(await screen.findByLabelText("文档状态：已删除")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "检查删除状态删除中.md" })).toBeNull();
