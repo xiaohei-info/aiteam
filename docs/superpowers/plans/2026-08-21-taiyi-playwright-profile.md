@@ -31,6 +31,7 @@ scope: taiyi-playwright
 - 外部运行必须提供 `E2E_TENANT_ID`、`E2E_AGENT_EMPLOYEE_ID`、成员凭据和 Operation 凭据；
 - 最新 taiyi 部署（8781/8782/8783）三端 smoke：Operation `15 passed`、Manager `23 passed`、Agent `10 passed`，合计 `48 passed`；
 - Manager audit/governance 截图基线已随当前页面导航/投影刷新；
-- Agent prompt 真实 endpoint 返回 202，RAG deletion/reconcile 真实 upstream-id smoke 已通过。
+- Agent prompt 真实 endpoint 返回 202，RAG deletion/reconcile 真实 upstream-id smoke 已通过；
+- taiyi 当前 reused-tenant cross-tier 重跑：`54 passed / 1 skipped`；唯一跳过是专家招募/Provider matching，测试按设计要求 isolated tenant/provider seed，不能用共享租户伪造通过。
 
 期间修复了 Agent list envelope 与前端 `listGet` 契约不一致、OpenAPI 缺少 abort path、E2E 动态会话选择和外部部署截图数据不稳定问题；Agent prompt external smoke 需要显式 `E2E_AGENT_EMPLOYEE_ID`。
