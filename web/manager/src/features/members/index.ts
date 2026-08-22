@@ -4,5 +4,6 @@ export type {
   CreateMemberInput,
   Department,
   Member,
+  MemberStatus,
   UpdateMemberInput,
 } from "./types";
