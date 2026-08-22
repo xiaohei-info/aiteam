@@ -18,3 +18,49 @@ body,
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
+
+[data-timeline-event-card="true"] {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-timeline-card-header="true"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-block-end: 0.5rem;
+}
+
+[data-timeline-card-meta="true"],
+[data-timeline-card-note="true"],
+[data-timeline-status] {
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+[data-timeline-event-card="true"][data-kind="error"] {
+  border-inline-start: 0.25rem solid var(--color-error);
+}
+
+[data-timeline-event-card="true"][data-kind="aborted"] {
+  border-inline-start: 0.25rem solid var(--color-warning);
+}
+
+[data-timeline-card-summary="true"] {
+  margin: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+[data-timeline-card-note="true"] {
+  margin: 0.5rem 0 0;
+}
+
+[data-timeline-status] {
+  display: block;
+  padding: 0.5rem 0;
+}
