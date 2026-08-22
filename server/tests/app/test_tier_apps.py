@@ -43,7 +43,10 @@ def test_manager_legacy_artifact_route_is_absent():
 
     assert path not in client.get("/openapi.json").json()["paths"]
     response = client.post(path, json={"known_versions": {}})
-    assert response.status_code == 404
+    # The removed path has no POST route. Depending on Starlette's method
+    # resolver and the final SPA fallback, it is either a normal 404 or a
+    # method-not-allowed 405; both must use the unified problem envelope.
+    assert response.status_code in {404, 405}
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
