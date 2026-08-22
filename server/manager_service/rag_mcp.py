@@ -764,7 +764,11 @@ class RagAccessService:
             exact_range: tuple[int, int] | None = None
             if valid_order and chunk_map is not None:
                 if order < len(chunk_map):
-                    if not content_text or chunk_map[order] == content_text:
+                    # An order/index without authoritative content is not
+                    # enough to prove the upstream chunk identity; otherwise a
+                    # malformed response could make us return a different
+                    # chunk from the same document.
+                    if content_text and chunk_map[order] == content_text:
                         exact_index = order
                     elif content_span is not None:
                         # LightRAG's token chunker need not match Manager's
