@@ -12,6 +12,7 @@ import { StackItem } from "@astryxdesign/core/Stack";
 
 import { useApiError, useApp } from "../../lib/app-context";
 import { ConversationStateControl } from "./ConversationStateControl";
+import { ScheduleControl } from "./ScheduleControl";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
@@ -30,6 +31,11 @@ export function ChatPage(): React.ReactNode {
   const [creating, setCreating] = useState(false);
 
   const handleSelect = useCallback((conversation: Conversation) => setSelected(conversation), []);
+  const handleStateChanged = useCallback((conversation: Conversation) => setSelected(conversation), []);
+  const handleScheduleChanged = useCallback((conversation: Conversation) => {
+    setSelected(conversation);
+    setSentSignal((signal) => signal + 1);
+  }, []);
   const handleSent = useCallback(() => setSentSignal((signal) => signal + 1), []);
   const handleCancelCreate = useCallback(() => {
     if (creating) return;
@@ -74,7 +80,8 @@ export function ChatPage(): React.ReactNode {
         <Card role="region" aria-label="会话工作区" width="100%">
           {selected ? (
             <VStack gap={4} width="100%">
-              <ConversationStateControl client={client} conversation={selected} onStateChanged={setSelected} />
+              <ConversationStateControl client={client} conversation={selected} onStateChanged={handleStateChanged} />
+              <ScheduleControl client={client} conversation={selected} onScheduleChanged={handleScheduleChanged} />
               <HStack justify="between" align="center">
                 <Heading level={2}>{selected.title ?? selected.id}</Heading>
               </HStack>
