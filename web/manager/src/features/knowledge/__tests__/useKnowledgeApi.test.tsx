@@ -81,6 +81,48 @@ describe("useKnowledgeApi document lifecycle", () => {
     );
   });
 
+  it("reconciles deletion with a fresh Idempotency-Key and validates both result states", async () => {
+    const { client, wrapper } = setup();
+    client.post
+      .mockResolvedValueOnce({ ...OPERATION, upstream_status: "present" })
+      .mockResolvedValueOnce({ ...OPERATION, status: "completed", document_status: "deleted", upstream_status: "deleted" });
+    const { result } = renderHook(() => useKnowledgeApi(), { wrapper });
+
+    await expect(result.current.reconcileDeleteDocument("ks-sales", "doc-1")).resolves.toMatchObject({
+      status: "pending",
+      document_status: "deleting",
+      upstream_status: "present",
+    });
+    await expect(result.current.reconcileDeleteDocument("ks-sales", "doc-1")).resolves.toMatchObject({
+      status: "completed",
+      document_status: "deleted",
+      upstream_status: "deleted",
+    });
+
+    const firstKey = client.post.mock.calls[0]![1].idempotencyKey;
+    const secondKey = client.post.mock.calls[1]![1].idempotencyKey;
+    expect(firstKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondKey).not.toBe(firstKey);
+    expect(client.post).toHaveBeenNthCalledWith(
+      1,
+      "/api/manager/knowledge-spaces/ks-sales/documents/doc-1/reconcile-delete",
+      { idempotencyKey: firstKey },
+    );
+  });
+
+  it("rejects an invalid reconciliation result instead of treating it as completed", async () => {
+    const { client, wrapper } = setup();
+    client.post.mockResolvedValue({ ...OPERATION, status: "completed", document_status: "deleting", upstream_status: "present" });
+    const { result } = renderHook(() => useKnowledgeApi(), { wrapper });
+
+    await expect(result.current.reconcileDeleteDocument("ks-sales", "doc-1")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 200,
+      code: "malformed_response",
+    });
+  });
+
   it("rejects a missing or malformed operation envelope instead of returning null", async () => {
     const { client, wrapper } = setup();
     client.del.mockResolvedValue({ operation_id: "op-1" });

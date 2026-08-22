@@ -146,6 +146,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionNoticeStatus, setActionNoticeStatus] = useState<"success" | "info">("success");
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -177,6 +178,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     setBusy(false);
     setError(null);
     setActionNotice(null);
+    setActionNoticeStatus("success");
     setSelectedFile(null);
     setUrl("");
     setPendingDelete(null);
@@ -263,6 +265,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     setBusy(true);
     setError(null);
     setActionNotice(null);
+    setActionNoticeStatus("info");
     try {
       const operation = await api.deleteDocument(actionSpaceId, document.id);
       if (currentSpaceId.current !== actionSpaceId) return;
@@ -271,6 +274,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         setError(`${operation.error_message || "删除失败"}；可重试`);
         return;
       }
+      setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
       setActionNotice(operation.status === "completed" ? "删除已完成" : "删除请求已接受，处理中");
       await reload();
     } catch (err) {
@@ -283,11 +287,31 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     }
   }
 
+  async function handleReconcile(document: KnowledgeDocument): Promise<void> {
+    const actionSpaceId = spaceId;
+    setBusy(true);
+    setError(null);
+    setActionNotice(null);
+    setActionNoticeStatus("info");
+    try {
+      const operation = await api.reconcileDeleteDocument(actionSpaceId, document.id);
+      if (currentSpaceId.current !== actionSpaceId) return;
+      setActionNotice(operation.status === "completed" ? "删除已完成" : "删除仍在处理中");
+      setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
+      await reload();
+    } catch (err) {
+      if (currentSpaceId.current === actionSpaceId) setError(retryableMessage(err, "删除核对失败"));
+    } finally {
+      if (currentSpaceId.current === actionSpaceId) setBusy(false);
+    }
+  }
+
   async function handleReindex(document: KnowledgeDocument): Promise<void> {
     const actionSpaceId = spaceId;
     setBusy(true);
     setError(null);
     setActionNotice(null);
+    setActionNoticeStatus("info");
     try {
       const operation = await api.reindexDocument(actionSpaceId, document.id);
       if (currentSpaceId.current !== actionSpaceId) return;
@@ -295,6 +319,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         setError(`${operation.error_message || "重建索引失败"}；可重试`);
         return;
       }
+      setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
       setActionNotice(operation.status === "completed" ? "索引重建已完成" : "重建索引请求已接受，处理中");
       await reload();
     } catch (err) {
@@ -412,10 +437,19 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
                 isDisabled={busy}
                 onClick={() => void handleReindex(doc)}
               />
-            ) : doc.status !== "deleting" && doc.status !== "deleted" ? (
-              <Text type="supporting">处理中</Text>
+            ) : doc.status === "deleting" ? (
+              <Button
+                label={`检查删除状态${doc.display_name}`}
+                variant="ghost"
+                size="sm"
+                isLoading={busy}
+                isDisabled={busy}
+                clickAction={() => handleReconcile(doc)}
+              />
+            ) : doc.status === "deleted" ? (
+              <Text type="supporting">已删除</Text>
             ) : (
-              <Text type="supporting">{doc.status === "deleting" ? "删除处理中" : "已删除"}</Text>
+              <Text type="supporting">处理中</Text>
             )}
             {(doc.status === "ready" || doc.status === "failed") && (
               <Button
@@ -449,7 +483,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
           <LayoutContent>
             <VStack gap={4}>
               {error && <Banner status="error" title={error} />}
-              {actionNotice && <Banner status="success" title={actionNotice} />}
+              {actionNotice && <Banner status={actionNoticeStatus} title={actionNotice} />}
               <Banner
                 status="info"
                 title="引用正文不通过 Manager HTTP 页面加载：文档已就绪且绑定同步后，请通过 Agent Pi knowledge_get 获取；本页不直连 MCP 或 LightRAG。"

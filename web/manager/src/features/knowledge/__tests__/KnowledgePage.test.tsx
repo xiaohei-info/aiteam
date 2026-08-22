@@ -71,6 +71,19 @@ const DELETE_OPERATION = {
   document_status: "deleting",
   upstream_status: "deletion_started",
 };
+const RECONCILE_PENDING_OPERATION = {
+  ...DELETE_OPERATION,
+  document_id: "doc-deleting",
+  status: "pending",
+  document_status: "deleting",
+  upstream_status: "present",
+};
+const RECONCILE_COMPLETED_OPERATION = {
+  ...RECONCILE_PENDING_OPERATION,
+  status: "completed",
+  document_status: "deleted",
+  upstream_status: "deleted",
+};
 const REINDEX_OPERATION = {
   operation_id: "op-reindex",
   operation: "reindex",
@@ -156,7 +169,7 @@ function makeClient(overrides: ClientOverrides = {}) {
     patch: vi.fn(),
     put: vi.fn(),
     listGet: vi.fn((url: string) => overrides.listGet?.(url) ?? defaultListGet(url)),
-    post: vi.fn((url: string, options?: unknown) => overrides.post?.(url, options) ?? (url.endsWith("/reindex") ? REINDEX_OPERATION : null)),
+    post: vi.fn((url: string, options?: unknown) => overrides.post?.(url, options) ?? (url.endsWith("/reconcile-delete") ? RECONCILE_PENDING_OPERATION : url.endsWith("/reindex") ? REINDEX_OPERATION : null)),
     del: vi.fn((url: string) => overrides.del?.(url) ?? (url.includes("/documents/") ? DELETE_OPERATION : undefined)),
   };
   vi.spyOn(clientMod, "createManagerApiClient").mockReturnValue(client as unknown as ApiClient);
@@ -368,6 +381,37 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByText("删除请求已接受，处理中")).toBeTruthy();
   });
 
+  it("checks a deleting document, keeps pending state visible, and reloads completion", async () => {
+    const deleting = { ...DOCUMENTS[1], id: "doc-deleting", display_name: "删除中.md", status: "deleting" as const };
+    const deleted = { ...deleting, status: "deleted" as const };
+    let documentLoads = 0;
+    const operations = [RECONCILE_PENDING_OPERATION, RECONCILE_COMPLETED_OPERATION];
+    const client = makeClient({
+      listGet: (url) => {
+        if (url.endsWith("/documents")) {
+          documentLoads += 1;
+          return { items: [documentLoads >= 3 ? deleted : deleting], page: PAGE };
+        }
+        return defaultListGet(url);
+      },
+      post: (url) => url.endsWith("/reconcile-delete") ? operations.shift()! : undefined,
+    });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+
+    const checkButton = await screen.findByRole("button", { name: "检查删除状态删除中.md" });
+    fireEvent.click(checkButton);
+    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
+      "/api/manager/knowledge-spaces/ks-sales/documents/doc-deleting/reconcile-delete",
+      { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+    ));
+    expect(await screen.findByText("删除仍在处理中")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "检查删除状态删除中.md" }));
+    await waitFor(() => expect(client.post).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText("文档状态：已删除")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "检查删除状态删除中.md" })).toBeNull();
+  });
+
   it("shows problem detail and a retry affordance for busy and unavailable deletion", async () => {
     const problems = [
       new ApiError("fallback", 409, "knowledge_deletion_busy", {
@@ -392,6 +436,33 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.queryByText("已删除")).toBeNull();
   });
 
+  it("shows reconciliation problem details without claiming deletion completed", async () => {
+    const deleting = { ...DOCUMENTS[1], id: "doc-deleting", display_name: "删除中.md", status: "deleting" as const };
+    const problems = [
+      new ApiError("fallback", 409, "knowledge_deletion_busy", {
+        type: "about:blank", title: "busy", status: 409, code: "knowledge_deletion_busy", detail: "LightRAG 删除仍在处理中",
+      }),
+      new ApiError("fallback", 503, "knowledge_upstream_unavailable", {
+        type: "about:blank", title: "unavailable", status: 503, code: "knowledge_upstream_unavailable", detail: "知识索引服务暂不可用",
+      }),
+    ];
+    const client = makeClient({
+      listGet: (url) => url.endsWith("/documents") ? { items: [deleting], page: PAGE } : defaultListGet(url),
+      post: (url) => url.endsWith("/reconcile-delete") ? (() => { throw problems.shift()!; })() : undefined,
+    });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+
+    const checkButton = await screen.findByRole("button", { name: "检查删除状态删除中.md" });
+    fireEvent.click(checkButton);
+    expect(await screen.findByRole("alert")).toHaveTextContent("LightRAG 删除仍在处理中；可重试");
+    expect(screen.getByRole("button", { name: "检查删除状态删除中.md" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "检查删除状态删除中.md" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("知识索引服务暂不可用；可重试");
+    expect(screen.queryByText("删除已完成")).toBeNull();
+    expect(screen.getByLabelText("文档状态：删除处理中")).toBeTruthy();
+  });
+
   it("renders lifecycle statuses, hides deleted citations, and excludes revoked bindings", async () => {
     makeClient({ listGet: (url) => {
       if (url.endsWith("/documents")) return { items: LIFECYCLE_DOCUMENTS, page: PAGE };
@@ -406,6 +477,7 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByText("重建索引中")).toBeTruthy();
     expect(screen.queryByText("citation:ks-sales:doc-deleting")).toBeNull();
     expect(screen.queryByText("citation:ks-sales:doc-deleted")).toBeNull();
+    expect(screen.getByRole("button", { name: "检查删除状态删除中.md" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "删除删除中.md" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除已删除.md" })).toBeNull();
 

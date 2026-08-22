@@ -24,6 +24,7 @@ export interface KnowledgeApi {
   uploadDocument: (id: string, file: File, displayName?: string) => Promise<KnowledgeDocument | null>;
   importUrl: (id: string, body: KnowledgeImportUrl) => Promise<KnowledgeDocument | null>;
   deleteDocument: (id: string, docId: string) => Promise<KnowledgeDocumentOperation>;
+  reconcileDeleteDocument: (id: string, docId: string) => Promise<KnowledgeDocumentOperation>;
   reindexDocument: (id: string, docId: string) => Promise<KnowledgeDocumentOperation>;
   retryDocument: (id: string, docId: string) => Promise<KnowledgeDocument | null>;
   getIngestion: (id: string, docId: string) => Promise<KnowledgeIngestionJob | null>;
@@ -42,8 +43,26 @@ export function parseKnowledgeDocumentOperation(value: unknown): KnowledgeDocume
   return value;
 }
 
-function operationFrom<T>(request: Promise<T | null> | T | null): Promise<KnowledgeDocumentOperation> {
-  return Promise.resolve(request).then(parseKnowledgeDocumentOperation);
+export function parseDeleteReconciliationOperation(value: unknown): KnowledgeDocumentOperation {
+  const operation = parseKnowledgeDocumentOperation(value);
+  if (
+    operation.operation !== "delete"
+    || (operation.status === "pending"
+      && (operation.document_status !== "deleting" || operation.upstream_status !== "present"))
+    || (operation.status === "completed"
+      && (operation.document_status !== "deleted" || operation.upstream_status !== "deleted"))
+    || (operation.status !== "pending" && operation.status !== "completed")
+  ) {
+    throw ApiError.malformed(200, "知识文档删除核对响应不是合法 operation envelope");
+  }
+  return operation;
+}
+
+function operationFrom(
+  request: Promise<KnowledgeDocumentOperation | null> | KnowledgeDocumentOperation | null,
+  parse: (value: unknown) => KnowledgeDocumentOperation = parseKnowledgeDocumentOperation,
+): Promise<KnowledgeDocumentOperation> {
+  return Promise.resolve(request).then(parse);
 }
 
 export function createKnowledgeApi(c: ApiClient): KnowledgeApi {
@@ -66,6 +85,10 @@ export function createKnowledgeApi(c: ApiClient): KnowledgeApi {
       `${BASE}/${id}/documents/${docId}`,
       { idempotencyKey: idempotencyKey() },
     )),
+    reconcileDeleteDocument: (id, docId) => operationFrom(c.post<KnowledgeDocumentOperation>(
+      `${BASE}/${id}/documents/${docId}/reconcile-delete`,
+      { idempotencyKey: idempotencyKey() },
+    ), parseDeleteReconciliationOperation),
     reindexDocument: (id, docId) => operationFrom(c.post<KnowledgeDocumentOperation>(
       `${BASE}/${id}/documents/${docId}/reindex`,
       { idempotencyKey: idempotencyKey() },
