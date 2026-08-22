@@ -69,6 +69,10 @@ export default defineConfig({
       // those tests race and turn valid product behavior into stale 403/500s.
       fullyParallel: false,
       workers: 1,
+      // Finish the standalone tier smoke projects first. They use the same
+      // seeded Agent SQLite/Manager tenant; running cross-tier mutations while
+      // Agent smoke prompts are still settling races the hourly usage outbox.
+      dependencies: ["operation-smoke", "manager-smoke", "agent-smoke"],
       use: { ...devices["Desktop Chrome"] },
     },
   ],
