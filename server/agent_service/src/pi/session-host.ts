@@ -260,6 +260,10 @@ export class SessionHost {
 
   async entries(conversationId: string) {
     const record = this.ensureRecord(conversationId);
+    // Prompt is accepted before Pi session initialization finishes. Waiting for
+    // the in-flight session prevents a transient 500 when the client immediately
+    // replays entries after a 202 prompt response.
+    await record.sessionReady?.catch(() => undefined);
     return record.sessionManager.getEntries();
   }
 
