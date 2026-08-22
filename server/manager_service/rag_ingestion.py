@@ -245,10 +245,21 @@ class LightRagIngestionClient:
             if response.status_code != 200:
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
             payload = _response_json(response)
-            started = payload.get("deletion_started", False)
-            busy = payload.get("busy", False)
-            if not isinstance(started, bool) or not isinstance(busy, bool):
+            started_value = payload.get("deletion_started")
+            busy_value = payload.get("busy")
+            # LightRAG 1.5.6 currently returns {status: "deletion_started"}
+            # (or {status: "busy"}), while some patched deployments expose
+            # boolean flags. Accept only these explicit acknowledgements; an
+            # arbitrary 200 response must never be treated as success.
+            if started_value is not None and not isinstance(started_value, bool):
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
+            if busy_value is not None and not isinstance(busy_value, bool):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            response_status = payload.get("status")
+            if response_status is not None and not isinstance(response_status, str):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            started = started_value is True or response_status == "deletion_started"
+            busy = busy_value is True or response_status == "busy"
             if not started and not busy:
                 # An ambiguous response cannot prove that the requested ids
                 # were accepted; do not revoke them as if deletion completed.

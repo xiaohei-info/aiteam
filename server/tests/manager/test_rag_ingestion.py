@@ -129,6 +129,38 @@ def test_deletion_accepts_single_explicit_started_flag():
     assert result == type(result)(deletion_started=True, busy=False)
 
 
+def test_deletion_accepts_lightrag_156_status_acknowledgement():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={
+                "status": "deletion_started",
+                "message": "Document deletion has been initiated.",
+                "doc_id": "rag-doc-1",
+            })
+        ),
+    )
+    try:
+        result = client.delete_document(workspace="derived", doc_ids=["rag-doc-1"])
+    finally:
+        client.close()
+    assert result == type(result)(deletion_started=True, busy=False)
+
+
+def test_deletion_accepts_explicit_busy_status():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"status": "busy"})
+        ),
+    )
+    try:
+        result = client.delete_document(workspace="derived", doc_ids=["rag-doc-1"])
+    finally:
+        client.close()
+    assert result == type(result)(deletion_started=False, busy=True)
+
+
 def test_deletion_rejects_ambiguous_response_without_claiming_success():
     client = LightRagIngestionClient(
         _settings(),
