@@ -89,6 +89,58 @@ def test_ingestion_rejects_workspace_not_owned_by_fixed_instance():
         client.close()
 
 
+def test_deletion_uses_exact_lightrag_156_endpoint_and_bounded_body():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json={"deletion_started": True, "busy": False})
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        result = client.delete_document(
+            workspace="derived", doc_ids=["rag-doc-1"],
+            delete_file=False, delete_llm_cache=True,
+        )
+    finally:
+        client.close()
+    assert result.deletion_started is True
+    assert result.busy is False
+    assert seen[0].method == "DELETE"
+    assert seen[0].url.path == "/documents/delete_document"
+    assert json.loads(seen[0].content) == {
+        "doc_ids": ["rag-doc-1"],
+        "delete_file": False,
+        "delete_llm_cache": True,
+    }
+
+
+def test_deletion_accepts_single_explicit_started_flag():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"deletion_started": True})
+        ),
+    )
+    try:
+        result = client.delete_document(workspace="derived", doc_ids=["rag-doc-1"])
+    finally:
+        client.close()
+    assert result == type(result)(deletion_started=True, busy=False)
+
+
+def test_deletion_rejects_ambiguous_response_without_claiming_success():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"status": "success"})),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.delete_document(workspace="derived", doc_ids=["rag-doc-1"])
+    finally:
+        client.close()
+
+
 def test_ingestion_fails_on_upstream_error_without_details():
     def handler(request: httpx.Request):
         return httpx.Response(502, text="provider token manager-secret")

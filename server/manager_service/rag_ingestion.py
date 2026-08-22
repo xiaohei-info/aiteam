@@ -78,8 +78,30 @@ class RagIngestionResult:
     chunk_count: int | None = None
 
 
+@dataclass(frozen=True)
+class RagDeletionResult:
+    """LightRAG 1.5.6 deletion acknowledgement.
+
+    The endpoint only acknowledges that deletion started or is busy; neither
+    flag proves physical completion.  Manager therefore keeps the document in
+    ``deleting`` until a separate reconciliation can verify completion.
+    """
+
+    deletion_started: bool
+    busy: bool
+
+
 class RagIngestionPort(Protocol):
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult: ...
+
+    def delete_document(
+        self,
+        *,
+        workspace: str,
+        doc_ids: list[str],
+        delete_file: bool,
+        delete_llm_cache: bool,
+    ) -> RagDeletionResult: ...
 
 
 def _response_json(response: httpx.Response) -> dict[str, Any]:
@@ -180,6 +202,53 @@ class LightRagIngestionClient:
             logger.warning("LightRAG ingestion request failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
 
+    def delete_document(
+        self,
+        *,
+        workspace: str,
+        doc_ids: list[str],
+        delete_file: bool = False,
+        delete_llm_cache: bool = True,
+    ) -> RagDeletionResult:
+        """Request LightRAG 1.5.6 document deletion through its exact endpoint."""
+        settings = self.settings
+        if settings is None or not workspace.strip() or not doc_ids:
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        if any(not isinstance(doc_id, str) or not doc_id.strip() for doc_id in doc_ids):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        instance = self.instance_for_workspace(workspace)
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        timeout = settings.request_timeout_ms / 1000
+        try:
+            response = self._http.request(
+                "DELETE",
+                f"{instance.url}/documents/delete_document",
+                headers=headers,
+                json={
+                    "doc_ids": doc_ids,
+                    "delete_file": bool(delete_file),
+                    "delete_llm_cache": bool(delete_llm_cache),
+                },
+                timeout=timeout,
+            )
+            if response.status_code != 200:
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            payload = _response_json(response)
+            started = payload.get("deletion_started", False)
+            busy = payload.get("busy", False)
+            if not isinstance(started, bool) or not isinstance(busy, bool):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            if not started and not busy:
+                # An ambiguous response cannot prove that the requested ids
+                # were accepted; do not revoke them as if deletion completed.
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            return RagDeletionResult(deletion_started=started, busy=busy)
+        except RagIngestionUnavailable:
+            raise
+        except (httpx.HTTPError, ValueError, TypeError, UnicodeError) as exc:
+            logger.warning("LightRAG deletion request failed: %s", type(exc).__name__)
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
     def _wait_until_ready(
         self,
         instance: RagInstance,
@@ -237,6 +306,7 @@ class LightRagIngestionClient:
 __all__ = [
     "LightRagIngestionClient",
     "LightRagIngestionSettings",
+    "RagDeletionResult",
     "RagIngestionPort",
     "RagIngestionResult",
     "RagIngestionUnavailable",

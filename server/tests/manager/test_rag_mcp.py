@@ -447,6 +447,30 @@ def test_mcp_inventory_is_read_only_search_and_bounded_get():
     assert [tool.name for tool in tools] == ["knowledge_search", "knowledge_get"]
 
 
+def test_access_get_rejects_document_revoked_by_delete(tmp_path):
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text("must not be returned", encoding="utf-8")
+
+    class DeletingDocs(FakeDocs):
+        def get(self, ctx: TenantContext, *, document_id: str):
+            doc = super().get(ctx, document_id=document_id)
+            doc.status = "deleting"
+            return doc
+
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=FakeBindings(), rag_service=FakeRag(), light_rag=LightRagClient(),
+        space_repository=FakeSpaces(), document_repository=DeletingDocs(), storage_root=tmp_path,
+    )
+    auth = access.authorize(
+        TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a"
+    )
+    with pytest.raises(RagUnavailable):
+        access.get(auth, "citation:space-a:doc-1")
+
+
 def test_access_get_reads_current_authorized_document_with_bounded_text(tmp_path):
     storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
     path = tmp_path / storage_key

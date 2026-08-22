@@ -1,6 +1,7 @@
 """知识文档 intake 编排（issue #416；04 §6.1.2/§6.6；D21/D22）。
 
-编排三个 repository + 文档解析器，驱动 intake 状态机：uploaded → parsing → indexing → ready | failed。
+编排 intake repository + 文档解析器，驱动状态机：uploaded → parsing → indexing → ready | failed；
+重建经 reindex_requested，删除经 deleting（LightRAG 仅异步确认，不能伪造 deleted）。
 完成时向 knowledge_space 已绑员工传播索引绑定（knowledge_document_binding）。
 
 红线（D21）：
@@ -11,9 +12,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -24,10 +27,13 @@ from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
 from .document_parser import UnsupportedFormatError, extract_text
+from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import (
     KnowledgeDocumentBindingRepository,
     KnowledgeDocumentRepository,
     KnowledgeIngestionJobRepository,
+    KnowledgeOperationRepository,
+    KnowledgeOperationRow,
     build_knowledge_intake_repositories,
 )
 from .knowledge_space_repository import ExpertKnowledgeBinding
@@ -35,6 +41,7 @@ from .rag_ingestion import RagIngestionPort, RagIngestionUnavailable
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentCreate,
+    KnowledgeDocumentOperationOut,
     KnowledgeDocumentOut,
     KnowledgeIngestionJobOut,
 )
@@ -52,6 +59,13 @@ _MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 _MAX_DISPLAY_NAME = 512
 _MAX_FILE_NAME = 1024
 _MAX_FILE_TYPE = 256
+_MAX_IDEMPOTENCY_KEY = 256
+
+
+class RagDeletionBusy(Conflict):
+    """LightRAG reports that deletion is still busy; local access stays revoked."""
+
+    status, code, title = 409, "knowledge_deletion_busy", "Knowledge deletion is busy"
 
 
 class _EmployeeIndexBindingPort(Protocol):
@@ -64,6 +78,14 @@ class _SpaceExistsPort(Protocol):
     """知识空间存在性查询端口。"""
 
     def __call__(self, ctx: TenantContext, knowledge_space_id: str) -> bool: ...
+
+
+class _AuditPort(Protocol):
+    def record(
+        self, ctx: TenantContext, *, actor: str, action: str,
+        resource_type: str | None = None, resource_id: str | None = None,
+        detail: str | None = None,
+    ) -> object: ...
 
 
 class _KnowledgeSpaceExists:
@@ -114,6 +136,8 @@ class KnowledgeIntakeService:
         storage_root: Path,
         rag_service: ManagerRagService,
         ingestion_client: RagIngestionPort,
+        operation_repo: KnowledgeOperationRepository | None = None,
+        audit_recorder: _AuditPort | None = None,
     ):
         self._doc_repo = doc_repo
         self._job_repo = job_repo
@@ -124,6 +148,8 @@ class KnowledgeIntakeService:
         self._storage_root = storage_root
         self._rag_service = rag_service
         self._ingestion_client = ingestion_client
+        self._operation_repo = operation_repo
+        self._audit = audit_recorder
 
     # ─────────────────────────────── 查询 ───────────────────────────────
 
@@ -232,31 +258,421 @@ class KnowledgeIntakeService:
         *,
         knowledge_space_id: str,
         document_id: str,
+        idempotency_key: str | None = None,
     ) -> tuple[KnowledgeDocumentOut, KnowledgeIngestionJobOut]:
-        """重试失败/已完成的文档：重置为 parsing 并重新推进。"""
+        """兼容旧 retry 路径，复用 reindex 状态机与 durable receipt。"""
+        self.reindex(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            idempotency_key=idempotency_key,
+        )
+        updated = self._doc_repo.get(ctx, document_id=document_id)
+        latest = self._job_repo.get_latest_by_document(ctx, document_id=document_id)
+        if updated is None or latest is None:
+            raise NotFound(f"document {document_id!r} disappeared during retry")
+        return _to_doc_out(updated), _to_ing_out(latest)
+
+    def reindex(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        idempotency_key: str | None = None,
+    ) -> KnowledgeDocumentOperationOut:
+        """重建当前租户文档的索引，旧 binding 在成功前保持不可检索。"""
+        _ensure_can_write(ctx)
+        return self._run_reindex(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            idempotency_key=idempotency_key,
+        )
+
+    def delete(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        idempotency_key: str | None = None,
+    ) -> KnowledgeDocumentOperationOut:
+        """请求 LightRAG 删除；started/busy 均不代表物理删除完成。"""
         _ensure_can_write(ctx)
         doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
-        if doc.status not in ("failed", "ready"):
-            raise Conflict(f"cannot retry document in state {doc.status!r} (allowed: failed, ready)")
-        # 标旧 binding 为 stale，避免下游读到过期 rag_document_id
+        key = _operation_key(idempotency_key)
+        fingerprint = _fingerprint("delete", knowledge_space_id, document_id)
+        existing = self._existing_operation(
+            ctx, operation="delete", idempotency_key=key, request_fingerprint=fingerprint
+        )
+        if existing is not None:
+            return self._operation_out(ctx, existing)
+        if doc.status == "deleted":
+            raise Conflict("cannot delete document in state 'deleted'")
+        if doc.status not in ("ready", "failed", "deleting"):
+            raise Conflict(
+                f"cannot delete document in state {doc.status!r} "
+                "(allowed: ready, failed, deleting)"
+            )
+        operation = self._create_operation(
+            ctx,
+            operation="delete",
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            idempotency_key=key,
+            request_fingerprint=fingerprint,
+        )
+        if (
+            operation.request_fingerprint != fingerprint
+            or operation.document_id != document_id
+            or operation.knowledge_space_id != knowledge_space_id
+        ):
+            raise Conflict("idempotency key was already used for a different document operation")
+        if operation.status != "pending":
+            return self._operation_out(ctx, operation)
+        if doc.status != "deleting":
+            if not self._transition_document(
+                ctx, document_id=document_id, expected=("ready", "failed"), status="deleting"
+            ):
+                self._update_operation(
+                    ctx, operation_id=operation.id, status="failed",
+                    error_code="STATE_CONFLICT", error_message="document changed while deletion was requested",
+                )
+                raise Conflict("document changed while deletion was being requested")
+        # Revoke before calling LightRAG: a slow or failed upstream must not
+        # leave an old citation readable.
+        self._revoke_bindings(ctx, document_id=document_id)
+        self._record_audit(
+            ctx, action="knowledge_document_delete_requested", resource_id=document_id,
+            detail="document status set to deleting; bindings revoked",
+        )
+        try:
+            handle = self._rag_handle(ctx, knowledge_space_id)
+            result = self._ingestion_client.delete_document(
+                workspace=handle.workspace,
+                doc_ids=self._rag_document_ids(
+                    ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
+                ),
+                delete_file=False,
+                delete_llm_cache=True,
+            )
+            started = _result_flag(result, "deletion_started")
+            busy = _result_flag(result, "busy")
+            if not started and not busy:
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+        except RagIngestionUnavailable:
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status="unavailable", error_code="LIGHTRAG_UNAVAILABLE",
+                error_message="knowledge deletion unavailable",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_failed", resource_id=document_id,
+                detail="LightRAG deletion unavailable; document remains deleting",
+            )
+            raise
+        except Exception as exc:
+            logger.warning("[kb] delete failed for %s: %s", document_id, type(exc).__name__)
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status="unavailable", error_code="LIGHTRAG_UNAVAILABLE",
+                error_message="knowledge deletion unavailable",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_failed", resource_id=document_id,
+                detail="LightRAG deletion unavailable; document remains deleting",
+            )
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+        upstream_status = "deletion_started" if started else "busy"
+        operation = self._update_operation(
+            ctx, operation_id=operation.id, status="pending",
+            upstream_status=upstream_status,
+        ) or replace(operation, status="pending", upstream_status=upstream_status)
+        self._record_audit(
+            ctx, action="knowledge_document_delete_pending", resource_id=document_id,
+            detail=f"LightRAG response={upstream_status}; document remains deleting",
+        )
+        if busy and not started:
+            raise RagDeletionBusy(
+                f"knowledge deletion is still busy; operation {operation.id} remains pending"
+            )
+        return self._operation_out(ctx, operation)
+
+    # ─────────────────────────────── 内部 ───────────────────────────────
+
+    def _run_reindex(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        idempotency_key: str | None,
+    ) -> KnowledgeDocumentOperationOut:
+        doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
+        key = _operation_key(idempotency_key)
+        fingerprint = _fingerprint("reindex", knowledge_space_id, document_id)
+        existing = self._existing_operation(
+            ctx, operation="reindex", idempotency_key=key, request_fingerprint=fingerprint
+        )
+        if existing is not None:
+            return self._operation_out(ctx, existing)
+        if doc.status not in ("ready", "failed"):
+            raise Conflict(
+                f"cannot reindex document in state {doc.status!r} "
+                "(allowed: ready, failed)"
+            )
+        operation = self._create_operation(
+            ctx,
+            operation="reindex",
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            idempotency_key=key,
+            request_fingerprint=fingerprint,
+        )
+        if (
+            operation.request_fingerprint != fingerprint
+            or operation.document_id != document_id
+            or operation.knowledge_space_id != knowledge_space_id
+        ):
+            raise Conflict("idempotency key was already used for a different document operation")
+        if operation.status != "pending":
+            return self._operation_out(ctx, operation)
+        if not self._transition_document(
+            ctx, document_id=document_id, expected=("ready", "failed"), status="reindex_requested",
+            error_code=None, error_message=None,
+        ):
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                error_code="STATE_CONFLICT", error_message="document changed while reindex was requested",
+            )
+            raise Conflict("document changed while reindex was being requested")
+        # Keep old citations unavailable while the new index is built.
         self._binding_repo.mark_stale_by_document(ctx, document_id=document_id)
-        # 新建 intake 任务
+        self._record_audit(
+            ctx, action="knowledge_document_reindex_requested", resource_id=document_id,
+            detail="document status set to reindex_requested; bindings stale",
+        )
         job = self._job_repo.create(
             ctx,
             knowledge_space_id=knowledge_space_id,
             document_id=document_id,
-            status="parsing",
+            status="reindex_requested",
             started_at=datetime.now(timezone.utc),
         )
-        self._doc_repo.update_status(ctx, document_id, status="parsing")
-        self._advance(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id, job_id=job.id)
+        try:
+            self._advance(
+                ctx,
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                job_id=job.id,
+                propagate_unavailable=True,
+            )
+        except RagIngestionUnavailable:
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status="unavailable", error_code="LIGHTRAG_UNAVAILABLE",
+                error_message="knowledge indexing unavailable",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_reindex_failed", resource_id=document_id,
+                detail="LightRAG indexing unavailable; document remains failed",
+            )
+            raise
         updated = self._doc_repo.get(ctx, document_id=document_id)
-        assert updated is not None
-        latest = self._job_repo.get_latest_by_document(ctx, document_id=document_id)
-        assert latest is not None
-        return _to_doc_out(updated), _to_ing_out(latest)
+        if updated is None:
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                error_code="DOCUMENT_UNAVAILABLE", error_message="knowledge document unavailable",
+            )
+            raise RagIngestionUnavailable("knowledge indexing unavailable")
+        if updated.status == "ready":
+            self._record_audit(
+                ctx, action="knowledge_document_reindex_completed", resource_id=document_id,
+                detail="document and current bindings published ready",
+            )
+            operation = self._update_operation(
+                ctx, operation_id=operation.id, status="completed",
+                upstream_status="processed", completed=True,
+            ) or replace(operation, status="completed", upstream_status="processed")
+        else:
+            self._record_audit(
+                ctx, action="knowledge_document_reindex_failed", resource_id=document_id,
+                detail="document intake failed; document remains retryable",
+            )
+            operation = self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status="failed", error_code=updated.error_code,
+                error_message=updated.error_message,
+            ) or replace(
+                operation, status="failed", upstream_status="failed",
+                error_code=updated.error_code, error_message=updated.error_message,
+            )
+        return self._operation_out(ctx, operation)
 
-    # ─────────────────────────────── 内部 ───────────────────────────────
+    def _existing_operation(
+        self,
+        ctx: TenantContext,
+        *,
+        operation: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> KnowledgeOperationRow | None:
+        if self._operation_repo is None:
+            return None
+        row = self._operation_repo.get_by_key(ctx, operation=operation, idempotency_key=idempotency_key)
+        if row is not None and row.request_fingerprint != request_fingerprint:
+            raise Conflict("idempotency key was already used for a different document operation")
+        return row
+
+    def _create_operation(
+        self,
+        ctx: TenantContext,
+        *,
+        operation: str,
+        knowledge_space_id: str,
+        document_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> KnowledgeOperationRow:
+        if self._operation_repo is None:
+            # Unit/dev callers that predate lifecycle receipts still execute the
+            # same state machine; production builder always injects this repo.
+            return KnowledgeOperationRow(
+                id=uuid.uuid4().hex, tenant_id=ctx.tenant_id,
+                knowledge_space_id=knowledge_space_id, document_id=document_id,
+                operation=operation, idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint, status="pending",
+            )
+        return self._operation_repo.create(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            operation=operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+
+    def _update_operation(self, ctx: TenantContext, **kwargs) -> KnowledgeOperationRow | None:
+        if self._operation_repo is None:
+            return None
+        return self._operation_repo.update(ctx, **kwargs)
+
+    def _operation_out(
+        self, ctx: TenantContext, operation: KnowledgeOperationRow
+    ) -> KnowledgeDocumentOperationOut:
+        doc = self._doc_repo.get(ctx, document_id=operation.document_id)
+        if (
+            operation.tenant_id != ctx.tenant_id
+            or doc is None
+            or doc.tenant_id != ctx.tenant_id
+            or doc.knowledge_space_id != operation.knowledge_space_id
+        ):
+            raise NotFound("knowledge document operation target is unavailable")
+        return KnowledgeDocumentOperationOut(
+            operation_id=operation.id,
+            operation=operation.operation,
+            idempotency_key=operation.idempotency_key,
+            tenant_id=ctx.tenant_id,
+            knowledge_space_id=operation.knowledge_space_id,
+            document_id=operation.document_id,
+            status=operation.status,
+            document_status=doc.status,
+            upstream_status=operation.upstream_status,
+            error_code=operation.error_code,
+            error_message=operation.error_message,
+            created_at=operation.created_at,
+            updated_at=operation.updated_at,
+            completed_at=operation.completed_at,
+        )
+
+    def _transition_document(
+        self,
+        ctx: TenantContext,
+        *,
+        document_id: str,
+        expected: tuple[str, ...],
+        status: str,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        transition = getattr(self._doc_repo, "transition_status", None)
+        if transition is not None:
+            return transition(
+                ctx, document_id, expected=expected, status=status,
+                error_code=error_code, error_message=error_message,
+            )
+        # Compatibility for in-memory repositories supplied by existing tests.
+        doc = self._doc_repo.get(ctx, document_id=document_id)
+        if doc is None or doc.status not in expected:
+            return False
+        return self._doc_repo.update_status(
+            ctx, document_id, status=status, error_code=error_code, error_message=error_message
+        )
+
+    def _revoke_bindings(self, ctx: TenantContext, *, document_id: str) -> None:
+        revoke = getattr(self._binding_repo, "mark_revoked_by_document", None)
+        if revoke is not None:
+            revoke(ctx, document_id=document_id)
+            return
+        # Compatibility for old in-memory repositories: stale is also denied
+        # by the read facade, while production uses the explicit revoked state.
+        self._binding_repo.mark_stale_by_document(ctx, document_id=document_id)
+
+    def _record_audit(
+        self, ctx: TenantContext, *, action: str, resource_id: str, detail: str
+    ) -> None:
+        if self._audit is None:
+            return
+        try:
+            self._audit.record(
+                ctx, actor=ctx.user_id, action=action,
+                resource_type="knowledge_document", resource_id=resource_id, detail=detail,
+            )
+        except Exception:  # noqa: BLE001 - lifecycle state must not fail on audit outage
+            logger.warning("[kb] lifecycle audit write failed for %s", resource_id)
+
+    def _rag_handle(self, ctx: TenantContext, knowledge_space_id: str):
+        handle = self._rag_service.get(ctx, knowledge_space_id)
+        if (
+            handle is None
+            or handle.tenant_id != ctx.tenant_id
+            or handle.knowledge_space_id != knowledge_space_id
+            or not isinstance(handle.workspace, str)
+            or not handle.workspace.strip()
+        ):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        registry = getattr(self._ingestion_client, "instance_registry", None)
+        if registry is not None:
+            try:
+                instance = registry.resolve(handle.workspace)
+            except Exception as exc:
+                raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+            if getattr(handle, "instance_id", "legacy") != instance.instance_id:
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+        return handle
+
+    def _rag_document_ids(
+        self, ctx: TenantContext, *, document_id: str, knowledge_space_id: str
+    ) -> list[str]:
+        rows = self._binding_repo.list_by_document(ctx, document_id=document_id)
+        ids: set[str] = set()
+        for row in rows:
+            if (
+                row.tenant_id != ctx.tenant_id
+                or row.document_id != document_id
+                or row.knowledge_space_id != knowledge_space_id
+                or not row.rag_document_id
+            ):
+                if (
+                    row.tenant_id != ctx.tenant_id
+                    or row.document_id != document_id
+                    or row.knowledge_space_id != knowledge_space_id
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                continue
+            ids.add(row.rag_document_id)
+        return sorted(ids) or [document_id]
 
     def _create_and_advance(
         self,
@@ -302,8 +718,9 @@ class KnowledgeIntakeService:
         knowledge_space_id: str,
         document_id: str,
         job_id: str,
+        propagate_unavailable: bool = False,
     ) -> None:
-        """推进单个 intake 任务：parsing → indexing → ready | failed。失败不抛，落到文档 error 状态。"""
+        """推进 parsing → indexing → ready | failed；重建可传播上游不可达。"""
         doc = self._doc_repo.get(ctx, document_id=document_id)
         if doc is None:
             logger.warning("[kb]intake advance: document %s vanished", document_id)
@@ -356,6 +773,8 @@ class KnowledgeIntakeService:
                 ctx, document_id=document_id, job_id=job_id,
                 error_code="INDEX_FAILED", message="knowledge indexing unavailable",
             )
+            if propagate_unavailable:
+                raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
             return
         # Bindings, job completion, and Manager ready are one DB transaction.
         try:
@@ -438,6 +857,29 @@ def _to_bind_out(row) -> KnowledgeDocumentBindingOut:
         rag_document_id=row.rag_document_id, status=row.status,
         last_synced_at=row.last_synced_at, created_at=row.created_at,
     )
+
+
+def _operation_key(value: str | None) -> str:
+    key = value.strip() if isinstance(value, str) else ""
+    if not key:
+        return uuid.uuid4().hex
+    if len(key) > _MAX_IDEMPOTENCY_KEY or any(char in key for char in "\r\n"):
+        raise ValidationProblem(detail="Idempotency-Key is invalid", errors=None)
+    return key
+
+
+def _fingerprint(operation: str, knowledge_space_id: str, document_id: str) -> str:
+    return hashlib.sha256(
+        f"{operation}|{knowledge_space_id}|{document_id}".encode("utf-8")
+    ).hexdigest()
+
+
+def _result_flag(result: object, field: str) -> bool:
+    if isinstance(result, dict):
+        value = result.get(field)
+    else:
+        value = getattr(result, field, False)
+    return value is True
 
 
 # ─────────────────────────────── 存储 ───────────────────────────────
@@ -587,10 +1029,13 @@ def build_knowledge_intake_service(
         storage_root=storage_root,
         rag_service=rag_service,
         ingestion_client=ingestion_client,
+        operation_repo=KnowledgeOperationRepository(router),
+        audit_recorder=build_enterprise_audit_repository(router),
     )
 
 
 __all__ = [
     "KnowledgeIntakeService",
+    "RagDeletionBusy",
     "build_knowledge_intake_service",
 ]

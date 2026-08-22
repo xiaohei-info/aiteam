@@ -34,11 +34,12 @@ from manager_service.knowledge_intake_repository import (
     KnowledgeDocumentRow,
     KnowledgeIngestionJobRepository,
     KnowledgeIngestionJobRow,
+    KnowledgeOperationRow,
 )
-from manager_service.knowledge_intake_service import KnowledgeIntakeService
+from manager_service.knowledge_intake_service import KnowledgeIntakeService, RagDeletionBusy
 from manager_service.employee_bindings_services import EmployeeKnowledgeBindingService
 from manager_service.employee_bindings_repositories import KnowledgeBindingRow
-from manager_service.rag_ingestion import RagIngestionResult, RagIngestionUnavailable
+from manager_service.rag_ingestion import RagDeletionResult, RagIngestionResult, RagIngestionUnavailable
 from manager_service.schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
@@ -219,6 +220,38 @@ class _FakeJobRepo:
         return False
 
 
+class _FakeOperationRepo:
+    def __init__(self):
+        self.rows: dict[tuple[str, str], KnowledgeOperationRow] = {}
+        self.calls = 0
+
+    def get_by_key(self, ctx, *, operation, idempotency_key):
+        return self.rows.get((operation, idempotency_key))
+
+    def create(self, ctx, *, knowledge_space_id, document_id, operation, idempotency_key,
+               request_fingerprint, status="pending"):
+        self.calls += 1
+        key = (operation, idempotency_key)
+        self.rows.setdefault(key, KnowledgeOperationRow(
+            id=f"op-{self.calls}", tenant_id=ctx.tenant_id,
+            knowledge_space_id=knowledge_space_id, document_id=document_id,
+            operation=operation, idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint, status=status,
+        ))
+        return self.rows[key]
+
+    def update(self, ctx, *, operation_id, status, upstream_status=None,
+               error_code=None, error_message=None, completed=False):
+        for key, row in self.rows.items():
+            if row.id == operation_id:
+                self.rows[key] = _dc_replace(
+                    row, status=status, upstream_status=upstream_status,
+                    error_code=error_code, error_message=error_message,
+                )
+                return self.rows[key]
+        return None
+
+
 class _FakeBindingRepo:
     def __init__(self, doc_repo=None, job_repo=None):
         self.bindings: list[KnowledgeDocumentBindingOut] = []
@@ -284,16 +317,25 @@ class _FakeRag:
 
 
 class _FakeIngestion:
-    def __init__(self, *, result=None, error=None):
+    def __init__(self, *, result=None, error=None, delete_result=None, delete_error=None):
         self.calls = []
+        self.delete_calls = []
         self.result = result or RagIngestionResult("doc-placeholder", 1)
         self.error = error
+        self.delete_result = delete_result or RagDeletionResult(True, False)
+        self.delete_error = delete_error
 
     def ingest_text(self, *, workspace, file_source, text):
         self.calls.append((workspace, file_source, text))
         if self.error:
             raise self.error
         return RagIngestionResult(file_source, self.result.chunk_count)
+
+    def delete_document(self, *, workspace, doc_ids, delete_file, delete_llm_cache):
+        self.delete_calls.append((workspace, doc_ids, delete_file, delete_llm_cache))
+        if self.delete_error:
+            raise self.delete_error
+        return self.delete_result
 
 
 class _FakeSpaceExists:
@@ -307,7 +349,8 @@ class _FakeSpaceExists:
 # ─────────────────────────────── 服务层状态机 ───────────────────────────────
 
 
-def _make_service(*, space_root: Path, experts=None, employees=None, existing_spaces=None, ingestion=None):
+def _make_service(*, space_root: Path, experts=None, employees=None, existing_spaces=None,
+                  ingestion=None, operation_repo=None):
     doc_repo = _FakeDocRepo()
     job_repo = _FakeJobRepo()
     return KnowledgeIntakeService(
@@ -320,6 +363,7 @@ def _make_service(*, space_root: Path, experts=None, employees=None, existing_sp
         storage_root=space_root,
         rag_service=_FakeRag(),
         ingestion_client=ingestion or _FakeIngestion(),
+        operation_repo=operation_repo,
     )
 
 
@@ -499,6 +543,84 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
         svc.retry(ctx, knowledge_space_id="ks", document_id="d1")
 
 
+def test_delete_revokes_bindings_and_keeps_document_deleting(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(delete_result=RagDeletionResult(True, False))
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="delete", file_name="a.txt",
+        file_type="text/plain", content=b"delete me",
+    )
+    operation = svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-1")
+    assert operation.status == "pending"
+    assert operation.document_status == "deleting"
+    assert ingestion.delete_calls == [("tt__ks", [doc.id], False, True)]
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_delete_duplicate_idempotency_key_reuses_pending_receipt(tmp_path: Path) -> None:
+    operations = _FakeOperationRepo()
+    ingestion = _FakeIngestion(delete_result=RagDeletionResult(True, False))
+    svc = _make_service(
+        space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion,
+        operation_repo=operations,
+    )
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="duplicate", file_name="a.txt",
+        file_type="text/plain", content=b"duplicate",
+    )
+    first = svc.delete(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="same")
+    second = svc.delete(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="same")
+    assert first.operation_id == second.operation_id
+    assert first.status == second.status == "pending"
+    assert len(ingestion.delete_calls) == 1
+
+
+def test_delete_busy_is_retryable_and_does_not_claim_deleted(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(delete_result=RagDeletionResult(False, True))
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="busy", file_name="a.txt",
+        file_type="text/plain", content=b"busy",
+    )
+    with pytest.raises(RagDeletionBusy):
+        svc.delete(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-busy")
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_delete_upstream_failure_revokes_reads_but_is_not_deleted(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(delete_error=RagIngestionUnavailable("secret"))
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="failed delete", file_name="a.txt",
+        file_type="text/plain", content=b"failed",
+    )
+    with pytest.raises(RagIngestionUnavailable):
+        svc.delete(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-fail")
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_reindex_upstream_failure_is_retryable_and_not_ready(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(error=RagIngestionUnavailable("secret"))
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="reindex", file_name="a.txt",
+        file_type="text/plain", content=b"reindex",
+    )
+    # The initial upload failed, so a retry/reindex is a valid transition.
+    with pytest.raises(RagIngestionUnavailable):
+        svc.reindex(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="re-1")
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "failed"
+
+
+def test_reindex_state_conflict_and_idempotency_key_fingerprint(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    row = _FakeDocRepo._row("d1", "ks", status="indexing")
+    svc._doc_repo._by_id["d1"] = row  # type: ignore[attr-defined]
+    with pytest.raises(Conflict):
+        svc.reindex(_owner_ctx(), knowledge_space_id="ks", document_id="d1", idempotency_key="re-1")
+
+
 def test_document_outside_space_raises_404(tmp_path: Path) -> None:
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
     ctx = _owner_ctx()
@@ -517,6 +639,17 @@ def test_ingest_url_schema_requires_url() -> None:
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         KnowledgeDocumentImportUrl(url="")
+
+
+def test_lifecycle_schema_exposes_fail_closed_states_and_operation_receipt():
+    from manager_service.schemas import KnowledgeDocumentOperationOut
+
+    operation = KnowledgeDocumentOperationOut(
+        operation_id="op-1", operation="delete", idempotency_key="k-1",
+        tenant_id="t", knowledge_space_id="ks", document_id="doc-1",
+        status="pending", document_status="deleting", upstream_status="deletion_started",
+    )
+    assert operation.model_dump()["document_status"] == "deleting"
 
 
 # ─────────────────────────────── 路由契约（注册） ───────────────────────────────
@@ -583,6 +716,8 @@ def test_routes_registered() -> None:
     for expected in [
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/url",
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}",
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/reindex",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/retry",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/ingestion",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/ingestions",

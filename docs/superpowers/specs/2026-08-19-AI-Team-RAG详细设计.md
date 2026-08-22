@@ -625,6 +625,16 @@ Manager delete document
 更新 document/binding version
 ```
 
+当前 Manager 最小生产契约：删除只经 `DELETE /documents/delete_document`，body 固定为
+`{"doc_ids": ["<rag_document_id>"], "delete_file": false, "delete_llm_cache": true}`。
+LightRAG 1.5.6 仅返回 `deletion_started`/`busy` acknowledgement，Manager 在调用前撤销
+文档 binding 并将文档置为 `deleting`；`deletion_started` 只落 durable receipt=`pending`
+并返回 HTTP 202，绝不推断为 `deleted`。`busy` 返回可重试的 409，网络/5xx 返回 bounded
+503；文档源文件保留。`POST .../{document_id}/reindex`（旧 `/retry` 兼容）只允许
+`ready|failed`，走现有 Manager ingestion seam，失败保持 `failed` 并可使用新的
+`Idempotency-Key` 重试。search/get/citation/bundle 只接受当前 tenant、space、snapshot
+和 `ready` binding/document，因此 `deleting`、`stale`、`revoked` 文档不会继续出现在结果中。
+
 修改以下任意内容通常需要重新索引：
 
 - embedding model；

@@ -32,6 +32,11 @@ _BIND_COLUMNS = (
     "id, tenant_id, knowledge_space_id, document_id, employee_id, rag_document_id, "
     "status, last_synced_at, created_at"
 )
+_OPERATION_COLUMNS = (
+    "id, tenant_id, knowledge_space_id, document_id, operation, idempotency_key, "
+    "request_fingerprint, status, upstream_status, error_code, error_message, "
+    "created_at, updated_at, completed_at"
+)
 
 
 def _s(value: Any) -> str:
@@ -136,6 +141,29 @@ class KnowledgeDocumentRepository:
                 "UPDATE knowledge_document SET status = %s, text_chars = COALESCE(%s, text_chars), "
                 "error_code = %s, error_message = %s, updated_at = now() WHERE id = %s",
                 (status, text_chars, error_code, error_message, document_id),
+            )
+            return cur.rowcount > 0
+
+    def transition_status(
+        self,
+        ctx: TenantContext,
+        document_id: str,
+        *,
+        expected: tuple[str, ...],
+        status: str,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        """CAS 状态推进，避免并发 delete/reindex 覆盖彼此的状态。"""
+        if not expected:
+            return False
+        placeholders = ", ".join(["%s"] * len(expected))
+        with self._router.session(ctx) as s:
+            cur = s.execute(
+                "UPDATE knowledge_document SET status = %s, error_code = %s, "
+                "error_message = %s, updated_at = now() WHERE id = %s AND status IN ("
+                + placeholders + ")",
+                (status, error_code, error_message, document_id, *expected),
             )
             return cur.rowcount > 0
 
@@ -452,6 +480,16 @@ class KnowledgeDocumentBindingRepository:
             )
             return cur.rowcount
 
+    def mark_revoked_by_document(self, ctx: TenantContext, *, document_id: str) -> int:
+        """撤销文档全部检索绑定，但保留绑定行作为审计/恢复依据。"""
+        with self._router.session(ctx) as s:
+            cur = s.execute(
+                "UPDATE knowledge_document_binding SET status = 'revoked' "
+                "WHERE document_id = %s AND status <> 'revoked'",
+                (document_id,),
+            )
+            return cur.rowcount
+
     def list_by_document(
         self, ctx: TenantContext, *, document_id: str
     ) -> list[KnowledgeDocumentBindingRow]:
@@ -482,6 +520,108 @@ class KnowledgeDocumentBindingRepository:
         return [_row_to_bind(r) for r in rows]
 
 
+# ─────────────────────────────── Lifecycle operation receipt ───────────────────────────────
+
+
+@dataclass(frozen=True)
+class KnowledgeOperationRow:
+    id: str
+    tenant_id: str
+    knowledge_space_id: str
+    document_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    status: str
+    upstream_status: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+def _row_to_operation(row: Any) -> KnowledgeOperationRow:
+    return KnowledgeOperationRow(
+        id=_s(row[0]), tenant_id=_s(row[1]), knowledge_space_id=row[2],
+        document_id=_s(row[3]), operation=row[4], idempotency_key=row[5],
+        request_fingerprint=row[6], status=row[7], upstream_status=row[8],
+        error_code=row[9], error_message=row[10], created_at=row[11],
+        updated_at=row[12], completed_at=row[13],
+    )
+
+
+class KnowledgeOperationRepository:
+    """租户作用域的 delete/reindex 幂等收据。"""
+
+    def __init__(self, router: PgTenantRouter):
+        self._router = router
+
+    def get_by_key(
+        self, ctx: TenantContext, *, operation: str, idempotency_key: str
+    ) -> KnowledgeOperationRow | None:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _OPERATION_COLUMNS + " FROM knowledge_document_operation "
+                "WHERE operation = %s AND idempotency_key = %s",
+                (operation, idempotency_key),
+            ).fetchone()
+        return _row_to_operation(row) if row is not None else None
+
+    def create(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        operation: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        status: str = "pending",
+    ) -> KnowledgeOperationRow:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO knowledge_document_operation "
+                "(tenant_id, knowledge_space_id, document_id, operation, idempotency_key, "
+                "request_fingerprint, status) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (tenant_id, operation, idempotency_key) DO NOTHING "
+                "RETURNING " + _OPERATION_COLUMNS,
+                (ctx.tenant_id, knowledge_space_id, document_id, operation,
+                 idempotency_key, request_fingerprint, status),
+            ).fetchone()
+            if row is None:
+                row = s.execute(
+                    "SELECT " + _OPERATION_COLUMNS + " FROM knowledge_document_operation "
+                    "WHERE operation = %s AND idempotency_key = %s",
+                    (operation, idempotency_key),
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("knowledge operation receipt unavailable")
+        return _row_to_operation(row)
+
+    def update(
+        self,
+        ctx: TenantContext,
+        *,
+        operation_id: str,
+        status: str,
+        upstream_status: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        completed: bool = False,
+    ) -> KnowledgeOperationRow | None:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "UPDATE knowledge_document_operation SET status = %s, upstream_status = %s, "
+                "error_code = %s, error_message = %s, updated_at = now(), "
+                "completed_at = CASE WHEN %s THEN now() ELSE completed_at END "
+                "WHERE id = %s RETURNING " + _OPERATION_COLUMNS,
+                (status, upstream_status, error_code, error_message[:2000] if error_message else None,
+                 completed, operation_id),
+            ).fetchone()
+        return _row_to_operation(row) if row is not None else None
+
+
 # ─────────────────────────────── Factory ───────────────────────────────
 
 
@@ -492,7 +632,7 @@ def build_knowledge_intake_repositories(
     KnowledgeIngestionJobRepository,
     KnowledgeDocumentBindingRepository,
 ]:
-    """组装三个 repository（共享同一 router）。"""
+    """组装 intake repository（保留既有三元组契约）。"""
     return (
         KnowledgeDocumentRepository(router),
         KnowledgeIngestionJobRepository(router),

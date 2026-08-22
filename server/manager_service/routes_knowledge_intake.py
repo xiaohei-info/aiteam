@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, Request, UploadFile, status
 from fastapi.responses import Response
 
 from shared.auth import require_claims, tenant_context_from
@@ -23,12 +23,19 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
-from .knowledge_intake_service import KnowledgeIntakeService, build_knowledge_intake_service, ensure_storage_root, manager_storage_root
+from .knowledge_intake_service import (
+    KnowledgeIntakeService,
+    RagDeletionBusy,
+    build_knowledge_intake_service,
+    ensure_storage_root,
+    manager_storage_root,
+)
 from .rag import PgManagerRagService
-from .rag_ingestion import LightRagIngestionClient
+from .rag_ingestion import LightRagIngestionClient, RagIngestionUnavailable
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
+    KnowledgeDocumentOperationOut,
     KnowledgeDocumentOut,
     KnowledgeIngestionJobOut,
 )
@@ -38,6 +45,13 @@ logger = logging.getLogger(__name__)
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
+
+
+class _KnowledgeUpstreamUnavailable(AppError):
+    status, code, title = 503, "knowledge_upstream_unavailable", "Knowledge service unavailable"
+
+    def __init__(self, _detail: str | None = None):
+        super().__init__("Knowledge operation is temporarily unavailable; retry later.")
 
 
 def _service(request: Request) -> KnowledgeIntakeService:
@@ -137,9 +151,64 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)[:300])
         return Envelope[KnowledgeDocumentOut](data=doc)
 
+    @router.delete(
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}",
+        summary="请求删除知识文档索引（异步，撤销当前 citation）",
+        operation_id="manager_knowledge_intake_delete",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def delete_document(
+        knowledge_space_id: str,
+        document_id: str,
+        request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[KnowledgeDocumentOperationOut]:
+        svc = _service(request)
+        try:
+            operation = await asyncio.to_thread(
+                svc.delete,
+                tenant_context_from(claims),
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                idempotency_key=idempotency_key,
+            )
+        except RagDeletionBusy:
+            # busy is a retryable upstream state, not a successful deletion.
+            raise
+        except RagIngestionUnavailable as exc:
+            raise _KnowledgeUpstreamUnavailable() from exc
+        return Envelope[KnowledgeDocumentOperationOut](data=operation)
+
+    @router.post(
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/reindex",
+        summary="重建知识文档索引（异步 envelope，失败可重试）",
+        operation_id="manager_knowledge_intake_reindex",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def reindex_document(
+        knowledge_space_id: str,
+        document_id: str,
+        request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[KnowledgeDocumentOperationOut]:
+        svc = _service(request)
+        try:
+            operation = await asyncio.to_thread(
+                svc.reindex,
+                tenant_context_from(claims),
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                idempotency_key=idempotency_key,
+            )
+        except RagIngestionUnavailable as exc:
+            raise _KnowledgeUpstreamUnavailable() from exc
+        return Envelope[KnowledgeDocumentOperationOut](data=operation)
+
     @router.post(
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/retry",
-        summary="重试失败/已完成的文档 intake",
+        summary="兼容重试失败/已完成的文档 intake",
         operation_id="manager_knowledge_intake_retry",
         status_code=status.HTTP_201_CREATED,
     )
@@ -147,15 +216,20 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         knowledge_space_id: str,
         document_id: str,
         request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeDocumentOut]:
         svc = _service(request)
-        doc, _job = await asyncio.to_thread(
-            svc.retry,
-            tenant_context_from(claims),
-            knowledge_space_id=knowledge_space_id,
-            document_id=document_id,
-        )
+        try:
+            doc, _job = await asyncio.to_thread(
+                svc.retry,
+                tenant_context_from(claims),
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                idempotency_key=idempotency_key,
+            )
+        except RagIngestionUnavailable as exc:
+            raise _KnowledgeUpstreamUnavailable() from exc
         return Envelope[KnowledgeDocumentOut](data=doc)
 
     @router.get(

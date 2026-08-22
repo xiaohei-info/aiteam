@@ -224,9 +224,14 @@ class KnowledgeSpaceBindingOut(BaseModel):
 # 索引绑定完成态走 knowledge_document_binding（employee ↔ document）。
 
 KnowledgeDocumentSource = Literal["file", "url"]
-KnowledgeDocumentStatus = Literal["uploaded", "parsing", "indexing", "ready", "failed"]
-IngestionJobStatus = Literal["parsing", "indexing", "done", "failed"]
-IndexBindingStatus = Literal["pending", "ready", "stale"]
+KnowledgeDocumentStatus = Literal[
+    "uploaded", "parsing", "indexing", "ready", "failed",
+    "reindex_requested", "deleting", "deleted",
+]
+IngestionJobStatus = Literal["parsing", "indexing", "done", "failed", "reindex_requested"]
+IndexBindingStatus = Literal["pending", "ready", "stale", "revoked"]
+KnowledgeOperationKind = Literal["delete", "reindex"]
+KnowledgeOperationStatus = Literal["pending", "accepted", "failed", "completed"]
 
 
 class KnowledgeDocumentCreate(BaseModel):
@@ -301,6 +306,27 @@ class KnowledgeDocumentImportUrl(BaseModel):
 
     url: str = Field(min_length=1, description="http(s) URL")
     display_name: str | None = None
+
+
+class KnowledgeDocumentOperationOut(BaseModel):
+    """delete/reindex durable receipt，供 Manager UI 轮询/重试。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str
+    operation: KnowledgeOperationKind
+    idempotency_key: str
+    tenant_id: str
+    knowledge_space_id: str
+    document_id: str
+    status: KnowledgeOperationStatus
+    document_status: KnowledgeDocumentStatus
+    upstream_status: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
 
 # ---- 技能/连接器/记忆策略 目录（issue #38；04 §6.6，D17，D16/D22）----
 # 三者均 tenant 作用域、runtime 中立（D16）：只存管理面真相（目录/可见性/安装绑定策略/凭据授权元数据），
