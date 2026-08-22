@@ -59,6 +59,11 @@ export default defineConfig({
     {
       name: "agent-smoke",
       testMatch: /agent\/.*\.spec\.ts/,
+      // Chat screenshots and local Agent SQLite state are shared by the Agent
+      // smoke files; serialize them so earlier prompt tests cannot mutate the
+      // conversation list while the visual fixture is captured.
+      fullyParallel: false,
+      workers: 1,
       use: { ...devices["Desktop Chrome"], baseURL: AGENT_UI_ORIGIN },
     },
     {
