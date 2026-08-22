@@ -1,6 +1,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -58,6 +59,7 @@ class Document:
     storage_key: str = ""
     file_name: str = ""
     source_type: str = "file"
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -495,6 +497,206 @@ def test_access_get_reads_current_authorized_document_with_bounded_text(tmp_path
     assert len(result["text"]) == 4_000
     assert str(tmp_path) not in json.dumps(result)
     assert "workspace" not in json.dumps(result)
+
+
+def test_search_returns_versioned_exact_chunk_citations_and_gets_authoritative_chunks(tmp_path):
+    chunk_zero = "a" * 1_200
+    chunk_one = "second authoritative chunk"
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text(chunk_zero + chunk_one, encoding="utf-8")
+    document = Document(
+        "doc-1", "space-a", "Policy", storage_key=storage_key,
+        file_name="policy.txt", updated_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+    )
+
+    class SingleBinding(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-1", "doc-1")]
+
+    class StoredDocs:
+        def get(self, ctx, *, document_id):
+            return document if document_id == "doc-1" else None
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {
+            "references": [{"reference_id": "ref-1", "file_path": "doc-1"}],
+            "chunks": [
+                {"reference_id": "ref-1", "file_path": "doc-1", "chunk_id": "upstream-0",
+                 "chunk_order_index": 0, "content": chunk_zero, "score": 0.9},
+                {"reference_id": "ref-1", "file_path": "doc-1", "chunk_id": "upstream-1",
+                 "chunk_order_index": 1, "content": chunk_one, "score": 0.8},
+            ],
+        }})
+
+    light = LightRagClient(
+        LightRagSettings("http://rag", "manager-secret"), transport=httpx.MockTransport(handler)
+    )
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=SingleBinding(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=StoredDocs(), storage_root=tmp_path,
+    )
+    claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
+
+    async def run():
+        try:
+            auth = access.authorize(claims, "employee-a")
+            result = await access.search(auth, "policy", 10)
+            fetched = [access.get(auth, item["citation_id"]) for item in result["items"]]
+            return result, fetched
+        finally:
+            await light.aclose()
+
+    result, fetched = asyncio.run(run())
+    assert [item["chunk_index"] for item in result["items"]] == [0, 1]
+    assert [item["text"] for item in result["items"]] == [chunk_zero, chunk_one]
+    assert all(len(item["citation_id"].split(":")) == 4 for item in result["items"])
+    assert all(item["locator"] in {"i0", "i1"} for item in result["items"])
+    assert all(item["citation_version"].startswith("sha256:") for item in result["items"])
+    assert all(fetched_item["text"] == expected for fetched_item, expected in zip(fetched, [chunk_zero, chunk_one]))
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert all("workspace" not in json.dumps(item) and str(tmp_path) not in json.dumps(item) for item in result["items"])
+    for forbidden in ("manager-secret", "upstream-0", "file_path", "storage_key", "chunk_id"):
+        assert forbidden not in rendered
+
+
+def test_chunk_id_without_order_uses_unique_authoritative_span_not_upstream_storage(tmp_path):
+    text = "prefix-" + ("unique chunk text " * 8) + "-suffix"
+    chunk_content = "unique chunk text " * 8
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text(text, encoding="utf-8")
+
+    class SingleBinding(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-1", "doc-1")]
+
+    class StoredDocs:
+        def get(self, ctx, *, document_id):
+            return Document("doc-1", "space-a", "Policy", storage_key=storage_key)
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {"chunks": [
+            {"file_path": "doc-1", "chunk_id": "upstream-token-only",
+             "content": chunk_content, "score": 1.0},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=SingleBinding(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=StoredDocs(), storage_root=tmp_path,
+    )
+
+    async def run():
+        try:
+            auth = access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+            result = await access.search(auth, "policy", 10)
+            fetched = access.get(auth, result["items"][0]["citation_id"])
+            return result, fetched
+        finally:
+            await light.aclose()
+
+    result, fetched = asyncio.run(run())
+    item = result["items"][0]
+    assert item["locator"].startswith("o")
+    assert "chunk_index" not in item
+    assert item["text"] == chunk_content
+    assert fetched["text"] == chunk_content
+
+
+def test_exact_citation_version_fails_closed_after_document_version_changes(tmp_path):
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text("authoritative text", encoding="utf-8")
+    document = Document(
+        "doc-1", "space-a", "Policy", storage_key=storage_key,
+        updated_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+    )
+
+    class SingleBinding(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-1", "doc-1")]
+
+    class StoredDocs:
+        def get(self, ctx, *, document_id):
+            return document if document_id == "doc-1" else None
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {"chunks": [
+            {"file_path": "doc-1", "chunk_id": "upstream-0", "chunk_order_index": 0,
+             "content": "authoritative text", "score": 1.0},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=SingleBinding(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=StoredDocs(), storage_root=tmp_path,
+    )
+    claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
+
+    async def run():
+        try:
+            auth = access.authorize(claims, "employee-a")
+            result = await access.search(auth, "policy", 10)
+            return auth, result
+        finally:
+            await light.aclose()
+
+    auth, result = asyncio.run(run())
+    citation_id = result["items"][0]["citation_id"]
+    document.updated_at = datetime(2026, 8, 23, tzinfo=timezone.utc)
+    with pytest.raises(RagUnavailable):
+        access.get(auth, citation_id)
+
+
+def test_duplicate_or_out_of_range_upstream_chunk_falls_back_to_versioned_document_citation(tmp_path):
+    chunk = "authoritative chunk"
+    storage_key = "knowledge/tenant-a/space-a/ingest-1/policy.txt"
+    path = tmp_path / storage_key
+    path.parent.mkdir(parents=True)
+    path.write_text(chunk, encoding="utf-8")
+
+    class SingleBinding(FakeBindings):
+        def list_by_employee(self, ctx, *, employee_id, status=None):
+            return [Binding("space-a", "doc-1", "doc-1")]
+
+    class StoredDocs:
+        def get(self, ctx, *, document_id):
+            return Document("doc-1", "space-a", "Policy", storage_key=storage_key)
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {"chunks": [
+            {"file_path": "doc-1", "chunk_id": "duplicate", "chunk_order_index": 0,
+             "content": chunk, "score": 0.9},
+            {"file_path": "doc-1", "chunk_id": "duplicate", "chunk_order_index": 0,
+             "content": chunk, "score": 0.8},
+            {"file_path": "doc-1", "chunk_id": "out-of-range", "chunk_order_index": 99,
+             "content": "not authoritative", "score": 0.7},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=SingleBinding(), rag_service=FakeRag(), light_rag=light,
+        space_repository=FakeSpaces(), document_repository=StoredDocs(), storage_root=tmp_path,
+    )
+    async def run():
+        try:
+            auth = access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+            return await access.search(auth, "policy", 10)
+        finally:
+            await light.aclose()
+
+    result = asyncio.run(run())
+    assert len(result["items"]) == 1
+    assert result["items"][0]["citation_id"].endswith("-d")
+    assert "chunk_index" not in result["items"][0]
 
 
 @pytest.mark.parametrize("citation_id", [
