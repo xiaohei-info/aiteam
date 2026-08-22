@@ -417,7 +417,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
             ) : (
               <Text type="supporting">{doc.status === "deleting" ? "删除处理中" : "已删除"}</Text>
             )}
-            {doc.status !== "deleting" && doc.status !== "deleted" && (
+            {(doc.status === "ready" || doc.status === "failed") && (
               <Button
                 label={`删除${doc.display_name}`}
                 variant="destructive"
