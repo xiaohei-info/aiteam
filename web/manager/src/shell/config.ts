@@ -2,7 +2,7 @@
  * Manager 企业端导航与壳配置（page-shell）。
  *
  * 导航严格对齐旧架构 app/ 的企业后台（admin section）菜单入口：
- * 员工 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 费用 / 充值 / 设置。
+ * 员工 / 部门 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 费用 / 充值 / 设置。
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  * 角色门控映射旧架构 permission_service 的 manage_employees / manage_connectors / view_billing。
  */
@@ -15,6 +15,8 @@ export const managerShellConfig: PageShellConfig = {
   nav: [
     // manage_employees 门控
     { id: "members", labelKey: "manager.nav.members", path: "/members", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 所有已登录角色可查看；写操作由部门页按 owner/enterprise_admin 门控
+    { id: "departments", labelKey: "manager.nav.departments", path: "/departments", icon: "board" },
     // 无角色门控
     { id: "solutions", labelKey: "manager.nav.solutions", path: "/solutions", icon: "board" },
     // manage_employees 门控

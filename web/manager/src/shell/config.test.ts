@@ -3,8 +3,8 @@
  * 壳装配逻辑本身在 @aiteam/shared buildShellViewModel（已覆盖），此处只验企业端配置正确。
  * 红线：只用 EnterpriseRole（owner / enterprise_admin / finance_admin / member），禁旧 admin/manager/viewer。
  *
- * 导航对齐旧架构 app/ 企业后台 admin section 的 10 个入口：
- * 员工 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 费用 / 充值 / 设置
+ * 导航覆盖企业后台的 11 个入口：
+ * 员工 / 部门 / 方案 / 技能 / 人才市场 / 记忆 / 连接器 / 模型 / 费用 / 充值 / 设置
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  */
 import { describe, expect, it } from "vitest";
@@ -59,6 +59,7 @@ function session(roles: string[]): AuthSession {
 
 const ALL_NAV_IDS = [
   "members",
+  "departments",
   "solutions",
   "skills",
   "marketplace",
@@ -137,13 +138,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航严格对齐旧架构 admin section（10 项）", () => {
+  it("导航覆盖部门管理入口（11 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(10);
+    expect(navIds).toHaveLength(11);
   });
 
-  it("owner 可见全部 10 项导航", () => {
+  it("owner 可见全部 11 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -162,6 +163,7 @@ describe("manager shell config", () => {
     );
     expect(vm.nav.map((n) => n.id)).toEqual([
       "members",
+      "departments",
       "solutions",
       "skills",
       "marketplace",
@@ -179,6 +181,7 @@ describe("manager shell config", () => {
       "/billing",
     );
     expect(vm.nav.map((n) => n.id)).toEqual([
+      "departments",
       "solutions",
       "memory",
       "llm",
@@ -196,6 +199,7 @@ describe("manager shell config", () => {
       "/solutions",
     );
     expect(vm.nav.map((n) => n.id)).toEqual([
+      "departments",
       "solutions",
       "memory",
       "llm",

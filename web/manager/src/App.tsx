@@ -4,6 +4,7 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
+import { DepartmentsPage } from "./features/departments";
 import { MarketplacePage } from "./features/marketplace";
 import { SolutionsPage } from "./features/solutions";
 import { ExpertsPage } from "./features/experts";
@@ -28,6 +29,7 @@ export function App(): React.ReactNode {
       <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="/" element={<DashboardPlaceholder />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route path="/departments" element={<DepartmentsPage />} />
         <Route path="/marketplace" element={<MarketplacePage />} />
         <Route path="/solutions" element={<SolutionsPage />} />
         <Route path="/experts" element={<ExpertsPage />} />

@@ -10,12 +10,13 @@ AI Team v1 **企业端前端**（独立工程 / 独立构建，v1 概要设计 0
 
 ## 企业端业务面（08 §12.1）
 
-成员账号 / 招募专家 / 成员级授权 / 企业治理。本卡（W-M）只落骨架与角色门控，细分业务页由后续卡接入：
+成员账号 / 部门管理 / 招募专家 / 成员级授权 / 企业治理。本卡（W-M）只落骨架与角色门控，细分业务页由后续卡接入：
 
 | 导航 | 路由 | 可见角色 |
 |------|------|----------|
 | 企业概览 | `/` | 登录即可见（含 member） |
 | 成员账号 | `/members` | owner / enterprise_admin |
+| 部门管理 | `/departments` | 登录即可查看；owner / enterprise_admin 可写 |
 | 招募专家 | `/marketplace` | owner / enterprise_admin |
 | 方案目录 | `/solutions` | owner / enterprise_admin |
 | 成员级授权 | `/grants` | owner / enterprise_admin |
