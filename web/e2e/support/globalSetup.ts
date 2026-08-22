@@ -69,7 +69,9 @@ function seedE2eTenant(identity?: SeedIdentity): SeedResult | null {
   if (process.env.E2E_EXTERNAL === "true" && process.env.E2E_EXTERNAL_SEED !== "true") {
     const tenant_id = process.env.E2E_TENANT_ID?.trim();
     if (!tenant_id) throw new Error("E2E_EXTERNAL requires E2E_TENANT_ID");
-    return { tenant_id, account: process.env.E2E_MEMBER_ACCOUNT, skipped: "external deployment" };
+    const employee_id = process.env.E2E_AGENT_EMPLOYEE_ID?.trim();
+    if (!employee_id) throw new Error("E2E_EXTERNAL requires E2E_AGENT_EMPLOYEE_ID for Pi prompt/delegation tests");
+    return { tenant_id, account: process.env.E2E_MEMBER_ACCOUNT, employee_id, skipped: "external deployment" };
   }
   const script = join(process.cwd(), "e2e", "support", "seed-e2e-tenant.py");
   const py = process.env.E2E_PYTHON ?? join(process.cwd(), "..", ".venv", "bin", "python");

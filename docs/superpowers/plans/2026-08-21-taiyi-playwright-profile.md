@@ -12,7 +12,7 @@ scope: taiyi-playwright
 
 ## 约束
 
-- `E2E_EXTERNAL=true` 时不启动 Playwright webServer、不执行本地 DB seed；使用显式 `E2E_TENANT_ID` 和三端凭据。
+- `E2E_EXTERNAL=true` 时不启动 Playwright webServer、不执行本地 DB seed；使用显式 `E2E_TENANT_ID`、`E2E_AGENT_EMPLOYEE_ID` 和三端凭据；缺少员工 ID 时在 globalSetup fail-fast，避免 prompt/delegation 用例得到误导性的 403。
 - UI/API origin 必须分别可配置；taiyi 单机可通过 SSH port-forward 暴露 8781/8782/8783。
 - 不绕过 Agent 登录；storageState 仍通过真实三端 login API 生成。
 - 默认配置和 harness origin invariant 测试保持不变。
@@ -33,4 +33,4 @@ scope: taiyi-playwright
 - Agent smoke：全部通过；
 - 合计 `48 passed`，已在 taiyi 最新 Agent server/UI 产物上验证。
 
-期间修复了 Agent list envelope 与前端 `listGet` 契约不一致、OpenAPI 缺少 abort path、E2E 动态会话选择和外部部署截图数据不稳定问题。
+期间修复了 Agent list envelope 与前端 `listGet` 契约不一致、OpenAPI 缺少 abort path、E2E 动态会话选择和外部部署截图数据不稳定问题；Agent prompt external smoke 需要显式 `E2E_AGENT_EMPLOYEE_ID`。

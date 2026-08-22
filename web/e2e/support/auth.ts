@@ -91,7 +91,9 @@ function seedMetadata(): SeedMetadata {
 /** Run-scoped employee handoff written by globalSetup after Manager seed. */
 export function seededEmployeeId(): string | undefined {
   const value = seedMetadata().employee_id;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  const external = process.env.E2E_AGENT_EMPLOYEE_ID?.trim();
+  return external || undefined;
 }
 
 export function defaultCredentials(tier: Tier): TierCredentials {
