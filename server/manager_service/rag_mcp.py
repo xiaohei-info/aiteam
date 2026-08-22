@@ -31,7 +31,6 @@ from shared.errors import AppError, Forbidden, Unauthorized
 
 from .document_parser import extract_text
 from .employee_config_service import employee_runnable
-from .knowledge_artifact_service import _chunks as _manager_chunks
 from .knowledge_intake_repository import KnowledgeDocumentRepository
 from .knowledge_intake_service import _resolve_path
 from .rag import RagHandle
@@ -47,6 +46,12 @@ _MAX_CITATION_TOKEN_CHARS = 256
 _MAX_UPSTREAM_ALIAS_CHARS = 1_024
 _MANAGER_CHUNK_CHARS = 1_200
 _SAFE_CITATION_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+
+
+def _manager_chunks(text: str, size: int = _MANAGER_CHUNK_CHARS) -> list[str]:
+    return [text[offset:offset + size] for offset in range(0, len(text), size)] if text else []
+
+
 _EXACT_CITATION_TOKEN = re.compile(
     r"^v([0-9a-f]{64})(?:-i([0-9]{1,9}))?(?:-o([0-9]{1,9})-l([0-9]{1,9}))?$"
 )

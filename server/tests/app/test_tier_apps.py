@@ -37,6 +37,16 @@ def test_openapi_and_docs(client, tier):
     assert client.get("/redoc").status_code == 200
 
 
+def test_manager_legacy_artifact_route_is_absent():
+    client = TestClient(get_app("manager"))
+    path = "/api/manager/knowledge/" + "/".join(("artifacts", "bundle"))
+
+    assert path not in client.get("/openapi.json").json()["paths"]
+    response = client.post(path, json={"known_versions": {}})
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
 def test_ping_envelope(client, tier):
     r = client.get(f"/api/{tier}/ping")
     assert r.status_code == 200

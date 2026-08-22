@@ -136,9 +136,9 @@ Agent 使用当前用户 token + employee_id 请求 runtime provider config
 - 验证 provider config pull → Pi ModelRuntime 注册 → 真实 prompt/stream/tool call；
 - 扫描 Manager/Agent 日志、SQLite、Session JSONL 和 SSE，确认没有 API key。
 
-## 5. 需要删除/替换的当前实现
+## 5. 历史路线（已归档；不作为当前实现）
 
-以下当前实现不再是目标路线：
+以下实现不再是目标路线，legacy local bundle 路径已删除且不保留兼容入口：
 
 - `pullKnowledgeArtifacts` bundle 主链；
 - Agent `knowledge_artifact` 企业知识真相；

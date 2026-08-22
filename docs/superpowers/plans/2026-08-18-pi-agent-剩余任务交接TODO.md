@@ -74,7 +74,7 @@ caf29a40  feat: add signed skill distribution
 - Compose/ctl 密钥隔离：private 仅 Manager，public 仅 Agent，Operation 不接收。
 - taiyi 已实测 signed package sync、本地 manifest 和 Skill session 启动。
 
-### 1.5 Manager RAG / Memory 路线（当前 local bundle 实现需回退）
+### 1.5 Manager RAG / Memory 路线（legacy local bundle 已归档并删除）
 
 最新目标主链：
 
@@ -104,7 +104,7 @@ Pi Session
 
 测试环境已完成：Manager/Hindsight 配置、受控 ResourceLoader、工具 allowlist、Extension recall/retain 和自定义 Agent memory 主链清理。生产 bank-scoped credential provisioning/rotation 仍待 hardening。
 
-需要继续清理/替换：
+历史上需要清理/替换的实现（本轮已完成）：
 
 - `pullKnowledgeArtifacts` bundle 主链；
 - Agent `knowledge_artifact` 企业知识真相；
@@ -131,7 +131,6 @@ Pi Session
 - `server/manager_service/knowledge_intake_service.py`
 - `server/manager_service/knowledge_space_service.py`
 - `server/manager_service/rag.py`
-- `server/manager_service/routes_knowledge_artifacts.py`
 - `server/agent_service/src/manager-client.ts`
 - `server/agent_service/src/tools/knowledge.ts`
 - `server/agent_service/src/pi/session-host.ts`
