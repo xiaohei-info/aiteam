@@ -17,6 +17,7 @@ on:
     branches: ["main", "feature/**"]
     paths:
       - "web/**"
+      - "server/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
     # main = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
@@ -24,6 +25,7 @@ on:
     branches: ["main", "feature/**"]
     paths:
       - "web/**"
+      - "server/**"
       - ".github/workflows/web-ci.yml"
 
 # 同一 PR/分支的旧 run 直接作废——过期提交的结果没有信息量，只烧分钟数。
