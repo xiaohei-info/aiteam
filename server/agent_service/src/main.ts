@@ -1,7 +1,7 @@
 import { createPublicKey } from "node:crypto";
 import { accessSync, chmodSync, constants, readFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, type JwtJwk } from "./http/auth.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
@@ -17,7 +17,7 @@ import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
 import { assertAgentLaunchConfiguration } from "./launch-guards.js";
 
 const launchConfiguration = assertAgentLaunchConfiguration();
-const dataRoot = process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data");
+const dataRoot = resolve(process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data"));
 const port = Number(process.env.PORT ?? 8000);
 const hostAddress = process.env.HOST ?? "127.0.0.1";
 const environment = launchConfiguration.environment;
@@ -62,6 +62,7 @@ const authenticate = useDevAuth
 const usageFlush = new UsageFlushService(store, managerClient);
 const schedule = new ScheduleService(store, sessionHost);
 const http = new AgentHttpServer({
+  logger: console,
   host: sessionHost,
   store,
   authenticate,
