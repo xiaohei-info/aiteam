@@ -67,6 +67,7 @@ export interface SessionHostOptions {
   store: AgentSqliteStore;
   modelRuntime: ModelRuntime;
   model?: Model<any>;
+  useFauxModel?: boolean;
   resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string, hindsightRuntimeConfig?: HindsightRuntimeConfig) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
@@ -606,6 +607,10 @@ export class SessionHost {
   }
 
   private async ensureRuntimeModel(authorization: SessionAuthorization): Promise<{ model: Model<any>; providerId?: string }> {
+    // Development E2E/faux sessions intentionally use the deterministic Pi
+    // model and must not contact the seeded dummy Provider endpoint. Production
+    // never enables this option because launch guards reject AITEAM_PI_FAKE.
+    if (this.options.useFauxModel) return { model: this.requireDefaultModel() };
     if (!authorization.managerClient?.pullRuntimeConfig) {
       if (!this.options.model) throw new SessionAuthorizationError("No authenticated Pi model is available");
       return { model: this.options.model };

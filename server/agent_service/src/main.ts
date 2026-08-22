@@ -49,6 +49,7 @@ const sessionHost = new SessionHost({
   store,
   modelRuntime: configured.runtime,
   model: configured.model,
+  useFauxModel,
   managerClient,
   sandbox,
   usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
