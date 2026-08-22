@@ -118,10 +118,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22.19.0"
-          cache: pnpm
-          cache-dependency-path: server/agent_service/pnpm-lock.yaml
       - name: Enable pnpm
-        run: corepack enable
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.4.0 --activate
       - name: Install Agent dependencies
         working-directory: server/agent_service
         run: pnpm install --frozen-lockfile
