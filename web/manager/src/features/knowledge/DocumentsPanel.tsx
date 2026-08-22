@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -31,6 +32,9 @@ const STATUS_LABEL: Record<KnowledgeDocumentStatus, string> = {
   indexing: "索引中",
   ready: "已就绪",
   failed: "失败",
+  reindex_requested: "重建索引中",
+  deleting: "删除处理中",
+  deleted: "已删除",
 };
 const STATUS_DESCRIPTION: Record<KnowledgeDocumentStatus, string> = {
   uploaded: "等待开始解析",
@@ -38,6 +42,9 @@ const STATUS_DESCRIPTION: Record<KnowledgeDocumentStatus, string> = {
   indexing: "正在建立索引",
   ready: "处理完成；绑定就绪后可由 Agent 引用",
   failed: "摄入失败，请先重试",
+  reindex_requested: "已请求重建索引，旧引用暂不可用",
+  deleting: "删除请求已接受，文档和引用暂不可用",
+  deleted: "文档已删除，引用不可用",
 };
 
 const STATUS_VARIANT: Record<KnowledgeDocumentStatus, BadgeVariant> = {
@@ -46,6 +53,9 @@ const STATUS_VARIANT: Record<KnowledgeDocumentStatus, BadgeVariant> = {
   indexing: "warning",
   ready: "success",
   failed: "error",
+  reindex_requested: "warning",
+  deleting: "warning",
+  deleted: "neutral",
 };
 const SOURCE_LABEL: Record<KnowledgeDocument["source_type"], string> = {
   file: "上传",
@@ -61,6 +71,15 @@ function citationStatus(document: KnowledgeDocument): {
   description: string;
   variant: BadgeVariant;
 } {
+  if (document.status === "deleting") {
+    return { label: "引用不可用", description: "文档删除处理中，当前不能获取引用", variant: "warning" };
+  }
+  if (document.status === "deleted") {
+    return { label: "引用不可用", description: "文档已删除，当前不能获取引用", variant: "error" };
+  }
+  if (document.status === "reindex_requested") {
+    return { label: "引用不可用", description: "索引重建中，旧引用暂不可用", variant: "warning" };
+  }
   if (document.status === "ready") {
     return {
       label: "文档已就绪",
@@ -77,11 +96,19 @@ const BINDING_STATUS_LABEL: Record<KnowledgeDocumentBinding["status"], string> =
   pending: "同步中",
   ready: "已就绪",
   stale: "需同步",
+  revoked: "已撤销",
 };
 const BINDING_STATUS_VARIANT: Record<KnowledgeDocumentBinding["status"], BadgeVariant> = {
   pending: "warning",
   ready: "success",
   stale: "error",
+  revoked: "error",
+};
+const BINDING_STATUS_DESCRIPTION: Record<KnowledgeDocumentBinding["status"], string> = {
+  pending: "等待索引同步",
+  ready: "可参与引用",
+  stale: "需要重新同步",
+  revoked: "已撤销，不能参与引用",
 };
 
 type DocumentRow = KnowledgeDocument & Record<string, unknown>;
@@ -92,6 +119,18 @@ interface Props {
   spaceName: string;
   canWrite: boolean;
   onClose: () => void;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) return error.problem?.detail ?? error.message;
+  return fallback;
+}
+
+function retryableMessage(error: unknown, fallback: string): string {
+  const message = errorMessage(error, fallback);
+  return error instanceof ApiError && (error.status === 409 || error.status === 503)
+    ? `${message}；可重试`
+    : message;
 }
 
 export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props): ReactNode {
@@ -106,9 +145,11 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<KnowledgeDocument | null>(null);
   const [bindingDocument, setBindingDocument] = useState<KnowledgeDocument | null>(null);
   const [documentBindings, setDocumentBindings] = useState<KnowledgeDocumentBinding[]>([]);
   const [bindingsLoading, setBindingsLoading] = useState(false);
@@ -126,7 +167,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     } catch (err) {
       if (requestId !== requestSequence.current || currentSpaceId.current !== requestedSpaceId) return;
       setDocs([]);
-      setError(err instanceof ApiError ? err.message : "加载文档失败");
+      setError(errorMessage(err, "加载文档失败"));
     } finally {
       if (requestId === requestSequence.current && currentSpaceId.current === requestedSpaceId) setLoading(false);
     }
@@ -134,8 +175,11 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
 
   useEffect(() => {
     setBusy(false);
+    setError(null);
+    setActionNotice(null);
     setSelectedFile(null);
     setUrl("");
+    setPendingDelete(null);
     bindingRequestSequence.current += 1;
     setBindingDocument(null);
     setDocumentBindings([]);
@@ -164,7 +208,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
       if (fileInputRef.current) fileInputRef.current.value = "";
       await reload();
     } catch (err) {
-      if (currentSpaceId.current === actionSpaceId) setError(err instanceof ApiError ? err.message : "上传失败");
+      if (currentSpaceId.current === actionSpaceId) setError(errorMessage(err, "上传失败"));
     } finally {
       if (currentSpaceId.current === actionSpaceId) setBusy(false);
     }
@@ -187,7 +231,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
       setUrl("");
       await reload();
     } catch (err) {
-      if (currentSpaceId.current === actionSpaceId) setError(err instanceof ApiError ? err.message : "导入失败");
+      if (currentSpaceId.current === actionSpaceId) setError(errorMessage(err, "导入失败"));
     } finally {
       if (currentSpaceId.current === actionSpaceId) setBusy(false);
     }
@@ -206,21 +250,55 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
       setDocumentBindings(nextBindings);
     } catch (err) {
       if (requestId !== bindingRequestSequence.current || currentSpaceId.current !== requestedSpaceId) return;
-      setBindingsError(err instanceof ApiError ? err.message : "加载索引绑定失败");
+      setBindingsError(errorMessage(err, "加载索引绑定失败"));
     } finally {
       if (requestId === bindingRequestSequence.current && currentSpaceId.current === requestedSpaceId) setBindingsLoading(false);
     }
   }
 
-  async function handleRetry(document: KnowledgeDocument): Promise<void> {
+  async function handleDelete(): Promise<void> {
+    const document = pendingDelete;
+    if (!document) return;
     const actionSpaceId = spaceId;
     setBusy(true);
     setError(null);
+    setActionNotice(null);
     try {
-      await api.retryDocument(actionSpaceId, document.id);
-      if (currentSpaceId.current === actionSpaceId) await reload();
+      const operation = await api.deleteDocument(actionSpaceId, document.id);
+      if (currentSpaceId.current !== actionSpaceId) return;
+      setPendingDelete(null);
+      if (operation.status === "failed") {
+        setError(`${operation.error_message || "删除失败"}；可重试`);
+        return;
+      }
+      setActionNotice(operation.status === "completed" ? "删除已完成" : "删除请求已接受，处理中");
+      await reload();
     } catch (err) {
-      if (currentSpaceId.current === actionSpaceId) setError(err instanceof ApiError ? err.message : "重试失败");
+      if (currentSpaceId.current === actionSpaceId) {
+        setPendingDelete(null);
+        setError(retryableMessage(err, "删除失败"));
+      }
+    } finally {
+      if (currentSpaceId.current === actionSpaceId) setBusy(false);
+    }
+  }
+
+  async function handleReindex(document: KnowledgeDocument): Promise<void> {
+    const actionSpaceId = spaceId;
+    setBusy(true);
+    setError(null);
+    setActionNotice(null);
+    try {
+      const operation = await api.reindexDocument(actionSpaceId, document.id);
+      if (currentSpaceId.current !== actionSpaceId) return;
+      if (operation.status === "failed") {
+        setError(`${operation.error_message || "重建索引失败"}；可重试`);
+        return;
+      }
+      setActionNotice(operation.status === "completed" ? "索引重建已完成" : "重建索引请求已接受，处理中");
+      await reload();
+    } catch (err) {
+      if (currentSpaceId.current === actionSpaceId) setError(retryableMessage(err, "重建索引失败"));
     } finally {
       if (currentSpaceId.current === actionSpaceId) setBusy(false);
     }
@@ -234,6 +312,15 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     if (bindingDocument.status === "failed") {
       return { status: "error", title: "文档摄入失败，当前没有可用引用；请先重试摄入。" };
     }
+    if (bindingDocument.status === "deleting") {
+      return { status: "error", title: "文档删除处理中，当前没有可用引用。" };
+    }
+    if (bindingDocument.status === "deleted") {
+      return { status: "error", title: "文档已删除，当前没有可用引用。" };
+    }
+    if (bindingDocument.status === "reindex_requested") {
+      return { status: "info", title: "索引重建中，旧引用暂不可用。" };
+    }
     if (bindingDocument.status !== "ready") {
       return { status: "info", title: "文档尚未就绪，完成解析和索引后才会产生可用引用。" };
     }
@@ -242,6 +329,12 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     }
     if (documentBindings.some((binding) => binding.status === "pending")) {
       return { status: "info", title: "文档已就绪，但索引绑定仍在同步；同步完成后才可获取引用。" };
+    }
+    if (documentBindings.some((binding) => binding.status === "revoked")) {
+      return { status: "error", title: "索引绑定已撤销，不能参与引用；请重新绑定专家并等待同步。" };
+    }
+    if (documentBindings.some((binding) => binding.status === "stale")) {
+      return { status: "error", title: "索引绑定需要重新同步，当前不能参与引用。" };
     }
     return { status: "error", title: "文档已就绪，但暂无可用绑定；请先绑定专家并等待索引同步。" };
   }, [bindingDocument, bindingsError, bindingsLoading, documentBindings]);
@@ -306,12 +399,35 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
       result.push({
         key: "actions",
         header: "操作",
-        width: pixel(160),
+        width: pixel(300),
         align: "end",
         resizable: false,
-        renderCell: (doc) => doc.status === "failed" || doc.status === "ready"
-          ? <Button label={doc.status === "failed" ? `重试${doc.display_name}` : `重建索引${doc.display_name}`} variant="ghost" size="sm" isDisabled={busy} onClick={() => void handleRetry(doc)} />
-          : <Text type="supporting">处理中</Text>,
+        renderCell: (doc) => (
+          <HStack gap={2} justify="end">
+            {doc.status === "failed" || doc.status === "ready" ? (
+              <Button
+                label={doc.status === "failed" ? `重试${doc.display_name}` : `重建索引${doc.display_name}`}
+                variant="ghost"
+                size="sm"
+                isDisabled={busy}
+                onClick={() => void handleReindex(doc)}
+              />
+            ) : doc.status !== "deleting" && doc.status !== "deleted" ? (
+              <Text type="supporting">处理中</Text>
+            ) : (
+              <Text type="supporting">{doc.status === "deleting" ? "删除处理中" : "已删除"}</Text>
+            )}
+            {doc.status !== "deleting" && doc.status !== "deleted" && (
+              <Button
+                label={`删除${doc.display_name}`}
+                variant="destructive"
+                size="sm"
+                isDisabled={busy}
+                onClick={() => setPendingDelete(doc)}
+              />
+            )}
+          </HStack>
+        ),
       });
     }
     return result;
@@ -333,10 +449,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
           <LayoutContent>
             <VStack gap={4}>
               {error && <Banner status="error" title={error} />}
-              <Banner
-                status="info"
-                title="删除文档暂不可用：Manager OpenAPI 当前没有文档删除 endpoint，本页不展示删除按钮，也不会发送删除请求。"
-              />
+              {actionNotice && <Banner status="success" title={actionNotice} />}
               <Banner
                 status="info"
                 title="引用正文不通过 Manager HTTP 页面加载：文档已就绪且绑定同步后，请通过 Agent Pi knowledge_get 获取；本页不直连 MCP 或 LightRAG。"
@@ -421,7 +534,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
                       <Text weight="bold">引用与来源</Text>
                       <Text type="supporting">来源：{SOURCE_LABEL[bindingDocument.source_type]} · {bindingDocument.file_name || "来源未提供"}</Text>
                       <Text type="supporting">文档状态：{STATUS_LABEL[bindingDocument.status]}</Text>
-                      <Code>{citationId(spaceId, bindingDocument.id)}</Code>
+                      {bindingDocument.status === "ready" && <Code>{citationId(spaceId, bindingDocument.id)}</Code>}
                       <Text type="supporting">引用正文请通过 Agent Pi knowledge_get 获取；Manager 没有 citation get HTTP API。</Text>
                     </VStack>
                   </Card>
@@ -447,7 +560,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
                           renderCell: (binding) => (
                             <VStack gap={1} aria-label={`绑定状态：${BINDING_STATUS_LABEL[binding.status]}`}>
                               <Badge label={BINDING_STATUS_LABEL[binding.status]} variant={BINDING_STATUS_VARIANT[binding.status]} />
-                              <Text type="supporting">{binding.status === "ready" ? "可参与引用" : binding.status === "pending" ? "等待索引同步" : "需要重新同步"}</Text>
+                              <Text type="supporting">{BINDING_STATUS_DESCRIPTION[binding.status]}</Text>
                             </VStack>
                           ),
                         },
@@ -466,6 +579,17 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
           footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" isDisabled={bindingsLoading} onClick={() => setBindingDocument(null)} /></HStack></LayoutFooter>}
         />
       </Dialog>
+
+      <AlertDialog
+        isOpen={pendingDelete != null}
+        onOpenChange={(isOpen) => { if (!isOpen && !busy) setPendingDelete(null); }}
+        title="删除文档"
+        description={pendingDelete ? `确定删除“${pendingDelete.display_name}”？删除后索引和引用将不可用，且不能恢复。` : "删除文档后索引和引用将不可用，且不能恢复。"}
+        cancelLabel="取消"
+        actionLabel="确认删除"
+        isActionLoading={busy}
+        onAction={() => void handleDelete()}
+      />
     </Dialog>
   );
 }

@@ -60,6 +60,58 @@ const DOCUMENT_BINDINGS = [
     status: "ready",
   },
 ];
+const DELETE_OPERATION = {
+  operation_id: "op-delete",
+  operation: "delete",
+  idempotency_key: "idem-delete",
+  tenant_id: "t1",
+  knowledge_space_id: "ks-sales",
+  document_id: "doc-ready",
+  status: "pending",
+  document_status: "deleting",
+  upstream_status: "deletion_started",
+};
+const REINDEX_OPERATION = {
+  operation_id: "op-reindex",
+  operation: "reindex",
+  idempotency_key: "idem-reindex",
+  tenant_id: "t1",
+  knowledge_space_id: "ks-sales",
+  document_id: "doc-ready",
+  status: "completed",
+  document_status: "ready",
+  upstream_status: "processed",
+};
+const LIFECYCLE_DOCUMENTS = [
+  ...DOCUMENTS,
+  {
+    ...DOCUMENTS[1],
+    id: "doc-reindex-requested",
+    display_name: "待重建.md",
+    status: "reindex_requested" as const,
+  },
+  {
+    ...DOCUMENTS[1],
+    id: "doc-deleting",
+    display_name: "删除中.md",
+    status: "deleting" as const,
+  },
+  {
+    ...DOCUMENTS[1],
+    id: "doc-deleted",
+    display_name: "已删除.md",
+    status: "deleted" as const,
+  },
+];
+const REVOKED_DOCUMENT_BINDINGS = [{
+  id: "binding-revoked",
+  tenant_id: "t1",
+  knowledge_space_id: "ks-sales",
+  document_id: "doc-ready",
+  employee_id: "e1",
+  rag_document_id: "rag-revoked",
+  status: "revoked" as const,
+}];
 
 interface ClientOverrides {
   listGet?: (url: string) => unknown;
@@ -104,8 +156,8 @@ function makeClient(overrides: ClientOverrides = {}) {
     patch: vi.fn(),
     put: vi.fn(),
     listGet: vi.fn((url: string) => overrides.listGet?.(url) ?? defaultListGet(url)),
-    post: vi.fn((url: string, options?: unknown) => overrides.post?.(url, options) ?? null),
-    del: vi.fn((url: string) => overrides.del?.(url)),
+    post: vi.fn((url: string, options?: unknown) => overrides.post?.(url, options) ?? (url.endsWith("/reindex") ? REINDEX_OPERATION : null)),
+    del: vi.fn((url: string) => overrides.del?.(url) ?? (url.includes("/documents/") ? DELETE_OPERATION : undefined)),
   };
   vi.spyOn(clientMod, "createManagerApiClient").mockReturnValue(client as unknown as ApiClient);
   return client;
@@ -265,7 +317,10 @@ describe("KnowledgePage Astryx contract", () => {
     ));
 
     fireEvent.click(screen.getByRole("button", { name: "重试销售手册.pdf" }));
-    await waitFor(() => expect(client.post).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/documents/doc-failed/retry"));
+    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
+      "/api/manager/knowledge-spaces/ks-sales/documents/doc-failed/reindex",
+      { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+    ));
   });
 
   it("shows ready and failed status, rebuilds ready indexes, and projects binding status", async () => {
@@ -282,16 +337,83 @@ describe("KnowledgePage Astryx contract", () => {
     expect(client.get).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "重建索引销售 FAQ.md" }));
-    await waitFor(() => expect(client.post).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/documents/doc-ready/retry"));
+    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
+      "/api/manager/knowledge-spaces/ks-sales/documents/doc-ready/reindex",
+      { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+    ));
 
-    expect(screen.queryByRole("button", { name: /删除销售 FAQ\.md/ })).toBeNull();
-    expect(client.del).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "删除销售 FAQ.md" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
     const bindingDialog = await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" });
     expect(within(bindingDialog).getByText("已就绪")).toBeTruthy();
     expect(within(bindingDialog).getByText(/引用可用/)).toBeTruthy();
     expect(within(bindingDialog).getByText("rag-1")).toBeTruthy();
+  });
+
+  it("confirms document deletion, sends the lifecycle request, and shows pending acceptance", async () => {
+    const client = makeClient();
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+    await screen.findByText("销售 FAQ.md");
+
+    fireEvent.click(screen.getByRole("button", { name: "删除销售 FAQ.md" }));
+    expect(screen.getByRole("alertdialog", { name: "删除文档" })).toBeTruthy();
+    expect(client.del).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(client.del).toHaveBeenCalledWith(
+      "/api/manager/knowledge-spaces/ks-sales/documents/doc-ready",
+      { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+    ));
+    expect(await screen.findByText("删除请求已接受，处理中")).toBeTruthy();
+  });
+
+  it("shows problem detail and a retry affordance for busy and unavailable deletion", async () => {
+    const problems = [
+      new ApiError("fallback", 409, "knowledge_deletion_busy", {
+        type: "about:blank", title: "busy", status: 409, code: "knowledge_deletion_busy", detail: "LightRAG 删除仍在处理中",
+      }),
+      new ApiError("fallback", 503, "manager_unavailable", {
+        type: "about:blank", title: "unavailable", status: 503, code: "manager_unavailable", detail: "知识索引服务暂不可用",
+      }),
+    ];
+    const client = makeClient({ del: () => { throw problems.shift()!; } });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+    await screen.findByText("销售 FAQ.md");
+
+    fireEvent.click(screen.getByRole("button", { name: "删除销售 FAQ.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("LightRAG 删除仍在处理中；可重试");
+    expect(screen.getByRole("button", { name: "删除销售 FAQ.md" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除销售 FAQ.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("知识索引服务暂不可用；可重试");
+    expect(screen.queryByText("已删除")).toBeNull();
+  });
+
+  it("renders lifecycle statuses, hides deleted citations, and excludes revoked bindings", async () => {
+    makeClient({ listGet: (url) => {
+      if (url.endsWith("/documents")) return { items: LIFECYCLE_DOCUMENTS, page: PAGE };
+      if (url.includes("/documents/") && url.endsWith("/bindings")) return { items: REVOKED_DOCUMENT_BINDINGS, page: PAGE };
+      return defaultListGet(url);
+    } });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+
+    expect(await screen.findByText("删除中.md")).toBeTruthy();
+    expect(screen.getAllByText("删除处理中").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已删除").length).toBeGreaterThan(0);
+    expect(screen.getByText("重建索引中")).toBeTruthy();
+    expect(screen.queryByText("citation:ks-sales:doc-deleting")).toBeNull();
+    expect(screen.queryByText("citation:ks-sales:doc-deleted")).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除删除中.md" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除已删除.md" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
+    const bindingDialog = await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" });
+    expect(within(bindingDialog).getByText("已撤销")).toBeTruthy();
+    expect(within(bindingDialog).getByText("已撤销，不能参与引用")).toBeTruthy();
+    expect(within(bindingDialog).queryByText(/引用可用/)).toBeNull();
   });
 
   it("keeps enterprise admins writable while citation content stays out of Manager HTTP", async () => {
@@ -308,7 +430,7 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "上传文件" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "从 URL 导入" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /删除销售手册\.pdf/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "删除销售手册.pdf" })).toBeTruthy();
     expect(client.get).not.toHaveBeenCalled();
     expect(client.listGet.mock.calls.flat().some((url) => String(url).includes("citation") || String(url).includes("/rag"))).toBe(false);
   });
