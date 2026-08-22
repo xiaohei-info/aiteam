@@ -630,6 +630,11 @@ def test_reconcile_delete_absent_completes_and_removes_source_idempotently(tmp_p
     repeated = svc.reconcile_delete(ctx, knowledge_space_id="ks", document_id=doc.id)
     assert repeated.operation_id == completed.operation_id
     assert repeated.status == "completed"
+    fresh_request_key = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="fresh-reconcile-key"
+    )
+    assert fresh_request_key.operation_id == completed.operation_id
+    assert fresh_request_key.status == "completed"
     assert ingestion.probe_calls == [("tt__ks", [doc.id])]
 
 
