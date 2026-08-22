@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import io
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -30,9 +29,7 @@ from manager_service.document_parser import (
 )
 from manager_service.knowledge_intake_repository import (
     KnowledgeDocumentBindingRepository,
-    KnowledgeDocumentRepository,
     KnowledgeDocumentRow,
-    KnowledgeIngestionJobRepository,
     KnowledgeIngestionJobRow,
     KnowledgeOperationRow,
 )
@@ -43,8 +40,6 @@ from manager_service.rag_ingestion import RagDeletionResult, RagIngestionResult,
 from manager_service.schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentImportUrl,
-    KnowledgeDocumentOut,
-    KnowledgeIngestionJobOut,
 )
 
 
@@ -317,13 +312,19 @@ class _FakeRag:
 
 
 class _FakeIngestion:
-    def __init__(self, *, result=None, error=None, delete_result=None, delete_error=None):
+    def __init__(
+        self, *, result=None, error=None, delete_result=None, delete_error=None,
+        present=None, probe_error=None,
+    ):
         self.calls = []
         self.delete_calls = []
+        self.probe_calls = []
         self.result = result or RagIngestionResult("doc-placeholder", 1)
         self.error = error
         self.delete_result = delete_result or RagDeletionResult(True, False)
         self.delete_error = delete_error
+        self.present = set(present or ())
+        self.probe_error = probe_error
 
     def ingest_text(self, *, workspace, file_source, text):
         self.calls.append((workspace, file_source, text))
@@ -336,6 +337,12 @@ class _FakeIngestion:
         if self.delete_error:
             raise self.delete_error
         return self.delete_result
+
+    def document_ids_present(self, *, workspace, doc_ids):
+        self.probe_calls.append((workspace, doc_ids))
+        if self.probe_error:
+            raise self.probe_error
+        return set(self.present)
 
 
 class _FakeSpaceExists:
@@ -600,6 +607,173 @@ def test_delete_upstream_failure_revokes_reads_but_is_not_deleted(tmp_path: Path
     assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "deleting"
 
 
+def test_reconcile_delete_absent_completes_and_removes_source_idempotently(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(present=set())
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="reconcile", file_name="a.txt",
+        file_type="text/plain", content=b"remove me",
+    )
+    source = svc._storage_root / doc.storage_key
+    assert source.exists()
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reconcile")
+
+    completed = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reconcile"
+    )
+    assert completed.status == "completed"
+    assert completed.document_status == "deleted"
+    assert completed.upstream_status == "deleted"
+    assert not source.exists()
+
+    repeated = svc.reconcile_delete(ctx, knowledge_space_id="ks", document_id=doc.id)
+    assert repeated.operation_id == completed.operation_id
+    assert repeated.status == "completed"
+    assert ingestion.probe_calls == [("tt__ks", [doc.id])]
+
+
+def test_reconcile_delete_records_sanitized_audit_lifecycle(tmp_path: Path) -> None:
+    class Audit:
+        def __init__(self):
+            self.records = []
+
+        def record(self, ctx, **kwargs):
+            self.records.append(kwargs)
+
+    audit = Audit()
+    ingestion = _FakeIngestion(present=set())
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    svc._audit = audit
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="audit", file_name="a.txt",
+        file_type="text/plain", content=b"audit me",
+    )
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-audit")
+    operation = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-audit"
+    )
+    assert operation.status == "completed"
+    assert [record["action"] for record in audit.records] == [
+        "knowledge_document_delete_requested",
+        "knowledge_document_delete_pending",
+        "knowledge_document_delete_reconciled",
+    ]
+    assert all("audit me" not in str(record) for record in audit.records)
+
+
+def test_reconcile_delete_present_keeps_pending_and_source(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(present={"doc-placeholder"})
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="still present", file_name="a.txt",
+        file_type="text/plain", content=b"keep me",
+    )
+    source = svc._storage_root / doc.storage_key
+    ingestion.present = {doc.id}
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-present")
+
+    pending = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-present"
+    )
+    assert pending.status == "pending"
+    assert pending.document_status == "deleting"
+    assert pending.upstream_status == "present"
+    assert source.exists()
+
+
+def test_reconcile_delete_probe_failure_is_retryable_without_claiming_deleted(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(probe_error=RagIngestionUnavailable("upstream-secret"))
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="probe failure", file_name="a.txt",
+        file_type="text/plain", content=b"keep me",
+    )
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-probe")
+    with pytest.raises(RagIngestionUnavailable) as exc:
+        svc.reconcile_delete(
+            ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-probe"
+        )
+    assert "upstream-secret" not in str(exc.value)
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_reconcile_delete_source_path_fence_keeps_deleting(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="fenced", file_name="a.txt",
+        file_type="text/plain", content=b"keep me",
+    )
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-fenced")
+    svc._doc_repo._by_id[doc.id] = _dc_replace(
+        svc._doc_repo._by_id[doc.id], storage_key="knowledge/t/other/escape.txt"
+    )
+    with pytest.raises(RagIngestionUnavailable):
+        svc.reconcile_delete(
+            ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-fenced"
+        )
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_reconcile_delete_rejects_symlinked_source(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must stay")
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="symlink", file_name="a.txt",
+        file_type="text/plain", content=b"indexed",
+    )
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-symlink")
+    link = svc._storage_root / "knowledge" / "t" / "ks" / "linked.txt"
+    link.symlink_to(outside)
+    svc._doc_repo._by_id[doc.id] = _dc_replace(
+        svc._doc_repo._by_id[doc.id], storage_key="knowledge/t/ks/linked.txt"
+    )
+    with pytest.raises(RagIngestionUnavailable):
+        svc.reconcile_delete(
+            ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-symlink"
+        )
+    assert outside.read_text() == "must stay"
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_reconcile_delete_requires_owner_admin_and_current_tenant(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="auth", file_name="a.txt",
+        file_type="text/plain", content=b"auth",
+    )
+    svc.delete(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-auth")
+    with pytest.raises(Forbidden):
+        svc.reconcile_delete(
+            TenantContext(tenant_id="t", user_id="m", roles=["member"]),
+            knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-auth",
+        )
+    with pytest.raises(NotFound):
+        svc.reconcile_delete(
+            _owner_ctx("other"), knowledge_space_id="ks", document_id=doc.id,
+            idempotency_key="del-auth",
+        )
+
+
+def test_reindex_cannot_restart_deleted_document(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="deleted", file_name="a.txt",
+        file_type="text/plain", content=b"gone",
+    )
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reindex")
+    svc.reconcile_delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reindex")
+    with pytest.raises(Conflict):
+        svc.reindex(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="reindex-deleted")
+
+
 def test_reindex_upstream_failure_is_retryable_and_not_ready(tmp_path: Path) -> None:
     ingestion = _FakeIngestion(error=RagIngestionUnavailable("secret"))
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
@@ -717,6 +891,7 @@ def test_routes_registered() -> None:
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/url",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}",
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/reconcile-delete",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/reindex",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/retry",
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/ingestion",

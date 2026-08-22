@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import stat
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -40,7 +41,6 @@ from .knowledge_space_repository import ExpertKnowledgeBinding
 from .rag_ingestion import RagIngestionPort, RagIngestionUnavailable
 from .schemas import (
     KnowledgeDocumentBindingOut,
-    KnowledgeDocumentCreate,
     KnowledgeDocumentOperationOut,
     KnowledgeDocumentOut,
     KnowledgeIngestionJobOut,
@@ -60,6 +60,10 @@ _MAX_DISPLAY_NAME = 512
 _MAX_FILE_NAME = 1024
 _MAX_FILE_TYPE = 256
 _MAX_IDEMPOTENCY_KEY = 256
+_DELETE_RETRYABLE_ERROR_CODES = frozenset({
+    "LIGHTRAG_UNAVAILABLE",
+    "SOURCE_DELETE_FAILED",
+})
 
 
 class RagDeletionBusy(Conflict):
@@ -150,6 +154,10 @@ class KnowledgeIntakeService:
         self._ingestion_client = ingestion_client
         self._operation_repo = operation_repo
         self._audit = audit_recorder
+        # Compatibility for unit/dev callers that predate the durable receipt
+        # repository. Production always supplies KnowledgeOperationRepository.
+        self._local_operations: dict[tuple[str, str], KnowledgeOperationRow] = {}
+        self._local_latest_operations: dict[tuple[str, str, str], KnowledgeOperationRow] = {}
 
     # ─────────────────────────────── 查询 ───────────────────────────────
 
@@ -399,6 +407,176 @@ class KnowledgeIntakeService:
             )
         return self._operation_out(ctx, operation)
 
+    def reconcile_delete(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        idempotency_key: str | None = None,
+    ) -> KnowledgeDocumentOperationOut:
+        """Reconcile LightRAG deletion and publish ``deleted`` only after proof.
+
+        LightRAG 1.5.6 exposes no deletion track id.  The bounded document
+        probe is therefore the only completion evidence; an unavailable or
+        malformed probe leaves the local document fail-closed in ``deleting``.
+        """
+        _ensure_can_write(ctx)
+        doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
+        fingerprint = _fingerprint("delete", knowledge_space_id, document_id)
+        provided_key = _provided_operation_key(idempotency_key)
+        operation = self._current_delete_operation(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=document_id,
+            request_fingerprint=fingerprint,
+            idempotency_key=provided_key,
+        )
+        if operation is None:
+            raise Conflict("no current delete operation is available for reconciliation")
+        if (
+            operation.tenant_id != ctx.tenant_id
+            or operation.operation != "delete"
+            or operation.knowledge_space_id != knowledge_space_id
+            or operation.document_id != document_id
+            or operation.request_fingerprint != fingerprint
+        ):
+            raise Conflict("delete operation does not match this document")
+        if doc.status == "deleted":
+            if operation.status == "completed":
+                # A repeated call with the same (or omitted) key is an idempotent
+                # read of the durable completion receipt.
+                return self._operation_out(ctx, operation)
+            if not _delete_operation_retryable(operation):
+                raise Conflict("delete operation is not retryable")
+            completed = self._update_operation_or_replace(
+                ctx, operation, status="completed", upstream_status="deleted",
+                error_code=None, error_message=None, completed=True,
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconciled", resource_id=document_id,
+                detail="document already deleted; completion receipt repaired",
+            )
+            return self._operation_out(ctx, completed)
+        if doc.status != "deleting":
+            raise Conflict(
+                f"cannot reconcile document in state {doc.status!r} "
+                "(required: deleting)"
+            )
+        if not _delete_operation_retryable(operation):
+            raise Conflict("delete operation is not retryable")
+
+        try:
+            handle = self._rag_handle(ctx, knowledge_space_id)
+            rag_ids = self._rag_document_ids(
+                ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
+            )
+            present = self._ingestion_client.document_ids_present(
+                workspace=handle.workspace, doc_ids=rag_ids
+            )
+            if not isinstance(present, (set, frozenset)) or any(
+                not isinstance(value, str) for value in present
+            ):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            present_ids = set(present)
+            if not present_ids.issubset(set(rag_ids)):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+        except RagIngestionUnavailable as exc:
+            operation = self._mark_reconcile_failed(
+                ctx, operation, upstream_status="unavailable",
+                error_code="LIGHTRAG_UNAVAILABLE",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                detail="LightRAG deletion probe unavailable; document remains deleting",
+            )
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+        except Exception as exc:  # noqa: BLE001 - never expose upstream/storage details
+            logger.warning("[kb] delete reconciliation probe failed: %s", type(exc).__name__)
+            operation = self._mark_reconcile_failed(
+                ctx, operation, upstream_status="unavailable",
+                error_code="LIGHTRAG_UNAVAILABLE",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                detail="LightRAG deletion probe unavailable; document remains deleting",
+            )
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+        if present_ids:
+            operation = self._update_operation_or_replace(
+                ctx, operation, status="pending", upstream_status="present",
+                error_code=None, error_message=None,
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconcile_pending", resource_id=document_id,
+                detail="LightRAG document is still present; document remains deleting",
+            )
+            return self._operation_out(ctx, operation)
+
+        try:
+            _delete_source_file(
+                self._storage_root,
+                tenant_id=ctx.tenant_id,
+                knowledge_space_id=knowledge_space_id,
+                storage_key=doc.storage_key,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("[kb] source cleanup failed: %s", type(exc).__name__)
+            operation = self._mark_reconcile_failed(
+                ctx, operation, upstream_status="source_unavailable",
+                error_code="SOURCE_DELETE_FAILED",
+            )
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                detail="Manager source cleanup failed; document remains deleting",
+            )
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+        if not self._transition_document(
+            ctx, document_id=document_id, expected=("deleting",), status="deleted",
+            error_code=None, error_message=None,
+        ):
+            current = self._doc_repo.get(ctx, document_id=document_id)
+            if current is not None and current.status == "deleted":
+                completed = self._current_delete_operation(
+                    ctx,
+                    knowledge_space_id=knowledge_space_id,
+                    document_id=document_id,
+                    request_fingerprint=fingerprint,
+                    idempotency_key=operation.idempotency_key,
+                )
+                if completed is not None and completed.status == "completed":
+                    return self._operation_out(ctx, completed)
+            self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status="state_conflict", error_code="STATE_CONFLICT",
+                error_message="document changed while deletion was reconciled",
+            )
+            raise Conflict("document changed while deletion was being reconciled")
+
+        updated = self._update_operation(
+            ctx, operation_id=operation.id, status="completed",
+            upstream_status="deleted", error_code=None, error_message=None, completed=True,
+        )
+        if self._operation_repo is not None and updated is None:
+            # The document is already fail-closed as deleted, but do not return
+            # a false durable receipt when its operation row could not update.
+            self._record_audit(
+                ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                detail="delete completion receipt unavailable after source cleanup",
+            )
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        operation = updated or replace(
+            operation, status="completed", upstream_status="deleted",
+            error_code=None, error_message=None, completed_at=datetime.now(timezone.utc),
+        )
+        self._record_audit(
+            ctx, action="knowledge_document_delete_reconciled", resource_id=document_id,
+            detail="LightRAG document absent; source removed and document marked deleted",
+        )
+        return self._operation_out(ctx, operation)
+
     # ─────────────────────────────── 内部 ───────────────────────────────
 
     def _run_reindex(
@@ -518,12 +696,55 @@ class KnowledgeIntakeService:
         idempotency_key: str,
         request_fingerprint: str,
     ) -> KnowledgeOperationRow | None:
-        if self._operation_repo is None:
-            return None
-        row = self._operation_repo.get_by_key(ctx, operation=operation, idempotency_key=idempotency_key)
+        row = None
+        if self._operation_repo is not None:
+            row = self._operation_repo.get_by_key(
+                ctx, operation=operation, idempotency_key=idempotency_key
+            )
+        if row is None:
+            row = self._local_operations.get((operation, idempotency_key))
         if row is not None and row.request_fingerprint != request_fingerprint:
             raise Conflict("idempotency key was already used for a different document operation")
         return row
+
+    def _current_delete_operation(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        request_fingerprint: str,
+        idempotency_key: str | None,
+    ) -> KnowledgeOperationRow | None:
+        if idempotency_key is not None:
+            return self._existing_operation(
+                ctx, operation="delete", idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        row = None
+        if self._operation_repo is not None:
+            getter = getattr(self._operation_repo, "get_latest_by_document", None)
+            if getter is not None:
+                row = getter(
+                    ctx, operation="delete", knowledge_space_id=knowledge_space_id,
+                    document_id=document_id,
+                )
+        if row is None:
+            row = self._local_latest_operations.get(("delete", knowledge_space_id, document_id))
+        if row is not None and row.request_fingerprint != request_fingerprint:
+            raise Conflict("current delete operation does not match this document")
+        return row
+
+    def _remember_operation(self, operation: KnowledgeOperationRow) -> KnowledgeOperationRow:
+        if self._operation_repo is not None and hasattr(
+            self._operation_repo, "get_latest_by_document"
+        ):
+            return operation
+        self._local_operations[(operation.operation, operation.idempotency_key)] = operation
+        self._local_latest_operations[
+            (operation.operation, operation.knowledge_space_id, operation.document_id)
+        ] = operation
+        return operation
 
     def _create_operation(
         self,
@@ -536,27 +757,87 @@ class KnowledgeIntakeService:
         request_fingerprint: str,
     ) -> KnowledgeOperationRow:
         if self._operation_repo is None:
-            # Unit/dev callers that predate lifecycle receipts still execute the
-            # same state machine; production builder always injects this repo.
-            return KnowledgeOperationRow(
+            # Unit/dev callers that predate the lifecycle receipt still execute
+            # the same state machine; production builder always injects this repo.
+            row = KnowledgeOperationRow(
                 id=uuid.uuid4().hex, tenant_id=ctx.tenant_id,
                 knowledge_space_id=knowledge_space_id, document_id=document_id,
                 operation=operation, idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint, status="pending",
             )
-        return self._operation_repo.create(
+            return self._remember_operation(row)
+        return self._remember_operation(self._operation_repo.create(
             ctx,
             knowledge_space_id=knowledge_space_id,
             document_id=document_id,
             operation=operation,
             idempotency_key=idempotency_key,
             request_fingerprint=request_fingerprint,
-        )
+        ))
 
     def _update_operation(self, ctx: TenantContext, **kwargs) -> KnowledgeOperationRow | None:
-        if self._operation_repo is None:
+        if self._operation_repo is not None:
+            updated = self._operation_repo.update(ctx, **kwargs)
+            return self._remember_operation(updated) if updated is not None else None
+        operation_id = kwargs.get("operation_id")
+        row = next(
+            (candidate for candidate in self._local_operations.values() if candidate.id == operation_id),
+            None,
+        )
+        if row is None:
             return None
-        return self._operation_repo.update(ctx, **kwargs)
+        completed = kwargs.get("completed", False)
+        updated = replace(
+            row,
+            status=kwargs["status"],
+            upstream_status=kwargs.get("upstream_status"),
+            error_code=kwargs.get("error_code"),
+            error_message=kwargs.get("error_message"),
+            completed_at=(datetime.now(timezone.utc) if completed else row.completed_at),
+        )
+        return self._remember_operation(updated)
+
+    def _update_operation_or_replace(
+        self, ctx: TenantContext, operation: KnowledgeOperationRow, **kwargs
+    ) -> KnowledgeOperationRow:
+        updated = self._update_operation(ctx, operation_id=operation.id, **kwargs)
+        if updated is not None:
+            return updated
+        if self._operation_repo is not None:
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        completed = kwargs.get("completed", False)
+        return self._remember_operation(replace(
+            operation,
+            status=kwargs["status"],
+            upstream_status=kwargs.get("upstream_status"),
+            error_code=kwargs.get("error_code"),
+            error_message=kwargs.get("error_message"),
+            completed_at=(datetime.now(timezone.utc) if completed else operation.completed_at),
+        ))
+
+    def _mark_reconcile_failed(
+        self,
+        ctx: TenantContext,
+        operation: KnowledgeOperationRow,
+        *,
+        upstream_status: str,
+        error_code: str,
+    ) -> KnowledgeOperationRow:
+        try:
+            updated = self._update_operation(
+                ctx, operation_id=operation.id, status="failed",
+                upstream_status=upstream_status, error_code=error_code,
+                error_message="knowledge deletion unavailable",
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve sanitized upstream error
+            logger.warning("[kb] delete operation update failed: %s", type(exc).__name__)
+            updated = None
+        if updated is not None:
+            return updated
+        return self._remember_operation(replace(
+            operation, status="failed", upstream_status=upstream_status,
+            error_code=error_code, error_message="knowledge deletion unavailable",
+        ))
 
     def _operation_out(
         self, ctx: TenantContext, operation: KnowledgeOperationRow
@@ -823,7 +1104,11 @@ class KnowledgeIntakeService:
         self, ctx: TenantContext, *, knowledge_space_id: str, document_id: str
     ):
         doc = self._doc_repo.get(ctx, document_id=document_id)
-        if doc is None or doc.knowledge_space_id != knowledge_space_id:
+        if (
+            doc is None
+            or doc.tenant_id != ctx.tenant_id
+            or doc.knowledge_space_id != knowledge_space_id
+        ):
             raise NotFound(f"document {document_id!r} not found in knowledge space {knowledge_space_id!r}")
         return doc
 
@@ -880,6 +1165,68 @@ def _result_flag(result: object, field: str) -> bool:
     else:
         value = getattr(result, field, False)
     return value is True
+
+
+def _provided_operation_key(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return _operation_key(value)
+
+
+def _delete_operation_retryable(operation: KnowledgeOperationRow) -> bool:
+    return operation.status == "pending" or (
+        operation.status == "failed"
+        and operation.error_code in _DELETE_RETRYABLE_ERROR_CODES
+    )
+
+
+def _delete_source_file(
+    root: Path,
+    *,
+    tenant_id: str,
+    knowledge_space_id: str,
+    storage_key: str,
+) -> None:
+    """Unlink one Manager source below its tenant/space directory only.
+
+    Directory descriptors with ``O_NOFOLLOW`` prevent a concurrent symlink
+    swap from redirecting the unlink outside the private knowledge root.
+    """
+    if not isinstance(storage_key, str) or not storage_key or "\x00" in storage_key:
+        raise ValueError("invalid knowledge storage key")
+    parts = Path(storage_key).parts
+    tenant = _storage_component(tenant_id, "_legacy")
+    space = _storage_component(knowledge_space_id, "_space")
+    if (
+        Path(storage_key).is_absolute()
+        or len(parts) < 4
+        or parts[:3] != ("knowledge", tenant, space)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ValueError("knowledge source is outside its tenant root")
+
+    root_resolved = root.resolve()
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    current_fd: int | None = None
+    try:
+        current_fd = os.open(root_resolved, flags)
+        for component in parts[:-1]:
+            try:
+                next_fd = os.open(component, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                return
+            os.close(current_fd)
+            current_fd = next_fd
+        try:
+            source_stat = os.stat(parts[-1], dir_fd=current_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError("knowledge source is not a regular file")
+        os.unlink(parts[-1], dir_fd=current_fd)
+    finally:
+        if current_fd is not None:
+            os.close(current_fd)
 
 
 # ─────────────────────────────── 存储 ───────────────────────────────

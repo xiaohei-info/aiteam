@@ -29,6 +29,12 @@ class _FakeIngestion:
     def ingest_text(self, *, workspace, file_source, text):
         return RagIngestionResult(rag_document_id=file_source, chunk_count=1)
 
+    def delete_document(self, *, workspace, doc_ids, delete_file=False, delete_llm_cache=True):
+        return type("Deletion", (), {"deletion_started": True, "busy": False})()
+
+    def document_ids_present(self, *, workspace, doc_ids):
+        return set()
+
 
 def _client(db_url, admin_url=None):
     from shared.app_factory import create_app
@@ -116,6 +122,54 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     r = client.get("/api/manager/knowledge-spaces/ks_default/documents",
                    headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 404
+
+
+def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
+    migrated_db, admin_url, two_tenants
+):
+    tid_a, _ = two_tenants
+    client = _client(migrated_db, admin_url=admin_url)
+    owner = _token(tid_a, ["owner"], user_id="delete-owner", admin_url=admin_url)
+    member = _token(tid_a, ["member"], user_id="delete-member", admin_url=admin_url)
+    auth = {"Authorization": f"Bearer {owner}"}
+    _make_space(client, owner, ks_id="ks_delete", name="Delete")
+    uploaded = client.post(
+        "/api/manager/knowledge-spaces/ks_delete/documents",
+        files={"file": ("delete.txt", b"delete me", "text/plain")}, headers=auth,
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["data"]["id"]
+    deleted = client.delete(
+        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}",
+        headers={**auth, "Idempotency-Key": "delete-1"},
+    )
+    assert deleted.status_code == 202, deleted.text
+    assert deleted.json()["data"]["status"] == "pending"
+    assert deleted.json()["data"]["document_status"] == "deleting"
+
+    member_reconcile = client.post(
+        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        headers={"Authorization": f"Bearer {member}", "Idempotency-Key": "delete-1"},
+    )
+    assert member_reconcile.status_code == 403
+    assert member_reconcile.headers["content-type"].startswith("application/problem+json")
+
+    reconciled = client.post(
+        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        headers={**auth, "Idempotency-Key": "delete-1"},
+    )
+    assert reconciled.status_code == 202, reconciled.text
+    assert reconciled.json()["data"]["status"] == "completed"
+    assert reconciled.json()["data"]["document_status"] == "deleted"
+    assert reconciled.json()["data"]["upstream_status"] == "deleted"
+    assert "delete me" not in reconciled.text
+
+    repeated = client.post(
+        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        headers=auth,
+    )
+    assert repeated.status_code == 202, repeated.text
+    assert repeated.json()["data"]["status"] == "completed"
 
 
 def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, two_tenants):

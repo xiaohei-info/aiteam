@@ -22,9 +22,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 64 * 1024
+_MAX_PROBE_RESPONSE_BYTES = 512 * 1024
 _MAX_REQUEST_TIMEOUT_MS = 30_000
 _MAX_PIPELINE_TIMEOUT_MS = 300_000
 _MAX_POLL_INTERVAL_MS = 10_000
+_MAX_PAGINATED_PAGES = 32
+_MAX_PAGINATED_PAGE_SIZE = 200
+_MAX_PROBE_ID_CHARS = 1_024
 
 
 class RagIngestionUnavailable(RuntimeError):
@@ -103,16 +107,23 @@ class RagIngestionPort(Protocol):
         delete_llm_cache: bool,
     ) -> RagDeletionResult: ...
 
+    def document_ids_present(self, *, workspace: str, doc_ids: list[str]) -> set[str]: ...
 
-def _response_json(response: httpx.Response) -> dict[str, Any]:
-    if len(response.content) > _MAX_RESPONSE_BYTES:
-        raise RagIngestionUnavailable("knowledge indexing unavailable")
+
+def _response_json(
+    response: httpx.Response,
+    *,
+    max_bytes: int = _MAX_RESPONSE_BYTES,
+    unavailable_message: str = "knowledge indexing unavailable",
+) -> dict[str, Any]:
+    if len(response.content) > max_bytes:
+        raise RagIngestionUnavailable(unavailable_message)
     try:
         payload = response.json()
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
+        raise RagIngestionUnavailable(unavailable_message) from exc
     if not isinstance(payload, dict):
-        raise RagIngestionUnavailable("knowledge indexing unavailable")
+        raise RagIngestionUnavailable(unavailable_message)
     return payload
 
 
@@ -247,6 +258,153 @@ class LightRagIngestionClient:
             raise
         except (httpx.HTTPError, ValueError, TypeError, UnicodeError) as exc:
             logger.warning("LightRAG deletion request failed: %s", type(exc).__name__)
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+    def document_ids_present(self, *, workspace: str, doc_ids: list[str]) -> set[str]:
+        """Return requested LightRAG ids still present, using a bounded page walk.
+
+        LightRAG 1.5.6 has no deletion receipt.  This deliberately reads only
+        the opaque ``id`` and stable ``file_path`` aliases from its paginated
+        document listing; all malformed or unbounded responses fail closed.
+        """
+        settings = self.settings
+        if not isinstance(doc_ids, list):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        if any(not isinstance(doc_id, str) for doc_id in doc_ids):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        requested = set(doc_ids)
+        if (
+            settings is None
+            or not isinstance(workspace, str)
+            or not workspace.strip()
+            or not requested
+            or len(doc_ids) > _MAX_PAGINATED_PAGE_SIZE
+            or len(requested) > _MAX_PAGINATED_PAGE_SIZE
+            or any(
+                not isinstance(doc_id, str)
+                or not doc_id
+                or len(doc_id) > _MAX_PROBE_ID_CHARS
+                or doc_id != doc_id.strip()
+                or any(char in doc_id for char in "\x00\r\n")
+                for doc_id in requested
+            )
+        ):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        instance = self.instance_for_workspace(workspace)
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        timeout = settings.request_timeout_ms / 1000
+        present: set[str] = set()
+        page = 1
+        try:
+            while True:
+                if page > _MAX_PAGINATED_PAGES:
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                response = self._http.post(
+                    f"{instance.url}/documents/paginated",
+                    headers=headers,
+                    json={
+                        "page": page,
+                        "page_size": _MAX_PAGINATED_PAGE_SIZE,
+                        "sort_field": "created_at",
+                        "sort_direction": "desc",
+                    },
+                    timeout=timeout,
+                )
+                if response.status_code != 200:
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                payload = _response_json(
+                    response,
+                    max_bytes=_MAX_PROBE_RESPONSE_BYTES,
+                    unavailable_message="knowledge deletion unavailable",
+                )
+                documents = payload.get("documents")
+                pagination = payload.get("pagination")
+                if not isinstance(documents, list) or not isinstance(pagination, dict):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                response_page = pagination.get("page")
+                if response_page is not None and (
+                    not isinstance(response_page, int)
+                    or isinstance(response_page, bool)
+                    or response_page != page
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                response_page_size = pagination.get("page_size", _MAX_PAGINATED_PAGE_SIZE)
+                if (
+                    not isinstance(response_page_size, int)
+                    or isinstance(response_page_size, bool)
+                    or response_page_size < 1
+                    or response_page_size > _MAX_PAGINATED_PAGE_SIZE
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                if len(documents) > response_page_size:
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                for document in documents:
+                    if not isinstance(document, dict):
+                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    aliases: list[str] = []
+                    for field_name in ("id", "file_path"):
+                        value = document.get(field_name)
+                        if value is None:
+                            continue
+                        if (
+                            not isinstance(value, str)
+                            or not value
+                            or value != value.strip()
+                            or len(value) > _MAX_PROBE_ID_CHARS
+                            or any(char in value for char in "\x00\r\n")
+                        ):
+                            raise RagIngestionUnavailable("knowledge deletion unavailable")
+                        aliases.append(value)
+                    if not aliases:
+                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    present.update(alias for alias in aliases if alias in requested)
+
+                total_pages = pagination.get("total_pages")
+                if total_pages is not None and (
+                    not isinstance(total_pages, int)
+                    or isinstance(total_pages, bool)
+                    or total_pages < 0
+                    or total_pages > _MAX_PAGINATED_PAGES
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                total_count = pagination.get("total_count")
+                if total_count is not None and (
+                    not isinstance(total_count, int)
+                    or isinstance(total_count, bool)
+                    or total_count < 0
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                has_next = pagination.get("has_next")
+                if has_next is not None and not isinstance(has_next, bool):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                if total_pages is not None and total_count is not None:
+                    expected_pages = (
+                        0 if total_count == 0
+                        else (total_count + response_page_size - 1) // response_page_size
+                    )
+                    if total_pages != expected_pages:
+                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                if total_pages is not None:
+                    more = page < total_pages
+                    if has_next is not None and has_next != more:
+                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                elif total_count is not None:
+                    more = page * response_page_size < total_count
+                    if has_next is not None and has_next != more:
+                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                elif has_next is not None:
+                    more = has_next
+                else:
+                    more = len(documents) == response_page_size
+                if page == _MAX_PAGINATED_PAGES and more:
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                if present == requested or not more:
+                    return present
+                page += 1
+        except RagIngestionUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
+            logger.warning("LightRAG document probe failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
 
     def _wait_until_ready(

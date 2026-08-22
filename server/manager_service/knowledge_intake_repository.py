@@ -12,7 +12,6 @@ RLS 强制跨租户隔离。
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -565,6 +564,24 @@ class KnowledgeOperationRepository:
                 "SELECT " + _OPERATION_COLUMNS + " FROM knowledge_document_operation "
                 "WHERE operation = %s AND idempotency_key = %s",
                 (operation, idempotency_key),
+            ).fetchone()
+        return _row_to_operation(row) if row is not None else None
+
+    def get_latest_by_document(
+        self,
+        ctx: TenantContext,
+        *,
+        operation: str,
+        knowledge_space_id: str,
+        document_id: str,
+    ) -> KnowledgeOperationRow | None:
+        """Return the newest operation for one tenant-scoped document."""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _OPERATION_COLUMNS + " FROM knowledge_document_operation "
+                "WHERE operation = %s AND knowledge_space_id = %s AND document_id = %s "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (operation, knowledge_space_id, document_id),
             ).fetchone()
         return _row_to_operation(row) if row is not None else None
 

@@ -15,8 +15,6 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, File, Header, Request, UploadFile, status
-from fastapi.responses import Response
-
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
@@ -176,6 +174,32 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         except RagDeletionBusy:
             # busy is a retryable upstream state, not a successful deletion.
             raise
+        except RagIngestionUnavailable as exc:
+            raise _KnowledgeUpstreamUnavailable() from exc
+        return Envelope[KnowledgeDocumentOperationOut](data=operation)
+
+    @router.post(
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/documents/{document_id}/reconcile-delete",
+        summary="核对 LightRAG 删除完成并安全清理源文档（受控重试）",
+        operation_id="manager_knowledge_intake_reconcile_delete",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def reconcile_delete_document(
+        knowledge_space_id: str,
+        document_id: str,
+        request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[KnowledgeDocumentOperationOut]:
+        svc = _service(request)
+        try:
+            operation = await asyncio.to_thread(
+                svc.reconcile_delete,
+                tenant_context_from(claims),
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                idempotency_key=idempotency_key,
+            )
         except RagIngestionUnavailable as exc:
             raise _KnowledgeUpstreamUnavailable() from exc
         return Envelope[KnowledgeDocumentOperationOut](data=operation)

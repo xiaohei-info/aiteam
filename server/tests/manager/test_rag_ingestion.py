@@ -254,3 +254,79 @@ def test_ingestion_rejects_bad_pipeline_response():
             client.ingest_text(workspace="derived", file_source="doc-1", text="hello")
     finally:
         client.close()
+
+
+def test_document_probe_reports_absent_ids_without_returning_upstream_fields():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return httpx.Response(200, json={
+            "documents": [{"id": "other", "file_path": "other-source", "content": "secret"}],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        assert client.document_ids_present(workspace="derived", doc_ids=["doc-1"]) == set()
+    finally:
+        client.close()
+    assert seen[0].url.path == "/documents/paginated"
+    assert json.loads(seen[0].content) == {
+        "page": 1, "page_size": 200, "sort_field": "created_at", "sort_direction": "desc",
+    }
+
+
+def test_document_probe_matches_id_or_file_path():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [{"id": "opaque-id", "file_path": "doc-1"}],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })),
+    )
+    try:
+        assert client.document_ids_present(
+            workspace="derived", doc_ids=["doc-1", "missing"]
+        ) == {"doc-1"}
+    finally:
+        client.close()
+
+
+def test_document_probe_rejects_malformed_document_or_pagination():
+    responses = [
+        {"documents": [{"status": "processed"}], "pagination": {"page": 1, "total_pages": 1}},
+        {"documents": [], "pagination": {"page": 1, "page_size": 200, "total_pages": 33}},
+    ]
+
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json=responses.pop(0))
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.document_ids_present(workspace="derived", doc_ids=["doc-1"])
+        with pytest.raises(RagIngestionUnavailable):
+            client.document_ids_present(workspace="derived", doc_ids=["doc-1"])
+    finally:
+        client.close()
+
+
+def test_document_probe_walks_bounded_pagination():
+    seen_pages: list[int] = []
+
+    def handler(request: httpx.Request):
+        body = json.loads(request.content)
+        seen_pages.append(body["page"])
+        page = body["page"]
+        return httpx.Response(200, json={
+            "documents": ([{"id": "doc-1", "file_path": "doc-1"}] if page == 2 else []),
+            "pagination": {"page": page, "page_size": 200, "total_count": 201, "total_pages": 2},
+        })
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        assert client.document_ids_present(workspace="derived", doc_ids=["doc-1"]) == {"doc-1"}
+    finally:
+        client.close()
+    assert seen_pages == [1, 2]
