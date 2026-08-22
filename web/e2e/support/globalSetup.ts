@@ -136,6 +136,30 @@ async function loginTier(tier: Tier, tenantId?: string): Promise<{ token: string
   }
 }
 
+/** Sync the Agent's local authorized projections before conversation specs run. */
+async function syncAgentProjection(
+  tenantId: string | undefined,
+  login: { token: string; claims?: Record<string, unknown> },
+): Promise<void> {
+  const memberId = login.claims?.user_id;
+  if (!tenantId || typeof memberId !== "string" || !memberId) {
+    throw new Error("Agent E2E login must expose tenant_id and claims.user_id for grant sync");
+  }
+  const ctx = await request.newContext({ baseURL: TIER_API_ORIGIN.agent });
+  try {
+    const response = await ctx.post("/api/agent/grants/sync", {
+      headers: { Authorization: `Bearer ${login.token}` },
+      data: { tenant_id: tenantId, member_id: memberId, known_versions: {} },
+      failOnStatusCode: false,
+    });
+    if (!response.ok()) {
+      throw new Error(`Agent grant sync failed: ${response.status()} ${await response.text()}`);
+    }
+  } finally {
+    await ctx.dispose();
+  }
+}
+
 /** 写某 tier 的 storageState 文件（只持久化 token + agent claims）。 */
 function writeStorageState(tier: Tier, token: string, claims?: Record<string, unknown>): void {
   const origin = TIER_BASE_URL[tier];
@@ -189,6 +213,10 @@ export default async function globalSetup(): Promise<void> {
       const result = await loginTier(tier, seed?.tenant_id);
       if (result?.token) {
         writeStorageState(tier, result.token, result.claims);
+        if (tier === "agent") {
+          await syncAgentProjection(seed?.tenant_id, result);
+          console.log("[globalSetup] agent grants projection 已同步");
+        }
         console.log(`[globalSetup] ${tier} storageState 已产出`);
       }
     }),
