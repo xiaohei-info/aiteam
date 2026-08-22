@@ -73,6 +73,37 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
   }
 });
 
+test("Agent group creation binds an authorized coordinator and rejects cross-roster input", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  fixture.store.replaceProjections([
+    { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: now },
+    { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: now },
+  ], [{ solution_instance_id: "solution-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: "Solution", expert_employee_ids: ["worker"] }], [
+    { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord-snapshot", display_name: "Coordinator" },
+    { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "worker-snapshot", display_name: "Worker" },
+  ]);
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const unauthorized = await fetch(`${base}/api/agent/conversations`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ kind: "group", coordinator_employee_id: "coordinator", solution_instance_id: "solution-1" }) });
+    assert.equal(unauthorized.status, 403);
+    assert.equal((await unauthorized.json() as { code: string }).code, "coordinator_not_authorized");
+    const created = await fetch(`${base}/api/agent/conversations`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ kind: "group", solution_instance_id: "solution-1" }) });
+    assert.equal(created.status, 201);
+    const metadata = (await created.json() as { data: { coordinator_employee_id: string; kind: string; solution_instance_id: string } }).data;
+    assert.equal(metadata.kind, "group");
+    assert.equal(metadata.coordinator_employee_id, "worker");
+    assert.equal(metadata.solution_instance_id, "solution-1");
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent prompt resolves only owned image attachment IDs into Pi", async () => {
   const fixture = await createFixture();
   fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);

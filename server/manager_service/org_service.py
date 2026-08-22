@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import NotFound
+from shared.errors import Forbidden, NotFound
+
+_ORG_WRITE_ROLES = frozenset({"owner", "enterprise_admin"})
 
 
 class OrgService:
@@ -68,6 +70,8 @@ class OrgService:
 
     def update_assignment(self, ctx: TenantContext, employee_id: str, department_id: str) -> dict:
         """调整员工部门归属。"""
+        if not set(ctx.roles) & _ORG_WRITE_ROLES:
+            raise Forbidden("organization assignment requires owner or enterprise_admin")
         with self._router.session(ctx) as s:
             # 验证部门存在
             dept = s.execute("SELECT id FROM department WHERE id = %s", (department_id,)).fetchone()

@@ -28,6 +28,18 @@ export interface AuthorizedConfig {
   skill_signing_keys?: SkillSigningKeyMetadata[];
 }
 
+export interface MarketplaceTemplate {
+  template_id: string;
+  display_name: string;
+  category: string;
+  model_name: string;
+  skills_count: number;
+  recruit_count: number;
+  is_recruited: boolean;
+  tags: string[];
+  avatar_url: string | null;
+}
+
 export interface ManagerAuthInput {
   tenant_id: string;
   account: string;
@@ -51,7 +63,8 @@ export interface ManagerClient {
   pullKnowledgeArtifacts?(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<{ artifacts: KnowledgeArtifact[]; authoritative: boolean }>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
-  memoryDelete?(caller: AuthenticatedCaller, memoryId: string): Promise<void>;
+  listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
+  memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
@@ -151,8 +164,15 @@ export class HttpManagerClient implements ManagerClient {
     return this.unwrap(response);
   }
 
-  async memoryDelete(caller: AuthenticatedCaller, memoryId: string): Promise<void> {
-    await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, undefined, "DELETE");
+  async listMarketplaceTemplates(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]> {
+    const response = await this.request("/api/manager/recruit/catalog/experts", caller);
+    const value = this.unwrap(response);
+    if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace catalog");
+    return value.map(normalizeMarketplaceTemplate);
+  }
+
+  async memoryDelete(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void> {
+    await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, { employee_id: employeeId }, "DELETE", idempotencyKey);
   }
 
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
@@ -202,7 +222,10 @@ export class HttpManagerClient implements ManagerClient {
     } catch (error) {
       throw new ManagerUnavailableError("Manager request failed", { cause: error });
     }
-    if (!response.ok) throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
+      throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
+    }
     return response;
   }
 
@@ -217,6 +240,13 @@ export class ManagerUnavailableError extends Error {
   constructor(message = "Manager is unavailable", options?: { cause?: unknown }) {
     super(message, options);
     this.name = "ManagerUnavailableError";
+  }
+}
+
+export class ManagerAuthorizationError extends ManagerUnavailableError {
+  constructor(readonly status: 401 | 403) {
+    super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied");
+    this.name = "ManagerAuthorizationError";
   }
 }
 
@@ -337,6 +367,25 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
     model_policy: modelPolicy,
     tools: stringArray(raw.tools),
     skills: stringArray(raw.skills ?? raw.skill_refs),
+  };
+}
+
+function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.template_id !== "string" || raw.template_id.length === 0 || raw.template_id.length > 256) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
+  const skills = stringArray(raw.skill_ids);
+  const tags = stringArray(raw.tags);
+  return {
+    template_id: raw.template_id,
+    display_name: typeof raw.display_name === "string" ? raw.display_name : raw.template_id,
+    category: typeof raw.category === "string" ? raw.category : "",
+    model_name: typeof raw.default_model === "string" ? raw.default_model : "",
+    skills_count: typeof raw.skills_count === "number" && Number.isInteger(raw.skills_count) && raw.skills_count >= 0 ? raw.skills_count : skills.length,
+    recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : 0,
+    is_recruited: raw.is_recruited === true,
+    tags,
+    avatar_url: typeof raw.avatar_url === "string" && raw.avatar_url.length > 0 ? raw.avatar_url : null,
   };
 }
 

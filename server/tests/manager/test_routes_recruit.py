@@ -216,6 +216,18 @@ def test_browse_experts_happy():
     assert r.json()["data"][0]["template_id"] == "tpl-1"
 
 
+def test_browse_experts_operator_outage_is_bounded_503():
+    class OfflineCatalog:
+        def list_expert_templates(self):
+            raise TimeoutError("operator offline")
+
+    c = _client(None)
+    c.app.state._operator_catalog = OfflineCatalog()
+    r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
+    assert r.status_code == 503
+    assert r.json()["code"] == "operator_unavailable"
+
+
 def test_browse_solutions_happy():
     from shared.contracts.crosstier import SolutionPackage
     from shared.contracts.crosstier import SolutionPackage

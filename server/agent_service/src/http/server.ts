@@ -7,7 +7,7 @@ import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, type ManagerClient } from "../manager-client.js";
+import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, normalizeKnowledgeArtifact, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEvent } from "../pi/event-sse.js";
 import type { ConversationState, KnowledgeArtifact, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
@@ -147,12 +147,12 @@ export class AgentHttpServer {
       if (platformRoute === "sync" && request.method === "POST") return await this.syncGrants(request, response, caller);
       if (platformRoute === "outbox" && request.method === "GET") return this.listOutbox(response, caller);
       if (platformRoute === "usage-flush" && request.method === "POST") return await this.flushUsage(request, response, caller);
-      if (platformRoute === "marketplace" && request.method === "GET") return this.listMarketplaceTemplates(response);
+      if (platformRoute === "marketplace" && request.method === "GET") return await this.listMarketplaceTemplates(response, caller, url.pathname);
       if (platformRoute === "knowledge-bases" && request.method === "GET") return this.listKnowledgeBases(response);
       if (platformRoute === "knowledge-read" && request.method === "GET") return this.listKnowledgeReadModel(response);
       if (platformRoute === "org" && request.method === "GET") return await this.orgTree(response, caller);
       if (platformRoute === "office-scene" && request.method === "GET") return this.officeScene(response, caller);
-      if (platformRoute === "office-feed" && request.method === "GET") return this.officeFeed(response);
+      if (platformRoute === "office-feed" && request.method === "GET") return this.officeFeed(response, caller);
 
       if (!route) throw new HttpProblem(405, "method_not_allowed", "Method not allowed");
       if (route.action === "events" && request.method === "GET") {
@@ -254,19 +254,48 @@ export class AgentHttpServer {
     const title = body.title === undefined || body.title === null ? null : this.stringField(body.title, "title", 200);
     const kind = body.kind === undefined ? "chat" : this.stringField(body.kind, "kind", 64);
     const labels = body.labels === undefined ? [] : this.stringArray(body.labels, "labels", 32);
+    const entryEmployeeId = this.optionalString(body.entry_employee_id, "entry_employee_id");
+    let coordinatorEmployeeId = this.optionalString(body.coordinator_employee_id, "coordinator_employee_id");
+    const solutionRef = this.optionalString(body.solution_instance_id, "solution_instance_id");
+    const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
-    if (this.options.store.getConversationMetadata(id)) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
+    const existing = this.options.store.getConversationMetadata(id);
+    if (existing) {
+      if (existing.tenant_id === caller.tenantId && existing.member_id === memberId) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
+      throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    }
+    if (kind === "group") {
+      if (entryEmployeeId) throw new HttpProblem(422, "invalid_group_employee", "Group conversations use coordinator_employee_id");
+      const solution = solutionRef ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === solutionRef) : undefined;
+      if (solutionRef && !solution) throw new HttpProblem(403, "solution_not_authorized", "Solution is not authorized locally");
+      const solutionRoster = solution && Array.isArray(solution.expert_employee_ids)
+        ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+        : [];
+      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
+      if (!coordinatorEmployeeId) throw new HttpProblem(403, "coordinator_not_authorized", "No authorized employee is available as coordinator");
+      if (solutionRoster.length > 0 && !solutionRoster.includes(coordinatorEmployeeId)) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator is not in the authorized solution roster");
+      this.requireAuthorizedEmployee(coordinatorEmployeeId, caller);
+    } else {
+      if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
+      if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
+    }
     let schedule = null;
     if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
     const metadata = this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
-      entryEmployeeId: this.optionalString(body.entry_employee_id, "entry_employee_id"),
-      coordinatorEmployeeId: this.optionalString(body.coordinator_employee_id, "coordinator_employee_id"),
-      solutionRef: this.optionalString(body.solution_instance_id, "solution_instance_id"),
+      entryEmployeeId, coordinatorEmployeeId, solutionRef,
       tenantId: caller.tenantId,
-      memberId: caller.userId ?? caller.callerId,
+      memberId,
     });
     this.writeJson(response, 201, { data: metadata });
+  }
+
+  private requireAuthorizedEmployee(employeeId: string, caller: AuthenticatedCaller): void {
+    const memberId = caller.userId ?? caller.callerId;
+    const expert = this.options.store.listLoadedExperts(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && !item.revoked);
+    if (!expert || !this.options.store.listSnapshots(caller.tenantId, memberId).some((snapshot) => snapshot.employee_id === employeeId && snapshot.version === expert.version)) {
+      throw new HttpProblem(403, "employee_not_authorized", "Employee is not authorized locally");
+    }
   }
 
   private requireOwnedConversation(conversationId: string, caller: AuthenticatedCaller): void {
@@ -323,9 +352,26 @@ export class AgentHttpServer {
 
   private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
-  private listMarketplaceTemplates(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
-  private listKnowledgeBases(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
-  private listKnowledgeReadModel(response: ServerResponse): void { this.writeJson(response, 200, { data: [], page: { next_cursor: null, has_more: false } }); }
+  private async listMarketplaceTemplates(response: ServerResponse, caller: AuthenticatedCaller, pathname: string): Promise<void> {
+    if (!this.options.managerClient?.listMarketplaceTemplates) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");
+    let templates: MarketplaceTemplate[];
+    try {
+      templates = await this.options.managerClient.listMarketplaceTemplates(caller);
+    } catch (error) {
+      if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
+      if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");
+      throw error;
+    }
+    const detailId = pathname.match(/^\/api\/agent\/marketplace\/templates\/([^/]+)$/)?.[1];
+    if (detailId) {
+      const template = templates.find((item) => item.template_id === decodeURIComponent(detailId));
+      if (!template) throw new HttpProblem(404, "marketplace_template_not_found", "Marketplace template not found");
+      return this.writeJson(response, 200, { data: template });
+    }
+    this.writeJson(response, 200, { data: templates, page: { next_cursor: null, has_more: false } });
+  }
+  private listKnowledgeBases(response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools"); }
+  private listKnowledgeReadModel(response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge read endpoints were removed; use the Pi knowledge tools"); }
   private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
 
@@ -335,6 +381,7 @@ export class AgentHttpServer {
     const limit = body.limit === undefined ? 50 : Number(body.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpProblem(422, "invalid_limit", "limit must be an integer between 1 and 100");
     const result = await this.options.usageFlush.flush(caller, limit);
+    if (result.failed.length > 0) throw new HttpProblem(503, "manager_unavailable", "Manager usage upload is unavailable", { failed: result.failed, sent: result.sent });
     this.writeJson(response, 200, { data: result });
   }
 
@@ -392,6 +439,7 @@ export class AgentHttpServer {
       }
       this.writeJson(response, 200, { data: { ok: true, ...result, ...(knowledge ? { knowledge } : {}) } });
     } catch (error) {
+      if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
       throw error;
     }
@@ -420,16 +468,47 @@ export class AgentHttpServer {
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient) throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable");
     try { this.writeJson(response, 200, { data: await this.options.managerClient.getOrgTree(caller) }); }
-    catch { throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable"); }
+    catch (error) {
+      if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
+      throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable");
+    }
   }
 
   private officeScene(response: ServerResponse, caller: AuthenticatedCaller): void {
-    const employees = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ employee_id: expert.employee_id, display_name: expert.display_name, status: expert.revoked ? "offline" : "ready", task: null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null }));
-    const summary = { total: employees.length, working: 0, ready: employees.filter((employee) => employee.status === "ready").length, offline: employees.filter((employee) => employee.status === "offline").length };
+    const memberId = caller.userId ?? caller.callerId;
+    const conversations = this.options.store.listConversations(100, undefined, caller.tenantId, memberId).items;
+    const taskByEmployee = new Map<string, { title: string; conversation_id: string }>();
+    for (const conversation of conversations) {
+      const employeeId = conversation.entry_employee_id ?? conversation.coordinator_employee_id;
+      if (!employeeId || taskByEmployee.has(employeeId)) continue;
+      if (conversation.state === "active" || conversation.state === "draft") {
+        taskByEmployee.set(employeeId, { title: conversation.title || (conversation.kind === "task" ? "Task" : "Conversation"), conversation_id: conversation.id });
+      }
+    }
+    const employees = this.options.store.listLoadedExperts(caller.tenantId, memberId, true).map((expert) => {
+      const task = taskByEmployee.get(expert.employee_id);
+      const conversation = task ? conversations.find((item) => item.id === task.conversation_id) : undefined;
+      const status = expert.revoked || ["paused", "muted", "archived"].includes(conversation?.state ?? "")
+        ? "offline"
+        : task && this.options.host.isPrompting(task.conversation_id) ? "working" : "ready";
+      return { employee_id: expert.employee_id, display_name: expert.display_name, status, task: status === "working" ? task?.title ?? null : null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null };
+    });
+    const summary = {
+      total: employees.length,
+      working: employees.filter((employee) => employee.status === "working").length,
+      ready: employees.filter((employee) => employee.status === "ready").length,
+      offline: employees.filter((employee) => employee.status === "offline").length,
+    };
     this.writeJson(response, 200, { data: { employees, summary } });
   }
 
-  private officeFeed(response: ServerResponse): void { this.writeJson(response, 200, { data: { events: [] } }); }
+  private officeFeed(response: ServerResponse, caller: AuthenticatedCaller): void {
+    const memberId = caller.userId ?? caller.callerId;
+    const events = this.options.store.listScheduledConversations()
+      .filter((conversation) => conversation.tenantId === caller.tenantId && conversation.memberId === memberId)
+      .map((conversation) => ({ type: "conversation_schedule", conversation_id: conversation.id, title: conversation.title ?? conversation.id, schedule: conversation.schedule }));
+    this.writeJson(response, 200, { data: { events } });
+  }
 
   private stringField(value: unknown, name: string, max: number): string { if (typeof value !== "string" || value.length === 0 || value.length > max) throw new HttpProblem(422, `invalid_${name}`, `${name} must be a non-empty string <= ${max} characters`); return value; }
   private optionalString(value: unknown, name: string): string | null { if (value === undefined || value === null) return null; return this.stringField(value, name, 256); }
@@ -455,6 +534,7 @@ export class AgentHttpServer {
     const attachmentIds = payload.attachment_ids === undefined ? [] : this.stringArray(payload.attachment_ids, "attachment_ids", MAX_PROMPT_IMAGES);
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
+    if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
@@ -513,7 +593,8 @@ export class AgentHttpServer {
       if (!started) return pending.push(envelope), undefined;
       if (!response.writableEnded) {
         const event = serializePiEvent(envelope.event, {
-          ...(envelope.source_ref ? { conversation_id: envelope.conversation_id, source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id } : {}),
+          conversation_id: envelope.conversation_id ?? conversationId,
+          ...(envelope.source_ref ? { source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id } : {}),
         });
         if (!event) return;
         response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
@@ -714,6 +795,7 @@ export class AgentHttpServer {
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
     else if (error instanceof InvalidEventCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
+    else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }
@@ -775,13 +857,14 @@ const OPENAPI = {
     "/api/agent/grants/readiness": { get: { operationId: "grantsReadiness", responses: { "200": { description: "Readiness" } } } },
     "/api/agent/grants/experts/{employee_id}/readiness": { get: { operationId: "expertReadiness", parameters: [{ name: "employee_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Readiness" } } } },
     "/api/agent/grants/sync": { post: { operationId: "syncGrants", responses: { "200": { description: "Sync result" }, "503": { description: "Manager unavailable" } } } },
-    "/api/agent/usage/outbox": { get: { operationId: "listUsageOutbox", responses: { "200": { description: "Usage summaries" } } } },
+    "/api/agent/usage/outbox": { get: { operationId: "listUsageOutbox", responses: { "200": { description: "Usage summaries", content: { "application/json": { schema: { $ref: "#/components/schemas/UsageOutboxListEnvelope" } } } } } } },
     "/api/agent/usage/flush": { post: { operationId: "flushUsage", responses: { "200": { description: "Usage flush result" }, "503": { description: "Manager unavailable" } } } },
-    "/api/agent/marketplace/templates": { get: { operationId: "listMarketplaceTemplates", responses: { "200": { description: "Read-only catalog projection" } } } },
-    "/api/agent/knowledge-bases": { get: { operationId: "listKnowledgeBases", responses: { "200": { description: "Read-only knowledge projection" } } } },
+    "/api/agent/marketplace/templates": { get: { operationId: "listMarketplaceTemplates", responses: { "200": { description: "Manager-backed catalog projection", content: { "application/json": { schema: { $ref: "#/components/schemas/MarketplaceTemplateListEnvelope" } } } }, "503": { $ref: "#/components/responses/ManagerUnavailable" } } } },
+    "/api/agent/marketplace/templates/{template_id}": { get: { operationId: "getMarketplaceTemplate", parameters: [{ name: "template_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Manager-backed catalog template", content: { "application/json": { schema: { $ref: "#/components/schemas/MarketplaceTemplateEnvelope" } } } }, "404": { $ref: "#/components/responses/NotFound" }, "503": { $ref: "#/components/responses/ManagerUnavailable" } } } },
+    "/api/agent/knowledge-bases": { get: { operationId: "listKnowledgeBases", responses: { "410": { description: "Removed; use Pi knowledge tools" } } } },
     "/api/agent/org/tree":  { get: { operationId: "orgTree", responses: { "200": { description: "Organization tree" } } } },
     "/api/agent/office/scene": { get: { operationId: "officeScene", responses: { "200": { description: "Office scene" } } } },
-    "/api/agent/office/feed": { get: { operationId: "officeFeed", responses: { "200": { description: "Office feed" } } } },
+    "/api/agent/office/feed": { get: { operationId: "officeFeed", responses: { "200": { description: "Conversation schedule projection" } } } },
   },
   components: {
     schemas: {
@@ -793,6 +876,12 @@ const OPENAPI = {
       LocalFileEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/LocalFileMetadata" } } },
       LocalFileListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/LocalFileMetadata" } }, page: { type: "object", properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
       LocalFileDeleteEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["deleted", "id"], properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } },
+      MarketplaceTemplate: { type: "object", required: ["template_id", "display_name", "category", "model_name", "skills_count", "recruit_count", "is_recruited", "tags", "avatar_url"], properties: { template_id: { type: "string" }, display_name: { type: "string" }, category: { type: "string" }, model_name: { type: "string" }, skills_count: { type: "integer", minimum: 0 }, recruit_count: { type: "integer", minimum: 0 }, is_recruited: { type: "boolean" }, tags: { type: "array", items: { type: "string" } }, avatar_url: { type: ["string", "null"] } } },
+      MarketplaceTemplateEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/MarketplaceTemplate" } } },
+      MarketplaceTemplateListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/MarketplaceTemplate" } }, page: { type: "object", required: ["next_cursor", "has_more"], properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
+      UsageSummary: { type: "object", required: ["schema_version", "summary_id", "tenant_id", "member_id", "employee_id", "window_start", "window_end", "prompt_count", "settled_count", "error_count", "input_tokens", "output_tokens", "cache_tokens", "cost_minor", "currency", "duration_ms_total"], properties: { schema_version: { const: "1" }, summary_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, employee_id: { type: "string" }, window_start: { type: "string", format: "date-time" }, window_end: { type: "string", format: "date-time" }, prompt_count: { type: "integer", minimum: 0 }, settled_count: { type: "integer", minimum: 0 }, error_count: { type: "integer", minimum: 0 }, input_tokens: { type: "integer", minimum: 0 }, output_tokens: { type: "integer", minimum: 0 }, cache_tokens: { type: "integer", minimum: 0 }, cost_minor: { type: "integer", minimum: 0 }, currency: { const: "USD" }, duration_ms_total: { type: "integer", minimum: 0 } } },
+      UsageOutboxItem: { type: "object", required: ["summary_id", "tenant_id", "member_id", "kind", "status", "attempts", "last_error", "created_at"], properties: { summary_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, kind: { type: "string" }, status: { type: "string" }, attempts: { type: "integer", minimum: 0 }, last_error: { type: ["string", "null"] }, created_at: { type: "string", format: "date-time" }, payload: { $ref: "#/components/schemas/UsageSummary" } } },
+      UsageOutboxListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/UsageOutboxItem" } }, page: { type: "object", required: ["next_cursor", "has_more"], properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
       Problem: { type: "object", required: ["type", "title", "status", "code", "detail", "instance", "request_id"], properties: { type: { type: "string" }, title: { type: "string" }, status: { type: "integer" }, code: { type: "string" }, detail: { type: "string" }, instance: { type: "string" }, request_id: { type: "string" } } },
     },
     responses: {
@@ -800,6 +889,7 @@ const OPENAPI = {
       NotFound: { description: "Conversation or file not found", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
       TooLarge: { description: "File or request exceeds a limit", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
       ValidationError: { description: "Validation error", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+      ManagerUnavailable: { description: "Manager-backed capability is unavailable", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
     },
   },
 };

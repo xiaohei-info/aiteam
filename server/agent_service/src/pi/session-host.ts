@@ -11,6 +11,7 @@ import {
   type AgentSessionEvent,
   type ResourceLoader,
   type ToolDefinition,
+  type SessionEntry,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -53,6 +54,7 @@ export interface SessionAuthorization {
   employeeId: string;
   snapshot: FrozenSnapshot;
   mentionedEmployeeIds?: ReadonlySet<string>;
+  rosterEmployeeIds?: ReadonlySet<string>;
   managerClient?: ManagerClient;
   runtimeProviderId?: string;
   runtimeScope?: string;
@@ -101,8 +103,10 @@ interface SessionRecord {
   aborting: boolean;
   delegateCalls: number;
   delegatePromptChars: number;
+  delegatedEntries: SessionEntry[];
   activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
+  eventSequence: number;
   runtimeProviderId?: string;
   hindsightWorkspaces: Set<string>;
   disposing?: Promise<void>;
@@ -170,6 +174,7 @@ export class SessionHost {
     record.aborting = false;
     record.delegateCalls = 0;
     record.delegatePromptChars = 0;
+    record.delegatedEntries = [];
 
     try {
       const authorization = caller ? this.resolveAuthorization(record, caller, mentions ?? []) : undefined;
@@ -278,7 +283,7 @@ export class SessionHost {
       employeeId,
       startedAt,
       endedAt: Date.now(),
-      entries: record.sessionManager.getEntries().slice(entriesBefore),
+      entries: [...record.sessionManager.getEntries().slice(entriesBefore), ...record.delegatedEntries],
       settled,
     });
   }
@@ -317,8 +322,10 @@ export class SessionHost {
       aborting: false,
       delegateCalls: 0,
       delegatePromptChars: 0,
+      delegatedEntries: [],
       activeDelegates: new Set(),
       listeners: new Set(),
+      eventSequence: 0,
       hindsightWorkspaces: new Set([workspace]),
     };
     this.records.set(conversationId, record);
@@ -409,14 +416,28 @@ export class SessionHost {
     if (metadata?.member_id && metadata.member_id !== memberId) throw new SessionAuthorizationError();
     const employeeId = metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
     if (!employeeId) throw new SessionAuthorizationError("Conversation has no authorized employee");
-    const expert = this.options.store.listLoadedExperts(caller.tenantId, memberId).find((item) => item.employee_id === employeeId);
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
+    const expert = experts.find((item) => item.employee_id === employeeId);
     if (!expert || expert.revoked) throw new SessionAuthorizationError();
+    let rosterEmployeeIds: ReadonlySet<string> | undefined;
+    if (metadata?.kind === "group") {
+      rosterEmployeeIds = new Set(experts.filter((item) => !item.revoked).map((item) => item.employee_id));
+      if (metadata.solution_instance_id) {
+        const solution = this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id);
+        if (!solution) throw new SessionAuthorizationError("Conversation solution is not authorized locally");
+        const solutionRoster = Array.isArray(solution.expert_employee_ids)
+          ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
+          : [];
+        if (solutionRoster.length > 0) rosterEmployeeIds = new Set(solutionRoster);
+      }
+      if (!rosterEmployeeIds.has(employeeId)) throw new SessionAuthorizationError("Coordinator is not in the authorized group roster");
+    }
     const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && item.version === expert.version);
     if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
     const mentionedEmployeeIds = mentions.length
-      ? new Set(this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((item) => mentions.includes(item.handle)).map((item) => item.employee_id))
+      ? new Set(experts.filter((item) => (!rosterEmployeeIds || rosterEmployeeIds.has(item.employee_id)) && mentions.includes(item.handle)).map((item) => item.employee_id))
       : undefined;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, managerClient: this.options.managerClient };
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, managerClient: this.options.managerClient };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -468,6 +489,9 @@ export class SessionHost {
     const memberId = authorization.caller.userId ?? authorization.caller.callerId;
     if (authorization.mentionedEmployeeIds && !authorization.mentionedEmployeeIds.has(input.employee_id)) {
       throw new Error("Employee was not explicitly mentioned in this group prompt");
+    }
+    if (authorization.rosterEmployeeIds && !authorization.rosterEmployeeIds.has(input.employee_id)) {
+      throw new Error("Employee is not in the authorized group roster");
     }
     const expert = this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && !item.revoked);
     if (!expert) throw new Error("Employee is not in the authorized local roster");
@@ -534,6 +558,7 @@ export class SessionHost {
         await result.session.prompt(prompt);
         return this.childSummary(sessionManager.getEntries());
       } finally {
+        record.delegatedEntries.push(...sessionManager.getEntries());
         unsubscribe();
         await child.abort();
         await this.flushChildResourceLoader(child);
@@ -613,7 +638,7 @@ export class SessionHost {
 
   private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string): void {
     if (!serializePiEvent(event, { conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId })) return;
-    const envelope: PiEventEnvelope = { id: `${sourceRef}:${Date.now()}`, event, conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId };
+    const envelope: PiEventEnvelope = { id: `${sourceRef}:${++record.eventSequence}`, event, conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId };
     for (const subscriber of record.listeners) {
       if (subscriber.replaying) subscriber.queued.push(envelope);
       else subscriber.listener(envelope);
@@ -623,8 +648,9 @@ export class SessionHost {
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
     if (!serializePiEvent(event)) return;
     const envelope: PiEventEnvelope = {
-      id: this.entryIdentity(event) ?? `${record.conversationId}:${Date.now()}`,
+      id: this.entryIdentity(event) ?? `${record.conversationId}:${++record.eventSequence}`,
       event,
+      conversation_id: record.conversationId,
     };
     for (const subscriber of record.listeners) {
       if (subscriber.replaying) subscriber.queued.push(envelope);

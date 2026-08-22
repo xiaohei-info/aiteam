@@ -36,6 +36,10 @@ class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
 
+class _OperatorUnavailable(AppError):
+    status, code, title = 503, "operator_unavailable", "Operator catalog unavailable"
+
+
 def _service(request: Request) -> RecruitService:
     """从端配置构造 RecruitService；未配置业务 DB → 503（不静默，与 employee/auth 路由一致）。
 
@@ -66,8 +70,13 @@ def build_recruit_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[ExpertTemplateDetail]:
         # 浏览是纯 Operator 目录只读（不碰租户 DB）；catalog 端口由 app.state 注入。
-        catalog: OperatorCatalogPort = request.app.state._operator_catalog
-        return ListEnvelope[ExpertTemplateDetail](data=catalog.list_expert_templates())
+        try:
+            catalog: OperatorCatalogPort = request.app.state._operator_catalog
+            return ListEnvelope[ExpertTemplateDetail](data=catalog.list_expert_templates())
+        except AppError:
+            raise
+        except Exception as exc:
+            raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
 
     @router.get(
         "/catalog/solutions", description="请查看接口名称了解用途", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
@@ -77,8 +86,13 @@ def build_recruit_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SolutionPackage]:
-        catalog: OperatorCatalogPort = request.app.state._operator_catalog
-        return ListEnvelope[SolutionPackage](data=catalog.list_solution_packages())
+        try:
+            catalog: OperatorCatalogPort = request.app.state._operator_catalog
+            return ListEnvelope[SolutionPackage](data=catalog.list_solution_packages())
+        except AppError:
+            raise
+        except Exception as exc:
+            raise _OperatorUnavailable("Operator solution catalog is unavailable") from exc
 
     @router.post(
         "/experts", description="请查看接口名称了解用途", summary="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）",

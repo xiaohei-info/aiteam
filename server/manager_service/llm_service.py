@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from shared.contracts.tenancy import TenantContext
-from shared.errors import NotFound
+from shared.errors import Forbidden, NotFound
+
+_LLM_WRITE_ROLES = frozenset({"owner", "enterprise_admin"})
 
 from .llm_repository import LlmRepository, LlmProviderRow, LlmModelRow
 
@@ -17,17 +19,20 @@ class LlmService:
         return [_provider_to_dict(r) for r in rows]
 
     def create_provider(self, ctx: TenantContext, *, name: str, provider_key: str, base_url: str | None) -> dict:
+        _ensure_can_write(ctx)
         row = self._repo.create_provider(ctx, name=name, provider_key=provider_key, base_url=base_url)
         return _provider_to_dict(row)
 
     def patch_provider(self, ctx: TenantContext, provider_id: str, *, name: str | None, base_url: str | None,
                        is_active: bool | None) -> dict:
+        _ensure_can_write(ctx)
         row = self._repo.update_provider(ctx, provider_id, name=name, base_url=base_url, is_active=is_active)
         if row is None:
             raise NotFound("provider not found in this tenant")
         return _provider_to_dict(row)
 
     def delete_provider(self, ctx: TenantContext, provider_id: str) -> None:
+        _ensure_can_write(ctx)
         deleted = self._repo.delete_provider(ctx, provider_id)
         if not deleted:
             raise NotFound("provider not found in this tenant")
@@ -38,6 +43,7 @@ class LlmService:
 
     def create_model(self, ctx: TenantContext, *, provider_id: str, model_uid: str, model_name: str,
                      context_window: int | None, input_price: str | None, output_price: str | None) -> dict:
+        _ensure_can_write(ctx)
         # 验证 provider 存在
         if self._repo.get_provider(ctx, provider_id) is None:
             raise NotFound("provider not found in this tenant")
@@ -48,7 +54,13 @@ class LlmService:
         return _model_to_dict(row)
 
     def delete_model(self, ctx: TenantContext, model_id: str) -> None:
+        _ensure_can_write(ctx)
         self._repo.delete_model(ctx, model_id)
+
+
+def _ensure_can_write(ctx: TenantContext) -> None:
+    if not set(ctx.roles) & _LLM_WRITE_ROLES:
+        raise Forbidden("LLM provider/model write requires owner or enterprise_admin")
 
 
 def _provider_to_dict(row: LlmProviderRow) -> dict:

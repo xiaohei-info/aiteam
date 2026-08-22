@@ -12,12 +12,25 @@ test("HttpManagerClient keeps employee-scoped memory deletion for management ope
     return new Response(JSON.stringify({ data: { ok: true } }), { status: 200, headers: { "content-type": "application/json" } });
   });
 
-  await client.memoryDelete(caller, "memory-1");
+  await client.memoryDelete(caller, "employee-1", "memory-1", "delete-key");
   assert.equal(requests.length, 1);
-  assert.match(requests[0].url, /\/api\/manager\/memories\/memory-1$/);
+  assert.match(requests[0].url, /\/api\/manager\/memories\/memory-1\?employee_id=employee-1$/);
   assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>)["Idempotency-Key"], "delete-key");
   assert.equal(requests[0].init.method, "DELETE");
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
+});
+
+test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    request = { url: String(input), init: init ?? {} };
+    return new Response(JSON.stringify({ data: [{ template_id: "tpl-1", display_name: "Researcher", category: "research", default_model: "model-1", skill_ids: ["skill-1"], tags: ["analysis"] }] }), { status: 200 });
+  });
+  const templates = await client.listMarketplaceTemplates(caller);
+  assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", model_name: "model-1", skills_count: 1, recruit_count: 0, is_recruited: false, tags: ["analysis"], avatar_url: null });
+  assert.equal(request?.url, "https://manager.test/api/manager/recruit/catalog/experts");
+  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
 });
 
 test("HttpManagerClient pulls only the employee-scoped runtime provider config", async () => {

@@ -52,9 +52,9 @@ def build_org_router(verifier) -> APIRouter:
         body: OrgAssignmentPatch,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Envelope[dict]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
-        return svc.update_assignment(ctx, employee_id, body.department_id)
+        return Envelope(data=svc.update_assignment(ctx, employee_id, body.department_id))
 
     return router

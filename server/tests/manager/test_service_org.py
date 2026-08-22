@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from manager_service.org_service import OrgService
-from shared.errors import NotFound
+from shared.errors import Forbidden, NotFound
 
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
@@ -52,6 +52,13 @@ def test_update_assignment_updates_employee_department_ids():
     assert "UPDATE employee SET department_ids = array_append" in update_sql
     assert "app_user" not in update_sql
     assert params == ("dept-a", "emp-1", "dept-a")
+
+
+def test_update_assignment_requires_manager_role():
+    router = FakeRouter()
+    with pytest.raises(Forbidden, match="organization assignment"):
+        OrgService(router).update_assignment(ctx(roles=["member"]), "emp-1", "dept-a")
+    assert router.executed == []
 
 
 def test_update_assignment_rejects_missing_department():

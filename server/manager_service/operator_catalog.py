@@ -19,6 +19,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+from shared.errors import AppError
+
+
+class OperatorCatalogUnavailable(AppError):
+    status, code, title = 503, "operator_unavailable", "Operator catalog unavailable"
 
 
 class OperatorCatalogPort(ABC):
@@ -78,7 +83,7 @@ class OperatorCatalogClient(OperatorCatalogPort):
         path = f"/api/operation/catalog/pull/expert-templates/{template_id}"
         if version:
             path += f"?version={version}"
-        resp = self._client.get(path)
+        resp = self._get(path)
         # 响应为 Envelope[ExpertTemplateDetail]，取 data 字段
         data = resp.get("data", {})
         return ExpertTemplateDetail.model_validate(data)
@@ -90,24 +95,32 @@ class OperatorCatalogClient(OperatorCatalogPort):
         path = f"/api/operation/catalog/pull/solution-templates/{solution_id}"
         if version:
             path += f"?version={version}"
-        resp = self._client.get(path)
+        resp = self._get(path)
         # 响应为 Envelope[SolutionPackage]，取 data 字段
         data = resp.get("data", {})
         return SolutionPackage.model_validate(data)
 
     def list_expert_templates(self) -> list[ExpertTemplateDetail]:
         """F06：列举可招募专家模板。调用 GET /api/operation/catalog/pull/expert-templates"""
-        resp = self._client.get("/api/operation/catalog/pull/expert-templates")
+        resp = self._get("/api/operation/catalog/pull/expert-templates")
         # 响应为 ListEnvelope[ExpertTemplateDetail]，取 data 字段
         data_list = resp.get("data", [])
         return [ExpertTemplateDetail.model_validate(item) for item in data_list]
 
     def list_solution_packages(self) -> list[SolutionPackage]:
         """F07：列举可应用行业方案包。调用 GET /api/operation/catalog/pull/solution-templates"""
-        resp = self._client.get("/api/operation/catalog/pull/solution-templates")
+        resp = self._get("/api/operation/catalog/pull/solution-templates")
         # 响应为 ListEnvelope[SolutionPackage]，取 data 字段
         data_list = resp.get("data", [])
         return [SolutionPackage.model_validate(item) for item in data_list]
+
+    def _get(self, path: str) -> dict:
+        try:
+            return self._client.get(path)
+        except AppError:
+            raise
+        except Exception as exc:
+            raise OperatorCatalogUnavailable("Operator catalog is unavailable") from exc
 
     def close(self) -> None:
         """关闭 HTTP 客户端连接。"""

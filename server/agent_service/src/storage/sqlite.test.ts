@@ -154,6 +154,37 @@ test("startup cleanup protects unreferenced files for accepted and unknown promp
   }
 });
 
+test("projection revocation removes solution/snapshot access and outbox exposes only aggregates", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-projection-revoke-test-"));
+  const store = new AgentSqliteStore(join(root, "agent.sqlite"));
+  try {
+    store.replaceProjections(
+      [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "one", display_name: "One", revoked: false, synced_at: new Date().toISOString() }],
+      [{ solution_instance_id: "solution-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: "Solution", expert_employee_ids: ["employee-1"] }],
+      [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "One" }],
+      [],
+      { tenantId: "tenant-1", memberId: "member-1" },
+    );
+    store.replaceProjections([], [], [], ["solution-1", "employee-1"], { tenantId: "tenant-1", memberId: "member-1" });
+    assert.equal(store.listSolutions("tenant-1", "member-1").length, 0);
+    assert.equal(store.listSnapshots("tenant-1", "member-1").length, 0);
+    assert.equal(store.listLoadedExperts("tenant-1", "member-1").length, 0);
+
+    store.upsertUsageSummary({
+      schema_version: "1", summary_id: "summary-1", tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1",
+      window_start: "2026-01-01T00:00:00.000Z", window_end: "2026-01-01T01:00:00.000Z", prompt_count: 1, settled_count: 1,
+      error_count: 0, input_tokens: 2, output_tokens: 3, cache_tokens: 0, cost_minor: 1, currency: "USD", duration_ms_total: 10,
+      run_count: 1, token_total: 5, cost_total: 0.01, duration_seconds_total: 1,
+    });
+    const item = store.listUsageOutbox("tenant-1", "member-1")[0];
+    assert.equal(item.payload?.summary_id, "summary-1");
+    assert.equal("prompt" in (item.payload ?? {}), false);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("SQLite receipts never replay expired or unknown Pi prompts", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-receipt-test-"));
   const store = new AgentSqliteStore(join(root, "agent.sqlite"));

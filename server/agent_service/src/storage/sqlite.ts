@@ -9,6 +9,18 @@ function createSha256(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
+function publicUsageSummary(value: unknown): UsageSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const fields = [
+    "schema_version", "summary_id", "tenant_id", "member_id", "employee_id", "window_start", "window_end",
+    "prompt_count", "settled_count", "error_count", "input_tokens", "output_tokens", "cache_tokens", "cost_minor",
+    "currency", "duration_ms_total", "run_count", "token_total", "cost_total", "duration_seconds_total",
+  ] as const;
+  if (raw.schema_version !== "1" || raw.currency !== "USD" || fields.some((field) => raw[field] === undefined)) return undefined;
+  return Object.fromEntries(fields.map((field) => [field, raw[field]])) as unknown as UsageSummary;
+}
+
 export type ReceiptState = "accepted" | "completed" | "unknown";
 
 export type ConversationState = "draft" | "active" | "paused" | "muted" | "archived";
@@ -92,6 +104,8 @@ export interface UsageOutboxItem {
   last_error: string | null;
   created_at: string;
   claim_token?: string | null;
+  /** The allowlisted aggregate that will be sent to Manager; never session content. */
+  payload?: UsageSummary;
 }
 
 export type LocalFileKind = "attachment" | "artifact";
@@ -632,8 +646,17 @@ export class AgentSqliteStore {
     return record ? this.toMetadata(record) : undefined;
   }
 
-  listLoadedExperts(tenantId?: string, memberId?: string): LoadedExpertProjection[] {
-    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM loaded_employee_projection WHERE revoked = 0 AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as LoadedExpertProjection, tenant_id: row.tenant_id, ...(row.member_id ? { member_id: row.member_id } : {}) }));
+  listLoadedExperts(tenantId?: string, memberId?: string, includeRevoked = false): LoadedExpertProjection[] {
+    const rows = this.db.prepare(`SELECT projection_json, tenant_id, member_id, revoked
+      FROM loaded_employee_projection
+      WHERE (${includeRevoked ? "1 = 1" : "revoked = 0"})
+        AND (? IS NULL OR tenant_id = ?)
+        AND (? IS NULL OR member_id = '' OR member_id = ?)
+      ORDER BY employee_id`).all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string; revoked: number }[];
+    return rows.map((row) => {
+      const projection = JSON.parse(row.projection_json) as LoadedExpertProjection;
+      return { ...projection, tenant_id: row.tenant_id, ...(row.member_id ? { member_id: row.member_id } : {}), revoked: row.revoked === 1 || projection.revoked === true };
+    });
   }
 
   listSnapshots(tenantId?: string, memberId?: string): FrozenSnapshot[] {
@@ -672,11 +695,28 @@ export class AgentSqliteStore {
     const revoke = owner
       ? this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND (member_id = ? OR member_id = '')")
       : this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ?");
-    for (const id of revokedIds) owner ? revoke.run(now, id, owner.tenantId, owner.memberId) : revoke.run(now, id);
+    const removeSnapshots = owner
+      ? this.db.prepare("DELETE FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND (member_id = ? OR member_id = '')")
+      : this.db.prepare("DELETE FROM frozen_snapshot WHERE employee_id = ?");
+    const removeSolutions = owner
+      ? this.db.prepare("DELETE FROM loaded_solution_projection WHERE solution_instance_id = ? AND tenant_id = ? AND (member_id = ? OR member_id = '')")
+      : this.db.prepare("DELETE FROM loaded_solution_projection WHERE solution_instance_id = ?");
     const upsertSolution = this.db.prepare("INSERT INTO loaded_solution_projection (solution_instance_id, tenant_id, member_id, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(solution_instance_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
     for (const solution of solutions) upsertSolution.run(solution.solution_instance_id, solution.tenant_id ?? "", solution.member_id ?? "", solution.version, JSON.stringify({ ...solution, ...(solution.tenant_id ? { tenant_id: solution.tenant_id } : {}), ...(solution.member_id ? { member_id: solution.member_id } : {}) }), now);
     const upsertSnapshot = this.db.prepare("INSERT INTO frozen_snapshot (employee_id, tenant_id, member_id, snapshot_version, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET snapshot_version=excluded.snapshot_version, version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
     for (const snapshot of snapshots) upsertSnapshot.run(snapshot.employee_id, snapshot.tenant_id ?? "", snapshot.member_id ?? "", snapshot.snapshot_version, snapshot.version, JSON.stringify({ ...snapshot, ...(snapshot.tenant_id ? { tenant_id: snapshot.tenant_id } : {}), ...(snapshot.member_id ? { member_id: snapshot.member_id } : {}) }), now);
+    // Revocation wins over an accidentally repeated stale snapshot/solution in the same pull.
+    for (const id of revokedIds) {
+      if (owner) {
+        revoke.run(now, id, owner.tenantId, owner.memberId);
+        removeSnapshots.run(id, owner.tenantId, owner.memberId);
+        removeSolutions.run(id, owner.tenantId, owner.memberId);
+      } else {
+        revoke.run(now, id);
+        removeSnapshots.run(id);
+        removeSolutions.run(id);
+      }
+    }
     return { upserted: experts.length + solutions.length + snapshots.length, revoked: revokedIds.length };
   }
 
@@ -727,7 +767,13 @@ export class AgentSqliteStore {
   }
 
   listUsageOutbox(tenantId?: string, memberId?: string): UsageOutboxItem[] {
-    return this.db.prepare("SELECT summary_id, tenant_id, member_id, kind, status, attempts, last_error, created_at, claim_token FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as unknown as UsageOutboxItem[];
+    const rows = this.db.prepare("SELECT summary_id, tenant_id, member_id, kind, status, attempts, last_error, created_at, claim_token, payload_json FROM usage_summary_outbox WHERE (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY created_at DESC").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as Array<Omit<UsageOutboxItem, "payload"> & { payload_json: string }>;
+    return rows.map((row) => {
+      let payload: UsageSummary | undefined;
+      try { payload = publicUsageSummary(JSON.parse(row.payload_json)); } catch { /* malformed local data remains visible via status/error */ }
+      const { payload_json: _payloadJson, ...item } = row;
+      return { ...item, ...(payload ? { payload } : {}) };
+    });
   }
 
   upsertUsageSummary(summary: UsageSummary): void {
