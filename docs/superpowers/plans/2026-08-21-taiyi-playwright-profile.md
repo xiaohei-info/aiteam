@@ -28,9 +28,9 @@ scope: taiyi-playwright
 
 - 本地默认 Playwright 配置仍列出 114 tests / 17 files；
 - taiyi external profile 已连接三端 root/health/login；
-- Operation smoke：全部通过；
-- Manager smoke：全部通过；
-- Agent smoke：全部通过；
-- 合计 `48 passed`，已在 taiyi 最新 Agent server/UI 产物上验证。
+- 外部运行必须提供 `E2E_TENANT_ID`、`E2E_AGENT_EMPLOYEE_ID`、成员凭据和 Operation 凭据；
+- 最新 taiyi 部署（8781/8782/8783）三端 smoke：Operation `15 passed`、Manager `23 passed`、Agent `10 passed`，合计 `48 passed`；
+- Manager audit/governance 截图基线已随当前页面导航/投影刷新；
+- Agent prompt 真实 endpoint 返回 202，RAG deletion/reconcile 真实 upstream-id smoke 已通过。
 
 期间修复了 Agent list envelope 与前端 `listGet` 契约不一致、OpenAPI 缺少 abort path、E2E 动态会话选择和外部部署截图数据不稳定问题；Agent prompt external smoke 需要显式 `E2E_AGENT_EMPLOYEE_ID`。
