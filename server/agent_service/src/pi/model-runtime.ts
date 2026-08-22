@@ -72,7 +72,10 @@ export async function createConfiguredModelRuntime(options: {
       models: [{ id: options.modelId ?? "aiteam-dev-faux-1", name: "AI Team Development Faux" }],
     });
     runtime.registerNativeProvider(faux.provider);
-    faux.setResponses([fauxAssistantMessage("AI Team Pi Agent development response")]);
+    // E2E runs share one local faux runtime across tier smoke and cross-tier
+    // projects. Keep a bounded response queue so later prompts do not fail just
+    // because an earlier test consumed the single seed response.
+    faux.setResponses(Array.from({ length: 256 }, () => fauxAssistantMessage("AI Team Pi Agent development response")));
     return { runtime, model: faux.getModel(), mode: "faux" };
   }
   return { runtime, mode: "provider" };
