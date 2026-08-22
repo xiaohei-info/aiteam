@@ -454,11 +454,11 @@ describe("KnowledgePage Astryx contract", () => {
 
     const checkButton = await screen.findByRole("button", { name: "检查删除状态删除中.md" });
     fireEvent.click(checkButton);
-    expect(await screen.findByRole("alert")).toHaveTextContent("LightRAG 删除仍在处理中；可重试");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("LightRAG 删除仍在处理中；可重试"));
     expect(screen.getByRole("button", { name: "检查删除状态删除中.md" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "检查删除状态删除中.md" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("知识索引服务暂不可用；可重试");
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("知识索引服务暂不可用；可重试"));
     expect(screen.queryByText("删除已完成")).toBeNull();
     expect(screen.getByLabelText("文档状态：删除处理中")).toBeTruthy();
   });
