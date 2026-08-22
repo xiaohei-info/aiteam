@@ -102,7 +102,13 @@ jobs:
       DB_URL: postgresql://app_rw:apprwpass@127.0.0.1:5433/manager_control_db
       APP_RW_PASSWORD: apprwpass
       OPERATOR_URL: http://127.0.0.1:8000
-      # provider 凭据入库前需 Fernet 加密；CI 用固定测试 key（非生产密钥）。
+      # Playwright globalSetup seeds a runnable employee. The local Agent runs
+      # with AITEAM_PI_FAKE=true, so these are non-production seed-only values;
+      # the endpoint is never contacted by the CI provider.
+      E2E_PROVIDER_ENDPOINT: https://e2e.invalid/v1
+      E2E_PROVIDER_SECRET: ci-e2e-provider-secret
+      E2E_PROVIDER_MODEL: aiteam-e2e-model
+      # provider credentials need Fernet encryption; this is a CI-only key.
       MANAGER_CREDENTIAL_KEY: vAkjGKeadpMSZuL5h21AanI5tjHmoOh87WNukUbEFhE=
     steps:
       - uses: actions/checkout@v4
