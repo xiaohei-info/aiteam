@@ -98,6 +98,7 @@ function mockProviders(list: ProviderCredential[]): ProvidersApi {
     list: vi.fn().mockResolvedValue(list),
     get: vi.fn().mockResolvedValue(list[0] ?? null),
     create: vi.fn().mockResolvedValue(list[0] ?? null),
+    update: vi.fn().mockResolvedValue(list[0] ?? null),
     del: vi.fn().mockResolvedValue(undefined),
   };
 }
