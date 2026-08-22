@@ -58,6 +58,8 @@ def test_ingestion_posts_manager_headers_and_waits_for_ready():
     finally:
         client.close()
     assert result.rag_document_id == "doc-1"
+    assert result.upstream_document_id == "doc_123456"
+    assert "doc_123456" not in repr(result)
     assert seen[0].headers["x-api-key"] == "manager-secret"
     assert seen[0].headers["lightrag-workspace"] == "derived"
     assert json.loads(seen[0].content) == {"text": "hello", "file_source": "doc-1"}
@@ -85,6 +87,35 @@ def test_ingestion_rejects_workspace_not_owned_by_fixed_instance():
     try:
         with pytest.raises(RagIngestionUnavailable, match="knowledge indexing unavailable"):
             client.ingest_text(workspace="other-workspace", file_source="doc-1", text="hello")
+    finally:
+        client.close()
+
+
+def test_ingestion_rejects_missing_or_ambiguous_upstream_document_id():
+    responses = [
+        {
+            "track_id": "track-1", "documents": [{"file_path": "doc-1", "status": "processed"}],
+            "total_count": 1,
+        },
+        {
+            "track_id": "track-1", "documents": [
+                {"id": "doc-a", "file_path": "doc-1", "status": "processed"},
+                {"id": "doc-b", "file_path": "doc-1", "status": "processed"},
+            ], "total_count": 2,
+        },
+    ]
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/text"):
+            return httpx.Response(200, json={"status": "success", "track_id": "track-1"})
+        return httpx.Response(200, json=responses.pop(0))
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.ingest_text(workspace="derived", file_source="doc-1", text="hello")
+        with pytest.raises(RagIngestionUnavailable):
+            client.ingest_text(workspace="derived", file_source="doc-1", text="hello")
     finally:
         client.close()
 
@@ -221,7 +252,7 @@ def test_ingestion_accepts_only_case_insensitive_processed_status(status):
             return httpx.Response(200, json={"status": "success", "track_id": "track-1"})
         return httpx.Response(200, json={
             "track_id": "track-1", "documents": [{
-                "status": status, "file_path": "doc-1", "chunks_count": 1,
+                "id": "upstream-doc-1", "status": status, "file_path": "doc-1", "chunks_count": 1,
             }], "total_count": 1,
         })
 
@@ -309,7 +340,7 @@ def test_document_probe_reports_absent_ids_without_returning_upstream_fields():
     }
 
 
-def test_document_probe_matches_id_or_file_path():
+def test_document_probe_accepts_only_resolved_internal_id():
     client = LightRagIngestionClient(
         _settings(),
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
@@ -319,8 +350,102 @@ def test_document_probe_matches_id_or_file_path():
     )
     try:
         assert client.document_ids_present(
-            workspace="derived", doc_ids=["doc-1", "missing"]
-        ) == {"doc-1"}
+            workspace="derived", doc_ids=["opaque-id", "missing"]
+        ) == {"opaque-id"}
+        assert client.document_ids_present(
+            workspace="derived", doc_ids=["doc-1"]
+        ) == set()
+    finally:
+        client.close()
+
+
+def test_alias_resolver_maps_legacy_file_source_to_upstream_id():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [{"id": "doc-internal-1", "file_path": "manager-uuid-1"}],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })),
+    )
+    try:
+        assert client.resolve_document_id(
+            workspace="derived", aliases=["manager-uuid-1"]
+        ) == "doc-internal-1"
+    finally:
+        client.close()
+
+
+def test_alias_resolver_rejects_ambiguous_malformed_and_cross_space_rows():
+    responses = [
+        {
+            "documents": [
+                {"id": "doc-a", "file_path": "manager-uuid"},
+                {"id": "doc-b", "file_path": "manager-uuid"},
+            ],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 2, "total_pages": 1},
+        },
+        {
+            "documents": [{"id": "doc-a"}],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        },
+        {
+            "documents": [{"id": "doc-a", "file_path": "manager-uuid", "workspace": "other"}],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        },
+    ]
+
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json=responses.pop(0))
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        for _ in range(3):
+            with pytest.raises(RagIngestionUnavailable):
+                client.resolve_document_id(workspace="derived", aliases=["manager-uuid"])
+    finally:
+        client.close()
+
+
+def test_delete_body_uses_resolved_upstream_id():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        if request.url.path.endswith("/paginated"):
+            return httpx.Response(200, json={
+                "documents": [{"id": "doc-internal-1", "file_path": "manager-uuid-1"}],
+                "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+            })
+        return httpx.Response(200, json={"status": "deletion_started"})
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        upstream_id = client.resolve_document_id(
+            workspace="derived", aliases=["manager-uuid-1"]
+        )
+        assert upstream_id == "doc-internal-1"
+        client.delete_document(workspace="derived", doc_ids=[upstream_id])
+    finally:
+        client.close()
+    assert seen[-1].url.path == "/documents/delete_document"
+    assert json.loads(seen[-1].content) == {
+        "doc_ids": ["doc-internal-1"],
+        "delete_file": False,
+        "delete_llm_cache": True,
+    }
+
+
+def test_alias_resolver_rejects_unbounded_pagination():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 6_401, "total_pages": 33},
+        })),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.resolve_document_id(workspace="derived", aliases=["manager-uuid"])
     finally:
         client.close()
 

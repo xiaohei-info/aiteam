@@ -85,7 +85,7 @@ def test_query_and_ingestion_select_the_same_instance_and_fixed_workspace():
         if request.url.path.endswith("/text"):
             return httpx.Response(200, json={"status": "success", "track_id": "track-b"})
         return httpx.Response(200, json={
-            "track_id": "track-b", "documents": [{"status": "processed", "file_path": "doc-b", "chunks_count": 1}],
+            "track_id": "track-b", "documents": [{"id": "doc-internal-b", "status": "processed", "file_path": "doc-b", "chunks_count": 1}],
             "total_count": 1,
         })
 

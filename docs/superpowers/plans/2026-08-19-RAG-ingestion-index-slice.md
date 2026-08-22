@@ -24,7 +24,7 @@ Manager intake
 
 - Manager LightRAG insert client：API key 只在 Manager；workspace 由 ManagerRagService 推导；file_source 使用 Manager document id。
 - intake 只在 LightRAG processing 成功后标记 ready；超时/错误标记 failed，不伪造 ready。
-- binding propagation 写入稳定 `rag_document_id`/source alias，供 citation mapping。
+- binding propagation 写入 LightRAG internal `rag_document_id`（无 upstream id 时保留 Manager source alias），供 citation mapping。
 - retry 复用同一 intake path；旧绑定先 stale。
 - 受限超时、poll interval、响应大小和错误脱敏。
 - fake LightRAG transport tests、state transition tests、taiyi live document intake/query smoke。

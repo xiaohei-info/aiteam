@@ -357,11 +357,25 @@ class KnowledgeIntakeService:
         )
         try:
             handle = self._rag_handle(ctx, knowledge_space_id)
+            aliases = self._rag_document_ids(
+                ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
+            )
+            resolved_ids = self._resolve_rag_document_ids(
+                workspace=handle.workspace, aliases=aliases
+            )
+            if not resolved_ids:
+                operation = self._update_operation_or_replace(
+                    ctx, operation, status="pending", upstream_status="absent",
+                    error_code=None, error_message=None,
+                )
+                self._record_audit(
+                    ctx, action="knowledge_document_delete_pending", resource_id=document_id,
+                    detail="LightRAG document is absent; reconciliation will clean the source",
+                )
+                return self._operation_out(ctx, operation)
             result = self._ingestion_client.delete_document(
                 workspace=handle.workspace,
-                doc_ids=self._rag_document_ids(
-                    ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
-                ),
+                doc_ids=resolved_ids,
                 delete_file=False,
                 delete_llm_cache=True,
             )
@@ -468,19 +482,25 @@ class KnowledgeIntakeService:
 
         try:
             handle = self._rag_handle(ctx, knowledge_space_id)
-            rag_ids = self._rag_document_ids(
+            aliases = self._rag_document_ids(
                 ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
             )
-            present = self._ingestion_client.document_ids_present(
-                workspace=handle.workspace, doc_ids=rag_ids
+            resolved_ids = self._resolve_rag_document_ids(
+                workspace=handle.workspace, aliases=aliases
             )
-            if not isinstance(present, (set, frozenset)) or any(
-                not isinstance(value, str) for value in present
-            ):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
-            present_ids = set(present)
-            if not present_ids.issubset(set(rag_ids)):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            if not resolved_ids:
+                present_ids: set[str] = set()
+            else:
+                present = self._ingestion_client.document_ids_present(
+                    workspace=handle.workspace, doc_ids=resolved_ids
+                )
+                if not isinstance(present, (set, frozenset)) or any(
+                    not isinstance(value, str) for value in present
+                ):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                present_ids = set(present)
+                if not present_ids.issubset(set(resolved_ids)):
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
         except RagIngestionUnavailable as exc:
             operation = self._mark_reconcile_failed(
                 ctx, operation, upstream_status="unavailable",
@@ -943,24 +963,47 @@ class KnowledgeIntakeService:
     def _rag_document_ids(
         self, ctx: TenantContext, *, document_id: str, knowledge_space_id: str
     ) -> list[str]:
+        """Return binding ids plus the Manager id as resolver candidates."""
         rows = self._binding_repo.list_by_document(ctx, document_id=document_id)
-        ids: set[str] = set()
+        ids: set[str] = {document_id}
         for row in rows:
             if (
                 row.tenant_id != ctx.tenant_id
                 or row.document_id != document_id
                 or row.knowledge_space_id != knowledge_space_id
-                or not row.rag_document_id
             ):
-                if (
-                    row.tenant_id != ctx.tenant_id
-                    or row.document_id != document_id
-                    or row.knowledge_space_id != knowledge_space_id
-                ):
-                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            rag_document_id = row.rag_document_id
+            if rag_document_id is None:
                 continue
-            ids.add(row.rag_document_id)
-        return sorted(ids) or [document_id]
+            if (
+                not isinstance(rag_document_id, str)
+                or not rag_document_id.strip()
+                or rag_document_id != rag_document_id.strip()
+                or len(rag_document_id) > 1_024
+                or any(char in rag_document_id for char in "\x00\r\n")
+            ):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            ids.add(rag_document_id)
+        return sorted(ids)
+
+    def _resolve_rag_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
+        """Resolve aliases before a delete/probe; retain old fake-port compatibility."""
+        resolver = getattr(self._ingestion_client, "resolve_document_id", None)
+        if resolver is None:
+            return aliases
+        resolved = resolver(workspace=workspace, aliases=aliases)
+        if resolved is None:
+            return []
+        if (
+            not isinstance(resolved, str)
+            or not resolved.strip()
+            or resolved != resolved.strip()
+            or len(resolved) > 1_024
+            or any(char in resolved for char in "\x00\r\n")
+        ):
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        return [resolved]
 
     def _create_and_advance(
         self,
@@ -1052,8 +1095,18 @@ class KnowledgeIntakeService:
             result = self._ingestion_client.ingest_text(
                 workspace=handle.workspace, file_source=document_id, text=text
             )
-            if not result or result.rag_document_id != document_id:
+            if not result or getattr(result, "rag_document_id", None) != document_id:
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
+            upstream_document_id = getattr(result, "upstream_document_id", None)
+            if upstream_document_id is not None and (
+                not isinstance(upstream_document_id, str)
+                or not upstream_document_id.strip()
+                or upstream_document_id != upstream_document_id.strip()
+                or len(upstream_document_id) > 1_024
+                or any(char in upstream_document_id for char in "\x00\r\n")
+            ):
+                raise RagIngestionUnavailable("knowledge indexing unavailable")
+            binding_rag_document_id = upstream_document_id or document_id
         except Exception as exc:
             if not isinstance(exc, RagIngestionUnavailable):
                 logger.warning("[kb] index failed for %s: %s", document_id, type(exc).__name__)
@@ -1072,7 +1125,7 @@ class KnowledgeIntakeService:
             published_at = datetime.now(timezone.utc)
             self._binding_repo.publish_ready(
                 ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
-                employee_ids=employee_ids, rag_document_id=result.rag_document_id,
+                employee_ids=employee_ids, rag_document_id=binding_rag_document_id,
                 job_id=job_id, chunk_count=result.chunk_count, text_chars=len(text),
                 completed_at=published_at, synced_at=published_at,
             )

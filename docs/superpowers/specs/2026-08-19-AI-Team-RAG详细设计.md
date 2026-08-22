@@ -629,7 +629,12 @@ Manager delete document
 `{"doc_ids": ["<rag_document_id>"], "delete_file": false, "delete_llm_cache": true}`。
 LightRAG 1.5.6 仅返回 `deletion_started`/`busy` acknowledgement，Manager 在调用前撤销
 文档 binding 并将文档置为 `deleting`；`deletion_started` 只落 durable receipt=`pending`
-并返回 HTTP 202，绝不推断为 `deleted`。`busy` 返回可重试的 409，网络/5xx 返回 bounded
+并返回 HTTP 202，绝不推断为 `deleted`。LightRAG 的 `file_source`/`file_path` 是
+Manager document UUID 兼容别名，`track_status` 的唯一 `document.id` 才是删除所需的
+upstream id；ingestion 结果内部保留该 id，ready binding 在可用时保存该 id。删除与
+reconcile 前由 Manager 通过有界 `/documents/paginated` 将 binding/Manager aliases
+解析为唯一 upstream id；不合法、跨 workspace、多匹配或超页均 fail-closed，probe
+只接收已解析的 id。`busy` 返回可重试的 409，网络/5xx 返回 bounded
 503；文档源文件保留。`POST .../{document_id}/reindex`（旧 `/retry` 兼容）只允许
 `ready|failed`，走现有 Manager ingestion seam，失败保持 `failed` 并可使用新的
 `Idempotency-Key` 重试。search/get/citation/bundle 只接受当前 tenant、space、snapshot

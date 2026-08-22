@@ -330,7 +330,9 @@ class _FakeIngestion:
         self.calls.append((workspace, file_source, text))
         if self.error:
             raise self.error
-        return RagIngestionResult(file_source, self.result.chunk_count)
+        return RagIngestionResult(
+            file_source, self.result.chunk_count, self.result.upstream_document_id
+        )
 
     def delete_document(self, *, workspace, doc_ids, delete_file, delete_llm_cache):
         self.delete_calls.append((workspace, doc_ids, delete_file, delete_llm_cache))
@@ -343,6 +345,17 @@ class _FakeIngestion:
         if self.probe_error:
             raise self.probe_error
         return set(self.present)
+
+
+class _ResolvingFakeIngestion(_FakeIngestion):
+    def __init__(self, *, resolved_id=None, **kwargs):
+        super().__init__(**kwargs)
+        self.resolved_id = resolved_id
+        self.resolve_calls = []
+
+    def resolve_document_id(self, *, workspace, aliases):
+        self.resolve_calls.append((workspace, aliases))
+        return self.resolved_id
 
 
 class _FakeSpaceExists:
@@ -540,6 +553,27 @@ def test_ingest_creates_index_bindings_for_bound_experts(tmp_path: Path) -> None
     assert all(b.rag_document_id == doc.id for b in binding_rows)
 
 
+def test_ingest_binding_stores_upstream_document_id(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(
+        result=RagIngestionResult(
+            rag_document_id="ignored-manager-alias",
+            chunk_count=1,
+            upstream_document_id="doc-internal-1",
+        )
+    )
+    svc = _make_service(
+        space_root=tmp_path / "store", employees=["emp-2"], existing_spaces={"ks"},
+        ingestion=ingestion,
+    )
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="binds", file_name="a.txt",
+        file_type="text/plain", content=b"x" * 1000,
+    )
+    binding_rows = svc.list_bindings(ctx, knowledge_space_id="ks", document_id=doc.id)
+    assert [row.rag_document_id for row in binding_rows] == ["doc-internal-1"]
+
+
 def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
     # 直接构造一个 parsing 状态的文档
@@ -550,9 +584,17 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
         svc.retry(ctx, knowledge_space_id="ks", document_id="d1")
 
 
-def test_delete_revokes_bindings_and_keeps_document_deleting(tmp_path: Path) -> None:
-    ingestion = _FakeIngestion(delete_result=RagDeletionResult(True, False))
-    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+def test_delete_resolves_alias_before_request_and_keeps_document_deleting(tmp_path: Path) -> None:
+    ingestion = _ResolvingFakeIngestion(
+        resolved_id="doc-internal-1",
+        result=RagIngestionResult(
+            rag_document_id="manager-alias", chunk_count=1, upstream_document_id="doc-stored-1"
+        ),
+        delete_result=RagDeletionResult(True, False),
+    )
+    svc = _make_service(
+        space_root=tmp_path / "store", employees=["emp-1"], existing_spaces={"ks"}, ingestion=ingestion
+    )
     ctx = _owner_ctx()
     doc, _ = svc.ingest_upload(
         ctx, knowledge_space_id="ks", display_name="delete", file_name="a.txt",
@@ -561,7 +603,10 @@ def test_delete_revokes_bindings_and_keeps_document_deleting(tmp_path: Path) -> 
     operation = svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-1")
     assert operation.status == "pending"
     assert operation.document_status == "deleting"
-    assert ingestion.delete_calls == [("tt__ks", [doc.id], False, True)]
+    assert len(ingestion.resolve_calls) == 1
+    assert ingestion.resolve_calls[0][0] == "tt__ks"
+    assert set(ingestion.resolve_calls[0][1]) == {doc.id, "doc-stored-1"}
+    assert ingestion.delete_calls == [("tt__ks", ["doc-internal-1"], False, True)]
     assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
 
 
@@ -636,6 +681,26 @@ def test_reconcile_delete_absent_completes_and_removes_source_idempotently(tmp_p
     assert fresh_request_key.operation_id == completed.operation_id
     assert fresh_request_key.status == "completed"
     assert ingestion.probe_calls == [("tt__ks", [doc.id])]
+
+
+def test_reconcile_delete_resolves_internal_id_before_absence_probe(tmp_path: Path) -> None:
+    ingestion = _ResolvingFakeIngestion(resolved_id="doc-internal-1", present=set())
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="reconcile", file_name="a.txt",
+        file_type="text/plain", content=b"remove me",
+    )
+    source = svc._storage_root / doc.storage_key
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reconcile")
+    completed = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-reconcile"
+    )
+    assert completed.status == "completed"
+    assert completed.document_status == "deleted"
+    assert not source.exists()
+    assert ingestion.resolve_calls == [("tt__ks", [doc.id]), ("tt__ks", [doc.id])]
+    assert ingestion.probe_calls == [("tt__ks", ["doc-internal-1"])]
 
 
 def test_reconcile_delete_records_sanitized_audit_lifecycle(tmp_path: Path) -> None:
