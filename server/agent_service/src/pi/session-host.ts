@@ -36,6 +36,7 @@ export interface PiEventEnvelope {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
+  source_role?: "child" | "coordinator";
 }
 
 export class EventCursorStaleError extends Error {
@@ -669,6 +670,7 @@ export class SessionHost {
       tool_call_id: toolCallId,
       source_employee_id: source.employeeId,
       source_employee_display_name: source.displayName,
+      source_role: "child" as const,
     };
     if (!serializePiEvent(event, metadata)) return;
     const envelope: PiEventEnvelope = { id: `${sourceRef}:${++record.eventSequence}`, event, ...metadata };

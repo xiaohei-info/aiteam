@@ -588,6 +588,7 @@ export class AgentHttpServer {
             tool_call_id: envelope.tool_call_id,
             source_employee_id: envelope.source_employee_id,
             source_employee_display_name: envelope.source_employee_display_name,
+            source_role: envelope.source_role,
           } : {}),
         });
         if (!event) return;

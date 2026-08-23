@@ -33,6 +33,7 @@ export interface PiEventMetadata {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
+  source_role?: "child" | "coordinator";
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */
@@ -232,6 +233,7 @@ function serializeMetadata(extra: PiEventMetadata): Record<string, unknown> {
     const clean = key === "source_employee_display_name" ? boundedIdentifier(value, MAX_SOURCE_NAME_CHARS) : boundedIdentifier(value, MAX_IDENTIFIER_CHARS);
     if (clean) result[key] = clean;
   }
+  if (extra.source_role === "child" || extra.source_role === "coordinator") result.source_role = extra.source_role;
   return result;
 }
 
@@ -280,7 +282,7 @@ function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
 
 function minimalEvent(value: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = { type: value.type };
-  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
+  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "source_role", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
     if (value[key] !== undefined) result[key] = value[key];
   }
   return result;

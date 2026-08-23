@@ -262,7 +262,7 @@ test("delegate_employee forwards child events with opaque attribution and bounds
     ], [], [snapshot("coordinator"), ...["a", "b", "c", "d", "e"].map(snapshot)]);
     fixture.store.createConversation({ id: "group-fanout", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
     const host = fixture.createHost();
-    const envelopes: Array<{ conversation_id?: string; source_ref?: string; tool_call_id?: string; source_employee_id?: string; source_employee_display_name?: string; event: { type: string } }> = [];
+    const envelopes: Array<{ conversation_id?: string; source_ref?: string; tool_call_id?: string; source_employee_id?: string; source_employee_display_name?: string; source_role?: string; event: { type: string } }> = [];
     await host.subscribe("group-fanout", (envelope) => envelopes.push(envelope as typeof envelopes[number]));
     fixture.faux.setResponses([
       fauxAssistantMessage(["a", "b", "c", "d", "e"].map((employee_id, index) => fauxToolCall("delegate_employee", { employee_id, task: `task-${index}` }, { id: `call-${index}` })), { stopReason: "toolUse" }),
@@ -274,7 +274,8 @@ test("delegate_employee forwards child events with opaque attribution and bounds
     assert(childEvents.length > 0);
     assert(envelopes.every((envelope) => envelope.conversation_id === "group-fanout"));
     assert(childEvents.every((envelope) => envelope.source_ref && envelope.tool_call_id));
-    assert(childEvents.every((envelope) => envelope.source_employee_id && envelope.source_employee_display_name));
+    assert(childEvents.every((envelope) => envelope.source_employee_id && envelope.source_employee_display_name && envelope.event));
+    assert(childEvents.every((envelope) => envelope.source_role === "child"));
     assert.deepEqual(
       [...new Set(childEvents.map((envelope) => `${envelope.source_employee_id}:${envelope.source_employee_display_name}`))].sort(),
       ["a:a", "b:b", "c:c", "d:d"],
