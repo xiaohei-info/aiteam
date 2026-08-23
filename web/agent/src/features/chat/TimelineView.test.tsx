@@ -49,6 +49,7 @@ describe("TimelineView Pi cards", () => {
   it("classifies common entries and events without runtime-specific fields", () => {
     expect(classifyPiRecord(entry("u", "message", { message: { role: "user", content: "hi" } }))).toMatchObject({ kind: "message", sender: "user", status: "recorded" });
     expect(classifyPiRecord(event("thinking", "thinking", { text: "plan" }).event)).toMatchObject({ kind: "thinking", status: "received" });
+    expect(classifyPiRecord(entry("thinking-message", "message", { message: { role: "assistant", content: [{ type: "thinking", thinking: "bounded plan" }] } }))).toMatchObject({ kind: "thinking", summary: "bounded plan" });
     expect(classifyPiRecord(event("call", "tool_call", { name: "read", input: { content: "not shown" } }).event)).toMatchObject({ kind: "tool-call", summary: "工具调用：read", status: "pending" });
     expect(classifyPiRecord(event("result", "tool_result", { name: "read", status: "completed" }).event)).toMatchObject({ kind: "tool-result", status: "completed" });
     expect(classifyPiRecord(event("approval", "approval_required", { toolName: "write" }).event)).toMatchObject({ kind: "approval", summary: "等待批准：write", status: "pending" });
@@ -61,6 +62,51 @@ describe("TimelineView Pi cards", () => {
     expect(classifyPiRecord(event("stream", "streaming").event)).toMatchObject({ kind: "streaming", status: "streaming" });
     expect(classifyPiRecord(entry("tool-message", "message", { message: { role: "assistant", content: [{ type: "toolCall", name: "read" }] } }))).toMatchObject({ kind: "tool-call", summary: "工具调用：read" });
     expect(classifyPiRecord(entry("tool-result-message", "message", { message: { role: "toolResult", content: "done" } }))).toMatchObject({ kind: "tool-result" });
+  });
+
+  it("classifies bounded tool, todo, memory, and RAG card details", () => {
+    expect(classifyPiRecord(event("todo", "tool_execution_start", {
+      toolName: "todo_update",
+      args: { todos: [{ id: "t1", content: "Review bounded output", status: "pending" }] },
+    }).event)).toMatchObject({
+      kind: "todo",
+      toolName: "todo_update",
+      todoItems: [{ id: "t1", text: "Review bounded output", status: "pending" }],
+    });
+
+    expect(classifyPiRecord(event("memory", "tool_execution_start", {
+      toolName: "hindsight_recall",
+      args: { query: "user preference" },
+    }).event)).toMatchObject({ kind: "memory", memoryOperation: "recall", memoryQuery: "user preference" });
+
+    const rag = classifyPiRecord(event("rag", "tool_execution_end", {
+      toolName: "knowledge_search",
+      args: { query: "onboarding" },
+      result: { content: [{ type: "text", text: JSON.stringify({ citations: [{ citation_id: "citation:1", title: "Onboarding", snippet: "bounded excerpt", score: 0.9 }] }) }] },
+    }).event);
+    expect(rag).toMatchObject({
+      kind: "rag",
+      ragOperation: "search",
+      ragQuery: "onboarding",
+      ragCitations: [{ citationId: "citation:1", title: "Onboarding", preview: "bounded excerpt", score: "0.9" }],
+    });
+  });
+
+  it("sanitizes ordinary tool args and result summaries", () => {
+    const call = classifyPiRecord(event("call", "tool_execution_start", {
+      toolName: "read",
+      args: { token: "leaked-token", path: "/private/workspace/file.txt", safe: "visible" },
+    }).event);
+    const result = classifyPiRecord(event("result", "tool_execution_end", {
+      toolName: "read",
+      result: { secret: "leaked-secret", output: "visible result" },
+    }).event);
+
+    expect(call.argsSummary).toContain("visible");
+    expect(call.argsSummary).not.toContain("leaked-token");
+    expect(call.argsSummary).not.toContain("/private/workspace");
+    expect(result.resultSummary).toContain("visible result");
+    expect(result.resultSummary).not.toContain("leaked-secret");
   });
 
   it("keeps unknown output bounded and removes sensitive fields", () => {
@@ -120,6 +166,32 @@ describe("TimelineView Pi cards", () => {
     expect(screen.queryByText("do-not-render")).not.toBeInTheDocument();
     expect(screen.queryByText("/private/file")).not.toBeInTheDocument();
     expect(screen.getByTestId("conversation-events")).toHaveAttribute("aria-label", "对话事件流");
+  });
+
+  it("renders structured activity cards and delegation source labels", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("todo", "todo_update", { todos: [{ id: "t1", title: "Review output", status: "pending" }] }),
+      entry("memory", "hindsight_retain", { content: "remember this bounded note" }),
+      entry("rag", "knowledge_get", {
+        citation_id: "citation:1",
+        result: { citation: { citation_id: "citation:1", title: "Guide", text: "bounded citation preview" } },
+      }),
+      entry("child", "tool_execution_start", {
+        toolName: "delegate_employee",
+        args: { employee_id: "employee-child", task: "review" },
+        source_employee_id: "employee-child",
+        source_employee_display_name: "研究专家",
+        source_role: "child",
+      }),
+    ]);
+
+    render(<TimelineView client={client} conversationId="group-1" />);
+
+    expect(await screen.findByRole("article", { name: "待办更新事件" })).toHaveTextContent("Review output");
+    expect(screen.getByRole("article", { name: "记忆活动事件" })).toHaveTextContent("remember this bounded note");
+    expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("bounded citation preview");
+    expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("来源专家：研究专家（子专家）");
+    expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("citation:1");
   });
 
   it("deduplicates a persisted entry when the same live id arrives and keeps newer events ordered", async () => {
