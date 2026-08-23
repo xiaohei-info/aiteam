@@ -696,6 +696,11 @@ function extractToolResult(value: Record<string, unknown> | null, depth = 0): un
 }
 
 function extractTodoItems(value: unknown): TimelineTodoItem[] | undefined {
+  const parsed = structuredResult(value);
+  if (parsed !== undefined && parsed !== value) {
+    const nested = extractTodoItems(parsed);
+    if (nested) return nested;
+  }
   const record = asRecord(value);
   const candidates: unknown[][] = [];
   if (Array.isArray(value)) candidates.push(value);

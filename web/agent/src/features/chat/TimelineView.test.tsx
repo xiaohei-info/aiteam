@@ -73,6 +73,17 @@ describe("TimelineView Pi cards", () => {
       toolName: "todo_update",
       todoItems: [{ id: "t1", text: "Review bounded output", status: "pending" }],
     });
+    expect(classifyPiRecord(entry("todo-result", "message", {
+      message: {
+        role: "toolResult",
+        toolCallId: "call-todo",
+        toolName: "todo_update",
+        content: [{ type: "text", text: JSON.stringify({ items: [{ id: "t1", title: "Persisted todo", status: "completed" }] }) }],
+      },
+    }))).toMatchObject({
+      kind: "todo",
+      todoItems: [{ id: "t1", text: "Persisted todo", status: "completed" }],
+    });
 
     expect(classifyPiRecord(event("memory", "tool_execution_start", {
       toolName: "hindsight_recall",
