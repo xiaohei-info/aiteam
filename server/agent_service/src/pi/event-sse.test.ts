@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classifyToolKind, serializePiEvent } from "./event-sse.js";
 
-test("Pi SSE serializer allowlists events and removes credential/path fields", () => {
-  const event = serializePiEvent({ type: "tool_execution_update", toolName: "read", path: "/private/data", authorization: "Bearer secret" } as never, { conversation_id: "conversation-1" });
-  assert.deepEqual(event, { type: "tool_execution_update", toolName: "read", conversation_id: "conversation-1" });
+test("Pi SSE serializer keeps bounded ordinary tool summaries without credential/path fields", () => {
+  const event = serializePiEvent({
+    type: "tool_execution_update",
+    toolName: "read",
+    args: { path: "/private/data", safe: "visible" },
+    partialResult: { output: "partial", secret: "hidden" },
+    authorization: "Bearer secret",
+  } as never, { conversation_id: "conversation-1" });
+  assert.deepEqual(event, {
+    type: "tool_execution_update",
+    conversation_id: "conversation-1",
+    toolName: "read",
+    args: { safe: "visible" },
+    partialResult: { output: "partial" },
+  });
   assert.equal(serializePiEvent({ type: "unknown_internal_event", body: "secret" } as never), undefined);
 });
 

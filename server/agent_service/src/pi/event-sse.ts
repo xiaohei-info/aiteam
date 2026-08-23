@@ -14,7 +14,7 @@ const ASSISTANT_EVENTS = new Set([
 const SECRET_KEY = /(?:authorization|access.?token|refresh.?token|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
 const INLINE_PATH = /(?:\/(?:Users|private|home|tmp|var|workspace|etc|root)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/gi;
-const UNSAFE_VALUE_KEY = /^(?:api|provider|model|response(?:_id)?|raw|headers|request|diagnostics|usage|session|context|data)$/i;
+const UNSAFE_VALUE_KEY = /^(?:api|provider|model|raw|headers|request|diagnostics|session)$/i;
 
 const MAX_EVENT_BYTES = 24 * 1024;
 const MAX_TEXT_CHARS = 4_000;
@@ -96,11 +96,9 @@ function serializeToolEvent(result: Record<string, unknown>, raw: Record<string,
   copyIdentifier(result, raw, "toolCallId");
   copyToolName(result, raw);
   const kind = classifyToolKind(raw.toolName);
-  if (!kind) {
-    if (raw.type === "tool_execution_end") copyBoolean(result, raw, "isError");
-    return;
-  }
-  result.tool_kind = kind;
+  if (kind) result.tool_kind = kind;
+  // Ordinary coding/custom tools still get bounded summaries. The serializer
+  // strips credentials, paths, runtime objects, and oversized payloads below.
   if (raw.type !== "tool_execution_end" && Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
   if (raw.type === "tool_execution_update" && Object.prototype.hasOwnProperty.call(raw, "partialResult")) result.partialResult = safeToolResult(raw.partialResult, kind);
   if (raw.type === "tool_execution_end") {
@@ -173,12 +171,12 @@ function serializeAssistantMessageEvent(value: unknown): Record<string, unknown>
   return result;
 }
 
-function safeToolResult(value: unknown, kind: ToolKind): unknown {
+function safeToolResult(value: unknown, kind?: ToolKind): unknown {
   const payload = unwrapToolResult(value);
   return safeToolValue(payload, kind);
 }
 
-function safeToolValue(value: unknown, _kind: ToolKind): unknown {
+function safeToolValue(value: unknown, _kind?: ToolKind): unknown {
   return boundedValue(value);
 }
 
