@@ -127,7 +127,12 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const snapshot = authorization.snapshot;
   const persona = typeof snapshot.persona === "string" ? snapshot.persona : "You are an AI Team digital employee.";
   const skills = Array.isArray(snapshot.skill_refs) ? snapshot.skill_refs.filter((value): value is string => typeof value === "string") : [];
-  return [persona, "Use only the tools authorized by the current employee snapshot.", skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const policy = snapshot.tool_policy && typeof snapshot.tool_policy === "object" ? snapshot.tool_policy as Record<string, unknown> : undefined;
+  const allowedTools = Array.isArray(policy?.allowed_tools) ? policy.allowed_tools : snapshot.tools;
+  const todoHint = Array.isArray(allowedTools) && allowedTools.includes("todo_update")
+    ? "For multi-step work, keep the user-visible checklist current with todo_update."
+    : "";
+  return [persona, "Use only the tools authorized by the current employee snapshot.", todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function loadJwtOptions() {
