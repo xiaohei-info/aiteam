@@ -583,7 +583,12 @@ export class AgentHttpServer {
       if (!response.writableEnded) {
         const event = serializePiEvent(envelope.event, {
           conversation_id: envelope.conversation_id ?? conversationId,
-          ...(envelope.source_ref ? { source_ref: envelope.source_ref, tool_call_id: envelope.tool_call_id } : {}),
+          ...(envelope.source_ref ? {
+            source_ref: envelope.source_ref,
+            tool_call_id: envelope.tool_call_id,
+            source_employee_id: envelope.source_employee_id,
+            source_employee_display_name: envelope.source_employee_display_name,
+          } : {}),
         });
         if (!event) return;
         response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);

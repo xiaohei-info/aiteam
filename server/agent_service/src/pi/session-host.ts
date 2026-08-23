@@ -21,6 +21,7 @@ import type { AuthenticatedCaller } from "../http/auth.js";
 import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
+import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
@@ -33,6 +34,8 @@ export interface PiEventEnvelope {
   conversation_id?: string;
   source_ref?: string;
   tool_call_id?: string;
+  source_employee_id?: string;
+  source_employee_display_name?: string;
 }
 
 export class EventCursorStaleError extends Error {
@@ -89,6 +92,11 @@ interface ChildSession {
   resolveDone: () => void;
   aborted: boolean;
   abort: () => Promise<void>;
+}
+
+interface ChildSource {
+  employeeId: string;
+  displayName: string;
 }
 
 interface SessionRecord {
@@ -382,7 +390,7 @@ export class SessionHost {
   }
 
   private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord, workspace?: string, sessionId?: string): ToolDefinition[] {
-    if (!authorization) return this.options.customTools ?? [];
+    if (!authorization) return (this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME);
     const allowed = this.allowedTools(authorization.snapshot);
     const operations = this.options.sandbox && workspace
       ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId())
@@ -396,7 +404,8 @@ export class SessionHost {
         ]
       : [];
     const tools = [
-      ...(this.options.customTools ?? []).filter((tool) => allowDelegation || tool.name !== "delegate_employee"),
+      ...(this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME && (allowDelegation || tool.name !== "delegate_employee")),
+      ...(allowed.has(TODO_UPDATE_TOOL_NAME) ? [createTodoUpdateTool()] : []),
       ...codingTools,
       ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
     ];
@@ -565,7 +574,8 @@ export class SessionHost {
       });
       child.session = result.session;
       if (child.aborted || signal?.aborted || record.aborting) await child.abort();
-      const unsubscribe = result.session.subscribe((event) => this.publishChild(record, event, sourceRef, toolCallId));
+      const source: ChildSource = { employeeId: expert.employee_id, displayName: expert.display_name };
+      const unsubscribe = result.session.subscribe((event) => this.publishChild(record, event, sourceRef, toolCallId, source));
       try {
         await result.session.prompt(prompt);
         return this.childSummary(sessionManager.getEntries());
@@ -652,9 +662,16 @@ export class SessionHost {
     return "Employee completed without a textual result.";
   }
 
-  private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string): void {
-    if (!serializePiEvent(event, { conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId })) return;
-    const envelope: PiEventEnvelope = { id: `${sourceRef}:${++record.eventSequence}`, event, conversation_id: record.conversationId, source_ref: sourceRef, tool_call_id: toolCallId };
+  private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string, source: ChildSource): void {
+    const metadata = {
+      conversation_id: record.conversationId,
+      source_ref: sourceRef,
+      tool_call_id: toolCallId,
+      source_employee_id: source.employeeId,
+      source_employee_display_name: source.displayName,
+    };
+    if (!serializePiEvent(event, metadata)) return;
+    const envelope: PiEventEnvelope = { id: `${sourceRef}:${++record.eventSequence}`, event, ...metadata };
     for (const subscriber of record.listeners) {
       if (subscriber.replaying) subscriber.queued.push(envelope);
       else subscriber.listener(envelope);

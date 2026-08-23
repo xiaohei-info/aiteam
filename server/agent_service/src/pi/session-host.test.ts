@@ -262,7 +262,7 @@ test("delegate_employee forwards child events with opaque attribution and bounds
     ], [], [snapshot("coordinator"), ...["a", "b", "c", "d", "e"].map(snapshot)]);
     fixture.store.createConversation({ id: "group-fanout", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator" });
     const host = fixture.createHost();
-    const envelopes: Array<{ conversation_id?: string; source_ref?: string; tool_call_id?: string; event: { type: string } }> = [];
+    const envelopes: Array<{ conversation_id?: string; source_ref?: string; tool_call_id?: string; source_employee_id?: string; source_employee_display_name?: string; event: { type: string } }> = [];
     await host.subscribe("group-fanout", (envelope) => envelopes.push(envelope as typeof envelopes[number]));
     fixture.faux.setResponses([
       fauxAssistantMessage(["a", "b", "c", "d", "e"].map((employee_id, index) => fauxToolCall("delegate_employee", { employee_id, task: `task-${index}` }, { id: `call-${index}` })), { stopReason: "toolUse" }),
@@ -274,7 +274,61 @@ test("delegate_employee forwards child events with opaque attribution and bounds
     assert(childEvents.length > 0);
     assert(envelopes.every((envelope) => envelope.conversation_id === "group-fanout"));
     assert(childEvents.every((envelope) => envelope.source_ref && envelope.tool_call_id));
+    assert(childEvents.every((envelope) => envelope.source_employee_id && envelope.source_employee_display_name));
+    assert.deepEqual(
+      [...new Set(childEvents.map((envelope) => `${envelope.source_employee_id}:${envelope.source_employee_display_name}`))].sort(),
+      ["a:a", "b:b", "c:c", "d:d"],
+    );
     assert.equal(new Set(childEvents.map((envelope) => envelope.tool_call_id)).size, 4);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost registers todo_update only for an explicitly authorized parent snapshot", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost();
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("todo_update", { items: [{ id: "one", title: "Finish", status: "pending" }] }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await host.prompt("conversation-1", "track this", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const entries = await host.entries("conversation-1");
+    const result = entries.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    assert(result && result.type === "message" && result.message.role === "toolResult");
+    const text = result.message.content[0]?.type === "text" ? result.message.content[0].text : "";
+    assert.match(text, /item_count/);
+    assert.match(text, /Finish/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost does not register todo_update when the snapshot policy omits it", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost();
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("todo_update", { items: [{ id: "one", title: "must not run", status: "pending" }] }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await host.prompt("conversation-1", "do not track", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const entries = await host.entries("conversation-1");
+    const result = entries.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    assert(result && result.type === "message" && result.message.role === "toolResult");
+    const text = result.message.content[0]?.type === "text" ? result.message.content[0].text : "";
+    assert.doesNotMatch(text, /must not run/);
     await host.dispose();
   } finally {
     await fixture.close();
