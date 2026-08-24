@@ -182,11 +182,18 @@ class PlatformProviderService:
         return row
 
 
+def newapi_urls() -> tuple[str | None, str | None]:
+    """Resolve the configurable NewAPI base URL and its OpenAI-compatible path."""
+    base_url = (os.getenv("NEWAPI_URL") or "").rstrip("/") or None
+    admin_url = (os.getenv("NEWAPI_ADMIN_BASE_URL") or base_url or "").rstrip("/") or None
+    public_url = (os.getenv("NEWAPI_PUBLIC_BASE_URL") or (f"{base_url}/v1" if base_url else "")).rstrip("/") or None
+    return admin_url, public_url
+
+
 @lru_cache(maxsize=1)
 def build_platform_provider_service() -> PlatformProviderService:
     settings = load_settings("operation")
-    admin_url = os.getenv("NEWAPI_ADMIN_BASE_URL")
-    public_url = os.getenv("NEWAPI_PUBLIC_BASE_URL")
+    admin_url, public_url = newapi_urls()
     admin_token = os.getenv("NEWAPI_ADMIN_TOKEN")
     admin_user_id = os.getenv("NEWAPI_ADMIN_USER_ID")
     encryption_key = os.getenv("OPERATION_PROVIDER_CREDENTIAL_KEY")

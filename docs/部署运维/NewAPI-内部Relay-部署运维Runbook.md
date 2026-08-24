@@ -22,8 +22,11 @@ NEWAPI_DB_NAME=newapi
 NEWAPI_REDIS_PASSWORD=<strong-random>
 NEWAPI_SESSION_SECRET=<openssl-rand-hex-32>
 NEWAPI_CRYPTO_SECRET=<openssl-rand-hex-32>
-NEWAPI_ADMIN_BASE_URL=http://127.0.0.1:9300
-NEWAPI_PUBLIC_BASE_URL=https://<relay-domain>/v1
+# NewAPI 基础地址，像 HINDSIGHT_URL/LIGHTRAG_URL 一样按环境配置。
+NEWAPI_URL=http://127.0.0.1:9300
+# 可选：管理面/推理面分离时分别覆盖；否则自动使用 NEWAPI_URL 和 NEWAPI_URL/v1。
+NEWAPI_ADMIN_BASE_URL=
+NEWAPI_PUBLIC_BASE_URL=
 ```
 
 环境文件必须 `chmod 600 .env.<env>`。生产还必须在首次 setup 后设置 Operator-only：
@@ -39,7 +42,7 @@ NEWAPI_ADMIN_TOKEN=<newapi-dashboard-access-token>
 ./scripts/ctl.sh start --env test --server newapi
 ./scripts/ctl.sh status --env test --server newapi
 ./scripts/ctl.sh logs --env test --server newapi --follow
-curl -fsS http://127.0.0.1:9300/api/status
+curl -fsS "${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}}/api/status"
 ```
 
 健康响应必须是 HTTP 2xx 且 `success=true`。

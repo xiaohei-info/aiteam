@@ -128,8 +128,9 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
-| `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址 | `http://newapi:3000` |
-| `NEWAPI_PUBLIC_BASE_URL` | 下发 tenant token 使用的推理地址 | `https://relay.example.com/v1` |
+| `NEWAPI_URL` | NewAPI 基础地址，像 `HINDSIGHT_URL`/`LIGHTRAG_URL` 一样按环境配置 | `http://newapi:3000` |
+| `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址（可覆盖 `NEWAPI_URL`） | `http://newapi:3000` |
+| `NEWAPI_PUBLIC_BASE_URL` | 下发 tenant token 使用的推理地址（可覆盖 `NEWAPI_URL/v1`） | `https://relay.example.com/v1` |
 | `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
 | `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
 | `NEWAPI_DB_PASSWORD` / `NEWAPI_REDIS_PASSWORD` | NewAPI 专属 DB/Redis 密码 | `***` |

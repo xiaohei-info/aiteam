@@ -163,9 +163,11 @@ validate_agent_production_env() {
 
 validate_newapi_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
-  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID NEWAPI_PUBLIC_BASE_URL; do
+  local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:+${NEWAPI_URL%/}/v1}}"
+  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
   done
+  [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_URL or NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
   [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || {
     echo "[ctl] ERROR: NEWAPI_IMAGE must use a fixed version tag or sha256 digest" >&2; exit 1;
   }
@@ -175,8 +177,8 @@ validate_newapi_production_env() {
       echo "[ctl] ERROR: ${name} must be a non-placeholder secret of at least 24 characters" >&2; exit 1;
     }
   done
-  [[ "${NEWAPI_PUBLIC_BASE_URL}" =~ ^https://[^[:space:]]+/v1/?$ ]] || {
-    echo "[ctl] ERROR: production NEWAPI_PUBLIC_BASE_URL must be an absolute HTTPS /v1 URL" >&2; exit 1;
+  [[ "${newapi_public_url}" =~ ^https://[^[:space:]]+/v1/?$ ]] || {
+    echo "[ctl] ERROR: production NEWAPI_URL/NEWAPI_PUBLIC_BASE_URL must resolve to an absolute HTTPS /v1 URL" >&2; exit 1;
   }
 }
 
@@ -435,11 +437,12 @@ start_service_local() {
   case "${service}" in
     newapi)
       echo "[ctl] Starting internal NewAPI relay (docker profile)..."
+      local newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}}"
       cd "${REPO_ROOT}/deploy/docker"
       dc --profile newapi up -d newapi
       echo "[ctl] Waiting for NewAPI to be ready..."
       for _ in {1..60}; do
-        if curl -fsS "http://127.0.0.1:${NEWAPI_PORT:-9300}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+        if curl -fsS "${newapi_admin_url%/}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
           echo "[ctl] NewAPI is ready"
           return 0
         fi
@@ -471,7 +474,7 @@ start_service_local() {
     manager)
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
       nohup setsid env \
-        -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
+        -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
         APP_TIER=manager \
         AITEAM_ENV="${AITEAM_ENV:-dev}" \
@@ -525,6 +528,9 @@ start_service_local() {
       ;;
     operation)
       echo "[ctl] Starting operation on port ${OPERATION_PORT}..."
+      local newapi_url="${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}"
+      local newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${newapi_url}}"
+      local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-${newapi_url%/}/v1}"
       nohup setsid env \
         -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         APP_TIER=operation \
@@ -532,8 +538,9 @@ start_service_local() {
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
         MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
-        NEWAPI_ADMIN_BASE_URL="${NEWAPI_ADMIN_BASE_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}" \
-        NEWAPI_PUBLIC_BASE_URL="${NEWAPI_PUBLIC_BASE_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}/v1}" \
+        NEWAPI_URL="${newapi_url}" \
+        NEWAPI_ADMIN_BASE_URL="${newapi_admin_url}" \
+        NEWAPI_PUBLIC_BASE_URL="${newapi_public_url}" \
         NEWAPI_ADMIN_USER_ID="${NEWAPI_ADMIN_USER_ID:-}" \
         NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}" \
         OPERATION_PROVIDER_CREDENTIAL_KEY="${OPERATION_PROVIDER_CREDENTIAL_KEY:-}" \
@@ -573,7 +580,7 @@ start_service_local() {
       # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
         -u DB_URL -u ADMIN_DB_URL -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u SERVICE_TOKEN -u MANAGER_CREDENTIAL_KEY \
-        -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
+        -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
         -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
         -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE \

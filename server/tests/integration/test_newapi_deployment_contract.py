@@ -41,6 +41,7 @@ def test_newapi_admin_secrets_only_enter_operation_process():
     ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
     assert "-u NEWAPI_ADMIN_TOKEN" in ctl
     assert 'NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"' in ctl
+    assert '-u NEWAPI_URL' in ctl
     assert "chmod 600 \"${ENV_FILE}\"" in ctl
     assert "dc --profile newapi up -d newapi" in ctl
 
@@ -60,5 +61,6 @@ def test_newapi_examples_never_contain_real_credentials():
     for name in (".env.example", ".env.test.example"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b" in text
+        assert "NEWAPI_URL=" in text
         assert "NEWAPI_ADMIN_TOKEN=" in text
         assert "newapi.xiaohei.tech" not in text

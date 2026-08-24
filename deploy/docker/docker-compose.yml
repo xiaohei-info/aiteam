@@ -176,8 +176,10 @@ services:
       # 云侧服务间调用：运营端调企业端开通 tenant。
       MANAGER_URL: http://manager:8000
       # Operator-only internal NewAPI management surface. Never copy admin credentials to Manager/Agent.
-      NEWAPI_ADMIN_BASE_URL: ${NEWAPI_ADMIN_BASE_URL:-http://newapi:3000}
-      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-http://newapi:3000/v1}
+      # NEWAPI_URL is the environment-level base address, like HINDSIGHT_URL/LIGHTRAG_URL.
+      NEWAPI_URL: ${NEWAPI_URL:-http://newapi:3000}
+      NEWAPI_ADMIN_BASE_URL: ${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}}
+      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}/v1}
       NEWAPI_ADMIN_USER_ID: ${NEWAPI_ADMIN_USER_ID:-}
       NEWAPI_ADMIN_TOKEN: ${NEWAPI_ADMIN_TOKEN:-}
       OPERATION_PROVIDER_CREDENTIAL_KEY: ${OPERATION_PROVIDER_CREDENTIAL_KEY:-}
