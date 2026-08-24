@@ -12,7 +12,7 @@
 3. Operator 把现有外部 `newapi.xiaohei.tech/v1` Provider 配为内部 NewAPI 的上游渠道；Agent 只调用内部 NewAPI。
 4. Manager 招募专家时继承模板固定的 Provider/模型并直接可用，无需再创建 Provider 或补模型。
 5. Manager 可切换员工模型，但只能从 Operator 对该 tenant 发布的模型目录选择，不能自由输入 Provider/model/price。
-6. Agent 从 Manager 获取同一模型、价格和 tenant 受限令牌；每次 Run 冻结版本并在本地计算 cost。
+6. Agent 从 Manager 获取同一模型、价格和 tenant 受限令牌；每次 Run 冻结版本并在本地计算 cost。计费始终按 AI Team 请求的快照模型和价格计算，忽略 Relay/上游响应中的实际模型名，不做二次映射或校正。
 7. usage 自动完成 Agent→Manager→Operator 脱敏汇总闭环。
 
 ## 2. 非目标
@@ -112,7 +112,7 @@
 1. Agent sync 拉授权 employee 投影。
 2. Run 前拉执行快照，冻结 provider/model/pricing versions。
 3. runtime-config 返回内部 NewAPI URL + tenant token；Agent 最小注入 Pi。
-4. 本地计算 usage/cost，异步 flush；Manager 聚合后使用服务身份上报 Operator。
+4. 本地计算 usage/cost；计费只使用请求快照中的模型/价格，不读取或处理上游 responseModel；异步 flush；Manager 聚合后使用服务身份上报 Operator。
 
 ## 8. API 原则
 
