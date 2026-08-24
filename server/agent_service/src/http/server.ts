@@ -1,8 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
+import { createRequire } from "node:module";
 import { readFileSync, statSync } from "node:fs";
 import { extname, join, resolve, relative, isAbsolute } from "node:path";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import swagger from "@fastify/swagger";
+import swaggerUi from "@fastify/swagger-ui";
+import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore } from "../storage/sqlite.js";
@@ -26,6 +31,52 @@ const ALLOWED_FILE_MIMES = new Set([
   "application/json", "application/pdf", "application/octet-stream", "image/gif", "image/jpeg", "image/png", "image/webp", "text/markdown", "text/plain",
 ]);
 const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const require = createRequire(import.meta.url);
+const REDOC_BUNDLE = readFileSync(require.resolve("redoc/bundles/redoc.standalone.js"), "utf8");
+const FASTIFY_BODY = Symbol("fastifyBody");
+
+type BufferedRequest = IncomingMessage & { [FASTIFY_BODY]?: unknown };
+type AgentRouteHandler = (request: IncomingMessage, response: ServerResponse, caller?: AuthenticatedCaller, fastifyRequest?: FastifyRequest) => void | Promise<void>;
+
+const ConversationParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+const ConversationFileParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }), attachment_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+const ConversationArtifactParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }), artifact_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+const ExpertParams = Type.Object({ employee_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
+const ConversationQuery = Type.Object({ after: Type.Optional(Type.String()), limit: Type.Optional(Type.String()), cursor: Type.Optional(Type.String()) }, { additionalProperties: false });
+const PromptImage = Type.Object({
+  type: Type.Literal("image"),
+  data: Type.String({ contentEncoding: "base64" }),
+  mimeType: Type.Union([Type.Literal("image/gif"), Type.Literal("image/jpeg"), Type.Literal("image/png"), Type.Literal("image/webp")]),
+}, { additionalProperties: false });
+const PromptRequest = Type.Object({
+  text: Type.String({ minLength: 1, maxLength: 200_000 }),
+  images: Type.Optional(Type.Array(PromptImage, { maxItems: MAX_PROMPT_IMAGES })),
+  attachment_ids: Type.Optional(Type.Array(Type.String(), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true })),
+  mentions: Type.Optional(Type.Array(Type.String(), { maxItems: 16 })),
+}, { $id: "PromptRequest", additionalProperties: false });
+const PromptAccepted = Type.Object({ conversation_id: Type.String(), accepted: Type.Boolean(), state: Type.Union([Type.Literal("accepted"), Type.Literal("completed")]), idempotency_key: Type.String() }, { $id: "PromptAccepted" });
+const PromptAcceptedEnvelope = Type.Object({ data: Type.Ref("PromptAccepted") }, { $id: "PromptAcceptedEnvelope" });
+const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME }), mime_type: Type.String(), data: Type.String({ contentEncoding: "base64" }) }, { $id: "LocalFileUpload", additionalProperties: false });
+const LocalFileMetadata = Type.Object({
+  id: Type.String(), conversation_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.Union([Type.Literal("attachment"), Type.Literal("artifact")]), filename: Type.String(), mime_type: Type.String(), byte_size: Type.Integer({ minimum: 0 }), sha256: Type.String(), created_at: Type.String({ format: "date-time" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
+}, { $id: "LocalFileMetadata" });
+const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope" });
+const Page = Type.Object({ next_cursor: Type.Union([Type.String(), Type.Null()]), has_more: Type.Boolean() }, { $id: "Page" });
+const LocalFileListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalFileMetadata")), page: Type.Ref("Page") }, { $id: "LocalFileListEnvelope" });
+const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean(), id: Type.String() }) }, { $id: "LocalFileDeleteEnvelope" });
+const MarketplaceTemplate = Type.Object({ template_id: Type.String(), display_name: Type.String(), category: Type.String(), model_name: Type.String(), skills_count: Type.Integer({ minimum: 0 }), recruit_count: Type.Integer({ minimum: 0 }), is_recruited: Type.Boolean(), tags: Type.Array(Type.String()), avatar_url: Type.Union([Type.String(), Type.Null()]) }, { $id: "MarketplaceTemplate" });
+const MarketplaceTemplateEnvelope = Type.Object({ data: Type.Ref("MarketplaceTemplate") }, { $id: "MarketplaceTemplateEnvelope" });
+const MarketplaceTemplateListEnvelope = Type.Object({ data: Type.Array(Type.Ref("MarketplaceTemplate")), page: Type.Ref("Page") }, { $id: "MarketplaceTemplateListEnvelope" });
+const UsageSummary = Type.Object({ schema_version: Type.Literal("1"), summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), employee_id: Type.String(), window_start: Type.String({ format: "date-time" }), window_end: Type.String({ format: "date-time" }), prompt_count: Type.Integer({ minimum: 0 }), settled_count: Type.Integer({ minimum: 0 }), error_count: Type.Integer({ minimum: 0 }), input_tokens: Type.Integer({ minimum: 0 }), output_tokens: Type.Integer({ minimum: 0 }), cache_tokens: Type.Integer({ minimum: 0 }), cost_minor: Type.Integer({ minimum: 0 }), currency: Type.Literal("USD"), duration_ms_total: Type.Integer({ minimum: 0 }) }, { $id: "UsageSummary" });
+const UsageOutboxItem = Type.Object({ summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.String(), status: Type.String(), attempts: Type.Integer({ minimum: 0 }), last_error: Type.Union([Type.String(), Type.Null()]), created_at: Type.String({ format: "date-time" }), payload: Type.Optional(Type.Ref("UsageSummary")) }, { $id: "UsageOutboxItem" });
+const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
+const ProblemSchema = Type.Object({ type: Type.String(), title: Type.String(), status: Type.Integer(), code: Type.String(), detail: Type.String(), instance: Type.String(), request_id: Type.String(), errors: Type.Optional(Type.Any()) }, { $id: "Problem" });
+const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: Type.Any() }]));
+const OPENAPI_SCHEMAS = [PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+
+function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
+  return { operationId, ...fields };
+}
 
 export interface AgentHttpServerOptions {
   host: SessionHost;
@@ -49,136 +100,196 @@ export class HttpProblem extends Error {
 
 export class AgentHttpServer {
   readonly server: Server;
+  private readonly app: FastifyInstance;
   private requests = 0;
   private errors = 0;
   private readonly promptWorkers = new Set<Promise<void>>();
 
   constructor(private readonly options: AgentHttpServerOptions) {
-    this.server = createServer((request, response) => {
-      void this.handle(request, response);
+    this.app = Fastify({
+      bodyLimit: MAX_UPLOAD_JSON_BYTES,
+      requestIdHeader: "x-request-id",
+      genReqId: () => randomUUID(),
+      logger: false,
     });
+    this.server = this.app.server;
+    this.app.addHook("onRequest", async (request, reply) => {
+      this.requests += 1;
+      reply.header("X-Request-ID", request.id);
+    });
+    this.app.setErrorHandler((error, request, reply) => {
+      this.errors += 1;
+      if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
+      reply.hijack();
+      this.writeError(reply.raw, this.fastifyError(error), String(request.id));
+    });
+    this.app.setNotFoundHandler((request, reply) => {
+      reply.hijack();
+      const pathname = new URL(request.url, "http://localhost").pathname;
+      if (request.method === "GET" && this.serveSpa(pathname, reply.raw)) return;
+      this.errors += 1;
+      this.writeError(reply.raw, new HttpProblem(404, "not_found", "Route not found"), String(request.id));
+    });
+    void this.app.register(swagger, {
+      openapi: {
+        openapi: "3.1.0",
+        info: { title: "AI Team Agent Service", version: "0.1.0" },
+        components: {
+          securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
+          responses: {
+            Unauthorized: { description: "Authentication required", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            NotFound: { description: "Conversation or file not found", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            TooLarge: { description: "File or request exceeds a limit", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            ValidationError: { description: "Validation error", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            ManagerUnavailable: { description: "Manager-backed capability is unavailable", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+          },
+        },
+      },
+      refResolver: { buildLocalReference: (json: any, _baseUri: any, _fragment: string, index: number) => json.$id ?? `def-${index}` },
+    });
+    for (const schema of OPENAPI_SCHEMAS) this.app.addSchema(schema);
+    this.registerRoutes();
+    void this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" }, staticCSP: true });
   }
 
-  listen(port: number, host = "127.0.0.1"): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const onError = (error: Error) => {
-        this.server.off("listening", onListening);
-        reject(error);
-      };
-      const onListening = () => {
-        this.server.off("error", onError);
-        resolve();
-      };
-      this.server.once("error", onError);
-      this.server.once("listening", onListening);
-      this.server.listen(port, host);
-    });
+  async listen(port: number, host = "127.0.0.1"): Promise<void> {
+    await this.app.listen({ port, host });
   }
 
   async close(): Promise<void> {
     await this.options.host.abortAll();
     await Promise.allSettled([...this.promptWorkers]);
-    if (!this.server.listening) return;
-    await new Promise<void>((resolve, reject) => this.server.close((error) => (error ? reject(error) : resolve())));
+    await this.app.close();
   }
 
-  private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    this.requests += 1;
-    const requestId = this.header(request, "x-request-id") ?? randomUUID();
-    response.setHeader("X-Request-ID", requestId);
-    try {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (request.method === "GET" && url.pathname === "/healthz") return this.writeJson(response, 200, { data: { status: "ok" } });
-      if (request.method === "GET" && url.pathname === "/metrics") return this.writeMetrics(response);
-      if (request.method === "GET" && url.pathname === "/readyz") {
-        let ready = false;
-        try {
-          this.options.store.db.prepare("SELECT 1").get();
-          ready = (await this.options.localReady?.()) ?? true;
-        } catch { ready = false; }
-        return this.writeJson(response, ready ? 200 : 503, { data: { ready } });
-      }
-      if (request.method === "GET" && url.pathname === "/openapi.json") return this.writeJson(response, 200, OPENAPI);
-      if (request.method === "GET" && url.pathname === "/docs") return this.writeHtml(response, swaggerHtml("/openapi.json"));
-      if (request.method === "GET" && url.pathname === "/redoc") return this.writeHtml(response, redocHtml("/openapi.json"));
-
-      const route = this.matchConversationRoute(url.pathname);
-      const platformRoute = this.matchPlatformRoute(url.pathname);
-      const publicAuthRoute = url.pathname === "/api/auth/resolve-tenant-by-account";
-      if (!route && !platformRoute && !publicAuthRoute) {
-        if (request.method === "GET" && this.serveSpa(url.pathname, response)) return;
-        throw new HttpProblem(404, "not_found", "Route not found");
-      }
-      if (url.pathname === "/api/auth/resolve-tenant-by-account" && request.method === "POST") return await this.resolveTenantByAccount(request, response);
-      if (platformRoute === "login" && request.method === "POST") return await this.login(request, response);
-      if (platformRoute === "reset-password" && request.method === "POST") return await this.resetPassword(request, response);
-      let caller: AuthenticatedCaller;
+  private registerRoutes(): void {
+    const generic = Type.Object({ data: Type.Any() });
+    const jsonResponse = (schema: unknown, description = "Successful response") => ({ description, content: { "application/json": { schema } } });
+    const problemResponse = (name: "Unauthorized" | "NotFound" | "TooLarge" | "ValidationError" | "ManagerUnavailable") => ({ $ref: `#/components/responses/${name}` });
+    this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { response: { 200: generic } }), false);
+    this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String() } } } } }), false);
+    this.registerRoute("GET", "/readyz", async (_request, response) => {
+      let ready = false;
       try {
-        caller = await this.options.authenticate(request);
-      } catch {
-        throw new HttpProblem(401, "unauthenticated", "Authentication is required");
-      }
-      if (!caller.callerId || !caller.tenantId || !(caller.userId ?? caller.callerId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+        this.options.store.db.prepare("SELECT 1").get();
+        ready = (await this.options.localReady?.()) ?? true;
+      } catch { ready = false; }
+      this.writeJson(response, ready ? 200 : 503, { data: { ready } });
+    }, routeSchema("readyz", { response: { 200: generic, 503: generic } }), false);
+    this.registerRoute("GET", "/openapi.json", (_request, response) => this.writeJson(response, 200, this.app.swagger()), routeSchema("openapi"), false);
+    this.registerRoute("GET", "/redoc", (_request, response) => this.writeHtml(response, redocHtml("/openapi.json")), routeSchema("redoc"), false);
+    this.registerRoute("GET", "/redoc/redoc.standalone.js", (_request, response) => this.writeText(response, 200, REDOC_BUNDLE, "text/javascript; charset=utf-8"), routeSchema("redocBundle"), false);
 
-      if (
-        platformRoute === "gone" ||
-        (platformRoute === "marketplace" && request.method !== "GET") ||
-        (platformRoute === "knowledge-bases" && request.method !== "GET") ||
-        (platformRoute === "knowledge-read" && request.method !== "GET")
-      ) throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API");
-      if (platformRoute === "ping" && request.method === "GET") return this.writeJson(response, 200, { data: { pong: true } });
-      if (platformRoute === "whoami" && request.method === "GET") return this.writeJson(response, 200, { data: caller.claims ?? { user_id: caller.userId ?? caller.callerId, tenant_id: caller.tenantId ?? null, roles: caller.roles ?? [] } });
-      if (platformRoute === "conversations" && request.method === "GET") return this.listConversations(response, url.searchParams, caller);
-      if (platformRoute === "conversations" && request.method === "POST") return await this.createConversation(request, response, caller);
-      if (platformRoute === "conversation" && request.method === "GET") return this.getConversation(response, url.pathname, caller);
-      if (platformRoute === "conversation" && (request.method === "PATCH" || request.method === "PUT")) return await this.updateConversation(request, response, url.pathname, caller);
-      if (platformRoute === "conversation" && request.method === "DELETE") return await this.deleteConversation(response, url.pathname, caller);
-      if (route?.action === "files" && request.method === "GET") return this.listLocalFiles(response, route, caller);
-      if (route?.action === "files" && request.method === "POST") return await this.uploadLocalFile(request, response, route, caller);
-      if (route?.action === "file" && request.method === "GET") return this.downloadLocalFile(response, route, caller);
-      if (route?.action === "file" && request.method === "DELETE") return this.deleteLocalFile(response, route, caller);
-      if (platformRoute === "state" && request.method === "GET") return this.getConversationState(response, url.pathname, caller);
-      if (platformRoute === "state" && request.method === "PUT") return await this.updateConversationState(request, response, url.pathname, caller);
-      if (platformRoute === "experts" && request.method === "GET") return this.listExperts(response, caller);
-      if (platformRoute === "solutions" && request.method === "GET") return this.listSolutions(response, caller);
-      if (platformRoute === "snapshots" && request.method === "GET") return this.listSnapshots(response, caller);
-      if (platformRoute === "readiness" && request.method === "GET") return await this.readiness(response, caller);
-      if (platformRoute === "expert-readiness" && request.method === "GET") return await this.expertReadiness(response, url.pathname, caller);
-      if (platformRoute === "sync" && request.method === "POST") return await this.syncGrants(request, response, caller);
-      if (platformRoute === "outbox" && request.method === "GET") return this.listOutbox(response, caller);
-      if (platformRoute === "usage-flush" && request.method === "POST") return await this.flushUsage(request, response, caller);
-      if (platformRoute === "marketplace" && request.method === "GET") return await this.listMarketplaceTemplates(response, caller, url.pathname);
-      if (platformRoute === "knowledge-bases" && request.method === "GET") return this.listKnowledgeBases(response);
-      if (platformRoute === "knowledge-read" && request.method === "GET") return this.listKnowledgeReadModel(response);
-      if (platformRoute === "org" && request.method === "GET") return await this.orgTree(response, caller);
-      if (platformRoute === "office-scene" && request.method === "GET") return this.officeScene(response, caller);
-      if (platformRoute === "office-feed" && request.method === "GET") return this.officeFeed(response, caller);
+    this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { body: Type.Object({ account: Type.String({ minLength: 1, maxLength: 256 }) }), response: { 200: generic, 400: problemResponse("ValidationError") } }), false);
+    this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), account: Type.String({ minLength: 1, maxLength: 256 }), password: Type.String({ minLength: 1, maxLength: 512 }) }), response: { 200: generic } }), false);
+    this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), account: Type.String({ minLength: 1, maxLength: 256 }), old_password: Type.String({ minLength: 1, maxLength: 512 }), new_password: Type.String({ minLength: 1, maxLength: 512 }) }), response: { 200: generic } }), false);
 
-      if (!route) throw new HttpProblem(405, "method_not_allowed", "Method not allowed");
-      if (route.action === "events" && request.method === "GET") {
-        this.requireOwnedConversation(route.conversationId, caller);
-        return await this.events(request, response, route.conversationId, url.searchParams.get("after"));
-      }
-      if (route.action === "entries" && request.method === "GET") {
-        this.requireOwnedConversation(route.conversationId, caller);
-        const entries = await this.options.host.entries(route.conversationId);
-        return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, entries } });
-      }
-      if (route.action === "prompt" && request.method === "POST") {
-        this.requireOwnedConversation(route.conversationId, caller);
-        return await this.prompt(request, response, route.conversationId, caller);
-      }
-      if (route.action === "abort" && request.method === "POST") {
-        this.requireOwnedConversation(route.conversationId, caller);
-        const aborted = await this.options.host.abort(route.conversationId);
-        return this.writeJson(response, 200, { data: { conversation_id: route.conversationId, aborted } });
-      }
-      throw new HttpProblem(405, "method_not_allowed", "Method not allowed");
-    } catch (error) {
-      this.errors += 1;
-      if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
-      this.writeError(response, error, requestId);
-    }
+    this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { querystring: ConversationQuery, response: { 200: generic } }));
+    this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), entry_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), solution_instance_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), schedule: Type.Optional(Type.Any()) }), response: { 201: generic } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.getConversation(response, request.url ?? "/", caller!), routeSchema("getConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    const conversationUpdateSchema = routeSchema("updateConversation", { params: ConversationParams, body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), schedule: Type.Optional(Type.Any()), last_read_entry_id: Type.Optional(Type.Union([Type.String(), Type.Null()])) }), response: { 200: generic, 404: problemResponse("NotFound") } });
+    this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.updateConversation(request, response, request.url ?? "/", caller!), conversationUpdateSchema);
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.updateConversation(request, response, request.url ?? "/", caller!), { ...conversationUpdateSchema, operationId: "replaceConversation" });
+    this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.deleteConversation(response, request.url ?? "/", caller!), routeSchema("deleteConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (request, response, caller) => this.getConversationState(response, request.url ?? "/", caller!), routeSchema("getConversationState", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller) => this.updateConversationState(request, response, request.url ?? "/", caller!), routeSchema("setConversationState", { params: ConversationParams, body: Type.Object({ state: Type.String({ minLength: 1, maxLength: 32 }) }), response: { 200: generic, 404: problemResponse("NotFound") } }));
+
+    const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 409: problemResponse("ValidationError"), 422: problemResponse("ValidationError") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/events", (request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      return this.events(request, response, conversationId, new URL(request.url ?? "/", "http://localhost").searchParams.get("after"));
+    }, routeSchema("subscribeConversationEvents", { params: ConversationParams, querystring: Type.Object({ after: Type.Optional(Type.String()) }, { additionalProperties: false }), response: { 200: { description: "Pi event stream", content: { "text/event-stream": { schema: Type.String() } } } } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/entries", async (request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      const entries = await this.options.host.entries(conversationId);
+      this.writeJson(response, 200, { data: { conversation_id: conversationId, entries } });
+    }, routeSchema("listConversationEntries", { params: ConversationParams, response: { 200: generic } }));
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      const aborted = await this.options.host.abort(conversationId);
+      this.writeJson(response, 200, { data: { conversation_id: conversationId, aborted } });
+    }, routeSchema("abortConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+
+    const fileCollection = (kind: LocalFileKind, operationId: string, params: unknown) => {
+      const route = (request: IncomingMessage) => ({ conversationId: String((request as BufferedRequest & { __params?: { conversation_id: string } }).__params?.conversation_id ?? ""), kind });
+      this.registerRoute("GET", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (request, response, caller, fastifyRequest) => {
+        (request as BufferedRequest & { __params?: { conversation_id: string } }).__params = fastifyRequest?.params as { conversation_id: string };
+        return this.listLocalFiles(response, route(request), caller!);
+      }, routeSchema(operationId, { params, response: { 200: jsonResponse(Type.Ref("LocalFileListEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("POST", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, async (request, response, caller, fastifyRequest) => {
+        (request as BufferedRequest & { __params?: { conversation_id: string } }).__params = fastifyRequest?.params as { conversation_id: string };
+        await this.uploadLocalFile(request, response, route(request), caller!);
+      }, routeSchema(`${operationId.replace("list", "upload")}`, { params, body: Type.Ref("LocalFileUpload"), response: { 201: jsonResponse(Type.Ref("LocalFileEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
+    };
+    fileCollection("attachment", "listAttachments", ConversationParams);
+    fileCollection("artifact", "listArtifacts", ConversationParams);
+    const fileItem = (kind: LocalFileKind, idName: "attachment_id" | "artifact_id", operationPrefix: string, params: unknown) => {
+      const route = (request: IncomingMessage, fastifyRequest?: FastifyRequest) => { const values = fastifyRequest?.params as Record<string, string>; return { conversationId: values.conversation_id, kind, fileId: values[idName] }; };
+      const path = `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}/:${idName}`;
+      this.registerRoute("GET", path, (request, response, caller, fastifyRequest) => this.downloadLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`download${operationPrefix}`, { params, response: { 200: { description: "Local file bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("DELETE", path, (request, response, caller, fastifyRequest) => this.deleteLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`delete${operationPrefix}`, { params, response: { 200: jsonResponse(Type.Ref("LocalFileDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+    };
+    fileItem("attachment", "attachment_id", "Attachment", ConversationFileParams);
+    fileItem("artifact", "artifact_id", "Artifact", ConversationArtifactParams);
+
+    this.registerRoute("GET", "/api/agent/grants/experts", (_request, response, caller) => this.listExperts(response, caller!), routeSchema("listAuthorizedExperts", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/solutions", (_request, response, caller) => this.listSolutions(response, caller!), routeSchema("listAuthorizedSolutions", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (request, response, caller) => this.expertReadiness(response, request.url ?? "/", caller!), routeSchema("expertReadiness", { params: ExpertParams, response: { 200: generic } }));
+    this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), member_id: Type.String({ minLength: 1, maxLength: 200 }), known_versions: Type.Optional(Type.Record(Type.String(), Type.String())) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
+    this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { body: Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates", (request, response, caller) => this.listMarketplaceTemplates(response, caller!, request.url ?? "/"), routeSchema("listMarketplaceTemplates", { response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (request, response, caller) => this.listMarketplaceTemplates(response, caller!, request.url ?? "/"), routeSchema("getMarketplaceTemplate", { params: Type.Object({ template_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/knowledge-bases", (_request, response) => this.listKnowledgeBases(response), routeSchema("listKnowledgeBases", { response: { 410: generic } }));
+    for (const path of ["/api/agent/knowledge-bases/:knowledge_base_id/:kind", "/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id"]) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema("knowledgeReadModel", { response: { 410: generic } }));
+    this.registerRoute("GET", "/api/agent/org/tree", (request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { response: { 200: generic } }));
+
+    const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
+    for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { response: { 410: generic } }));
+  }
+
+  private registerRoute(method: string | string[], url: string, handler: AgentRouteHandler, schema: Record<string, unknown>, authenticated = true): void {
+    const routeSchemaWithAuth = { ...schema, security: authenticated ? [{ bearerAuth: [] }] : [] };
+    this.app.route({
+      method: method as never,
+      url,
+      schema: routeSchemaWithAuth as never,
+      handler: async (request, reply) => {
+        const raw = request.raw as BufferedRequest & { __params?: Record<string, string> };
+        raw[FASTIFY_BODY] = request.body;
+        reply.hijack();
+        try {
+          let caller: AuthenticatedCaller | undefined;
+          if (authenticated) {
+            try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
+            if (!caller.callerId || !caller.tenantId || !(caller.userId ?? caller.callerId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+          }
+          await handler(raw, reply.raw, caller, request);
+        } catch (error) {
+          this.errors += 1;
+          if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
+          this.writeError(reply.raw, error, String(request.id));
+        }
+      },
+    });
+  }
+
+  private fastifyError(error: unknown): unknown {
+    const candidate = error as { code?: string; statusCode?: number; validation?: unknown };
+    if (candidate.code === "FST_ERR_CTP_INVALID_JSON_BODY") return new HttpProblem(400, "invalid_json", "Request body must be a JSON object");
+    if (candidate.code === "FST_ERR_CTP_BODY_TOO_LARGE" || candidate.statusCode === 413) return new HttpProblem(413, "request_too_large", "Request body is too large");
+    if (candidate.code === "FST_ERR_VALIDATION") return new HttpProblem(422, "validation_error", "Request validation failed", candidate.validation);
+    return error;
   }
 
   private async resolveTenantByAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -609,40 +720,6 @@ export class AgentHttpServer {
     response.once("close", close);
   }
 
-  private matchPlatformRoute(pathname: string): string | undefined {
-    if (pathname === "/api/agent/login") return "login";
-    if (pathname === "/api/agent/reset-password") return "reset-password";
-    if (pathname === "/api/agent/ping") return "ping";
-    if (pathname === "/api/agent/whoami") return "whoami";
-    if (pathname === "/api/agent/conversations") return "conversations";
-    if (/^\/api\/agent\/conversations\/[^/]+$/.test(pathname)) return "conversation";
-    if (/^\/api\/agent\/conversations\/[^/]+\/state$/.test(pathname)) return "state";
-    if (pathname === "/api/agent/grants/experts") return "experts";
-    if (pathname === "/api/agent/grants/solutions") return "solutions";
-    if (pathname === "/api/agent/grants/snapshots") return "snapshots";
-    if (pathname === "/api/agent/grants/readiness") return "readiness";
-    if (/^\/api\/agent\/grants\/experts\/[^/]+\/readiness$/.test(pathname)) return "expert-readiness";
-    if (pathname === "/api/agent/grants/sync") return "sync";
-    if (pathname === "/api/agent/usage/outbox") return "outbox";
-    if (pathname === "/api/agent/usage/flush") return "usage-flush";
-    if (pathname === "/api/agent/marketplace/templates" || /^\/api\/agent\/marketplace\/templates\/[^/]+$/.test(pathname)) return "marketplace";
-    if (pathname === "/api/agent/knowledge-bases") return "knowledge-bases";
-    if (/^\/api\/agent\/knowledge-bases\/[^/]+\/(search|documents|ingestions)(\/[^/]+)?$/.test(pathname)) return "knowledge-read";
-    if (pathname === "/api/agent/org/tree") return "org";
-    if (pathname === "/api/agent/office/scene") return "office-scene";
-    if (pathname === "/api/agent/office/feed") return "office-feed";
-    if (/^\/api\/agent\/conversations\/[^/]+\/(group-dispatch|terminal\/execute)$/.test(pathname) || pathname.startsWith("/api/agent/recruitments") || pathname.startsWith("/api/agent/knowledge-bases/")) return "gone";
-    return undefined;
-  }
-
-  private matchConversationRoute(pathname: string): { conversationId: string; action: "prompt" | "events" | "abort" | "entries" | "files" | "file"; kind?: LocalFileKind; fileId?: string } | undefined {
-    const match = pathname.match(/^\/api\/agent\/conversations\/([^/]+)\/(prompt|events|abort|entries)$/);
-    if (match) return { conversationId: decodeURIComponent(match[1]), action: match[2] as "prompt" | "events" | "abort" | "entries" };
-    const files = pathname.match(/^\/api\/agent\/conversations\/([^/]+)\/(attachments|artifacts)(?:\/([^/]+))?$/);
-    if (!files) return undefined;
-    return { conversationId: decodeURIComponent(files[1]), action: files[3] ? "file" : "files", kind: files[2] === "artifacts" ? "artifact" : "attachment", ...(files[3] ? { fileId: decodeURIComponent(files[3]) } : {}) };
-  }
-
   private listLocalFiles(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): void {
     this.requireOwnedConversation(route.conversationId, caller);
     const items = this.options.store.listOwnedLocalFiles(route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId, route.kind);
@@ -810,88 +887,6 @@ function hasImageSignature(mimeType: string, data: Buffer): boolean {
   return false;
 }
 
-const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, {}]));
-
-const OPENAPI = {
-  openapi: "3.1.0",
-  info: { title: "AI Team Agent Service", version: "0.1.0" },
-  paths: {
-    "/healthz": { get: { operationId: "healthz", responses: { "200": { description: "Alive" } } } },
-    "/readyz": { get: { operationId: "readyz", responses: { "200": { description: "Ready" }, "503": { description: "Not ready" } } } },
-    "/api/agent/conversations/{conversation_id}/prompt": { post: { operationId: "promptConversation", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 1, maxLength: 256 } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/PromptRequest" } } } }, responses: { "202": { description: "Accepted", content: { "application/json": { schema: { $ref: "#/components/schemas/PromptAcceptedEnvelope" } } } }, "409": { description: "Conflict" }, "422": { description: "Validation error" } } } },
-    "/api/agent/conversations/{conversation_id}/events": { get: { operationId: "subscribeConversationEvents", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "after", in: "query", required: false, schema: { type: "string" } }], responses: { "200": { description: "Pi event stream" } } } },
-    "/api/agent/conversations/{conversation_id}/abort": { post: { operationId: "abortConversation", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Abort result" }, "404": { description: "Not found" } } } },
-    "/api/agent/conversations/{conversation_id}/entries": { get: { operationId: "listConversationEntries", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Pi entries" } } } },
-    "/api/agent/conversations": { get: { operationId: "listConversations", responses: { "200": { description: "Conversation metadata" } } }, post: { operationId: "createConversation", responses: { "201": { description: "Conversation metadata" } } } },
-    "/api/agent/conversations/{conversation_id}": { parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], get: { operationId: "getConversation", responses: { "200": { description: "Conversation metadata" } } }, patch: { operationId: "updateConversation", responses: { "200": { description: "Conversation metadata" } } }, delete: { operationId: "deleteConversation", responses: { "200": { description: "Deleted" } } } },
-    "/api/agent/conversations/{conversation_id}/state": { put: { operationId: "setConversationState", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Conversation metadata" } } } },
-    "/api/agent/conversations/{conversation_id}/attachments": {
-      get: { operationId: "listAttachments", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local attachment metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileListEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-      post: { operationId: "uploadAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileUpload" } } } }, responses: { "201": { description: "Stored local attachment metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" }, "413": { $ref: "#/components/responses/TooLarge" }, "422": { $ref: "#/components/responses/ValidationError" } } },
-    },
-    "/api/agent/conversations/{conversation_id}/attachments/{attachment_id}": {
-      get: { operationId: "downloadAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "attachment_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local attachment bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-      delete: { operationId: "deleteAttachment", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "attachment_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Deleted", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileDeleteEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-    },
-    "/api/agent/conversations/{conversation_id}/artifacts": {
-      get: { operationId: "listArtifacts", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local artifact metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileListEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-      post: { operationId: "uploadArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileUpload" } } } }, responses: { "201": { description: "Stored local artifact metadata", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" }, "413": { $ref: "#/components/responses/TooLarge" }, "422": { $ref: "#/components/responses/ValidationError" } } },
-    },
-    "/api/agent/conversations/{conversation_id}/artifacts/{artifact_id}": {
-      get: { operationId: "downloadArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "artifact_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Local artifact bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-      delete: { operationId: "deleteArtifact", parameters: [{ name: "conversation_id", in: "path", required: true, schema: { type: "string" } }, { name: "artifact_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Deleted", content: { "application/json": { schema: { $ref: "#/components/schemas/LocalFileDeleteEnvelope" } } } }, "401": { $ref: "#/components/responses/Unauthorized" }, "404": { $ref: "#/components/responses/NotFound" } } },
-    },
-    "/api/auth/resolve-tenant-by-account": { post: { operationId: "resolveTenantByAccount", responses: { "200": { description: "Resolved tenant" }, "503": { description: "Manager unavailable" } } } },
-    "/api/agent/login": { post: { operationId: "login", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Authentication failed" } } } },
-    "/api/agent/reset-password": { post: { operationId: "resetPassword", responses: { "200": { description: "Manager-issued token" }, "401": { description: "Reset failed" } } } },
-    "/api/agent/ping": { get: { operationId: "ping", responses: { "200": { description: "Pong" } } } },
-    "/api/agent/whoami": { get: { operationId: "whoami", responses: { "200": { description: "Authenticated caller" } } } },
-    "/api/agent/grants/experts": { get: { operationId: "listAuthorizedExperts", responses: { "200": { description: "Local projection" } } } },
-    "/api/agent/grants/solutions": { get: { operationId: "listAuthorizedSolutions", responses: { "200": { description: "Local projection" } } } },
-    "/api/agent/grants/snapshots": { get: { operationId: "listFrozenSnapshots", responses: { "200": { description: "Frozen snapshots" } } } },
-    "/api/agent/grants/readiness": { get: { operationId: "grantsReadiness", responses: { "200": { description: "Readiness" } } } },
-    "/api/agent/grants/experts/{employee_id}/readiness": { get: { operationId: "expertReadiness", parameters: [{ name: "employee_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Readiness" } } } },
-    "/api/agent/grants/sync": { post: { operationId: "syncGrants", responses: { "200": { description: "Sync result" }, "503": { description: "Manager unavailable" } } } },
-    "/api/agent/usage/outbox": { get: { operationId: "listUsageOutbox", responses: { "200": { description: "Usage summaries", content: { "application/json": { schema: { $ref: "#/components/schemas/UsageOutboxListEnvelope" } } } } } } },
-    "/api/agent/usage/flush": { post: { operationId: "flushUsage", responses: { "200": { description: "Usage flush result" }, "503": { description: "Manager unavailable" } } } },
-    "/api/agent/marketplace/templates": { get: { operationId: "listMarketplaceTemplates", responses: { "200": { description: "Manager-backed catalog projection", content: { "application/json": { schema: { $ref: "#/components/schemas/MarketplaceTemplateListEnvelope" } } } }, "503": { $ref: "#/components/responses/ManagerUnavailable" } } } },
-    "/api/agent/marketplace/templates/{template_id}": { get: { operationId: "getMarketplaceTemplate", parameters: [{ name: "template_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "Manager-backed catalog template", content: { "application/json": { schema: { $ref: "#/components/schemas/MarketplaceTemplateEnvelope" } } } }, "404": { $ref: "#/components/responses/NotFound" }, "503": { $ref: "#/components/responses/ManagerUnavailable" } } } },
-    "/api/agent/knowledge-bases": { get: { operationId: "listKnowledgeBases", responses: { "410": { description: "Removed; use Pi knowledge tools" } } } },
-    "/api/agent/org/tree":  { get: { operationId: "orgTree", responses: { "200": { description: "Organization tree" } } } },
-    "/api/agent/office/scene": { get: { operationId: "officeScene", responses: { "200": { description: "Office scene" } } } },
-    "/api/agent/office/feed": { get: { operationId: "officeFeed", responses: { "200": { description: "Conversation schedule projection" } } } },
-  },
-  components: {
-    schemas: {
-      PromptRequest: { type: "object", required: ["text"], properties: { text: { type: "string", minLength: 1, maxLength: 200000 }, images: { type: "array", maxItems: 8, items: { type: "object", required: ["type", "data", "mimeType"], properties: { type: { const: "image" }, data: { type: "string", contentEncoding: "base64" }, mimeType: { type: "string", enum: ["image/gif", "image/jpeg", "image/png", "image/webp"] } } } }, attachment_ids: { type: "array", maxItems: 8, uniqueItems: true, items: { type: "string" } }, mentions: { type: "array", maxItems: 16, items: { type: "string" } } } },
-      PromptAccepted: { type: "object", required: ["conversation_id", "accepted", "state", "idempotency_key"], properties: { conversation_id: { type: "string" }, accepted: { type: "boolean" }, state: { type: "string", enum: ["accepted", "completed"] }, idempotency_key: { type: "string" } } },
-      PromptAcceptedEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/PromptAccepted" } } },
-      LocalFileUpload: { type: "object", required: ["filename", "mime_type", "data"], properties: { filename: { type: "string", maxLength: 255 }, mime_type: { type: "string" }, data: { type: "string", contentEncoding: "base64" } } },
-      LocalFileMetadata: { type: "object", required: ["id", "conversation_id", "tenant_id", "member_id", "kind", "filename", "mime_type", "byte_size", "sha256", "created_at", "referenced_at"], properties: { id: { type: "string" }, conversation_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, kind: { type: "string", enum: ["attachment", "artifact"] }, filename: { type: "string" }, mime_type: { type: "string" }, byte_size: { type: "integer", minimum: 0 }, sha256: { type: "string" }, created_at: { type: "string", format: "date-time" }, referenced_at: { type: ["string", "null"], format: "date-time" } } },
-      LocalFileEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/LocalFileMetadata" } } },
-      LocalFileListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/LocalFileMetadata" } }, page: { type: "object", properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
-      LocalFileDeleteEnvelope: { type: "object", required: ["data"], properties: { data: { type: "object", required: ["deleted", "id"], properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } },
-      MarketplaceTemplate: { type: "object", required: ["template_id", "display_name", "category", "model_name", "skills_count", "recruit_count", "is_recruited", "tags", "avatar_url"], properties: { template_id: { type: "string" }, display_name: { type: "string" }, category: { type: "string" }, model_name: { type: "string" }, skills_count: { type: "integer", minimum: 0 }, recruit_count: { type: "integer", minimum: 0 }, is_recruited: { type: "boolean" }, tags: { type: "array", items: { type: "string" } }, avatar_url: { type: ["string", "null"] } } },
-      MarketplaceTemplateEnvelope: { type: "object", required: ["data"], properties: { data: { $ref: "#/components/schemas/MarketplaceTemplate" } } },
-      MarketplaceTemplateListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/MarketplaceTemplate" } }, page: { type: "object", required: ["next_cursor", "has_more"], properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
-      UsageSummary: { type: "object", required: ["schema_version", "summary_id", "tenant_id", "member_id", "employee_id", "window_start", "window_end", "prompt_count", "settled_count", "error_count", "input_tokens", "output_tokens", "cache_tokens", "cost_minor", "currency", "duration_ms_total"], properties: { schema_version: { const: "1" }, summary_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, employee_id: { type: "string" }, window_start: { type: "string", format: "date-time" }, window_end: { type: "string", format: "date-time" }, prompt_count: { type: "integer", minimum: 0 }, settled_count: { type: "integer", minimum: 0 }, error_count: { type: "integer", minimum: 0 }, input_tokens: { type: "integer", minimum: 0 }, output_tokens: { type: "integer", minimum: 0 }, cache_tokens: { type: "integer", minimum: 0 }, cost_minor: { type: "integer", minimum: 0 }, currency: { const: "USD" }, duration_ms_total: { type: "integer", minimum: 0 } } },
-      UsageOutboxItem: { type: "object", required: ["summary_id", "tenant_id", "member_id", "kind", "status", "attempts", "last_error", "created_at"], properties: { summary_id: { type: "string" }, tenant_id: { type: "string" }, member_id: { type: "string" }, kind: { type: "string" }, status: { type: "string" }, attempts: { type: "integer", minimum: 0 }, last_error: { type: ["string", "null"] }, created_at: { type: "string", format: "date-time" }, payload: { $ref: "#/components/schemas/UsageSummary" } } },
-      UsageOutboxListEnvelope: { type: "object", required: ["data", "page"], properties: { data: { type: "array", items: { $ref: "#/components/schemas/UsageOutboxItem" } }, page: { type: "object", required: ["next_cursor", "has_more"], properties: { next_cursor: { type: ["string", "null"] }, has_more: { type: "boolean" } } } } },
-      Problem: { type: "object", required: ["type", "title", "status", "code", "detail", "instance", "request_id"], properties: { type: { type: "string" }, title: { type: "string" }, status: { type: "integer" }, code: { type: "string" }, detail: { type: "string" }, instance: { type: "string" }, request_id: { type: "string" } } },
-    },
-    responses: {
-      Unauthorized: { description: "Authentication required", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
-      NotFound: { description: "Conversation or file not found", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
-      TooLarge: { description: "File or request exceeds a limit", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
-      ValidationError: { description: "Validation error", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
-      ManagerUnavailable: { description: "Manager-backed capability is unavailable", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
-    },
-  },
-};
-
-function swaggerHtml(url: string): string {
-  return `<!doctype html><title>AI Team Agent API</title><script src="https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js"></script><div id="app"></div><script>SwaggerUIBundle({url:${JSON.stringify(url)},dom_id:'#app'})</script>`;
-}
 function redocHtml(url: string): string {
-  return `<!doctype html><title>AI Team Agent API</title><redoc spec-url=${JSON.stringify(url)}></redoc><script src="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js"></script>`;
+  return `<!doctype html><title>AI Team Agent API</title><redoc spec-url=${JSON.stringify(url)}></redoc><script src="/redoc/redoc.standalone.js"></script>`;
 }
