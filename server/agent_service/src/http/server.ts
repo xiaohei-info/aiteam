@@ -570,8 +570,9 @@ export class AgentHttpServer {
   }
 
   private expertReadinessValue(expert: LoadedExpertProjection, runtime: boolean) {
-    const provider = expert.model_policy && (expert.model_policy.model || expert.model_policy.provider_ref) ? "ready" : "blocked";
-    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready", runtime: runtime ? "ready" : "blocked", provider, skills: [], capabilities: [], reasons: [ ...(runtime ? [] : ["Pi runtime is not ready"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
+    const provider = expert.model_policy?.model && expert.model_policy.provider_ref ? "ready" : "blocked";
+    const lifecycle = typeof expert.status === "string" && expert.status !== "active" ? "blocked" : "ready";
+    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready" && lifecycle === "ready", runtime: runtime ? "ready" : "blocked", provider, skills: [], capabilities: [], reasons: [ ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -644,16 +645,17 @@ export class AgentHttpServer {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
+    const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
+    const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
+    const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
+    if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+    if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
     try {
-      const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
-      const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
-      const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
-      if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {

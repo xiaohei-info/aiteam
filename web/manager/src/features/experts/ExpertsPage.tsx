@@ -16,6 +16,7 @@ import { Card } from "@astryxdesign/core/Card";
 import { Code } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
 import { Text } from "@astryxdesign/core/Text";
@@ -35,6 +36,7 @@ export function ExpertsPage(): ReactNode {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [transitioningId, setTransitioningId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +67,19 @@ export function ExpertsPage(): ReactNode {
     },
     [],
   );
+
+  const transition = useCallback(async (employee: EmployeeConfig, action: "activate" | "pause" | "resume") => {
+    setTransitioningId(employee.employee_id);
+    setError(null);
+    try {
+      const updated = await api.transitionEmployee(employee.employee_id, action);
+      if (updated) setItems((current) => current.map((item) => item.employee_id === updated.employee_id ? updated : item));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.action_error"));
+    } finally {
+      setTransitioningId(null);
+    }
+  }, [api, i18n]);
 
   const columns = useMemo<TableColumn<EmployeeRow>[]>(() => [
     {
@@ -124,20 +139,36 @@ export function ExpertsPage(): ReactNode {
     {
       key: "actions",
       header: "",
-      width: pixel(120),
+      width: pixel(200),
       align: "end",
       resizable: false,
-      renderCell: (employee) => (
-        <Button
-          label={i18n.t("manager.experts.edit_config")}
-          variant="ghost"
-          size="sm"
-          data-testid="edit-config"
-          onClick={() => setDetailId(employee.employee_id)}
-        />
-      ),
+      renderCell: (employee) => {
+        const action = employee.status === "active" ? "pause" : employee.status === "paused" ? "resume" : employee.status === "draft" ? "activate" : null;
+        const configured = Boolean(employee.model_policy.provider_ref && employee.model_policy.model);
+        return (
+          <HStack gap={1} justify="end">
+            <Button
+              label={i18n.t("manager.experts.edit_config")}
+              variant="ghost"
+              size="sm"
+              data-testid="edit-config"
+              onClick={() => setDetailId(employee.employee_id)}
+            />
+            {action ? (
+              <Button
+                label={i18n.t(`manager.experts.transition_${action}`)}
+                variant="secondary"
+                size="sm"
+                isLoading={transitioningId === employee.employee_id}
+                isDisabled={transitioningId !== null || action === "activate" && !configured}
+                onClick={() => void transition(employee, action)}
+              />
+            ) : null}
+          </HStack>
+        );
+      },
     },
-  ], [i18n]);
+  ], [i18n, transition, transitioningId]);
 
   return (
     <VStack as="section" gap={6}>

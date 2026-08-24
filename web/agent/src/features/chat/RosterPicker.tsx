@@ -69,19 +69,14 @@ export function RosterPicker({ client, onPick, onCancel, busy = false, error }: 
         }
         const loaded = await listLoadedExperts(client);
         if (!cancelled) setExperts(loaded);
+        const report = await getReadinessReport(client).catch(() => null);
+        if (!cancelled && report) setReadiness(Object.fromEntries(report.experts.map((expert) => [expert.employee_id, expert])));
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "加载专家失败");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-
-    void getReadinessReport(client)
-      .then((report) => {
-        if (cancelled || report == null) return;
-        setReadiness(Object.fromEntries(report.experts.map((expert) => [expert.employee_id, expert])));
-      })
-      .catch(() => {});
 
     return () => { cancelled = true; };
   }, [client, session]);

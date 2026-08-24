@@ -162,6 +162,18 @@ describe("ExpertsPage", () => {
     expect(statuses[1]).toHaveTextContent("待配置");
   });
 
+  it("生命周期：已配置草稿可激活，未配置草稿保持禁用", async () => {
+    const draftConfigured = { ...employeeConfigured, status: "draft" };
+    const { api } = mockApis([draftConfigured, employeeUnconfigured]);
+    (api.transitionEmployee as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...draftConfigured, status: "active" });
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: "激活" });
+    expect(buttons[0]).toBeEnabled();
+    expect(buttons[1]).toBeDisabled();
+    fireEvent.click(buttons[0]!);
+    await waitFor(() => expect(api.transitionEmployee).toHaveBeenCalledWith("emp-1", "activate"));
+  });
+
   it("编辑：点击编辑配置打开抽屉，修改 provider/model 后保存调用 updateEmployee 并保留未编辑字段", async () => {
     const { api, updateEmployee } = mockApis([employeeConfigured]);
     renderPage();
