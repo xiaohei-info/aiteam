@@ -12,6 +12,9 @@ describe("aiteamStone", () => {
       "#5b6066",
       "#b8bec5",
     ]);
+    for (const token of ["--color-on-success", "--color-on-error", "--color-on-warning"] as const) {
+      expect(aiteamStone.__inputTokens?.[token]).toEqual(["#ffffff", "#17202b"]);
+    }
     expect(aiteamStone.tokens["--font-family-body"]).toContain("PingFang SC");
   });
 
