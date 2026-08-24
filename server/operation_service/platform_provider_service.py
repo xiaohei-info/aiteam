@@ -34,10 +34,10 @@ class PlatformProviderService:
             if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
                 raise Conflict("platform provider code already exists") from exc
             raise
-        return _provider(row)
+        return self._provider_output(row)
 
     def list_providers(self, *, published_only: bool = False) -> list[PlatformProvider]:
-        return [_provider(row) for row in self._repo.list_providers(published_only=published_only)]
+        return [self._provider_output(row) for row in self._repo.list_providers(published_only=published_only)]
 
     def publish_provider(self, provider_id: str) -> PlatformProvider:
         provider = self._require_provider(provider_id)
@@ -46,7 +46,7 @@ class PlatformProviderService:
             raise Conflict("publish at least one priced model before publishing provider")
         if any((rate := self._repo.current_rate(provider_id, model.model_id)) is None or rate.pricing_status != "known" for model in models):
             raise Conflict("every published model requires a known active price")
-        return _provider(self._repo.set_provider_status(provider.provider_id, "published"))
+        return self._provider_output(self._repo.set_provider_status(provider.provider_id, "published"))
 
     def sync_models(self, provider_id: str) -> list[PlatformModel]:
         provider = self._require_provider(provider_id)
@@ -164,10 +164,13 @@ class PlatformProviderService:
     def _runtime_access(self, provider: ProviderRow, access: AccessRow) -> dict:
         return {
             "access": _access(access),
-            "relay_base_url": provider.relay_base_url,
+            "relay_base_url": self._public_relay_url,
             "api_protocol": provider.api_protocol,
             "relay_token": self._crypto.decrypt(access.encrypted_token),
         }
+
+    def _provider_output(self, row: ProviderRow) -> PlatformProvider:
+        return _provider(row).model_copy(update={"relay_base_url": self._public_relay_url})
 
     def _require_provider(self, provider_id: str) -> ProviderRow:
         row = self._repo.get_provider(provider_id)

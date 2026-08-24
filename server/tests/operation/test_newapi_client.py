@@ -1,10 +1,12 @@
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from operation_service.newapi_client import NewApiAdminClient, NewApiError
-from operation_service.platform_provider_service import newapi_urls
+from operation_service.platform_provider_repository import ProviderRow
+from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
 
 
 def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
@@ -19,6 +21,12 @@ def test_explicit_newapi_urls_override_common_base(monkeypatch):
     monkeypatch.setenv("NEWAPI_ADMIN_BASE_URL", "http://newapi:3000")
     monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://relay.example/v1")
     assert newapi_urls() == ("http://newapi:3000", "https://relay.example/v1")
+
+
+def test_existing_provider_output_uses_current_configured_relay_url():
+    service = PlatformProviderService(None, None, None, "https://relay.example/new/v1")
+    row = ProviderRow("p1", "newapi", "NewAPI", "http://127.0.0.1:9300/v1", "openai-completions", 1, "published", 2, datetime.now(UTC))
+    assert service._provider_output(row).relay_base_url == "https://relay.example/new/v1"
 
 
 def test_newapi_client_uses_server_management_identity_and_normalizes_models():
