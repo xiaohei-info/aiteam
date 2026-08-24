@@ -103,6 +103,19 @@ def test_register_validation_error_422(client):
     assert r.json()["code"] == "validation_error"
 
 
+def test_register_allows_empty_avatar_and_skills(client):
+    body = {
+        "display_name": "草稿专家",
+        "category": "市场营销",
+        "system_prompt": "你是客服",
+        "default_model": "gpt-4.1",
+        "description": "客服专家",
+    }
+    r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["avatar_url"] == ""
+    assert data["skill_ids"] == []
 # ---- 发布/下架/可见范围 ----
 
 def test_publish_notifies_manager(client, manager):

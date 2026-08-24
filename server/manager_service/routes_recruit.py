@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, Request, status
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
+from pydantic import Field
+
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
@@ -30,6 +32,10 @@ from .schemas import (
     SolutionApplyRecordOut,
     SolutionInstanceOut,
 )
+
+
+class RecruitableExpertOut(ExpertTemplateDetail):
+    is_recruited: bool = Field(default=False)
 
 
 class _ManagerNotConfigured(AppError):
@@ -68,15 +74,22 @@ def build_recruit_router(verifier) -> APIRouter:
     async def list_recruitable_experts(
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[ExpertTemplateDetail]:
-        # 浏览是纯 Operator 目录只读（不碰租户 DB）；catalog 端口由 app.state 注入。
+    ) -> ListEnvelope[RecruitableExpertOut]:
+        # 浏览是 Operator 目录只读；is_recruited 再查本 tenant 已落地实例。
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
-            return ListEnvelope[ExpertTemplateDetail](data=catalog.list_expert_templates())
+            templates = catalog.list_expert_templates()
         except AppError:
             raise
         except Exception as exc:
             raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
+        recruited = _service(request).recruited_template_ids(tenant_context_from(claims))
+        return ListEnvelope[RecruitableExpertOut](
+            data=[
+                RecruitableExpertOut(**item.model_dump(), is_recruited=item.template_id in recruited)
+                for item in templates
+            ]
+        )
 
     @router.get(
         "/catalog/solutions", description="请查看接口名称了解用途", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",

@@ -78,6 +78,7 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         system_prompt=payload.get("system_prompt", ""),
         default_model=payload.get("default_model", ""),
         skill_ids=payload.get("skill_ids", []),
+        platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
         description=payload.get("description", ""),
         initial_memories=payload.get("initial_memories", []),
@@ -162,6 +163,7 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         system_prompt=payload.get("system_prompt", ""),
         default_model=payload.get("default_model", ""),
         skill_ids=payload.get("skill_ids", []),
+        platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
         description=payload.get("description", ""),
         initial_memories=payload.get("initial_memories", []),
@@ -181,15 +183,18 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
 class CatalogService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
-    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway):
+    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None):
         self._repo = repo
         self._manager = manager
+        self._platform_skills = platform_skills
 
     # ---- 注册（草稿态，不通知 Manager）----
 
     def register_expert_template(
         self, req: RegisterExpertTemplateRequest
     ) -> CatalogEntryResponse:
+        self._validate_platform_skill_refs(req.platform_skill_refs)
+
         def make(candidate: str) -> CatalogEntry:
             return CatalogEntry(
                 catalog_type=CatalogType.EXPERT_TEMPLATE,
@@ -201,11 +206,10 @@ class CatalogService:
                     "avatar_url": req.avatar_url,
                     "system_prompt": req.system_prompt,
                     "default_model": req.default_model,
-                    "skill_ids": req.skill_ids,
-                    "tags": req.tags,
+                    "skill_ids": [],
+                    "platform_skill_refs": [ref.model_dump(mode="json") for ref in req.platform_skill_refs],
+                    "tags": [],
                     "description": req.description,
-                    "initial_memories": req.initial_memories,
-                    "sort_order": req.sort_order,
                 },
             )
 
@@ -254,12 +258,29 @@ class CatalogService:
         entry = _with_auto_id(self._repo, make, req.display_name)
         return _to_response(entry)
 
+    def _validate_platform_skill_refs(self, refs) -> None:
+        if refs and self._platform_skills is None:
+            from shared.errors import AppError
+            exc = AppError("Operator platform skill store is not configured")
+            exc.status, exc.code, exc.title = 503, "operator_skill_store_unavailable", "Operator skill store unavailable"
+            raise exc
+        if self._platform_skills is None:
+            return
+        for ref in refs:
+            row = self._platform_skills.get_package(skill_id=ref.skill_id, version=ref.version, published_only=True)
+            if row["content_hash"] != ref.content_hash:
+                raise Conflict("platform skill reference content hash does not match the published version")
+
     # ---- 生命周期：发布 / 下架 / 可见范围 ----
 
     def publish_template(
         self, catalog_type: CatalogType, template_id: str, req: PublishTemplateRequest
     ) -> CatalogEntryResponse:
         entry = self._repo.get(catalog_type, template_id)
+        if catalog_type == CatalogType.EXPERT_TEMPLATE:
+            from shared.contracts.platform_skill import PlatformSkillRef
+            refs = [PlatformSkillRef.model_validate(ref) for ref in (entry.payload or {}).get("platform_skill_refs", [])]
+            self._validate_platform_skill_refs(refs)
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
@@ -326,6 +347,9 @@ class CatalogService:
         body 中 None 值已在 routes 层经 exclude_none 排除，此处 changes 不含 None。
         """
         entry = self._repo.get(catalog_type, template_id)
+        if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
+            from shared.contracts.platform_skill import PlatformSkillRef
+            self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
         # 分离 payload 字段与 dataclass 顶层字段
         _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
                        'status', 'visible_scope', 'payload'}
@@ -406,9 +430,10 @@ class CatalogService:
         recommended: dict = {}
         if payload.get("default_model"):
             recommended["model"] = payload["default_model"]
-        skills = payload.get("skill_ids") or []
-        if skills:
-            recommended["skills"] = list(skills)
+        refs = payload.get("platform_skill_refs") or []
+        if refs:
+            recommended["platform_skill_refs"] = list(refs)
+            recommended["skills"] = [str(ref.get("skill_id")) for ref in refs if isinstance(ref, dict) and ref.get("skill_id")]
         # 知识引用：行业方案包级 knowledge_refs 叠加由 apply_solution 处理；
         # 模板级无独立 knowledge_refs 字段，留空。
         return persona, recommended
@@ -444,6 +469,7 @@ class CatalogService:
             system_prompt=payload.get("system_prompt", ""),
             default_model=payload.get("default_model", ""),
             skill_ids=payload.get("skill_ids", []),
+            platform_skill_refs=payload.get("platform_skill_refs", []),
             description=payload.get("description", ""),
             initial_memories=payload.get("initial_memories", []),
             sort_order=payload.get("sort_order", 0),
@@ -530,6 +556,7 @@ class CatalogService:
                     system_prompt=payload.get("system_prompt", ""),
                     default_model=payload.get("default_model", ""),
                     skill_ids=payload.get("skill_ids", []),
+                    platform_skill_refs=payload.get("platform_skill_refs", []),
                     description=payload.get("description", ""),
                     initial_memories=payload.get("initial_memories", []),
                     sort_order=payload.get("sort_order", 0),

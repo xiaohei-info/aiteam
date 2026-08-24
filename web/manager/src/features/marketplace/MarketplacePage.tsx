@@ -119,6 +119,14 @@ export function MarketplacePage(): ReactNode {
                   </VStack>
                   {t.persona && <Text color="secondary">{t.persona}</Text>}
                 {canWrite && (
+                    t.is_recruited ? (
+                      <Button
+                        label={i18n.t("manager.experts.recruited")}
+                        size="sm"
+                        variant="secondary"
+                        isDisabled
+                      />
+                    ) : (
                     <Button
                       label={i18n.t("manager.experts.recruit")}
                       size="sm"
@@ -128,6 +136,7 @@ export function MarketplacePage(): ReactNode {
                       "manager.experts.recruit_ok",
                       )}
                     />
+                    )
                 )}
                 </VStack>
               </Card>

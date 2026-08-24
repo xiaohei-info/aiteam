@@ -14,6 +14,7 @@ export interface ExpertTemplate {
   version: string;
   display_name: string;
   persona?: string | null;
+  is_recruited?: boolean;
 }
 
 /** 方案包内专家摘要（对齐 SolutionPackage.experts 的 ExpertTemplateDetail）。 */

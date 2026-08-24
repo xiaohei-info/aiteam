@@ -40,6 +40,7 @@ from .grants import LoadedExpertProjection, MemberGrant
 from .snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
 from .summary import AuditSummaryEvent, UsageSummary
 from .skill import SignedSkillPackage, SkillFile, SkillPackage, SkillSigningKeyMetadata
+from .platform_skill import PlatformSkillPackage, PlatformSkillRef, PlatformSkillSummary
 from .tenancy import TenantContext
 
 __all__ = [
@@ -76,6 +77,9 @@ __all__ = [
     "UsageSummary",
     "TenantContext",
     "SignedSkillPackage",
+    "PlatformSkillPackage",
+    "PlatformSkillRef",
+    "PlatformSkillSummary",
     "SkillFile",
     "SkillPackage",
     "SkillSigningKeyMetadata",

@@ -15,6 +15,7 @@ from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
 from .routes_catalog_notify import router as catalog_notify_router
 from .routes_capability import build_capability_router
+from .routes_skill_market import build_skill_market_router
 from .routes_employee import build_employee_router
 from .routes_employee_bindings import build_employee_bindings_router
 from .routes_employee_prompt import build_employee_prompt_router
@@ -168,6 +169,7 @@ app.include_router(build_knowledge_space_router(_verifier))
 app.include_router(build_knowledge_intake_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))
+app.include_router(build_skill_market_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
 # 招募专家/应用方案（/api/manager/recruit/*，M6，F06/F07，D12）。

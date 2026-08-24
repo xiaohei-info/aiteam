@@ -71,6 +71,7 @@ def _fake_svc():
     svc.recruit_expert.return_value = _recruit_result()
     svc.apply_solution.return_value = _apply_result()
     svc.list_solution_instances.return_value = [_solution_instance()]
+    svc.recruited_template_ids.return_value = set()
     svc.get_solution_instance.return_value = _solution_instance()
     return svc
 
@@ -205,15 +206,27 @@ def test_recruit_expert_conflict_409():
 # ---- catalog 浏览（F06/F07） ----
 
 def test_browse_experts_happy():
-    """目录浏览（纯 Operator 目录只读，不碰 DB）。"""
+    """目录浏览合并本租户已招募状态。"""
     from shared.contracts.crosstier import ExpertTemplateDetail
-    c = _client(None)  # 不依赖 DB
-    c.app.state._operator_catalog.seed_expert(
-        ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试")
-    )
-    r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
+
+    fake = _fake_svc()
+    fake.recruited_template_ids.return_value = {"tpl-1"}
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
+        c = _client("postgresql://fake/fake")
+        c.app.state._operator_catalog.seed_expert(
+            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试")
+        )
+        r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
     assert r.status_code == 200
     assert r.json()["data"][0]["template_id"] == "tpl-1"
+    assert r.json()["data"][0]["is_recruited"] is True
+
+
+def test_browse_experts_no_db_503():
+    c = _client(None)
+    r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
+    assert r.status_code == 503
+    assert r.json()["code"] == "manager_db_unconfigured"
 
 
 def test_browse_experts_operator_outage_is_bounded_503():
@@ -247,7 +260,8 @@ def test_browse_experts_no_token_401():
 
 
 def test_browse_catalog_empty():
-    c = _client(None)
-    r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=_fake_svc()):
+        c = _client("postgresql://fake/fake")
+        r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
     assert r.status_code == 200
     assert r.json()["data"] == []

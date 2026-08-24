@@ -233,6 +233,23 @@ def test_skill_crud_roundtrip_and_version_increment():
         svc.get_skill(ctx, catalog_id=created.catalog_id)
 
 
+def test_operator_managed_skill_ids_and_rows_are_immutable_via_generic_crud():
+    repo = _FakeRepo()
+    svc = CapabilityCatalogService(repo)
+    ctx = _ctx("t-a")
+    with pytest.raises(Conflict, match="reserved"):
+        svc.create_skill(ctx, SkillCatalogIn(skill_id="platform-forged"))
+    row = repo.create_skill(
+        ctx, skill_id="platform-real", display_name="Platform", version="1.0.0",
+        install_policy="on_demand", binding_policy="opt_in", visibility="tenant",
+        config={"source": "operator"}, files=[{"path": "SKILL.md", "content": "# X"}], content_hash="hash",
+    )
+    with pytest.raises(Conflict, match="immutable"):
+        svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real"), catalog_id=row.catalog_id)
+    with pytest.raises(Conflict, match="immutable"):
+        svc.delete_skill(ctx, catalog_id=row.catalog_id)
+
+
 def test_skill_id_conflict_within_tenant():
     svc = CapabilityCatalogService(_FakeRepo())
     ctx = _ctx("t-a")

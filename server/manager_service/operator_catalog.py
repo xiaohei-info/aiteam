@@ -19,6 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+from shared.contracts.platform_skill import PlatformSkillPackage
 from shared.errors import AppError
 
 
@@ -51,6 +52,13 @@ class OperatorCatalogPort(ABC):
     @abstractmethod
     def list_solution_packages(self) -> list[SolutionPackage]:
         """F07 浏览：列可应用行业方案包（各 solution 取最新版本）。只读，不写 Operator。"""
+
+    def list_platform_skills(self) -> list[dict]:
+        return []
+
+    def pull_platform_skill(self, *, skill_id: str, version: str) -> PlatformSkillPackage:
+        from shared.errors import NotFound
+        raise NotFound(f"platform skill not found: {skill_id}@{version}")
 
 
 class OperatorCatalogClient(OperatorCatalogPort):
@@ -114,6 +122,14 @@ class OperatorCatalogClient(OperatorCatalogPort):
         data_list = resp.get("data", [])
         return [SolutionPackage.model_validate(item) for item in data_list]
 
+    def pull_platform_skill(self, *, skill_id: str, version: str) -> PlatformSkillPackage:
+        path = f"/api/operation/skill-market/pull/skills/{skill_id}/versions/{version}"
+        data = self._get(path).get("data", {})
+        return PlatformSkillPackage.model_validate(data)
+
+    def list_platform_skills(self) -> list[dict]:
+        return self._get("/api/operation/skill-market/pull/skills").get("data", [])
+
     def _get(self, path: str) -> dict:
         try:
             return self._client.get(path)
@@ -142,6 +158,7 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._experts_latest: dict[str, ExpertTemplateDetail] = {}
         self._solutions: dict[tuple[str, str], SolutionPackage] = {}
         self._solutions_latest: dict[str, SolutionPackage] = {}
+        self._platform_skills: dict[tuple[str, str], PlatformSkillPackage] = {}
         self.invalidated: list[tuple[str, str]] = []
 
     def invalidate(self, catalog_type: str, template_id: str) -> None:
@@ -156,6 +173,9 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
     def seed_solution(self, package: SolutionPackage) -> None:
         self._solutions[(package.solution_id, package.version)] = package
         self._solutions_latest[package.solution_id] = package
+
+    def seed_platform_skill(self, package: PlatformSkillPackage) -> None:
+        self._platform_skills[(package.package.skill_id, package.package.version)] = package
 
     # ---- 只读拉取（红线：不改预置真相）----
     def pull_expert_template(
@@ -190,3 +210,28 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
 
     def list_solution_packages(self) -> list[SolutionPackage]:
         return [p.model_copy(deep=True) for p in self._solutions_latest.values()]
+
+    def list_platform_skills(self) -> list[dict]:
+        latest: dict[str, PlatformSkillPackage] = {}
+        for (skill_id, _), package in self._platform_skills.items():
+            latest[skill_id] = package
+        return [
+            {
+                "skill_id": skill_id,
+                "owner": item.owner,
+                "slug": item.slug,
+                "display_name": item.package.display_name,
+                "summary": item.package.description,
+                "published_version": item.package.version,
+                "content_hash": item.package.content_hash,
+                "status": "published",
+            }
+            for skill_id, item in latest.items()
+        ]
+
+    def pull_platform_skill(self, *, skill_id: str, version: str) -> PlatformSkillPackage:
+        package = self._platform_skills.get((skill_id, version))
+        if package is None:
+            from shared.errors import NotFound
+            raise NotFound(f"platform skill not found: {skill_id}@{version}")
+        return package.model_copy(deep=True)

@@ -20,6 +20,7 @@ import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
@@ -28,8 +29,10 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
 import { useProvidersApi } from "../providers/useProvidersApi";
+import { useCapabilityApi } from "../capability/useCapabilityApi";
 import type { EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { ProviderCredential } from "../providers/types";
+import type { SkillCatalog } from "../capability/types";
 
 export interface EmployeeConfigDrawerProps {
   employeeId: string | null;
@@ -48,6 +51,7 @@ type Draft = {
   model: string;
   thinking_level: (typeof THINKING_LEVELS)[number] | "";
   timeout_seconds: string;
+  skills: string[];
 };
 
 function toDraft(e: EmployeeConfig): Draft {
@@ -62,6 +66,7 @@ function toDraft(e: EmployeeConfig): Draft {
       : "",
     timeout_seconds:
       e.execution_policy.timeout_seconds != null ? String(e.execution_policy.timeout_seconds) : "",
+    skills: e.skills,
   };
 }
 
@@ -94,9 +99,11 @@ export function EmployeeConfigDrawer({
   const i18n = useI18n();
   const experts = useExpertsApi();
   const providersApi = useProvidersApi();
+  const capabilityApi = useCapabilityApi();
 
   const [employee, setEmployee] = useState<EmployeeConfig | null>(null);
   const [providers, setProviders] = useState<ProviderCredential[]>([]);
+  const [skills, setSkills] = useState<SkillCatalog[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [providersLoading, setProvidersLoading] = useState(true);
@@ -152,6 +159,12 @@ export function EmployeeConfigDrawer({
       alive = false;
     };
   }, [providersApi]);
+
+  useEffect(() => {
+    let alive = true;
+    capabilityApi.listSkills().then((items) => { if (alive) setSkills(items); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [capabilityApi]);
 
   const selectedProvider = useMemo(
     () => providers.find((p) => p.provider_ref === draft?.provider_ref) ?? null,
@@ -224,6 +237,7 @@ export function EmployeeConfigDrawer({
       execution_policy: {
         timeout_seconds: timeout,
       },
+      skills: draft.skills,
     };
 
     try {
@@ -346,6 +360,20 @@ export function EmployeeConfigDrawer({
                           onChange={(value) => update("thinking_level", value as Draft["thinking_level"])}
                         />
                       </FormLayout>
+                    </VStack>
+
+                    <VStack gap={3}>
+                      <Heading level={3}>技能</Heading>
+                      <MultiSelector
+                        label="企业已安装技能"
+                        description={skills.length ? "选择此专家可使用的技能" : "暂无已安装技能，请先前往技能市场安装"}
+                        options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || skill.skill_id} · v${skill.version}` }))}
+                        value={draft.skills}
+                        onChange={(value) => update("skills", value)}
+                        placeholder="选择技能"
+                        triggerDisplay="labels"
+                        isDisabled={submitting || skills.length === 0}
+                      />
                     </VStack>
 
                     <VStack gap={3}>

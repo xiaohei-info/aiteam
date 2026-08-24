@@ -25,6 +25,12 @@ export type CatalogStatus = "draft" | "published" | "unpublished";
 /** 前端可见范围简化表示（visible_scope dict 的前端投影）。 */
 export type VisibilityLabel = "public" | "enterprise" | "hidden";
 
+export interface PlatformSkillRef {
+  skill_id: string;
+  version: string;
+  content_hash: string;
+}
+
 /** 方案内专家绑定（对齐后端 ExpertBinding schema）。 */
 export interface ExpertBinding {
   template_id: string;
@@ -41,12 +47,13 @@ export interface CatalogItem {
   status: CatalogStatus;
   visible_scope: Record<string, unknown> | null;
 
-  // ---- 专家模板 PRD-v2 扁平字段 ----
+  // ---- 专家模板字段 ----
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
   default_model?: string;
   skill_ids?: string[];
+  platform_skill_refs?: PlatformSkillRef[];
   tags?: string[];
   description?: string;
   initial_memories?: Record<string, unknown>[];
@@ -74,11 +81,8 @@ export interface RegisterExpertTemplate {
   avatar_url?: string;
   system_prompt?: string;
   default_model?: string;
-  skill_ids?: string[];
-  tags?: string[];
+  platform_skill_refs?: PlatformSkillRef[];
   description?: string;
-  initial_memories?: Record<string, unknown>[];
-  sort_order?: number;
 }
 
 /** 注册行业方案请求体（对齐 RegisterSolutionTemplateRequest）。 */

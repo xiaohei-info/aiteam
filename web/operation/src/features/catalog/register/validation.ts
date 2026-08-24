@@ -3,10 +3,14 @@ import type { CatalogItemType } from "../types";
 export interface RegistrationInput {
   catalogType: CatalogItemType;
   displayName: string;
+  category: string;
+  avatarUrl: string;
+  systemPrompt: string;
+  defaultModel: string;
+  description: string;
   expertTemplateIds: string[];
   plannerTemplateId: string;
   plannerPrompt: string;
-  initialMemoriesText: string;
   defaultGrantsText: string;
 }
 
@@ -17,17 +21,6 @@ export function parseList(value: string): string[] {
     .split(/[\n,，]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-export function parseJsonArray(value: string): Record<string, unknown>[] | undefined {
-  const text = value.trim();
-  if (!text) return undefined;
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed as Record<string, unknown>[] : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function parseJsonObject(value: string): Record<string, unknown> | undefined {
@@ -49,9 +42,10 @@ export function validateRegistration(input: RegistrationInput): RegistrationErro
   if (!input.displayName.trim()) errors.displayName = "名称不能为空";
 
   if (input.catalogType === "expert_template") {
-    if (input.initialMemoriesText.trim() && !parseJsonArray(input.initialMemoriesText)) {
-      errors.initialMemoriesText = "预置记忆必须是 JSON 数组";
-    }
+    if (!input.category.trim()) errors.category = "请选择分类";
+    if (!input.systemPrompt.trim()) errors.systemPrompt = "请填写系统提示词";
+    if (!input.defaultModel.trim()) errors.defaultModel = "请填写默认模型";
+    if (!input.description.trim()) errors.description = "请填写岗位描述";
     return errors;
   }
 

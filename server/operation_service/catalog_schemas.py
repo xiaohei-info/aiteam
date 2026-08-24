@@ -13,6 +13,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.enums import CatalogStatus, CatalogType
+from shared.contracts.platform_skill import PlatformSkillRef
 
 
 class ExpertBinding(BaseModel):
@@ -35,8 +36,8 @@ class RegisterExpertTemplateRequest(BaseModel):
 
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
     default_model / skill_ids / tags / description / initial_memories / sort_order。
-    PRD 必填字段（category / avatar_url / system_prompt / default_model / skill_ids / description）
-    在 schema 层做 min_length 校验，注册即草稿（is_published 不在本请求中）。
+    创建专家模板的最小字段：名称、分类、系统提示词、默认模型、岗位描述；头像可选。
+    技能只接受 Operator 内部平台技能的固定版本引用，未选择时为空。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -49,16 +50,12 @@ class RegisterExpertTemplateRequest(BaseModel):
     # is_published 不在注册请求中；注册即草稿，发布由单独发布动作完成（05 F03）。
     display_name: str = Field(min_length=1, description="专家名称（PRD: name）")
     category: str = Field(min_length=1, description="分类（市场营销/财务分析/…）(PRD: category, 必填)")
-    avatar_url: str = Field(min_length=1, description="头像图片 URL (PRD: avatar_url, 必填)")
+    avatar_url: str = Field(default="", description="可选头像图片 URL")
     system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
     default_model: str = Field(min_length=1, description="默认使用的大模型（PRD: default_model, 必填）")
-    skill_ids: list[str] = Field(min_length=1, default_factory=list, description="预配置技能列表 (PRD: skill_ids, 必填)")
-    tags: list[str] = Field(default_factory=list, description="搜索标签 (PRD: tags)")
+    platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
+    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility field; use skill_refs")
     description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
-    initial_memories: list[dict] = Field(
-        default_factory=list, description="预置记忆条目 (PRD: initial_memories)"
-    )
-    sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）(PRD: sort_order)")
 
 
 # ---- 行业方案（对齐 PRD-v2 S03 + 下游 apply/建群业务流程所需字段）----
@@ -133,11 +130,9 @@ class UpdateExpertTemplateRequest(BaseModel):
     avatar_url: str | None = None
     system_prompt: str | None = None
     default_model: str | None = None
+    platform_skill_refs: list[PlatformSkillRef] | None = None
     skill_ids: list[str] | None = None
-    tags: list[str] | None = None
     description: str | None = None
-    initial_memories: list[dict] | None = None
-    sort_order: int | None = None
 
 
 class UpdateSolutionTemplateRequest(BaseModel):
@@ -173,7 +168,8 @@ class CatalogEntryResponse(BaseModel):
     avatar_url: str = Field(default="")
     system_prompt: str = Field(default="")
     default_model: str = Field(default="")
-    skill_ids: list[str] = Field(default_factory=list)
+    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
+    platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = Field(default="")
     initial_memories: list[dict] = Field(default_factory=list)

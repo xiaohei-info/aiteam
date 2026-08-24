@@ -13,6 +13,7 @@ export interface BasicInfoFieldsProps {
   isAddingCategory: boolean;
   disabled: boolean;
   displayNameError?: string;
+  categoryError?: string;
   onDisplayNameChange: (value: string) => void;
   onCategoryChange: (value: string) => void;
   onNewCategoryChange: (value: string) => void;
@@ -29,6 +30,7 @@ export function BasicInfoFields({
   isAddingCategory,
   disabled,
   displayNameError,
+  categoryError,
   onDisplayNameChange,
   onCategoryChange,
   onNewCategoryChange,
@@ -55,6 +57,7 @@ export function BasicInfoFields({
             options={categories.map((value) => ({ value, label: value }))}
             placeholder="请选择分类"
             isDisabled={disabled}
+            status={categoryError ? { type: "error", message: categoryError } : undefined}
           />
           <VStack gap={2} align="start">
             <Button

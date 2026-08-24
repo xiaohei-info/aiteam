@@ -38,7 +38,10 @@ def manager():
 
 @pytest.fixture
 def service(manager):
-    return CatalogService(CatalogRepository(), manager)
+    class PlatformSkillStore:
+        def get_package(self, *, skill_id, version, published_only=False):
+            return {"content_hash": "abc123"}
+    return CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore())
 
 
 def _expert(**kw):
@@ -49,7 +52,7 @@ def _expert(**kw):
         avatar_url="https://example.com/cmo.png",
         system_prompt="market lead",
         default_model="gpt-5",
-        skill_ids=["seo", "analytics"],
+        platform_skill_refs=[],
         description="CMO expert",
     )
     base.update(kw)
@@ -355,18 +358,15 @@ def test_update_solution_orchestration_fields(service):
 
 # ---- Issue #279：专家模板模型/绑定/提示词包/分类/角色字段 ----
 
-def test_register_expert_stores_flat_fields(service):
-    """注册专家模板时携带 PRD-v2 扁平字段，应存入 payload。"""
+def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
+    ref = {"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}
     req = _expert(
         category="marketing",
         avatar_url="https://example.com/avatar.png",
         system_prompt="You are CMO",
         default_model="gpt-5",
-        skill_ids=["web_search", "seo"],
-        tags=["cmo"],
+        platform_skill_refs=[ref],
         description="营销高管",
-        initial_memories=[{"role": "user", "content": "hi"}],
-        sort_order=2,
     )
     service.register_expert_template(req)
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
@@ -374,27 +374,25 @@ def test_register_expert_stores_flat_fields(service):
     assert entry.payload["avatar_url"] == "https://example.com/avatar.png"
     assert entry.payload["system_prompt"] == "You are CMO"
     assert entry.payload["default_model"] == "gpt-5"
-    assert entry.payload["skill_ids"] == ["web_search", "seo"]
-    assert entry.payload["tags"] == ["cmo"]
+    assert entry.payload["skill_ids"] == []
+    assert entry.payload["platform_skill_refs"] == [ref]
     assert entry.payload["description"] == "营销高管"
-    assert entry.payload["initial_memories"] == [{"role": "user", "content": "hi"}]
-    assert entry.payload["sort_order"] == 2
+    assert "initial_memories" not in entry.payload
+    assert "sort_order" not in entry.payload
 
 
 def test_register_expert_default_fields(service):
-    """注册专家模板时不带可选项 tags/initial_memories/sort_order,应落默认值（空 list/0）。
-    必填字段（category/avatar_url/system_prompt/default_model/skill_ids/description）由 schema 校验。"""
+    """头像与平台技能均可不选。"""
     service.register_expert_template(_expert())
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["category"] == "marketing"
     assert entry.payload["avatar_url"] == "https://example.com/cmo.png"
     assert entry.payload["system_prompt"] == "market lead"
     assert entry.payload["default_model"] == "gpt-5"
-    assert entry.payload["skill_ids"] == ["seo", "analytics"]
+    assert entry.payload["skill_ids"] == []
+    assert entry.payload["platform_skill_refs"] == []
     assert entry.payload["description"] == "CMO expert"
     assert entry.payload["tags"] == []
-    assert entry.payload["initial_memories"] == []
-    assert entry.payload["sort_order"] == 0
 
 
 def test_update_expert_flat_fields(service):
@@ -406,14 +404,14 @@ def test_update_expert_flat_fields(service):
             "system_prompt": "Updated system prompt",
             "default_model": "claude-opus-4-8",
             "category": "growth",
-            "skill_ids": ["seo"],
+            "platform_skill_refs": [{"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}],
         },
     )
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["system_prompt"] == "Updated system prompt"
     assert entry.payload["default_model"] == "claude-opus-4-8"
     assert entry.payload["category"] == "growth"
-    assert entry.payload["skill_ids"] == ["seo"]
+    assert entry.payload["platform_skill_refs"][0]["version"] == "1.0.0"
 
 
 def test_list_includes_full_config(service):
@@ -423,8 +421,7 @@ def test_list_includes_full_config(service):
             system_prompt="x",
             default_model="gpt-5",
             category="marketing",
-            skill_ids=["code"],
-            tags=["cmo"],
+            platform_skill_refs=[{"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}],
             description="desc",
         )
     )
@@ -434,8 +431,8 @@ def test_list_includes_full_config(service):
     assert out.system_prompt == "x"
     assert out.default_model == "gpt-5"
     assert out.category == "marketing"
-    assert out.skill_ids == ["code"]
-    assert out.tags == ["cmo"]
+    assert out.skill_ids == []
+    assert out.platform_skill_refs[0].content_hash == "abc123"
     assert out.description == "desc"
 # ---- Issue #285：方案内专家绑定排序（sequence_no）与启用开关（enabled）----
 

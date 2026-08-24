@@ -14,6 +14,7 @@ from shared.service_client import ServiceClient
 from .catalog_gateway import CatalogManagerGateway, HttpCatalogManagerGateway
 from .catalog_repository import CatalogRepository, PgCatalogRepository
 from .catalog_service import CatalogService
+from .platform_skill_market import PlatformSkillRepository
 from .repository import apply_migrations
 
 
@@ -40,4 +41,6 @@ def get_catalog_gateway() -> CatalogManagerGateway:
 
 
 def get_catalog_service() -> CatalogService:
-    return CatalogService(get_catalog_repository(), get_catalog_gateway())
+    settings = load_settings("operation")
+    skills = PlatformSkillRepository(settings.admin_db_url) if settings.admin_db_url else None
+    return CatalogService(get_catalog_repository(), get_catalog_gateway(), platform_skills=skills)

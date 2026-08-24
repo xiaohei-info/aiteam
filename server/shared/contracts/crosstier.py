@@ -15,6 +15,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from .skill import SignedSkillPackage, SkillSigningKeyMetadata
+from .platform_skill import PlatformSkillRef
 from .snapshot import EmployeeExecutionSnapshot
 from .summary import AuditSummaryEvent, UsageSummary
 
@@ -100,7 +101,8 @@ class ExpertTemplateDetail(BaseModel):
     avatar_url: str = Field(default="", description="头像图片 URL")
     system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）")
     default_model: str = Field(default="", description="默认使用的大模型")
-    skill_ids: list[str] = Field(default_factory=list, description="预配置技能列表")
+    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
+    platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator platform skill fixed references")
     description: str = Field(default="", description="用户可见职位描述（≤200字）")
     initial_memories: list[dict] = Field(default_factory=list, description="预置记忆条目")
     sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）")

@@ -547,22 +547,30 @@ describe("注册表单", () => {
   });
 
   it("提交失败后保留已填写的注册输入", async () => {
-    mockFetch
-      .mockResolvedValueOnce(envOk())
-      .mockResolvedValueOnce(problemResponse(422, "invalid", "服务端拒绝注册"));
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market/internal")) return listPage([]);
+      if (String(url).includes("skill-market/external")) return singleResponse([]);
+      if (String(url).includes("expert-templates") && init?.method === "POST") {
+        return problemResponse(422, "invalid", "服务端拒绝注册");
+      }
+      return envOk();
+    });
 
     renderCatalogPage(makeSystemAdminSession());
     await screen.findByText("注册专家模板");
     fireEvent.click(screen.getByText("注册专家模板"));
     fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "保留的专家" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" }), { target: { value: "保留的人设" } });
+    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://example.com/avatar.png" } });
+    fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "保留的人设" } });
+    fireEvent.change(screen.getByPlaceholderText("如 gpt-5 / claude-opus-4-8 / deepseek"), { target: { value: "gpt-5" } });
+    fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "描述" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     await waitFor(() => {
       expect(screen.getByText("服务端拒绝注册")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("display_name")).toHaveValue("保留的专家");
-      expect(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" })).toHaveValue("保留的人设");
+      expect(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）")).toHaveValue("保留的人设");
     });
   });
 
@@ -580,10 +588,14 @@ describe("注册表单", () => {
       validateRegistration({
         catalogType: "expert_template",
         displayName: "",
+        category: "市场营销",
+        avatarUrl: "https://example.com/avatar.png",
+        systemPrompt: "sp",
+        defaultModel: "gpt-5",
+        description: "desc",
         expertTemplateIds: [],
         plannerTemplateId: "",
         plannerPrompt: "",
-        initialMemoriesText: "",
         defaultGrantsText: "",
       }),
     ).toEqual({ displayName: "名称不能为空" });
@@ -669,22 +681,15 @@ describe("注册表单", () => {
 
   it("注册专家模板成功提交 system_prompt + default_model", async () => {
     let capturedBody: unknown = null;
-    mockFetch
-      .mockResolvedValueOnce(envOk())
-      .mockImplementationOnce(async (url: unknown, init: unknown) => {
-        const u = String(url);
-        const i = init as { body?: string } | undefined;
-        if (u.includes("expert-templates")) capturedBody = i?.body ? JSON.parse(i.body) : null;
-        return singleResponse(
-          makeCatalogItem({
-            id: "new-id",
-            display_name: "新专家",
-            system_prompt: "电商客服",
-            default_model: "gpt-5",
-          }),
-        );
-      })
-      .mockResolvedValueOnce(envOk());
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market/internal")) return listPage([]);
+      if (String(url).includes("skill-market/external")) return singleResponse([]);
+      if (String(url).includes("expert-templates") && init?.method === "POST") {
+        capturedBody = init.body ? JSON.parse(String(init.body)) : null;
+        return singleResponse(makeCatalogItem({ id: "new-id", display_name: "新专家", system_prompt: "电商客服", default_model: "gpt-5" }));
+      }
+      return envOk();
+    });
 
     renderCatalogPage(makeSystemAdminSession());
 
@@ -714,17 +719,8 @@ describe("注册表单", () => {
 
     // Fill all PRD required fields so the always-send payload is complete.
     await selectAstryxOption("分类 (category)", "市场营销");
-    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://example.com/a.png" } });
-    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "淘宝电商客服" } });
-
-    // Expand advanced config and fill skills/tags/memories/sort to cover that branch.
-    fireEvent.click(screen.getByRole("button", { name: "能力配置（技能、标签、记忆、排序）" }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)"), { target: { value: "chat\nrefund" } });
-    fireEvent.change(screen.getByLabelText("搜索标签 (tags, 每行或逗号分隔)"), { target: { value: "电商\n客服" } });
-    fireEvent.change(screen.getByLabelText("排序权重 (sort_order, 数值越小越靠前)"), { target: { value: "10" } });
+    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://example.com/a.png" } });
+    fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "淘宝电商客服" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
@@ -738,57 +734,37 @@ describe("注册表单", () => {
       system_prompt: "电商客服",
       default_model: "gpt-5",
       description: "淘宝电商客服",
-      skill_ids: ["chat", "refund"],
-      tags: ["电商", "客服"],
-      sort_order: 10,
-      initial_memories: [],
+      platform_skill_refs: [],
     });
     await waitFor(() => {
       expect(screen.queryByText("注册新模板/方案")).not.toBeInTheDocument();
     });
     fireEvent.click(screen.getByText("注册专家模板"));
     expect(screen.getByPlaceholderText("display_name")).toHaveValue("");
-    expect(screen.getByRole("textbox", { name: "系统提示词 (system_prompt)" })).toHaveValue("");
+    expect(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）")).toHaveValue("");
   });
 
-  it("注册专家模板时 initial_memories 填非法 JSON 会被前端校验拦截", async () => {
-
+  it("注册专家模板不再展示手工技能 ID、标签、预置记忆和排序", async () => {
     renderCatalogPage(makeSystemAdminSession());
-    await waitFor(() => expect(screen.getByText("注册专家模板")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("注册专家模板"));
-    await waitFor(() => expect(screen.getByText("注册新模板/方案")).toBeInTheDocument());
-
-    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "X专家" } });
-    await selectAstryxOption("分类 (category)", "技术研发");
-    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
-    fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
-    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
-    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
-    fireEvent.click(screen.getByRole("button", { name: "能力配置（技能、标签、记忆、排序）" }));
-    await waitFor(() => expect(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("预配置技能 (skill_ids, 每行或逗号分隔)"), { target: { value: "s1" } });
-    fireEvent.change(screen.getByLabelText("预置记忆 (initial_memories, JSON 数组)"), { target: { value: "{not-json" } });
-
-    fireEvent.click(screen.getByRole("button", { name: "注册" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("预置记忆必须是 JSON 数组")).toBeInTheDocument();
-    });
-    expect(mockFetch.mock.calls.filter(([url]) => String(url).includes("expert-templates"))).toHaveLength(0);
+    fireEvent.click(await screen.findByText("注册专家模板"));
+    await screen.findByText("技能（可选）");
+    expect(screen.queryByText(/预配置技能/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/预置记忆/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/排序权重/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/搜索标签/)).not.toBeInTheDocument();
   });
 
   it("注册专家模板时通过「新建分类」流程追加自定义分类并提交", async () => {
     let capturedBody: unknown = null;
-    mockFetch
-      .mockResolvedValueOnce(envOk())
-      .mockImplementationOnce(async (url: unknown, init: unknown) => {
-        if (String(url).includes("expert-templates")) {
-          const i = init as { body?: string } | undefined;
-          capturedBody = i?.body ? JSON.parse(i.body) : null;
-        }
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market/internal")) return listPage([]);
+      if (String(url).includes("skill-market/external")) return singleResponse([]);
+      if (String(url).includes("expert-templates") && init?.method === "POST") {
+        capturedBody = init.body ? JSON.parse(String(init.body)) : null;
         return singleResponse(makeCatalogItem({ id: "new-cat", display_name: "新专家" }));
-      })
-      .mockResolvedValueOnce(envOk());
+      }
+      return envOk();
+    });
 
     renderCatalogPage(makeSystemAdminSession());
     await waitFor(() => expect(screen.getByText("注册专家模板")).toBeInTheDocument());
@@ -798,8 +774,8 @@ describe("注册表单", () => {
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
-    fireEvent.change(screen.getByLabelText("头像 (avatar_url)"), { target: { value: "https://x.png" } });
-    fireEvent.change(screen.getByLabelText("岗位描述 (description, ≤200字)"), { target: { value: "desc" } });
+    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://x.png" } });
+    fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "desc" } });
 
     fireEvent.click(screen.getByRole("button", { name: "新建分类" }));
     const newCatInput = await screen.findByLabelText("新分类名称");

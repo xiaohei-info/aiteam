@@ -27,6 +27,7 @@ from shared.errors import Conflict, Forbidden, NotFound
 from .employee_config_repository import EmployeeConfigRepository
 from .operator_catalog import OperatorCatalogPort
 from .provider_credential_repository import ProviderCredentialRepository
+from .platform_skill_service import PlatformSkillService
 from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
 from .recruit_repository import RecruitRepository, SolutionInstanceRow
 from .repository_member import GrantRepository
@@ -150,6 +151,7 @@ class RecruitService:
         recruit: RecruitRepository,
         orders: RecruitOrderRepository,
         providers: ProviderCredentialRepository,
+        platform_skills: PlatformSkillService | None = None,
     ):
         self._catalog = catalog
         self._employees = employees
@@ -157,6 +159,7 @@ class RecruitService:
         self._recruit = recruit
         self._orders = orders
         self._providers = providers
+        self._platform_skills = platform_skills
         self._resolver = ProviderResolver(providers)
 
     # ---- F06 招募专家 ----
@@ -170,6 +173,10 @@ class RecruitService:
         template = self._catalog.pull_expert_template(
             template_id=req.template_id, version=req.template_version
         )
+        if self._employees.get_by_source_template(
+            ctx, source_template_id=template.template_id
+        ) is not None:
+            raise Conflict("expert template already recruited in this tenant")
 
         # slug 由前端显式传入或后端按模板 display_name 自动生成（+ 去重后缀）；空=自动生成。
         slug = req.employee_slug
@@ -185,6 +192,7 @@ class RecruitService:
 
         recommended = template.recommended_config or {}
         match = self._resolver.resolve(ctx, recommended)
+        skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
         try:
             row = self._employees.create(
                 ctx,
@@ -196,10 +204,12 @@ class RecruitService:
                 thinking_level=recommended.get("thinking_level"),
                 timeout_seconds=recommended.get("timeout_seconds"),
                 tools=list(recommended.get("tools", [])),
-                skills=list(recommended.get("skills", [])),
+                skills=skills,
                 knowledge_refs=list(recommended.get("knowledge_refs", [])),
                 connector_refs=list(recommended.get("connector_refs", [])),
                 memory_policy=recommended.get("memory_policy"),
+                source_template_id=template.template_id,
+                source_template_version=template.version,
             )
 
             # 3) 可选招募即绑定授权（D12：部门/成员级授权）。无 subject 则跳过（grants_applied=False）。
@@ -290,6 +300,7 @@ class RecruitService:
             )
             recommended = (template.recommended_config or {})
             match = self._resolver.resolve(ctx, recommended)
+            skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
             try:
                 row = self._employees.create(
                     ctx,
@@ -301,8 +312,7 @@ class RecruitService:
                     thinking_level=recommended.get("thinking_level"),
                         timeout_seconds=recommended.get("timeout_seconds"),
                     tools=list(recommended.get("tools", [])),
-                    skills=list(recommended.get("skills", []))
-                    + list(package.skill_refs),  # 方案级技能引用叠加到每个专家
+                    skills=skills + list(package.skill_refs),  # 方案级技能引用叠加到每个专家
                     knowledge_refs=list(recommended.get("knowledge_refs", []))
                     + list(package.knowledge_refs),  # 方案级知识引用叠加
                     connector_refs=list(recommended.get("connector_refs", [])),
@@ -406,6 +416,17 @@ class RecruitService:
             experts=expert_results,
             grants_applied=grants_applied,
         )
+
+    def recruited_template_ids(self, ctx: TenantContext) -> set[str]:
+        return self._employees.list_live_source_template_ids(ctx)
+
+    def _resolve_skills(self, ctx: TenantContext, refs, recommended: dict) -> list[str]:
+        platform_refs = list(refs or recommended.get("platform_skill_refs") or [])
+        if platform_refs:
+            if self._platform_skills is None:
+                raise Conflict("platform skill installer is not configured")
+            return self._platform_skills.install_all(ctx, platform_refs)
+        return list(recommended.get("skills", []))
 
     # ---- slug 自动生成（F06 招募时 employee_slug 未传，由后端派生唯一 slug）----
     _SLUGIFY_RE = None
@@ -602,6 +623,8 @@ def build_recruit_service(
 
     catalog 由编排层注入（OPERATOR_URL 缺失时 _build_operator_catalog fail-closed；测试显式注入 FakeOperatorCatalogClient）。
     """
+    from .capability_catalog_repository import CapabilityCatalogRepository
+
     return RecruitService(
         catalog=catalog,
         employees=EmployeeConfigRepository(router),
@@ -609,6 +632,7 @@ def build_recruit_service(
         recruit=RecruitRepository(router),
         orders=RecruitOrderRepository(router),
         providers=ProviderCredentialRepository(router),
+        platform_skills=PlatformSkillService(operator=catalog, catalog=CapabilityCatalogRepository(router)),
     )
 
 

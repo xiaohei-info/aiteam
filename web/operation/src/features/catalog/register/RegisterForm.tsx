@@ -7,14 +7,23 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { type FormEvent, useEffect, useState } from "react";
 import { BasicInfoFields } from "./BasicInfoFields";
 import { ExpertTemplateFields } from "./ExpertTemplateFields";
-import { RuntimeConfigFields } from "./RuntimeConfigFields";
+import { ExpertSkillSelector } from "./ExpertSkillSelector";
 import { SolutionTemplateFields } from "./SolutionTemplateFields";
 import { TeamMemberSelector } from "./TeamMemberSelector";
-import { parseJsonArray, parseJsonObject, parseList, validateRegistration, type RegistrationErrors } from "./validation";
+import { ApiError } from "@aiteam/shared";
+import { parseJsonObject, parseList, validateRegistration, type RegistrationErrors } from "./validation";
 import type { CatalogApi } from "../useCatalogApi";
 import type { CatalogItem, CatalogItemType, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
+import type { PlatformSkillRef } from "../../skill-market/types";
 
 const DEFAULT_EXPERT_CATEGORIES = ["市场营销", "财务分析", "技术研发", "客户服务", "人力资源"];
+
+function formatRegisterError(error: unknown): string {
+  if (error instanceof ApiError && error.problem?.errors?.length) {
+    return error.problem.errors.map((item) => `${String(item.loc.at(-1) ?? "字段")}: ${item.message}`).join("；");
+  }
+  return error instanceof Error ? error.message : "注册失败";
+}
 
 export interface RegisterFormProps {
   api: CatalogApi;
@@ -25,7 +34,7 @@ export interface RegisterFormProps {
 
 export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFormProps) {
   const [displayName, setDisplayName] = useState("");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(DEFAULT_EXPERT_CATEGORIES[0] ?? "");
   const [categories, setCategories] = useState(DEFAULT_EXPERT_CATEGORIES);
   const [newCategory, setNewCategory] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
@@ -33,11 +42,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [systemPrompt, setSystemPrompt] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
   const [expertDescription, setExpertDescription] = useState("");
-  const [skillIdsText, setSkillIdsText] = useState("");
-  const [expertTagsText, setExpertTagsText] = useState("");
-  const [initialMemoriesText, setInitialMemoriesText] = useState("");
-  const [sortOrder, setSortOrder] = useState<number | null>(null);
-  const [isRuntimeConfigOpen, setIsRuntimeConfigOpen] = useState(false);
+  const [platformSkillRefs, setPlatformSkillRefs] = useState<PlatformSkillRef[]>([]);
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
   const [expertTemplateIds, setExpertTemplateIds] = useState<string[]>([]);
   const [plannerTemplateId, setPlannerTemplateId] = useState("");
@@ -83,11 +88,8 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       avatar_url: avatarUrl.trim(),
       system_prompt: systemPrompt.trim(),
       default_model: defaultModel.trim(),
-      skill_ids: parseList(skillIdsText),
+      platform_skill_refs: platformSkillRefs,
       description: expertDescription.trim(),
-      tags: parseList(expertTagsText),
-      sort_order: sortOrder ?? 0,
-      initial_memories: parseJsonArray(initialMemoriesText) ?? [],
     };
   }
 
@@ -114,10 +116,14 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
     const errors = validateRegistration({
       catalogType,
       displayName,
+      category,
+      avatarUrl,
+      systemPrompt,
+      defaultModel,
+      description: expertDescription,
       expertTemplateIds,
       plannerTemplateId,
       plannerPrompt,
-      initialMemoriesText,
       defaultGrantsText,
     });
     setValidationErrors(errors);
@@ -132,7 +138,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       }
       onDone();
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "注册失败");
+      setSubmitError(formatRegisterError(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -154,6 +160,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
             isAddingCategory={isAddingCategory}
             disabled={disabled}
             displayNameError={validationErrors.displayName}
+            categoryError={validationErrors.category}
             onDisplayNameChange={setDisplayName}
             onCategoryChange={setCategory}
             onNewCategoryChange={setNewCategory}
@@ -168,25 +175,15 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
                 defaultModel={defaultModel}
                 description={expertDescription}
                 disabled={disabled}
+                systemPromptError={validationErrors.systemPrompt}
+                defaultModelError={validationErrors.defaultModel}
+                descriptionError={validationErrors.description}
                 onAvatarUrlChange={setAvatarUrl}
                 onSystemPromptChange={setSystemPrompt}
                 onDefaultModelChange={setDefaultModel}
                 onDescriptionChange={setExpertDescription}
               />
-              <RuntimeConfigFields
-                skillIdsText={skillIdsText}
-                tagsText={expertTagsText}
-                initialMemoriesText={initialMemoriesText}
-                sortOrder={sortOrder}
-                isOpen={isRuntimeConfigOpen}
-                disabled={disabled}
-                initialMemoriesError={validationErrors.initialMemoriesText}
-                onSkillIdsChange={setSkillIdsText}
-                onTagsChange={setExpertTagsText}
-                onInitialMemoriesChange={setInitialMemoriesText}
-                onSortOrderChange={setSortOrder}
-                onOpenChange={setIsRuntimeConfigOpen}
-              />
+              <ExpertSkillSelector value={platformSkillRefs} onChange={setPlatformSkillRefs} disabled={disabled} />
             </>
           ) : (
             <>

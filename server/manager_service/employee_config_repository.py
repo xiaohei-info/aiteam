@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+
+from psycopg import errors as pg_errors
 from datetime import datetime
 from typing import Any
 
@@ -90,26 +92,35 @@ class EmployeeConfigRepository:
         knowledge_refs: list[str],
         connector_refs: list[str],
         memory_policy: dict | None,
+        source_template_id: str | None = None,
+        source_template_version: str | None = None,
     ) -> EmployeeConfigRow:
         """在本 tenant 建 employee 配置行。tenant_id 取自 ctx（D22，RLS WITH CHECK 兜底）。"""
-        with self._router.session(ctx) as s:
-            row = s.execute(
-                """
-                INSERT INTO employee (
-                    tenant_id, employee_slug, display_name, persona, model, provider_ref,
-                    thinking_level, timeout_seconds, tools, skills,
-                    knowledge_refs, connector_refs, memory_policy
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING """ + _CONFIG_COLUMNS,
-                (
-                    ctx.tenant_id, employee_slug, display_name, persona, model, provider_ref,
-                    thinking_level, timeout_seconds,
-                    json.dumps(tools), json.dumps(skills), json.dumps(knowledge_refs),
-                    json.dumps(connector_refs), json.dumps(memory_policy) if memory_policy else None,
-                ),
-            ).fetchone()
+        try:
+            with self._router.session(ctx) as s:
+                row = s.execute(
+                    """
+                    INSERT INTO employee (
+                        tenant_id, employee_slug, display_name, persona, model, provider_ref,
+                        thinking_level, timeout_seconds, tools, skills,
+                        knowledge_refs, connector_refs, memory_policy,
+                        source_template_id, source_template_version
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING """ + _CONFIG_COLUMNS,
+                    (
+                        ctx.tenant_id, employee_slug, display_name, persona, model, provider_ref,
+                        thinking_level, timeout_seconds,
+                        json.dumps(tools), json.dumps(skills), json.dumps(knowledge_refs),
+                        json.dumps(connector_refs), json.dumps(memory_policy) if memory_policy else None,
+                        source_template_id, source_template_version,
+                    ),
+                ).fetchone()
+        except pg_errors.UniqueViolation as exc:
+            if "uq_employee_live_direct_template" in str(exc):
+                raise Conflict("expert template already recruited in this tenant") from exc
+            raise
         return _row_to_config(row)
 
     def get(self, ctx: TenantContext, *, employee_id: str) -> EmployeeConfigRow | None:
@@ -128,6 +139,25 @@ class EmployeeConfigRepository:
                 (employee_slug,),
             ).fetchone()
         return _row_to_config(row) if row is not None else None
+
+    def get_by_source_template(
+        self, ctx: TenantContext, *, source_template_id: str
+    ) -> EmployeeConfigRow | None:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _CONFIG_COLUMNS
+                + " FROM employee WHERE source_template_id = %s AND status <> 'archived'",
+                (source_template_id,),
+            ).fetchone()
+        return _row_to_config(row) if row is not None else None
+
+    def list_live_source_template_ids(self, ctx: TenantContext) -> set[str]:
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT source_template_id FROM employee "
+                "WHERE source_template_id IS NOT NULL AND status <> 'archived'"
+            ).fetchall()
+        return {str(row[0]) for row in rows}
 
     def update(
         self,

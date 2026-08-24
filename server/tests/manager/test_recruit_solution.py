@@ -19,6 +19,7 @@ import pytest
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.tenancy import TenantContext
+from shared.contracts.platform_skill import PlatformSkillRef
 from shared.errors import Conflict, Forbidden, NotFound
 
 from manager_service.employee_config_repository import EmployeeConfigRow
@@ -49,6 +50,7 @@ class _FakeEmployeeRepo:
 
     def __init__(self):
         self._store: dict[str, dict[str, EmployeeConfigRow]] = {}
+        self._source_templates: dict[str, dict[str, str]] = {}
 
     def _bucket(self, ctx: TenantContext) -> dict[str, EmployeeConfigRow]:
         return self._store.setdefault(ctx.tenant_id, {})
@@ -64,6 +66,8 @@ class _FakeEmployeeRepo:
             status=kw.get("status", "applied"),
         )
         self._bucket(ctx)[row.employee_id] = row
+        if kw.get("source_template_id"):
+            self._source_templates.setdefault(ctx.tenant_id, {})[row.employee_id] = kw["source_template_id"]
         return row
 
     def get(self, ctx, *, employee_id):
@@ -74,6 +78,22 @@ class _FakeEmployeeRepo:
             if r.employee_slug == employee_slug:
                 return r
         return None
+
+    def get_by_source_template(self, ctx, *, source_template_id):
+        sources = self._source_templates.get(ctx.tenant_id, {})
+        for employee_id, template_id in sources.items():
+            row = self._bucket(ctx).get(employee_id)
+            if template_id == source_template_id and row is not None and row.status != "archived":
+                return row
+        return None
+
+    def list_live_source_template_ids(self, ctx):
+        sources = self._source_templates.get(ctx.tenant_id, {})
+        return {
+            template_id
+            for employee_id, template_id in sources.items()
+            if (row := self._bucket(ctx).get(employee_id)) is not None and row.status != "archived"
+        }
 
 
 class _FakeGrantRepo:
@@ -313,6 +333,20 @@ def _expert_template(template_id="tpl-1", version="v1", display_name="专家A") 
 # ---- F06 招募专家 ----
 
 
+def test_recruit_expert_auto_installs_pinned_platform_skills():
+    catalog = FakeOperatorCatalogClient()
+    ref = PlatformSkillRef(skill_id="platform-skill", version="1.0.0", content_hash="abc123")
+    catalog.seed_expert(_expert_template().model_copy(update={"platform_skill_refs": [ref]}))
+    installer = type("Installer", (), {"install_all": lambda self, ctx, refs: ["platform-skill--v1"]})()
+    emp, grant, recruit, orders, providers = _FakeEmployeeRepo(), _FakeGrantRepo(), _FakeRecruitRepo(), _FakeOrderRepo(), _FakeProviderRepo()
+    providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, providers=providers, platform_skills=installer)
+
+    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1"))
+
+    assert emp.get(_ctx("t-a"), employee_id=result.employee_id).skills == ["platform-skill--v1"]
+
+
 def test_recruit_expert_creates_employee_instance_from_template():
     """F06 主路径：拉模板 → 建 employee 实例（persona/model 等中立字段来自模板，D16）。"""
     catalog = FakeOperatorCatalogClient()
@@ -540,6 +574,8 @@ def test_operator_catalog_is_read_only_port():
         "pull_solution_package",
         "list_expert_templates",
         "list_solution_packages",
+        "list_platform_skills",
+        "pull_platform_skill",
     }, methods
     # 红线兜底：端口不得出现任何反向写语义方法名。
     write_like = {"seed", "write", "push", "create", "update", "delete", "put", "post"}
@@ -808,8 +844,8 @@ def test_recruit_expert_generates_slug_when_missing():
     assert svc._employees.get_by_slug(ctx, employee_slug=result.employee_slug) is not None
 
 
-def test_recruit_expert_generated_slugs_are_unique():
-    """同一 tenant 多次不传 slug 时后端生成唯一 slug."""
+def test_recruit_expert_same_template_conflicts():
+    """同一 tenant 同一模板不可重复招募。"""
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="销售 专家", persona=None,
     )
@@ -833,9 +869,9 @@ def test_recruit_expert_generated_slugs_are_unique():
         providers=_FakeProviderRepo(),
     )
     ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
-    r1 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
-    r2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
-    assert r1.employee_slug != r2.employee_slug
+    svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    with pytest.raises(Conflict, match="already recruited"):
+        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
 
 
 def test_recruit_expert_explicit_slug_still_works():
@@ -928,10 +964,8 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
     ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
     assert result.employee_slug == "enterprise_sales_pro_v2"
-    # 重复招募 -> 唯一后缀
-    result2 = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
-    assert result2.employee_slug.startswith("enterprise_sales_pro_v2_")
-    assert result2.employee_slug != result.employee_slug
+    with pytest.raises(Conflict, match="already recruited"):
+        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
 
 
 # ---- AITEAM-682：recruit/apply 时 default_model 自动匹配 provider_ref（resolver 验收）----

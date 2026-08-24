@@ -100,6 +100,17 @@ describe("MarketplacePage", () => {
     await waitFor(() => expect(screen.getByText("暂无可招募模板")).toBeInTheDocument());
   });
 
+  it("已招募模板显示已招募且不可再点", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { template_id: "tpl-1", version: "1", display_name: "测试专家", is_recruited: true },
+    ]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("已招募")).toBeInTheDocument());
+    expect(screen.queryByText("招募")).not.toBeInTheDocument();
+    expect(api.recruitExpert).not.toHaveBeenCalled();
+  });
+
   it("招募成功：显示成功提示", async () => {
     const api = mockApi();
     renderPage(["owner"]);

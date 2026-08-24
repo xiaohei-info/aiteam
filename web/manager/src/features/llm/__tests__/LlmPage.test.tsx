@@ -85,7 +85,8 @@ describe("LlmPage LLM管理", () => {
     await waitFor(() => expect(screen.getByTestId("provider-row")).toBeInTheDocument());
     expect(screen.getByTestId("model-row")).toBeInTheDocument();
     expect(screen.getByText("GPT-5")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 1, name: "LLM 管理" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "模型目录" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往 Provider 凭据" })).toHaveAttribute("href", "/providers");
     expect(screen.getByRole("table", { name: "Provider 列表" })).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "模型列表" })).toBeInTheDocument();
   });

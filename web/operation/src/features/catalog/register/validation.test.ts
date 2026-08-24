@@ -7,10 +7,14 @@ describe("validateRegistration", () => {
       validateRegistration({
         catalogType: "solution_template",
         displayName: "  ",
+        category: "",
+        avatarUrl: "",
+        systemPrompt: "",
+        defaultModel: "",
+        description: "",
         expertTemplateIds: [],
         plannerTemplateId: "",
         plannerPrompt: "",
-        initialMemoriesText: "",
         defaultGrantsText: "not-json",
       }),
     ).toEqual({
@@ -22,19 +26,26 @@ describe("validateRegistration", () => {
     });
   });
 
-  it("仅对专家模板校验 JSON 数组，并允许空的可选配置", () => {
+  it("专家模板校验必填字段与 JSON 数组", () => {
     expect(
       validateRegistration({
         catalogType: "expert_template",
         displayName: "客服专家",
+        category: "",
+        avatarUrl: "",
+        systemPrompt: "",
+        defaultModel: "",
+        description: "",
         expertTemplateIds: [],
         plannerTemplateId: "",
         plannerPrompt: "",
-        initialMemoriesText: '{"role":"user"}',
         defaultGrantsText: "",
       }),
     ).toEqual({
-      initialMemoriesText: "预置记忆必须是 JSON 数组",
+      category: "请选择分类",
+      systemPrompt: "请填写系统提示词",
+      defaultModel: "请填写默认模型",
+      description: "请填写岗位描述",
     });
   });
 });

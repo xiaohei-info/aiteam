@@ -47,6 +47,8 @@ class CapabilityCatalogService:
 
     def create_skill(self, ctx: TenantContext, body: SkillCatalogIn) -> SkillCatalogOut:
         _ensure_can_write(ctx)
+        if body.skill_id.startswith("platform-"):
+            raise Conflict("platform skill IDs are reserved for Operator-managed installs")
         if self._repo.get_skill_by_id(ctx, skill_id=body.skill_id) is not None:
             raise Conflict("skill_id already exists in this tenant")
         row = self._repo.create_skill(
@@ -62,8 +64,9 @@ class CapabilityCatalogService:
 
     def update_skill(self, ctx: TenantContext, body: SkillCatalogIn, *, catalog_id: str) -> SkillCatalogOut:
         _ensure_can_write(ctx)
-        if self._repo.get_skill(ctx, catalog_id=catalog_id) is None:
-            raise NotFound("skill not found in this tenant")
+        current = self._require_skill(ctx, catalog_id)
+        if current.config.get("source") == "operator":
+            raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         # skill_id 不可变（unique 约束的稳定标识）；其余字段以 body 覆盖。
         row = self._repo.update_skill(
             ctx, catalog_id=catalog_id, display_name=body.display_name, version=body.version,
@@ -78,6 +81,9 @@ class CapabilityCatalogService:
 
     def delete_skill(self, ctx: TenantContext, *, catalog_id: str) -> None:
         _ensure_can_write(ctx)
+        current = self._require_skill(ctx, catalog_id)
+        if current.config.get("source") == "operator":
+            raise Conflict("Operator-managed skills are immutable; uninstall through the platform skill market")
         if not self._repo.delete(ctx, resource_kind="skill", catalog_id=catalog_id):
             raise NotFound("skill not found in this tenant")
 
