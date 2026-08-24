@@ -73,6 +73,7 @@ def test_pull_expert_template_success(client):
                 "display_name": "CMO",
                 "persona": "marketing leader",
                 "recommended_config": {},
+                "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
             }
         },
     )
@@ -106,6 +107,7 @@ def test_pull_expert_template_with_version(client):
                 "display_name": "CMO v2",
                 "persona": "marketing leader",
                 "recommended_config": {},
+                "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
             }
         },
     )
@@ -167,6 +169,7 @@ def test_pull_solution_package_success(client):
                         "display_name": "CMO",
                         "persona": "marketing leader",
                         "recommended_config": {},
+                        "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
                     }
                 ],
                 "knowledge_refs": [],
@@ -215,6 +218,7 @@ def test_list_expert_templates_success(client):
                     "display_name": "CMO",
                     "persona": "marketing leader",
                     "recommended_config": {},
+                    "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
                 },
                 {
                     "template_id": "tpl-cto",
@@ -222,6 +226,7 @@ def test_list_expert_templates_success(client):
                     "display_name": "CTO",
                     "persona": "tech leader",
                     "recommended_config": {},
+                    "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
                 },
             ]
         },

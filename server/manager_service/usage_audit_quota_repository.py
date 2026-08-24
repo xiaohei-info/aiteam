@@ -41,6 +41,9 @@ class UsageRollupRow:
     error_count: int
     duration_seconds_total: int
     received_at: datetime
+    pricing_version: int | None = None
+    pricing_status: str = "unknown"
+    currency: str = "USD"
 
 
 @dataclass(frozen=True)
@@ -82,7 +85,7 @@ class QuotaPolicyRow:
 
 _USAGE_COLUMNS = (
     "id, tenant_id, summary_id, employee_id, window_start, window_end, run_count, "
-    "token_total, cost_total, error_count, duration_seconds_total, received_at"
+    "token_total, cost_total, pricing_version, pricing_status, currency, error_count, duration_seconds_total, received_at"
 )
 
 _AUDIT_COLUMNS = (
@@ -107,9 +110,12 @@ def _row_to_usage(row: Any) -> UsageRollupRow:
         run_count=row[6],
         token_total=row[7],
         cost_total=row[8],
-        error_count=row[9],
-        duration_seconds_total=row[10],
-        received_at=row[11],
+        pricing_version=row[9],
+        pricing_status=row[10],
+        currency=row[11],
+        error_count=row[12],
+        duration_seconds_total=row[13],
+        received_at=row[14],
     )
 
 
@@ -178,9 +184,9 @@ class UsageAuditQuotaRepository:
                 """
                 INSERT INTO usage_rollup (
                     tenant_id, summary_id, employee_id, window_start, window_end,
-                    run_count, token_total, cost_total, error_count, duration_seconds_total
+                    run_count, token_total, cost_total, pricing_version, pricing_status, currency, error_count, duration_seconds_total
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (tenant_id, summary_id) DO UPDATE SET
                     employee_id = EXCLUDED.employee_id,
@@ -189,6 +195,9 @@ class UsageAuditQuotaRepository:
                     run_count = EXCLUDED.run_count,
                     token_total = EXCLUDED.token_total,
                     cost_total = EXCLUDED.cost_total,
+                    pricing_version = EXCLUDED.pricing_version,
+                    pricing_status = EXCLUDED.pricing_status,
+                    currency = EXCLUDED.currency,
                     error_count = EXCLUDED.error_count,
                     duration_seconds_total = EXCLUDED.duration_seconds_total,
                     received_at = now()
@@ -197,6 +206,7 @@ class UsageAuditQuotaRepository:
                     tenant_uuid, payload["summary_id"], emp_uuid,
                     payload["window_start"], payload["window_end"],
                     payload["run_count"], payload["token_total"], payload["cost_total"],
+                    payload.get("pricing_version"), payload.get("pricing_status", "unknown"), payload.get("currency", "USD"),
                     payload["error_count"], payload["duration_seconds_total"],
                 ),
             ).fetchone()

@@ -52,6 +52,7 @@ def _service(request: Request) -> SnapshotService:
             member_service=MemberDeptService(repo=member_repo),
             audit_recorder=build_enterprise_audit_repository(router),
             knowledge_binding=EmployeeKnowledgeBindingRepository(router),
+            platform_catalog=request.app.state._operator_catalog,
         )
         request.app.state._snapshot_service = cache
     return cache

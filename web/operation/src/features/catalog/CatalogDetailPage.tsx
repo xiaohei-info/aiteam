@@ -105,7 +105,6 @@ export function CatalogDetailPage(): ReactNode {
       const changes: Record<string, unknown> = { display_name: draft.display_name };
       if (draft.catalog_type === "expert_template") {
         changes.system_prompt = draft.system_prompt ?? "";
-        changes.default_model = draft.default_model ?? "";
         changes.category = draft.category ?? "";
         changes.avatar_url = draft.avatar_url ?? "";
         changes.description = draft.description ?? "";

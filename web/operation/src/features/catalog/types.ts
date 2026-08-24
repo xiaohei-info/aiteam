@@ -25,6 +25,13 @@ export type CatalogStatus = "draft" | "published" | "unpublished";
 /** 前端可见范围简化表示（visible_scope dict 的前端投影）。 */
 export type VisibilityLabel = "public" | "enterprise" | "hidden";
 
+export interface PlatformModelRef {
+  provider_id: string;
+  provider_version: number;
+  model_id: string;
+  model_version: number;
+}
+
 export interface PlatformSkillRef {
   skill_id: string;
   version: string;
@@ -51,7 +58,7 @@ export interface CatalogItem {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
+  platform_model_ref?: PlatformModelRef;
   skill_ids?: string[];
   platform_skill_refs?: PlatformSkillRef[];
   tags?: string[];
@@ -80,7 +87,7 @@ export interface RegisterExpertTemplate {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
+  platform_model_ref: PlatformModelRef;
   platform_skill_refs?: PlatformSkillRef[];
   description?: string;
 }

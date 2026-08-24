@@ -15,7 +15,7 @@ function publicUsageSummary(value: unknown): UsageSummary | undefined {
   const fields = [
     "schema_version", "summary_id", "tenant_id", "member_id", "employee_id", "window_start", "window_end",
     "prompt_count", "settled_count", "error_count", "input_tokens", "output_tokens", "cache_tokens", "cost_minor",
-    "currency", "duration_ms_total", "run_count", "token_total", "cost_total", "duration_seconds_total",
+    "currency", "duration_ms_total", "pricing_version", "pricing_status", "run_count", "token_total", "cost_total", "duration_seconds_total",
   ] as const;
   if (raw.schema_version !== "1" || raw.currency !== "USD" || fields.some((field) => raw[field] === undefined)) return undefined;
   return Object.fromEntries(fields.map((field) => [field, raw[field]])) as unknown as UsageSummary;
@@ -708,6 +708,8 @@ export class AgentSqliteStore {
           'cost_minor', json_extract(usage_summary_outbox.payload_json, '$.cost_minor') + json_extract(excluded.payload_json, '$.cost_minor'),
           'currency', json_extract(usage_summary_outbox.payload_json, '$.currency'),
           'duration_ms_total', json_extract(usage_summary_outbox.payload_json, '$.duration_ms_total') + json_extract(excluded.payload_json, '$.duration_ms_total'),
+          'pricing_version', json_extract(usage_summary_outbox.payload_json, '$.pricing_version'),
+          'pricing_status', json_extract(usage_summary_outbox.payload_json, '$.pricing_status'),
           'run_count', json_extract(usage_summary_outbox.payload_json, '$.run_count') + json_extract(excluded.payload_json, '$.run_count'),
           'token_total', json_extract(usage_summary_outbox.payload_json, '$.token_total') + json_extract(excluded.payload_json, '$.token_total'),
           'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),

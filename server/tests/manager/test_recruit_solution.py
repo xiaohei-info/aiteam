@@ -19,6 +19,7 @@ import pytest
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.tenancy import TenantContext
+from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
 from shared.errors import Conflict, Forbidden, NotFound
 
@@ -42,6 +43,10 @@ from manager_service.schemas import (
 )
 
 
+def _model_ref(model="claude-opus-4-8", provider="provider-1") -> PlatformModelRef:
+    return PlatformModelRef(provider_id=provider, provider_version=1, model_id=model, model_version=1)
+
+
 # ---- 内存伪 repository（模拟 RLS 跨租户不可见；tenant_id 只从 ctx 读，D22）----
 
 
@@ -63,7 +68,7 @@ class _FakeEmployeeRepo:
             timeout_seconds=kw["timeout_seconds"],
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
-            status=kw.get("status", "applied"),
+            status=kw.get("status", "draft"), platform_model_ref=kw.get("platform_model_ref"),
         )
         self._bucket(ctx)[row.employee_id] = row
         if kw.get("source_template_id"):
@@ -72,6 +77,14 @@ class _FakeEmployeeRepo:
 
     def get(self, ctx, *, employee_id):
         return self._bucket(ctx).get(employee_id)
+
+    def transition_status(self, ctx, *, employee_id, from_status, to_status, archive_reason=None):
+        row = self.get(ctx, employee_id=employee_id)
+        if row is None or row.status != from_status:
+            return None
+        updated = EmployeeConfigRow(**{**row.__dict__, "status": to_status})
+        self._bucket(ctx)[employee_id] = updated
+        return updated
 
     def get_by_slug(self, ctx, *, employee_slug):
         for r in self._bucket(ctx).values():
@@ -320,7 +333,7 @@ def _ctx(tid: str, roles=None) -> TenantContext:
 def _expert_template(template_id="tpl-1", version="v1", display_name="专家A") -> ExpertTemplateDetail:
     return ExpertTemplateDetail(
         template_id=template_id, version=version, display_name=display_name,
-        persona="你是测试专家",
+        persona="你是测试专家", platform_model_ref=_model_ref(),
         recommended_config={
             "model": "claude-opus-4-8", "provider_ref": "relay-default",
             "thinking_level": "high",
@@ -364,7 +377,10 @@ def test_recruit_expert_creates_employee_instance_from_template():
     row = emp.get(_ctx("t-a"), employee_id=result.employee_id)
     assert row.display_name == "专家A"
     assert row.model == "claude-opus-4-8"
-    assert row.provider_ref == "relay-default"
+    assert row.provider_ref == "provider-1"
+    assert row.platform_model_ref == _model_ref().model_dump(mode="json")
+    assert row.status == "active"
+    assert result.provider_match_status == "platform"
     assert row.skills == ["code-review"]
     assert result.grants_applied is False
     # 审计事件已记
@@ -447,11 +463,11 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
         solution_id=solution_id, version=version, display_name="行业方案A",
         experts=[
             ExpertTemplateDetail(
-                template_id="tpl-a", version="v1", display_name="专家甲",
+                template_id="tpl-a", version="v1", display_name="专家甲", platform_model_ref=_model_ref("m-a"),
                 persona="你是甲", recommended_config={"model": "m-a", "skills": ["s-a"]},
             ),
             ExpertTemplateDetail(
-                template_id="tpl-b", version="v1", display_name="专家乙",
+                template_id="tpl-b", version="v1", display_name="专家乙", platform_model_ref=_model_ref("m-b"),
                 persona="你是乙", recommended_config={"model": "m-b", "knowledge_refs": ["ks-b"]},
             ),
         ],
@@ -576,6 +592,8 @@ def test_operator_catalog_is_read_only_port():
         "list_solution_packages",
         "list_platform_skills",
         "pull_platform_skill",
+        "list_platform_catalog",
+        "resolve_tenant_access",
     }, methods
     # 红线兜底：端口不得出现任何反向写语义方法名。
     write_like = {"seed", "write", "push", "create", "update", "delete", "put", "post"}
@@ -746,15 +764,15 @@ def _ordered_solution_package() -> SolutionPackage:
         solution_id="sol-ord", version="v1", display_name="Ordered",
         experts=[
             ExpertTemplateDetail(
-                template_id="tpl-z", version="v1", display_name="专家Z",
+                template_id="tpl-z", version="v1", display_name="专家Z", platform_model_ref=_model_ref("m-z"),
                 sequence_no=5, enabled=True,
             ),
             ExpertTemplateDetail(
-                template_id="tpl-a", version="v1", display_name="专家A",
+                template_id="tpl-a", version="v1", display_name="专家A", platform_model_ref=_model_ref("m-a"),
                 sequence_no=2, enabled=True,
             ),
             ExpertTemplateDetail(
-                template_id="tpl-disabled", version="v1", display_name="专家D",
+                template_id="tpl-disabled", version="v1", display_name="专家D", platform_model_ref=_model_ref("m-d"),
                 sequence_no=1, enabled=False,
             ),
         ],
@@ -817,21 +835,13 @@ def test_apply_solution_preserves_collab_prompts_from_package():
 def test_recruit_expert_generates_slug_when_missing():
     """未传 employee_slug 时后端自动生成 slug（PRD P03/P04：实例标识服务端创建）."""
     template = ExpertTemplateDetail(
-        template_id="tpl-auto", version="1", display_name="测试销售专家", persona="销售精英",
+        template_id="tpl-auto", version="1", display_name="测试销售专家", persona="销售精英", platform_model_ref=_model_ref(),
     )
-
-    class FakeCat:
-        def pull_expert_template(self, template_id, version=None):
-            return template
-        def pull_solution_package(self, solution_id, version=None):
-            raise NotImplementedError
-        def list_expert_templates(self):
-            return [template]
-        def list_solution_packages(self):
-            return []
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(template)
 
     svc = RecruitService(
-        catalog=FakeCat(),
+        catalog=catalog,
         employees=_FakeEmployeeRepo(),
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
@@ -847,21 +857,13 @@ def test_recruit_expert_generates_slug_when_missing():
 def test_recruit_expert_same_template_conflicts():
     """同一 tenant 同一模板不可重复招募。"""
     template = ExpertTemplateDetail(
-        template_id="tpl-auto", version="1", display_name="销售 专家", persona=None,
+        template_id="tpl-auto", version="1", display_name="销售 专家", persona=None, platform_model_ref=_model_ref(),
     )
-
-    class FakeCat:
-        def pull_expert_template(self, template_id, version=None):
-            return template
-        def pull_solution_package(self, solution_id, version=None):
-            raise NotImplementedError
-        def list_expert_templates(self):
-            return [template]
-        def list_solution_packages(self):
-            return []
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(template)
 
     svc = RecruitService(
-        catalog=FakeCat(),
+        catalog=catalog,
         employees=_FakeEmployeeRepo(),
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
@@ -877,21 +879,13 @@ def test_recruit_expert_same_template_conflicts():
 def test_recruit_expert_explicit_slug_still_works():
     """向前兼容：显式传 employee_slug 仍按传入值落库（PRD 放宽而非移除）."""
     template = ExpertTemplateDetail(
-        template_id="tpl-auto", version="1", display_name="销售专家", persona=None,
+        template_id="tpl-auto", version="1", display_name="销售专家", persona=None, platform_model_ref=_model_ref(),
     )
-
-    class FakeCat:
-        def pull_expert_template(self, template_id, version=None):
-            return template
-        def pull_solution_package(self, solution_id, version=None):
-            raise NotImplementedError
-        def list_expert_templates(self):
-            return [template]
-        def list_solution_packages(self):
-            return []
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(template)
 
     svc = RecruitService(
-        catalog=FakeCat(),
+        catalog=catalog,
         employees=_FakeEmployeeRepo(),
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
@@ -907,21 +901,13 @@ def test_recruit_expert_generated_slug_allowed_chars():
     """后端生成 slug 遵守 [a-z0-9_] 约束（与 repo unique slug 约定一致）."""
     # Mix English + CJK chars + punctuation -> CJK/non-ASCII dropped, keeps only [a-z0-9_]
     template = ExpertTemplateDetail(
-        template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None,
+        template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None, platform_model_ref=_model_ref(),
     )
-
-    class FakeCat:
-        def pull_expert_template(self, template_id, version=None):
-            return template
-        def pull_solution_package(self, solution_id, version=None):
-            raise NotImplementedError
-        def list_expert_templates(self):
-            return [template]
-        def list_solution_packages(self):
-            return []
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(template)
 
     svc = RecruitService(
-        catalog=FakeCat(),
+        catalog=catalog,
         employees=_FakeEmployeeRepo(),
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
@@ -940,21 +926,13 @@ def test_recruit_expert_generated_slug_allowed_chars():
 def test_recruit_expert_generated_slug_handles_ascii_template():
     """纯 ASCII display_name 场景：字符映射 + 去重正常工作."""
     template = ExpertTemplateDetail(
-        template_id="tpl-sales", version="1", display_name="Enterprise Sales-Pro v2", persona=None,
+        template_id="tpl-sales", version="1", display_name="Enterprise Sales-Pro v2", persona=None, platform_model_ref=_model_ref(),
     )
-
-    class FakeCat:
-        def pull_expert_template(self, template_id, version=None):
-            return template
-        def pull_solution_package(self, solution_id, version=None):
-            raise NotImplementedError
-        def list_expert_templates(self):
-            return [template]
-        def list_solution_packages(self):
-            return []
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(template)
 
     svc = RecruitService(
-        catalog=FakeCat(),
+        catalog=catalog,
         employees=_FakeEmployeeRepo(),
         grants=_FakeGrantRepo(),
         recruit=_FakeRecruitRepo(),
@@ -988,6 +966,7 @@ def _service_with_providers(
 # ---- explicit 路径 ----
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_explicit_provider_ref_exists_sets_explicit_and_writes_ref():
     """recommended.provider_ref 有值且本 tenant 存在 → explicit，employee 写入该 ref。"""
     catalog = FakeOperatorCatalogClient()
@@ -1006,6 +985,7 @@ def test_resolve_explicit_provider_ref_exists_sets_explicit_and_writes_ref():
     assert row.model == "claude-opus-4-8"
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_explicit_provider_ref_missing_raises_conflict_409():
     """recommended.provider_ref 有值但本 tenant 不存在 → V1 抛 409，避免落错误引用。"""
     catalog = FakeOperatorCatalogClient()
@@ -1030,6 +1010,7 @@ def _template_with_model_only(
     )
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_single_match_sets_matched_and_writes_ref():
     """有 model、恰好 1 个 provider 支持且 enabled → matched，employee 自动写入 provider_ref + model。"""
     catalog = FakeOperatorCatalogClient()
@@ -1048,6 +1029,7 @@ def test_resolve_model_single_match_sets_matched_and_writes_ref():
     assert result.provider_match_candidates == ["only-one"]
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_no_match_creates_with_provider_ref_none_status_none():
     """有 model、本 tenant 无 provider 支持 → 仍创建 employee，provider_ref=None，status=none(待配置)。"""
     catalog = FakeOperatorCatalogClient()
@@ -1064,6 +1046,7 @@ def test_resolve_model_no_match_creates_with_provider_ref_none_status_none():
     assert row.model == "claude-opus-4-8"
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
     """有 model、多个 provider 支持 → ambiguous，不随机选择，provider_ref=None，保留 candidates。"""
     catalog = FakeOperatorCatalogClient()
@@ -1083,6 +1066,7 @@ def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
     assert row.model == "claude-opus-4-8"
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_ignores_disabled_provider_model():
     """provider 声明了该 model 但 enabled=False → 不参与匹配。"""
     catalog = FakeOperatorCatalogClient()
@@ -1099,6 +1083,7 @@ def test_resolve_ignores_disabled_provider_model():
     assert row.provider_ref is None
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_no_provider_ref_and_no_model_status_none():
     """无 provider_ref 且无 model → status=none，不查 provider。"""
     catalog = FakeOperatorCatalogClient()
@@ -1121,6 +1106,7 @@ def test_resolve_no_provider_ref_and_no_model_status_none():
 # ---- 审计：recruit_event.detail 记录脱敏匹配决策 ----
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_audit_detail_records_match_decision_no_secret():
     """recruit_event.detail 记录 default_model / provider_match_status / matched_provider_ref / candidates，不记 secret。"""
     catalog = FakeOperatorCatalogClient()
@@ -1164,6 +1150,7 @@ def _mixed_solution_package() -> SolutionPackage:
     )
 
 
+@pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_apply_solution_each_expert_owns_provider_match():
     """apply_solution 展开多个专家时，每个专家独立走同一 resolver；单匹配写 ref，无匹配保留 None。"""
     catalog = FakeOperatorCatalogClient()

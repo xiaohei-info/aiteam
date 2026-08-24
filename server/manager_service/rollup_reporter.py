@@ -15,6 +15,7 @@ import hashlib
 from decimal import Decimal
 from typing import Protocol
 
+from shared.contracts.crosstier import EnterpriseRollupUpload
 from shared.contracts.summary import UsageSummary
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError
@@ -63,6 +64,9 @@ def _to_usage_summary(row: UsageRollupOut, tenant_id: str) -> UsageSummary:
         run_count=row.run_count,
         token_total=row.token_total,
         cost_total=row.cost_total,
+        currency=row.currency,
+        pricing_version=row.pricing_version,
+        pricing_status=row.pricing_status,
         error_count=row.error_count,
         duration_seconds_total=row.duration_seconds_total,
     )
@@ -100,8 +104,6 @@ class RollupReporter:
         summaries = [_to_usage_summary(r, ctx.tenant_id) for r in rows]
         if not summaries:
             return {"summaries": 0, "run_count": 0, "token_total": 0, "cost_total": "0"}
-        from operation_service.rollup_schemas import EnterpriseRollupUpload
-
         payload = EnterpriseRollupUpload(
             enterprise_id=enterprise_id,
             tenant_id=ctx.tenant_id,

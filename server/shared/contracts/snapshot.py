@@ -8,14 +8,18 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .platform_provider import PricingSnapshot
 from .skill import SkillSigningKeyMetadata
 
 
 class ModelPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: str | None = Field(default=None, description="Pi model id；空=产品默认模型")
-    provider_ref: str | None = Field(default=None, description="provider 配置引用（04 §6.7）")
+    model: str | None = Field(default=None, description="Operator 发布的 Pi model id")
+    provider_ref: str | None = Field(default=None, description="Operator 平台 provider 引用（04 §6.7）")
+    provider_version: int | None = Field(default=None, ge=1)
+    model_version: int | None = Field(default=None, ge=1)
+    pricing: PricingSnapshot | None = None
     thinking_level: str | None = Field(default=None, description="思考深度：none/basic/deep")
 
 

@@ -120,8 +120,8 @@ function ExpertDetailSections({ draft, onChange, editing }: {
         {editing ? <TextArea label="system_prompt" placeholder="岗位描述系统提示词（纯文本）" value={draft.system_prompt ?? ""} onChange={(system_prompt) => onChange({ ...draft, system_prompt })} rows={6} /> : <ReadonlyText value={draft.system_prompt} />}
       </DetailSection>
 
-      <DetailSection title="默认模型 (default_model)">
-        {editing ? <TextInput label="default_model" value={draft.default_model ?? ""} onChange={(default_model) => onChange({ ...draft, default_model })} /> : <ReadonlyText value={draft.default_model} />}
+      <DetailSection title="平台 Provider / 模型">
+        <ReadonlyText value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id} / ${draft.platform_model_ref.model_id} · v${draft.platform_model_ref.model_version}` : "未配置"} />
       </DetailSection>
 
       <DetailSection title="岗位描述 (description)">

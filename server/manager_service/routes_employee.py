@@ -63,7 +63,7 @@ def _service(request: Request) -> EmployeeConfigService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_employee_config_service", None)
     if cache is None:
-        cache = build_employee_config_service(PgTenantRouter(dsn))
+        cache = build_employee_config_service(PgTenantRouter(dsn), request.app.state._operator_catalog)
         request.app.state._employee_config_service = cache
     return cache
 

@@ -52,10 +52,10 @@ def provision_tenant(
         with psycopg.connect(dsn, autocommit=True) as conn:
             # 1. 插入 tenant_registry（控制面表，无 RLS，admin 连接）
             conn.execute(
-                "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code)"
-                " VALUES (%s, %s, %s)"
-                " ON CONFLICT (tenant_id) DO NOTHING",
-                (body.tenant_id, slug, body.enterprise_code),
+                "INSERT INTO tenant_registry (tenant_id, enterprise_id, enterprise_slug, enterprise_code)"
+                " VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (tenant_id) DO UPDATE SET enterprise_id = COALESCE(tenant_registry.enterprise_id, EXCLUDED.enterprise_id)",
+                (body.tenant_id, body.enterprise_id, slug, body.enterprise_code),
             )
     except pg_errors.UniqueViolation as e:
         # enterprise_slug 或 enterprise_code 唯一约束冲突 → 409 清晰提示

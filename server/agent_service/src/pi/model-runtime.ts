@@ -20,12 +20,28 @@ class MemoryCredentialStore implements CredentialStore {
   async delete(providerId: string): Promise<void> { this.values.delete(providerId); }
 }
 
+export interface RuntimePricingSnapshot {
+  pricing_version: number;
+  pricing_status: "known" | "unknown";
+  billing_mode: "token" | "request";
+  input_usd_per_million: string | null;
+  output_usd_per_million: string | null;
+  cache_read_usd_per_million: string | null;
+  cache_write_usd_per_million: string | null;
+  request_usd: string | null;
+  currency: "USD";
+  effective_from: string;
+}
+
 export interface RuntimeProviderConfig {
   base_url: string;
   api_protocol: "openai-completions" | "openai-responses" | "anthropic-messages";
   api_key: string;
   model: string;
   provider_ref: string;
+  provider_version: number;
+  model_version: number;
+  pricing: RuntimePricingSnapshot;
   version: number;
 }
 
@@ -44,7 +60,12 @@ export async function registerRuntimeProvider(runtime: ModelRuntime, config: Run
         api: config.api_protocol as Api,
         reasoning: true,
         input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        cost: {
+          input: Number(config.pricing.input_usd_per_million ?? 0),
+          output: Number(config.pricing.output_usd_per_million ?? 0),
+          cacheRead: Number(config.pricing.cache_read_usd_per_million ?? 0),
+          cacheWrite: Number(config.pricing.cache_write_usd_per_million ?? 0),
+        },
         contextWindow: 128_000,
         maxTokens: 32_768,
       }],

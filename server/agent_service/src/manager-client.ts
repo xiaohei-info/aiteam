@@ -296,7 +296,7 @@ function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
     template_id: raw.template_id,
     display_name: typeof raw.display_name === "string" ? raw.display_name : raw.template_id,
     category: typeof raw.category === "string" ? raw.category : "",
-    model_name: typeof raw.default_model === "string" ? raw.default_model : "",
+    model_name: typeof raw.platform_model_ref === "object" && raw.platform_model_ref !== null && typeof (raw.platform_model_ref as Record<string, unknown>).model_id === "string" ? (raw.platform_model_ref as Record<string, unknown>).model_id as string : "",
     skills_count: typeof raw.skills_count === "number" && Number.isInteger(raw.skills_count) && raw.skills_count >= 0 ? raw.skills_count : skills.length,
     recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : 0,
     is_recruited: raw.is_recruited === true,
@@ -347,14 +347,27 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   return { base_url: baseUrl, bank_id: bankId as string, token: token as string, lease_id: leaseId as string, version: raw.version, issued_at: issuedAtValue as string, expires_at: expiresAtValue as string };
 }
 
+function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned invalid runtime pricing");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["pricing_version", "pricing_status", "billing_mode", "input_usd_per_million", "output_usd_per_million", "cache_read_usd_per_million", "cache_write_usd_per_million", "request_usd", "currency", "effective_from"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned invalid runtime pricing");
+  if (typeof raw.pricing_version !== "number" || !Number.isInteger(raw.pricing_version) || raw.pricing_version < 1 || (raw.pricing_status !== "known" && raw.pricing_status !== "unknown") || (raw.billing_mode !== "token" && raw.billing_mode !== "request") || raw.currency !== "USD" || typeof raw.effective_from !== "string" || !Number.isFinite(Date.parse(raw.effective_from))) throw new ManagerUnavailableError("Manager returned incomplete runtime pricing");
+  for (const key of ["input_usd_per_million", "output_usd_per_million", "cache_read_usd_per_million", "cache_write_usd_per_million", "request_usd"]) {
+    const item = raw[key];
+    if (item !== null && (typeof item !== "string" || item.trim() === "" || !Number.isFinite(Number(item)) || Number(item) < 0)) throw new ManagerUnavailableError("Manager returned invalid runtime pricing rate");
+  }
+  return raw as unknown as RuntimeProviderConfig["pricing"];
+}
+
 export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "version"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
+  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
   if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
-  if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
-  return raw as unknown as RuntimeProviderConfig;
+  for (const key of ["version", "provider_version", "model_version"]) if (typeof raw[key] !== "number" || !Number.isInteger(raw[key]) || Number(raw[key]) < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
+  return { ...raw, pricing: normalizeRuntimePricing(raw.pricing) } as unknown as RuntimeProviderConfig;
 }
 
 function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string): FrozenSnapshot {

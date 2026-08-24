@@ -60,6 +60,13 @@ class OperatorCatalogPort(ABC):
         from shared.errors import NotFound
         raise NotFound(f"platform skill not found: {skill_id}@{version}")
 
+    def list_platform_catalog(self) -> dict:
+        return {"providers": [], "models": []}
+
+    def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
+        from shared.errors import NotFound
+        raise NotFound("platform tenant access is unavailable")
+
 
 class OperatorCatalogClient(OperatorCatalogPort):
     """生产实现：经 shared.service_client 走 Operator 云侧端点（05 §5.3，#176）。
@@ -130,6 +137,21 @@ class OperatorCatalogClient(OperatorCatalogPort):
     def list_platform_skills(self) -> list[dict]:
         return self._get("/api/operation/skill-market/pull/skills").get("data", [])
 
+    def list_platform_catalog(self) -> dict:
+        return self._get("/api/operation/catalog/platform-providers").get("data", {})
+
+    def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
+        try:
+            return self._client.post(
+                "/api/operation/provider-access/resolve",
+                json={"tenant_id": tenant_id, "provider_id": provider_id, "model_ids": model_ids},
+                idempotency_key=f"provider-access:{tenant_id}:{provider_id}",
+            ).get("data", {})
+        except AppError:
+            raise
+        except Exception as exc:
+            raise OperatorCatalogUnavailable("Operator provider access is unavailable") from exc
+
     def _get(self, path: str) -> dict:
         try:
             return self._client.get(path)
@@ -159,6 +181,7 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._solutions: dict[tuple[str, str], SolutionPackage] = {}
         self._solutions_latest: dict[str, SolutionPackage] = {}
         self._platform_skills: dict[tuple[str, str], PlatformSkillPackage] = {}
+        self._platform_catalog: dict = {"providers": [], "models": []}
         self.invalidated: list[tuple[str, str]] = []
 
     def invalidate(self, catalog_type: str, template_id: str) -> None:
@@ -176,6 +199,9 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
 
     def seed_platform_skill(self, package: PlatformSkillPackage) -> None:
         self._platform_skills[(package.package.skill_id, package.package.version)] = package
+
+    def seed_platform_catalog(self, catalog: dict) -> None:
+        self._platform_catalog = catalog
 
     # ---- 只读拉取（红线：不改预置真相）----
     def pull_expert_template(
@@ -235,3 +261,13 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
             from shared.errors import NotFound
             raise NotFound(f"platform skill not found: {skill_id}@{version}")
         return package.model_copy(deep=True)
+
+    def list_platform_catalog(self) -> dict:
+        return dict(self._platform_catalog)
+
+    def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
+        return {
+            "access": {"access_id": f"access-{tenant_id}-{provider_id}", "tenant_id": tenant_id, "provider_id": provider_id,
+                       "allowed_model_ids": model_ids, "status": "active", "version": 1, "expires_at": None},
+            "relay_base_url": "https://relay.test/v1", "api_protocol": "openai-completions", "relay_token": "test-tenant-token",
+        }

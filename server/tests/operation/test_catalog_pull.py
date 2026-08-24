@@ -14,6 +14,8 @@ from operation_service.catalog_service import CatalogService
 from run import get_app
 from shared.contracts.crosstier import CatalogReleaseNotify
 
+_MODEL_REF = {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-5", "model_version": 1}
+
 
 # 在模块加载时就设置环境变量
 os.environ["SERVICE_TOKEN"] = "test-service-token"
@@ -38,7 +40,8 @@ def client(manager):
     class PlatformSkillStore:
         def get_package(self, *, skill_id, version, published_only=False):
             return {"content_hash": "abc123"}
-    service = CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore())
+    providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
+    service = CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore(), platform_providers=providers)
     app.dependency_overrides[get_catalog_service] = lambda: service
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -64,7 +67,7 @@ def _register_and_publish_expert(client):
     # 注册
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader", "default_model": "gpt-5", "skill_ids": ["seo"], "description": "CMO expert"},
+        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader", "platform_model_ref": _MODEL_REF, "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
     # 发布
@@ -163,7 +166,7 @@ def test_pull_expert_template_not_published(client):
     # 只注册，不发布
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "h", "system_prompt": "s", "default_model": "g", "skill_ids": ["sk"], "description": "d"},
+        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "h", "system_prompt": "s", "platform_model_ref": {**_MODEL_REF, "model_id": "g"}, "skill_ids": ["sk"], "description": "d"},
         headers=_auth_header(),
     )
 
@@ -191,7 +194,7 @@ def _register_solution_with_bindings(client):
     for tpl_id, name in [("tpl-cmo", "CMO"), ("tpl-ceo", "CEO")]:
         client.post(
             "/api/operation/catalog/expert-templates",
-            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "h", "system_prompt": f"{name} system", "default_model": "g", "skill_ids": ["sk"], "description": "d"},
+            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "h", "system_prompt": f"{name} system", "platform_model_ref": {**_MODEL_REF, "model_id": "g"}, "skill_ids": ["sk"], "description": "d"},
             headers=_auth_header(),
         )
         client.post(
@@ -308,7 +311,7 @@ def _register_solution_with_orchestration(client):
         "/api/operation/catalog/expert-templates",
         json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing",
               "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader",
-              "default_model": "gpt-5", "skill_ids": ["seo"], "description": "CMO expert"},
+              "platform_model_ref": _MODEL_REF, "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
     client.post(
@@ -379,7 +382,7 @@ def _register_expert_with_full_config(client):
             "category": "marketing",
             "avatar_url": "https://example.com/a.png",
             "system_prompt": "You are CMO",
-            "default_model": "gpt-5",
+            "platform_model_ref": _MODEL_REF,
             "platform_skill_refs": [{
                 "skill_id": "00000000-0000-0000-0000-000000000101",
                 "version": "1.0.0",
@@ -409,7 +412,7 @@ def test_pull_expert_template_includes_flat_config(client):
     assert data["template_id"] == "tpl-full"
     assert data["display_name"] == "Full Config Expert"
     assert data["system_prompt"] == "You are CMO"
-    assert data["default_model"] == "gpt-5"
+    assert data["platform_model_ref"]["model_id"] == "gpt-5"
     assert data["skill_ids"] == []
     assert data["platform_skill_refs"][0]["version"] == "1.0.0"
     assert data["category"] == "marketing"
@@ -433,7 +436,7 @@ def test_pull_expert_template_defaults_when_unset(client):
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["system_prompt"] == "marketing leader"
-    assert data["default_model"] == "gpt-5"
+    assert data["platform_model_ref"]["model_id"] == "gpt-5"
     assert data["skill_ids"] == []
     assert data["platform_skill_refs"] == []
     assert data["category"] == "marketing"
@@ -467,7 +470,7 @@ def test_list_expert_templates_include_flat_config(client):
     data = r.json()["data"]
     item = next(i for i in data if i["template_id"] == "tpl-full")
     assert item["system_prompt"] == "You are CMO"
-    assert item["default_model"] == "gpt-5"
+    assert item["platform_model_ref"]["model_id"] == "gpt-5"
     assert item["skill_ids"] == []
     assert item["platform_skill_refs"][0]["skill_id"] == "00000000-0000-0000-0000-000000000101"
     assert item["category"] == "marketing"

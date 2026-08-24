@@ -180,6 +180,7 @@ services:
       NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-http://newapi:3000/v1}
       NEWAPI_ADMIN_USER_ID: ${NEWAPI_ADMIN_USER_ID:-}
       NEWAPI_ADMIN_TOKEN: ${NEWAPI_ADMIN_TOKEN:-}
+      OPERATION_PROVIDER_CREDENTIAL_KEY: ${OPERATION_PROVIDER_CREDENTIAL_KEY:-}
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
       SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}

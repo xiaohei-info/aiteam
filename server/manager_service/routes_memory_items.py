@@ -54,6 +54,7 @@ def _service(request: Request) -> MemoryService:
             member_service=MemberDeptService(repo=member_repo),
             audit_recorder=build_enterprise_audit_repository(router),
             knowledge_binding=EmployeeKnowledgeBindingRepository(router),
+            platform_catalog=request.app.state._operator_catalog,
         )
         backend = getattr(request.app.state, "_hindsight_client", None) or HindsightClient()
         service = build_memory_service(snapshot=snapshot, backend=backend)

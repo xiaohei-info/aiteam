@@ -14,6 +14,7 @@ export interface ExpertTemplate {
   version: string;
   display_name: string;
   persona?: string | null;
+  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   is_recruited?: boolean;
 }
 
@@ -26,7 +27,7 @@ export interface SolutionPackageExpertSummary {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
+  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   skill_ids?: string[];
   description?: string;
   sequence_no?: number;
@@ -55,6 +56,9 @@ export interface SolutionPackage {
 export interface ModelPolicy {
   model: string;
   provider_ref?: string | null;
+  provider_version?: number | null;
+  model_version?: number | null;
+  pricing?: Record<string, unknown> | null;
   thinking_level?: string | null;
 }
 

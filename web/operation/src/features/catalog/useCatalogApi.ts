@@ -30,7 +30,7 @@ export type UpdateExpertTemplateChanges = {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
+  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   skill_ids?: string[];
   tags?: string[];
   description?: string;

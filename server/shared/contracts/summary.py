@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +28,10 @@ class UsageSummary(BaseModel):
     window_end: datetime
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"), description="总费用")
+    cost_total: Decimal = Field(default=Decimal("0"), description="USD 总费用（至少 6 位小数）")
+    currency: Literal["USD"] = "USD"
+    pricing_version: int | None = Field(default=None, ge=1)
+    pricing_status: Literal["known", "unknown"] = "unknown"
     error_count: int = 0
     duration_seconds_total: int = 0
 

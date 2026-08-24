@@ -13,6 +13,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.enums import CatalogStatus, CatalogType
+from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
 
 
@@ -35,7 +36,7 @@ class RegisterExpertTemplateRequest(BaseModel):
     """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。
 
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
-    default_model / skill_ids / tags / description / initial_memories / sort_order。
+    platform_model_ref / platform_skill_refs / description。
     创建专家模板的最小字段：名称、分类、系统提示词、默认模型、岗位描述；头像可选。
     技能只接受 Operator 内部平台技能的固定版本引用，未选择时为空。
     """
@@ -52,7 +53,7 @@ class RegisterExpertTemplateRequest(BaseModel):
     category: str = Field(min_length=1, description="分类（市场营销/财务分析/…）(PRD: category, 必填)")
     avatar_url: str = Field(default="", description="可选头像图片 URL")
     system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
-    default_model: str = Field(min_length=1, description="默认使用的大模型（PRD: default_model, 必填）")
+    platform_model_ref: PlatformModelRef = Field(description="Operator 已发布平台 Provider/模型固定引用")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility field; use skill_refs")
     description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
@@ -129,7 +130,7 @@ class UpdateExpertTemplateRequest(BaseModel):
     category: str | None = None
     avatar_url: str | None = None
     system_prompt: str | None = None
-    default_model: str | None = None
+    platform_model_ref: PlatformModelRef | None = None
     platform_skill_refs: list[PlatformSkillRef] | None = None
     skill_ids: list[str] | None = None
     description: str | None = None
@@ -167,7 +168,7 @@ class CatalogEntryResponse(BaseModel):
     category: str = Field(default="")
     avatar_url: str = Field(default="")
     system_prompt: str = Field(default="")
-    default_model: str = Field(default="")
+    platform_model_ref: PlatformModelRef | None = None
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

@@ -13,8 +13,9 @@ import { TeamMemberSelector } from "./TeamMemberSelector";
 import { ApiError } from "@aiteam/shared";
 import { parseJsonObject, parseList, validateRegistration, type RegistrationErrors } from "./validation";
 import type { CatalogApi } from "../useCatalogApi";
-import type { CatalogItem, CatalogItemType, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
+import type { CatalogItem, CatalogItemType, PlatformModelRef, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
 import type { PlatformSkillRef } from "../../skill-market/types";
+import { usePlatformProvidersApi } from "../../providers/usePlatformProvidersApi";
 
 const DEFAULT_EXPERT_CATEGORIES = ["市场营销", "财务分析", "技术研发", "客户服务", "人力资源"];
 
@@ -33,6 +34,7 @@ export interface RegisterFormProps {
 }
 
 export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFormProps) {
+  const providerApi = usePlatformProvidersApi();
   const [displayName, setDisplayName] = useState("");
   const [category, setCategory] = useState(DEFAULT_EXPERT_CATEGORIES[0] ?? "");
   const [categories, setCategories] = useState(DEFAULT_EXPERT_CATEGORIES);
@@ -41,6 +43,8 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [avatarUrl, setAvatarUrl] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
+  const [modelOptions, setModelOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [modelRefs, setModelRefs] = useState<Record<string, PlatformModelRef>>({});
   const [expertDescription, setExpertDescription] = useState("");
   const [platformSkillRefs, setPlatformSkillRefs] = useState<PlatformSkillRef[]>([]);
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
@@ -59,6 +63,24 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [validationErrors, setValidationErrors] = useState<RegistrationErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (catalogType !== "expert_template") return;
+    void providerApi.list().then(async (providers) => {
+      const published = providers.filter((provider) => provider.status === "published");
+      const groups = await Promise.all(published.map(async (provider) => ({ provider, models: await providerApi.models(provider.provider_id) })));
+      const refs: Record<string, PlatformModelRef> = {};
+      const options: Array<{ value: string; label: string }> = [];
+      for (const { provider, models } of groups) for (const item of models) {
+        if (item.model.status !== "published" || !item.rate) continue;
+        const value = `${provider.provider_id}::${item.model.model_id}`;
+        refs[value] = { provider_id: provider.provider_id, provider_version: provider.version, model_id: item.model.model_id, model_version: item.model.version };
+        options.push({ value, label: `${provider.display_name} / ${item.model.display_name || item.model.model_id} · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}` });
+      }
+      setModelRefs(refs); setModelOptions(options);
+      if (options.length === 1) setDefaultModel(options[0]!.value);
+    }).catch(() => { setModelOptions([]); setModelRefs({}); });
+  }, [catalogType, providerApi]);
 
   useEffect(() => {
     if (catalogType !== "solution_template") return;
@@ -87,7 +109,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       category: category.trim(),
       avatar_url: avatarUrl.trim(),
       system_prompt: systemPrompt.trim(),
-      default_model: defaultModel.trim(),
+      platform_model_ref: modelRefs[defaultModel]!,
       platform_skill_refs: platformSkillRefs,
       description: expertDescription.trim(),
     };
@@ -173,6 +195,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
                 avatarUrl={avatarUrl}
                 systemPrompt={systemPrompt}
                 defaultModel={defaultModel}
+                modelOptions={modelOptions}
                 description={expertDescription}
                 disabled={disabled}
                 systemPromptError={validationErrors.systemPrompt}

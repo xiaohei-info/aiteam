@@ -15,6 +15,7 @@ from .routes_auth import router as auth_router
 from .routes_catalog import router as catalog_router, router_pull as catalog_pull_router
 from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
+from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
 from .routes_admin import build_admin_router
 
@@ -53,6 +54,8 @@ app.state._token_verifier = _verifier
 # 认证面（/api/operation/auth/*）：系统账号登录。
 app.include_router(auth_router)
 app.include_router(enterprise_router)
+# Platform Provider/model/rate routes precede greedy catalog routes.
+app.include_router(platform_provider_router)
 # Manager 拉取端点（服务间调用，05 F06/F07）必须先于管理路由注册：
 # 管理路由含贪婪 `GET /{catalog_type}/{template_id}`，会吞掉 `/catalog/pull/expert-templates`
 # 等列举端点（catalog_type="pull"），导致服务间调用错命中用户鉴权 → 401。

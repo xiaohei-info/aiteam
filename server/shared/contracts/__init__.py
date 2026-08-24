@@ -19,6 +19,7 @@ from .crosstier import (
     AuthorizedConfigPullRequest,
     AuthorizedConfigPullResponse,
     CatalogReleaseNotify,
+    EnterpriseRollupUpload,
     ExpertTemplateDetail,
     OwnerBootstrapSync,
     SnapshotPullRequest,
@@ -41,6 +42,14 @@ from .snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
 from .summary import AuditSummaryEvent, UsageSummary
 from .skill import SignedSkillPackage, SkillFile, SkillPackage, SkillSigningKeyMetadata
 from .platform_skill import PlatformSkillPackage, PlatformSkillRef, PlatformSkillSummary
+from .platform_provider import (
+    PlatformModel,
+    PlatformModelRate,
+    PlatformModelRef,
+    PlatformProvider,
+    PricingSnapshot,
+    TenantProviderAccess,
+)
 from .tenancy import TenantContext
 
 __all__ = [
@@ -50,6 +59,7 @@ __all__ = [
     "AuthorizedConfigPullRequest",
     "AuthorizedConfigPullResponse",
     "CatalogReleaseNotify",
+    "EnterpriseRollupUpload",
     "ExpertTemplateDetail",
     "OwnerBootstrapSync",
     "SnapshotPullRequest",
@@ -80,6 +90,12 @@ __all__ = [
     "PlatformSkillPackage",
     "PlatformSkillRef",
     "PlatformSkillSummary",
+    "PlatformProvider",
+    "PlatformModel",
+    "PlatformModelRef",
+    "PlatformModelRate",
+    "PricingSnapshot",
+    "TenantProviderAccess",
     "SkillFile",
     "SkillPackage",
     "SkillSigningKeyMetadata",

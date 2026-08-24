@@ -7,13 +7,12 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { ExpertsPage } from "../ExpertsPage";
 import { useExpertsApi } from "../useExpertsApi";
-import { useProvidersApi } from "../../providers/useProvidersApi";
+import { usePlatformModelsApi } from "../../platform-models/usePlatformModelsApi";
 
 vi.mock("../useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
-vi.mock("../../providers/useProvidersApi", () => ({ useProvidersApi: vi.fn() }));
+vi.mock("../../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: vi.fn() }));
 
 import type { ExpertsApi } from "../useExpertsApi";
-import type { ProvidersApi } from "../../providers/useProvidersApi";
 import type { EmployeeConfig } from "../types";
 import type { ProviderCredential } from "../../providers/types";
 import { toEmployeeConfigIn } from "../EmployeeConfigDrawer";
@@ -67,7 +66,7 @@ const employeeConfigured: EmployeeConfig = {
   version: 1,
   display_name: "架构师",
   persona: "技术架构专家",
-  model_policy: { model: "gpt-4o", provider_ref: "openai-main", thinking_level: "basic" },
+  model_policy: { model: "gpt-4o", provider_ref: "openai-main", provider_version: 1, model_version: 1, thinking_level: "basic" },
   execution_policy: { timeout_seconds: 60 },
   tools: ["t1"],
   skills: ["s1"],
@@ -93,16 +92,6 @@ const employeeUnconfigured: EmployeeConfig = {
   status: "draft",
 };
 
-function mockProviders(list: ProviderCredential[]): ProvidersApi {
-  return {
-    list: vi.fn().mockResolvedValue(list),
-    get: vi.fn().mockResolvedValue(list[0] ?? null),
-    create: vi.fn().mockResolvedValue(list[0] ?? null),
-    update: vi.fn().mockResolvedValue(list[0] ?? null),
-    del: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
 function mockApis(
   employees: EmployeeConfig[],
   providers: ProviderCredential[] = [provider],
@@ -123,7 +112,15 @@ function mockApis(
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
   };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
-  (useProvidersApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockProviders(providers));
+  (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+    list: vi.fn().mockResolvedValue({
+      providers: providers.map((item) => ({ provider_id: item.provider_ref, provider_code: item.provider_ref, display_name: item.display_name, status: "published", version: item.version })),
+      models: providers.flatMap((item) => (item.supported_models ?? []).map((model) => ({
+        model: { provider_id: item.provider_ref, model_id: model.model, display_name: model.display_name, status: "published", version: 1 },
+        rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, currency: "USD" },
+      }))),
+    }),
+  });
   return { api, updateEmployee };
 }
 
@@ -185,7 +182,7 @@ describe("ExpertsPage", () => {
     expect(within(providerSelect).getByRole("combobox")).toHaveTextContent("OpenAI");
     const modelSelect = screen.getByTestId("model-select");
     fireEvent.click(within(modelSelect).getByRole("combobox"));
-    fireEvent.click(screen.getByRole("option", { name: "GPT-4o mini", hidden: true }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-4o mini/, hidden: true }));
 
     fireEvent.click(screen.getByText("保存"));
 

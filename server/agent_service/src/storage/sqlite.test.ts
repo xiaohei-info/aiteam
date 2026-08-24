@@ -171,6 +171,7 @@ test("projection revocation removes solution/snapshot access and outbox exposes 
       schema_version: "1", summary_id: "summary-1", tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1",
       window_start: "2026-01-01T00:00:00.000Z", window_end: "2026-01-01T01:00:00.000Z", prompt_count: 1, settled_count: 1,
       error_count: 0, input_tokens: 2, output_tokens: 3, cache_tokens: 0, cost_minor: 1, currency: "USD", duration_ms_total: 10,
+      pricing_version: 1, pricing_status: "known",
       run_count: 1, token_total: 5, cost_total: 0.01, duration_seconds_total: 1,
     });
     const item = store.listUsageOutbox("tenant-1", "member-1")[0];

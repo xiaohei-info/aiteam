@@ -106,6 +106,39 @@ def test_usage_summary_uses_decimal_not_float():
     assert isinstance(s.cost_total, Decimal)
 
 
+def test_platform_pricing_is_decimal_versioned_and_secret_free():
+    from decimal import Decimal
+
+    pricing = C.PricingSnapshot(
+        pricing_version=3,
+        pricing_status="known",
+        input_usd_per_million="0.30",
+        output_usd_per_million="1.20",
+        cache_read_usd_per_million="0.06",
+        currency="USD",
+        effective_from="2026-08-24T00:00:00Z",
+    )
+    policy = C.ModelPolicy(
+        model="minimax-m3",
+        provider_ref="newapi",
+        provider_version=2,
+        model_version=4,
+        pricing=pricing,
+    )
+    assert isinstance(policy.pricing.input_usd_per_million, Decimal)
+    assert policy.model_dump(mode="json")["pricing"]["input_usd_per_million"] == "0.30"
+    assert "token" not in policy.model_dump(mode="json")
+
+
+def test_platform_rate_rejects_float_like_extra_or_negative_values():
+    with pytest.raises(ValidationError):
+        C.PlatformModelRate(
+            rate_id="r1", provider_id="p1", model_id="m1", pricing_version=1,
+            pricing_status="known", input_usd_per_million="-1", source="manual",
+            effective_from="2026-08-24T00:00:00Z", secret="leak",
+        )
+
+
 def test_crosstier_snapshot_pull_wraps_snapshot():
     from shared.contracts.crosstier import SnapshotPullResponse
 

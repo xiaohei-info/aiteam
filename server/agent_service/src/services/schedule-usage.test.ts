@@ -62,12 +62,16 @@ test("local scheduler invokes SessionHost prompt once and shuts down cleanly", a
 test("usage aggregation is deterministic, bucketed, and contains no prompt data", () => {
   const summary = aggregateUsage({
     tenantId: "tenant-1", memberId: "member-1", employeeId: "employee-1", startedAt: Date.parse("2026-01-01T01:23:00Z"), endedAt: Date.parse("2026-01-01T01:24:02Z"), settled: true,
-    entries: [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 3, cost: { total: 0.17 } }, content: [{ type: "text", text: "secret prompt" }] } } as never],
+    entries: [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 3, cost: { total: 999 } }, content: [{ type: "text", text: "secret prompt" }] } } as never],
+    pricing: { pricing_version: 7, pricing_status: "known", billing_mode: "token", input_usd_per_million: "0.30", output_usd_per_million: "1.20", cache_read_usd_per_million: "0.06", cache_write_usd_per_million: "0.375", request_usd: null, currency: "USD", effective_from: "2026-01-01T00:00:00Z" },
   });
   assert.equal(summary.input_tokens, 10);
   assert.equal(summary.output_tokens, 5);
   assert.equal(summary.cache_tokens, 5);
-  assert.equal(summary.cost_minor, 17);
+  assert.equal(summary.cost_minor, 0);
+  assert.equal(summary.cost_total, 0.00001);
+  assert.equal(summary.pricing_version, 7);
+  assert.equal(summary.pricing_status, "known");
   assert.equal(summary.duration_ms_total, 62000);
   assert.equal(summary.window_start, "2026-01-01T01:00:00.000Z");
   assert(!JSON.stringify(summary).includes("secret prompt"));

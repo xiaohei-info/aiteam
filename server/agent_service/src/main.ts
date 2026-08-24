@@ -42,6 +42,7 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
+const usageFlush = new UsageFlushService(store, managerClient);
 const sessionHost = new SessionHost({
   cwdRoot,
   agentDir,
@@ -52,7 +53,10 @@ const sessionHost = new SessionHost({
   useFauxModel,
   managerClient,
   sandbox,
-  usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
+  usageRecorder: (capture, caller) => {
+    store.upsertUsageSummary(aggregateUsage(capture));
+    void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
+  },
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl, hindsightRuntimeConfig),
 });
 
@@ -60,7 +64,6 @@ const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
   : createJwtAuthenticator(loadJwtOptions());
 
-const usageFlush = new UsageFlushService(store, managerClient);
 const schedule = new ScheduleService(store, sessionHost);
 const http = new AgentHttpServer({
   logger: console,

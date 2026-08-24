@@ -602,6 +602,9 @@ class UsageRollupOut(BaseModel):
     run_count: int = 0
     token_total: int = 0
     cost_total: Decimal = Decimal("0")
+    pricing_version: int | None = None
+    pricing_status: Literal["known", "unknown"] = "unknown"
+    currency: Literal["USD"] = "USD"
     error_count: int = 0
     duration_seconds_total: int = 0
 

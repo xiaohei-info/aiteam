@@ -22,6 +22,7 @@ build_usage_audit_quota_router 闭包注入各端点依赖（照 build_employee_
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
@@ -42,10 +43,15 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
+from .rollup_reporter import RollupReporter, ServiceClientRollupClient
+from shared.service_client import ServiceClient
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
     build_usage_audit_quota_service,
 )
+
+logger = logging.getLogger(__name__)
+
 
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
@@ -75,6 +81,26 @@ def _service(request: Request) -> UsageAuditQuotaService:
     return cache
 
 
+def _report_to_operator(request: Request, service: UsageAuditQuotaService, ctx: TenantContext) -> None:
+    settings = request.app.state.settings
+    if not settings.admin_db_url or not settings.operator_url:
+        return
+    import psycopg
+    with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
+        row = conn.execute("SELECT enterprise_id::text FROM tenant_registry WHERE tenant_id=%s::uuid", (ctx.tenant_id,)).fetchone()
+    if not row or not row[0]:
+        logger.warning("usage rollup deferred: tenant has no enterprise mapping", extra={"tenant_id": ctx.tenant_id})
+        return
+    client = ServiceClient(
+        settings.operator_url, service_identity=settings.service_name,
+        service_token=settings.service_token, timeout=settings.service_client_timeout_ms / 1000,
+    )
+    try:
+        RollupReporter(service).report(ctx, enterprise_id=row[0], client=ServiceClientRollupClient(client))
+    finally:
+        client.close()
+
+
 def build_usage_audit_quota_router(verifier) -> APIRouter:
     """构造 usage/audit/quota 路由；verifier 由 app 持有并闭包注入受保护端点。"""
     router = APIRouter(prefix="/api/manager", tags=["manager", "usage-audit-quota"])
@@ -97,6 +123,10 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         if body.tenant_id != ctx.tenant_id:
             raise Forbidden("usage tenant_id must match the authenticated tenant")
         result = svc.ingest_upload(ctx, body.model_dump(exclude={"tenant_id"}))
+        try:
+            _report_to_operator(request, svc, ctx)
+        except Exception:  # best effort; Agent outbox already has durable retry semantics
+            logger.warning("usage rollup upload to Operator deferred", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
         return Envelope[dict](data=result)
 
     # ---- usage 查询 ----

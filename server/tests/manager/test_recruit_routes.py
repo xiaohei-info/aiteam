@@ -112,7 +112,7 @@ def test_browse_experts_returns_seeded_templates():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
         client = _client("postgresql://fake/fake")
         client.app.state._operator_catalog.seed_expert(
-            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家")
+            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家", platform_model_ref={"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1})
         )
         resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
     assert resp.status_code == 200, resp.text

@@ -415,7 +415,7 @@ class TestPgRollupRepository:
     def test_summaries_for_with_tenant(self, repo):
         _set_one(self.cursor, ("t1",))  # tenant lookup
         _set_all(self.cursor, [(
-            "s1", _dt(), _dt(), 3, 300, Decimal("4.5"), 1, 10,
+            "s1", _dt(), _dt(), 3, 300, Decimal("4.5"), 1, 10, 1, "known", "USD",
         )])
         rows = repo.summaries_for("ent-1")
         assert rows[0].summary_id == "s1"
@@ -429,7 +429,7 @@ class TestPgRollupRepository:
 
     def test_all_summaries(self, repo):
         _set_all(self.cursor, [(
-            "ent-1", "s1", _dt(), _dt(), 3, 300, Decimal("4.5"), 1, 10, "t1",
+            "ent-1", "s1", _dt(), _dt(), 3, 300, Decimal("4.5"), 1, 10, 1, "known", "USD", "t1",
         )])
         rows = repo.all_summaries()
         assert rows[0][0] == "ent-1"
@@ -437,7 +437,7 @@ class TestPgRollupRepository:
 
     def test_to_summary_handles_nulls(self, repo):
         from operation_service.rollup_repository import PgRollupRepository
-        s = PgRollupRepository._to_summary("t1", ("s1", _dt(), _dt(), None, None, None, None, None))
+        s = PgRollupRepository._to_summary("t1", ("s1", _dt(), _dt(), None, None, None, None, None, None, "unknown", "USD"))
         assert s.run_count == 0
         assert s.cost_total == Decimal("0")
 

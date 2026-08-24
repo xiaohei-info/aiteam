@@ -15,6 +15,7 @@ from .catalog_gateway import CatalogManagerGateway, HttpCatalogManagerGateway
 from .catalog_repository import CatalogRepository, PgCatalogRepository
 from .catalog_service import CatalogService
 from .platform_skill_market import PlatformSkillRepository
+from .platform_provider_service import build_platform_provider_service
 from .repository import apply_migrations
 
 
@@ -43,4 +44,8 @@ def get_catalog_gateway() -> CatalogManagerGateway:
 def get_catalog_service() -> CatalogService:
     settings = load_settings("operation")
     skills = PlatformSkillRepository(settings.admin_db_url) if settings.admin_db_url else None
-    return CatalogService(get_catalog_repository(), get_catalog_gateway(), platform_skills=skills)
+    try:
+        providers = build_platform_provider_service()
+    except RuntimeError:
+        providers = None
+    return CatalogService(get_catalog_repository(), get_catalog_gateway(), platform_skills=skills, platform_providers=providers)

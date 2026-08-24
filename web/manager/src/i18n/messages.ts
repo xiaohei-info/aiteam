@@ -14,7 +14,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.nav.skills": "技能管理",
     "manager.nav.grants": "成员级授权",
     "manager.nav.governance": "企业治理",
-    "manager.nav.providers": "Provider 凭据",
+    "manager.nav.providers": "平台模型",
     "manager.providers.loading": "Provider 凭据加载中…",
     "manager.providers.load_error": "Provider 凭据加载失败",
     "manager.providers.create_error": "Provider 凭据创建失败，请重试。",

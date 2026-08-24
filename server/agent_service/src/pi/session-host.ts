@@ -25,7 +25,7 @@ import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
-import { registerRuntimeProvider } from "./model-runtime.js";
+import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 
 export interface PiEventEnvelope {
@@ -76,7 +76,7 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
-  usageRecorder?: (capture: UsageCapture) => void | Promise<void>;
+  usageRecorder?: (capture: UsageCapture, caller: AuthenticatedCaller) => void | Promise<void>;
 }
 
 interface Subscriber {
@@ -113,7 +113,6 @@ interface SessionRecord {
   aborting: boolean;
   delegateCalls: number;
   delegatePromptChars: number;
-  delegatedEntries: SessionEntry[];
   activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
   eventSequence: number;
@@ -184,7 +183,6 @@ export class SessionHost {
     record.aborting = false;
     record.delegateCalls = 0;
     record.delegatePromptChars = 0;
-    record.delegatedEntries = [];
 
     try {
       const authorization = caller ? this.resolveAuthorization(record, caller, mentions ?? []) : undefined;
@@ -297,16 +295,23 @@ export class SessionHost {
 
   private async recordUsage(record: SessionRecord, authorization: SessionAuthorization | undefined, startedAt: number, settled: boolean, entriesBefore: number): Promise<void> {
     if (!this.options.usageRecorder || !authorization?.caller.tenantId || !authorization.caller.userId) return;
-    const employeeId = authorization.employeeId;
+    await this.recordUsageEntries(
+      authorization, startedAt, settled, record.sessionManager.getEntries().slice(entriesBefore),
+    );
+  }
+
+  private async recordUsageEntries(authorization: SessionAuthorization, startedAt: number, settled: boolean, entries: readonly SessionEntry[]): Promise<void> {
+    if (!this.options.usageRecorder || !authorization.caller.tenantId || !authorization.caller.userId) return;
     await this.options.usageRecorder({
       tenantId: authorization.caller.tenantId,
       memberId: authorization.caller.userId,
-      employeeId,
+      employeeId: authorization.employeeId,
       startedAt,
       endedAt: Date.now(),
-      entries: [...record.sessionManager.getEntries().slice(entriesBefore), ...record.delegatedEntries],
+      entries,
       settled,
-    });
+      pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
+    }, authorization.caller);
   }
 
   private ensureRecord(conversationId: string): SessionRecord {
@@ -343,7 +348,6 @@ export class SessionHost {
       aborting: false,
       delegateCalls: 0,
       delegatePromptChars: 0,
-      delegatedEntries: [],
       activeDelegates: new Set(),
       listeners: new Set(),
       eventSequence: 0,
@@ -577,11 +581,15 @@ export class SessionHost {
       if (child.aborted || signal?.aborted || record.aborting) await child.abort();
       const source: ChildSource = { employeeId: expert.employee_id, displayName: expert.display_name };
       const unsubscribe = result.session.subscribe((event) => this.publishChild(record, event, sourceRef, toolCallId, source));
+      const childStartedAt = Date.now();
       try {
         await result.session.prompt(prompt);
+        await this.recordUsageEntries(childAuthorization, childStartedAt, true, sessionManager.getEntries());
         return this.childSummary(sessionManager.getEntries());
+      } catch (error) {
+        await this.recordUsageEntries(childAuthorization, childStartedAt, false, sessionManager.getEntries());
+        throw error;
       } finally {
-        record.delegatedEntries.push(...sessionManager.getEntries());
         unsubscribe();
         await child.abort();
         await this.flushChildResourceLoader(child);
@@ -631,7 +639,11 @@ export class SessionHost {
     const policy = authorization.snapshot.model_policy;
     const expectedModel = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).model === "string" ? (policy as Record<string, unknown>).model : undefined;
     const expectedProvider = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).provider_ref === "string" ? (policy as Record<string, unknown>).provider_ref : undefined;
-    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
+    const expectedProviderVersion = policy && typeof policy === "object" ? (policy as Record<string, unknown>).provider_version : undefined;
+    const expectedModelVersion = policy && typeof policy === "object" ? (policy as Record<string, unknown>).model_version : undefined;
+    const expectedPricing = policy && typeof policy === "object" ? (policy as Record<string, unknown>).pricing : undefined;
+    const expectedPricingVersion = expectedPricing && typeof expectedPricing === "object" ? (expectedPricing as Record<string, unknown>).pricing_version : undefined;
+    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider || config.provider_version !== expectedProviderVersion || config.model_version !== expectedModelVersion || config.pricing.pricing_version !== expectedPricingVersion) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
     const providerId = `aiteam:${createHash("sha256").update(`${authorization.caller.tenantId}:${memberId}:${authorization.employeeId}:${config.version}:${authorization.runtimeScope ?? "session"}`).digest("hex").slice(0, 32)}`;
     const model = await registerRuntimeProvider(this.options.modelRuntime, config, providerId);
     authorization.runtimeProviderId = providerId;

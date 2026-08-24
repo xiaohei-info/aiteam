@@ -31,7 +31,6 @@ export const managerShellConfig: PageShellConfig = {
     // manage_connectors 门控
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控
-    { id: "llm", labelKey: "manager.nav.llm", path: "/llm", icon: "key" },
     // view_billing 门控
     { id: "billing", labelKey: "manager.nav.billing", path: "/billing", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN] },
     // view_billing 门控

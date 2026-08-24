@@ -1,11 +1,13 @@
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
+import { Selector } from "@astryxdesign/core/Selector";
 
 export interface ExpertTemplateFieldsProps {
   avatarUrl: string;
   systemPrompt: string;
   defaultModel: string;
+  modelOptions: Array<{ value: string; label: string }>;
   description: string;
   disabled: boolean;
   systemPromptError?: string;
@@ -21,6 +23,7 @@ export function ExpertTemplateFields({
   avatarUrl,
   systemPrompt,
   defaultModel,
+  modelOptions,
   description,
   disabled,
   systemPromptError,
@@ -51,11 +54,13 @@ export function ExpertTemplateFields({
         isDisabled={disabled}
         status={systemPromptError ? { type: "error", message: systemPromptError } : undefined}
       />
-      <TextInput
-        label="默认模型 (default_model)"
-        value={defaultModel}
+      <Selector
+        label="平台 Provider / 模型"
+        options={modelOptions}
+        value={defaultModel || undefined}
         onChange={onDefaultModelChange}
-        placeholder="如 gpt-5 / claude-opus-4-8 / deepseek"
+        placeholder="选择 Operator 已发布模型"
+        data-testid="platform-model-select"
         isRequired
         isDisabled={disabled}
         status={defaultModelError ? { type: "error", message: defaultModelError } : undefined}

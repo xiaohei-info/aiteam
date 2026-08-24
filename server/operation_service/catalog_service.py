@@ -76,7 +76,7 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         category=payload.get("category", ""),
         avatar_url=payload.get("avatar_url", ""),
         system_prompt=payload.get("system_prompt", ""),
-        default_model=payload.get("default_model", ""),
+        platform_model_ref=payload.get("platform_model_ref"),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
@@ -161,7 +161,7 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         category=payload.get("category", ""),
         avatar_url=payload.get("avatar_url", ""),
         system_prompt=payload.get("system_prompt", ""),
-        default_model=payload.get("default_model", ""),
+        platform_model_ref=payload.get("platform_model_ref"),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
@@ -183,10 +183,11 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
 class CatalogService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
-    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None):
+    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None, platform_providers=None):
         self._repo = repo
         self._manager = manager
         self._platform_skills = platform_skills
+        self._platform_providers = platform_providers
 
     # ---- 注册（草稿态，不通知 Manager）----
 
@@ -194,6 +195,7 @@ class CatalogService:
         self, req: RegisterExpertTemplateRequest
     ) -> CatalogEntryResponse:
         self._validate_platform_skill_refs(req.platform_skill_refs)
+        self._validate_platform_model_ref(req.platform_model_ref)
 
         def make(candidate: str) -> CatalogEntry:
             return CatalogEntry(
@@ -205,7 +207,7 @@ class CatalogService:
                     "category": req.category,
                     "avatar_url": req.avatar_url,
                     "system_prompt": req.system_prompt,
-                    "default_model": req.default_model,
+                    "platform_model_ref": req.platform_model_ref.model_dump(mode="json"),
                     "skill_ids": [],
                     "platform_skill_refs": [ref.model_dump(mode="json") for ref in req.platform_skill_refs],
                     "tags": [],
@@ -271,6 +273,14 @@ class CatalogService:
             if row["content_hash"] != ref.content_hash:
                 raise Conflict("platform skill reference content hash does not match the published version")
 
+    def _validate_platform_model_ref(self, ref) -> None:
+        if self._platform_providers is None:
+            from shared.errors import AppError
+            exc = AppError("Operator platform Provider store is not configured")
+            exc.status, exc.code, exc.title = 503, "operator_provider_store_unavailable", "Operator Provider store unavailable"
+            raise exc
+        self._platform_providers.validate_model_ref(ref, require_published=True)
+
     # ---- 生命周期：发布 / 下架 / 可见范围 ----
 
     def publish_template(
@@ -278,9 +288,12 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         entry = self._repo.get(catalog_type, template_id)
         if catalog_type == CatalogType.EXPERT_TEMPLATE:
+            from shared.contracts.platform_provider import PlatformModelRef
             from shared.contracts.platform_skill import PlatformSkillRef
-            refs = [PlatformSkillRef.model_validate(ref) for ref in (entry.payload or {}).get("platform_skill_refs", [])]
+            payload = entry.payload or {}
+            refs = [PlatformSkillRef.model_validate(ref) for ref in payload.get("platform_skill_refs", [])]
             self._validate_platform_skill_refs(refs)
+            self._validate_platform_model_ref(PlatformModelRef.model_validate(payload.get("platform_model_ref")))
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
@@ -350,6 +363,9 @@ class CatalogService:
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
             from shared.contracts.platform_skill import PlatformSkillRef
             self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
+        if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_model_ref" in changes:
+            from shared.contracts.platform_provider import PlatformModelRef
+            self._validate_platform_model_ref(PlatformModelRef.model_validate(changes["platform_model_ref"]))
         # 分离 payload 字段与 dataclass 顶层字段
         _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
                        'status', 'visible_scope', 'payload'}
@@ -421,15 +437,20 @@ class CatalogService:
 
         Manager recruit 读 template.persona 与 template.recommended_config.{model,skills,knowledge_refs,…}。
         注册端已改为 flat 字段后，跨端 pull 时把 system_prompt → persona、
-        default_model → recommended_config.model、skill_ids → recommended_config.skills 等同步回去，
+        platform_model_ref → recommended_config 的 provider/model 固定引用，skill refs 同步回去，
         避免联动 manager 侧。
         """
         if not payload:
             return None, {}
         persona = payload.get("system_prompt") or None
         recommended: dict = {}
-        if payload.get("default_model"):
-            recommended["model"] = payload["default_model"]
+        if payload.get("platform_model_ref"):
+            model_ref = dict(payload["platform_model_ref"])
+            recommended["platform_model_ref"] = model_ref
+            recommended["provider_ref"] = model_ref["provider_id"]
+            recommended["provider_version"] = model_ref["provider_version"]
+            recommended["model"] = model_ref["model_id"]
+            recommended["model_version"] = model_ref["model_version"]
         refs = payload.get("platform_skill_refs") or []
         if refs:
             recommended["platform_skill_refs"] = list(refs)
@@ -467,7 +488,7 @@ class CatalogService:
             category=payload.get("category", ""),
             avatar_url=payload.get("avatar_url", ""),
             system_prompt=payload.get("system_prompt", ""),
-            default_model=payload.get("default_model", ""),
+            platform_model_ref=payload.get("platform_model_ref"),
             skill_ids=payload.get("skill_ids", []),
             platform_skill_refs=payload.get("platform_skill_refs", []),
             description=payload.get("description", ""),
@@ -554,7 +575,7 @@ class CatalogService:
                     category=payload.get("category", ""),
                     avatar_url=payload.get("avatar_url", ""),
                     system_prompt=payload.get("system_prompt", ""),
-                    default_model=payload.get("default_model", ""),
+                    platform_model_ref=payload.get("platform_model_ref"),
                     skill_ids=payload.get("skill_ids", []),
                     platform_skill_refs=payload.get("platform_skill_refs", []),
                     description=payload.get("description", ""),

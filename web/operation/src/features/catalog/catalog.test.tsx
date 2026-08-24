@@ -23,6 +23,12 @@ import { CatalogDetailPage } from "./CatalogDetailPage";
 import { validateRegistration } from "./register/validation";
 import type { SessionContextValue } from "../../auth/session";
 
+const platformProvidersMock = vi.hoisted(() => ({
+  list: vi.fn().mockResolvedValue([{ provider_id: "provider-1", provider_code: "newapi", display_name: "内部 NewAPI", relay_base_url: "http://relay/v1", api_protocol: "openai-completions", status: "published", version: 2, updated_at: "now" }]),
+  models: vi.fn().mockResolvedValue([{ model: { provider_id: "provider-1", model_id: "gpt-5", display_name: "GPT-5", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } }]),
+}));
+vi.mock("../providers/usePlatformProvidersApi", () => ({ usePlatformProvidersApi: () => platformProvidersMock }));
+
 // ---- helpers ----
 
 const mockFetch = vi.fn();
@@ -562,7 +568,7 @@ describe("注册表单", () => {
     fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "保留的专家" } });
     fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://example.com/avatar.png" } });
     fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "保留的人设" } });
-    fireEvent.change(screen.getByPlaceholderText("如 gpt-5 / claude-opus-4-8 / deepseek"), { target: { value: "gpt-5" } });
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "描述" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -679,14 +685,14 @@ describe("注册表单", () => {
     });
   });
 
-  it("注册专家模板成功提交 system_prompt + default_model", async () => {
+  it("注册专家模板成功提交 system_prompt + platform_model_ref", async () => {
     let capturedBody: unknown = null;
     mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
       if (String(url).includes("skill-market/internal")) return listPage([]);
       if (String(url).includes("skill-market/external")) return singleResponse([]);
       if (String(url).includes("expert-templates") && init?.method === "POST") {
         capturedBody = init.body ? JSON.parse(String(init.body)) : null;
-        return singleResponse(makeCatalogItem({ id: "new-id", display_name: "新专家", system_prompt: "电商客服", default_model: "gpt-5" }));
+        return singleResponse(makeCatalogItem({ id: "new-id", display_name: "新专家", system_prompt: "电商客服", platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 } }));
       }
       return envOk();
     });
@@ -712,10 +718,7 @@ describe("注册表单", () => {
     )!;
     fireEvent.change(systemPrompt, { target: { value: "电商客服" } });
 
-    const modelInput = document.querySelector<HTMLInputElement>(
-      "input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]",
-    )!;
-    fireEvent.change(modelInput, { target: { value: "gpt-5" } });
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
 
     // Fill all PRD required fields so the always-send payload is complete.
     await selectAstryxOption("分类 (category)", "市场营销");
@@ -732,7 +735,7 @@ describe("注册表单", () => {
       category: "市场营销",
       avatar_url: "https://example.com/a.png",
       system_prompt: "电商客服",
-      default_model: "gpt-5",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
       description: "淘宝电商客服",
       platform_skill_refs: [],
     });
@@ -773,7 +776,7 @@ describe("注册表单", () => {
 
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
-    fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"如 gpt-5 / claude-opus-4-8 / deepseek\"]")!, { target: { value: "gpt-5" } });
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
     fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://x.png" } });
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "desc" } });
 
@@ -1053,7 +1056,7 @@ describe("详情页编辑模式", () => {
       visible_scope: null,
       version: "1",
       system_prompt: "你是一名客服专家",
-      default_model: "gpt-5",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
       ...overrides,
     });
   }
@@ -1287,7 +1290,7 @@ describe("详情页多 section", () => {
           system_prompt: "你是客服",
           category: "support",
           avatar_url: "https://example.com/a.png",
-          default_model: "gpt-4o",
+          platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
           skill_ids: ["skill_a"],
           tags: ["客服"],
           description: "客服专家",
@@ -1303,8 +1306,8 @@ describe("详情页多 section", () => {
     });
     expect(screen.getByText("系统提示词 (system_prompt)")).toBeInTheDocument();
     expect(screen.getByText("你是客服")).toBeInTheDocument();
-    expect(screen.getByText("默认模型 (default_model)")).toBeInTheDocument();
-    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("平台 Provider / 模型")).toBeInTheDocument();
+    expect(screen.getByText(/provider-1 \/ gpt-4o/)).toBeInTheDocument();
     expect(screen.getByText("分类 / 头像")).toBeInTheDocument();
     expect(screen.getByText("岗位描述 (description)")).toBeInTheDocument();
     expect(screen.getByText("客服专家")).toBeInTheDocument();
@@ -1350,7 +1353,7 @@ describe("详情页多 section", () => {
     expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("零售")).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("管理员在详情页进入编辑模式修改 system_prompt + default_model,并调 PATCH", async () => {
+  it("管理员编辑 system_prompt 时平台模型保持只读且 PATCH 不改模型", async () => {
     mockFetch
       .mockResolvedValueOnce(
         singleResponse(
@@ -1359,7 +1362,7 @@ describe("详情页多 section", () => {
             template_id: "exp_a",
             display_name: "AI 客服",
             system_prompt: "旧 system_prompt",
-            default_model: "gpt-4o",
+            platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
           }),
         ),
       )
@@ -1370,7 +1373,7 @@ describe("详情页多 section", () => {
             template_id: "exp_a",
             display_name: "AI 客服",
             system_prompt: "新 system_prompt",
-            default_model: "claude-sonnet",
+            platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
           }),
         ),
       );
@@ -1397,10 +1400,7 @@ describe("详情页多 section", () => {
     );
     expect(textareas[0]).toHaveValue("旧 system_prompt");
     fireEvent.change(textareas[0]!, { target: { value: "新 system_prompt" } });
-    const allInputs = document.querySelectorAll<HTMLInputElement>("input");
-    const modelInput = Array.from(allInputs).find((el) => el.value === "gpt-4o");
-    expect(modelInput).toBeTruthy();
-    fireEvent.change(modelInput!, { target: { value: "claude-sonnet" } });
+    expect(screen.getByText(/provider-1 \/ gpt-4o/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -1412,7 +1412,7 @@ describe("详情页多 section", () => {
       expect(patchCall).toBeTruthy();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新 system_prompt");
-      expect(body.default_model).toBe("claude-sonnet");
+      expect(body.platform_model_ref).toBeUndefined();
     });
   });
 
@@ -1427,7 +1427,7 @@ describe("详情页多 section", () => {
       category: "support",
       avatar_url: "https://old.png",
       system_prompt: "你是客服",
-      default_model: "gpt-4o",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
       description: "旧描述",
       skill_ids: ["skill_a"],
       tags: ["旧标签"],

@@ -31,6 +31,11 @@ class FakeCatalogGateway(CatalogManagerGateway):
         self.notifications.append((notify, idempotency_key))
 
 
+class PlatformProviderStore:
+    def validate_model_ref(self, ref, *, require_published=False):
+        return ref
+
+
 @pytest.fixture
 def manager():
     return FakeCatalogGateway()
@@ -41,7 +46,10 @@ def service(manager):
     class PlatformSkillStore:
         def get_package(self, *, skill_id, version, published_only=False):
             return {"content_hash": "abc123"}
-    return CatalogService(CatalogRepository(), manager, platform_skills=PlatformSkillStore())
+    return CatalogService(
+        CatalogRepository(), manager,
+        platform_skills=PlatformSkillStore(), platform_providers=PlatformProviderStore(),
+    )
 
 
 def _expert(**kw):
@@ -51,7 +59,7 @@ def _expert(**kw):
         category="marketing",
         avatar_url="https://example.com/cmo.png",
         system_prompt="market lead",
-        default_model="gpt-5",
+        platform_model_ref={"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-5", "model_version": 1},
         platform_skill_refs=[],
         description="CMO expert",
     )
@@ -151,7 +159,7 @@ def test_publish_succeeds_when_manager_notify_fails(service):
         def notify_catalog_release(self, notify, *, idempotency_key):
             raise RuntimeError('Manager unreachable / 405')
 
-    svc = CatalogService(CatalogRepository(), _FailingGateway())
+    svc = CatalogService(CatalogRepository(), _FailingGateway(), platform_providers=PlatformProviderStore())
     svc.register_expert_template(_expert())
     entry = svc.publish_template(
         CatalogType.EXPERT_TEMPLATE, 'tpl-cmo', PublishTemplateRequest()
@@ -165,7 +173,7 @@ def test_unpublish_succeeds_when_manager_notify_fails(service):
         def notify_catalog_release(self, notify, *, idempotency_key):
             raise RuntimeError('Manager unreachable / 405')
 
-    svc = CatalogService(CatalogRepository(), _FailingGateway())
+    svc = CatalogService(CatalogRepository(), _FailingGateway(), platform_providers=PlatformProviderStore())
     svc.register_expert_template(_expert())
     svc.publish_template(CatalogType.EXPERT_TEMPLATE, 'tpl-cmo', PublishTemplateRequest())
     entry = svc.unpublish_template(CatalogType.EXPERT_TEMPLATE, 'tpl-cmo')
@@ -364,7 +372,6 @@ def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
         category="marketing",
         avatar_url="https://example.com/avatar.png",
         system_prompt="You are CMO",
-        default_model="gpt-5",
         platform_skill_refs=[ref],
         description="营销高管",
     )
@@ -373,7 +380,7 @@ def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
     assert entry.payload["category"] == "marketing"
     assert entry.payload["avatar_url"] == "https://example.com/avatar.png"
     assert entry.payload["system_prompt"] == "You are CMO"
-    assert entry.payload["default_model"] == "gpt-5"
+    assert entry.payload["platform_model_ref"]["model_id"] == "gpt-5"
     assert entry.payload["skill_ids"] == []
     assert entry.payload["platform_skill_refs"] == [ref]
     assert entry.payload["description"] == "营销高管"
@@ -388,7 +395,7 @@ def test_register_expert_default_fields(service):
     assert entry.payload["category"] == "marketing"
     assert entry.payload["avatar_url"] == "https://example.com/cmo.png"
     assert entry.payload["system_prompt"] == "market lead"
-    assert entry.payload["default_model"] == "gpt-5"
+    assert entry.payload["platform_model_ref"]["model_id"] == "gpt-5"
     assert entry.payload["skill_ids"] == []
     assert entry.payload["platform_skill_refs"] == []
     assert entry.payload["description"] == "CMO expert"
@@ -402,14 +409,14 @@ def test_update_expert_flat_fields(service):
         CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
         {
             "system_prompt": "Updated system prompt",
-            "default_model": "claude-opus-4-8",
+            "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "claude-opus-4-8", "model_version": 1},
             "category": "growth",
             "platform_skill_refs": [{"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}],
         },
     )
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["system_prompt"] == "Updated system prompt"
-    assert entry.payload["default_model"] == "claude-opus-4-8"
+    assert entry.payload["platform_model_ref"]["model_id"] == "claude-opus-4-8"
     assert entry.payload["category"] == "growth"
     assert entry.payload["platform_skill_refs"][0]["version"] == "1.0.0"
 
@@ -419,7 +426,6 @@ def test_list_includes_full_config(service):
     service.register_expert_template(
         _expert(
             system_prompt="x",
-            default_model="gpt-5",
             category="marketing",
             platform_skill_refs=[{"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}],
             description="desc",
@@ -429,7 +435,7 @@ def test_list_includes_full_config(service):
     assert len(items) == 1
     out = items[0]
     assert out.system_prompt == "x"
-    assert out.default_model == "gpt-5"
+    assert out.platform_model_ref.model_id == "gpt-5"
     assert out.category == "marketing"
     assert out.skill_ids == []
     assert out.platform_skill_refs[0].content_hash == "abc123"
@@ -489,7 +495,7 @@ def _auto_expert(**kw):
         category="x",
         avatar_url="h",
         system_prompt="s",
-        default_model="g",
+        platform_model_ref={"provider_id": "provider-1", "provider_version": 1, "model_id": "g", "model_version": 1},
         skill_ids=["sk"],
         description="d",
     )

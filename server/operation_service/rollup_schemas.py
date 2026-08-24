@@ -14,24 +14,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.crosstier import EnterpriseRollupUpload
 from shared.contracts.summary import UsageSummary
-
-
-class EnterpriseRollupUpload(BaseModel):
-    """Manager → Operator 企业级用量汇总上报（窄通信，云侧服务调用）。
-
-    Manager 已在企业端把成员级聚合（enterprise_usage_rollup）卷成企业级聚合后上报；
-    Operator 落 cross_enterprise_usage_rollup 并跨企业再聚合。按 summary_id 幂等去重。
-    payload 复用 UsageSummary：脱敏聚合单元，含 tenant_id，绝不含会话内容。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    enterprise_id: str = Field(description="上报企业（Operator 侧企业账号 id）")
-    tenant_id: str = Field(description="对应 tenant，与 UsageSummary.tenant_id 一致")
-    summaries: list[UsageSummary] = Field(
-        default_factory=list, description="企业级脱敏聚合摘要列表（按员工/时间聚合）"
-    )
 
 
 class EnterpriseUsageRollup(BaseModel):

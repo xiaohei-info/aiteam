@@ -3,7 +3,7 @@
  * 壳装配逻辑本身在 @aiteam/shared buildShellViewModel（已覆盖），此处只验企业端配置正确。
  * 红线：只用 EnterpriseRole（owner / enterprise_admin / finance_admin / member），禁旧 admin/manager/viewer。
  *
- * 导航覆盖企业后台的 14 个入口，包含 Agent 可用专家的完整管理链路。
+ * 导航覆盖企业后台的 13 个入口，Provider/模型仅使用 Operator 平台目录。
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  */
 import { describe, expect, it } from "vitest";
@@ -67,7 +67,6 @@ const ALL_NAV_IDS = [
   "grants",
   "memory",
   "connectors",
-  "llm",
   "billing",
   "recharge",
   "settings",
@@ -140,13 +139,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（14 项）", () => {
+  it("导航覆盖企业管理入口（13 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(14);
+    expect(navIds).toHaveLength(13);
   });
 
-  it("owner 可见全部 14 项导航", () => {
+  it("owner 可见全部 13 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -174,7 +173,6 @@ describe("manager shell config", () => {
       "grants",
       "memory",
       "connectors",
-      "llm",
       "settings",
     ]);
   });
@@ -189,7 +187,6 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "memory",
-      "llm",
       "billing",
       "recharge",
       "settings",
@@ -207,7 +204,6 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "memory",
-      "llm",
       "settings",
     ]);
   });

@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from shared.contracts.platform_provider import PricingSnapshot
+
 
 _SENSITIVE_CAPABILITY_KEY_PARTS = (
     "secret", "token", "password", "credential", "apikey", "privatekey", "authorization",
@@ -117,6 +119,9 @@ class RuntimeProviderConfigOut(BaseModel):
     api_key: str
     model: str
     provider_ref: str
+    provider_version: int
+    model_version: int
+    pricing: PricingSnapshot
     version: int
 
 

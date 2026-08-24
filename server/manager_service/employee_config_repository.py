@@ -39,12 +39,13 @@ class EmployeeConfigRow:
     status: str
     archive_reason: str | None = None
     archived_at: datetime | None = None
+    platform_model_ref: dict | None = None
 
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
     "timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
-    "memory_policy, version, status, archive_reason, archived_at"
+    "memory_policy, version, status, archive_reason, archived_at, platform_model_ref"
 )
 
 
@@ -67,6 +68,7 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         status=row[14],
         archive_reason=row[15],
         archived_at=row[16],
+        platform_model_ref=dict(row[17]) if row[17] else None,
     )
 
 
@@ -94,6 +96,7 @@ class EmployeeConfigRepository:
         memory_policy: dict | None,
         source_template_id: str | None = None,
         source_template_version: str | None = None,
+        platform_model_ref: dict | None = None,
     ) -> EmployeeConfigRow:
         """在本 tenant 建 employee 配置行。tenant_id 取自 ctx（D22，RLS WITH CHECK 兜底）。"""
         try:
@@ -104,9 +107,9 @@ class EmployeeConfigRepository:
                         tenant_id, employee_slug, display_name, persona, model, provider_ref,
                         thinking_level, timeout_seconds, tools, skills,
                         knowledge_refs, connector_refs, memory_policy,
-                        source_template_id, source_template_version
+                        source_template_id, source_template_version, platform_model_ref
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING """ + _CONFIG_COLUMNS,
                     (
@@ -115,6 +118,7 @@ class EmployeeConfigRepository:
                         json.dumps(tools), json.dumps(skills), json.dumps(knowledge_refs),
                         json.dumps(connector_refs), json.dumps(memory_policy) if memory_policy else None,
                         source_template_id, source_template_version,
+                        json.dumps(platform_model_ref) if platform_model_ref else None,
                     ),
                 ).fetchone()
         except pg_errors.UniqueViolation as exc:
@@ -175,6 +179,7 @@ class EmployeeConfigRepository:
         knowledge_refs: list[str],
         connector_refs: list[str],
         memory_policy: dict | None,
+        platform_model_ref: dict | None = None,
     ) -> EmployeeConfigRow | None:
         """改写本 tenant 内 employee 的配置（version 由触发器自增）。跨 tenant 行 RLS 不可见。"""
         with self._router.session(ctx) as s:
@@ -184,7 +189,7 @@ class EmployeeConfigRepository:
                     display_name = %s, persona = %s, model = %s, provider_ref = %s,
                     thinking_level = %s, timeout_seconds = %s,
                     tools = %s, skills = %s, knowledge_refs = %s, connector_refs = %s,
-                    memory_policy = %s
+                    memory_policy = %s, platform_model_ref = %s
                 WHERE id = %s
                 RETURNING """ + _CONFIG_COLUMNS,
                 (
@@ -192,7 +197,7 @@ class EmployeeConfigRepository:
                     timeout_seconds, json.dumps(tools), json.dumps(skills),
                     json.dumps(knowledge_refs), json.dumps(connector_refs),
                     json.dumps(memory_policy) if memory_policy else None,
-                    employee_id,
+                    json.dumps(platform_model_ref) if platform_model_ref else None, employee_id,
                 ),
             ).fetchone()
         return _row_to_config(row) if row is not None else None

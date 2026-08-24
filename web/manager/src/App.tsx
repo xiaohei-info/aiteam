@@ -14,7 +14,6 @@ import { ProvidersPage } from "./features/providers";
 import { KnowledgePage } from "./features/knowledge";
 import { CapabilityPage } from "./features/capability";
 import { BillingPage, RechargePage } from "./features/billing";
-import { LlmPage } from "./features/llm";
 import { MemoryPage } from "./features/memory-items";
 import { ConnectorsPage } from "./features/connectors";
 import { OrgPage } from "./features/org";
@@ -42,7 +41,6 @@ export function App(): React.ReactNode {
         <Route path="/skill-market" element={<SkillMarketPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/recharge" element={<RechargePage />} />
-        <Route path="/llm" element={<LlmPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/connectors" element={<ConnectorsPage />} />
         <Route path="/org" element={<OrgPage />} />
