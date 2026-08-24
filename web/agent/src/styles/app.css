@@ -30,7 +30,43 @@ body,
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.5rem;
-  margin-block-end: 0.5rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+[data-timeline-card-header="true"]::-webkit-details-marker {
+  display: none;
+}
+
+[data-timeline-card-header="true"]::before {
+  content: "›";
+  color: var(--color-text-secondary);
+  font-size: 1.125rem;
+  line-height: 1;
+  transition: transform var(--duration-fast);
+}
+
+[data-timeline-disclosure="true"][open] > [data-timeline-card-header="true"] {
+  border-block-end: 1px solid var(--color-border);
+}
+
+[data-timeline-disclosure="true"][open] > [data-timeline-card-header="true"]::before {
+  transform: rotate(90deg);
+}
+
+[data-timeline-card-header="true"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+[data-timeline-card-hint="true"] {
+  color: var(--color-text-secondary);
+}
+
+[data-timeline-card-content="true"] {
+  padding: 0.75rem;
 }
 
 [data-timeline-card-note="true"],

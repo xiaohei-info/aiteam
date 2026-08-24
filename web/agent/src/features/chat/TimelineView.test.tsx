@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiEntry, PiEvent } from "@aiteam/shared/contracts";
 import type { AgentApiClient } from "../../lib/api-client";
@@ -210,6 +210,12 @@ describe("TimelineView Pi cards", () => {
 
     expect(await screen.findByText("hello")).toBeInTheDocument();
     expect(screen.getByText("hello").closest('[data-timeline-event-card="true"]')).toBeNull();
+    expect(screen.getByText("hello").closest("details")).toBeNull();
+    const thinkingCard = screen.getByRole("article", { name: "思考事件" });
+    const disclosure = thinkingCard.querySelector("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(thinkingCard.querySelector("summary")!);
+    expect(disclosure).toHaveAttribute("open");
     expect(screen.queryByText(/类型：/)).not.toBeInTheDocument();
     expect(screen.queryByText(/状态：/)).not.toBeInTheDocument();
     expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("read");

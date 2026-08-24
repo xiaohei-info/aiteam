@@ -214,59 +214,64 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
       data-timeline-event-card="true"
       data-kind={model.kind}
       data-status={model.status}
-      padding={3}
+      padding={0}
       role={model.kind === "error" ? "alert" : "article"}
       aria-label={`${model.label}事件`}
     >
-      <div data-timeline-card-header="true">
-        <strong data-timeline-card-label="true">{model.label}</strong>
-      </div>
-      {model.sourceLabel ? <p data-timeline-card-source="true">{model.sourceLabel}</p> : null}
-      <p data-timeline-card-summary="true">{model.summary}</p>
-      {model.argsSummary ? <BoundedDetail label="参数摘要" value={model.argsSummary} testId="timeline-tool-args" /> : null}
-      {model.resultSummary ? <BoundedDetail label="结果摘要" value={model.resultSummary} testId="timeline-tool-result" /> : null}
-      {model.kind === "todo" && model.todoItems?.length ? (
-        <section data-timeline-todos="true" aria-label="待办列表">
-          <strong>待办列表</strong>
-          <ul>
-            {model.todoItems.map((todo, index) => (
-              <li key={todo.id || `${todo.text}-${index}`}>
-                <span>{todo.text}</span>
-                <code>{todo.status}</code>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {model.kind === "memory" ? (
-        <section data-timeline-memory="true" aria-label="记忆活动摘要">
-          {model.memoryQuery ? <BoundedDetail label="查询/内容摘要" value={model.memoryQuery} /> : null}
-          {model.memoryPreview ? <BoundedDetail label="结果预览" value={model.memoryPreview} /> : null}
-        </section>
-      ) : null}
-      {model.kind === "rag" ? (
-        <section data-timeline-rag="true" aria-label="知识活动摘要">
-          {model.ragQuery ? <BoundedDetail label="查询摘要" value={model.ragQuery} /> : null}
-          {model.ragCitationId ? <BoundedDetail label="引用标识" value={model.ragCitationId} /> : null}
-          {model.ragResultPreview ? <BoundedDetail label="结果预览" value={model.ragResultPreview} /> : null}
-          {model.ragCitations?.length ? (
-            <div data-timeline-citations="true">
-              <strong>引用摘要</strong>
+      <details data-timeline-disclosure="true">
+        <summary data-timeline-card-header="true">
+          <strong data-timeline-card-label="true">{model.label}</strong>
+          {model.toolName ? <code data-timeline-card-hint="true">{model.toolName}</code> : null}
+        </summary>
+        <div data-timeline-card-content="true">
+          {model.sourceLabel ? <p data-timeline-card-source="true">{model.sourceLabel}</p> : null}
+          <p data-timeline-card-summary="true">{model.summary}</p>
+          {model.argsSummary ? <BoundedDetail label="参数摘要" value={model.argsSummary} testId="timeline-tool-args" /> : null}
+          {model.resultSummary ? <BoundedDetail label="结果摘要" value={model.resultSummary} testId="timeline-tool-result" /> : null}
+          {model.kind === "todo" && model.todoItems?.length ? (
+            <section data-timeline-todos="true" aria-label="待办列表">
+              <strong>待办列表</strong>
               <ul>
-                {model.ragCitations.map((citation, index) => (
-                  <li key={citation.citationId || `${citation.title || "citation"}-${index}`}>
-                    {citation.title ? <span>{citation.title}</span> : null}
-                    {citation.citationId ? <code>{citation.citationId}</code> : null}
-                    {citation.preview ? <span>{citation.preview}</span> : null}
-                    {citation.score ? <small>相关度：{citation.score}</small> : null}
+                {model.todoItems.map((todo, index) => (
+                  <li key={todo.id || `${todo.text}-${index}`}>
+                    <span>{todo.text}</span>
+                    <code>{todo.status}</code>
                   </li>
                 ))}
               </ul>
-            </div>
+            </section>
           ) : null}
-        </section>
-      ) : null}
-      {model.kind === "unknown" ? <p data-timeline-card-note="true">仅显示受限摘要</p> : null}
+          {model.kind === "memory" ? (
+            <section data-timeline-memory="true" aria-label="记忆活动摘要">
+              {model.memoryQuery ? <BoundedDetail label="查询/内容摘要" value={model.memoryQuery} /> : null}
+              {model.memoryPreview ? <BoundedDetail label="结果预览" value={model.memoryPreview} /> : null}
+            </section>
+          ) : null}
+          {model.kind === "rag" ? (
+            <section data-timeline-rag="true" aria-label="知识活动摘要">
+              {model.ragQuery ? <BoundedDetail label="查询摘要" value={model.ragQuery} /> : null}
+              {model.ragCitationId ? <BoundedDetail label="引用标识" value={model.ragCitationId} /> : null}
+              {model.ragResultPreview ? <BoundedDetail label="结果预览" value={model.ragResultPreview} /> : null}
+              {model.ragCitations?.length ? (
+                <div data-timeline-citations="true">
+                  <strong>引用摘要</strong>
+                  <ul>
+                    {model.ragCitations.map((citation, index) => (
+                      <li key={citation.citationId || `${citation.title || "citation"}-${index}`}>
+                        {citation.title ? <span>{citation.title}</span> : null}
+                        {citation.citationId ? <code>{citation.citationId}</code> : null}
+                        {citation.preview ? <span>{citation.preview}</span> : null}
+                        {citation.score ? <small>相关度：{citation.score}</small> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+          {model.kind === "unknown" ? <p data-timeline-card-note="true">仅显示受限摘要</p> : null}
+        </div>
+      </details>
     </Card>
   );
 }
