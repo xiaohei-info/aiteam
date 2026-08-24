@@ -1,33 +1,24 @@
-/**
- * W-A.2 会话列表过滤（filter prop）。
- *
- * ConversationList 在群聊页允许传 filter 谓词以排除私聊会话（parity GroupPage 复用组件）。
- * 本测试 mock listConversations 直接驱动 loadFirst / loadMore 分支。
- */
-
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentApiClient } from "../../lib/api-client";
 import type { Conversation } from "./useChatApi";
 import { listConversations } from "./useChatApi";
 
-vi.mock("./useChatApi", () => ({
-  listConversations: vi.fn(),
-}));
+vi.mock("./useChatApi", () => ({ listConversations: vi.fn() }));
 
 import { ConversationList } from "./ConversationList";
 
 const mockedList = vi.mocked(listConversations);
 
-function makeConv(id: string, isPrivate = false): Conversation {
+function makeConv(id: string, kind: "private" | "group" = "group", employeeId = "emp-1"): Conversation {
   return {
     id,
-    title: isPrivate ? null : `会话${id}`,
-    kind: isPrivate ? "private" : "group",
+    title: `${kind === "private" ? "员工" : "群聊"}${id}`,
+    kind,
     state: "active",
-    entry_employee_id: isPrivate ? "emp-1" : null,
-    coordinator_employee_id: isPrivate ? null : "emp-2",
+    entry_employee_id: kind === "private" ? employeeId : null,
+    coordinator_employee_id: kind === "group" ? "emp-2" : null,
     solution_instance_id: null,
     schedule: null,
     last_read_entry_id: null,
@@ -42,13 +33,11 @@ function makeClient(): AgentApiClient {
   return new AgentApiClient({ fetch: vi.fn() as unknown as typeof fetch, baseUrl: "http://test" });
 }
 
-describe("ConversationList — filter", () => {
-  it("首屏加载按 filter 过滤", async () => {
-    mockedList.mockResolvedValue({
-      items: [makeConv("c1"), makeConv("c2", true), makeConv("c3")],
-      nextCursor: null,
-      hasMore: false,
-    } satisfies Awaited<ReturnType<typeof listConversations>>);
+describe("ConversationList", () => {
+  it("automatically loads all pages and keeps the group navigation filtered", async () => {
+    mockedList
+      .mockResolvedValueOnce({ items: [makeConv("c1")], nextCursor: "p1", hasMore: true })
+      .mockResolvedValueOnce({ items: [makeConv("c2", "private"), makeConv("c3")], nextCursor: null, hasMore: false });
 
     render(
       <ConversationList
@@ -56,48 +45,41 @@ describe("ConversationList — filter", () => {
         selectedId={null}
         onSelect={() => {}}
         headerLabel="群聊"
-        filter={(c) => c.kind === "group"}
+        filter={(conversation) => conversation.kind === "group"}
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("会话c1")).toBeInTheDocument();
-      expect(screen.getByText("会话c3")).toBeInTheDocument();
-    });
-    expect(screen.getByRole("region", { name: "群聊会话" })).toBeInTheDocument();
-    expect(mockedList).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("群聊c1")).toBeInTheDocument();
+    expect(await screen.findByText("群聊c3")).toBeInTheDocument();
+    expect(screen.queryByText("员工c2")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "群聊列表" })).toBeInTheDocument();
+    expect(mockedList).toHaveBeenCalledTimes(2);
   });
 
-  it("加载更多按 filter 过滤", async () => {
-    mockedList
-      .mockResolvedValueOnce({
-        items: [makeConv("c1")],
-        nextCursor: "p1",
-        hasMore: true,
-      } as Awaited<ReturnType<typeof listConversations>>)
-      .mockResolvedValueOnce({
-        items: [makeConv("c2", true), makeConv("c3")],
-        nextCursor: null,
-        hasMore: false,
-      } as Awaited<ReturnType<typeof listConversations>>);
+  it("shows one friend per employee and selects the newest conversation", async () => {
+    const onSelect = vi.fn();
+    mockedList.mockResolvedValue({
+      items: [makeConv("new", "private", "emp-1"), makeConv("old", "private", "emp-1"), makeConv("other", "private", "emp-2")],
+      nextCursor: null,
+      hasMore: false,
+    });
 
     render(
       <ConversationList
         client={makeClient()}
-        selectedId={null}
-        onSelect={() => {}}
-        filter={(c) => c.kind === "group"}
+        selectedId="old"
+        onSelect={onSelect}
+        headerLabel="数字员工"
+        groupByEmployee
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("会话c1")).toBeInTheDocument());
+    expect(await screen.findByText("员工new")).toBeInTheDocument();
+    expect(screen.queryByText("员工old")).not.toBeInTheDocument();
+    expect(screen.getByText("2 个对话")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-other")).toBeInTheDocument();
 
-    // 触发 loadMore
-    await act(async () => {
-      fireEvent.click(screen.getByText("加载更多"));
-    });
-
-    await waitFor(() => expect(screen.getByText("会话c3")).toBeInTheDocument());
-    expect(mockedList).toHaveBeenCalledTimes(2);
+    await act(async () => fireEvent.click(screen.getByTestId("conversation-new")));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "new", entry_employee_id: "emp-1" }));
   });
 });

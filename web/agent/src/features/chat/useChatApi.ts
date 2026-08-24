@@ -21,9 +21,10 @@ export interface Conversation {
 export async function listConversations(
   client: AgentApiClient,
   cursor?: string | null,
+  limit = 50,
 ): Promise<{ items: Conversation[]; nextCursor: string | null; hasMore: boolean }> {
   const result = await client.listGet<Conversation>("/api/agent/conversations", {
-    query: { limit: 50, cursor },
+    query: { limit, cursor },
   });
   if (!Array.isArray(result.items) || !result.page || typeof result.page.has_more !== "boolean") {
     throw new Error("conversation list: invalid response");
