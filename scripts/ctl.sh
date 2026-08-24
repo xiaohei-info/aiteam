@@ -38,7 +38,7 @@ Options:
   --deploy <local|docker>    Deployment mode (default: local)
                              local:  Run Python directly
                              docker: Use docker-compose
-  --server <all|manager|operation|agent|postgres>
+  --server <all|manager|operation|agent|postgres|newapi>
                              Which server(s) to control (default: all)
   --follow, -f               Follow logs in real-time (for logs command)
   --daemon                   Stay in foreground watching service PIDs (systemd friendly)
@@ -76,6 +76,9 @@ load_env() {
     echo "" >&2
     exit 1
   fi
+
+  # 环境文件将承载 NewAPI/Provider 管理凭据；启动前收紧为仅当前用户可读写。
+  chmod 600 "${ENV_FILE}"
 
   # 加载配置
   set -a
@@ -118,6 +121,7 @@ load_env() {
   fi
 
   validate_agent_production_env
+  validate_newapi_production_env
 
   # 自动探测 Python 解释器：优先 venv 内的 python（能直接获得 venv 依赖），
   # 否则 fallback 到系统 python3。避免部署必须 source .venv/bin/activate。
@@ -155,6 +159,16 @@ validate_agent_production_env() {
     echo "[ctl] ERROR: production Agent JWKS is required" >&2
     exit 1
   fi
+}
+
+validate_newapi_production_env() {
+  [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
+  for name in NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
+    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
+  done
+  [[ "${NEWAPI_SESSION_SECRET}" != *change-me* && "${NEWAPI_CRYPTO_SECRET}" != *change-me* ]] || {
+    echo "[ctl] ERROR: production NewAPI secrets must not use development placeholders" >&2; exit 1;
+  }
 }
 
 # 解析参数
@@ -208,8 +222,8 @@ parse_args() {
     exit 2
   fi
 
-  if [[ ! "${SERVER}" =~ ^(all|manager|operation|agent|postgres)$ ]]; then
-    echo "[ctl] Invalid --server: ${SERVER} (must be 'all', 'manager', 'operation', 'agent', or 'postgres')" >&2
+  if [[ ! "${SERVER}" =~ ^(all|manager|operation|agent|postgres|newapi)$ ]]; then
+    echo "[ctl] Invalid --server: ${SERVER} (must be 'all', 'manager', 'operation', 'agent', 'postgres', or 'newapi')" >&2
     exit 2
   fi
 }
@@ -247,11 +261,14 @@ docker_compose_cmd() {
   case "${action}" in
     start)
       if [[ "${SERVER}" == "all" ]]; then
-        dc up -d
+        dc --profile newapi up -d
         echo "[ctl] Started all services (docker)"
       elif [[ "${SERVER}" == "postgres" ]]; then
         dc up -d postgres
         echo "[ctl] Started postgres (docker)"
+      elif [[ "${SERVER}" == "newapi" ]]; then
+        dc --profile newapi up -d newapi
+        echo "[ctl] Started newapi (docker)"
       else
         dc up -d postgres "${SERVER}"
         echo "[ctl] Started ${SERVER} (docker)"
@@ -259,15 +276,18 @@ docker_compose_cmd() {
       ;;
     stop)
       if [[ "${SERVER}" == "all" ]]; then
-        dc down
+        dc --profile newapi down
         echo "[ctl] Stopped all services (docker)"
+      elif [[ "${SERVER}" == "newapi" ]]; then
+        dc --profile newapi stop newapi newapi-redis newapi-postgres
+        echo "[ctl] Stopped newapi (docker)"
       else
         dc stop "${SERVER}"
         echo "[ctl] Stopped ${SERVER} (docker)"
       fi
       ;;
     status)
-      dc ps
+      dc --profile newapi ps
       ;;
     logs)
       if [[ "${SERVER}" == "all" ]]; then
@@ -278,9 +298,9 @@ docker_compose_cmd() {
         fi
       else
         if (( FOLLOW_LOGS )); then
-          dc logs -f "${SERVER}"
+          if [[ "${SERVER}" == "newapi" ]]; then dc --profile newapi logs -f newapi; else dc logs -f "${SERVER}"; fi
         else
-          dc logs --tail=100 "${SERVER}"
+          if [[ "${SERVER}" == "newapi" ]]; then dc --profile newapi logs --tail=100 newapi; else dc logs --tail=100 "${SERVER}"; fi
         fi
       fi
       ;;
@@ -309,6 +329,10 @@ get_service_paths() {
     postgres)
       PID_FILE="${state_dir}/postgres.pid"
       LOG_FILE="${REPO_ROOT}/logs/postgres.log"
+      ;;
+    newapi)
+      PID_FILE="${state_dir}/newapi.pid"
+      LOG_FILE="${REPO_ROOT}/logs/newapi.log"
       ;;
   esac
 }
@@ -352,7 +376,14 @@ get_pid() {
   local service="$1"
   get_service_paths "${service}"
 
-  # postgres 特殊处理：检查 docker 容器状态
+  # 外部组件特殊处理：检查 docker 容器状态。
+  if [[ "${service}" == "newapi" ]]; then
+    if docker ps --format '{{.Names}}' | grep -qx "aiteam-newapi"; then
+      echo "docker"
+      return 0
+    fi
+    return 1
+  fi
   if [[ "${service}" == "postgres" ]]; then
     if docker ps --format '{{.Names}}' | grep -q "aiteam-pg"; then
       echo "docker"
@@ -389,6 +420,21 @@ start_service_local() {
   fi
 
   case "${service}" in
+    newapi)
+      echo "[ctl] Starting internal NewAPI relay (docker profile)..."
+      cd "${REPO_ROOT}/deploy/docker"
+      dc --profile newapi up -d newapi
+      echo "[ctl] Waiting for NewAPI to be ready..."
+      for _ in {1..60}; do
+        if curl -fsS "http://127.0.0.1:${NEWAPI_PORT:-9300}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+          echo "[ctl] NewAPI is ready"
+          return 0
+        fi
+        sleep 1
+      done
+      echo "[ctl] NewAPI failed readiness; inspect: docker logs aiteam-newapi" >&2
+      return 1
+      ;;
     postgres)
       # 检查容器是否已运行
       if docker ps --format '{{.Names}}' | grep -q "aiteam-pg"; then
@@ -412,6 +458,7 @@ start_service_local() {
     manager)
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
       nohup setsid env \
+        -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         APP_TIER=manager \
         AITEAM_ENV="${AITEAM_ENV:-dev}" \
         DB_URL="${DB_URL}" \
@@ -465,11 +512,16 @@ start_service_local() {
     operation)
       echo "[ctl] Starting operation on port ${OPERATION_PORT}..."
       nohup setsid env \
+        -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         APP_TIER=operation \
         AITEAM_ENV="${AITEAM_ENV:-dev}" \
         ADMIN_DB_URL="${ADMIN_DB_URL}" \
         APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
         MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
+        NEWAPI_ADMIN_BASE_URL="${NEWAPI_ADMIN_BASE_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}" \
+        NEWAPI_PUBLIC_BASE_URL="${NEWAPI_PUBLIC_BASE_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}/v1}" \
+        NEWAPI_ADMIN_USER_ID="${NEWAPI_ADMIN_USER_ID:-}" \
+        NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}" \
         SERVICE_TOKEN="${SERVICE_TOKEN}" \
         SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}" \
         AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
@@ -506,6 +558,7 @@ start_service_local() {
       # credentials before starting Agent so they cannot leak through inheritance.
       nohup setsid env \
         -u DB_URL -u ADMIN_DB_URL -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u SERVICE_TOKEN -u MANAGER_CREDENTIAL_KEY \
+        -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY \
         -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
         -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE \
@@ -549,6 +602,12 @@ stop_service_local() {
   local service="$1"
   get_service_paths "${service}"
 
+  if [[ "${service}" == "newapi" ]]; then
+    echo "[ctl] Stopping internal NewAPI relay (docker profile)..."
+    cd "${REPO_ROOT}/deploy/docker"
+    dc --profile newapi stop newapi newapi-redis newapi-postgres
+    return 0
+  fi
   if [[ "${service}" == "postgres" ]]; then
     echo "[ctl] Stopping postgres (docker container)..."
     cd "${REPO_ROOT}/deploy/docker"
@@ -587,19 +646,25 @@ start_local() {
   if [[ "${SERVER}" == "all" ]]; then
     start_service_local postgres
     sleep 2
+    start_service_local newapi
+    sleep 1
     start_service_local manager
     sleep 1
     start_service_local operation
     sleep 1
     start_service_local agent
   else
-    if [[ "${SERVER}" != "postgres" ]]; then
-      # 确保 postgres 在运行
+    if [[ "${SERVER}" =~ ^(manager|operation|agent)$ ]]; then
+      # 控制面/Agent 服务确保主 PostgreSQL 已运行；NewAPI 使用自己的数据库。
       if ! get_pid postgres >/dev/null 2>&1; then
         echo "[ctl] Starting postgres first..."
         start_service_local postgres
         sleep 2
       fi
+    fi
+    if [[ "${SERVER}" == "operation" ]] && ! get_pid newapi >/dev/null 2>&1; then
+      echo "[ctl] Starting internal NewAPI relay first..."
+      start_service_local newapi
     fi
     start_service_local "${SERVER}"
   fi
@@ -611,6 +676,7 @@ stop_local() {
     stop_service_local agent
     stop_service_local operation
     stop_service_local manager
+    stop_service_local newapi
     stop_service_local postgres
   else
     stop_service_local "${SERVER}"
@@ -619,7 +685,7 @@ stop_local() {
 
 # Local 模式状态
 status_local() {
-  local services=("postgres" "manager" "operation" "agent")
+  local services=("postgres" "newapi" "manager" "operation" "agent")
 
   if [[ "${SERVER}" != "all" ]]; then
     services=("${SERVER}")
@@ -631,7 +697,14 @@ status_local() {
   for service in "${services[@]}"; do
     get_service_paths "${service}"
 
-    if [[ "${service}" == "postgres" ]]; then
+    if [[ "${service}" == "newapi" ]]; then
+      if docker ps --format '{{.Names}}' | grep -qx "aiteam-newapi"; then
+        echo "● ${service} — running (docker)"
+        echo "  Port:    127.0.0.1:${NEWAPI_PORT:-9300}"
+      else
+        echo "● ${service} — stopped"
+      fi
+    elif [[ "${service}" == "postgres" ]]; then
       # 检查 docker postgres
       if docker ps --format '{{.Names}}' | grep -q "aiteam-pg"; then
         echo "● ${service} — running (docker)"
@@ -667,6 +740,11 @@ status_local() {
 logs_local() {
   get_service_paths "${SERVER}"
 
+  if [[ "${SERVER}" == "newapi" ]]; then
+    cd "${REPO_ROOT}/deploy/docker"
+    if (( FOLLOW_LOGS )); then dc --profile newapi logs -f newapi; else dc --profile newapi logs --tail=100 newapi; fi
+    return 0
+  fi
   if [[ ! -f "${LOG_FILE}" ]]; then
     echo "[ctl] Log file does not exist: ${LOG_FILE}" >&2
     return 1
@@ -686,7 +764,7 @@ logs_local() {
 _daemon_wait_loop() {
   trap 'stop_local 2>/dev/null || true; exit 0' SIGTERM SIGINT
   while true; do
-    for _svc in manager operation agent; do
+    for _svc in newapi manager operation agent; do
       if ! get_pid "${_svc}" >/dev/null 2>&1; then
         echo "[ctl][daemon] ${_svc} exited unexpectedly (leader/process-group missing) — tearing down" >&2
         stop_local 2>/dev/null || true

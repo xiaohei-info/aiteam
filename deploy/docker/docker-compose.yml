@@ -86,6 +86,69 @@ services:
       timeout: 5s
       retries: 12
 
+  # Platform-managed AI Relay. It is a first-class AI Team component but remains
+  # behind the Operator control plane: only the loopback HTTP port is published;
+  # its PostgreSQL/Redis and all management/upstream credentials stay private.
+  newapi-postgres:
+    profiles: [newapi]
+    image: ${NEWAPI_POSTGRES_IMAGE:-postgres:16.10-alpine}
+    container_name: aiteam-newapi-pg
+    environment:
+      POSTGRES_USER: ${NEWAPI_DB_USER:-newapi}
+      POSTGRES_PASSWORD: ${NEWAPI_DB_PASSWORD:-newapi_test}
+      POSTGRES_DB: ${NEWAPI_DB_NAME:-newapi}
+    volumes:
+      - newapi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  newapi-redis:
+    profiles: [newapi]
+    image: ${NEWAPI_REDIS_IMAGE:-redis:7.4.5-alpine}
+    container_name: aiteam-newapi-redis
+    command: ["redis-server", "--requirepass", "${NEWAPI_REDIS_PASSWORD:-newapi_test}"]
+    volumes:
+      - newapi_redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${NEWAPI_REDIS_PASSWORD:-newapi_test}' ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  newapi:
+    profiles: [newapi]
+    image: ${NEWAPI_IMAGE:-calciumion/new-api:v0.13.2}
+    container_name: aiteam-newapi
+    restart: unless-stopped
+    command: --log-dir /app/logs
+    depends_on:
+      newapi-postgres:
+        condition: service_healthy
+      newapi-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${NEWAPI_PORT:-9300}:3000"
+    environment:
+      SQL_DSN: postgresql://${NEWAPI_DB_USER:-newapi}:${NEWAPI_DB_PASSWORD:-newapi_test}@newapi-postgres:5432/${NEWAPI_DB_NAME:-newapi}
+      REDIS_CONN_STRING: redis://:${NEWAPI_REDIS_PASSWORD:-newapi_test}@newapi-redis:6379
+      SESSION_SECRET: ${NEWAPI_SESSION_SECRET:-dev-newapi-session-secret-change-me}
+      CRYPTO_SECRET: ${NEWAPI_CRYPTO_SECRET:-dev-newapi-crypto-secret-change-me}
+      TZ: ${NEWAPI_TZ:-Asia/Shanghai}
+      ERROR_LOG_ENABLED: "true"
+      BATCH_UPDATE_ENABLED: "true"
+      NODE_NAME: aiteam-newapi
+    volumes:
+      - newapi_data:/data
+      - newapi_logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   operation:
     build:
       context: ../..
@@ -107,6 +170,11 @@ services:
       APP_RW_PASSWORD: aiteam_test
       # 云侧服务间调用：运营端调企业端开通 tenant。
       MANAGER_URL: http://manager:8000
+      # Operator-only internal NewAPI management surface. Never copy admin credentials to Manager/Agent.
+      NEWAPI_ADMIN_BASE_URL: ${NEWAPI_ADMIN_BASE_URL:-http://newapi:3000}
+      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-http://newapi:3000/v1}
+      NEWAPI_ADMIN_USER_ID: ${NEWAPI_ADMIN_USER_ID:-}
+      NEWAPI_ADMIN_TOKEN: ${NEWAPI_ADMIN_TOKEN:-}
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
       SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
@@ -217,6 +285,14 @@ services:
         condition: service_healthy
 
 volumes:
+  newapi_pgdata:
+    name: ${NEWAPI_PG_VOLUME:-aiteam_newapi_pg_data_${AITEAM_ENV:-dev}}
+  newapi_redisdata:
+    name: ${NEWAPI_REDIS_VOLUME:-aiteam_newapi_redis_data_${AITEAM_ENV:-dev}}
+  newapi_data:
+    name: ${NEWAPI_DATA_VOLUME:-aiteam_newapi_data_${AITEAM_ENV:-dev}}
+  newapi_logs:
+    name: ${NEWAPI_LOG_VOLUME:-aiteam_newapi_logs_${AITEAM_ENV:-dev}}
   lightrag_pgdata:
     name: ${LIGHTRAG_PG_VOLUME:-aiteam_lightrag_pg_data_${AITEAM_ENV:-dev}}
   # 实际卷名由 ENV 的 MANAGER_DATA_VOLUME 决定（ctl.sh 缺省注入 managerdata_<env>，
