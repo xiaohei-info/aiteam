@@ -27,8 +27,8 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 三端（可独立部署的部署单元）：
 
-- **运营端 Operator（平台运营 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、负责人初始凭据、跨企业治理汇总。
-- **企业端 Manager（平台托管多租户企业管理 SaaS）**：tenant 管理、成员账号与认证、专家/方案配置、成员级授权、企业 RAG、企业治理汇总。
+- **运营端 Operator（平台运营 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、平台 Provider/模型/价格与内部 NewAPI Relay、负责人初始凭据、跨企业治理汇总。
+- **企业端 Manager（平台托管多租户企业管理 SaaS）**：tenant 管理、成员账号与认证、专家/方案配置、Operator 平台模型只读选择、成员级授权、企业 RAG、企业治理汇总。
 - **用户端 Agent（每用户本机自部署）**：工作台、私聊、群聊、Run、Task、Loop——**全部本地执行与落库，会话内容绝不上传**。
 
 核心承诺：
@@ -54,8 +54,8 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 | 层级 | 职责 | 禁止事项 |
 |------|------|----------|
-| **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站 |
-| **企业端 Manager Service** | tenant 隔离 / 成员账号·认证 / 专家·方案配置 / 成员级授权 / 企业 RAG / 企业治理与计量汇总 | 持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向用户机器入站 |
+| **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 平台 Provider·模型·价格 / 内部 NewAPI Relay 与 tenant access / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站；向 Agent 下发全平台共享上游/管理 key |
+| **企业端 Manager Service** | tenant 隔离 / 成员账号·认证 / 专家·方案配置 / Operator 平台模型只读选择 / tenant Relay access 加密投影 / 成员级授权 / 企业 RAG / 企业治理与计量汇总 | 自建 Provider/模型/价格真相；持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向用户机器入站 |
 | **用户端 Agent Service** | 本地会话/群聊/run/task/loop / 事件流 / pull 装载已授权专家·方案 | 改企业端配置主数据；承担运营治理；直调 runtime CLI；暴露 runtime 原始事件；上传会话明细 |
 | **Node Agent（用户端）** | 本地会话、Pi Session、事件流 | 上传会话内容；持控制面业务主数据 |
 | **External Capability（用户端本地接入）** | 知识/技能/连接器/MCP 本地执行 | 内部协作编排语义 |
@@ -69,12 +69,12 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ### 3.1 复用优先，不自造底层
 
 - **Hermes 为执行底座之一**（经 `AcpExecutor` + `HermesAcpDriver` 接入），不自建任务编排内核
-- **知识库**复用 LightRAG、**记忆**复用 mem0（OpenMemory 本地优先 MCP）、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 接已有服务
+- **知识库**复用 LightRAG、**记忆**复用 mem0（OpenMemory 本地优先 MCP）、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 复用平台内部 NewAPI；Operator 统一维护 Provider/模型/价格并为每 tenant 签发受限令牌
 - **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter（设计借鉴 multica `server/pkg/agent`，Python 重实现）
 
 ### 3.2 系统所有权分库，单写者
 
-- 三端按系统所有权分库：Operator 持 oper 库；Manager 持 manager_control_db + tenant data space（默认 PostgreSQL shared tables + RLS，可演进 schema/db-per-tenant）；Agent 持本机 agent 库。
+- 三端按系统所有权分库：Operator 持 oper 库（含 platform_provider/platform_model/platform_model_rate/tenant Relay access 真相）；Manager 持 manager_control_db + tenant data space（含只读平台目录与 tenant access 加密投影，默认 PostgreSQL shared tables + RLS，可演进 schema/db-per-tenant）；Agent 持本机 agent 库。
 - 每张核心表只有一个写端；跨端读取走 pull API 或本地只读投影，**禁止跨端/跨库直写**
 - Manager 内部所有业务数据、RAG workspace、对象存储、缓存、队列/outbox、审计日志都必须绑定 `tenant_id`，并经 TenantContext 访问。
 

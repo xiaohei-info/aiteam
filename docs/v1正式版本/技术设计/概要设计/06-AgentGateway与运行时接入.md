@@ -94,8 +94,10 @@ Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始�
 ```text
 RunSpec
   system_prompt        # ← persona（中立文本，不写 SOUL.md）
-  model                # ← 中立 model id（空=让该 runtime CLI 自解析默认）
-  provider_ref         # ← 模型供应商配置引用（AI Relay 或直连，见 04 §6.7；不内联明文凭据）
+  model                # ← Operator 发布的中立 model id；Manager 只能从 tenant 可见平台目录选择
+  provider_ref         # ← Operator 平台 Provider 引用（内部 NewAPI Relay，见 04 §6.7；不内联明文凭据）
+  provider_version / model_version / pricing_version
+  pricing_snapshot     # ← 非敏感 Decimal rate card；一次 Run 冻结，用于 Agent 本地计费
   thinking_level       # ← 中立 reasoning/effort 档位
   mcp_config           # ← 能力统一注入通道（见 7.5.2）
   resume_session_id    # ← 续接上次 session
@@ -125,7 +127,7 @@ RunSpec
 | `resume_session_id` | `--resume <sid>` | ACP session | 各自 | 落地校验失败则清空回退 |
 | 技能（原生） | 原生 skill 机制 | profile skills（Driver 内封装） | 各自 | 降级见 7.5.2 |
 
-模型目录：**静态目录（稳定阵容如 Claude）+ 动态发现（shell 出 CLI 列模型、短期缓存）**，与 multica 一致。
+模型目录：Operator 统一维护**发布目录 + 动态发现 + 人工价格覆盖**；Manager/Agent 只消费 tenant 可见投影。Driver 可报告 runtime capability，但不得建立绕过 Operator 的第二套业务模型目录。
 
 #### 7.5.4 规则与兼容
 
