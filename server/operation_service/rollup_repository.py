@@ -175,7 +175,7 @@ class PgRollupRepository(CrossEnterpriseRollupRepositoryBase):
                     summary.cost_total, summary.error_count, summary.duration_seconds_total,
                     summary.pricing_version, summary.pricing_status, summary.currency, summary.window_start, summary.window_end,
                 ))
-                cur.execute(recompute, tuple([enterprise_id, tenant_id] + [enterprise_id] * 7))
+                cur.execute(recompute, tuple([enterprise_id, tenant_id] + [enterprise_id] * 8))
             conn.commit()
 
     def get(self, enterprise_id):
