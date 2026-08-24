@@ -4,7 +4,10 @@ import { ApiError } from "@aiteam/shared/api-client";
 import { createConversation, deleteAttachment, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
 import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function client(fetch: typeof globalThis.fetch): AgentApiClient {
   return new AgentApiClient({ baseUrl: "http://agent.test", fetch });
@@ -45,7 +48,8 @@ describe("Pi chat contract", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("resets only the key after idempotency_unknown and preserves uploaded prompt data", () => {
+  it("resets only the key after idempotency_unknown and preserves uploaded prompt data without secure-context APIs", () => {
+    vi.stubGlobal("crypto", {});
     const pending: PendingSubmission = { key: "old-key", text: "inspect", uploaded: [{ id: "a1" } as PendingSubmission["uploaded"][number]], uploadsComplete: true, promptAttempted: true };
     const error = new ApiError("unknown", 409, "idempotency_unknown");
     const retry = resetPendingSubmissionKey(pending);

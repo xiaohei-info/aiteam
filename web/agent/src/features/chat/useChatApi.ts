@@ -223,8 +223,8 @@ function eventId(event: PiEvent): string {
   return typeof event.id === "string" ? event.id : `${event.type}-${Date.now()}`;
 }
 
-function makeIdempotencyKey(): string {
-  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+export function makeIdempotencyKey(): string {
+  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
 export type { PiEntry };

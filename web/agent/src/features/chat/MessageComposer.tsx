@@ -36,7 +36,7 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, deleteAttachment, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
+import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
 import { parseMentions } from "../group/MentionComposer";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
@@ -56,7 +56,7 @@ export function isIdempotencyUnknownError(error: unknown): boolean {
 }
 
 export function resetPendingSubmissionKey(pending: PendingSubmission): PendingSubmission {
-  return { ...pending, key: crypto.randomUUID(), promptAttempted: false };
+  return { ...pending, key: makeIdempotencyKey(), promptAttempted: false };
 }
 
 export interface MessageComposerProps {
@@ -159,7 +159,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     if ((!text && attachments.length === 0) || sending) return;
     setSending(true);
     setError(null);
-    const pending = pendingSubmission.current ?? { key: crypto.randomUUID(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
+    const pending = pendingSubmission.current ?? { key: makeIdempotencyKey(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
     pendingSubmission.current = pending;
     try {
       // Upload bytes to Agent storage first; Manager never sees attachment content.
