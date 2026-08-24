@@ -58,7 +58,7 @@ const PromptAccepted = Type.Object({ conversation_id: Type.String(), accepted: T
 const PromptAcceptedEnvelope = Type.Object({ data: Type.Ref("PromptAccepted") }, { $id: "PromptAcceptedEnvelope" });
 const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME }), mime_type: Type.String(), data: Type.String({ contentEncoding: "base64" }) }, { $id: "LocalFileUpload", additionalProperties: false });
 const LocalFileMetadata = Type.Object({
-  id: Type.String(), conversation_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.Union([Type.Literal("attachment"), Type.Literal("artifact")]), filename: Type.String(), mime_type: Type.String(), byte_size: Type.Integer({ minimum: 0 }), sha256: Type.String(), created_at: Type.String({ format: "date-time" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
+  id: Type.String(), conversation_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.String({ enum: ["attachment", "artifact"] }), filename: Type.String(), mime_type: Type.String(), byte_size: Type.Integer({ minimum: 0 }), sha256: Type.String(), created_at: Type.String({ format: "date-time" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
 }, { $id: "LocalFileMetadata" });
 const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope" });
 const Page = Type.Object({ next_cursor: Type.Union([Type.String(), Type.Null()]), has_more: Type.Boolean() }, { $id: "Page" });
@@ -112,10 +112,15 @@ export class AgentHttpServer {
       genReqId: () => randomUUID(),
       logger: false,
     });
+    // Business handlers retain the existing trust-boundary validation. Fastify
+    // schemas are the single OpenAPI source, without changing their legacy
+    // error/status semantics through a second validator/serializer.
+    this.app.setValidatorCompiler(() => () => true);
+    this.app.setSerializerCompiler(() => (data) => JSON.stringify(data));
     this.server = this.app.server;
     this.app.addHook("onRequest", async (request, reply) => {
       this.requests += 1;
-      reply.header("X-Request-ID", request.id);
+      reply.raw.setHeader("X-Request-ID", request.id);
     });
     this.app.setErrorHandler((error, request, reply) => {
       this.errors += 1;
@@ -146,10 +151,25 @@ export class AgentHttpServer {
         },
       },
       refResolver: { buildLocalReference: (json: any, _baseUri: any, _fragment: string, index: number) => json.$id ?? `def-${index}` },
+      transformObject: (documentObject: any) => {
+        const openapiObject = documentObject.openapiObject ?? documentObject.swaggerObject;
+        const responseNames = new Set(["Unauthorized", "NotFound", "TooLarge", "ValidationError", "ManagerUnavailable"]);
+        for (const pathItem of Object.values(openapiObject.paths ?? {})) {
+          for (const operation of Object.values(pathItem as Record<string, any>)) {
+            if (!operation || typeof operation !== "object" || !operation.responses) continue;
+            for (const [status, response] of Object.entries(operation.responses as Record<string, any>)) {
+              if (response && responseNames.has(response.description)) operation.responses[status] = { $ref: `#/components/responses/${response.description}` };
+            }
+          }
+        }
+        return openapiObject;
+      },
     });
-    for (const schema of OPENAPI_SCHEMAS) this.app.addSchema(schema);
-    this.registerRoutes();
-    void this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" }, staticCSP: true });
+    this.app.after(() => {
+      for (const schema of OPENAPI_SCHEMAS) this.app.addSchema(schema);
+      this.registerRoutes();
+      this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" }, staticCSP: true });
+    });
   }
 
   async listen(port: number, host = "127.0.0.1"): Promise<void> {
@@ -165,7 +185,7 @@ export class AgentHttpServer {
   private registerRoutes(): void {
     const generic = Type.Object({ data: Type.Any() });
     const jsonResponse = (schema: unknown, description = "Successful response") => ({ description, content: { "application/json": { schema } } });
-    const problemResponse = (name: "Unauthorized" | "NotFound" | "TooLarge" | "ValidationError" | "ManagerUnavailable") => ({ $ref: `#/components/responses/${name}` });
+    const problemResponse = (name: "Unauthorized" | "NotFound" | "TooLarge" | "ValidationError" | "ManagerUnavailable") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
     this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { response: { 200: generic } }), false);
     this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String() } } } } }), false);
     this.registerRoute("GET", "/readyz", async (_request, response) => {
@@ -750,6 +770,14 @@ export class AgentHttpServer {
 
 
   private async readJson(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
+    const fastifyBody = (request as BufferedRequest)[FASTIFY_BODY];
+    if (fastifyBody !== undefined) {
+      let serialized: string;
+      try { serialized = JSON.stringify(fastifyBody); } catch { throw new HttpProblem(400, "invalid_json", "Request body must be a JSON object"); }
+      if (Buffer.byteLength(serialized, "utf8") > maxBytes) throw new HttpProblem(413, "request_too_large", "Request body is too large");
+      if (!fastifyBody || typeof fastifyBody !== "object" || Array.isArray(fastifyBody)) throw new HttpProblem(400, "invalid_json", "Request body must be a JSON object");
+      return fastifyBody as Record<string, unknown>;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
