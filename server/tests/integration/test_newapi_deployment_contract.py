@@ -15,7 +15,7 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     relay = service_block("newapi", "operation")
 
     assert "profiles: [newapi]" in relay
-    assert "${NEWAPI_IMAGE:-calciumion/new-api:v0.13.2}" in relay
+    assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}" in relay
     assert "latest" not in relay
     assert '"127.0.0.1:${NEWAPI_PORT:-9300}:3000"' in relay
     assert "newapi-postgres:" in relay and "newapi-redis:" in relay
@@ -59,6 +59,6 @@ def test_release_gate_and_deployer_cover_newapi_backup_and_health():
 def test_newapi_examples_never_contain_real_credentials():
     for name in (".env.example", ".env.test.example"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "NEWAPI_IMAGE=calciumion/new-api:v0.13.2" in text
+        assert "NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b" in text
         assert "NEWAPI_ADMIN_TOKEN=" in text
         assert "newapi.xiaohei.tech" not in text

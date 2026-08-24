@@ -15,7 +15,7 @@ AI Team v1 是「云侧双控制面 + 用户本地数据面」架构，三端是
 | 运营端 Operation | 平台方部署 | `Dockerfile.operation` | 8001 | `server/operation_service` + `shared` | `web/operation` |
 | 企业端 Manager | 平台托管多租户 SaaS | `Dockerfile.manager` | 8002 | `server/manager_service` + `shared` | `web/manager` |
 | 用户端 Agent | 每用户本机自部署 | `Dockerfile.agent` | 8003 | Node `server/agent_service` | `web/agent` |
-| 内部 NewAPI Relay | 平台方部署、Operator 管理 | `calciumion/new-api:v0.13.2` | 9300（默认 loopback） | 独立组件 | 自带管理 UI（不面向企业/Agent） |
+| 内部 NewAPI Relay | 平台方部署、Operator 管理 | `calciumion/new-api:v1.0.0-rc.25` + 固定 sha256 digest | 9300（默认 loopback） | 独立组件 | 自带管理 UI（不面向企业/Agent） |
 
 通信面（05 §5.5 窄通信面）：
 - Operator ↔ Manager：云侧服务间调用（`MANAGER_URL` / `OPERATOR_URL`）。

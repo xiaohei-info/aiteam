@@ -14,7 +14,7 @@
 复制 `.env.example` 后至少设置：
 
 ```dotenv
-NEWAPI_IMAGE=calciumion/new-api:v0.13.2
+NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b
 NEWAPI_PORT=9300
 NEWAPI_DB_USER=newapi
 NEWAPI_DB_PASSWORD=<strong-random>

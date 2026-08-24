@@ -91,7 +91,7 @@ services:
   # its PostgreSQL/Redis and all management/upstream credentials stay private.
   newapi-postgres:
     profiles: [newapi]
-    image: ${NEWAPI_POSTGRES_IMAGE:-postgres:16.10-alpine}
+    image: ${NEWAPI_POSTGRES_IMAGE:-postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229}
     container_name: aiteam-newapi-pg
     environment:
       POSTGRES_USER: ${NEWAPI_DB_USER:-newapi}
@@ -108,7 +108,7 @@ services:
 
   newapi-redis:
     profiles: [newapi]
-    image: ${NEWAPI_REDIS_IMAGE:-redis:7.4.5-alpine}
+    image: ${NEWAPI_REDIS_IMAGE:-redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf}
     container_name: aiteam-newapi-redis
     command: ["redis-server", "--requirepass", "${NEWAPI_REDIS_PASSWORD:-newapi_test}"]
     volumes:
@@ -122,7 +122,7 @@ services:
 
   newapi:
     profiles: [newapi]
-    image: ${NEWAPI_IMAGE:-calciumion/new-api:v0.13.2}
+    image: ${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}
     container_name: aiteam-newapi
     restart: unless-stopped
     command: --log-dir /app/logs
@@ -138,9 +138,11 @@ services:
       REDIS_CONN_STRING: redis://:${NEWAPI_REDIS_PASSWORD:-newapi_test}@newapi-redis:6379
       SESSION_SECRET: ${NEWAPI_SESSION_SECRET:-dev-newapi-session-secret-change-me}
       CRYPTO_SECRET: ${NEWAPI_CRYPTO_SECRET:-dev-newapi-crypto-secret-change-me}
-      TZ: ${NEWAPI_TZ:-Asia/Shanghai}
-      ERROR_LOG_ENABLED: "true"
-      BATCH_UPDATE_ENABLED: "true"
+      TZ: ${NEWAPI_TZ:-UTC}
+      ERROR_LOG_ENABLED: "false"
+      BATCH_UPDATE_ENABLED: "false"
+      SESSION_COOKIE_SECURE: "false"
+      TRUSTED_PROXIES: none
       NODE_NAME: aiteam-newapi
     volumes:
       - newapi_data:/data

@@ -71,8 +71,8 @@ bash scripts/lightrag-ops.sh --dry-run rollback --image ghcr.io/hkuds/lightrag:1
 echo '[deploy-check] LightRAG validate/backup/upgrade/rollback dry-runs OK'
 bash scripts/newapi-ops.sh --dry-run backup >/tmp/aiteam-newapi-backup.out
 bash scripts/newapi-ops.sh --dry-run restore --input /tmp/example-newapi.dump --yes >/tmp/aiteam-newapi-restore.out
-bash scripts/newapi-ops.sh --dry-run upgrade --image calciumion/new-api:v0.13.2 --yes >/tmp/aiteam-newapi-upgrade.out
-bash scripts/newapi-ops.sh --dry-run rollback --image calciumion/new-api:v0.13.2 --yes >/tmp/aiteam-newapi-rollback.out
+bash scripts/newapi-ops.sh --dry-run upgrade --image calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b --yes >/tmp/aiteam-newapi-upgrade.out
+bash scripts/newapi-ops.sh --dry-run rollback --image calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b --yes >/tmp/aiteam-newapi-rollback.out
 echo '[deploy-check] NewAPI backup/restore/upgrade/rollback dry-runs OK'
 
 # Reject credentials accidentally committed to deployment material while allowing
