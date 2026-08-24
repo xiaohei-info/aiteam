@@ -46,7 +46,7 @@ const ConversationQuery = Type.Object({ after: Type.Optional(Type.String()), lim
 const PromptImage = Type.Object({
   type: Type.Literal("image"),
   data: Type.String({ contentEncoding: "base64" }),
-  mimeType: Type.Union([Type.Literal("image/gif"), Type.Literal("image/jpeg"), Type.Literal("image/png"), Type.Literal("image/webp")]),
+  mimeType: Type.String({ enum: ["image/gif", "image/jpeg", "image/png", "image/webp"] }),
 }, { additionalProperties: false });
 const PromptRequest = Type.Object({
   text: Type.String({ minLength: 1, maxLength: 200_000 }),
@@ -54,7 +54,7 @@ const PromptRequest = Type.Object({
   attachment_ids: Type.Optional(Type.Array(Type.String(), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true })),
   mentions: Type.Optional(Type.Array(Type.String(), { maxItems: 16 })),
 }, { $id: "PromptRequest", additionalProperties: false });
-const PromptAccepted = Type.Object({ conversation_id: Type.String(), accepted: Type.Boolean(), state: Type.Union([Type.Literal("accepted"), Type.Literal("completed")]), idempotency_key: Type.String() }, { $id: "PromptAccepted" });
+const PromptAccepted = Type.Object({ conversation_id: Type.String(), accepted: Type.Boolean(), state: Type.String({ enum: ["accepted", "completed"] }), idempotency_key: Type.String() }, { $id: "PromptAccepted" });
 const PromptAcceptedEnvelope = Type.Object({ data: Type.Ref("PromptAccepted") }, { $id: "PromptAcceptedEnvelope" });
 const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME }), mime_type: Type.String(), data: Type.String({ contentEncoding: "base64" }) }, { $id: "LocalFileUpload", additionalProperties: false });
 const LocalFileMetadata = Type.Object({
@@ -188,13 +188,13 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { response: { 200: generic } }));
     this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { querystring: ConversationQuery, response: { 200: generic } }));
     this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), entry_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), solution_instance_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), schedule: Type.Optional(Type.Any()) }), response: { 201: generic } }));
-    this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.getConversation(response, request.url ?? "/", caller!), routeSchema("getConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.getConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
     const conversationUpdateSchema = routeSchema("updateConversation", { params: ConversationParams, body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), schedule: Type.Optional(Type.Any()), last_read_entry_id: Type.Optional(Type.Union([Type.String(), Type.Null()])) }), response: { 200: generic, 404: problemResponse("NotFound") } });
-    this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.updateConversation(request, response, request.url ?? "/", caller!), conversationUpdateSchema);
-    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.updateConversation(request, response, request.url ?? "/", caller!), { ...conversationUpdateSchema, operationId: "replaceConversation" });
-    this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (request, response, caller) => this.deleteConversation(response, request.url ?? "/", caller!), routeSchema("deleteConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
-    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (request, response, caller) => this.getConversationState(response, request.url ?? "/", caller!), routeSchema("getConversationState", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
-    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller) => this.updateConversationState(request, response, request.url ?? "/", caller!), routeSchema("setConversationState", { params: ConversationParams, body: Type.Object({ state: Type.String({ minLength: 1, maxLength: 32 }) }), response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id", (request, response, caller, fastifyRequest) => this.updateConversation(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), conversationUpdateSchema);
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id", (request, response, caller, fastifyRequest) => this.updateConversation(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), { ...conversationUpdateSchema, operationId: "replaceConversation" });
+    this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.deleteConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("deleteConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (_request, response, caller, fastifyRequest) => this.getConversationState(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationState", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller, fastifyRequest) => this.updateConversationState(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationState", { params: ConversationParams, body: Type.Object({ state: Type.String({ minLength: 1, maxLength: 32 }) }), response: { 200: generic, 404: problemResponse("NotFound") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 409: problemResponse("ValidationError"), 422: problemResponse("ValidationError") } }));
@@ -217,15 +217,9 @@ export class AgentHttpServer {
     }, routeSchema("abortConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
 
     const fileCollection = (kind: LocalFileKind, operationId: string, params: unknown) => {
-      const route = (request: IncomingMessage) => ({ conversationId: String((request as BufferedRequest & { __params?: { conversation_id: string } }).__params?.conversation_id ?? ""), kind });
-      this.registerRoute("GET", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (request, response, caller, fastifyRequest) => {
-        (request as BufferedRequest & { __params?: { conversation_id: string } }).__params = fastifyRequest?.params as { conversation_id: string };
-        return this.listLocalFiles(response, route(request), caller!);
-      }, routeSchema(operationId, { params, response: { 200: jsonResponse(Type.Ref("LocalFileListEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
-      this.registerRoute("POST", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, async (request, response, caller, fastifyRequest) => {
-        (request as BufferedRequest & { __params?: { conversation_id: string } }).__params = fastifyRequest?.params as { conversation_id: string };
-        await this.uploadLocalFile(request, response, route(request), caller!);
-      }, routeSchema(`${operationId.replace("list", "upload")}`, { params, body: Type.Ref("LocalFileUpload"), response: { 201: jsonResponse(Type.Ref("LocalFileEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
+      const route = (fastifyRequest?: FastifyRequest) => ({ conversationId: String((fastifyRequest?.params as { conversation_id?: string })?.conversation_id ?? ""), kind });
+      this.registerRoute("GET", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (_request, response, caller, fastifyRequest) => this.listLocalFiles(response, route(fastifyRequest), caller!), routeSchema(operationId, { params, response: { 200: jsonResponse(Type.Ref("LocalFileListEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("POST", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (request, response, caller, fastifyRequest) => this.uploadLocalFile(request, response, route(fastifyRequest), caller!), routeSchema(kind === "artifact" ? "uploadArtifact" : "uploadAttachment", { params, body: Type.Ref("LocalFileUpload"), response: { 201: jsonResponse(Type.Ref("LocalFileEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
     };
     fileCollection("attachment", "listAttachments", ConversationParams);
     fileCollection("artifact", "listArtifacts", ConversationParams);
@@ -242,12 +236,12 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/grants/solutions", (_request, response, caller) => this.listSolutions(response, caller!), routeSchema("listAuthorizedSolutions", { response: { 200: generic } }));
     this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { response: { 200: generic } }));
     this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (request, response, caller) => this.expertReadiness(response, request.url ?? "/", caller!), routeSchema("expertReadiness", { params: ExpertParams, response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { params: ExpertParams, response: { 200: generic } }));
     this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), member_id: Type.String({ minLength: 1, maxLength: 200 }), known_versions: Type.Optional(Type.Record(Type.String(), Type.String())) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { body: Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/marketplace/templates", (request, response, caller) => this.listMarketplaceTemplates(response, caller!, request.url ?? "/"), routeSchema("listMarketplaceTemplates", { response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (request, response, caller) => this.listMarketplaceTemplates(response, caller!, request.url ?? "/"), routeSchema("getMarketplaceTemplate", { params: Type.Object({ template_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates", (_request, response, caller) => this.listMarketplaceTemplates(response, caller!), routeSchema("listMarketplaceTemplates", { response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (_request, response, caller, fastifyRequest) => this.listMarketplaceTemplates(response, caller!, (fastifyRequest?.params as { template_id: string }).template_id), routeSchema("getMarketplaceTemplate", { params: Type.Object({ template_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/knowledge-bases", (_request, response) => this.listKnowledgeBases(response), routeSchema("listKnowledgeBases", { response: { 410: generic } }));
     for (const path of ["/api/agent/knowledge-bases/:knowledge_base_id/:kind", "/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id"]) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema("knowledgeReadModel", { response: { 410: generic } }));
     this.registerRoute("GET", "/api/agent/org/tree", (request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { response: { 200: generic } }));
@@ -414,19 +408,13 @@ export class AgentHttpServer {
     if (!this.options.store.getOwnedConversation(conversationId, caller.tenantId, caller.userId ?? caller.callerId)) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
   }
 
-  private getConversationId(pathname: string): string {
-    const match = pathname.match(/^\/api\/agent\/conversations\/([^/]+)/);
-    if (!match) throw new HttpProblem(404, "not_found", "Conversation not found");
-    return decodeURIComponent(match[1]);
-  }
-
-  private getConversation(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): void {
-    const metadata = this.options.store.getOwnedConversationMetadata(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId);
+  private getConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
+    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: metadata });
   }
 
-  private async updateConversation(request: IncomingMessage, response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
+  private async updateConversation(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const patch: Parameters<AgentSqliteStore["updateConversation"]>[1] = {};
     if (body.title !== undefined) patch.title = body.title === null ? null : this.stringField(body.title, "title", 200);
@@ -434,36 +422,36 @@ export class AgentHttpServer {
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.optionalString(body.last_read_entry_id, "last_read_entry_id");
-    this.requireOwnedConversation(this.getConversationId(pathname), caller);
-    const updated = this.options.store.updateConversation(this.getConversationId(pathname), patch);
+    this.requireOwnedConversation(conversationId, caller);
+    const updated = this.options.store.updateConversation(conversationId, patch);
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: updated });
   }
 
-  private getConversationState(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): void {
-    const metadata = this.options.store.getOwnedConversationMetadata(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId);
+  private getConversationState(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
+    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state } });
   }
 
-  private async updateConversationState(request: IncomingMessage, response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
+  private async updateConversationState(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const state = this.stringField(body.state, "state", 32) as ConversationState;
     if (!["draft", "active", "paused", "muted", "archived"].includes(state)) throw new HttpProblem(422, "invalid_state", "Unsupported conversation state");
-    this.requireOwnedConversation(this.getConversationId(pathname), caller);
-    const updated = this.options.store.updateConversation(this.getConversationId(pathname), { state });
+    this.requireOwnedConversation(conversationId, caller);
+    const updated = this.options.store.updateConversation(conversationId, { state });
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: updated });
   }
 
-  private async deleteConversation(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
-    if (!(await this.options.host.delete(this.getConversationId(pathname), caller.tenantId!, caller.userId ?? caller.callerId))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+  private async deleteConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    if (!(await this.options.host.delete(conversationId, caller.tenantId!, caller.userId ?? caller.callerId))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
   private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
-  private async listMarketplaceTemplates(response: ServerResponse, caller: AuthenticatedCaller, pathname: string): Promise<void> {
+  private async listMarketplaceTemplates(response: ServerResponse, caller: AuthenticatedCaller, templateId?: string): Promise<void> {
     if (!this.options.managerClient?.listMarketplaceTemplates) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");
     let templates: MarketplaceTemplate[];
     try {
@@ -473,9 +461,8 @@ export class AgentHttpServer {
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");
       throw error;
     }
-    const detailId = pathname.match(/^\/api\/agent\/marketplace\/templates\/([^/]+)$/)?.[1];
-    if (detailId) {
-      const template = templates.find((item) => item.template_id === decodeURIComponent(detailId));
+    if (templateId) {
+      const template = templates.find((item) => item.template_id === templateId);
       if (!template) throw new HttpProblem(404, "marketplace_template_not_found", "Marketplace template not found");
       return this.writeJson(response, 200, { data: template });
     }
@@ -552,8 +539,8 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { runtime: state, runtime_reason: runtime ? undefined : "Pi runtime is not ready", experts } });
   }
 
-  private async expertReadiness(response: ServerResponse, pathname: string, caller: AuthenticatedCaller): Promise<void> {
-    const id = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+  private async expertReadiness(response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
+    const id = employeeId;
     const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === id);
     if (!expert) return this.writeJson(response, 200, { data: { employee_id: id, display_name: id, handle: id, available: false, runtime: "unknown", provider: "unknown", skills: [], capabilities: [], reasons: ["Expert is not authorized locally"] } });
     const runtime = (await this.options.runtimeReady?.()) ?? true;
