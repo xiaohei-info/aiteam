@@ -43,12 +43,14 @@ test("Agent exposes standard docs and readiness boundaries", async () => {
     const swaggerBundle = await fetch(`${base}/docs/static/swagger-ui-bundle.js`);
     assert.equal(swaggerBundle.status, 200);
     assert.match(swaggerBundle.headers.get("content-type") ?? "", /javascript/u);
+    await swaggerBundle.arrayBuffer();
     const redoc = await fetch(`${base}/redoc`);
     assert.equal(redoc.status, 200);
     assert.match(await redoc.text(), /\/redoc\/redoc\.standalone\.js/u);
     const redocBundle = await fetch(`${base}/redoc/redoc.standalone.js`);
     assert.equal(redocBundle.status, 200);
     assert.match(redocBundle.headers.get("content-type") ?? "", /javascript/u);
+    await redocBundle.arrayBuffer();
     const missing = await fetch(`${base}/api/missing`);
     assert.equal(missing.status, 404);
     assert.equal(missing.headers.get("content-type"), "application/problem+json; charset=utf-8");

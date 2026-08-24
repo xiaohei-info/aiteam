@@ -168,7 +168,9 @@ export class AgentHttpServer {
     this.app.after(() => {
       for (const schema of OPENAPI_SCHEMAS) this.app.addSchema(schema);
       this.registerRoutes();
-      this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" }, staticCSP: true });
+      // Do not emit `upgrade-insecure-requests`: taiyi/dev serves HTTP directly;
+      // TLS termination can add that policy at the edge without breaking local docs.
+      this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" } });
     });
   }
 
