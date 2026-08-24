@@ -174,6 +174,13 @@ export async function updateConversation(
   );
 }
 
+export async function getConversationRuntimeState(
+  client: AgentApiClient,
+  conversationId: string,
+): Promise<{ conversation_id: string; state: string; prompting: boolean } | null> {
+  return client.get(`/api/agent/conversations/${encodeURIComponent(conversationId)}/state`);
+}
+
 export async function setConversationState(
   client: AgentApiClient,
   conversationId: string,

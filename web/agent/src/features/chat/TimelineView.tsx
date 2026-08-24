@@ -9,7 +9,7 @@ import {
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import type { AgentApiClient } from "../../lib/api-client";
-import { getEntries, subscribePiEvents } from "./useChatApi";
+import { getConversationRuntimeState, getEntries, subscribePiEvents } from "./useChatApi";
 
 const MAX_TYPE_LENGTH = 80;
 const MAX_STATUS_LENGTH = 80;
@@ -106,9 +106,10 @@ export interface TimelineViewProps {
   client: AgentApiClient;
   conversationId: string;
   refreshSignal?: number;
+  onPromptingChange?: (prompting: boolean) => void;
 }
 
-export function TimelineView({ client, conversationId, refreshSignal = 0 }: TimelineViewProps) {
+export function TimelineView({ client, conversationId, refreshSignal = 0, onPromptingChange }: TimelineViewProps) {
   const [entries, setEntries] = useState<PiEntry[]>([]);
   const [events, setEvents] = useState<TimelineEventItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,6 +129,9 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
       conversationId,
       (next) => {
         if (!alive) return;
+        const type = normalizeType(firstString(asRecord(next.event), "type") ?? "");
+        if (type === "agent_start") onPromptingChange?.(true);
+        else if (type === "agent_end" || type === "agent_settled") onPromptingChange?.(false);
         setEvents((current) => upsertEvent(current, next));
         setStreamError(null);
       },
@@ -135,6 +139,10 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
         if (alive) setStreamError(errorMessage(cause, "事件流连接失败"));
       },
     );
+
+    void getConversationRuntimeState(client, conversationId)
+      .then((state) => { if (alive) onPromptingChange?.(Boolean(state?.prompting)); })
+      .catch(() => undefined);
 
     void getEntries(client, conversationId)
       .then((next) => {
@@ -152,7 +160,7 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
       alive = false;
       subscription.close();
     };
-  }, [client, conversationId]);
+  }, [client, conversationId, onPromptingChange]);
 
   useEffect(() => {
     if (refreshSignal === 0) return;
@@ -172,7 +180,13 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
   }, [client, conversationId, refreshSignal]);
 
   const timeline = mergeTimeline(entries, events);
-  const hasContent = timeline.length > 0;
+  const visibleTimeline = timeline.flatMap((item, index) => {
+    const models = classifyPiRecords(item.kind === "entry" ? item.entry : item.item.event)
+      .filter((model) => model.kind !== "streaming" && model.kind !== "settled");
+    const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
+    return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
+  });
+  const hasContent = visibleTimeline.length > 0;
   const visibleError = loadError ?? streamError;
 
   return (
@@ -190,19 +204,15 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
           实时事件流离线：{streamError}
         </span>
       ) : null}
-      {timeline.map((item, index) => {
-        const models = classifyPiRecords(item.kind === "entry" ? item.entry : item.item.event);
-        const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
-        return models.map((model, modelIndex) => (
-          <ChatMessage key={`${itemKey}-${modelIndex}`} sender={model.sender}>
-            <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
-              {model.kind === "message"
-                ? <p data-timeline-message="true">{model.summary}</p>
-                : <TimelineCard model={model} />}
-            </ChatMessageBubble>
-          </ChatMessage>
-        ));
-      })}
+      {visibleTimeline.map(({ model, key }) => (
+        <ChatMessage key={key} sender={model.sender}>
+          <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
+            {model.kind === "message"
+              ? <p data-timeline-message="true">{model.summary}</p>
+              : <TimelineCard model={model} />}
+          </ChatMessageBubble>
+        </ChatMessage>
+      ))}
       {!loading && !hasContent && loadError && !streamError ? <span role="alert">{loadError}</span> : null}
     </ChatMessageList>
   );

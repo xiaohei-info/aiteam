@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
 import { ApiError } from "@aiteam/shared/api-client";
-import { createConversation, deleteAttachment, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
+import { createConversation, deleteAttachment, getConversationRuntimeState, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
 import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
 afterEach(() => {
@@ -25,10 +25,12 @@ describe("Pi chat contract", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("http://agent.test/api/agent/conversations?limit=50");
   });
 
-  it("persists state through the Node Agent state endpoint", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => new Response(JSON.stringify({ data: { id: "c1", state: JSON.parse(String(init?.body)).state } }), { headers: { "content-type": "application/json" } }));
-    await expect(setConversationState(client(fetchMock as unknown as typeof fetch), "c1", "paused")).resolves.toMatchObject({ state: "paused" });
-    expect(fetchMock).toHaveBeenCalledWith("http://agent.test/api/agent/conversations/c1/state", expect.objectContaining({ method: "PUT" }));
+  it("reads runtime prompting state without persisting it and updates the durable state separately", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => new Response(JSON.stringify({ data: init?.method === "PUT" ? { id: "c1", state: JSON.parse(String(init.body)).state } : { conversation_id: "c1", state: "active", prompting: true } }), { headers: { "content-type": "application/json" } }));
+    const api = client(fetchMock as unknown as typeof fetch);
+    await expect(getConversationRuntimeState(api, "c1")).resolves.toMatchObject({ prompting: true });
+    await expect(setConversationState(api, "c1", "paused")).resolves.toMatchObject({ state: "paused" });
+    expect(fetchMock).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/state", expect.objectContaining({ method: "PUT" }));
   });
 
   it("submits one idempotent prompt request", async () => {

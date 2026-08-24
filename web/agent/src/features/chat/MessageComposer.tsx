@@ -61,14 +61,17 @@ export function resetPendingSubmissionKey(pending: PendingSubmission): PendingSu
 
 export interface MessageComposerProps {
   conversationId: string;
+  isPrompting: boolean;
+  onPromptingChange: (prompting: boolean) => void;
   onSent: () => void;
 }
 
-export function MessageComposer({ conversationId, onSent }: MessageComposerProps) {
+export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent }: MessageComposerProps) {
   const { client } = useApp();
   const toMessage = useApiError();
   const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
+  const [submitting, setSending] = useState(false);
+  const sending = submitting || isPrompting;
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [roster, setRoster] = useState<LoadedExpertProjection[]>([]);
@@ -169,12 +172,14 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       }
       // Keep the key and local IDs stable: a lost response may mean the Agent accepted the prompt.
       pending.promptAttempted = true;
+      onPromptingChange(true);
       await submitPrompt(client, conversationId, { text: pending.text, attachment_ids: pending.uploaded.map((file) => file.id) }, pending.key);
       pendingSubmission.current = null;
       setContent("");
       setAttachments([]);
       onSent();
     } catch (err) {
+      onPromptingChange(false);
       if (!pending.promptAttempted) {
         // Upload failed before any prompt attempt; these IDs are definitely orphaned.
         await Promise.all(pending.uploaded.map((file) => deleteAttachment(client, conversationId, file.id).catch(() => undefined)));
@@ -197,6 +202,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       setError(toMessage(err));
     } finally {
       setSending(false);
+      onPromptingChange(false);
     }
   }
 
@@ -307,6 +313,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   return (
     <VStack gap={1} padding={4}>
       {toast && <Banner status="info" title={toast} />}
+      {isPrompting ? <Text type="supporting" role="status" aria-live="polite">执行中</Text> : null}
       <ChatComposer
         value={content}
         onChange={setContent}
@@ -362,13 +369,14 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           />
         }
         sendButton={
-          sending ? (
-            <Button label="停止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
+          isPrompting ? (
+            <Button label="终止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
           ) : (
             <Button
               label="发送"
               variant="primary"
-              isDisabled={!content.trim() && attachments.length === 0}
+              isLoading={submitting}
+              isDisabled={submitting || !content.trim() && attachments.length === 0}
               onClick={() => void submitCurrentContent()}
             />
           )

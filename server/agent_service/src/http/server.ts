@@ -453,7 +453,7 @@ export class AgentHttpServer {
   private getConversationState(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
     const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state } });
+    this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state, prompting: this.options.host.isPrompting(conversationId) } });
   }
 
   private async updateConversationState(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {

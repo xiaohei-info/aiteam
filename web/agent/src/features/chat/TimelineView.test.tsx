@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiEntry, PiEvent } from "@aiteam/shared/contracts";
 import type { AgentApiClient } from "../../lib/api-client";
-import { getEntries, subscribePiEvents } from "./useChatApi";
+import { getConversationRuntimeState, getEntries, subscribePiEvents } from "./useChatApi";
 import {
   boundedJson,
   classifyPiRecord,
@@ -14,10 +14,12 @@ import {
 } from "./TimelineView";
 
 vi.mock("./useChatApi", () => ({
+  getConversationRuntimeState: vi.fn(),
   getEntries: vi.fn(),
   subscribePiEvents: vi.fn(),
 }));
 
+const mockedRuntimeState = vi.mocked(getConversationRuntimeState);
 const mockedGetEntries = vi.mocked(getEntries);
 const mockedSubscribe = vi.mocked(subscribePiEvents);
 
@@ -36,6 +38,8 @@ function event(id: string, type: string, extra: Record<string, unknown> = {}): T
 beforeEach(() => {
   onEvent = undefined;
   onError = undefined;
+  mockedRuntimeState.mockReset();
+  mockedRuntimeState.mockResolvedValue({ conversation_id: "c1", state: "active", prompting: false });
   mockedGetEntries.mockReset();
   mockedSubscribe.mockReset();
   mockedSubscribe.mockImplementation((_client, _conversationId, next, error) => {
@@ -249,7 +253,8 @@ describe("TimelineView Pi cards", () => {
     expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("read");
     expect(screen.getByRole("article", { name: "需要审批事件" })).toHaveTextContent("write");
     expect(screen.getByRole("alert", { name: "错误事件" })).toHaveTextContent("failed");
-    expect(screen.getByRole("article", { name: "已完成事件" })).toHaveTextContent("执行已完成");
+    expect(screen.queryByRole("article", { name: "已完成事件" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: "执行中事件" })).not.toBeInTheDocument();
     expect(screen.queryByText("do-not-render")).not.toBeInTheDocument();
     expect(screen.queryByText("/private/file")).not.toBeInTheDocument();
     expect(screen.getByTestId("conversation-events")).toHaveAttribute("aria-label", "对话事件流");
@@ -282,10 +287,12 @@ describe("TimelineView Pi cards", () => {
     expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("citation:1");
   });
 
-  it("keeps an updating thought expanded, collapses it on completion, and streams one answer bubble", async () => {
+  it("keeps an updating thought expanded, collapses it on completion, streams one answer bubble, and reports runtime state outside the timeline", async () => {
     mockedGetEntries.mockResolvedValue([]);
-    render(<TimelineView client={client} conversationId="live" />);
+    const onPromptingChange = vi.fn();
+    render(<TimelineView client={client} conversationId="live" onPromptingChange={onPromptingChange} />);
     await waitFor(() => expect(screen.getByText("暂无事件")).toBeInTheDocument());
+    expect(onPromptingChange).toHaveBeenCalledWith(false);
 
     await act(async () => {
       onEvent?.(event("run", "agent_start"));
@@ -299,6 +306,8 @@ describe("TimelineView Pi cards", () => {
       }));
     });
 
+    expect(onPromptingChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("article", { name: "执行中事件" })).not.toBeInTheDocument();
     const thinking = screen.getByRole("article", { name: "思考事件" });
     expect(screen.getAllByRole("article", { name: "思考事件" })).toHaveLength(1);
     expect(thinking.querySelector("details")).toHaveAttribute("open");
@@ -324,6 +333,13 @@ describe("TimelineView Pi cards", () => {
     });
     expect(screen.getAllByText("实时回答")).toHaveLength(1);
     expect(screen.queryByText("实时")).not.toBeInTheDocument();
+
+    await act(async () => {
+      onEvent?.(event("agent-end", "agent_end"));
+      onEvent?.(event("agent-settled", "agent_settled"));
+    });
+    expect(onPromptingChange).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole("article", { name: "已完成事件" })).not.toBeInTheDocument();
   });
 
   it("deduplicates a persisted entry when the same live id arrives and keeps newer events ordered", async () => {

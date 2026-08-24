@@ -25,12 +25,16 @@ export function ChatPage(): React.ReactNode {
   const { client } = useApp();
   const toMessage = useApiError();
   const [selected, setSelected] = useState<Conversation | null>(null);
+  const [prompting, setPrompting] = useState(false);
   const [sentSignal, setSentSignal] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const handleSelect = useCallback((conversation: Conversation) => setSelected(conversation), []);
+  const handleSelect = useCallback((conversation: Conversation) => {
+    setPrompting(false);
+    setSelected(conversation);
+  }, []);
   const handleStateChanged = useCallback((conversation: Conversation) => setSelected(conversation), []);
   const handleScheduleChanged = useCallback((conversation: Conversation) => {
     setSelected(conversation);
@@ -87,10 +91,10 @@ export function ChatPage(): React.ReactNode {
               </HStack>
               <ChatLayout
                 density="balanced"
-                composer={<MessageComposer conversationId={selected.id} onSent={handleSent} />}
+                composer={<MessageComposer conversationId={selected.id} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} />}
                 emptyState={<Text>选择一个会话开始对话</Text>}
               >
-                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} />
+                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} />
               </ChatLayout>
             </VStack>
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
