@@ -269,7 +269,7 @@ function boundedIdentifier(value: unknown, max: number): string | undefined {
 }
 
 function safeText(value: string, max: number): string {
-  const redacted = SECRET_KEY.test(value) ? "[内容已隐藏]" : value.replace(INLINE_SECRET, "[内容已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
+  const redacted = value.replace(INLINE_SECRET, "[内容已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
   return redacted.length <= max ? redacted : `${redacted.slice(0, Math.max(0, max - 1))}…`;
 }
 

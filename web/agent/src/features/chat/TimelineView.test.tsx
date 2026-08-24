@@ -50,7 +50,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("TimelineView Pi cards", () => {
   it("classifies common entries and events without runtime-specific fields", () => {
     expect(classifyPiRecord(entry("u", "message", { message: { role: "user", content: "hi" } }))).toMatchObject({ kind: "message", sender: "user", status: "recorded" });
-    expect(classifyPiRecord(event("thinking", "thinking", { text: "plan" }).event)).toMatchObject({ kind: "thinking", status: "received" });
+    expect(classifyPiRecord(event("thinking", "thinking", { text: "plan" }).event)).toMatchObject({ kind: "thinking", status: "completed" });
     expect(classifyPiRecord(entry("thinking-message", "message", { message: { role: "assistant", content: [{ type: "thinking", thinking: "bounded plan" }] } }))).toMatchObject({ kind: "thinking", summary: "bounded plan" });
     expect(classifyPiRecord(event("call", "tool_call", { name: "read", input: { content: "not shown" } }).event)).toMatchObject({ kind: "tool-call", summary: "工具调用：read", status: "pending" });
     expect(classifyPiRecord(event("result", "tool_result", { name: "read", status: "completed" }).event)).toMatchObject({ kind: "tool-result", status: "completed" });
@@ -78,6 +78,20 @@ describe("TimelineView Pi cards", () => {
     }));
     expect(models.map((model) => model.kind)).toEqual(["thinking", "message"]);
     expect(models.map((model) => model.summary)).toEqual(["先分析问题", "最终答案"]);
+
+    const liveThinking = classifyPiRecords(event("thinking", "message_update", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "累计思考" }, { type: "text", text: "不应提前显示" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "思考" },
+    }).event);
+    expect(liveThinking).toHaveLength(1);
+    expect(liveThinking[0]).toMatchObject({ kind: "thinking", status: "streaming", summary: "累计思考" });
+
+    const liveAnswer = classifyPiRecords(event("text", "message_update", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "不应重复" }, { type: "text", text: "实时回答" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "回答" },
+    }).event);
+    expect(liveAnswer).toHaveLength(1);
+    expect(liveAnswer[0]).toMatchObject({ kind: "message", summary: "实时回答" });
   });
 
   it("classifies bounded tool, todo, memory, and RAG card details", () => {
@@ -184,6 +198,20 @@ describe("TimelineView Pi cards", () => {
     }));
     expect(events.some((item) => item.event.type === "message_update")).toBe(false);
     expect(classifyPiRecords(events.at(-1)!.event).map((model) => model.kind)).toEqual(["thinking", "message"]);
+
+    events = upsertEvent(events, event("agent-end", "agent_end"));
+    events = upsertEvent(events, event("agent-settled", "agent_settled"));
+    const lifecycle = events.filter((item) => ["agent_start", "agent_end", "agent_settled"].includes(item.event.type));
+    expect(lifecycle).toHaveLength(1);
+    expect(lifecycle[0]!.event.type).toBe("agent_settled");
+  });
+
+  it("deduplicates a final SSE answer against its durable entry using visible text", () => {
+    const durable = entry("assistant", "message", { message: { role: "assistant", content: [{ type: "thinking", thinking: "full private reasoning" }, { type: "text", text: "唯一回答" }] } });
+    const live = event("different-id", "message_end", { message: { role: "assistant", content: [{ type: "thinking", thinking: "[内容已隐藏]" }, { type: "text", text: "唯一回答" }] } });
+    const merged = mergeTimeline([durable], [live]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.kind).toBe("entry");
   });
 
   it("keeps persisted order and removes duplicate SSE identities", () => {
@@ -252,6 +280,50 @@ describe("TimelineView Pi cards", () => {
     expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("bounded citation preview");
     expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("来源专家：研究专家（子专家）");
     expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("citation:1");
+  });
+
+  it("keeps an updating thought expanded, collapses it on completion, and streams one answer bubble", async () => {
+    mockedGetEntries.mockResolvedValue([]);
+    render(<TimelineView client={client} conversationId="live" />);
+    await waitFor(() => expect(screen.getByText("暂无事件")).toBeInTheDocument());
+
+    await act(async () => {
+      onEvent?.(event("run", "agent_start"));
+      onEvent?.(event("thinking-1", "message_update", {
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "第一段" }] },
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "第一段" },
+      }));
+      onEvent?.(event("thinking-2", "message_update", {
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "第一段，继续思考" }] },
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "，继续思考" },
+      }));
+    });
+
+    const thinking = screen.getByRole("article", { name: "思考事件" });
+    expect(screen.getAllByRole("article", { name: "思考事件" })).toHaveLength(1);
+    expect(thinking.querySelector("details")).toHaveAttribute("open");
+    expect(thinking).toHaveTextContent("第一段，继续思考");
+
+    await act(async () => {
+      onEvent?.(event("thinking-end", "message_update", {
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "思考完成" }] },
+        assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+      }));
+    });
+    expect(screen.getByRole("article", { name: "思考事件" }).querySelector("details")).not.toHaveAttribute("open");
+
+    await act(async () => {
+      onEvent?.(event("text-1", "message_update", {
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "思考完成" }, { type: "text", text: "实时" }] },
+        assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "实时" },
+      }));
+      onEvent?.(event("text-2", "message_update", {
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "思考完成" }, { type: "text", text: "实时回答" }] },
+        assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "回答" },
+      }));
+    });
+    expect(screen.getAllByText("实时回答")).toHaveLength(1);
+    expect(screen.queryByText("实时")).not.toBeInTheDocument();
   });
 
   it("deduplicates a persisted entry when the same live id arrives and keeps newer events ordered", async () => {

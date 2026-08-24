@@ -209,6 +209,7 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
 }
 
 function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
+  const updating = ["streaming", "running", "pending", "waiting"].includes(model.status);
   return (
     <Card
       data-timeline-event-card="true"
@@ -218,7 +219,7 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
       role={model.kind === "error" ? "alert" : "article"}
       aria-label={`${model.label}事件`}
     >
-      <details data-timeline-disclosure="true">
+      <details key={updating ? "updating" : "completed"} data-timeline-disclosure="true" open={updating || undefined}>
         <summary data-timeline-card-header="true">
           <strong data-timeline-card-label="true">{model.label}</strong>
           {model.toolName ? <code data-timeline-card-hint="true">{model.toolName}</code> : null}
@@ -317,6 +318,18 @@ export function classifyPiRecords(record: PiEntry | PiEvent): TimelineCardModel[
     const type = normalizeType(firstString(asRecord(part), "type") ?? "");
     return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
   });
+  const recordType = normalizeType(firstString(value, "type") ?? "");
+  const updateType = normalizeType(firstString(asRecord(value.assistantMessageEvent), "type") ?? "");
+  if (recordType === "message_update") {
+    if (updateType.startsWith("thinking_") || updateType.startsWith("reasoning_")) {
+      const thinkingText = textFrom(thinking) ?? textFrom(value.assistantMessageEvent);
+      return thinkingText ? [classifyPiRecord({ ...value, type: "thinking", status: updateType.endsWith("_end") ? "completed" : "streaming", thinking: thinkingText } as PiEvent)] : [classifyPiRecord(record)];
+    }
+    if (updateType.startsWith("text_") && text.length) return [classifyPiRecord({ ...value, type: "message", message: { ...message, content: text } } as PiEvent)];
+    if ((updateType.startsWith("toolcall_") || updateType.startsWith("tool_call_")) && tools.length) {
+      return tools.map((part) => classifyPiRecord({ ...value, ...(asRecord(part) ?? {}), type: "tool_call", message: undefined } as PiEvent));
+    }
+  }
   if (!thinking.length && !tools.length) return [classifyPiRecord(record)];
 
   const models: TimelineCardModel[] = [];
@@ -379,6 +392,16 @@ function uniqueEntries(entries: PiEntry[]): PiEntry[] {
 
 export function upsertEvent(current: TimelineEventItem[], next: TimelineEventItem): TimelineEventItem[] {
   const nextEvent = asRecord(next.event);
+  const nextType = normalizeType(firstString(nextEvent, "type") ?? "");
+  if (nextType === "agent_end" || nextType === "agent_settled") {
+    for (let index = current.length - 1; index >= 0; index -= 1) {
+      const currentType = normalizeType(firstString(asRecord(current[index]?.event), "type") ?? "");
+      if (!isAgentLifecycleType(currentType)) continue;
+      const updated = current.slice();
+      updated[index] = { ...next, id: current[index]!.id };
+      return updated;
+    }
+  }
   const boundary = lastRunBoundary(current);
   if (normalizeType(firstString(nextEvent, "type") ?? "") === "message_end" && messageRole(nextEvent) === "assistant") {
     current = current.filter((item, index) => index <= boundary || normalizeType(firstString(asRecord(item.event), "type") ?? "") !== "message_update");
@@ -401,6 +424,10 @@ export function upsertEvent(current: TimelineEventItem[], next: TimelineEventIte
   const updated = current.slice();
   updated[index] = next;
   return updated;
+}
+
+function isAgentLifecycleType(type: string): boolean {
+  return type === "agent_start" || type === "agent_end" || type === "agent_settled";
 }
 
 function lastRunBoundary(events: TimelineEventItem[]): number {
@@ -563,6 +590,7 @@ function statusFor(kind: TimelineKind, type: string, value: Record<string, unkno
   if (explicit) return safeDisplayText(explicit, MAX_STATUS_LENGTH);
   if (typeof value?.approved === "boolean") return value.approved ? "approved" : "pending";
   if (typeof value?.success === "boolean") return value.success ? "success" : "failed";
+  if (kind === "thinking") return "completed";
   if (kind === "tool-call") return type.endsWith("_start") || type.endsWith("_started") ? "running" : "pending";
   if (kind === "tool-result") return type.endsWith("_update") ? "running" : "completed";
   if (kind === "todo" || kind === "memory" || kind === "rag") {
@@ -991,7 +1019,11 @@ function payloadIdentity(value: unknown): string | null {
 function messageSignature(value: unknown): string | null {
   const message = asRecord(asRecord(value)?.message);
   const role = lower(firstString(message, "role"));
-  const content = textFrom(message?.content);
+  const rawContent = message?.content;
+  const visibleContent = role === "assistant" && Array.isArray(rawContent)
+    ? rawContent.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "text")
+    : rawContent;
+  const content = textFrom(visibleContent);
   return role && content ? `${role}:${content}` : null;
 }
 

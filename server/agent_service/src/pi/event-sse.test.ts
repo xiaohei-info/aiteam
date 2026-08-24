@@ -79,4 +79,14 @@ test("Pi SSE serializer bounds structured todo arguments and keeps thinking cont
   assert(thinking);
   assert.equal((thinking.assistantMessageEvent as { delta: string }).delta.length, 4_000);
   assert(!JSON.stringify(thinking).includes("hidden"));
+
+  const redacted = serializePiEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Inspect workspace /root/private/file and api_key=sk-secret" },
+  } as never);
+  const delta = (redacted?.assistantMessageEvent as { delta: string }).delta;
+  assert(delta.startsWith("Inspect workspace "));
+  assert(delta.includes("[路径已隐藏]"));
+  assert(delta.includes("[内容已隐藏]"));
+  assert.notEqual(delta, "[内容已隐藏]");
 });
