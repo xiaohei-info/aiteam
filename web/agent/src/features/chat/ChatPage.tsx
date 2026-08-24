@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { Card } from "@astryxdesign/core/Card";
 import { ChatLayout } from "@astryxdesign/core/Chat";
 import { Button } from "@astryxdesign/core/Button";
+import { Dialog } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -27,12 +28,14 @@ export function ChatPage(): React.ReactNode {
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [prompting, setPrompting] = useState(false);
   const [sentSignal, setSentSignal] = useState(0);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const handleSelect = useCallback((conversation: Conversation) => {
     setPrompting(false);
+    setScheduleOpen(false);
     setSelected(conversation);
   }, []);
   const handleStateChanged = useCallback((conversation: Conversation) => setSelected(conversation), []);
@@ -62,6 +65,7 @@ export function ChatPage(): React.ReactNode {
         return;
       }
       setSelected(created);
+      setScheduleOpen(false);
       setSentSignal((signal) => signal + 1);
       setCreateOpen(false);
     } catch (err) {
@@ -85,9 +89,14 @@ export function ChatPage(): React.ReactNode {
           {selected ? (
             <VStack gap={4} width="100%">
               <ConversationStateControl client={client} conversation={selected} onStateChanged={handleStateChanged} />
-              <ScheduleControl client={client} conversation={selected} onScheduleChanged={handleScheduleChanged} />
               <HStack justify="between" align="center">
                 <Heading level={2}>{selected.title ?? selected.id}</Heading>
+                <Button
+                  label={selected.schedule ? "调度已设置" : "设置调度"}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setScheduleOpen(true)}
+                />
               </HStack>
               <ChatLayout
                 density="balanced"
@@ -100,6 +109,23 @@ export function ChatPage(): React.ReactNode {
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
         </Card>
       </StackItem>
+      {selected && scheduleOpen ? (
+        <Dialog
+          isOpen
+          purpose="form"
+          width={720}
+          maxHeight="90vh"
+          aria-label="调度配置"
+          onOpenChange={(open) => setScheduleOpen(open)}
+        >
+          <VStack gap={3}>
+            <HStack justify="end">
+              <Button label="关闭调度配置" variant="ghost" size="sm" onClick={() => setScheduleOpen(false)} />
+            </HStack>
+            <ScheduleControl client={client} conversation={selected} onScheduleChanged={handleScheduleChanged} />
+          </VStack>
+        </Dialog>
+      ) : null}
       {createOpen ? <RosterPicker client={client} onPick={handlePick} onCancel={handleCancelCreate} busy={creating} error={createError} /> : null}
     </HStack>
   );
