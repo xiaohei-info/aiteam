@@ -74,7 +74,7 @@ const http = new AgentHttpServer({
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
     return sandbox.isAvailable(cwdRoot);
   },
-  runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
+  runtimeReady: () => managerClient !== undefined || configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
 
