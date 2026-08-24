@@ -31,6 +31,34 @@ class SkillMarketSettingsIn(BaseModel):
     auto_publish_downloads: bool
 
 
+def _verified_text_manifest(verification: dict, *, owner: str, slug: str, version: str) -> set[tuple[object, object, object]]:
+    identity_matches = (
+        verification.get("publisherHandle", "").lower() == owner.lower()
+        and verification.get("slug") == slug
+        and verification.get("version") == version
+    )
+    security_passed = bool((verification.get("security") or {}).get("passed"))
+    reasons = set(verification.get("reasons") or [])
+    card_only_pending = not verification.get("ok") and reasons == {"card.missing"}
+    if not identity_matches or not security_passed or (not verification.get("ok") and not card_only_pending):
+        raise ValidationProblem("ClawHub skill version did not pass exact security verification")
+
+    expected_files = (verification.get("artifact") or {}).get("files", [])
+    allowed_registry_files = {"_meta.json", "skill-card.md"}
+    if any(
+        item.get("path") not in allowed_registry_files
+        and item.get("path") != "SKILL.md"
+        and not (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
+        for item in expected_files
+    ):
+        raise ValidationProblem("ClawHub skill contains files unsupported by the text-only runtime; only SKILL.md and references/*.md are allowed")
+    return {
+        (item.get("path"), item.get("sha256"), item.get("size"))
+        for item in expected_files
+        if item.get("path") == "SKILL.md" or (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
+    }
+
+
 def _claims(request: Request) -> TokenClaims:
     claims = require_claims(request.app.state._token_verifier)(request)
     authorize(claims, [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR.value])
@@ -125,31 +153,9 @@ async def download_external(
         if not chosen:
             raise ValidationProblem("ClawHub skill has no downloadable version")
         verification = client.verify(owner=owner, slug=slug, version=chosen)
-        if (
-            not verification.get("ok")
-            or verification.get("decision") != "pass"
-            or verification.get("publisherHandle", "").lower() != owner.lower()
-            or verification.get("slug") != slug
-            or verification.get("version") != chosen
-            or not (verification.get("security") or {}).get("passed")
-        ):
-            raise ValidationProblem("ClawHub skill version did not pass exact security verification")
+        expected = _verified_text_manifest(verification, owner=owner, slug=slug, version=chosen)
         raw = client.download(owner=owner, slug=slug, version=chosen)
         files, content_hash = parse_skill_zip(raw)
-        expected_files = (verification.get("artifact") or {}).get("files", [])
-        allowed_registry_files = {"_meta.json", "skill-card.md"}
-        if any(
-            item.get("path") not in allowed_registry_files
-            and item.get("path") != "SKILL.md"
-            and not (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
-            for item in expected_files
-        ):
-            raise ValidationProblem("ClawHub skill contains files unsupported by the text-only runtime")
-        expected = {
-            (item.get("path"), item.get("sha256"), item.get("size"))
-            for item in expected_files
-            if item.get("path") == "SKILL.md" or (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
-        }
         actual = {(item["path"], __import__("hashlib").sha256(item["content"].encode()).hexdigest(), len(item["content"].encode())) for item in files}
         if not expected or actual != expected:
             raise ValidationProblem("downloaded skill files do not match ClawHub verified artifact")

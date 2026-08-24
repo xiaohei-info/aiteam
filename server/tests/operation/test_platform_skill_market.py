@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from operation_service.platform_skill_market import ClawHubClient, parse_skill_zip
+from operation_service.routes_skill_market import _verified_text_manifest
 from shared.errors import ValidationProblem
 
 
@@ -30,6 +31,41 @@ def test_parse_skill_zip_rejects_scripts():
 def test_parse_skill_zip_requires_skill_md():
     with pytest.raises(ValidationProblem, match="SKILL.md"):
         parse_skill_zip(_zip({"references/guide.md": "guide"}))
+
+
+def test_missing_skill_card_is_allowed_when_security_passed_and_files_are_text_only():
+    manifest = _verified_text_manifest(
+        {
+            "ok": False,
+            "reasons": ["card.missing"],
+            "publisherHandle": "publisher",
+            "slug": "demo",
+            "version": "1.0.0",
+            "security": {"passed": True},
+            "artifact": {"files": [{"path": "SKILL.md", "sha256": "abc", "size": 3}]},
+        },
+        owner="publisher", slug="demo", version="1.0.0",
+    )
+    assert manifest == {("SKILL.md", "abc", 3)}
+
+
+def test_non_text_skill_reports_compatibility_error_before_download():
+    with pytest.raises(ValidationProblem, match="text-only runtime"):
+        _verified_text_manifest(
+            {
+                "ok": False,
+                "reasons": ["card.missing"],
+                "publisherHandle": "publisher",
+                "slug": "demo",
+                "version": "1.0.0",
+                "security": {"passed": True},
+                "artifact": {"files": [
+                    {"path": "SKILL.md", "sha256": "abc", "size": 3},
+                    {"path": "scripts/run.py", "sha256": "def", "size": 3},
+                ]},
+            },
+            owner="publisher", slug="demo", version="1.0.0",
+        )
 
 
 def test_clawhub_search_does_not_use_internal_version_record_id():
