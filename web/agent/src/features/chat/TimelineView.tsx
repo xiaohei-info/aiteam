@@ -191,15 +191,17 @@ export function TimelineView({ client, conversationId, refreshSignal = 0 }: Time
         </span>
       ) : null}
       {timeline.map((item, index) => {
-        const model = item.kind === "entry" ? classifyPiRecord(item.entry) : classifyPiRecord(item.item.event);
-        const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || `${model.type}-${index}`}`;
-        return (
-          <ChatMessage key={itemKey} sender={model.sender} name={model.label}>
-            <ChatMessageBubble metadata={item.kind === "event" ? "实时" : "已记录"} variant="ghost">
-              <TimelineCard model={model} />
+        const models = classifyPiRecords(item.kind === "entry" ? item.entry : item.item.event);
+        const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
+        return models.map((model, modelIndex) => (
+          <ChatMessage key={`${itemKey}-${modelIndex}`} sender={model.sender}>
+            <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
+              {model.kind === "message"
+                ? <p data-timeline-message="true">{model.summary}</p>
+                : <TimelineCard model={model} />}
             </ChatMessageBubble>
           </ChatMessage>
-        );
+        ));
       })}
       {!loading && !hasContent && loadError && !streamError ? <span role="alert">{loadError}</span> : null}
     </ChatMessageList>
@@ -211,14 +213,13 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
     <Card
       data-timeline-event-card="true"
       data-kind={model.kind}
+      data-status={model.status}
       padding={3}
       role={model.kind === "error" ? "alert" : "article"}
       aria-label={`${model.label}事件`}
     >
       <div data-timeline-card-header="true">
         <strong data-timeline-card-label="true">{model.label}</strong>
-        <span data-timeline-card-meta="true">类型：<code>{model.type}</code></span>
-        <span data-timeline-card-meta="true">状态：<code>{model.status}</code></span>
       </div>
       {model.sourceLabel ? <p data-timeline-card-source="true">{model.sourceLabel}</p> : null}
       <p data-timeline-card-summary="true">{model.summary}</p>
@@ -299,10 +300,36 @@ export function classifyPiRecord(record: PiEntry | PiEvent): TimelineCardModel {
   };
 }
 
+/** Split a persisted assistant message into one thinking card and one answer bubble. */
+export function classifyPiRecords(record: PiEntry | PiEvent): TimelineCardModel[] {
+  const value = asRecord(record);
+  const message = asRecord(value?.message);
+  if (!value || !message || lower(firstString(message, "role")) !== "assistant" || !Array.isArray(message.content)) return [classifyPiRecord(record)];
+
+  const thinking = message.content.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "thinking");
+  const text = message.content.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "text");
+  const tools = message.content.filter((part) => {
+    const type = normalizeType(firstString(asRecord(part), "type") ?? "");
+    return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
+  });
+  if (!thinking.length && !tools.length) return [classifyPiRecord(record)];
+
+  const models: TimelineCardModel[] = [];
+  const thinkingText = textFrom(thinking);
+  if (thinkingText) models.push(classifyPiRecord({ ...value, type: "thinking", thinking: thinkingText } as PiEvent));
+  for (const part of tools) {
+    const tool = asRecord(part) ?? {};
+    models.push(classifyPiRecord({ ...value, ...tool, type: "tool_call", message: undefined } as PiEvent));
+  }
+  if (text.length) models.push(classifyPiRecord({ ...value, type: "message", message: { ...message, content: text } } as PiEvent));
+  return models.length ? models : [classifyPiRecord(record)];
+}
+
 /** Merges the durable snapshot before live events and removes identity duplicates. */
 export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): TimelineItem[] {
   const result: TimelineItem[] = [];
   const durableIds = new Set<string>();
+  const durableMessages = new Set<string>();
   const seenEntryIds = new Set<string>();
 
   for (const entry of entries) {
@@ -313,6 +340,8 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
     if (id) durableIds.add(id);
     const payloadId = payloadIdentity(entry);
     if (payloadId) durableIds.add(payloadId);
+    const signature = messageSignature(entry);
+    if (signature) durableMessages.add(signature);
     result.push({ kind: "entry", entry });
   }
 
@@ -325,6 +354,8 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
     if (eventId && durableIds.has(eventId)) continue;
     const payloadId = payloadIdentity(item?.event);
     if (payloadId && durableIds.has(payloadId)) continue;
+    const signature = messageSignature(item?.event);
+    if (signature && durableMessages.has(signature)) continue;
     result.push({ kind: "event", item });
   }
 
@@ -341,7 +372,23 @@ function uniqueEntries(entries: PiEntry[]): PiEntry[] {
   });
 }
 
-function upsertEvent(current: TimelineEventItem[], next: TimelineEventItem): TimelineEventItem[] {
+export function upsertEvent(current: TimelineEventItem[], next: TimelineEventItem): TimelineEventItem[] {
+  const nextEvent = asRecord(next.event);
+  const boundary = lastRunBoundary(current);
+  if (normalizeType(firstString(nextEvent, "type") ?? "") === "message_end" && messageRole(nextEvent) === "assistant") {
+    current = current.filter((item, index) => index <= boundary || normalizeType(firstString(asRecord(item.event), "type") ?? "") !== "message_update");
+  }
+
+  const streamKey = streamingEventKey(next);
+  if (streamKey) {
+    for (let index = current.length - 1; index > boundary; index -= 1) {
+      if (streamingEventKey(current[index]!) !== streamKey) continue;
+      const updated = current.slice();
+      updated[index] = mergeStreamingEvent(current[index]!, next);
+      return updated;
+    }
+  }
+
   const id = typeof next?.id === "string" ? next.id : "";
   if (!id) return [...current, next];
   const index = current.findIndex((item) => item.id === id);
@@ -349,6 +396,43 @@ function upsertEvent(current: TimelineEventItem[], next: TimelineEventItem): Tim
   const updated = current.slice();
   updated[index] = next;
   return updated;
+}
+
+function lastRunBoundary(events: TimelineEventItem[]): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (normalizeType(firstString(asRecord(events[index]?.event), "type") ?? "") === "agent_start") return index;
+  }
+  return -1;
+}
+
+function streamingEventKey(item: TimelineEventItem): string | null {
+  const event = asRecord(item.event);
+  const type = normalizeType(firstString(event, "type") ?? "");
+  if (type.startsWith("tool_execution_")) {
+    const callId = firstString(event, "toolCallId", "tool_call_id");
+    return callId ? `tool:${callId}` : null;
+  }
+  if (type !== "message_update") return null;
+  const update = asRecord(event?.assistantMessageEvent);
+  const updateType = normalizeType(firstString(update, "type") ?? "");
+  const phase = updateType.startsWith("thinking_") || updateType.startsWith("reasoning_") ? "thinking"
+    : updateType.startsWith("text_") ? "text"
+      : updateType.startsWith("toolcall_") || updateType.startsWith("tool_call_") ? "tool"
+        : null;
+  if (!phase) return null;
+  const contentIndex = typeof update?.contentIndex === "number" ? update.contentIndex : -1;
+  return `message:${phase}:${contentIndex}`;
+}
+
+function mergeStreamingEvent(previous: TimelineEventItem, next: TimelineEventItem): TimelineEventItem {
+  const previousEvent = asRecord(previous.event) ?? {};
+  const nextEvent = asRecord(next.event) ?? {};
+  const previousUpdate = asRecord(previousEvent.assistantMessageEvent);
+  const nextUpdate = asRecord(nextEvent.assistantMessageEvent);
+  if (nextEvent.message === undefined && previousUpdate && nextUpdate && typeof previousUpdate.delta === "string" && typeof nextUpdate.delta === "string") {
+    return { ...next, id: previous.id, event: { ...nextEvent, assistantMessageEvent: { ...nextUpdate, delta: boundedText(previousUpdate.delta + nextUpdate.delta, MAX_SUMMARY_LENGTH) } } as unknown as PiEvent };
+  }
+  return { ...next, id: previous.id };
 }
 
 function classifyKind(type: string, value: Record<string, unknown> | null): TimelineKind {
@@ -897,6 +981,13 @@ function payloadIdentity(value: unknown): string | null {
   const message = asRecord(record.message);
   if (typeof message?.id === "string" && message.id) return message.id;
   return null;
+}
+
+function messageSignature(value: unknown): string | null {
+  const message = asRecord(asRecord(value)?.message);
+  const role = lower(firstString(message, "role"));
+  const content = textFrom(message?.content);
+  return role && content ? `${role}:${content}` : null;
 }
 
 function normalizeType(type: string): string {

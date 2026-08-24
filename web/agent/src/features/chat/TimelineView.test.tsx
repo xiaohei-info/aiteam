@@ -6,8 +6,10 @@ import { getEntries, subscribePiEvents } from "./useChatApi";
 import {
   boundedJson,
   classifyPiRecord,
+  classifyPiRecords,
   mergeTimeline,
   TimelineView,
+  upsertEvent,
   type TimelineEventItem,
 } from "./TimelineView";
 
@@ -62,6 +64,20 @@ describe("TimelineView Pi cards", () => {
     expect(classifyPiRecord(event("stream", "streaming").event)).toMatchObject({ kind: "streaming", status: "streaming" });
     expect(classifyPiRecord(entry("tool-message", "message", { message: { role: "assistant", content: [{ type: "toolCall", name: "read" }] } }))).toMatchObject({ kind: "tool-call", summary: "工具调用：read" });
     expect(classifyPiRecord(entry("tool-result-message", "message", { message: { role: "toolResult", content: "done" } }))).toMatchObject({ kind: "tool-result" });
+  });
+
+  it("splits one persisted assistant entry into a thinking card and an answer bubble", () => {
+    const models = classifyPiRecords(entry("assistant", "message", {
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "先分析问题" },
+          { type: "text", text: "最终答案" },
+        ],
+      },
+    }));
+    expect(models.map((model) => model.kind)).toEqual(["thinking", "message"]);
+    expect(models.map((model) => model.summary)).toEqual(["先分析问题", "最终答案"]);
   });
 
   it("classifies bounded tool, todo, memory, and RAG card details", () => {
@@ -146,6 +162,30 @@ describe("TimelineView Pi cards", () => {
     expect(boundedJson(payload)).toContain("[已省略]");
   });
 
+  it("coalesces one live thinking stream and one tool call instead of appending every delta", () => {
+    let events: TimelineEventItem[] = [event("run", "agent_start")];
+    events = upsertEvent(events, event("think-1", "message_update", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "用户说" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "用户说" },
+    }));
+    events = upsertEvent(events, event("think-2", "message_update", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "用户说 hi" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: " hi" },
+    }));
+    events = upsertEvent(events, event("tool-start", "tool_execution_start", { toolCallId: "call-1", toolName: "read" }));
+    events = upsertEvent(events, event("tool-end", "tool_execution_end", { toolCallId: "call-1", toolName: "read", result: "done" }));
+
+    expect(events).toHaveLength(3);
+    expect(classifyPiRecord(events[1]!.event)).toMatchObject({ kind: "thinking", summary: "用户说 hi" });
+    expect(classifyPiRecord(events[2]!.event)).toMatchObject({ kind: "tool-result", resultSummary: "done" });
+
+    events = upsertEvent(events, event("message-end", "message_end", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "用户说 hi" }, { type: "text", text: "你好" }] },
+    }));
+    expect(events.some((item) => item.event.type === "message_update")).toBe(false);
+    expect(classifyPiRecords(events.at(-1)!.event).map((model) => model.kind)).toEqual(["thinking", "message"]);
+  });
+
   it("keeps persisted order and removes duplicate SSE identities", () => {
     const merged = mergeTimeline(
       [entry("e1", "message"), entry("e2", "message")],
@@ -169,11 +209,13 @@ describe("TimelineView Pi cards", () => {
     render(<TimelineView client={client} conversationId="c1" />);
 
     expect(await screen.findByText("hello")).toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "消息事件" })).toBeInTheDocument();
+    expect(screen.getByText("hello").closest('[data-timeline-event-card="true"]')).toBeNull();
+    expect(screen.queryByText(/类型：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/状态：/)).not.toBeInTheDocument();
     expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("read");
     expect(screen.getByRole("article", { name: "需要审批事件" })).toHaveTextContent("write");
     expect(screen.getByRole("alert", { name: "错误事件" })).toHaveTextContent("failed");
-    expect(screen.getByRole("article", { name: "已完成事件" })).toHaveTextContent("settled");
+    expect(screen.getByRole("article", { name: "已完成事件" })).toHaveTextContent("执行已完成");
     expect(screen.queryByText("do-not-render")).not.toBeInTheDocument();
     expect(screen.queryByText("/private/file")).not.toBeInTheDocument();
     expect(screen.getByTestId("conversation-events")).toHaveAttribute("aria-label", "对话事件流");
@@ -199,6 +241,7 @@ describe("TimelineView Pi cards", () => {
     render(<TimelineView client={client} conversationId="group-1" />);
 
     expect(await screen.findByRole("article", { name: "待办更新事件" })).toHaveTextContent("Review output");
+    expect(screen.getByRole("article", { name: "待办更新事件" })).toHaveAttribute("data-kind", "todo");
     expect(screen.getByRole("article", { name: "记忆活动事件" })).toHaveTextContent("remember this bounded note");
     expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("bounded citation preview");
     expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("来源专家：研究专家（子专家）");

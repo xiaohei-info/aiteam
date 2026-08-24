@@ -33,7 +33,6 @@ body,
   margin-block-end: 0.5rem;
 }
 
-[data-timeline-card-meta="true"],
 [data-timeline-card-note="true"],
 [data-timeline-status] {
   overflow-wrap: anywhere;
@@ -41,12 +40,63 @@ body,
   font-size: 0.875rem;
 }
 
-[data-timeline-event-card="true"][data-kind="error"] {
-  border-inline-start: 0.25rem solid var(--color-error);
+[data-timeline-message="true"] {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-[data-timeline-event-card="true"][data-kind="aborted"] {
+[data-timeline-event-card="true"][data-kind="thinking"] {
+  border-inline-start: 0.25rem solid var(--color-icon-purple);
+  background-color: var(--color-background-purple);
+}
+
+[data-timeline-event-card="true"][data-kind="tool-call"] {
+  border-inline-start: 0.25rem solid var(--color-icon-blue);
+  background-color: var(--color-background-blue);
+}
+
+[data-timeline-event-card="true"][data-kind="tool-result"] {
+  border-inline-start: 0.25rem solid var(--color-icon-teal);
+  background-color: var(--color-background-teal);
+}
+
+[data-timeline-event-card="true"][data-kind="todo"] {
+  border-inline-start: 0.25rem solid var(--color-icon-yellow);
+  background-color: var(--color-background-yellow);
+}
+
+[data-timeline-event-card="true"][data-kind="memory"] {
+  border-inline-start: 0.25rem solid var(--color-icon-pink);
+  background-color: var(--color-background-pink);
+}
+
+[data-timeline-event-card="true"][data-kind="rag"] {
+  border-inline-start: 0.25rem solid var(--color-icon-cyan);
+  background-color: var(--color-background-cyan);
+}
+
+[data-timeline-event-card="true"][data-kind="approval"] {
+  border-inline-start: 0.25rem solid var(--color-icon-orange);
+  background-color: var(--color-background-orange);
+}
+
+[data-timeline-event-card="true"][data-kind="error"] {
+  border-inline-start: 0.25rem solid var(--color-error);
+  background-color: var(--color-background-red);
+}
+
+[data-timeline-event-card="true"][data-kind="aborted"],
+[data-timeline-event-card="true"][data-kind="waiting"] {
   border-inline-start: 0.25rem solid var(--color-warning);
+  background-color: var(--color-background-yellow);
+}
+
+[data-timeline-event-card="true"][data-kind="streaming"],
+[data-timeline-event-card="true"][data-kind="settled"],
+[data-timeline-event-card="true"][data-kind="compaction"] {
+  border-inline-start: 0.25rem solid var(--color-border-emphasized);
+  background-color: var(--color-background-gray);
 }
 
 [data-timeline-card-summary="true"] {
