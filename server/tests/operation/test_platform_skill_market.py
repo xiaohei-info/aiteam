@@ -50,7 +50,7 @@ def test_missing_skill_card_is_allowed_when_security_passed_and_files_are_text_o
 
 
 def test_non_text_skill_reports_compatibility_error_before_download():
-    with pytest.raises(ValidationProblem, match="text-only runtime"):
+    with pytest.raises(ValidationProblem, match="当前仅支持"):
         _verified_text_manifest(
             {
                 "ok": False,

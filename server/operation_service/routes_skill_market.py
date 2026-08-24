@@ -51,7 +51,7 @@ def _verified_text_manifest(verification: dict, *, owner: str, slug: str, versio
         and not (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
         for item in expected_files
     ):
-        raise ValidationProblem("ClawHub skill contains files unsupported by the text-only runtime; only SKILL.md and references/*.md are allowed")
+        raise ValidationProblem("该技能包含脚本或资源文件，当前仅支持 SKILL.md 和 references/*.md 纯文本技能")
     return {
         (item.get("path"), item.get("sha256"), item.get("size"))
         for item in expected_files
