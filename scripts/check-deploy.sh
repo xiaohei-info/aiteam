@@ -19,24 +19,28 @@ docker compose -f "${COMPOSE_FILE}" config --quiet
 echo '[deploy-check] docker compose config OK (default profile)'
 
 default_services="$(docker compose -f "${COMPOSE_FILE}" config --services)"
-profile_services="$(docker compose -f "${COMPOSE_FILE}" --profile lightrag config --services)"
+lightrag_services="$(docker compose -f "${COMPOSE_FILE}" --profile lightrag config --services)"
+newapi_services="$(docker compose -f "${COMPOSE_FILE}" --profile newapi config --services)"
 for service in postgres operation manager agent; do
   grep -qx "${service}" <<<"${default_services}" || { echo "[deploy-check][ERR] default Compose profile missing ${service}" >&2; exit 1; }
 done
-if grep -Eq '^(lightrag|lightrag-postgres)$' <<<"${default_services}"; then
-  echo '[deploy-check][ERR] LightRAG services must not start in the default profile' >&2
+if grep -Eq '^(lightrag|lightrag-postgres|newapi|newapi-postgres|newapi-redis)$' <<<"${default_services}"; then
+  echo '[deploy-check][ERR] external components must not start in the default Compose profile' >&2
   exit 1
 fi
 for service in lightrag-postgres lightrag; do
-  grep -qx "${service}" <<<"${profile_services}" || { echo "[deploy-check][ERR] lightrag profile missing ${service}" >&2; exit 1; }
+  grep -qx "${service}" <<<"${lightrag_services}" || { echo "[deploy-check][ERR] lightrag profile missing ${service}" >&2; exit 1; }
 done
-echo '[deploy-check] Compose profile boundary OK (LightRAG opt-in)'
+for service in newapi-postgres newapi-redis newapi; do
+  grep -qx "${service}" <<<"${newapi_services}" || { echo "[deploy-check][ERR] newapi profile missing ${service}" >&2; exit 1; }
+done
+echo '[deploy-check] Compose profile boundaries OK (LightRAG/NewAPI explicit)'
 
 # Every image in the release Compose graph must have an immutable-looking
 # version reference. Environment overrides are checked too, so CI catches a
 # caller supplying :latest even when the checked-in fallback is safe.
 images=()
-while IFS= read -r image; do [[ -n "${image}" ]] && images+=("${image}"); done < <(docker compose -f "${COMPOSE_FILE}" --profile lightrag config --images)
+while IFS= read -r image; do [[ -n "${image}" ]] && images+=("${image}"); done < <(docker compose -f "${COMPOSE_FILE}" --profile lightrag --profile newapi config --images)
 (( ${#images[@]} )) || { echo '[deploy-check][ERR] Compose returned no images' >&2; exit 1; }
 for image in "${images[@]}"; do
   if [[ "${image}" == *@sha256:* ]]; then
@@ -65,6 +69,11 @@ bash scripts/lightrag-ops.sh --dry-run backup >/tmp/aiteam-lightrag-backup.out
 bash scripts/lightrag-ops.sh --dry-run upgrade --image ghcr.io/hkuds/lightrag:1.5.6 >/tmp/aiteam-lightrag-upgrade.out
 bash scripts/lightrag-ops.sh --dry-run rollback --image ghcr.io/hkuds/lightrag:1.5.6 >/tmp/aiteam-lightrag-rollback.out
 echo '[deploy-check] LightRAG validate/backup/upgrade/rollback dry-runs OK'
+bash scripts/newapi-ops.sh --dry-run backup >/tmp/aiteam-newapi-backup.out
+bash scripts/newapi-ops.sh --dry-run restore --input /tmp/example-newapi.dump --yes >/tmp/aiteam-newapi-restore.out
+bash scripts/newapi-ops.sh --dry-run upgrade --image calciumion/new-api:v0.13.2 --yes >/tmp/aiteam-newapi-upgrade.out
+bash scripts/newapi-ops.sh --dry-run rollback --image calciumion/new-api:v0.13.2 --yes >/tmp/aiteam-newapi-rollback.out
+echo '[deploy-check] NewAPI backup/restore/upgrade/rollback dry-runs OK'
 
 # Reject credentials accidentally committed to deployment material while allowing
 # variable references, generated-secret instructions, and explicit placeholders.

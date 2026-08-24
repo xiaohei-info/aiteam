@@ -75,7 +75,22 @@ fi
 (cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
 
-# 3) 装 systemd unit（内容变了才 daemon-reload）
+# 3) NewAPI 数据在服务重启/升级前先做可恢复备份（首次部署无容器时跳过）。
+ENV_FILE="${DEPLOY_ROOT}/.env.${ENV_TARGET}"
+[[ -f "${ENV_FILE}" ]] || fail "environment file missing: ${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+set -a
+# shellcheck source=/dev/null
+source "${ENV_FILE}"
+set +a
+if docker ps --format '{{.Names}}' | grep -qx 'aiteam-newapi-pg'; then
+  log "backing up internal NewAPI before restart"
+  scripts/newapi-ops.sh --env-file "${ENV_FILE}" backup || fail "NewAPI backup failed"
+else
+  log "NewAPI database container not present yet; skipping pre-restart backup"
+fi
+
+# 4) 装 systemd unit（内容变了才 daemon-reload）
 UNIT_SRC="${DEPLOY_ROOT}/deploy/ci/${UNIT_NAME}.service"
 UNIT_DST="/etc/systemd/system/${UNIT_NAME}.service"
 [[ -f "$UNIT_SRC" ]] || fail "unit file not found: ${UNIT_SRC}"
@@ -88,7 +103,7 @@ else
   log "${UNIT_DST} content unchanged"
 fi
 
-# 4) 启动 / 重启 daemon
+# 5) 启动 / 重启 daemon
 log "restarting ${UNIT_NAME}"
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
 if ! systemctl restart "$UNIT_NAME" 2>&1; then
@@ -96,7 +111,7 @@ if ! systemctl restart "$UNIT_NAME" 2>&1; then
   fail "systemctl restart ${UNIT_NAME} failed — see status above"
 fi
 
-# 5) /healthz 冒烟 + GET / 必须是 HTML
+# 6) /healthz + internal NewAPI 冒烟；GET / 必须是 HTML
 log "smoking /healthz"
 sleep 5
 for port in 8781 8782 8783; do
@@ -109,6 +124,20 @@ for port in 8781 8782 8783; do
   done
   (( ok )) || fail "port ${port} /healthz failed after 10 attempts"
 done
+
+newapi_ok=0
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if curl -fsS --max-time 3 "http://127.0.0.1:${NEWAPI_PORT:-9300}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+    newapi_ok=1; break
+  fi
+  sleep 2
+done
+(( newapi_ok )) || fail "internal NewAPI /api/status failed after 10 attempts"
+for container in aiteam-newapi-pg aiteam-newapi-redis aiteam-newapi; do
+  state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
+  [[ "${state}" == "healthy" || "${state}" == "running" ]] || fail "${container} is not healthy (state=${state:-missing})"
+done
+log "  internal NewAPI + PostgreSQL + Redis OK"
 
 log "smoking GET / (front-end SPA entry must be HTML, not 404 Problem JSON)"
 for port in 8781 8782 8783; do

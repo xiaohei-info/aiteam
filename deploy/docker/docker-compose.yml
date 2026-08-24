@@ -99,6 +99,7 @@ services:
       POSTGRES_DB: ${NEWAPI_DB_NAME:-newapi}
     volumes:
       - newapi_pgdata:/var/lib/postgresql/data
+    networks: [newapi-internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -112,6 +113,7 @@ services:
     command: ["redis-server", "--requirepass", "${NEWAPI_REDIS_PASSWORD:-newapi_test}"]
     volumes:
       - newapi_redisdata:/data
+    networks: [newapi-internal]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a '${NEWAPI_REDIS_PASSWORD:-newapi_test}' ping | grep -q PONG"]
       interval: 5s
@@ -143,6 +145,7 @@ services:
     volumes:
       - newapi_data:/data
       - newapi_logs:/app/logs
+    networks: [default, newapi-internal]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
       interval: 10s
@@ -283,6 +286,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+networks:
+  newapi-internal:
+    internal: true
 
 volumes:
   newapi_pgdata:

@@ -163,11 +163,20 @@ validate_agent_production_env() {
 
 validate_newapi_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
-  for name in NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
+  for name in NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID NEWAPI_PUBLIC_BASE_URL; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
   done
-  [[ "${NEWAPI_SESSION_SECRET}" != *change-me* && "${NEWAPI_CRYPTO_SECRET}" != *change-me* ]] || {
-    echo "[ctl] ERROR: production NewAPI secrets must not use development placeholders" >&2; exit 1;
+  [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || {
+    echo "[ctl] ERROR: NEWAPI_IMAGE must use a fixed version tag or sha256 digest" >&2; exit 1;
+  }
+  for name in NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN; do
+    value="${!name}"
+    [[ ${#value} -ge 24 && "${value}" != *change-me* && "${value}" != newapi_dev && "${value}" != newapi_test ]] || {
+      echo "[ctl] ERROR: ${name} must be a non-placeholder secret of at least 24 characters" >&2; exit 1;
+    }
+  done
+  [[ "${NEWAPI_PUBLIC_BASE_URL}" =~ ^https://[^[:space:]]+/v1/?$ ]] || {
+    echo "[ctl] ERROR: production NEWAPI_PUBLIC_BASE_URL must be an absolute HTTPS /v1 URL" >&2; exit 1;
   }
 }
 

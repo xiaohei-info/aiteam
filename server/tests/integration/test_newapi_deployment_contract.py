@@ -21,6 +21,10 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     assert "newapi-postgres:" in relay and "newapi-redis:" in relay
     assert "ports:" not in postgres
     assert "ports:" not in redis
+    assert "networks: [newapi-internal]" in postgres
+    assert "networks: [newapi-internal]" in redis
+    assert "networks: [default, newapi-internal]" in relay
+    assert "newapi-internal:\n    internal: true" in COMPOSE
     assert "/var/lib/postgresql/data" in postgres
     assert "- newapi_redisdata:/data" in redis
     assert "- newapi_data:/data" in relay
@@ -39,6 +43,17 @@ def test_newapi_admin_secrets_only_enter_operation_process():
     assert 'NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"' in ctl
     assert "chmod 600 \"${ENV_FILE}\"" in ctl
     assert "dc --profile newapi up -d newapi" in ctl
+
+
+def test_release_gate_and_deployer_cover_newapi_backup_and_health():
+    gate = (ROOT / "scripts/check-deploy.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    assert "--profile lightrag --profile newapi config --images" in gate
+    assert "scripts/newapi-ops.sh --dry-run backup" in gate
+    assert 'scripts/newapi-ops.sh --env-file "${ENV_FILE}" backup' in deploy
+    assert "/api/status" in deploy
+    for container in ("aiteam-newapi-pg", "aiteam-newapi-redis", "aiteam-newapi"):
+        assert container in deploy
 
 
 def test_newapi_examples_never_contain_real_credentials():
