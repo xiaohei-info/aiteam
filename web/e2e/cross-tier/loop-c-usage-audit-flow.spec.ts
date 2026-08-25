@@ -452,12 +452,21 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     ).not.toHaveLength(0);
 
     // ── 阶段 5/6: Flush 后本轮 summary 不再 pending（sent 出队）──
-    const afterFlushResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
-      headers: { Authorization: `Bearer ${agentLogin.token}` },
-      failOnStatusCode: false,
-    });
-    expect(afterFlushResp.ok(), `outbox read after flush: ${afterFlushResp.status()}`).toBe(true);
-    const afterFlushBody = (await afterFlushResp.json()) as { data: unknown[] };
+    const afterFlushBody = await waitFor(
+      async () => {
+        const response = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
+          headers: { Authorization: `Bearer ${agentLogin.token}` },
+          failOnStatusCode: false,
+        });
+        expect(response.ok(), `outbox read after flush: ${response.status()}`).toBe(true);
+        return await response.json() as { data: unknown[] };
+      },
+      (body) => !usageOutboxItems(body.data).some((item) => {
+        const id = summaryId(item);
+        return id !== undefined && flushedSummaryIds.has(id) && item.status !== "sent";
+      }),
+      `flush ${traceId} outbox settle`,
+    );
     const pendingAfterFlush = Array.isArray(afterFlushBody.data) ? afterFlushBody.data.length : -1;
     expect(
       pendingAfterFlush <= pendingAfterPrompt,
