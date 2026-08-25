@@ -86,13 +86,14 @@ class AuthorizedConfigService:
 
         all_solution_instances = self._recruit_repo.list_solution_instances(ctx) if self._recruit_repo else []
         all_solution_ids = {s.id for s in all_solution_instances}
+        applied_solution_ids = {s.id for s in all_solution_instances if s.status == "applied"}
 
         if set(ctx.roles) & _GRANT_EXEMPT_ROLES:
             authorized_employee_ids = all_employee_ids
-            authorized_solution_ids = all_solution_ids
+            authorized_solution_ids = applied_solution_ids
         else:
             authorized_employee_ids = self._authorized_employee_ids(ctx, req.member_id)
-            authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id)
+            authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id) & applied_solution_ids
 
         authorized_configs = [cfg for cfg in all_configs if cfg.employee_id in authorized_employee_ids]
         experts: list[dict] = []

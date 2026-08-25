@@ -11,23 +11,44 @@ export interface DelegateEmployeeContext {
   delegate: (toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal) => Promise<string>;
 }
 
-const parameters = Type.Object({
+const delegateParameters = Type.Object({
   employee_id: Type.String({ minLength: 1, maxLength: 256 }),
   task: Type.String({ minLength: 1, maxLength: 8_000 }),
   context: Type.Optional(Type.String({ maxLength: 8_000 })),
 });
 
+const mentionParameters = Type.Object({
+  employee_id: Type.String({ minLength: 1, maxLength: 256 }),
+  message: Type.String({ minLength: 1, maxLength: 8_000 }),
+  context: Type.Optional(Type.String({ maxLength: 8_000 })),
+});
+
 function createMentionTool(name: "mention_employee" | "delegate_employee", context: DelegateEmployeeContext): ToolDefinition {
+  const parameters = name === "mention_employee" ? mentionParameters : delegateParameters;
   return defineTool({
     name,
     label: name === "mention_employee" ? "Mention employee" : "Delegate employee",
     description: "Send a bounded message to an authorized employee in this group conversation and receive that employee's reply.",
-    promptSnippet: `${name}(employee_id, task, context)`,
+    promptSnippet: name === "mention_employee" ? "mention_employee(employee_id, message, context)" : "delegate_employee(employee_id, task, context)",
     parameters,
+    ...(name === "mention_employee" ? {
+      prepareArguments(args: unknown) {
+        if (!args || typeof args !== "object") return args;
+        const raw = args as { message?: unknown; task?: unknown };
+        if (typeof raw.message === "string" || typeof raw.task !== "string") return args;
+        return { ...(args as Record<string, unknown>), message: raw.task };
+      },
+    } : {}),
     executionMode: "parallel",
     execute: async (toolCallId, params, signal) => {
       try {
-        const text = await context.delegate(toolCallId, params, signal);
+        const raw = params as { employee_id: string; message?: string; task?: string; context?: string };
+        const input: DelegateEmployeeInput = {
+          employee_id: raw.employee_id,
+          task: raw.message ?? raw.task ?? "",
+          ...(raw.context ? { context: raw.context } : {}),
+        };
+        const text = await context.delegate(toolCallId, input, signal);
         return { content: [{ type: "text", text }], details: undefined };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Employee mention failed";

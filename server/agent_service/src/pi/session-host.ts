@@ -21,7 +21,7 @@ import type { AuthenticatedCaller } from "../http/auth.js";
 import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
-import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply } from "../services/group-message-delivery.js";
+import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
@@ -37,7 +37,7 @@ export interface PiEventEnvelope {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
-  source_role?: "child" | "participant" | "coordinator";
+  source_role?: "human" | "child" | "participant" | "coordinator";
 }
 
 export class EventCursorStaleError extends Error {
@@ -112,7 +112,8 @@ interface SessionRecord {
   runtimeProviderId?: string;
   activeSourceRef?: string;
   activeToolCallId?: string;
-  activeSourceRole?: "child" | "participant" | "coordinator";
+  activeSourceRole?: "human" | "child" | "participant" | "coordinator";
+  activeSource?: GroupMessageSource;
   hindsightWorkspaces: Set<string>;
   disposing?: Promise<void>;
 }
@@ -258,14 +259,32 @@ export class SessionHost {
       if (record.prompting && !record.promptPromise) await new Promise<void>((resolve) => setImmediate(resolve));
       await record.promptPromise?.catch(() => undefined);
     }));
+    const seenLogicalMessages = new Set<string>();
     return records
       .flatMap((record) => record.sessionManager.getEntries().map((entry) => this.decorateEntry(record, entry)))
-      .sort((left, right) => this.entryTimestamp(left) - this.entryTimestamp(right));
+      .filter((entry) => {
+        const value = entry as unknown as Record<string, unknown>;
+        if (value.type !== "message" || (value as { message?: { role?: unknown } }).message?.role !== "user") return true;
+        const logicalMessageId = typeof value.logical_message_id === "string" ? value.logical_message_id : undefined;
+        if (!logicalMessageId || seenLogicalMessages.has(logicalMessageId)) return !logicalMessageId;
+        seenLogicalMessages.add(logicalMessageId);
+        return true;
+      })
+      .sort((left, right) => {
+        const timestampDelta = this.entryTimestamp(left) - this.entryTimestamp(right);
+        if (timestampDelta !== 0) return timestampDelta;
+        return this.entryId(left).localeCompare(this.entryId(right));
+      });
   }
 
   private entryTimestamp(entry: SessionEntry): number {
     const value = entry as unknown as { timestamp?: unknown };
     return typeof value.timestamp === "number" ? value.timestamp : 0;
+  }
+
+  private entryId(entry: SessionEntry): string {
+    const value = entry as unknown as { id?: unknown };
+    return typeof value.id === "string" ? value.id : "";
   }
 
   async initializeConversationParticipants(conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -279,6 +298,7 @@ export class SessionHost {
     const solution = metadata.solution_instance_id
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
       : undefined;
+    if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
     if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
     const roster = solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
@@ -430,6 +450,7 @@ export class SessionHost {
     const roster = solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
+    if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
     const allowed = new Set(roster);
     if (mentions.length === 0) return coordinator && allowed.has(coordinator) ? [coordinator] : [];
     const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
@@ -590,11 +611,12 @@ export class SessionHost {
       const solution = metadata.solution_instance_id
         ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
         : undefined;
+      if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
       if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
       const allowedIds = new Set(solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
         : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
-      if (!participantIds.has(employeeId) && !allowedIds.has(employeeId)) throw new SessionAuthorizationError("Employee is not in the authorized local roster");
+      if (!allowedIds.has(employeeId) || (metadata.solution_instance_id && !participantIds.has(employeeId))) throw new SessionAuthorizationError("Employee is not in the authorized local roster or solution roster");
     } else if (metadata.entry_employee_id !== employeeId) {
       throw new SessionAuthorizationError("Employee is not the private conversation participant");
     }
@@ -614,6 +636,7 @@ export class SessionHost {
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;
     record.activeSourceRef = command.toolCallId ? `${record.conversationId}:${command.toolCallId}` : undefined;
+    record.activeSource = command.source;
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
     try {
       record.sessionReady = this.ensureSession(record, authorization);
@@ -640,6 +663,7 @@ export class SessionHost {
       record.activeToolCallId = undefined;
       record.activeSourceRef = undefined;
       record.activeSourceRole = undefined;
+      record.activeSource = undefined;
       await this.disposeSession(record);
     }
   }
@@ -785,15 +809,27 @@ export class SessionHost {
     const expert = record.employeeId
       ? this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId)
       : undefined;
+    const raw = event as unknown as Record<string, unknown>;
+    const message = raw.message as Record<string, unknown> | undefined;
+    const isUserMessage = message?.role === "user";
     const metadata = record.employeeId
-      ? {
-          conversation_id: record.conversationId,
-          ...(record.activeSourceRef ? { source_ref: record.activeSourceRef } : {}),
-          ...(record.activeToolCallId ? { tool_call_id: record.activeToolCallId } : {}),
-          source_employee_id: record.employeeId,
-          source_employee_display_name: expert?.display_name ?? record.employeeId,
-          source_role: record.activeSourceRole ?? (record.role === "coordinator" ? "coordinator" as const : "participant" as const),
-        }
+      ? isUserMessage && record.activeSource?.type === "human"
+        ? { conversation_id: record.conversationId, source_role: "human" as const }
+        : isUserMessage && record.activeSource?.type === "employee"
+          ? {
+              conversation_id: record.conversationId,
+              source_employee_id: record.activeSource.id,
+              source_employee_display_name: record.activeSource.displayName ?? record.activeSource.id,
+              source_role: "participant" as const,
+            }
+          : {
+              conversation_id: record.conversationId,
+              ...(record.activeSourceRef ? { source_ref: record.activeSourceRef } : {}),
+              ...(record.activeToolCallId ? { tool_call_id: record.activeToolCallId } : {}),
+              source_employee_id: record.employeeId,
+              source_employee_display_name: expert?.display_name ?? record.employeeId,
+              source_role: record.activeSourceRole ?? (record.role === "coordinator" ? "coordinator" as const : "participant" as const),
+            }
       : { conversation_id: record.conversationId };
     if (!serializePiEvent(event, metadata)) return;
     const entryId = this.entryIdentity(event);

@@ -117,10 +117,10 @@ def _resolve_coordinator_template_id(
         raise ValidationProblem(
             "coordinator_template_id is required: designate one expert as the coordinator"
         )
-    bound = {b.template_id for b in bindings}
+    bound = {b.template_id for b in bindings if b.enabled}
     if coordinator_id not in bound:
         raise ValidationProblem(
-            f"coordinator_template_id {coordinator_id!r} is not among the bound experts: {sorted(bound)}"
+            f"coordinator_template_id {coordinator_id!r} must be one of the enabled experts: {sorted(bound)}"
         )
     return coordinator_id
 
@@ -363,14 +363,15 @@ class CatalogService:
 
         bindings = payload.get("expert_bindings") or []
         bound_ids = {b["template_id"] for b in bindings} if bindings else set(payload.get("expert_template_ids", []))
+        enabled_ids = {b["template_id"] for b in bindings if b.get("enabled", True)} if bindings else bound_ids
         if not bound_ids:
             raise ValidationProblem("a solution template must have at least one bound expert")
         coordinator_id = (payload.get("coordinator_template_id") or "").strip()
         if not coordinator_id:
             raise ValidationProblem("coordinator_template_id must not be empty for a solution template")
-        if coordinator_id not in bound_ids:
+        if coordinator_id not in enabled_ids:
             raise ValidationProblem(
-                f"coordinator_template_id {coordinator_id!r} is not among the bound experts: {sorted(bound_ids)}"
+                f"coordinator_template_id {coordinator_id!r} must be one of the enabled experts: {sorted(enabled_ids)}"
             )
 
 
@@ -456,7 +457,7 @@ class CatalogService:
         version 为 None 时返回最新已发布版本。只返回 PUBLISHED 状态的方案。
         """
         from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
-        from shared.errors import NotFound
+        from shared.errors import Conflict, NotFound
 
         entry = self._repo.get(CatalogType.SOLUTION_TEMPLATE, solution_id)
         if entry.status != CatalogStatus.PUBLISHED:
@@ -485,9 +486,9 @@ class CatalogService:
                     expert.sequence_no = override.get("sequence_no", 1)
                     expert.enabled = override.get("enabled", True)
                 experts.append(expert)
-            except Exception:  # noqa: BLE001
-                # 跳过不存在或未发布的专家模板（方案可能引用了已下架的模板）
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # 方案包必须是完整可复现的团队；任何缺失/下架专家都使整包不可应用。
+                raise Conflict(f"solution expert {expert_id!r} is unavailable or not published") from exc
 
         return SolutionPackage(
             solution_id=entry.template_id,

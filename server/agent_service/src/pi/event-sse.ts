@@ -33,7 +33,7 @@ export interface PiEventMetadata {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
-  source_role?: "child" | "participant" | "coordinator";
+  source_role?: "human" | "child" | "participant" | "coordinator";
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */
@@ -233,7 +233,7 @@ function serializeMetadata(extra: PiEventMetadata): Record<string, unknown> {
     const clean = key === "source_employee_display_name" ? boundedIdentifier(value, MAX_SOURCE_NAME_CHARS) : boundedIdentifier(value, MAX_IDENTIFIER_CHARS);
     if (clean) result[key] = clean;
   }
-  if (extra.source_role === "child" || extra.source_role === "participant" || extra.source_role === "coordinator") result.source_role = extra.source_role;
+  if (extra.source_role === "human" || extra.source_role === "child" || extra.source_role === "participant" || extra.source_role === "coordinator") result.source_role = extra.source_role;
   return result;
 }
 
