@@ -393,7 +393,7 @@ class TestPgRollupRepository:
         assert "cross_enterprise_usage_rollup" in joined
 
     def test_get_found(self, repo):
-        row = (3, 300, Decimal("4.5"), 1, 10, 1, _dt(), _dt(), "t1")
+        row = (3, 300, Decimal("4.5"), 0, 0, 1, 10, 1, _dt(), _dt(), "t1")
         _set_one(self.cursor, row)
         result = repo.get("ent-1")
         assert result.run_count == 3
@@ -406,7 +406,7 @@ class TestPgRollupRepository:
 
     def test_list_all(self, repo):
         _set_all(self.cursor, [(
-            "ent-1", "t1", 3, 300, Decimal("4.5"), 1, 10, 1, _dt(), _dt(),
+            "ent-1", "t1", 3, 300, Decimal("4.5"), 0, 0, 1, 10, 1, _dt(), _dt(),
         )])
         rows = repo.list_all()
         assert rows[0].enterprise_id == "ent-1"

@@ -123,8 +123,8 @@ describe("OverviewCards 组件", () => {
     expect(container.textContent).toContain("5");
     expect(container.textContent).toContain("总执行次数");
     expect(container.textContent).toContain("12,345");
-    expect(container.textContent).toContain("总消耗");
-    expect(container.textContent).toContain("¥9,876.50");
+    expect(container.textContent).toContain("总 API 成本（USD）");
+    expect(container.textContent).toContain("$9,876.50");
     expect(container.textContent).toContain("总 Token");
     expect(container.textContent).toContain("5,000,000");
     expect(screen.getByRole("region", { name: "企业数：5" })).toBeInTheDocument();

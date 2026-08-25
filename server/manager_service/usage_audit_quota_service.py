@@ -99,6 +99,8 @@ class UsageAuditQuotaService:
             run_count=agg["run_count"],
             token_total=agg["token_total"],
             cost_total=_to_decimal(agg["cost_total"]),
+            unknown_pricing_tokens=agg.get("unknown_pricing_tokens", 0),
+            unknown_pricing_runs=agg.get("unknown_pricing_runs", 0),
             error_count=agg["error_count"],
             duration_seconds_total=agg["duration_seconds_total"],
         )

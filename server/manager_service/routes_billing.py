@@ -54,6 +54,8 @@ class UsageOverviewOut(BaseModel):
     period: str
     total_tokens: int
     total_cost: Decimal
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     top_employee_id: str | None = None
     top_employee_tokens: int = 0
     trend: list[dict] = Field(default_factory=list)
@@ -67,8 +69,7 @@ class UsageRecordOut(BaseModel):
     employee_id: str
     employee_name: str
     date: str | None = None
-    input_tokens: int
-    output_tokens: int
+    token_total: int
     cost: Decimal
 
 

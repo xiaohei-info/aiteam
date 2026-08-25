@@ -147,7 +147,7 @@ def test_board_response_has_no_session_or_drilldown_fields(client):
     board = client.get("/api/operation/rollups/board", headers=_auth(_OP)).json()["data"]
     allowed_row = {
         "enterprise_id", "tenant_id", "run_count", "token_total", "cost_total",
-        "error_count", "duration_seconds_total", "summary_count",
+        "unknown_pricing_tokens", "unknown_pricing_runs", "error_count", "duration_seconds_total", "summary_count",
         "window_start", "window_end",
     }
     for row in board["enterprises"]:

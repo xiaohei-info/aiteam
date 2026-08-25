@@ -618,6 +618,8 @@ class UsageAggregateOut(BaseModel):
     run_count: int
     token_total: int
     cost_total: Decimal
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     error_count: int
     duration_seconds_total: int
 

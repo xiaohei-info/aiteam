@@ -12,7 +12,7 @@ from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
 def _overview_total_row(tokens=5000, cost=Decimal("12.50")):
-    return (tokens, cost)
+    return (tokens, cost, 100, 1)
 
 
 def _overview_top_row(emp_id="33333333-3333-3333-3333-333333333333", tokens=3000):
@@ -75,6 +75,8 @@ def test_get_usage_overview_aggregates():
     assert data["period"] == "all"
     assert data["total_tokens"] == 5000
     assert data["total_cost"] == Decimal("12.50")
+    assert data["unknown_pricing_tokens"] == 100
+    assert data["unknown_pricing_runs"] == 1
     assert data["top_employee_id"] == "33333333-3333-3333-3333-333333333333"
     assert data["top_employee_tokens"] == 3000
     assert data["trend"] == [{"day": "2026-06-01", "tokens": 1000, "cost": Decimal("2.50")}]
@@ -85,7 +87,7 @@ def test_get_usage_overview_aggregates():
 
 def test_get_usage_overview_empty_returns_defaults():
     router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(0, Decimal("0"))))
+    router.queue(FakeCursor(fetchone=(0, Decimal("0"), 0, 0)))
     router.queue(FakeCursor(fetchone=None))
     router.queue(FakeCursor(fetchall=[]))
     router.queue(FakeCursor(fetchall=[]))
@@ -100,7 +102,7 @@ def test_get_usage_overview_empty_returns_defaults():
 def test_get_usage_overview_uses_period_window_in_sql():
     """验证 period 窗口条件被拼入 SQL（month 场景）。"""
     router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(0, Decimal("0"))))
+    router.queue(FakeCursor(fetchone=(0, Decimal("0"), 0, 0)))
     router.queue(FakeCursor(fetchone=None))
     router.queue(FakeCursor(fetchall=[]))
     router.queue(FakeCursor(fetchall=[]))
@@ -119,8 +121,7 @@ def test_list_usage_records_returns_rows():
     assert len(rows) == 2
     assert rows[0]["record_id"] == "r-1"
     assert rows[0]["employee_name"] == "33333333-3333-3333-3333-333333333333"
-    assert rows[0]["input_tokens"] == 0
-    assert rows[0]["output_tokens"] == 200
+    assert rows[0]["token_total"] == 200
     assert rows[0]["cost"] == Decimal("0.50")
     assert rows[0]["date"].startswith("2026-06-15")
 

@@ -148,6 +148,11 @@ export function GovernancePage(): ReactNode {
     () => rollups.filter((rollup) => employeeFilter === "all" || rollup.employee_id === employeeFilter),
     [employeeFilter, rollups],
   );
+  const fmtUsd = (value: number | string): string => {
+    const usd = Number(value);
+    return Number.isFinite(usd) ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` : "—";
+  };
+
   const visibleAudits = useMemo(
     () => audits.filter((audit) => auditActionFilter === "all" || audit.action === auditActionFilter),
     [auditActionFilter, audits],
@@ -163,7 +168,7 @@ export function GovernancePage(): ReactNode {
       },
       { key: "run_count", header: i18n.t("manager.gov.runs"), width: pixel(100) },
       { key: "token_total", header: i18n.t("manager.gov.tokens"), width: pixel(120) },
-      { key: "cost_total", header: i18n.t("manager.gov.cost"), width: pixel(120), renderCell: (rollup) => String(rollup.cost_total) },
+      { key: "cost_total", header: i18n.t("manager.gov.cost"), width: pixel(160), renderCell: (rollup) => fmtUsd(rollup.cost_total) },
       { key: "error_count", header: i18n.t("manager.gov.errors"), width: pixel(100) },
     ],
     [i18n],

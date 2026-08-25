@@ -19,16 +19,16 @@ type UsageRollupRow = UsageRollup & Record<string, unknown>;
 type AuditSummaryRow = AuditSummary & Record<string, unknown>;
 
 function fmt(v: number): string { return v.toLocaleString("zh-CN"); }
-function fmtCost(v: number | string): string {
-  const yuan = Number(v) / 100;
-  return yuan >= 10000 ? `${(yuan/10000).toFixed(2)} 万元` : `¥${yuan.toLocaleString("zh-CN", {minimumFractionDigits:2})}`;
+function fmtUsd(v: number | string): string {
+  const usd = Number(v);
+  return Number.isFinite(usd) ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` : "—";
 }
 
 const rollupColumns: TableColumn<UsageRollupRow>[] = [
   { key: "employee_id", header: "员工", width: proportional(1), renderCell: (row) => row.employee_id ?? "—" },
   { key: "run_count", header: "执行", width: pixel(100), renderCell: (row) => fmt(row.run_count) },
   { key: "token_total", header: "Token", width: pixel(120), renderCell: (row) => fmt(row.token_total) },
-  { key: "cost_total", header: "消耗", width: pixel(140), renderCell: (row) => fmtCost(row.cost_total) },
+  { key: "cost_total", header: "API 成本（USD）", width: pixel(160), renderCell: (row) => fmtUsd(row.cost_total) },
   { key: "error_count", header: "错误", width: pixel(100), renderCell: (row) => fmt(row.error_count) },
 ];
 

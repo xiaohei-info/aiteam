@@ -65,7 +65,7 @@ class BillingService:
         }
 
     def get_usage_overview(self, ctx: TenantContext, *, period: str) -> dict:
-        """按 tenant + period 聚合 usage overview（总消耗 Token / 折合费用 / 消耗最高员工 + 趋势 + 排名）。"""
+        """按 tenant + period 聚合 usage overview（Token / USD API 成本 / 消耗最高员工 + 趋势 + 排名）。"""
         return self._repo.get_usage_overview(ctx, period=period)
 
     def list_usage_records(

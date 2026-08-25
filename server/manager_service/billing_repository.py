@@ -142,7 +142,9 @@ class BillingRepository:
         we = window_end
         with self._router.session(ctx) as s:
             total = s.execute(
-                "SELECT COALESCE(SUM(token_total), 0), COALESCE(SUM(cost_total), 0) "
+                "SELECT COALESCE(SUM(token_total), 0), COALESCE(SUM(cost_total), 0), "
+                "COALESCE(SUM(token_total) FILTER (WHERE pricing_status = 'unknown'), 0), "
+                "COALESCE(COUNT(*) FILTER (WHERE pricing_status = 'unknown'), 0) "
                 "FROM usage_rollup WHERE (%s::timestamptz IS NULL OR window_start >= %s) "
                 "AND (%s::timestamptz IS NULL OR window_end <= %s)",
                 (ws, ws, we, we),
@@ -182,6 +184,8 @@ class BillingRepository:
             "period": period,
             "total_tokens": int(total[0]),
             "total_cost": Decimal(str(total[1])),
+            "unknown_pricing_tokens": int(total[2]),
+            "unknown_pricing_runs": int(total[3]),
             "top_employee_id": top_employee_id,
             "top_employee_tokens": top_employee_tokens,
             "trend": [
@@ -223,8 +227,7 @@ class BillingRepository:
                 "employee_id": str(r[1]),
                 "employee_name": str(r[1]),
                 "date": r[2].isoformat() if r[2] else None,
-                "input_tokens": 0,
-                "output_tokens": int(r[3]),
+                "token_total": int(r[3]),
                 "cost": Decimal(str(r[4])),
             }
             for r in rows

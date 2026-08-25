@@ -298,7 +298,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.gov.window": "窗口",
     "manager.gov.runs": "运行数",
     "manager.gov.tokens": "Token",
-    "manager.gov.cost": "成本",
+    "manager.gov.cost": "API 成本（USD）",
     "manager.gov.errors": "错误数",
     "manager.gov.audit_title": "审计事件",
     "manager.gov.audit_empty": "暂无审计事件",

@@ -66,7 +66,7 @@ describe("BillingPage 工资管理", () => {
     const { container } = renderPage();
     await waitFor(() => expect(screen.getByText("¥200.00")).toBeInTheDocument());
     expect(screen.getByText("150,000")).toBeInTheDocument();
-    expect(screen.getByText("¥45.50")).toBeInTheDocument();
+    expect(screen.getByText("$45.50")).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "账单周期" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "本月" })).toHaveAttribute("aria-pressed", "true");
     expect(container.querySelector(".astryx-card")).toBeInTheDocument();

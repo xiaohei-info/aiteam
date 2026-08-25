@@ -232,6 +232,8 @@ class UsageAuditQuotaRepository:
                     COALESCE(SUM(run_count), 0) AS run_count,
                     COALESCE(SUM(token_total), 0) AS token_total,
                     COALESCE(SUM(cost_total), 0) AS cost_total,
+                    COALESCE(SUM(token_total) FILTER (WHERE pricing_status = 'unknown'), 0) AS unknown_pricing_tokens,
+                    COALESCE(COUNT(*) FILTER (WHERE pricing_status = 'unknown'), 0) AS unknown_pricing_runs,
                     COALESCE(SUM(error_count), 0) AS error_count,
                     COALESCE(SUM(duration_seconds_total), 0) AS duration_seconds_total
                 FROM usage_rollup
@@ -244,8 +246,10 @@ class UsageAuditQuotaRepository:
             "run_count": row[1],
             "token_total": row[2],
             "cost_total": row[3],
-            "error_count": row[4],
-            "duration_seconds_total": row[5],
+            "unknown_pricing_tokens": row[4],
+            "unknown_pricing_runs": row[5],
+            "error_count": row[6],
+            "duration_seconds_total": row[7],
         }
 
     # ---- audit summary：消费 F13 上报的脱敏 AuditSummaryEvent ----

@@ -26,6 +26,8 @@ class EnterpriseRollupRow:
     run_count: int = 0
     token_total: int = 0
     cost_total: Decimal = field(default_factory=lambda: Decimal("0"))
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     error_count: int = 0
     duration_seconds_total: int = 0
     summary_count: int = 0
@@ -42,6 +44,9 @@ class EnterpriseRollupRow:
         self.run_count += s.run_count
         self.token_total += s.token_total
         self.cost_total += s.cost_total
+        if s.pricing_status == "unknown":
+            self.unknown_pricing_tokens += s.token_total
+            self.unknown_pricing_runs += s.run_count
         self.error_count += s.error_count
         self.duration_seconds_total += s.duration_seconds_total
         self.summary_count += 1
@@ -183,20 +188,23 @@ class PgRollupRepository(CrossEnterpriseRollupRepositoryBase):
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT run_count, token_total, cost_total, error_count, duration_seconds_total, "
-                    "summary_count, window_start, window_end, tenant_id "
+                    "SELECT run_count, token_total, cost_total, "
+                    "(SELECT COALESCE(SUM(token_total), 0) FROM operation_rollup_seen WHERE enterprise_id = %s::uuid AND pricing_status = 'unknown'), "
+                    "(SELECT COALESCE(SUM(run_count), 0) FROM operation_rollup_seen WHERE enterprise_id = %s::uuid AND pricing_status = 'unknown'), "
+                    "error_count, duration_seconds_total, summary_count, window_start, window_end, tenant_id "
                     "FROM cross_enterprise_usage_rollup WHERE enterprise_id = %s::uuid",
-                    (enterprise_id,),
+                    (enterprise_id, enterprise_id, enterprise_id),
                 )
                 row = cur.fetchone()
                 if row is None:
                     raise NotFound(f"enterprise rollup not found: {enterprise_id}")
                 return EnterpriseRollupRow(
-                    enterprise_id=enterprise_id, tenant_id=row[8],
+                    enterprise_id=enterprise_id, tenant_id=row[10],
                     run_count=row[0] or 0, token_total=row[1] or 0,
-                    cost_total=row[2] or Decimal("0"), error_count=row[3] or 0,
-                    duration_seconds_total=row[4] or 0, summary_count=row[5] or 0,
-                    window_start=row[6], window_end=row[7],
+                    cost_total=row[2] or Decimal("0"), unknown_pricing_tokens=row[3] or 0,
+                    unknown_pricing_runs=row[4] or 0, error_count=row[5] or 0,
+                    duration_seconds_total=row[6] or 0, summary_count=row[7] or 0,
+                    window_start=row[8], window_end=row[9],
                 )
 
     def list_all(self):
@@ -204,17 +212,20 @@ class PgRollupRepository(CrossEnterpriseRollupRepositoryBase):
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT enterprise_id, tenant_id, run_count, token_total, cost_total, error_count, "
-                    "duration_seconds_total, summary_count, window_start, window_end "
-                    "FROM cross_enterprise_usage_rollup"
+                    "SELECT r.enterprise_id, r.tenant_id, r.run_count, r.token_total, r.cost_total, "
+                    "(SELECT COALESCE(SUM(s.token_total), 0) FROM operation_rollup_seen s WHERE s.enterprise_id = r.enterprise_id AND s.pricing_status = 'unknown'), "
+                    "(SELECT COALESCE(SUM(s.run_count), 0) FROM operation_rollup_seen s WHERE s.enterprise_id = r.enterprise_id AND s.pricing_status = 'unknown'), "
+                    "r.error_count, r.duration_seconds_total, r.summary_count, r.window_start, r.window_end "
+                    "FROM cross_enterprise_usage_rollup r"
                 )
                 rows = cur.fetchall()
         return [
             EnterpriseRollupRow(
                 enterprise_id=str(r[0]), tenant_id=r[1], run_count=r[2] or 0, token_total=r[3] or 0,
-                cost_total=r[4] or Decimal("0"), error_count=r[5] or 0,
-                duration_seconds_total=r[6] or 0, summary_count=r[7] or 0,
-                window_start=r[8], window_end=r[9],
+                cost_total=r[4] or Decimal("0"), unknown_pricing_tokens=r[5] or 0,
+                unknown_pricing_runs=r[6] or 0, error_count=r[7] or 0,
+                duration_seconds_total=r[8] or 0, summary_count=r[9] or 0,
+                window_start=r[10], window_end=r[11],
             )
             for r in rows
         ]

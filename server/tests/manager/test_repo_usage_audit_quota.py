@@ -73,12 +73,13 @@ def test_list_usage_empty():
 
 def test_aggregate_usage_returns_dict():
     router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(2, 8, 2000, Decimal("3.0"), 0, 1200)))
+    router.queue(FakeCursor(fetchone=(2, 8, 2000, Decimal("3.0"), 500, 1, 0, 1200)))
     agg = UsageAuditQuotaRepository(router).aggregate_usage(
         ctx(), window_start=datetime(2026, 1, 1), window_end=datetime(2026, 2, 1)
     )
     assert agg == {"rollup_count": 2, "run_count": 8, "token_total": 2000,
-                   "cost_total": Decimal("3.0"), "error_count": 0, "duration_seconds_total": 1200}
+                   "cost_total": Decimal("3.0"), "unknown_pricing_tokens": 500,
+                   "unknown_pricing_runs": 1, "error_count": 0, "duration_seconds_total": 1200}
 
 
 def test_upsert_audit_returns_row():

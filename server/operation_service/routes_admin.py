@@ -110,8 +110,13 @@ class FinanceOverviewOut(BaseModel):
     total_recharged: Decimal = Decimal("0")
     total_tokens_billed: int = 0
     total_api_cost: Decimal = Decimal("0")
-    gross_profit: Decimal = Decimal("0")
-    profit_margin: float = 0.0
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
+    gross_profit: Decimal | None = None
+    profit_margin: float | None = None
+    profit_status: str = "unavailable_currency_mismatch"
+    revenue_currency: str = "CNY"
+    cost_currency: str = "USD"
     active_orgs: int = 0
     monthly_trend: list[dict] = Field(default_factory=list)
     top5_consumers: list[dict] = Field(default_factory=list)

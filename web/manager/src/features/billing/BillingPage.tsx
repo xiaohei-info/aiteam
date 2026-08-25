@@ -15,6 +15,12 @@ import type { UsageOverview, BillingBalance } from "./types";
 
 const PERIODS = [{ key: "month", label: "本月" }, { key: "last_month", label: "上月" }, { key: "all", label: "全部" }];
 
+function fmtUsd(value: number | string): string {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`;
+}
+
 export function BillingPage(): ReactNode {
   const api = useBillingApi();
   const [overview, setOverview] = useState<UsageOverview | null>(null);
@@ -57,13 +63,14 @@ export function BillingPage(): ReactNode {
         </Grid>
       )}
 
-      {overview && (
+      {overview && <>
         <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
-          <Metric title="总消耗Token" value={overview.total_tokens.toLocaleString()} />
-          <Metric title="折合费用" value={`¥${String(overview.total_cost)}`} />
+          <Metric title="总消耗 Token" value={overview.total_tokens.toLocaleString()} />
+          <Metric title="API 成本（USD）" value={fmtUsd(overview.total_cost)} />
           <Metric title="消耗最高员工" value={overview.top_employee_id ?? "—"} />
         </Grid>
-      )}
+        {(overview.unknown_pricing_tokens ?? 0) > 0 && <Banner status="warning" title={`${(overview.unknown_pricing_tokens ?? 0).toLocaleString()} 个 Token 尚无价格快照，成本未完整计入`} />}
+      </>}
 
       {loading && <Card padding={4} role="status" aria-label="工资数据加载中"><Skeleton height={96} /></Card>}
     </VStack>

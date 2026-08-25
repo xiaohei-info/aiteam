@@ -16,9 +16,9 @@ import { useI18n } from "../i18n/context";
 import { type RollupBoard, useBoardApi } from "../features/board/useBoardApi";
 
 function fmt(v: number): string { return v.toLocaleString("zh-CN"); }
-function fmtCost(v: number | string): string {
-  const yuan = Number(v) / 100;
-  return yuan >= 10000 ? `${(yuan / 10000).toFixed(2)} 万元` : `¥${yuan.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`;
+function fmtUsd(v: number | string): string {
+  const usd = Number(v);
+  return Number.isFinite(usd) ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` : "—";
 }
 
 function MetricCard({ label, value }: { label: string; value: string }): ReactNode {
@@ -66,14 +66,17 @@ export function DashboardPlaceholder(): ReactNode {
           endContent={<Button label="重试" variant="ghost" onClick={load} />}
         />
       ) : board ? (
-        <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
-          <MetricCard label="企业数" value={fmt(board.enterprise_count)} />
-          <MetricCard label="执行次数" value={fmt(board.run_count)} />
-          <MetricCard label="总消耗" value={fmtCost(board.cost_total)} />
-          <MetricCard label="总 Token" value={fmt(board.token_total)} />
-          <MetricCard label="错误次数" value={fmt(board.error_count)} />
-          <MetricCard label="总耗时（秒）" value={fmt(board.duration_seconds_total)} />
-        </Grid>
+        <VStack gap={4}>
+          <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
+            <MetricCard label="企业数" value={fmt(board.enterprise_count)} />
+            <MetricCard label="执行次数" value={fmt(board.run_count)} />
+            <MetricCard label="总 API 成本（USD）" value={fmtUsd(board.cost_total)} />
+            <MetricCard label="总 Token" value={fmt(board.token_total)} />
+            <MetricCard label="错误次数" value={fmt(board.error_count)} />
+            <MetricCard label="总耗时（秒）" value={fmt(board.duration_seconds_total)} />
+          </Grid>
+          {(board.unknown_pricing_tokens ?? 0) > 0 && <Banner status="warning" title={`${fmt(board.unknown_pricing_tokens ?? 0)} 个 Token 尚无价格快照，成本未完整计入`} />}
+        </VStack>
       ) : (
         <EmptyState
           title="暂无运营汇总数据"

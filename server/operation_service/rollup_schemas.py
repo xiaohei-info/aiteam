@@ -28,6 +28,8 @@ class EnterpriseUsageRollup(BaseModel):
     run_count: int = 0
     token_total: int = 0
     cost_total: Decimal = Field(default=Decimal("0"))
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     error_count: int = 0
     duration_seconds_total: int = 0
     summary_count: int = Field(default=0, description="已聚合的脱敏摘要条数")
@@ -47,6 +49,8 @@ class CrossEnterpriseBoard(BaseModel):
     run_count: int = 0
     token_total: int = 0
     cost_total: Decimal = Field(default=Decimal("0"))
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     error_count: int = 0
     duration_seconds_total: int = 0
     enterprises: list[EnterpriseUsageRollup] = Field(default_factory=list)

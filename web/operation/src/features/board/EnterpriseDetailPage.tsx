@@ -12,11 +12,11 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { type EnterpriseRollup, useBoardApi } from "./useBoardApi.js";
 
 function fmt(value: number): string { return value.toLocaleString("zh-CN"); }
-function fmtCost(cost: number | string): string {
-  const yuan = typeof cost === "string" ? Number.parseFloat(cost) : cost;
-  return yuan >= 10000
-    ? `${(yuan / 10000).toFixed(2)} 万元`
-    : `¥${yuan.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function fmtUsd(cost: number | string): string {
+  const usd = typeof cost === "string" ? Number.parseFloat(cost) : cost;
+  return Number.isFinite(usd)
+    ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`
+    : "—";
 }
 
 function Metric({ label, value }: { label: string; value: string }): ReactNode {
@@ -71,9 +71,10 @@ export function EnterpriseDetailPage(): ReactNode {
           </VStack>
           <Grid columns={{ minWidth: 220, max: 3 }} gap={4}>
             <Metric label="执行次数" value={fmt(data.run_count)} />
-            <Metric label="消耗" value={fmtCost(data.cost_total)} />
+            <Metric label="API 成本（USD）" value={fmtUsd(data.cost_total)} />
             <Metric label="总 Token" value={fmt(data.token_total)} />
           </Grid>
+          {(data.unknown_pricing_tokens ?? 0) > 0 && <Banner status="warning" title={`${fmt(data.unknown_pricing_tokens ?? 0)} 个 Token 尚无价格快照，API 成本未完整计入`} />}
         </>
       ) : <EmptyState title="暂无数据" />}
     </VStack>
