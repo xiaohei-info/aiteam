@@ -31,6 +31,7 @@ type UsageOutboxItem = {
   member_id?: string;
   tenant_id?: string;
   employee_id?: string;
+  payload?: { employee_id?: string };
   status?: string;
   attempts?: number;
   last_error?: string | null;
@@ -47,6 +48,10 @@ function usageOutboxItems(data: unknown): UsageOutboxItem[] {
 
 function summaryId(item: UsageOutboxItem): string | undefined {
   return typeof item.summary_id === "string" ? item.summary_id : undefined;
+}
+
+function outboxEmployeeId(item: UsageOutboxItem): string | undefined {
+  return typeof item.employee_id === "string" ? item.employee_id : item.payload?.employee_id;
 }
 
 async function waitFor<T>(read: () => Promise<T>, ready: (value: T) => boolean, message: string): Promise<T> {
@@ -398,7 +403,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
         return id !== undefined
           && item.tenant_id === ownerTenantId
           && item.member_id === ownerMemberId
-          && item.employee_id === employeeId
+          && outboxEmployeeId(item) === employeeId
           && (item.status === "pending" || item.status === "failed" || item.status === "sent");
       }),
       `prompt ${traceId} usage outbox`,
@@ -409,7 +414,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       return id !== undefined
         && item.tenant_id === ownerTenantId
         && item.member_id === ownerMemberId
-        && item.employee_id === employeeId;
+        && outboxEmployeeId(item) === employeeId;
     });
     const flushedSummaryIds = new Set(
       changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
