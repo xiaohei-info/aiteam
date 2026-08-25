@@ -465,6 +465,17 @@ def test_expert_binding_sequence_no_must_be_positive():
         ExpertBinding(template_id="tpl-x", sequence_no=0, enabled=True)
 
 
+def test_solution_coordinator_must_be_enabled(service):
+    with pytest.raises(Exception, match="enabled experts"):
+        service.register_solution_template(_multi_solution(coordinator_template_id="tpl-cmo"))
+
+
+def test_pull_solution_fails_closed_when_bound_expert_is_missing(service):
+    service.register_solution_template(_solution(solution_id="sol-missing", expert_template_ids=["tpl-missing"], coordinator_template_id="tpl-missing"))
+    service.publish_template(CatalogType.SOLUTION_TEMPLATE, "sol-missing", PublishTemplateRequest())
+    with pytest.raises(Conflict, match="unavailable or not published"):
+        service.pull_solution_package(solution_id="sol-missing")
+
 
 # ---- AITEAM-355 问题二：服务端自动生成 ID ----
 

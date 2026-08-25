@@ -205,6 +205,12 @@ class CatalogService:
             bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
             coordinator_id = _resolve_coordinator_template_id(req.coordinator_template_id, bindings)
             coordinator_instructions = _normalize_coordinator_instructions(req.coordinator_instructions)
+            template_versions: dict[str, str] = {}
+            for binding in bindings:
+                try:
+                    template_versions[binding.template_id] = self._repo.get(CatalogType.EXPERT_TEMPLATE, binding.template_id).version
+                except Exception:  # noqa: BLE001 — drafts may be registered before their expert templates
+                    continue
             return CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
                 template_id=candidate,
@@ -224,6 +230,7 @@ class CatalogService:
                     ],
                     "coordinator_template_id": coordinator_id,
                     "coordinator_instructions": coordinator_instructions,
+                    "expert_template_versions": template_versions,
                     "tags": req.tags,
                 },
             )
@@ -471,6 +478,7 @@ class CatalogService:
         # expert_bindings 为权威源（含 template_id/sequence_no/enabled），优先于派生的
         # expert_template_ids，避免双源不同步导致拉取到过期专家。
         bindings_meta = payload.get("expert_bindings") or []
+        template_versions = payload.get("expert_template_versions") or {}
         if bindings_meta:
             binding_order = [b["template_id"] for b in bindings_meta]
             binding_overrides = {b["template_id"]: b for b in bindings_meta}
@@ -480,14 +488,15 @@ class CatalogService:
         experts: list[ExpertTemplateDetail] = []
         for expert_id in binding_order:
             try:
-                expert = self.pull_expert_template_detail(template_id=expert_id, version=None)
+                pinned_version = template_versions.get(expert_id) if isinstance(template_versions, dict) else None
+                expert = self.pull_expert_template_detail(template_id=expert_id, version=pinned_version if isinstance(pinned_version, str) and pinned_version else None)
                 override = binding_overrides.get(expert_id)
                 if override is not None:
                     expert.sequence_no = override.get("sequence_no", 1)
                     expert.enabled = override.get("enabled", True)
                 experts.append(expert)
             except Exception as exc:  # noqa: BLE001
-                # 方案包必须是完整可复现的团队；任何缺失/下架专家都使整包不可应用。
+                # 方案包必须是完整可复现的团队；任何缺失/下架/版本不符专家都使整包不可应用。
                 raise Conflict(f"solution expert {expert_id!r} is unavailable or not published") from exc
 
         return SolutionPackage(
