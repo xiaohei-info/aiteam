@@ -251,7 +251,7 @@ test.describe("Pi solution → fixed participant group chat", () => {
     });
     const solutionProjection = await requireOk(solutionProjectionResponse, "agent-solution-projection");
     const projected = (solutionProjection.data as JsonRecord[]).find((item) => item.solution_instance_id === instanceId) as JsonRecord | undefined;
-    expect(projected).toBeTruthy();
+    expect(projected, `[agent-solution-projection] expected ${instanceId}; received ${JSON.stringify(solutionProjection.data).slice(0, 1200)}`).toBeTruthy();
     expect(projected?.coordinator_employee_id).toBe(coordinatorId);
 
     const groupResponse = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
