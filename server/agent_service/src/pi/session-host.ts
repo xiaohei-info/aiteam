@@ -122,6 +122,7 @@ interface SessionRecord {
 const MAX_DELEGATE_CALLS = 4;
 const MAX_DELEGATE_PROMPT_BUDGET = 32_000;
 const MAX_DELEGATE_RESULT_CHARS = 2_000;
+const MAX_ENTRIES_PROMPT_WAIT_MS = 5_000;
 
 export class ConversationBusyError extends Error {
   constructor() {
@@ -258,7 +259,14 @@ export class SessionHost {
     await Promise.all(records.map(async (record) => {
       await record.sessionReady?.catch(() => undefined);
       if (record.prompting && !record.promptPromise) await new Promise<void>((resolve) => setImmediate(resolve));
-      await record.promptPromise?.catch(() => undefined);
+      if (record.promptPromise) {
+        // Do not let a provider that ignores abort hold history forever. Entries are
+        // durable Pi data; an in-flight prompt can be observed on the next read.
+        await Promise.race([
+          record.promptPromise.catch(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, MAX_ENTRIES_PROMPT_WAIT_MS)),
+        ]);
+      }
     }));
     const seenLogicalMessages = new Set<string>();
     return records
