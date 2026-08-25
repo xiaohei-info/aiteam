@@ -30,7 +30,9 @@ import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useGrantsApi } from "../grants/useGrantsApi";
+import { useKnowledgeApi } from "../knowledge/useKnowledgeApi";
 import type { Department, Member } from "../grants/types";
+import type { KnowledgeSpace } from "../knowledge/types";
 import type { SolutionInstance, SolutionPackage } from "../experts/types";
 
 export function SolutionsPage(): ReactNode {
@@ -39,6 +41,7 @@ export function SolutionsPage(): ReactNode {
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useExpertsApi();
   const grantsApi = useGrantsApi();
+  const knowledgeApi = useKnowledgeApi();
 
   const [solutions, setSolutions] = useState<SolutionPackage[]>([]);
   const [solutionInstances, setSolutionInstances] = useState<SolutionInstance[]>([]);
@@ -161,10 +164,17 @@ export function SolutionsPage(): ReactNode {
           solution={applyFor}
           api={api}
           grantsApi={grantsApi}
+          knowledgeApi={knowledgeApi}
           onClose={() => setApplyFor(null)}
-          onApplied={() => {
+          onApplied={(warning) => {
             setApplyFor(null);
-            setNotice(i18n.t("manager.experts.apply_ok"));
+            if (warning) {
+              setNotice(null);
+              setError(warning);
+            } else {
+              setError(null);
+              setNotice(i18n.t("manager.experts.apply_ok"));
+            }
             void load();
           }}
         />
@@ -177,42 +187,67 @@ function SolutionApplyDialog({
   solution,
   api,
   grantsApi,
+  knowledgeApi,
   onClose,
   onApplied,
 }: {
   solution: SolutionPackage;
   api: ReturnType<typeof useExpertsApi>;
   grantsApi: ReturnType<typeof useGrantsApi>;
+  knowledgeApi: ReturnType<typeof useKnowledgeApi>;
   onClose: () => void;
-  onApplied: () => void;
+  onApplied: (warning?: string) => void;
 }): ReactNode {
   const [members, setMembers] = useState<Member[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [knowledgeSpaces, setKnowledgeSpaces] = useState<KnowledgeSpace[]>([]);
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  const [knowledgeSpaceIds, setKnowledgeSpaceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    void Promise.all([grantsApi.listMembers(), grantsApi.listDepartments()])
-      .then(([loadedMembers, loadedDepartments]) => {
+    void Promise.all([grantsApi.listMembers(), grantsApi.listDepartments(), knowledgeApi.list()])
+      .then(([loadedMembers, loadedDepartments, loadedKnowledgeSpaces]) => {
         if (!active) return;
         setMembers(loadedMembers);
         setDepartments(loadedDepartments);
+        setKnowledgeSpaces(loadedKnowledgeSpaces);
       })
-      .catch((err) => { if (active) setError(err instanceof Error ? err.message : "加载授权目标失败"); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : "加载授权目标或知识空间失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [grantsApi]);
+  }, [grantsApi, knowledgeApi]);
 
   async function apply(): Promise<void> {
     setWorking(true);
     setError(null);
     try {
-      await api.applySolution({ solution_id: solution.solution_id, solution_version: solution.version, member_ids: memberIds, department_ids: departmentIds });
-      onApplied();
+      const result = await api.applySolution({
+        solution_id: solution.solution_id,
+        solution_version: solution.version,
+        member_ids: memberIds,
+        department_ids: departmentIds,
+      });
+      const employeeIds = result?.solution_instance?.expert_employee_ids
+        ?? result?.experts?.map((expert) => expert.employee_id)
+        ?? [];
+      const failures: string[] = [];
+      for (const knowledgeSpaceId of knowledgeSpaceIds) {
+        for (const employeeId of employeeIds) {
+          try {
+            await knowledgeApi.bind(knowledgeSpaceId, { resource_type: "expert", resource_id: employeeId });
+          } catch {
+            failures.push(`${knowledgeSpaceId}/${employeeId}`);
+          }
+        }
+      }
+      onApplied(failures.length > 0
+        ? `方案已应用，但 ${failures.length} 个知识绑定未完成；可在知识库页面为方案专家重试绑定。`
+        : undefined);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");
     } finally {
@@ -224,12 +259,13 @@ function SolutionApplyDialog({
     <Dialog isOpen purpose="form" width={640} maxHeight="85vh" aria-label={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
       <VStack gap={4}>
         <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
-        <Text color="secondary">应用后会在当前企业创建方案内专家，并只给下方选中的成员/部门授权。知识绑定请在企业知识页面绑定到实际专家。</Text>
+        <Text color="secondary">应用后会在当前企业创建方案专家，并只给下方选中的成员/部门授权。可选知识空间会绑定到本次展开的全部专家；知识空间始终属于当前 tenant。</Text>
         {error && <Banner status="error" title={error} />}
-        {loading ? <Text role="status">加载成员和部门…</Text> : (
+        {loading ? <Text role="status">加载成员、部门和知识空间…</Text> : (
           <VStack gap={3}>
             <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
             <MultiSelector label="授权部门" options={departments.map((department) => ({ value: department.id, label: department.display_name }))} value={departmentIds} onChange={setDepartmentIds} triggerDisplay="labels" isOptional isDisabled={working} />
+            <MultiSelector label="方案知识空间（可选）" options={knowledgeSpaces.map((space) => ({ value: space.knowledge_space_id, label: space.display_name || space.knowledge_space_id }))} value={knowledgeSpaceIds} onChange={setKnowledgeSpaceIds} triggerDisplay="labels" isOptional isDisabled={working} />
           </VStack>
         )}
         <HStack justify="end" gap={2}>

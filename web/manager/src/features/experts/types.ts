@@ -137,3 +137,10 @@ export interface SolutionInstance {
   created_at: string | null;
   updated_at: string | null;
 }
+
+/** Result of Manager solution expansion; employees are the tenant-owned targets for optional bindings. */
+export interface ApplySolutionResult {
+  solution_instance?: SolutionInstance;
+  experts?: Array<{ employee_id: string }>;
+  grants_applied?: boolean;
+}

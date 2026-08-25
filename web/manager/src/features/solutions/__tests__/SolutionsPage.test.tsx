@@ -8,13 +8,18 @@ import { SessionContext, type SessionContextValue } from "../../../auth/session"
 import { SolutionsPage } from "../SolutionsPage";
 import { useExpertsApi } from "../../experts/useExpertsApi";
 import { useGrantsApi } from "../../grants/useGrantsApi";
+import { useKnowledgeApi } from "../../knowledge/useKnowledgeApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 vi.mock("../../grants/useGrantsApi", () => ({ useGrantsApi: vi.fn() }));
+vi.mock("../../knowledge/useKnowledgeApi", () => ({ useKnowledgeApi: vi.fn() }));
 
 import type { ExpertsApi } from "../../experts/useExpertsApi";
 import type { GrantsApi } from "../../grants/useGrantsApi";
 import type { SolutionInstance, SolutionPackage } from "../../experts/types";
+import type { KnowledgeApi } from "../../knowledge/useKnowledgeApi";
+
+let lastKnowledgeApi: KnowledgeApi;
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -38,6 +43,14 @@ function mockApi(): ExpertsApi {
     listExperts: vi.fn().mockResolvedValue([]), listSolutions: vi.fn().mockResolvedValue([]),
   };
   (useGrantsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(grantsApi);
+  const knowledgeApi: KnowledgeApi = {
+    list: vi.fn().mockResolvedValue([{ knowledge_space_id: "ks-1", workspace: "", display_name: "企业知识" }]),
+    create: vi.fn(), del: vi.fn(), listBindings: vi.fn(), bind: vi.fn().mockResolvedValue(null), unbind: vi.fn(),
+    listDocuments: vi.fn(), uploadDocument: vi.fn(), importUrl: vi.fn(), deleteDocument: vi.fn(), reconcileDeleteDocument: vi.fn(),
+    reindexDocument: vi.fn(), retryDocument: vi.fn(), getIngestion: vi.fn(), listDocumentBindings: vi.fn(),
+  };
+  lastKnowledgeApi = knowledgeApi;
+  (useKnowledgeApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(knowledgeApi);
   const api: ExpertsApi = {
     listTemplates: vi.fn().mockResolvedValue([]),
     listSolutions: vi.fn().mockResolvedValue([{
@@ -67,12 +80,16 @@ function renderPage(roles: string[]) {
   );
 }
 
-async function applyDefaultSolution(): Promise<HTMLElement> {
+async function applyDefaultSolution(withKnowledge = false): Promise<HTMLElement> {
   const cardButton = screen.getAllByRole("button", { name: "应用方案" })[0]!;
   fireEvent.click(cardButton);
   const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
   fireEvent.click(within(dialog).getByRole("combobox", { name: /授权成员/ }));
   fireEvent.click(screen.getByRole("option", { name: "成员一", hidden: true }));
+  if (withKnowledge) {
+    fireEvent.click(within(dialog).getByRole("combobox", { name: /方案知识空间/ }));
+    fireEvent.click(screen.getByRole("option", { name: "企业知识", hidden: true }));
+  }
   fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
   return dialog;
 }
@@ -141,6 +158,19 @@ describe("SolutionsPage", () => {
     (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("暂无可应用方案")).toBeInTheDocument());
+  });
+
+  it("应用方案后可把当前 tenant 知识空间绑定到展开专家", async () => {
+    const api = mockApi();
+    (api.applySolution as ReturnType<typeof vi.fn>).mockResolvedValue({
+      solution_instance: { expert_employee_ids: ["emp-1", "emp-2"] },
+    });
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    await applyDefaultSolution(true);
+    await waitFor(() => expect(lastKnowledgeApi.bind).toHaveBeenCalledTimes(2));
+    expect(lastKnowledgeApi.bind).toHaveBeenNthCalledWith(1, "ks-1", { resource_type: "expert", resource_id: "emp-1" });
+    expect(lastKnowledgeApi.bind).toHaveBeenNthCalledWith(2, "ks-1", { resource_type: "expert", resource_id: "emp-2" });
   });
 
   it("应用方案失败：applySolution 报错显示操作失败", async () => {

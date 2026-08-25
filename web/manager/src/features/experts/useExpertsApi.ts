@@ -12,6 +12,7 @@ import { createManagerApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import type {
   ApplySolutionInput,
+  ApplySolutionResult,
   EmployeeConfig,
   EmployeeConfigIn,
   ExpertTemplate,
@@ -25,7 +26,7 @@ export interface ExpertsApi {
   listTemplates: () => Promise<ExpertTemplate[]>;
   listSolutions: () => Promise<SolutionPackage[]>;
   recruitExpert: (input: RecruitExpertInput) => Promise<unknown>;
-  applySolution: (input: ApplySolutionInput) => Promise<unknown>;
+  applySolution: (input: ApplySolutionInput) => Promise<ApplySolutionResult | null>;
   listEmployees: () => Promise<EmployeeConfig[]>;
   updateEmployee: (employeeId: string, config: EmployeeConfigIn) => Promise<EmployeeConfig | null>;
   transitionEmployee: (employeeId: string, transition: string, reason?: string) => Promise<EmployeeConfig | null>;
@@ -51,7 +52,7 @@ export function useExpertsApi(): ExpertsApi {
         return client.post("/api/manager/recruit/experts", { body: input });
       },
       applySolution(input) {
-        return client.post("/api/manager/recruit/solutions", { body: input });
+        return client.post<ApplySolutionResult>("/api/manager/recruit/solutions", { body: input });
       },
       async listEmployees() {
         const r = await client.listGet<EmployeeConfig>("/api/manager/employees");
