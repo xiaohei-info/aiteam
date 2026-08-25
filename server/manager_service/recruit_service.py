@@ -230,10 +230,7 @@ class RecruitService:
         orders: list[RecruitmentOrderOut] = []
         _match_audits: list[dict] = []
 
-        # 3) 逐个专家展开 employee 实例（slug 用 solution 派生，保证可复入幂等可读）。
-        expert_results: list[RecruitExpertResult] = []
-        expert_employee_ids: list[str] = []
-        # 按 Operator 固定方案包顺序展开；旧 sequence/enabled 仅用于滚动兼容。
+        # 3) 先预检完整方案，任何 provider/skill/slug/coordinator 错误都必须发生在写 employee 之前。
         ordered_experts = sorted(
             (t for t in package.experts if t.enabled),
             key=lambda t: (t.sequence_no, t.template_id),
@@ -248,19 +245,31 @@ class RecruitService:
         active_template_ids = {template.template_id for template in ordered_experts}
         if coordinator_template_id not in active_template_ids:
             raise Conflict("solution coordinator must be one of the enabled experts")
+        prepared: list[tuple[object, str, dict, ProviderMatchResult, list[str]]] = []
+        seen_slugs: set[str] = set()
         for idx, template in enumerate(ordered_experts):
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
-            # 展开前确保 slug 未被占用（被占则报冲突，由调用方决策换 version / 换 slug）。
-            if self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
+            if slug in seen_slugs or self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
                 raise Conflict(f"employee slug collision during solution expansion: {slug}")
-            order = _track_provision(
-                self._orders, ctx,
-                idem=_idempotency_key(template.template_id, slug),
-                template_id=template.template_id,
-                solution_id=package.solution_id,
-            )
+            seen_slugs.add(slug)
             recommended, match = _resolve_platform_model(self._catalog, ctx, template)
             skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
+            prepared.append((template, slug, recommended, match, skills))
+
+        expert_results: list[RecruitExpertResult] = []
+        expert_employee_ids: list[str] = []
+        for template, slug, recommended, match, skills in prepared:
+            try:
+                order = _track_provision(
+                    self._orders, ctx,
+                    idem=_idempotency_key(template.template_id, slug),
+                    template_id=template.template_id,
+                    solution_id=package.solution_id,
+                )
+            except Exception:
+                self._rollback_solution_resources(ctx, expert_employee_ids)
+                raise
+            created_employee_id: str | None = None
             try:
                 row = self._employees.create(
                     ctx,
@@ -270,7 +279,7 @@ class RecruitService:
                     model=recommended.get("model"),
                     provider_ref=match.provider_ref,
                     thinking_level=recommended.get("thinking_level"),
-                        timeout_seconds=recommended.get("timeout_seconds"),
+                    timeout_seconds=recommended.get("timeout_seconds"),
                     tools=list(recommended.get("tools", [])),
                     # Skills and knowledge belong to the employee template/tenant bindings.
                     # Never copy deprecated solution-level refs into every employee.
@@ -280,22 +289,21 @@ class RecruitService:
                     memory_policy=recommended.get("memory_policy"),
                     platform_model_ref=recommended["platform_model_ref"],
                 )
+                created_employee_id = row.employee_id
                 row = self._employees.transition_status(
                     ctx, employee_id=row.employee_id, from_status="draft", to_status="active"
                 ) or row
             except Exception as exc:
                 failed = order.mark_failed(_error_code(exc), str(exc)[:1000])
                 self._orders.update(ctx, failed)
+                self._rollback_solution_resources(ctx, [*expert_employee_ids, *([created_employee_id] if created_employee_id else [])])
                 raise
             expert_employee_ids.append(row.employee_id)
-            # 订单落 succeeded（携带 created_employee_id）。
             done = order.mark_succeeded(row.employee_id)
             self._orders.update(ctx, done)
             fin = _order_out(done)
             orders.append(fin)
-            # AITEAM-682：逐专家记录匹配审计，供方案级 audit 还原。
             _match_audits.append(_match_detail(recommended, match))
-
             expert_results.append(
                 RecruitExpertResult(
                     employee_id=row.employee_id,
@@ -319,71 +327,66 @@ class RecruitService:
 
         # 4) 授权只接受本次 Manager 请求；Operator 不知道目标 tenant 的成员/部门，
         # 因而 deprecated package.default_grants 永远不参与授权。
-        grants_applied = False
         grant_dept_ids = list(req.department_ids)
         grant_member_ids = list(req.member_ids)
-        if (grant_dept_ids or grant_member_ids) and expert_employee_ids:
-            for employee_id in expert_employee_ids:
-                _upsert_grant(
-                    self._grants, ctx,
-                    resource_type="expert", resource_id=employee_id,
-                    department_ids=grant_dept_ids, member_ids=grant_member_ids,
-                )
+        try:
+            grants_applied = self._apply_solution_grants(
+                ctx, expert_employee_ids, grant_dept_ids, grant_member_ids,
+            )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids)
+            raise
 
         # 5) 建 solution_instance（本 tenant 展开后的真相）。
-        instance = self._recruit.create_solution_instance(
-            ctx,
-            solution_id=package.solution_id,
-            solution_version=package.version,
-            display_name=req.display_name_override or package.display_name,
-            expert_employee_ids=expert_employee_ids,
-            # Legacy solution columns remain empty while rolling deployments drain old clients.
-            knowledge_refs=[],
-            skill_refs=[],
-            planner_prompt="",
-            subtask_prompt="",
-            aggregate_prompt="",
-            default_grants_meta=None,
-            template_meta=package.model_dump(mode="json"),
-            coordinator_employee_id=coordinator_employee_id,
-            coordinator_instructions=getattr(package, "coordinator_instructions", ""),
-            workflow_skill_ref=getattr(package, "workflow_skill_ref", None),
-            output_requirements=getattr(package, "output_requirements", ""),
-        )
+        try:
+            instance = self._recruit.create_solution_instance(
+                ctx,
+                solution_id=package.solution_id,
+                solution_version=package.version,
+                display_name=req.display_name_override or package.display_name,
+                expert_employee_ids=expert_employee_ids,
+                # Legacy solution columns remain empty while rolling deployments drain old clients.
+                knowledge_refs=[],
+                skill_refs=[],
+                planner_prompt="",
+                subtask_prompt="",
+                aggregate_prompt="",
+                default_grants_meta=None,
+                template_meta=package.model_dump(mode="json"),
+                coordinator_employee_id=coordinator_employee_id,
+                coordinator_instructions=getattr(package, "coordinator_instructions", ""),
+                workflow_skill_ref=getattr(package, "workflow_skill_ref", None),
+                output_requirements=getattr(package, "output_requirements", ""),
+            )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids)
+            raise
 
         # 方案本身也必须被授权：Agent 的方案投影按 ``resource_type=solution`` 裁剪，
         # 仅授权展开后的 expert 会让成员能私聊专家、却无法从该方案创建群聊。
         if grant_dept_ids or grant_member_ids:
-            _upsert_grant(
-                self._grants, ctx,
-                resource_type="solution", resource_id=instance.id,
-                department_ids=grant_dept_ids, member_ids=grant_member_ids,
+            try:
+                _upsert_grant(
+                    self._grants, ctx,
+                    resource_type="solution", resource_id=instance.id,
+                    department_ids=grant_dept_ids, member_ids=grant_member_ids,
+                )
+                grants_applied = True
+            except Exception:
+                self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+                raise
+
+        try:
+            self._record_solution_apply(
+                ctx,
+                package=package,
+                instance=instance,
+                employee_ids=expert_employee_ids,
+                match_audits=_match_audits,
             )
-            grants_applied = True
-
-        # 6) 审计。
-        self._recruit.append_recruit_event(
-            ctx,
-            action="apply_solution",
-            actor_user_id=ctx.user_id,
-            source_solution_id=package.solution_id,
-            source_solution_version=package.version,
-            target_employee_ids=expert_employee_ids,
-            target_solution_instance_id=instance.id,
-            detail={"expert_count": len(expert_employee_ids), "match_audits": _match_audits},
-        )
-
-        # 7) 方案应用记录（AITEAM-242，issue #286）：applied_by / applied_at /
-        # solution_version / status / expert_instances_created。
-        self._recruit.create_solution_apply_record(
-            ctx,
-            solution_id=package.solution_id,
-            solution_version=package.version,
-            applied_by=ctx.user_id,
-            expert_instance_ids=expert_employee_ids,
-            detail={"solution_instance_id": instance.id, "expert_count": len(expert_employee_ids)},
-            status="applied",
-        )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+            raise
 
         return ApplySolutionResult(
             solution_instance=_solution_out(instance),
@@ -393,6 +396,80 @@ class RecruitService:
 
     def recruited_template_ids(self, ctx: TenantContext) -> set[str]:
         return self._employees.list_live_source_template_ids(ctx)
+
+    def _record_solution_apply(
+        self,
+        ctx: TenantContext,
+        *,
+        package,
+        instance: SolutionInstanceRow,
+        employee_ids: list[str],
+        match_audits: list[dict],
+    ) -> None:
+        self._recruit.append_recruit_event(
+            ctx,
+            action="apply_solution",
+            actor_user_id=ctx.user_id,
+            source_solution_id=package.solution_id,
+            source_solution_version=package.version,
+            target_employee_ids=employee_ids,
+            target_solution_instance_id=instance.id,
+            detail={"expert_count": len(employee_ids), "match_audits": match_audits},
+        )
+        self._recruit.create_solution_apply_record(
+            ctx,
+            solution_id=package.solution_id,
+            solution_version=package.version,
+            applied_by=ctx.user_id,
+            expert_instance_ids=employee_ids,
+            detail={"solution_instance_id": instance.id, "expert_count": len(employee_ids)},
+            status="applied",
+        )
+
+    def _apply_solution_grants(
+        self,
+        ctx: TenantContext,
+        employee_ids: list[str],
+        department_ids: list[str],
+        member_ids: list[str],
+    ) -> bool:
+        if not (department_ids or member_ids) or not employee_ids:
+            return False
+        for employee_id in employee_ids:
+            _upsert_grant(
+                self._grants, ctx,
+                resource_type="expert", resource_id=employee_id,
+                department_ids=department_ids, member_ids=member_ids,
+            )
+        return True
+
+    def _rollback_solution_resources(self, ctx: TenantContext, employee_ids: list[str], solution_instance_id: str | None = None) -> None:
+        """Best-effort compensation for a failed solution apply.
+
+        Employee creation and grants use separate repository transactions today; delete grants
+        before employees so FK constraints cannot preserve a half-applied roster. The original
+        exception remains authoritative if compensation itself encounters an unavailable row.
+        """
+        if solution_instance_id:
+            try:
+                for grant in self._grants.list_by_resource(ctx, resource_type="solution", resource_id=solution_instance_id):
+                    self._grants.delete(ctx, grant_id=grant.id)
+            except Exception:  # noqa: BLE001 - compensation is best effort
+                pass
+            try:
+                self._recruit.delete_solution_instance(ctx, instance_id=solution_instance_id)
+            except Exception:  # noqa: BLE001 - preserve original apply failure
+                pass
+        for employee_id in reversed(list(dict.fromkeys(employee_ids))):
+            try:
+                for grant in self._grants.list_by_resource(ctx, resource_type="expert", resource_id=employee_id):
+                    self._grants.delete(ctx, grant_id=grant.id)
+            except Exception:  # noqa: BLE001 - continue cleaning remaining employees
+                pass
+            try:
+                self._employees.delete(ctx, employee_id=employee_id)
+            except Exception:  # noqa: BLE001 - preserve original apply failure
+                pass
 
     def _resolve_skills(self, ctx: TenantContext, refs, recommended: dict) -> list[str]:
         platform_refs = list(refs or recommended.get("platform_skill_refs") or [])

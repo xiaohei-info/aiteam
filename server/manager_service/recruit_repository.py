@@ -226,6 +226,11 @@ class RecruitRepository:
             ).fetchone()
         return _row_to_solution(row) if row is not None else None
 
+    def delete_solution_instance(self, ctx: TenantContext, *, instance_id: str) -> bool:
+        with self._router.session(ctx) as s:
+            cur = s.execute("DELETE FROM solution_instance WHERE id = %s", (instance_id,))
+            return cur.rowcount > 0
+
     def find_solution_instance(
         self, ctx: TenantContext, *, solution_id: str, solution_version: str
     ) -> SolutionInstanceRow | None:

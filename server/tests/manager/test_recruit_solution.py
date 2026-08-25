@@ -108,6 +108,9 @@ class _FakeEmployeeRepo:
             if (row := self._bucket(ctx).get(employee_id)) is not None and row.status != "archived"
         }
 
+    def delete(self, ctx, *, employee_id):
+        return self._bucket(ctx).pop(employee_id, None) is not None
+
 
 class _FakeGrantRepo:
     """内存伪 GrantRepository（模拟 D12 授权 upsert；跨租户分桶）。"""
@@ -126,6 +129,18 @@ class _FakeGrantRepo:
         )
         self._bucket(ctx)[key] = row
         return row
+
+    def list_by_resource(self, ctx, *, resource_type, resource_id):
+        row = self._bucket(ctx).get((resource_type, resource_id))
+        return [row] if row else []
+
+    def delete(self, ctx, *, grant_id):
+        bucket = self._bucket(ctx)
+        for key, row in list(bucket.items()):
+            if row.id == grant_id:
+                del bucket[key]
+                return True
+        return False
 
 
 class _FakeProviderRepo:
@@ -201,6 +216,9 @@ class _FakeRecruitRepo:
 
     def get_solution_instance(self, ctx, *, instance_id):
         return self._solutions.get(ctx.tenant_id, {}).get(instance_id)
+
+    def delete_solution_instance(self, ctx, *, instance_id):
+        return self._solutions.get(ctx.tenant_id, {}).pop(instance_id, None) is not None
 
     def find_solution_instance(self, ctx, *, solution_id, solution_version):
         for r in self._solutions.get(ctx.tenant_id, {}).values():
@@ -513,6 +531,35 @@ def test_apply_solution_expands_experts_and_instance():
     assert len(events) == 1
     assert events[0].action == "apply_solution"
     assert events[0].source_solution_id == "sol-1"
+
+
+def test_apply_solution_rolls_back_partial_employee_creation():
+    """方案展开中途失败不留下已创建员工或授权。"""
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    class FailingEmployeeRepo(_FakeEmployeeRepo):
+        calls = 0
+        def create(self, ctx, **kw):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated employee write failure")
+            return super().create(ctx, **kw)
+
+    emp = FailingEmployeeRepo()
+    grant = _FakeGrantRepo()
+    recruit = _FakeRecruitRepo()
+    orders = _FakeOrderRepo()
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+
+    with pytest.raises(RuntimeError, match="simulated employee write failure"):
+        svc.apply_solution(
+            _ctx("t-a"),
+            ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"], member_ids=["member-1"]),
+        )
+
+    assert emp._bucket(_ctx("t-a")) == {}
+    assert grant._bucket(_ctx("t-a")) == {}
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 
 def test_apply_solution_ignores_legacy_package_default_grants():
