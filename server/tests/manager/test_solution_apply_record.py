@@ -38,9 +38,6 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
                 persona="你是乙", recommended_config={"model": "m-b", "knowledge_refs": ["ks-b"]},
             ),
         ],
-        knowledge_refs=["ks-shared"],
-        skill_refs=["skill-shared"],
-        default_grants={"department_ids": ["dept-default"]},
     )
 
 

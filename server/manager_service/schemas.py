@@ -497,12 +497,6 @@ class SolutionInstanceOut(BaseModel):
     workflow_skill_ref: dict | None = Field(default=None, description="方案工作流 Skill 固定版本引用")
     output_requirements: str = Field(default="", description="方案交付要求")
     config_version: int = Field(default=1, ge=1)
-    # Deprecated response fields are retained for rolling clients; new projections leave them empty.
-    knowledge_refs: list[str] = Field(default_factory=list, description="Deprecated; tenant binding lives on employees")
-    skill_refs: list[str] = Field(default_factory=list, description="Deprecated; skills live on employee snapshots")
-    planner_prompt: str = Field(default="", description="Deprecated; use coordinator_instructions")
-    subtask_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
-    aggregate_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

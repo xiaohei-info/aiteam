@@ -602,12 +602,6 @@ def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:
         workflow_skill_ref=row.workflow_skill_ref,
         output_requirements=row.output_requirements,
         config_version=row.config_version,
-        # Deprecated fields intentionally remain empty for new Pi-native instances.
-        knowledge_refs=row.knowledge_refs or [],
-        skill_refs=row.skill_refs or [],
-        planner_prompt=row.planner_prompt,
-        subtask_prompt=row.subtask_prompt,
-        aggregate_prompt=row.aggregate_prompt,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

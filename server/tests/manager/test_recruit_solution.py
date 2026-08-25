@@ -495,9 +495,6 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
                 persona="你是乙", recommended_config={"model": "m-b", "knowledge_refs": ["ks-b"]},
             ),
         ],
-        knowledge_refs=["ks-shared"],
-        skill_refs=["skill-shared"],
-        default_grants={"department_ids": ["dept-default"]},
     )
 
 
@@ -520,8 +517,6 @@ def test_apply_solution_expands_experts_and_instance():
     # 方案只固定 roster/coordinator；deprecated package refs never fan out to employees.
     assert inst.coordinator_employee_id == inst.expert_employee_ids[1]
     assert inst.coordinator_instructions == "先让相关专家分析，再汇总结论。"
-    assert inst.knowledge_refs == []
-    assert inst.skill_refs == []
     for eid in inst.expert_employee_ids:
         row = emp.get(_ctx("t-a"), employee_id=eid)
         assert "ks-shared" not in row.knowledge_refs
@@ -880,7 +875,6 @@ def test_apply_solution_persists_pi_native_coordinator_metadata():
         coordinator_instructions="先核对事实，再给出结论。",
         output_requirements="给出三条可执行建议。",
         experts=[_expert_template()],
-        planner_prompt="legacy-plan", subtask_prompt="legacy-sub", aggregate_prompt="legacy-agg",
     )
     catalog.seed_solution(pkg)
     svc, _, _, _, _ = _build_service(catalog)
@@ -889,9 +883,6 @@ def test_apply_solution_persists_pi_native_coordinator_metadata():
     assert result.solution_instance.coordinator_employee_id == result.solution_instance.expert_employee_ids[0]
     assert result.solution_instance.coordinator_instructions == "先核对事实，再给出结论。"
     assert result.solution_instance.output_requirements == "给出三条可执行建议。"
-    assert result.solution_instance.planner_prompt == ""
-    assert result.solution_instance.subtask_prompt == ""
-    assert result.solution_instance.aggregate_prompt == ""
 
 
 # ---- 追加测试：F06 未传 employee_slug 时后端自动生成 slug（PRD P03/P04）----
