@@ -61,7 +61,6 @@ const ALL_NAV_IDS = [
   "departments",
   "solutions",
   "skills",
-  "providers",
   "marketplace",
   "experts",
   "grants",
@@ -139,13 +138,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（13 项）", () => {
+  it("导航覆盖企业管理入口（12 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(13);
+    expect(navIds).toHaveLength(12);
   });
 
-  it("owner 可见全部 13 项导航", () => {
+  it("owner 可见全部 12 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -167,7 +166,6 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "skills",
-      "providers",
       "marketplace",
       "experts",
       "grants",

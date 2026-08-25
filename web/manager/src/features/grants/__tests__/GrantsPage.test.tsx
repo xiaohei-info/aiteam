@@ -82,8 +82,11 @@ describe("GrantsPage 成员级授权", () => {
     mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByTestId("grant-row")).toBeInTheDocument());
-    // member_id m1 在授权行内解析为"张三"（表单下拉也有同名选项，故限定行内）
-    expect(screen.getByRole("row", { name: /张三/ })).toBeInTheDocument();
+    // resource_id e1 和 member_id m1 都必须解析为用户可读名称。
+    const row = screen.getByRole("row", { name: /专家A/ });
+    expect(row).toHaveTextContent("专家A");
+    expect(row).toHaveTextContent("张三");
+    expect(row).not.toHaveTextContent("e1");
     expect(screen.getByRole("table", { name: "成员级授权" })).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "新建授权" })).toBeInTheDocument();
   });

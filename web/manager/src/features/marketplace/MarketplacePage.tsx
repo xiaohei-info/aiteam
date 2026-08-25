@@ -14,7 +14,6 @@ import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
 import { Heading } from "@astryxdesign/core/Heading";
@@ -115,7 +114,7 @@ export function MarketplacePage(): ReactNode {
                 <VStack gap={3}>
                   <VStack gap={1}>
                     <Heading level={3}>{t.display_name}</Heading>
-                    <Code>{t.template_id}@{t.version}</Code>
+                    <Text type="supporting">版本 v{t.version}</Text>
                   </VStack>
                   {t.persona && <Text color="secondary">{t.persona}</Text>}
                 {canWrite && (

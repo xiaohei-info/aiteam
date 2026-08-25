@@ -10,14 +10,18 @@ import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
+import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { useExpertsApi } from "../experts/useExpertsApi";
 import { useMemoryApi } from "./useMemoryApi";
 import type { MemoryItem } from "./types";
 
 export function MemoryPage(): ReactNode {
   const api = useMemoryApi();
+  const expertsApi = useExpertsApi();
   const [items, setItems] = useState<MemoryItem[]>([]);
+  const [employees, setEmployees] = useState<Array<{ employee_id: string; display_name: string }>>([]);
   const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +39,9 @@ export function MemoryPage(): ReactNode {
   }, [api, keyword]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void expertsApi.listEmployees().then(setEmployees).catch(() => setEmployees([]));
+  }, [expertsApi]);
 
   const handleCreate = useCallback(async () => {
     if (!newEmployee || !newContent) return;
@@ -63,11 +70,18 @@ export function MemoryPage(): ReactNode {
       {actionError && <Banner status="error" title={actionError} />}
 
       {showForm && (
-        <Card padding={4}><VStack gap={3}><FormLayout><TextInput label="员工ID" value={newEmployee} onChange={setNewEmployee} /><TextInput label="记忆内容" value={newContent} onChange={setNewContent} /></FormLayout><HStack gap={2}><Button label="保存" variant="primary" size="sm" onClick={() => void handleCreate()} /><Button label="取消" variant="secondary" size="sm" onClick={() => setShowForm(false)} /></HStack></VStack></Card>
+        <Card padding={4}><VStack gap={3}><FormLayout><Selector
+          label="专家"
+          options={employees.map((employee) => ({ value: employee.employee_id, label: employee.display_name || "未命名专家" }))}
+          value={newEmployee || undefined}
+          onChange={setNewEmployee}
+          placeholder={employees.length === 0 ? "暂无可用专家" : "请选择专家"}
+          isRequired
+        /><TextInput label="记忆内容" value={newContent} onChange={setNewContent} /></FormLayout><HStack gap={2}><Button label="保存" variant="primary" size="sm" onClick={() => void handleCreate()} isDisabled={!newEmployee || !newContent} /><Button label="取消" variant="secondary" size="sm" onClick={() => setShowForm(false)} /></HStack></VStack></Card>
       )}
 
       {loading ? <Card padding={4} role="status" aria-label="记忆加载中"><Skeleton height={80} /></Card> : items.length === 0 ? <EmptyState title="暂无记忆条目" /> : <VStack gap={2}>{items.map((m) => (
-        <Card key={m.memory_id} padding={4} data-testid="memory-item"><HStack justify="between" align="start"><VStack gap={1}><Text>{m.content}</Text><Text type="supporting">{m.category} · 重要度 {m.importance}/5 · {m.source} · {m.created_at?.slice(0, 10)}</Text></VStack><Button label="删除" variant="destructive" size="sm" onClick={() => void handleDelete(m.memory_id)} /></HStack></Card>
+        <Card key={m.memory_id} padding={4} data-testid="memory-item"><HStack justify="between" align="start"><VStack gap={1}><Text>{m.content}</Text><Text type="supporting">专家：{employees.find((employee) => employee.employee_id === m.employee_id)?.display_name || "已删除专家"}</Text><Text type="supporting">{m.category} · 重要度 {m.importance}/5 · {m.source} · {m.created_at?.slice(0, 10)}</Text></VStack><Button label="删除" variant="destructive" size="sm" onClick={() => void handleDelete(m.memory_id)} /></HStack></Card>
       ))}</VStack>}
     </VStack>
   );

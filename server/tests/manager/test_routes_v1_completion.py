@@ -132,7 +132,7 @@ def test_connector_presets_ok():
     c = _build_app("postgresql://x", build_connector_ops_router)
     r = c.get("/api/manager/connectors/presets", headers=_hdr())
     assert r.status_code == 200
-    assert len(r.json()) >= 5
+    assert len(r.json()["data"]) >= 5
 
 def test_connector_test_ok():
     from manager_service.routes_connector_ops import build_connector_ops_router

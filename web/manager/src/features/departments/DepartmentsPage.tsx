@@ -5,7 +5,6 @@ import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
@@ -173,18 +172,12 @@ export function DepartmentsPage(): ReactNode {
   const columns = useMemo<TableColumn<DepartmentRow>[]>(() => {
     const base: TableColumn<DepartmentRow>[] = [
       {
-        key: "department_slug",
-        header: i18n.t("manager.departments.col_slug"),
-        width: proportional(1),
-        renderCell: (department) => <Code>{department.department_slug}</Code>,
-      },
-      {
         key: "display_name",
         header: i18n.t("manager.departments.col_name"),
         width: proportional(1),
         renderCell: (department) => (
           <Text weight="bold" data-testid="department-row" data-department-id={department.id}>
-            {department.display_name || department.department_slug}
+            {department.display_name || "未命名部门"}
           </Text>
         ),
       },

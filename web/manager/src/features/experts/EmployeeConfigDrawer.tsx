@@ -183,7 +183,7 @@ export function EmployeeConfigDrawer({
   const providerOptions = useMemo(
     () => catalog.providers.map((provider) => ({
       value: provider.provider_id,
-      label: provider.display_name || provider.provider_code,
+      label: provider.display_name || "未命名 Provider",
     })),
     [catalog.providers],
   );
@@ -191,7 +191,7 @@ export function EmployeeConfigDrawer({
   const modelOptions = useMemo(
     () => availableModels.map((item) => ({
       value: item.model.model_id,
-      label: `${item.model.display_name || item.model.model_id} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
+      label: `${item.model.display_name || "未命名模型"} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
     })),
     [availableModels],
   );
@@ -377,7 +377,7 @@ export function EmployeeConfigDrawer({
                       <MultiSelector
                         label="企业已安装技能"
                         description={skills.length ? "选择此专家可使用的技能" : "暂无已安装技能，请先前往技能市场安装"}
-                        options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || skill.skill_id} · v${skill.version}` }))}
+                        options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || "未命名技能"} · v${skill.version}` }))}
                         value={draft.skills}
                         onChange={(value) => update("skills", value)}
                         placeholder="选择技能"

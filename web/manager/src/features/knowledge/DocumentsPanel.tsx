@@ -18,6 +18,8 @@ import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { createManagerApiClient } from "../../api/client";
+import { useSession } from "../../auth/session";
 import { useKnowledgeApi } from "./useKnowledgeApi";
 import type {
   KnowledgeDocument,
@@ -135,6 +137,7 @@ function retryableMessage(error: unknown, fallback: string): string {
 
 export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props): ReactNode {
   const api = useKnowledgeApi();
+  const { token, onUnauthorized } = useSession();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
@@ -153,6 +156,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
   const [pendingDelete, setPendingDelete] = useState<KnowledgeDocument | null>(null);
   const [bindingDocument, setBindingDocument] = useState<KnowledgeDocument | null>(null);
   const [documentBindings, setDocumentBindings] = useState<KnowledgeDocumentBinding[]>([]);
+  const [employeeNames, setEmployeeNames] = useState<Map<string, string>>(new Map());
   const [bindingsLoading, setBindingsLoading] = useState(false);
   const [bindingsError, setBindingsError] = useState<string | null>(null);
 
@@ -247,9 +251,16 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     setBindingsLoading(true);
     setBindingsError(null);
     try {
-      const nextBindings = await api.listDocumentBindings(requestedSpaceId, document.id);
+      const client = createManagerApiClient({ getToken: () => token, onUnauthorized });
+      const [nextBindings, employeePage] = await Promise.all([
+        api.listDocumentBindings(requestedSpaceId, document.id),
+        client.listGet<{ employee_id?: string; display_name?: string }>("/api/manager/employees"),
+      ]);
       if (requestId !== bindingRequestSequence.current || currentSpaceId.current !== requestedSpaceId) return;
       setDocumentBindings(nextBindings);
+      setEmployeeNames(new Map((employeePage.items ?? [])
+        .map((employee) => [employee.employee_id ?? "", employee.display_name ?? "未命名专家"] as const)
+        .filter(([id]) => id)));
     } catch (err) {
       if (requestId !== bindingRequestSequence.current || currentSpaceId.current !== requestedSpaceId) return;
       setBindingsError(errorMessage(err, "加载索引绑定失败"));
@@ -586,7 +597,12 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
                       tableProps={{ "aria-label": "文档索引绑定" }}
                       data={documentBindings as DocumentBindingRow[]}
                       columns={[
-                        { key: "employee_id", header: "专家", width: proportional(1) },
+                        {
+                          key: "employee_id",
+                          header: "专家",
+                          width: proportional(1),
+                          renderCell: (binding) => employeeNames.get(binding.employee_id) ?? "已删除专家",
+                        },
                         {
                           key: "status",
                           header: "状态",

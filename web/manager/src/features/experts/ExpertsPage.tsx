@@ -13,7 +13,6 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -87,14 +86,8 @@ export function ExpertsPage(): ReactNode {
       header: i18n.t("manager.experts.display_name"),
       width: proportional(1),
       renderCell: (employee) => (
-        <Text weight="bold" data-testid="employee-row">{employee.display_name}</Text>
+        <Text weight="bold" data-testid="employee-row">{employee.display_name || "未命名专家"}</Text>
       ),
-    },
-    {
-      key: "employee_slug",
-      header: "slug",
-      width: proportional(1),
-      renderCell: (employee) => <Code>{employee.employee_slug}</Code>,
     },
     {
       key: "status",
@@ -106,12 +99,6 @@ export function ExpertsPage(): ReactNode {
           variant={employee.status === "active" ? "success" : "neutral"}
         />
       ),
-    },
-    {
-      key: "provider_ref",
-      header: i18n.t("manager.experts.provider_ref"),
-      width: proportional(1),
-      renderCell: (employee) => employee.model_policy.provider_ref ?? "—",
     },
     {
       key: "model",

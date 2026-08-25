@@ -187,7 +187,7 @@ describe("LoginPage", () => {
       expect(screen.getByTestId("owner-reset-form")).toBeInTheDocument();
     });
     expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument();
-    expect(screen.getByText("t-uuid-1 · owner1")).toBeInTheDocument();
+    expect(screen.getByText("账号：owner1")).toBeInTheDocument();
     expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     const newPasswordInput = screen.getByTestId("new-password") as HTMLInputElement;

@@ -10,7 +10,6 @@ import { SolutionsPage } from "./features/solutions";
 import { ExpertsPage } from "./features/experts";
 import { GrantsPage } from "./features/grants";
 import { GovernancePage } from "./features/governance";
-import { ProvidersPage } from "./features/providers";
 import { KnowledgePage } from "./features/knowledge";
 import { CapabilityPage } from "./features/capability";
 import { BillingPage, RechargePage } from "./features/billing";
@@ -35,7 +34,6 @@ export function App(): React.ReactNode {
         <Route path="/experts" element={<ExpertsPage />} />
         <Route path="/grants" element={<GrantsPage />} />
         <Route path="/governance" element={<GovernancePage />} />
-        <Route path="/providers" element={<ProvidersPage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
         <Route path="/skill-market" element={<SkillMarketPage />} />

@@ -69,6 +69,8 @@ export function GovernancePage(): ReactNode {
 
   const [rollups, setRollups] = useState<UsageRollup[]>([]);
   const [audits, setAudits] = useState<AuditSummary[]>([]);
+  const [employeeNames, setEmployeeNames] = useState<Map<string, string>>(new Map());
+  const [memberNames, setMemberNames] = useState<Map<string, string>>(new Map());
   const [quotas, setQuotas] = useState<QuotaPolicy[]>([]);
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [auditActionFilter, setAuditActionFilter] = useState("all");
@@ -90,6 +92,10 @@ export function GovernancePage(): ReactNode {
       setRollups(nextRollups);
       setAudits(nextAudits);
       setQuotas(nextQuotas);
+      const employees = await (api.listEmployees ? api.listEmployees().catch(() => []) : []);
+      const members = await (api.listMembers ? api.listMembers().catch(() => []) : []);
+      setEmployeeNames(new Map(employees.map((employee) => [employee.employee_id, employee.display_name])));
+      setMemberNames(new Map(members.map((member) => [member.id, member.display_name])));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.gov.load_error"));
     } finally {
@@ -132,10 +138,10 @@ export function GovernancePage(): ReactNode {
       { value: "all", label: "全部员工" },
       ...Array.from(new Set(rollups.map((rollup) => rollup.employee_id).filter(Boolean))).map((employeeId) => ({
         value: employeeId!,
-        label: employeeId!,
+        label: employeeNames.get(employeeId!) ?? "已删除专家",
       })),
     ],
-    [rollups],
+    [employeeNames, rollups],
   );
   const auditActionOptions = useMemo(
     () => [
@@ -175,17 +181,19 @@ export function GovernancePage(): ReactNode {
   );
   const auditColumns = useMemo<TableColumn<AuditSummaryRow>[]>(
     () => [
-      { key: "actor", header: i18n.t("manager.gov.actor"), width: proportional(1), renderCell: (audit) => <Text data-testid="audit-row">{audit.actor}</Text> },
+      { key: "actor", header: i18n.t("manager.gov.actor"), width: proportional(1), renderCell: (audit) => <Text data-testid="audit-row">{audit.actor === "anon" ? "未认证用户" : memberNames.get(audit.actor) ?? "企业成员"}</Text> },
       { key: "action", header: i18n.t("manager.gov.action"), width: proportional(1) },
       {
         key: "resource",
         header: i18n.t("manager.gov.resource"),
         width: proportional(1),
-        renderCell: (audit) => audit.resource_type ? `${audit.resource_type}:${audit.resource_id ?? ""}` : "—",
+        renderCell: (audit) => audit.resource_id && employeeNames.has(audit.resource_id)
+          ? employeeNames.get(audit.resource_id)
+          : audit.resource_type ? "管理对象" : "—",
       },
       { key: "occurred_at", header: i18n.t("manager.gov.time"), width: pixel(200) },
     ],
-    [i18n],
+    [employeeNames, i18n, memberNames],
   );
   const quotaColumns = useMemo<TableColumn<QuotaPolicyRow>[]>(
     () => [

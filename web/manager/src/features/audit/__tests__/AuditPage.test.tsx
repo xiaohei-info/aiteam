@@ -13,7 +13,12 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { AuditPage } from "../AuditPage";
 import * as apiModule from "../useAuditApi";
+import * as membersModule from "../../members/useMembersApi";
+import * as expertsModule from "../../experts/useExpertsApi";
 import type { AuditEvent } from "../types";
+
+vi.mock("../../members/useMembersApi", () => ({ useMembersApi: vi.fn() }));
+vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -30,6 +35,15 @@ function sessionValue(): SessionContextValue {
 }
 
 function mockApi(overrides: Partial<apiModule.AuditApi> = {}) {
+  vi.mocked(membersModule.useMembersApi).mockReturnValue({
+    listMembers: vi.fn().mockResolvedValue([{ id: "m1", display_name: "张三" }]),
+    createMember: vi.fn(), updateMember: vi.fn(), deleteMember: vi.fn(), listDepartments: vi.fn(),
+  });
+  vi.mocked(expertsModule.useExpertsApi).mockReturnValue({
+    listEmployees: vi.fn().mockResolvedValue([{ employee_id: "e1", display_name: "专家A" }]),
+    listTemplates: vi.fn(), listSolutions: vi.fn(), recruitExpert: vi.fn(), applySolution: vi.fn(),
+    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
+  });
   const api: apiModule.AuditApi = {
     list: vi.fn().mockResolvedValue([
       { event_id: "e1", event_type: "member.created", actor_id: "u1", target_type: "member", target_id: "m1", detail: {}, created_at: "2026-06-30T10:00:00Z" },
@@ -74,7 +88,8 @@ describe("AuditPage 审计事件", () => {
     expect(screen.getByRole("columnheader", { name: "事件类型" })).toBeInTheDocument();
     expect(screen.getAllByRole("row")).toHaveLength(2);
     expect(screen.getByText("member.created")).toBeInTheDocument();
-    expect(screen.getByText("member/m1")).toBeInTheDocument();
+    expect(screen.getByText("成员：张三")).toBeInTheDocument();
+    expect(screen.queryByText("m1")).not.toBeInTheDocument();
   });
 
   it("按事件类型筛选并翻页", async () => {

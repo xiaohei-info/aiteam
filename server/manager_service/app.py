@@ -152,6 +152,8 @@ app.state._token_verifier = _verifier
 app.state._operator_catalog = _build_operator_catalog()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
+# 连接器预设/状态/测试路由必须先于 capability 的 /connectors/{catalog_id}，避免 `presets` 被当成 UUID。
+app.include_router(build_connector_ops_router(_verifier))
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。
 app.include_router(build_employee_router(_verifier))
 # employee_prompt 版本管理（/api/manager/employees/{id}/prompts[|/history|/rollback]，issue #303）。verifier 由本端持有闭包注入。
@@ -193,8 +195,6 @@ app.include_router(build_memory_items_router(_verifier))
 # P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
 # Manager-only because Hindsight 0.12.0 has no native bank-scoped token API.
 app.include_router(build_hindsight_router(_verifier))
-# ---- 功能补全：B05 连接器测试/状态/grants/预设 ----
-app.include_router(build_connector_ops_router(_verifier))
 # ---- 功能补全：P07 组织树/部门分配 ----
 app.include_router(build_org_router(_verifier))
 # ---- 功能补全：B08 企业设置/子管理员邀请 ----

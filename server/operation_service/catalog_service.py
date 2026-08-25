@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from shared.contracts.crosstier import CatalogReleaseNotify
+from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.errors import Conflict, NotFound
 
@@ -521,6 +524,12 @@ class CatalogService:
         results: list[ExpertTemplateDetail] = []
         for entry in entries:
             payload = entry.payload or {}
+            try:
+                # Old published rows may predate the required platform model reference.
+                # They are not executable and must not break the whole marketplace list.
+                model_ref = PlatformModelRef.model_validate(payload.get("platform_model_ref"))
+            except (ValidationError, TypeError, ValueError):
+                continue
             persona, recommended = self._backfill_expert(payload)
             results.append(
                 ExpertTemplateDetail(
@@ -532,7 +541,7 @@ class CatalogService:
                     category=payload.get("category", ""),
                     avatar_url=payload.get("avatar_url", ""),
                     system_prompt=payload.get("system_prompt", ""),
-                    platform_model_ref=payload.get("platform_model_ref"),
+                    platform_model_ref=model_ref,
                     skill_ids=payload.get("skill_ids", []),
                     platform_skill_refs=payload.get("platform_skill_refs", []),
                     description=payload.get("description", ""),

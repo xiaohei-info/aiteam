@@ -138,14 +138,14 @@ describe("ExpertsPage", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-  it("列表：展示本 tenant 已招募专家（名称 / slug / 状态 / provider / model / 配置状态）", async () => {
+  it("列表：展示本 tenant 已招募专家名称 / 状态 / model / 配置状态", async () => {
     mockApis([employeeConfigured, employeeUnconfigured]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")[0]!).toBeInTheDocument());
     expect(screen.getAllByTestId("employee-row")).toHaveLength(2);
     expect(screen.getByText("架构师")).toBeInTheDocument();
-    expect(screen.getByText("architect")).toBeInTheDocument();
-    expect(screen.getByText("openai-main")).toBeInTheDocument();
+    expect(screen.queryByText("architect")).not.toBeInTheDocument();
+    expect(screen.queryByText("openai-main")).not.toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "已招募专家实例" })).toBeInTheDocument();
   });

@@ -400,6 +400,28 @@ def test_update_expert_flat_fields(service):
     assert entry.payload["platform_skill_refs"][0]["version"] == "1.0.0"
 
 
+def test_list_published_experts_skips_legacy_missing_model_ref(service):
+    service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE,
+        template_id="legacy-no-model",
+        version="1",
+        display_name="旧专家",
+        status=CatalogStatus.PUBLISHED,
+        payload={"system_prompt": "legacy"},
+    ))
+    service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE,
+        template_id="valid-model",
+        version="1",
+        display_name="可用专家",
+        status=CatalogStatus.PUBLISHED,
+        payload={"platform_model_ref": {"provider_id": "p", "provider_version": 1, "model_id": "m", "model_version": 1}},
+    ))
+
+    items = service.list_published_expert_templates()
+    assert [item.template_id for item in items] == ["valid-model"]
+
+
 def test_list_includes_full_config(service):
     """GET 目录列表时 CatalogEntryResponse 应返回完整模板配置（PRD-v2 扁平字段验收）。"""
     service.register_expert_template(

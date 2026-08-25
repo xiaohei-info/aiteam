@@ -217,18 +217,21 @@ class BillingRepository:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._router.session(ctx) as s:
             rows = s.execute(
-                "SELECT id, employee_id, window_start, token_total, cost_total "
-                "FROM usage_rollup" + where + " ORDER BY window_start DESC LIMIT 500",
+                "SELECT u.id, u.employee_id, "
+                "COALESCE(NULLIF(e.display_name, ''), NULLIF(e.employee_slug, ''), '已删除专家') AS employee_name, "
+                "u.window_start, u.token_total, u.cost_total "
+                "FROM usage_rollup AS u "
+                "LEFT JOIN employee AS e ON e.id = u.employee_id" + where.replace("window_start", "u.window_start").replace("window_end", "u.window_end").replace("employee_id", "u.employee_id") + " ORDER BY u.window_start DESC LIMIT 500",
                 tuple(params),
             ).fetchall()
         return [
             {
                 "record_id": str(r[0]),
                 "employee_id": str(r[1]),
-                "employee_name": str(r[1]),
-                "date": r[2].isoformat() if r[2] else None,
-                "token_total": int(r[3]),
-                "cost": Decimal(str(r[4])),
+                "employee_name": str(r[2] or "已删除专家"),
+                "date": r[3].isoformat() if r[3] else None,
+                "token_total": int(r[4]),
+                "cost": Decimal(str(r[5])),
             }
             for r in rows
         ]

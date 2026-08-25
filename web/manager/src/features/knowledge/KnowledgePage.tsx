@@ -5,7 +5,6 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
@@ -168,7 +167,7 @@ export function KnowledgePage(): ReactNode {
       if (requestId !== bindingRequestSequence.current || bindingSpaceIdRef.current !== id) return;
       setExperts((employeePage.items ?? []).map((employee) => ({
         id: employee.employee_id ?? "",
-        label: employee.display_name ?? employee.employee_id ?? "",
+        label: employee.display_name ?? "未命名专家",
       })).filter((option) => option.id));
       setDepartments((departmentPage.items ?? []).map((department) => ({ id: department.id, label: department.display_name })));
       setMembers((memberPage.items ?? []).map((member) => ({ id: member.id, label: member.display_name })));
@@ -207,7 +206,7 @@ export function KnowledgePage(): ReactNode {
 
   const resolveResourceLabel = useCallback((binding: KnowledgeBinding): string => {
     const options = binding.resource_type === "expert" ? experts : binding.resource_type === "department" ? departments : members;
-    return options.find((option) => option.id === binding.resource_id)?.label ?? binding.resource_id;
+    return options.find((option) => option.id === binding.resource_id)?.label ?? "已删除对象";
   }, [departments, experts, members]);
 
   async function handleBind(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -278,9 +277,7 @@ export function KnowledgePage(): ReactNode {
 
   const spaceColumns = useMemo<TableColumn<KnowledgeSpaceRow>[]>(() => {
     const result: TableColumn<KnowledgeSpaceRow>[] = [
-      { key: "knowledge_space_id", header: "ID", width: proportional(1), renderCell: (space) => <Code>{space.knowledge_space_id}</Code> },
-      { key: "display_name", header: "名称", width: proportional(1), renderCell: (space) => <Text weight="bold">{space.display_name || "—"}</Text> },
-      { key: "workspace", header: "Workspace", width: proportional(1), renderCell: (space) => <Code>{space.workspace}</Code> },
+      { key: "display_name", header: "名称", width: proportional(2), renderCell: (space) => <Text weight="bold">{space.display_name || "未命名知识空间"}</Text> },
     ];
     result.push({
       key: "actions",
@@ -289,7 +286,7 @@ export function KnowledgePage(): ReactNode {
       align: "end",
       resizable: false,
       renderCell: (space) => {
-        const name = space.display_name || space.knowledge_space_id;
+        const name = space.display_name || "未命名知识空间";
         return (
           <HStack gap={2} justify="end">
             <Button label={`管理${name}文档`} variant="ghost" size="sm" onClick={() => setDocSpaceId(space.knowledge_space_id)} />
@@ -369,7 +366,7 @@ export function KnowledgePage(): ReactNode {
 
       <Dialog
         isOpen={bindingSpace != null}
-        aria-label={bindingSpace ? `绑定管理 · ${bindingSpace.display_name || bindingSpace.knowledge_space_id}` : "绑定管理"}
+        aria-label={bindingSpace ? `绑定管理 · ${bindingSpace.display_name || "未命名知识空间"}` : "绑定管理"}
         onOpenChange={(isOpen) => { if (!isOpen && !working) closeBindings(); }}
         width={820}
         maxHeight="90vh"
@@ -379,7 +376,7 @@ export function KnowledgePage(): ReactNode {
           height="auto"
           header={
             <DialogHeader
-              title={bindingSpace ? `绑定管理 · ${bindingSpace.display_name || bindingSpace.knowledge_space_id}` : "绑定管理"}
+              title={bindingSpace ? `绑定管理 · ${bindingSpace.display_name || "未命名知识空间"}` : "绑定管理"}
               onOpenChange={(isOpen) => { if (!isOpen && !working) closeBindings(); }}
             />
           }
@@ -425,7 +422,7 @@ export function KnowledgePage(): ReactNode {
                             />
                             <Selector
                               label="绑定对象"
-                              options={resourceOptions.map((option) => ({ value: option.id, label: option.label || option.id }))}
+                              options={resourceOptions.map((option) => ({ value: option.id, label: option.label || "未命名对象" }))}
                               value={bindResourceId || undefined}
                               onChange={setBindResourceId}
                               placeholder={resourceOptions.length === 0 ? "无可用目标" : "请选择"}
@@ -473,7 +470,7 @@ export function KnowledgePage(): ReactNode {
       {documentSpace && (
         <DocumentsPanel
           spaceId={documentSpace.knowledge_space_id}
-          spaceName={documentSpace.display_name || documentSpace.knowledge_space_id}
+          spaceName={documentSpace.display_name || "未命名知识空间"}
           canWrite={canWrite}
           onClose={() => setDocSpaceId(null)}
         />

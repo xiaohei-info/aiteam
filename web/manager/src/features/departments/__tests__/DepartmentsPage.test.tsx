@@ -65,7 +65,7 @@ describe("DepartmentsPage 部门管理", () => {
     await waitFor(() => expect(screen.getByTestId("department-row")).toBeInTheDocument());
     expect(screen.getByRole("heading", { level: 1, name: "部门管理" })).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "部门管理" })).toBeInTheDocument();
-    expect(screen.getByText("engineering")).toBeInTheDocument();
+    expect(screen.getByText("研发部")).toBeInTheDocument();
     expect(screen.getByText("2026-07-01T00:00:00Z")).toBeInTheDocument();
     expect(screen.getByText(/不展示或虚构成员树/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "前往成员账号页面" })).toHaveAttribute("href", "/members");

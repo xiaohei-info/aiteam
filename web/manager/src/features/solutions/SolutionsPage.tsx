@@ -13,7 +13,6 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { MultiSelector } from "@astryxdesign/core/MultiSelector";
@@ -33,7 +32,7 @@ import { useGrantsApi } from "../grants/useGrantsApi";
 import { useKnowledgeApi } from "../knowledge/useKnowledgeApi";
 import type { Department, Member } from "../grants/types";
 import type { KnowledgeSpace } from "../knowledge/types";
-import type { SolutionInstance, SolutionPackage } from "../experts/types";
+import type { EmployeeConfig, SolutionInstance, SolutionPackage } from "../experts/types";
 
 export function SolutionsPage(): ReactNode {
   const { session } = useSession();
@@ -45,6 +44,7 @@ export function SolutionsPage(): ReactNode {
 
   const [solutions, setSolutions] = useState<SolutionPackage[]>([]);
   const [solutionInstances, setSolutionInstances] = useState<SolutionInstance[]>([]);
+  const [employees, setEmployees] = useState<EmployeeConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -55,9 +55,14 @@ export function SolutionsPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      const [s, si] = await Promise.all([api.listSolutions(), api.listSolutionInstances()]);
+      const [s, si, employeeItems] = await Promise.all([
+        api.listSolutions(),
+        api.listSolutionInstances(),
+        api.listEmployees(),
+      ]);
       setSolutions(s);
       setSolutionInstances(si);
+      setEmployees(employeeItems);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.load_error"));
     } finally {
@@ -108,7 +113,7 @@ export function SolutionsPage(): ReactNode {
                 <VStack gap={3}>
                   <VStack gap={1}>
                     <Heading level={3}>{s.display_name}</Heading>
-                    <Code>{s.solution_id}@{s.version}</Code>
+                    <Text type="supporting">版本 v{s.version}</Text>
                   </VStack>
                   {s.tags && s.tags.length > 0 && (
                     <HStack gap={1} wrap="wrap">
@@ -147,7 +152,11 @@ export function SolutionsPage(): ReactNode {
         ) : (
           <Grid columns={{ minWidth: 300, repeat: "fit" }} gap={3}>
             {solutionInstances.map((si) => (
-              <SolutionInstanceCard key={si.id} instance={si} />
+              <SolutionInstanceCard
+                key={si.id}
+                instance={si}
+                employeeNames={new Map(employees.map((employee) => [employee.employee_id, employee.display_name]))}
+              />
             ))}
           </Grid>
         )}
@@ -251,11 +260,11 @@ function SolutionApplyDialog({
               if (err instanceof ApiError && err.status < 500 && err.status !== 408 && err.status !== 429) break;
             }
           }
-          if (failure) failures.push(`${knowledgeSpaceId}/${employeeId}`);
+          if (failure) failures.push(employeeId);
         }
       }
       onApplied(failures.length > 0
-        ? `方案已应用，但 ${failures.length} 个知识绑定未完成（${failures.slice(0, 3).join(", ")}）；可在知识库页面重试。`
+        ? `方案已应用，但 ${failures.length} 个知识绑定未完成；可在知识库页面重试。`
         : undefined);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");
@@ -272,9 +281,9 @@ function SolutionApplyDialog({
         {error && <Banner status="error" title={error} />}
         {loading ? <Text role="status">加载成员、部门和知识空间…</Text> : (
           <VStack gap={3}>
-            <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
-            <MultiSelector label="授权部门" options={departments.map((department) => ({ value: department.id, label: department.display_name }))} value={departmentIds} onChange={setDepartmentIds} triggerDisplay="labels" isOptional isDisabled={working} />
-            <MultiSelector label="方案知识空间（可选）" options={knowledgeSpaces.map((space) => ({ value: space.knowledge_space_id, label: space.display_name || space.knowledge_space_id }))} value={knowledgeSpaceIds} onChange={setKnowledgeSpaceIds} triggerDisplay="labels" isOptional isDisabled={working} />
+            <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name || "未命名成员" }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
+            <MultiSelector label="授权部门" options={departments.map((department) => ({ value: department.id, label: department.display_name || "未命名部门" }))} value={departmentIds} onChange={setDepartmentIds} triggerDisplay="labels" isOptional isDisabled={working} />
+            <MultiSelector label="方案知识空间（可选）" options={knowledgeSpaces.map((space) => ({ value: space.knowledge_space_id, label: space.display_name || "未命名知识空间" }))} value={knowledgeSpaceIds} onChange={setKnowledgeSpaceIds} triggerDisplay="labels" isOptional isDisabled={working} />
           </VStack>
         )}
         <HStack justify="end" gap={2}>
@@ -309,7 +318,7 @@ function SolutionDetailOverlay({ solution, onClose }: {
         header={
           <DialogHeader
             title={solution.display_name}
-            subtitle={`${solution.solution_id}@${solution.version}`}
+            subtitle={`版本 v${solution.version}`}
             onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
           />
         }
@@ -351,7 +360,7 @@ function SolutionDetailOverlay({ solution, onClose }: {
                     <MetadataListItem label="预期交付物"><Text color="secondary">{solution.output_requirements}</Text></MetadataListItem>
                   )}
                   {solution.workflow_skill_ref && (
-                    <MetadataListItem label="方案工作流 Skill"><Code>{String(solution.workflow_skill_ref.skill_id ?? solution.workflow_skill_ref.id ?? "已配置")}</Code></MetadataListItem>
+                    <MetadataListItem label="方案工作流 Skill">已配置</MetadataListItem>
                   )}
                 </MetadataList>
               )}
@@ -370,7 +379,13 @@ function SolutionDetailOverlay({ solution, onClose }: {
   );
 }
 
-function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): ReactNode {
+function SolutionInstanceCard({
+  instance,
+  employeeNames,
+}: {
+  instance: SolutionInstance;
+  employeeNames: Map<string, string>;
+}): ReactNode {
   return (
     <Card role="article" aria-label={instance.display_name} data-testid="solution-instance-card">
       <VStack gap={3}>
@@ -378,10 +393,10 @@ function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): Rea
           <Heading level={3}>{instance.display_name}</Heading>
           <Badge label={instance.status} variant={instance.status === "applied" ? "success" : "neutral"} />
         </HStack>
-        <Code>{instance.solution_id}@{instance.solution_version}</Code>
+        <Text type="supporting">版本 v{instance.solution_version}</Text>
         <MetadataList columns="single">
           <MetadataListItem label="专家数量"><Text>{instance.expert_employee_ids.length}</Text></MetadataListItem>
-          <MetadataListItem label="协调专家"><Code>{instance.coordinator_employee_id ?? "-"}</Code></MetadataListItem>
+          <MetadataListItem label="协调专家"><Text>{instance.coordinator_employee_id ? employeeNames.get(instance.coordinator_employee_id) ?? "已删除专家" : "—"}</Text></MetadataListItem>
           {instance.coordinator_instructions && <MetadataListItem label="协作说明"><Text color="secondary">{instance.coordinator_instructions}</Text></MetadataListItem>}
           {instance.output_requirements && <MetadataListItem label="预期交付物"><Text color="secondary">{instance.output_requirements}</Text></MetadataListItem>}
         </MetadataList>

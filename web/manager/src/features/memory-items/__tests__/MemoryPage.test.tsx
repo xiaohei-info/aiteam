@@ -14,6 +14,9 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { MemoryPage } from "../MemoryPage";
 import * as apiModule from "../useMemoryApi";
+import * as expertsModule from "../../experts/useExpertsApi";
+
+vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -32,6 +35,11 @@ function sessionValue(): SessionContextValue {
 const memItem = { memory_id: "m1", employee_id: "emp-1", content: "用户偏好中文回答", category: "preference", importance: 4, source: "manual", created_at: "2026-06-30T10:00:00Z", last_used_at: null };
 
 function mockApi(overrides: Partial<apiModule.MemoryApi> = {}) {
+  vi.mocked(expertsModule.useExpertsApi).mockReturnValue({
+    listEmployees: vi.fn().mockResolvedValue([{ employee_id: "emp-2", display_name: "专家B" }]),
+    listTemplates: vi.fn(), listSolutions: vi.fn(), recruitExpert: vi.fn(), applySolution: vi.fn(),
+    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
+  });
   const api: apiModule.MemoryApi = {
     list: vi.fn().mockResolvedValue([memItem]),
     create: vi.fn().mockResolvedValue(memItem),
@@ -82,7 +90,8 @@ describe("MemoryPage 记忆管理", () => {
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("+ 新增记忆"));
-    fireEvent.change(screen.getByLabelText("员工ID"), { target: { value: "emp-2" } });
+    fireEvent.click(screen.getByRole("combobox", { name: /专家/ }));
+    fireEvent.click(screen.getByRole("option", { name: "专家B", hidden: true }));
     fireEvent.change(screen.getByLabelText("记忆内容"), { target: { value: "新记忆内容" } });
     fireEvent.click(screen.getByText("保存"));
 

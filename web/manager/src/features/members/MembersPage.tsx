@@ -187,7 +187,7 @@ export function MembersPage(): ReactNode {
         key: "display_name",
         header: i18n.t("manager.members.col_name"),
         width: proportional(1),
-        renderCell: (member) => <Text weight="bold" data-testid="member-row">{member.display_name || member.id}</Text>,
+        renderCell: (member) => <Text weight="bold" data-testid="member-row">{member.display_name || "未命名成员"}</Text>,
       },
       {
         key: "status",

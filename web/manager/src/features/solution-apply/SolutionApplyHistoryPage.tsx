@@ -13,7 +13,6 @@ import { ApiError } from "@aiteam/shared";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
@@ -23,6 +22,8 @@ import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
+import { useExpertsApi } from "../experts/useExpertsApi";
+import { useGrantsApi } from "../grants/useGrantsApi";
 import { useSolutionApplyApi } from "./useSolutionApplyApi";
 import type { SolutionApplyRecord, SolutionInstanceSummary } from "./types";
 
@@ -34,7 +35,11 @@ const STATUS_VARIANT: Record<string, BadgeVariant> = {
 export function SolutionApplyHistoryPage(): ReactNode {
   const i18n = useI18n();
   const api = useSolutionApplyApi();
+  const expertsApi = useExpertsApi();
+  const grantsApi = useGrantsApi();
   const [instances, setInstances] = useState<SolutionInstanceSummary[]>([]);
+  const [expertNames, setExpertNames] = useState<Map<string, string>>(new Map());
+  const [memberNames, setMemberNames] = useState<Map<string, string>>(new Map());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [records, setRecords] = useState<SolutionApplyRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -45,13 +50,20 @@ export function SolutionApplyHistoryPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      setInstances(await api.listSolutionInstances());
+      const [nextInstances, employees, members] = await Promise.all([
+        api.listSolutionInstances(),
+        expertsApi.listEmployees().catch(() => []),
+        grantsApi.listMembers().catch(() => []),
+      ]);
+      setInstances(nextInstances);
+      setExpertNames(new Map(employees.map((employee) => [employee.employee_id, employee.display_name])));
+      setMemberNames(new Map(members.map((member) => [member.id, member.display_name])));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.load_error"));
     } finally {
       setLoading(false);
     }
-  }, [api, i18n]);
+  }, [api, expertsApi, grantsApi, i18n]);
 
   const setRecordsOpen = useCallback(
     async (isOpen: boolean, instanceId: string, solutionId: string) => {
@@ -96,7 +108,7 @@ export function SolutionApplyHistoryPage(): ReactNode {
         <VStack gap={3}>
           {instances.map((instance) => {
             const open = activeId === instance.id;
-            const name = instance.display_name || instance.solution_id;
+            const name = instance.display_name || "未命名方案";
             return (
               <Card
                 key={instance.id}
@@ -114,16 +126,19 @@ export function SolutionApplyHistoryPage(): ReactNode {
                   trigger={
                     <HStack gap={2} align="center" wrap="wrap">
                       <Text weight="bold">{name}</Text>
-                      <Code>
-                        {instance.solution_id}
-                        {instance.solution_version ? `@${instance.solution_version}` : ""}
-                      </Code>
+                      <Text type="supporting">版本 {instance.solution_version ? `v${instance.solution_version}` : "—"}</Text>
                       <Badge label={instance.status} variant={STATUS_VARIANT[instance.status] ?? "neutral"} />
                       <Text color="accent">{i18n.t("manager.solution_apply.view_history")}</Text>
                     </HStack>
                   }
                 >
-                  <ApplyRecords records={records} loading={recordsLoading} i18n={i18n} />
+                  <ApplyRecords
+                    records={records}
+                    loading={recordsLoading}
+                    i18n={i18n}
+                    expertNames={expertNames}
+                    memberNames={memberNames}
+                  />
                 </Collapsible>
               </Card>
             );
@@ -138,10 +153,14 @@ function ApplyRecords({
   records,
   loading,
   i18n,
+  expertNames,
+  memberNames,
 }: {
   records: SolutionApplyRecord[];
   loading: boolean;
   i18n: ReturnType<typeof useI18n>;
+  expertNames: Map<string, string>;
+  memberNames: Map<string, string>;
 }): ReactNode {
   if (loading) {
     return <Skeleton height={64} />;
@@ -172,7 +191,7 @@ function ApplyRecords({
               </HStack>
               <MetadataList columns="single">
                 <MetadataListItem label={i18n.t("manager.solution_apply.applied_by")}>
-                  {record.applied_by ?? "—"}
+                  {record.applied_by ? memberNames.get(record.applied_by) ?? "企业管理员" : "—"}
                 </MetadataListItem>
                 <MetadataListItem label={i18n.t("manager.solution_apply.applied_at")}>
                   {record.created_at?.slice(0, 19) ?? "—"}
@@ -182,7 +201,9 @@ function ApplyRecords({
                     <Text>{record.expert_instance_ids.length}</Text>
                     {record.expert_instance_ids.length > 0 && (
                       <HStack gap={1} wrap="wrap">
-                        {record.expert_instance_ids.map((id) => <Code key={id}>{id}</Code>)}
+                        {record.expert_instance_ids.map((id) => (
+                          <Text key={id}>{expertNames.get(id) ?? "已删除专家"}</Text>
+                        ))}
                       </HStack>
                     )}
                   </VStack>
