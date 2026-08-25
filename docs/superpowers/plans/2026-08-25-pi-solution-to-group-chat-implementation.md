@@ -20,6 +20,18 @@ scope: operator-manager-agent-solution-group-chat
 
 不在本轮做：跨用户群聊、云端执行、旧 Run/Task/Loop/DAG、临时 child Session、CLI 作为 Agent 协作主入口、完整方案版本升级向导、生产数据迁移。
 
+## 2. 当前实施状态
+
+已落地到当前分支：
+
+- Operator 方案模板移除知识/普通技能/planner 三段/default grants，改为 coordinator + instructions；
+- Manager 应用映射 coordinator employee、方案状态/版本投影、成员/部门授权选择、预检与失败补偿；
+- Agent 固定 participant Pi Session、统一 human/employee delivery、无 @/单 @/多 @ 路由、coordinator mention tool、source metadata、方案撤权 fail-closed；
+- Agent 群聊复用单聊 Composer/Timeline/SSE/abort/附件/幂等、新建对话和历史入口；
+- Python 1504 passed/83 skipped，Agent 75 passed/1 skipped，Operation web 163 passed，Manager web 242 passed，Agent web 112 passed，相关 typecheck 通过。
+
+仍需独立验收：taiyi 三端真实 Operator publish → Manager apply/authorize → Agent sync → group create → multi-session @/history/restart/abort/revoke E2E；方案知识绑定 UI、完整方案工作流 Skill 配置和 canonical v1 文档原子更新。
+
 ## 2. 关键契约
 
 ### 2.1 Operator SolutionTemplate
