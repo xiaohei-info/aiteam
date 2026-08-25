@@ -32,6 +32,23 @@ test("projection ownership schema migrates legacy local databases additively", (
   }
 });
 
+test("participant session index is additive, ordered, and removed with its conversation", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-participant-session-test-"));
+  const store = new AgentSqliteStore(join(root, "agent.sqlite"));
+  try {
+    store.createConversation({ id: "group", kind: "group", tenantId: "tenant-1", memberId: "member-1", sessionFile: "", workspace: "", coordinatorEmployeeId: "coord" });
+    store.upsertConversationParticipant({ conversation_id: "group", employee_id: "worker", role: "member", session_file: "/tmp/worker.jsonl", workspace: "/tmp/worker", pi_session_id: "session-worker", employee_version: "1" });
+    store.upsertConversationParticipant({ conversation_id: "group", employee_id: "coord", role: "coordinator", session_file: "/tmp/coord.jsonl", workspace: "/tmp/coord", pi_session_id: "session-coord", employee_version: "2" });
+    assert.deepEqual(store.listConversationParticipants("group").map((item) => item.employee_id), ["coord", "worker"]);
+    assert.equal(store.getConversationParticipant("group", "worker")?.pi_session_id, "session-worker");
+    assert.equal(store.deleteConversation("group", "tenant-1", "member-1"), true);
+    assert.deepEqual(store.listConversationParticipants("group"), []);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Agent startup drops legacy Manager knowledge content while preserving local tables", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-knowledge-cleanup-test-"));
   const path = join(root, "agent.sqlite");

@@ -20,7 +20,8 @@ import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
-import { createDelegateEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
+import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
+import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
@@ -36,7 +37,7 @@ export interface PiEventEnvelope {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
-  source_role?: "child" | "coordinator";
+  source_role?: "child" | "participant" | "coordinator";
 }
 
 export class EventCursorStaleError extends Error {
@@ -62,6 +63,7 @@ export interface SessionAuthorization {
   managerClient?: ManagerClient;
   runtimeProviderId?: string;
   runtimeScope?: string;
+  groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
 }
 
 export interface SessionHostOptions {
@@ -85,23 +87,10 @@ interface Subscriber {
   queued: PiEventEnvelope[];
 }
 
-interface ChildSession {
-  session?: AgentSession;
-  resourceLoader?: ResourceLoader;
-  resourceLoaderShutdown?: Promise<void>;
-  done: Promise<void>;
-  resolveDone: () => void;
-  aborted: boolean;
-  abort: () => Promise<void>;
-}
-
-interface ChildSource {
-  employeeId: string;
-  displayName: string;
-}
-
 interface SessionRecord {
   conversationId: string;
+  employeeId?: string;
+  role?: "coordinator" | "member";
   workspace: string;
   sessionManager: SessionManager;
   session?: AgentSession;
@@ -113,16 +102,17 @@ interface SessionRecord {
   aborting: boolean;
   delegateCalls: number;
   delegatePromptChars: number;
-  activeDelegates: Set<ChildSession>;
   listeners: Set<Subscriber>;
   eventSequence: number;
   runtimeProviderId?: string;
+  activeSourceRef?: string;
+  activeToolCallId?: string;
+  activeSourceRole?: "child" | "participant" | "coordinator";
   hindsightWorkspaces: Set<string>;
   disposing?: Promise<void>;
 }
 
 const MAX_DELEGATE_CALLS = 4;
-const MAX_DELEGATE_CONCURRENCY = 2;
 const MAX_DELEGATE_PROMPT_BUDGET = 32_000;
 const MAX_DELEGATE_RESULT_CHARS = 2_000;
 
@@ -142,8 +132,11 @@ export class SessionAuthorizationError extends Error {
 
 export class SessionHost {
   private readonly records = new Map<string, SessionRecord>();
+  private readonly listeners = new Map<string, Set<Subscriber>>();
+  private readonly delivery: GroupMessageDeliveryService;
 
   constructor(private readonly options: SessionHostOptions) {
+    this.delivery = new GroupMessageDeliveryService((command, employeeId) => this.deliverToParticipant(command, employeeId));
     mkdirSync(options.cwdRoot, { recursive: true, mode: 0o700 });
     mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
     mkdirSync(options.agentDir, { recursive: true, mode: 0o700 });
@@ -157,102 +150,85 @@ export class SessionHost {
     listener: (envelope: PiEventEnvelope) => void,
     after?: string,
   ): Promise<() => void> {
-    const record = this.ensureRecord(conversationId);
     const subscriber: Subscriber = { listener, replaying: true, queued: [] };
-    record.listeners.add(subscriber);
+    const listeners = this.listeners.get(conversationId) ?? new Set<Subscriber>();
+    listeners.add(subscriber);
+    this.listeners.set(conversationId, listeners);
     try {
-      // Pi entries are the durable replay source. Transient AgentSessionEvents stay in memory;
-      // callers use GET /entries with a Pi entry id after reconnecting.
       if (after !== undefined && after !== "") this.parseEntryCursor(after);
       subscriber.replaying = false;
       for (const envelope of subscriber.queued.splice(0)) listener(envelope);
     } catch (error) {
-      record.listeners.delete(subscriber);
+      listeners.delete(subscriber);
       throw error;
     }
-
-    return () => record.listeners.delete(subscriber);
+    return () => {
+      listeners.delete(subscriber);
+      if (listeners.size === 0) this.listeners.delete(conversationId);
+    };
   }
 
   async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[]): Promise<string | undefined> {
-    // Keep record creation and the prompting marker in the same synchronous turn. An
-    // immediate delete must see the initialization lock before prompt yields.
-    const record = this.ensureRecord(conversationId);
-    if (record.prompting) throw new ConversationBusyError();
-    record.prompting = true;
-    record.aborting = false;
-    record.delegateCalls = 0;
-    record.delegatePromptChars = 0;
-
-    try {
-      const authorization = caller ? this.resolveAuthorization(record, caller, mentions ?? []) : undefined;
-      record.sessionReady = this.ensureSession(record, authorization);
-      const session = await record.sessionReady;
-      const startedAt = Date.now();
-      const entriesBefore = record.sessionManager.getEntries().length;
-      const promptPromise = (async () => {
-        try {
-          await session.prompt(text, images ? { images } : undefined);
-          await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
-          return record.sessionManager.getLeafId() ?? undefined;
-        } catch (error) {
-          await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
-          throw error;
-        }
-      })();
-      record.promptPromise = promptPromise;
-      try {
-        return await promptPromise;
-      } finally {
-        if (record.promptPromise === promptPromise) record.promptPromise = undefined;
+    const metadata = this.options.store.getConversationMetadata(conversationId);
+    if (!metadata) throw new Error("Conversation does not exist");
+    const targetEmployeeIds = this.resolveTargetEmployeeIds(metadata, caller, mentions ?? []);
+    for (const record of this.records.values()) {
+      if (record.conversationId === conversationId) {
+        record.delegateCalls = 0;
+        record.delegatePromptChars = 0;
       }
-    } finally {
-      record.sessionReady = undefined;
-      record.prompting = false;
-      record.aborting = false;
-      await this.abortChildren(record);
-      await this.disposeSession(record);
     }
+    const sourceId = caller?.userId ?? caller?.callerId ?? "human";
+    const result = await this.delivery.deliver({
+      conversationId,
+      source: { type: "human", id: sourceId },
+      targetEmployeeIds,
+      text,
+      images,
+      logicalMessageId: `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      caller,
+    });
+    return result.replies.at(-1)?.entryId;
   }
 
   async abort(conversationId: string): Promise<boolean> {
-    const record = this.records.get(conversationId);
-    if (!record) return false;
-    record.aborting = true;
-    const session = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-    const children = await this.abortChildren(record);
-    if (!session) return children > 0;
-    await session.abort();
+    const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
+    if (records.length === 0) return false;
+    await Promise.all(records.map(async (record) => {
+      record.aborting = true;
+      const session = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
+      await session?.abort().catch(() => undefined);
+    }));
     return true;
   }
 
   isPrompting(conversationId: string): boolean {
-    return this.records.get(conversationId)?.prompting ?? false;
+    return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
   }
 
   async delete(conversationId: string, tenantId: string, memberId: string): Promise<boolean> {
     const indexed = this.options.store.getOwnedConversation(conversationId, tenantId, memberId);
     if (!indexed) return false;
-    const record = this.records.get(conversationId);
-    if (record) {
+    const participants = this.options.store.listConversationParticipants(conversationId);
+    const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
+    for (const record of records) {
       record.aborting = true;
-      const sessionReady = record.sessionReady;
-      await this.abortChildren(record);
-      // Initialization may still be constructing the session/resource loader. Wait for
-      // it before disposal and workspace deletion so no resource is created afterward.
-      await sessionReady?.catch(() => undefined);
+      await record.sessionReady?.catch(() => undefined);
       await record.session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
       await this.disposeSession(record);
       for (const workspace of record.hindsightWorkspaces) removeHindsightState(this.options.agentDir, workspace);
-      this.records.delete(conversationId);
+      this.records.delete(this.recordKey(record.conversationId, record.employeeId));
     }
-    if (!record && indexed.workspace) removeHindsightState(this.options.agentDir, indexed.workspace);
-    for (const path of [indexed.sessionFile, indexed.workspace]) {
+    for (const participant of participants) if (participant.workspace) removeHindsightState(this.options.agentDir, participant.workspace);
+    if (indexed.workspace) removeHindsightState(this.options.agentDir, indexed.workspace);
+    const paths = [indexed.sessionFile, indexed.workspace, ...participants.flatMap((participant) => [participant.session_file, participant.workspace])];
+    for (const path of paths) {
       if (!path) continue;
-      this.assertManagedPathEither(path, path === indexed.workspace ? this.options.cwdRoot : this.options.sessionDir, this.options.cwdRoot);
+      this.assertManagedPathEither(path, path.includes("/sessions/") ? this.options.sessionDir : this.options.cwdRoot, this.options.cwdRoot);
       rmSync(path, { recursive: true, force: true });
     }
+    this.listeners.delete(conversationId);
     return this.options.store.deleteConversation(conversationId, tenantId, memberId);
   }
 
@@ -267,30 +243,68 @@ export class SessionHost {
   }
 
   async entries(conversationId: string) {
-    const record = this.ensureRecord(conversationId);
-    // Prompt is accepted before Pi session initialization and persistence
-    // finish. Waiting for both in-flight phases prevents a transient 500 when
-    // the client immediately replays entries after a 202 prompt response.
-    await record.sessionReady?.catch(() => undefined);
-    // The prompt method assigns promptPromise immediately after the session
-    // promise resumes. Yield once so an entries request cannot observe the
-    // narrow gap between those two assignments.
-    if (record.prompting && !record.promptPromise) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+    const participantRows = this.options.store.listConversationParticipants(conversationId);
+    const records = participantRows.length > 0
+      ? participantRows.map((participant) => this.ensureRecord(conversationId, participant.employee_id))
+      : [this.ensureRecord(conversationId)];
+    await Promise.all(records.map(async (record) => {
+      await record.sessionReady?.catch(() => undefined);
+      if (record.prompting && !record.promptPromise) await new Promise<void>((resolve) => setImmediate(resolve));
+      await record.promptPromise?.catch(() => undefined);
+    }));
+    return records
+      .flatMap((record) => record.sessionManager.getEntries().map((entry) => this.decorateEntry(record, entry)))
+      .sort((left, right) => this.entryTimestamp(left) - this.entryTimestamp(right));
+  }
+
+  private entryTimestamp(entry: SessionEntry): number {
+    const value = entry as unknown as { timestamp?: unknown };
+    return typeof value.timestamp === "number" ? value.timestamp : 0;
+  }
+
+  async initializeConversationParticipants(conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+    if (!metadata) throw new SessionAuthorizationError("Conversation is not owned by the authenticated member");
+    if (metadata.kind !== "group") {
+      if (metadata.entry_employee_id) this.ensureRecord(conversationId, metadata.entry_employee_id);
+      return;
     }
-    await record.promptPromise?.catch(() => undefined);
-    return record.sessionManager.getEntries();
+    const memberId = caller.userId ?? caller.callerId;
+    const solution = metadata.solution_instance_id
+      ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
+      : undefined;
+    const roster = solution && Array.isArray(solution.expert_employee_ids)
+      ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
+      : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
+    const coordinator = metadata.coordinator_employee_id
+      ?? (solution && typeof solution.coordinator_employee_id === "string" ? solution.coordinator_employee_id : undefined)
+      ?? roster[0];
+    if (!coordinator || !roster.includes(coordinator)) throw new SessionAuthorizationError("Group conversation has no authorized coordinator");
+    for (const employeeId of [...new Set([coordinator, ...roster])]) {
+      this.requireParticipantSnapshot(caller, employeeId);
+      const previous = this.options.store.getConversationParticipant(conversationId, employeeId);
+      this.options.store.upsertConversationParticipant({
+        conversation_id: conversationId,
+        employee_id: employeeId,
+        role: employeeId === coordinator ? "coordinator" : "member",
+        session_file: previous?.session_file ?? "",
+        workspace: previous?.workspace ?? "",
+        pi_session_id: previous?.pi_session_id ?? null,
+        employee_version: this.options.store.listSnapshots(caller.tenantId, memberId).find((snapshot) => snapshot.employee_id === employeeId)?.version ?? "",
+      });
+      this.ensureRecord(conversationId, employeeId);
+    }
   }
 
   async dispose(): Promise<void> {
     for (const record of this.records.values()) {
-      await this.abortChildren(record);
       const session = record.session ?? await record.sessionReady?.catch(() => undefined);
       await session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
       await this.disposeSession(record);
     }
     this.records.clear();
+    this.listeners.clear();
   }
 
   private async recordUsage(record: SessionRecord, authorization: SessionAuthorization | undefined, startedAt: number, settled: boolean, entriesBefore: number): Promise<void> {
@@ -314,22 +328,28 @@ export class SessionHost {
     }, authorization.caller);
   }
 
-  private ensureRecord(conversationId: string): SessionRecord {
-    const existing = this.records.get(conversationId);
-    if (existing) return existing;
-
+  private ensureRecord(conversationId: string, employeeId?: string): SessionRecord {
     const indexed = this.options.store.getConversation(conversationId);
     if (!indexed) throw new Error("Conversation does not exist");
-    const workspace = indexed.workspace || join(this.options.cwdRoot, this.safeDirectoryName(conversationId));
+    const resolvedEmployeeId = employeeId ?? indexed.entryEmployeeId ?? indexed.coordinatorEmployeeId ?? undefined;
+    const key = this.recordKey(conversationId, resolvedEmployeeId);
+    const existing = this.records.get(key);
+    if (existing) return existing;
+
+    const participant = resolvedEmployeeId
+      ? this.options.store.getConversationParticipant(conversationId, resolvedEmployeeId)
+      : undefined;
+    const workspace = participant?.workspace || indexed.workspace || join(this.options.cwdRoot, this.safeDirectoryName(`${conversationId}:${resolvedEmployeeId ?? "conversation"}`));
     this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
     this.assertManagedPath(workspace, this.options.cwdRoot);
     chmodSync(workspace, 0o700);
 
     let sessionManager: SessionManager;
-    if (indexed.sessionFile && existsSync(indexed.sessionFile)) {
-      this.assertManagedPathEither(indexed.sessionFile, this.options.sessionDir, this.options.cwdRoot);
-      sessionManager = SessionManager.open(indexed.sessionFile, this.options.sessionDir, workspace);
+    const existingSessionFile = participant?.session_file || (!resolvedEmployeeId ? indexed.sessionFile : "");
+    if (existingSessionFile && existsSync(existingSessionFile)) {
+      this.assertManagedPathEither(existingSessionFile, this.options.sessionDir, this.options.cwdRoot);
+      sessionManager = SessionManager.open(existingSessionFile, this.options.sessionDir, workspace);
     } else {
       sessionManager = SessionManager.create(workspace, this.options.sessionDir);
     }
@@ -338,23 +358,76 @@ export class SessionHost {
     if (!sessionFile) throw new Error("Persistent SessionManager did not provide a session file");
     this.assertManagedPathEither(sessionFile, this.options.sessionDir, this.options.cwdRoot);
     try { chmodSync(sessionFile, 0o600); } catch { /* SDK may create it after first append */ }
-    this.options.store.saveConversation({ ...indexed, id: conversationId, sessionFile, workspace });
+    const role = participant?.role ?? (resolvedEmployeeId && indexed.coordinatorEmployeeId === resolvedEmployeeId ? "coordinator" : "member");
+    if (resolvedEmployeeId) {
+      const expert = this.options.store.listLoadedExperts(indexed.tenantId ?? undefined, indexed.memberId ?? undefined, true).find((item) => item.employee_id === resolvedEmployeeId);
+      this.options.store.upsertConversationParticipant({
+        conversation_id: conversationId,
+        employee_id: resolvedEmployeeId,
+        role,
+        session_file: sessionFile,
+        workspace,
+        pi_session_id: sessionManager.getSessionId(),
+        employee_version: participant?.employee_version ?? expert?.version ?? "",
+        created_at: participant?.created_at,
+      });
+      if (indexed.kind !== "group" && !indexed.coordinatorEmployeeId) this.options.store.saveConversation({ ...indexed, id: conversationId, sessionFile, workspace });
+    } else {
+      this.options.store.saveConversation({ ...indexed, id: conversationId, sessionFile, workspace });
+    }
 
     const record: SessionRecord = {
       conversationId,
+      ...(resolvedEmployeeId ? { employeeId: resolvedEmployeeId } : {}),
+      role,
       workspace,
       sessionManager,
       prompting: false,
       aborting: false,
       delegateCalls: 0,
       delegatePromptChars: 0,
-      activeDelegates: new Set(),
       listeners: new Set(),
       eventSequence: 0,
       hindsightWorkspaces: new Set([workspace]),
     };
-    this.records.set(conversationId, record);
+    this.records.set(key, record);
     return record;
+  }
+
+  private recordKey(conversationId: string, employeeId?: string): string {
+    return `${conversationId}:${employeeId ?? "__conversation__"}`;
+  }
+
+  private requireParticipantSnapshot(caller: AuthenticatedCaller, employeeId: string): void {
+    const memberId = caller.userId ?? caller.callerId;
+    const expert = this.options.store.listLoadedExperts(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && !item.revoked);
+    if (!expert || !this.options.store.listSnapshots(caller.tenantId, memberId).some((snapshot) => snapshot.employee_id === employeeId && snapshot.version === expert.version)) {
+      throw new SessionAuthorizationError(`Employee ${employeeId} is not authorized in this conversation`);
+    }
+  }
+
+  private resolveTargetEmployeeIds(metadata: { kind: string; entry_employee_id: string | null; coordinator_employee_id: string | null; solution_instance_id: string | null; tenant_id?: string | null; member_id?: string | null }, caller: AuthenticatedCaller | undefined, mentions: string[]): string[] {
+    const coordinator = metadata.coordinator_employee_id ?? metadata.entry_employee_id;
+    if (!caller && !coordinator) return ["__conversation__"];
+    if (metadata.kind !== "group" && !metadata.coordinator_employee_id) {
+      if (mentions.length > 0) throw new SessionAuthorizationError("mentions are only supported for group conversations");
+      if (!coordinator) throw new SessionAuthorizationError("Conversation requires a locally authorized employee snapshot");
+      return [coordinator];
+    }
+    if (!caller) return coordinator ? [coordinator] : [];
+    const memberId = caller.userId ?? caller.callerId;
+    const solution = metadata.solution_instance_id
+      ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
+      : undefined;
+    const roster = solution && Array.isArray(solution.expert_employee_ids)
+      ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
+      : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
+    const allowed = new Set(roster);
+    if (mentions.length === 0) return coordinator && allowed.has(coordinator) ? [coordinator] : [];
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
+    const targets = [...new Set(mentions)].map((handle) => experts.find((expert) => expert.handle === handle)?.employee_id);
+    if (targets.some((employeeId) => !employeeId || !allowed.has(employeeId))) throw new SessionAuthorizationError("Mentioned employee is not in the authorized group roster");
+    return targets as string[];
   }
 
   private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
@@ -367,7 +440,8 @@ export class SessionHost {
       if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
       await this.options.sandbox.assertAvailable(record.workspace);
     }
-    const customTools = this.toolsFor(authorization, true, record, record.workspace);
+    const allowPeerMention = Boolean(authorization && record.employeeId && record.role === "coordinator");
+    const customTools = this.toolsFor(authorization, allowPeerMention, record, record.workspace);
     if (authorization) {
       authorization.runtimeScope = record.conversationId;
       await this.ensureRuntimeModel(authorization);
@@ -409,10 +483,13 @@ export class SessionHost {
         ]
       : [];
     const tools = [
-      ...(this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME && (allowDelegation || tool.name !== "delegate_employee")),
+      ...(this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME && (allowDelegation || (tool.name !== "delegate_employee" && tool.name !== "mention_employee"))),
       ...(allowed.has(TODO_UPDATE_TOOL_NAME) ? [createTodoUpdateTool()] : []),
       ...codingTools,
-      ...(allowDelegation && record ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.delegate(record, authorization, toolCallId, input, signal) })] : []),
+      ...(allowDelegation && record ? [
+        ...(allowed.has("mention_employee") ? [createMentionEmployeeTool({ delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
+        ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
+      ] : []),
     ];
     return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
   }
@@ -440,23 +517,16 @@ export class SessionHost {
     const memberId = caller.userId ?? caller.callerId;
     if (metadata?.tenant_id && metadata.tenant_id !== caller.tenantId) throw new SessionAuthorizationError();
     if (metadata?.member_id && metadata.member_id !== memberId) throw new SessionAuthorizationError();
-    const employeeId = metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
+    const employeeId = record.employeeId ?? metadata?.entry_employee_id ?? metadata?.coordinator_employee_id;
     if (!employeeId) throw new SessionAuthorizationError("Conversation has no authorized employee");
     const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
     const expert = experts.find((item) => item.employee_id === employeeId);
     if (!expert || expert.revoked) throw new SessionAuthorizationError();
     let rosterEmployeeIds: ReadonlySet<string> | undefined;
-    if (metadata?.kind === "group") {
-      rosterEmployeeIds = new Set(experts.filter((item) => !item.revoked).map((item) => item.employee_id));
-      if (metadata.solution_instance_id) {
-        const solution = this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id);
-        if (!solution) throw new SessionAuthorizationError("Conversation solution is not authorized locally");
-        const solutionRoster = Array.isArray(solution.expert_employee_ids)
-          ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
-          : [];
-        if (solutionRoster.length > 0) rosterEmployeeIds = new Set(solutionRoster);
-      }
-      if (!rosterEmployeeIds.has(employeeId)) throw new SessionAuthorizationError("Coordinator is not in the authorized group roster");
+    if (metadata?.kind === "group" || metadata?.coordinator_employee_id) {
+      rosterEmployeeIds = new Set(this.options.store.listConversationParticipants(record.conversationId).map((item) => item.employee_id));
+      if (rosterEmployeeIds.size === 0) rosterEmployeeIds = new Set(experts.filter((item) => !item.revoked).map((item) => item.employee_id));
+      if (!rosterEmployeeIds.has(employeeId)) throw new SessionAuthorizationError("Employee is not in the authorized group roster");
     }
     const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === employeeId && item.version === expert.version);
     if (!snapshot) throw new SessionAuthorizationError("Conversation employee snapshot is not available locally");
@@ -489,125 +559,120 @@ export class SessionHost {
     }
   }
 
-  private async abortChildren(record: SessionRecord): Promise<number> {
-    const children = [...record.activeDelegates];
-    await Promise.all(children.map(async (child) => {
-      await child.abort().catch(() => undefined);
-      await child.done.catch(() => undefined);
-    }));
-    return children.length;
-  }
-
   private async flushResourceLoader(loader?: ResourceLoader): Promise<void> {
     const controlled = loader as ControlledResourceLoader | undefined;
     await controlled?.shutdown?.();
   }
 
-  private async flushChildResourceLoader(child: ChildSession): Promise<void> {
-    if (!child.resourceLoaderShutdown) {
-      child.resourceLoaderShutdown = this.flushResourceLoader(child.resourceLoader);
+  private async deliverToParticipant(command: GroupMessageCommand, employeeId: string): Promise<GroupMessageReply> {
+    const caller = command.caller;
+    if (!caller) {
+      const record = this.ensureRecord(command.conversationId, employeeId);
+      return this.promptParticipant(record, command, undefined);
     }
-    await child.resourceLoaderShutdown;
+    const metadata = this.options.store.getConversationMetadata(command.conversationId);
+    if (!metadata) throw new SessionAuthorizationError("Conversation does not exist");
+    if ((metadata.tenant_id && metadata.tenant_id !== caller.tenantId) || (metadata.member_id && metadata.member_id !== (caller.userId ?? caller.callerId))) {
+      throw new SessionAuthorizationError("Conversation employee is not authorized locally");
+    }
+    if (metadata.kind === "group" || metadata.coordinator_employee_id) {
+      const participants = this.options.store.listConversationParticipants(command.conversationId);
+      const participantIds = new Set(participants.map((participant) => participant.employee_id));
+      const memberId = caller.userId ?? caller.callerId;
+      const solution = metadata.solution_instance_id
+        ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
+        : undefined;
+      const allowedIds = new Set(solution && Array.isArray(solution.expert_employee_ids)
+        ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
+        : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
+      if (!participantIds.has(employeeId) && !allowedIds.has(employeeId)) throw new SessionAuthorizationError("Employee is not in the authorized local roster");
+    } else if (metadata.entry_employee_id !== employeeId) {
+      throw new SessionAuthorizationError("Employee is not the private conversation participant");
+    }
+    const record = this.ensureRecord(command.conversationId, employeeId);
+    const authorization = this.resolveAuthorization(record, caller);
+    authorization!.groupMessageSource = command.source;
+    if (command.source.type === "employee" && command.source.id === employeeId) throw new SessionAuthorizationError("An employee cannot mention itself");
+    return this.promptParticipant(record, command, authorization);
   }
 
-  private async delegate(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
-    if (!authorization.caller.tenantId) throw new Error("Authenticated tenant is required for delegation");
-    const memberId = authorization.caller.userId ?? authorization.caller.callerId;
-    if (authorization.mentionedEmployeeIds && !authorization.mentionedEmployeeIds.has(input.employee_id)) {
-      throw new Error("Employee was not explicitly mentioned in this group prompt");
+  private async promptParticipant(record: SessionRecord, command: GroupMessageCommand, authorization?: SessionAuthorization): Promise<GroupMessageReply> {
+    const employeeId = record.employeeId ?? "conversation";
+    const startedAt = Date.now();
+    const entriesBefore = record.sessionManager.getEntries().length;
+    if (record.prompting) throw new ConversationBusyError();
+    record.prompting = true;
+    record.aborting = false;
+    record.activeToolCallId = command.toolCallId;
+    record.activeSourceRef = command.toolCallId ? `${record.conversationId}:${command.toolCallId}` : undefined;
+    record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
+    try {
+      record.sessionReady = this.ensureSession(record, authorization);
+      const session = await record.sessionReady;
+      const promptPromise = (async () => {
+        await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
+        return record.sessionManager.getLeafId() ?? undefined;
+      })();
+      record.promptPromise = promptPromise;
+      const entryId = await promptPromise;
+      const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
+      return { employeeId, entryId, text };
+    } catch (error) {
+      await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
+      throw error;
+    } finally {
+      record.promptPromise = undefined;
+      record.sessionReady = undefined;
+      record.prompting = false;
+      record.aborting = false;
+      record.activeToolCallId = undefined;
+      record.activeSourceRef = undefined;
+      record.activeSourceRole = undefined;
+      await this.disposeSession(record);
     }
-    if (authorization.rosterEmployeeIds && !authorization.rosterEmployeeIds.has(input.employee_id)) {
-      throw new Error("Employee is not in the authorized group roster");
-    }
-    const expert = this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && !item.revoked);
-    if (!expert) throw new Error("Employee is not in the authorized local roster");
-    const snapshot = this.options.store.listSnapshots(authorization.caller.tenantId, memberId).find((item) => item.employee_id === input.employee_id && item.version === expert.version);
-    if (!snapshot) throw new Error("Employee snapshot is not available locally");
+  }
 
+  private async mention(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
+    if (record.role !== "coordinator" || !record.employeeId) throw new Error("Only a group coordinator can mention another employee");
+    if (record.aborting || signal?.aborted) throw new Error("Mention aborted");
+    if (input.employee_id === record.employeeId) throw new Error("An employee cannot mention itself");
     const prompt = [input.task, input.context ? `Context:\n${input.context}` : ""].filter(Boolean).join("\n\n");
-    if (record.aborting || signal?.aborted) throw new Error("Delegation aborted");
-    if (record.delegateCalls >= MAX_DELEGATE_CALLS) throw new Error(`Delegation limit reached (maximum ${MAX_DELEGATE_CALLS})`);
-    if (record.delegatePromptChars + prompt.length > MAX_DELEGATE_PROMPT_BUDGET) throw new Error("Delegation prompt budget exceeded");
+    if (record.delegateCalls >= MAX_DELEGATE_CALLS) throw new Error(`Mention limit reached (maximum ${MAX_DELEGATE_CALLS})`);
+    if (record.delegatePromptChars + prompt.length > MAX_DELEGATE_PROMPT_BUDGET) throw new Error("Mention prompt budget exceeded");
     record.delegateCalls += 1;
     record.delegatePromptChars += prompt.length;
-    while (record.activeDelegates.size >= MAX_DELEGATE_CONCURRENCY) {
-      if (record.aborting || signal?.aborted) throw new Error("Delegation aborted");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    const result = await this.delivery.deliver({
+      conversationId: record.conversationId,
+      source: { type: "employee", id: record.employeeId, displayName: authorization.snapshot.display_name },
+      targetEmployeeIds: [input.employee_id],
+      text: prompt,
+      toolCallId,
+      logicalMessageId: `${record.conversationId}:${toolCallId}`,
+      idempotencyKey: `mention:${record.conversationId}:${toolCallId}:${input.employee_id}`,
+      caller: authorization.caller,
+    });
+    return result.replies[0]?.text ?? "Employee completed without a textual result.";
+  }
 
-    let resolveDone!: () => void;
-    const done = new Promise<void>((resolve) => { resolveDone = resolve; });
-    const child: ChildSession = {
-      aborted: false,
-      done,
-      resolveDone,
-      abort: async () => { child.aborted = true; await child.session?.abort(); },
-    };
-    record.activeDelegates.add(child);
-    const sourceRef = createHash("sha256").update(`${record.conversationId}:${toolCallId}:${Date.now()}`).digest("hex").slice(0, 24);
-    let childWorkspace: string | undefined;
-    let childProviderId: string | undefined;
-    try {
-      childWorkspace = join(record.workspace, ".delegates", sourceRef);
-      record.hindsightWorkspaces.add(childWorkspace);
-      mkdirSync(childWorkspace, { recursive: true, mode: 0o700 });
-      chmodSync(childWorkspace, 0o700);
-      if (this.hasCodingTools(snapshot)) {
-        if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
-        await this.options.sandbox.assertAvailable(childWorkspace);
-      }
-      const sessionManager = SessionManager.inMemory(childWorkspace);
-      const childAuthorization = { ...authorization, employeeId: snapshot.employee_id, snapshot, runtimeScope: sourceRef };
-      const hindsightRuntimeConfig = await this.resolveHindsightRuntimeConfig(childAuthorization);
-      const resourceLoader = this.options.resourceLoaderFactory(`${record.conversationId}:${sourceRef}`, childAuthorization, childWorkspace, this.options.agentDir, hindsightRuntimeConfig);
-      child.resourceLoader = resourceLoader;
-      await resourceLoader.reload();
-      const childTools = this.toolsFor(childAuthorization, false, undefined, childWorkspace, sessionManager.getSessionId());
-      const childRuntime = await this.ensureRuntimeModel(childAuthorization);
-      childProviderId = childRuntime.providerId;
-      const result = await createAgentSession({
-        cwd: childWorkspace,
-        agentDir: this.options.agentDir,
-        model: childRuntime.model,
-        thinkingLevel: this.thinkingLevelFor({ ...authorization, snapshot }),
-        modelRuntime: this.options.modelRuntime,
-        resourceLoader,
-        sessionManager,
-        settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-        tools: [...childTools.map((tool) => tool.name), ...memoryToolNames(childAuthorization.snapshot, hindsightRuntimeConfig), ...ragToolNames(childAuthorization.snapshot)],
-        customTools: childTools,
-      });
-      child.session = result.session;
-      if (child.aborted || signal?.aborted || record.aborting) await child.abort();
-      const source: ChildSource = { employeeId: expert.employee_id, displayName: expert.display_name };
-      const unsubscribe = result.session.subscribe((event) => this.publishChild(record, event, sourceRef, toolCallId, source));
-      const childStartedAt = Date.now();
-      try {
-        await result.session.prompt(prompt);
-        await this.recordUsageEntries(childAuthorization, childStartedAt, true, sessionManager.getEntries());
-        return this.childSummary(sessionManager.getEntries());
-      } catch (error) {
-        await this.recordUsageEntries(childAuthorization, childStartedAt, false, sessionManager.getEntries());
-        throw error;
-      } finally {
-        unsubscribe();
-        await child.abort();
-        await this.flushChildResourceLoader(child);
-        result.session.dispose();
-      }
-    } finally {
-      try {
-        if (childProviderId) {
-          await this.options.modelRuntime.removeRuntimeApiKey(childProviderId).catch(() => undefined);
-          this.options.modelRuntime.unregisterProvider(childProviderId);
-        }
-        await this.flushChildResourceLoader(child);
-      } finally {
-        if (childWorkspace) rmSync(childWorkspace, { recursive: true, force: true });
-        record.activeDelegates.delete(child);
-        child.resolveDone();
-      }
+  private latestAssistantText(entries: readonly SessionEntry[]): string {
+    for (const entry of [...entries].reverse()) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      const text = entry.message.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("").trim();
+      if (text) return text.slice(0, MAX_DELEGATE_RESULT_CHARS);
     }
+    return "Employee completed without a textual result.";
+  }
+
+  private decorateEntry(record: SessionRecord, entry: SessionEntry): SessionEntry {
+    if (!record.employeeId || !record.role) return entry;
+    const expert = this.options.store.listLoadedExperts(undefined, undefined, true).find((item) => item.employee_id === record.employeeId);
+    return {
+      ...(entry as unknown as Record<string, unknown>),
+      source_employee_id: record.employeeId,
+      source_employee_display_name: expert?.display_name ?? record.employeeId,
+      source_role: record.role,
+    } as unknown as SessionEntry;
   }
 
   private async resolveHindsightRuntimeConfig(authorization?: SessionAuthorization): Promise<HindsightRuntimeConfig | undefined> {
@@ -675,31 +740,28 @@ export class SessionHost {
     return "Employee completed without a textual result.";
   }
 
-  private publishChild(record: SessionRecord, event: AgentSessionEvent, sourceRef: string, toolCallId: string, source: ChildSource): void {
-    const metadata = {
-      conversation_id: record.conversationId,
-      source_ref: sourceRef,
-      tool_call_id: toolCallId,
-      source_employee_id: source.employeeId,
-      source_employee_display_name: source.displayName,
-      source_role: "child" as const,
-    };
-    if (!serializePiEvent(event, metadata)) return;
-    const envelope: PiEventEnvelope = { id: `${sourceRef}:${++record.eventSequence}`, event, ...metadata };
-    for (const subscriber of record.listeners) {
-      if (subscriber.replaying) subscriber.queued.push(envelope);
-      else subscriber.listener(envelope);
-    }
-  }
-
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
-    if (!serializePiEvent(event)) return;
+    const expert = record.employeeId
+      ? this.options.store.listLoadedExperts(undefined, undefined, true).find((item) => item.employee_id === record.employeeId)
+      : undefined;
+    const metadata = record.employeeId
+      ? {
+          conversation_id: record.conversationId,
+          ...(record.activeSourceRef ? { source_ref: record.activeSourceRef } : {}),
+          ...(record.activeToolCallId ? { tool_call_id: record.activeToolCallId } : {}),
+          source_employee_id: record.employeeId,
+          source_employee_display_name: expert?.display_name ?? record.employeeId,
+          source_role: record.activeSourceRole ?? (record.role === "coordinator" ? "coordinator" as const : "participant" as const),
+        }
+      : { conversation_id: record.conversationId };
+    if (!serializePiEvent(event, metadata)) return;
+    const entryId = this.entryIdentity(event);
     const envelope: PiEventEnvelope = {
-      id: this.entryIdentity(event) ?? `${record.conversationId}:${++record.eventSequence}`,
+      id: entryId && record.employeeId ? `${record.employeeId}:${entryId}` : entryId ?? `${record.conversationId}:${++record.eventSequence}`,
       event,
-      conversation_id: record.conversationId,
+      ...metadata,
     };
-    for (const subscriber of record.listeners) {
+    for (const subscriber of this.listeners.get(record.conversationId) ?? []) {
       if (subscriber.replaying) subscriber.queued.push(envelope);
       else subscriber.listener(envelope);
     }

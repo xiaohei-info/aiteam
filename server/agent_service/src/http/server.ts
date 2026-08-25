@@ -398,7 +398,9 @@ export class AgentHttpServer {
       const solutionRoster = solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
         : [];
-      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
+      const solutionCoordinator = solution && typeof solution.coordinator_employee_id === "string" ? solution.coordinator_employee_id : undefined;
+      if (solutionCoordinator && coordinatorEmployeeId && coordinatorEmployeeId !== solutionCoordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator does not match the authorized solution");
+      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
       if (!coordinatorEmployeeId) throw new HttpProblem(403, "coordinator_not_authorized", "No authorized employee is available as coordinator");
       if (solutionRoster.length > 0 && !solutionRoster.includes(coordinatorEmployeeId)) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator is not in the authorized solution roster");
       this.requireAuthorizedEmployee(coordinatorEmployeeId, caller);
@@ -414,7 +416,41 @@ export class AgentHttpServer {
       tenantId: caller.tenantId,
       memberId,
     });
-    this.writeJson(response, 201, { data: metadata });
+    try {
+      await this.options.host.initializeConversationParticipants(id, caller);
+    } catch (error) {
+      await this.options.host.delete(id, caller.tenantId!, memberId).catch(() => undefined);
+      throw error;
+    }
+    this.writeJson(response, 201, { data: this.options.store.getOwnedConversationMetadata(id, caller.tenantId!, memberId) ?? metadata });
+  }
+
+  private resolvePromptTargets(conversation: ReturnType<AgentSqliteStore["getConversation"]>, caller: AuthenticatedCaller, mentions: string[]): string[] {
+    if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    const coordinator = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
+    if (conversation.kind !== "group") {
+      if (mentions.length > 0) throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
+      if (!coordinator) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      return [coordinator];
+    }
+    if (mentions.length === 0) {
+      if (!coordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Group conversation has no coordinator");
+      return [coordinator];
+    }
+    const memberId = caller.userId ?? caller.callerId;
+    const participants = this.options.store.listConversationParticipants(conversation.id);
+    const solution = conversation.solutionRef
+      ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === conversation.solutionRef)
+      : undefined;
+    const roster = new Set(participants.length > 0
+      ? participants.map((participant) => participant.employee_id)
+      : solution && Array.isArray(solution.expert_employee_ids)
+        ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+        : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
+    const targets = [...new Set(mentions)].map((handle) => experts.find((expert) => expert.handle === handle)?.employee_id);
+    if (targets.some((employeeId) => !employeeId || !roster.has(employeeId))) throw new HttpProblem(403, "employee_not_authorized", "Mentioned employee is not in the authorized group roster");
+    return targets as string[];
   }
 
   private requireAuthorizedEmployee(employeeId: string, caller: AuthenticatedCaller): void {
@@ -645,11 +681,13 @@ export class AgentHttpServer {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
-    const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
-    const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
-    const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
-    if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
-    if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
+    const targetEmployeeIds = this.resolvePromptTargets(conversation, caller, mentions);
+    for (const employeeId of targetEmployeeIds) {
+      const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked);
+      const snapshot = expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
+      if (!expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
+    }
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });

@@ -61,6 +61,20 @@ export interface ConversationMetadata {
   updated_at: string;
 }
 
+export type ConversationParticipantRole = "coordinator" | "member";
+
+export interface ConversationParticipantSession {
+  conversation_id: string;
+  employee_id: string;
+  role: ConversationParticipantRole;
+  session_file: string;
+  workspace: string;
+  pi_session_id: string | null;
+  employee_version: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LoadedExpertProjection {
   employee_id: string;
   tenant_id: string;
@@ -226,6 +240,20 @@ export class AgentSqliteStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS conversation_updated_idx ON conversation(updated_at DESC, id);
+
+      CREATE TABLE IF NOT EXISTS conversation_participant_session (
+        conversation_id TEXT NOT NULL,
+        employee_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('coordinator', 'member')),
+        session_file TEXT NOT NULL,
+        workspace TEXT NOT NULL,
+        pi_session_id TEXT,
+        employee_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, employee_id)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
 
       CREATE TABLE IF NOT EXISTS idempotency_receipt (
         conversation_id TEXT NOT NULL,
@@ -453,8 +481,54 @@ export class AgentSqliteStore {
     const ownerTenant = existing?.tenantId ?? tenantId;
     const ownerMember = existing?.memberId ?? memberId;
     if (result.changes > 0 && ownerTenant && ownerMember) this.deleteConversationLocalFiles(id, ownerTenant, ownerMember);
+    this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
     this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
     return result.changes > 0;
+  }
+
+  listConversationParticipants(conversationId: string): ConversationParticipantSession[] {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+             employee_version, created_at, updated_at
+      FROM conversation_participant_session
+      WHERE conversation_id = ?
+      ORDER BY CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
+    `).all(conversationId) as unknown as ConversationParticipantSession[];
+  }
+
+  getConversationParticipant(conversationId: string, employeeId: string): ConversationParticipantSession | undefined {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+             employee_version, created_at, updated_at
+      FROM conversation_participant_session
+      WHERE conversation_id = ? AND employee_id = ?
+    `).get(conversationId, employeeId) as ConversationParticipantSession | undefined;
+  }
+
+  upsertConversationParticipant(input: Omit<ConversationParticipantSession, "created_at" | "updated_at"> & { created_at?: string; updated_at?: string }): ConversationParticipantSession {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO conversation_participant_session (
+        conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+        employee_version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, employee_id) DO UPDATE SET
+        role = excluded.role,
+        session_file = excluded.session_file,
+        workspace = excluded.workspace,
+        pi_session_id = excluded.pi_session_id,
+        employee_version = excluded.employee_version,
+        updated_at = excluded.updated_at
+    `).run(
+      input.conversation_id, input.employee_id, input.role, input.session_file, input.workspace,
+      input.pi_session_id ?? null, input.employee_version,
+      input.created_at ?? now, input.updated_at ?? now,
+    );
+    return this.getConversationParticipant(input.conversation_id, input.employee_id)!;
+  }
+
+  deleteConversationParticipants(conversationId: string): void {
+    this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(conversationId);
   }
 
   createLocalFile(input: {

@@ -135,7 +135,13 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const todoHint = Array.isArray(allowedTools) && allowedTools.includes("todo_update")
     ? "For multi-step work, keep the user-visible checklist current with todo_update."
     : "";
-  return [persona, "Use only the tools authorized by the current employee snapshot.", todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const source = authorization.groupMessageSource
+    ? `You are replying inside a group conversation. Message source: ${authorization.groupMessageSource.type === "employee" ? "employee" : "human"} ${authorization.groupMessageSource.displayName ?? authorization.groupMessageSource.id}. Reply as this employee; do not impersonate another employee.`
+    : "";
+  const mentionHint = authorization.employeeId && authorization.rosterEmployeeIds
+    ? "In this group, direct employee mentions are routed by the host to the addressed participant session. Use mention_employee only when you need to consult another authorized participant."
+    : "";
+  return [persona, "Use only the tools authorized by the current employee snapshot.", source, mentionHint, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function loadJwtOptions() {

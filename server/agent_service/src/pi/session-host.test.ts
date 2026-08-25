@@ -84,6 +84,104 @@ test("production SessionHost fails closed when an enabled memory policy has no M
   }
 });
 
+test("group conversations create fixed participant sessions and route @mentions directly", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: now },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: now },
+    ], [{ solution_instance_id: "solution-fixed", tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: "Fixed Group", coordinator_employee_id: "coordinator", expert_employee_ids: ["coordinator", "worker"] }], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord-snapshot", display_name: "Coordinator", tool_policy: { allowed_tools: ["mention_employee"] } },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "worker-snapshot", display_name: "Worker", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "fixed-group", kind: "group", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", solutionRef: "solution-fixed", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+    await host.initializeConversationParticipants("fixed-group", caller);
+    const participants = fixture.store.listConversationParticipants("fixed-group");
+    assert.deepEqual(participants.map((item) => item.employee_id), ["coordinator", "worker"]);
+    assert.equal(new Set(participants.map((item) => item.session_file)).size, 2);
+
+    fixture.faux.setResponses([fauxAssistantMessage("worker direct reply")]);
+    await host.prompt("fixed-group", "@worker 请直接分析", undefined, caller, ["worker"]);
+    const workerSession = fixture.store.getConversationParticipant("fixed-group", "worker");
+    assert(workerSession?.session_file);
+    const firstWorkerEntries = await host.entries("fixed-group");
+    assert(firstWorkerEntries.some((entry) => (entry as unknown as { source_employee_id?: string }).source_employee_id === "worker"));
+
+    fixture.faux.setResponses([fauxAssistantMessage("worker second reply")]);
+    await host.prompt("fixed-group", "@worker 再补充", undefined, caller, ["worker"]);
+    const workerSessionAfter = fixture.store.getConversationParticipant("fixed-group", "worker");
+    assert.equal(workerSessionAfter?.session_file, workerSession?.session_file);
+    assert((await host.entries("fixed-group")).length > firstWorkerEntries.length);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("group prompt without mentions routes to coordinator and multiple mentions fan out", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: now },
+      { employee_id: "worker-a", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "a", display_name: "A", revoked: false, synced_at: now },
+      { employee_id: "worker-b", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "b", display_name: "B", revoked: false, synced_at: now },
+    ], [], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord", display_name: "Coordinator", tool_policy: { allowed_tools: [] } },
+      { employee_id: "worker-a", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "a", display_name: "A", tool_policy: { allowed_tools: [] } },
+      { employee_id: "worker-b", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "b", display_name: "B", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "fanout-group", kind: "group", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+    await host.initializeConversationParticipants("fanout-group", caller);
+    fixture.faux.setResponses([fauxAssistantMessage("coordinator reply")]);
+    await host.prompt("fanout-group", "请先回答", undefined, caller);
+    fixture.faux.setResponses([fauxAssistantMessage("A reply"), fauxAssistantMessage("B reply")]);
+    await host.prompt("fanout-group", "@a @b 请分别回答", undefined, caller, ["a", "b"]);
+    const entries = await host.entries("fanout-group");
+    assert(entries.some((entry) => (entry as unknown as { source_employee_id?: string }).source_employee_id === "coordinator"));
+    assert(entries.some((entry) => (entry as unknown as { source_employee_id?: string }).source_employee_id === "worker-a"));
+    assert(entries.some((entry) => (entry as unknown as { source_employee_id?: string }).source_employee_id === "worker-b"));
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("coordinator mention_employee uses the fixed peer session and unified delivery", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: now },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: now },
+    ], [], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord", display_name: "Coordinator", tool_policy: { allowed_tools: ["mention_employee"] } },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "worker", display_name: "Worker", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "tool-group", kind: "group", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+    await host.initializeConversationParticipants("tool-group", caller);
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("mention_employee", { employee_id: "worker", task: "请返回固定 Session 结果" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("worker fixed-session reply"),
+      fauxAssistantMessage("coordinator final"),
+    ]);
+    await host.prompt("tool-group", "请咨询 worker", undefined, caller);
+    const participant = fixture.store.getConversationParticipant("tool-group", "worker");
+    assert(participant?.session_file);
+    assert((await host.entries("tool-group")).some((entry) => (entry as unknown as { source_employee_id?: string }).source_employee_id === "worker"));
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost persists a Pi session and replays entries", async () => {
   const fixture = await createFixture();
   try {
