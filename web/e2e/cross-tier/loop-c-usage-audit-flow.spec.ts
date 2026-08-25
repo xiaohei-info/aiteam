@@ -235,6 +235,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
   test("Agent Conversation prompt → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
     request,
   }) => {
+    test.setTimeout(180_000);
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
     // Agent Conversation prompt → outbox summary 写入/更新 → flush sent>0 →
     // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。

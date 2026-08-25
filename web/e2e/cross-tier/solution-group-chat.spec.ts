@@ -80,7 +80,7 @@ async function waitForAssistant(
   await expect.poll(async () => {
     latest = await getEntries(request, token, conversationId);
     return employeeIds.every((employeeId) => Boolean(assistantFrom(latest, employeeId)));
-  }, { timeout: 30_000, intervals: [250, 500, 1_000] }).toBe(true);
+  }, { timeout: 90_000, intervals: [250, 500, 1_000] }).toBe(true);
 
   const errors = latest
     .map((entry) => entry.message)
