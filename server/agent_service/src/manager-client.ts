@@ -296,7 +296,9 @@ function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
     template_id: raw.template_id,
     display_name: typeof raw.display_name === "string" ? raw.display_name : raw.template_id,
     category: typeof raw.category === "string" ? raw.category : "",
-    model_name: typeof raw.platform_model_ref === "object" && raw.platform_model_ref !== null && typeof (raw.platform_model_ref as Record<string, unknown>).model_id === "string" ? (raw.platform_model_ref as Record<string, unknown>).model_id as string : "",
+    model_name: typeof raw.platform_model_ref === "object" && raw.platform_model_ref !== null && typeof (raw.platform_model_ref as Record<string, unknown>).model_id === "string"
+      ? (raw.platform_model_ref as Record<string, unknown>).model_id as string
+      : typeof raw.default_model === "string" ? raw.default_model : "",
     skills_count: typeof raw.skills_count === "number" && Number.isInteger(raw.skills_count) && raw.skills_count >= 0 ? raw.skills_count : skills.length,
     recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : 0,
     is_recruited: raw.is_recruited === true,
@@ -308,7 +310,9 @@ function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
 function normalizeSolution(value: unknown, tenantId?: string, memberId?: string): LoadedSolutionProjection {
   if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid solution projection");
   const raw = value as Record<string, unknown>;
-  const id = stringValue(raw.solution_instance_id ?? raw.solution_id ?? raw.id, "solution_instance_id");
+  // Manager's solution projection uses `id` for the tenant solution_instance and
+  // `solution_id` for the immutable Operator catalog source. Prefer the instance.
+  const id = stringValue(raw.solution_instance_id ?? raw.id ?? raw.solution_id, "solution_instance_id");
   const version = String(raw.version ?? (raw.solution_version !== undefined && raw.config_version !== undefined ? `${raw.solution_version}:${raw.config_version}` : raw.solution_version ?? raw.config_version ?? ""));
   assertOwnership(raw, tenantId, memberId);
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };

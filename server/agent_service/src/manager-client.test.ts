@@ -39,7 +39,8 @@ test("HttpManagerClient pulls only the employee-scoped runtime provider config",
     request = { url: String(input), init: init ?? {} };
     return new Response(JSON.stringify({ data: {
       base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "secret",
-      model: "m1", provider_ref: "p1", version: 2,
+      model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 2,
+      pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
     } }), { status: 200 });
   });
   const config = await client.pullRuntimeConfig(caller, "employee-1");
@@ -85,19 +86,21 @@ test("runtime config accepts only the Pi protocols implemented by this contract"
   for (const api_protocol of ["openai-completions", "openai-responses", "anthropic-messages"] as const) {
     assert.equal(normalizeRuntimeProviderConfig({
       base_url: "https://newapi.test/v1", api_protocol, api_key: "secret",
-      model: "m1", provider_ref: "p1", version: 1,
+      model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 1,
+      pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
     }).api_protocol, api_protocol);
   }
   assert.throws(() => normalizeRuntimeProviderConfig({
     base_url: "https://newapi.test/v1", api_protocol: "pi-messages", api_key: "secret",
-    model: "m1", provider_ref: "p1", version: 1,
+    model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 1,
+    pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
   }), /invalid runtime provider protocol/);
 });
 
 test("normalizes the Manager AuthorizedConfig contract into local projection fields", () => {
   const config = normalizeAuthorizedConfig({
     experts: [{ employee_id: "employee-1", employee_slug: "helper", display_name: "Helper", version: 7, model: "model-1", provider_ref: "provider-1", tools: ["memory_recall"], skills: ["skill-1"] }],
-    solutions: [{ solution_instance_id: "solution-1", display_name: "Solution", version: 3 }],
+    solutions: [{ id: "instance-1", solution_id: "catalog-1", display_name: "Solution", version: 3 }],
     snapshots: [{ employee_id: "employee-1", version: 7, snapshot_version: "snap-7", display_name: "Helper", model_policy: { model: "model-1" }, skills: ["skill-1"], tools: ["memory_recall"] }],
     revoked_ids: [],
   }, "tenant-1");
@@ -106,6 +109,7 @@ test("normalizes the Manager AuthorizedConfig contract into local projection fie
   assert.equal(config.experts[0].tenant_id, "tenant-1");
   assert.deepEqual(config.experts[0].tools, ["memory_recall"]);
   assert.deepEqual(config.experts[0].skills, ["skill-1"]);
+  assert.equal(config.solutions[0].solution_instance_id, "instance-1");
   assert.equal(config.solutions[0].version, "3");
   assert.equal(config.snapshots?.[0].version, "7");
   assert.deepEqual(config.snapshots?.[0].skill_refs, ["skill-1"]);
