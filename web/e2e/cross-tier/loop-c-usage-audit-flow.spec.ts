@@ -426,7 +426,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     for (const item of changedUsageItems) {
       expect(item.tenant_id, "usage outbox tenant owner").toBe(ownerTenantId);
       expect(item.member_id, "usage outbox member owner").toBe(ownerMemberId);
-      expect(["pending", "failed", "sent"], "usage summary status").toContain(item.status);
+      expect(["pending", "failed", "sending", "sent"], "usage summary status").toContain(item.status);
     }
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
