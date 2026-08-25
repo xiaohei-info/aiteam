@@ -112,6 +112,16 @@ export class AgentHttpServer {
       genReqId: () => randomUUID(),
       logger: false,
     });
+    // Fastify rejects an empty JSON body before the handler. Several command-style
+    // Agent endpoints intentionally accept an empty JSON request, so preserve the
+    // previous HTTP contract while still rejecting malformed JSON.
+    this.app.removeContentTypeParser("application/json");
+    this.app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+      const text = typeof body === "string" ? body : body.toString("utf8");
+      if (text.trim() === "") return done(null, {});
+      try { return done(null, JSON.parse(text)); }
+      catch { return done(new HttpProblem(400, "invalid_json", "Request body must be valid JSON")); }
+    });
     // Business handlers retain the existing trust-boundary validation. Fastify
     // schemas are the single OpenAPI source, without changing their legacy
     // error/status semantics through a second validator/serializer.
