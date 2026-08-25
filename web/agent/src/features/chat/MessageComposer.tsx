@@ -8,8 +8,8 @@
  * AITEAM-688：runtime/model 是部署级配置，前端不再提供模型选择入口。
  *
  * 复用工种：
- *   - 群聊 MentionComposer.parseMentions 解析已输入 @提及（口径与后端一致）。
- *   - listLoadedExperts（GET /api/agent/grants/experts）提供 @提及 roster 真实数据源。
+ *   - 统一解析群聊 @提及（口径与后端一致）。
+ *   - 私聊自行读取授权 roster；群聊由父级传入方案裁剪后的 roster。
  */
 
 import {
@@ -37,7 +37,7 @@ import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
 import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
-import { parseMentions } from "../group/MentionComposer";
+import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
 const SKILL_OPTIONS = [
@@ -64,9 +64,11 @@ export interface MessageComposerProps {
   isPrompting: boolean;
   onPromptingChange: (prompting: boolean) => void;
   onSent: () => void;
+  /** Group conversations pass their authorized solution roster; private chat keeps the local roster lookup. */
+  mentionRoster?: LoadedExpertProjection[];
 }
 
-export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent }: MessageComposerProps) {
+export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, mentionRoster }: MessageComposerProps) {
   const { client } = useApp();
   const toMessage = useApiError();
   const [content, setContent] = useState("");
@@ -83,8 +85,10 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSubmission = useRef<PendingSubmission | null>(null);
 
-  // roster 真实数据源（grants/experts：本地已装载/已授权专家投影）。
+  // Private chat reads the full local roster. Group chat supplies the solution-scoped roster
+  // so the composer never offers an employee outside the current conversation.
   useEffect(() => {
+    if (mentionRoster !== undefined) return;
     let cancelled = false;
     listLoadedExperts(client)
       .then((items) => {
@@ -96,7 +100,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, mentionRoster]);
 
   useEffect(() => {
     if (!toast) return;
@@ -107,7 +111,8 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     };
   }, [toast]);
 
-  const visibleHandles = useMemo(() => new Set(footerHandles(roster)), [roster]);
+  const activeRoster = mentionRoster ?? roster;
+  const visibleHandles = useMemo(() => new Set(footerHandles(activeRoster)), [activeRoster]);
   const mentioned = useMemo(() => parseMentions(content, visibleHandles), [content, visibleHandles]);
 
   function showToast(message: string) {
@@ -138,6 +143,18 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     input.insertText(insert);
     setContent(input.getValue());
   }
+
+  // GroupExpertRoster uses the same composer as private chat and only emits a
+  // local insertion event; prompt submission remains in this shared component.
+  useEffect(() => {
+    const onAppendMention = (event: Event) => {
+      if (mentionRoster === undefined) return;
+      const handle = (event as CustomEvent<string>).detail;
+      if (typeof handle === "string" && visibleHandles.has(handle)) insertAtCursor(`@${handle} `);
+    };
+    window.addEventListener("group:append-mention", onAppendMention);
+    return () => window.removeEventListener("group:append-mention", onAppendMention);
+  }, [mentionRoster, visibleHandles]);
 
   function pickHandle(handle: string) {
     insertAtCursor(`@${handle} `);
@@ -173,7 +190,11 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
       // Keep the key and local IDs stable: a lost response may mean the Agent accepted the prompt.
       pending.promptAttempted = true;
       onPromptingChange(true);
-      await submitPrompt(client, conversationId, { text: pending.text, attachment_ids: pending.uploaded.map((file) => file.id) }, pending.key);
+      await submitPrompt(client, conversationId, {
+        text: pending.text,
+        attachment_ids: pending.uploaded.map((file) => file.id),
+        ...(mentionRoster !== undefined && mentioned.length > 0 ? { mentions: mentioned } : {}),
+      }, pending.key);
       pendingSubmission.current = null;
       setContent("");
       setAttachments([]);
@@ -238,11 +259,11 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         width={240}
         hasAutoFocus={false}
         content={
-          roster.length === 0 ? (
+          activeRoster.length === 0 ? (
             <Text type="supporting">暂无可召唤的智能体</Text>
           ) : (
             <VStack gap={1}>
-              {roster.map((p) => (
+              {activeRoster.map((p) => (
                 <Button
                   key={p.employee_id}
                   label={`@${p.display_name || p.handle}（点击召唤）`}

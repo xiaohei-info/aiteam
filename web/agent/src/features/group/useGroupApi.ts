@@ -5,6 +5,8 @@ export interface SolutionProjection {
   solution_instance_id: string;
   display_name: string;
   version: string;
+  /** New Manager projection; optional while older deployments are rolling forward. */
+  coordinator_employee_id?: string | null;
   expert_employee_ids?: string[];
 }
 
@@ -66,14 +68,15 @@ export function createGroupConversation(
   input: {
     title?: string | null;
     solution_instance_id?: string | null;
-    coordinator_employee_id: string;
+    /** Required only for free groups; solution groups are server-owned. */
+    coordinator_employee_id?: string;
   },
 ): Promise<Conversation | null> {
   return createConversation(client, {
     title: input.title,
     kind: "group",
     collaboration_mode: input.solution_instance_id ? "orchestrated" : "free",
-    coordinator_employee_id: input.coordinator_employee_id,
+    ...(input.coordinator_employee_id ? { coordinator_employee_id: input.coordinator_employee_id } : {}),
     solution_instance_id: input.solution_instance_id,
   });
 }
