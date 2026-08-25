@@ -9,9 +9,7 @@ export interface RegistrationInput {
   defaultModel: string;
   description: string;
   expertTemplateIds: string[];
-  plannerTemplateId: string;
-  plannerPrompt: string;
-  defaultGrantsText: string;
+  coordinatorTemplateId: string;
 }
 
 export type RegistrationErrors = Partial<Record<keyof RegistrationInput, string>>;
@@ -52,14 +50,8 @@ export function validateRegistration(input: RegistrationInput): RegistrationErro
   if (input.expertTemplateIds.length === 0) {
     errors.expertTemplateIds = "请至少选择一个专家模板";
   }
-  if (!input.plannerTemplateId.trim()) {
-    errors.plannerTemplateId = "请指定一个专家为 Planner 角色（编排者）";
-  }
-  if (!input.plannerPrompt.trim()) {
-    errors.plannerPrompt = "请填写 Planner 编排规则提示词";
-  }
-  if (input.defaultGrantsText.trim() && !parseJsonObject(input.defaultGrantsText)) {
-    errors.defaultGrantsText = "默认 Grants 必须是 JSON 对象";
+  if (!input.coordinatorTemplateId.trim()) {
+    errors.coordinatorTemplateId = "请选择一个协调专家";
   }
 
   return errors;

@@ -90,7 +90,7 @@ def test_register_expert_envelope(client, manager):
 
 
 def test_register_solution_envelope(client):
-    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
+    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "coordinator_template_id": "tpl-cmo", "coordinator_instructions": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201
     assert r.json()["data"]["catalog_type"] == "solution_template"
@@ -102,6 +102,19 @@ def test_register_validation_error_422(client):
     )
     assert r.status_code == 422
     assert r.json()["code"] == "validation_error"
+
+
+def test_register_solution_rejects_removed_runtime_fields(client):
+    body = {
+        "display_name": "旧字段方案",
+        "description": "d",
+        "expert_template_ids": ["tpl-cmo"],
+        "coordinator_template_id": "tpl-cmo",
+        "knowledge_refs": ["tenant-knowledge"],
+        "planner_prompt": "legacy",
+    }
+    response = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
+    assert response.status_code == 422
 
 
 def test_register_allows_empty_avatar_and_skills(client):
@@ -215,7 +228,7 @@ def test_route_register_expert_without_id_returns_201_with_generated_id(client, 
 
 
 def test_route_register_solution_without_id_returns_201_with_generated_id(client):
-    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
+    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "coordinator_template_id": "tpl-cmo", "coordinator_instructions": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]

@@ -11,7 +11,7 @@ import { ExpertSkillSelector } from "./ExpertSkillSelector";
 import { SolutionTemplateFields } from "./SolutionTemplateFields";
 import { TeamMemberSelector } from "./TeamMemberSelector";
 import { ApiError } from "@aiteam/shared";
-import { parseJsonObject, parseList, validateRegistration, type RegistrationErrors } from "./validation";
+import { parseList, validateRegistration, type RegistrationErrors } from "./validation";
 import type { CatalogApi } from "../useCatalogApi";
 import type { CatalogItem, CatalogItemType, PlatformModelRef, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
 import type { PlatformSkillRef } from "../../skill-market/types";
@@ -49,17 +49,11 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [platformSkillRefs, setPlatformSkillRefs] = useState<PlatformSkillRef[]>([]);
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
   const [expertTemplateIds, setExpertTemplateIds] = useState<string[]>([]);
-  const [plannerTemplateId, setPlannerTemplateId] = useState("");
+  const [coordinatorTemplateId, setCoordinatorTemplateId] = useState("");
   const [solutionDescription, setSolutionDescription] = useState("");
   const [icon, setIcon] = useState("");
-  const [knowledgeRefsText, setKnowledgeRefsText] = useState("");
-  const [skillRefsText, setSkillRefsText] = useState("");
-  const [plannerPrompt, setPlannerPrompt] = useState("");
-  const [subtaskPrompt, setSubtaskPrompt] = useState("");
-  const [aggregatePrompt, setAggregatePrompt] = useState("");
-  const [defaultGrantsText, setDefaultGrantsText] = useState("");
+  const [coordinatorInstructions, setCoordinatorInstructions] = useState("");
   const [solutionTagsText, setSolutionTagsText] = useState("");
-  const [isSolutionAdvancedOpen, setIsSolutionAdvancedOpen] = useState(false);
   const [validationErrors, setValidationErrors] = useState<RegistrationErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -100,7 +94,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
 
   function updateExpertTemplateIds(ids: string[]) {
     setExpertTemplateIds(ids);
-    if (plannerTemplateId && !ids.includes(plannerTemplateId)) setPlannerTemplateId("");
+    if (coordinatorTemplateId && !ids.includes(coordinatorTemplateId)) setCoordinatorTemplateId("");
   }
 
   function buildExpertPayload(): RegisterExpertTemplate {
@@ -121,13 +115,8 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       description: solutionDescription.trim(),
       icon: icon.trim(),
       expert_template_ids: expertTemplateIds,
-      planner_template_id: plannerTemplateId.trim(),
-      knowledge_refs: parseList(knowledgeRefsText),
-      skill_refs: parseList(skillRefsText),
-      planner_prompt: plannerPrompt.trim(),
-      subtask_prompt: subtaskPrompt.trim(),
-      aggregate_prompt: aggregatePrompt.trim(),
-      default_grants: parseJsonObject(defaultGrantsText) ?? null,
+      coordinator_template_id: coordinatorTemplateId.trim(),
+      coordinator_instructions: coordinatorInstructions.trim(),
       tags: parseList(solutionTagsText),
     };
   }
@@ -144,9 +133,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       defaultModel,
       description: expertDescription,
       expertTemplateIds,
-      plannerTemplateId,
-      plannerPrompt,
-      defaultGrantsText,
+      coordinatorTemplateId,
     });
     setValidationErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -213,37 +200,23 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
               <TeamMemberSelector
                 options={expertOptions}
                 selectedIds={expertTemplateIds}
-                plannerTemplateId={plannerTemplateId}
+                coordinatorTemplateId={coordinatorTemplateId}
                 disabled={disabled}
                 selectionError={validationErrors.expertTemplateIds}
-                plannerError={validationErrors.plannerTemplateId}
+                coordinatorError={validationErrors.coordinatorTemplateId}
                 onSelectionChange={updateExpertTemplateIds}
-                onPlannerChange={setPlannerTemplateId}
+                onCoordinatorChange={setCoordinatorTemplateId}
               />
               <SolutionTemplateFields
                 description={solutionDescription}
                 icon={icon}
-                knowledgeRefsText={knowledgeRefsText}
-                skillRefsText={skillRefsText}
-                plannerPrompt={plannerPrompt}
-                subtaskPrompt={subtaskPrompt}
-                aggregatePrompt={aggregatePrompt}
-                defaultGrantsText={defaultGrantsText}
+                coordinatorInstructions={coordinatorInstructions}
                 tagsText={solutionTagsText}
-                isAdvancedOpen={isSolutionAdvancedOpen}
                 disabled={disabled}
-                plannerPromptError={validationErrors.plannerPrompt}
-                defaultGrantsError={validationErrors.defaultGrantsText}
                 onDescriptionChange={setSolutionDescription}
                 onIconChange={setIcon}
-                onKnowledgeRefsChange={setKnowledgeRefsText}
-                onSkillRefsChange={setSkillRefsText}
-                onPlannerPromptChange={setPlannerPrompt}
-                onSubtaskPromptChange={setSubtaskPrompt}
-                onAggregatePromptChange={setAggregatePrompt}
-                onDefaultGrantsChange={setDefaultGrantsText}
+                onCoordinatorInstructionsChange={setCoordinatorInstructions}
                 onTagsChange={setSolutionTagsText}
-                onAdvancedOpenChange={setIsSolutionAdvancedOpen}
               />
             </>
           )}

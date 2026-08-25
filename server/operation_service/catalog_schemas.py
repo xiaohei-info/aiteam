@@ -55,18 +55,17 @@ class RegisterExpertTemplateRequest(BaseModel):
     system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
     platform_model_ref: PlatformModelRef = Field(description="Operator 已发布平台 Provider/模型固定引用")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
-    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility field; use skill_refs")
+    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection; use platform_skill_refs")
     description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
 
 
 # ---- 行业方案（对齐 PRD-v2 S03 + 下游 apply/建群业务流程所需字段）----
 
 class RegisterSolutionTemplateRequest(BaseModel):
-    """注册行业方案模板（北向请求）。引用专家模板 + 知识/技能 refs + 协作编排规则。
+    """注册行业方案模板（北向请求）。方案只定义专家团队与协调专家。
 
-    保留字段依据：Operator 设置 → Manager apply（落 solution_instance）→ Agent 从方案创建群聊
-    继承编排规则（planner/subtask/aggregate_prompt 三段 prompt）。default_kb_blueprint /
-    default_skill_bundle / default_collaboration_template_ref 已删除——下游无消费。
+    专家自身的知识、技能、模型和工具配置归专家模板；企业成员/部门授权与租户知识绑定
+    在 Manager 应用方案时完成，不在 Operator 模板中填写跨租户引用。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -86,21 +85,12 @@ class RegisterSolutionTemplateRequest(BaseModel):
         default_factory=list,
         description="方案内专家绑定列表（含排序号与启用开关）；提供时优先于 expert_template_ids",
     )
-    planner_template_id: str = Field(
+    coordinator_template_id: str = Field(
         default="",
-        description="Planner 角色：必须指定方案内某一专家模板为编排者（planner）；空由服务端拒绝",
+        description="协调专家：必须指定方案内某一专家模板；应用到 Manager 后映射为 coordinator_employee_id",
     )
-    knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
-    skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
-    default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
-    planner_prompt: str = Field(
-        default="", description="方案级协作编排规则：planner 阶段 prompt；必填，服务端强制非空"
-    )
-    subtask_prompt: str = Field(
-        default="", description="方案级协作编排规则：子任务拆解 prompt"
-    )
-    aggregate_prompt: str = Field(
-        default="", description="方案级协作编排规则：多专家结果聚合 prompt"
+    coordinator_instructions: str = Field(
+        default="", max_length=4000, description="可选的自然语言协作说明，不是执行状态机或安全策略",
     )
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
@@ -144,13 +134,8 @@ class UpdateSolutionTemplateRequest(BaseModel):
     icon: str | None = None
     expert_template_ids: list[str] | None = None
     expert_bindings: list["ExpertBinding"] | None = None
-    planner_template_id: str | None = None
-    knowledge_refs: list[str] | None = None
-    skill_refs: list[str] | None = None
-    default_grants: dict | None = None
-    planner_prompt: str | None = None
-    subtask_prompt: str | None = None
-    aggregate_prompt: str | None = None
+    coordinator_template_id: str | None = None
+    coordinator_instructions: str | None = Field(default=None, max_length=4000)
     tags: list[str] | None = None
 
 
@@ -180,9 +165,8 @@ class CatalogEntryResponse(BaseModel):
     expert_bindings: list["ExpertBinding"] | None = Field(
         default=None, description="方案内专家绑定列表（仅 solution_template）"
     )
-    knowledge_refs: list[str] = Field(default_factory=list, description="知识库引用（仅 solution_template）")
-    skill_refs: list[str] = Field(default_factory=list, description="技能引用（仅 solution_template）")
-    default_grants: dict | None = Field(default=None, description="默认授权（仅 solution_template）")
+    coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的模板 id")
+    coordinator_instructions: str = Field(default="", max_length=4000)
 
 
 # ---- 详情视图（对齐前端 CatalogItem，返回完整 payload 顶层字段）----
@@ -193,7 +177,5 @@ class CatalogDetailView(CatalogEntryResponse):
     model_config = ConfigDict(extra="forbid")
 
     expert_template_ids: list[str] = Field(default_factory=list)
-    planner_template_id: str = Field(default="", description="方案内被指定为 planner 的专家模板 id")
-    planner_prompt: str = Field(default="")
-    subtask_prompt: str = Field(default="")
-    aggregate_prompt: str = Field(default="")
+    coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的模板 id")
+    coordinator_instructions: str = Field(default="", max_length=4000)

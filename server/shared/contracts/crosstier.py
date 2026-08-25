@@ -96,7 +96,7 @@ class ExpertTemplateDetail(BaseModel):
     persona: str | None = Field(default=None, description="内部人设/系统提示词影子（backfill from system_prompt）")
     recommended_config: dict = Field(
         default_factory=dict,
-        description="推荐配置（Manager 招募时预填充 model/skills/knowledge_refs 等）；backfill from flat 字段",
+        description="推荐配置（Manager 招募时预填充模型和专家能力配置）；backfill from flat 字段",
     )
     category: str = Field(default="", description="分类（市场营销/财务分析/…）")
     avatar_url: str = Field(default="", description="头像图片 URL")
@@ -125,14 +125,9 @@ class SolutionPackage(BaseModel):
     display_name: str
     description: str = Field(default="", description="方案描述")
     icon: str = Field(default="", description="方案图标")
-    planner_template_id: str = Field(default="", description="方案内被指定为 planner 的专家模板 id；空=运行时自动选择")
-    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表")
-    knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
-    skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
-    default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
-    planner_prompt: str = Field(default="", description="方案级协作编排规则：planner prompt；空=回退运行时默认")
-    subtask_prompt: str = Field(default="", description="方案级协作编排规则：子任务拆解 prompt")
-    aggregate_prompt: str = Field(default="", description="方案级协作编排规则：多专家结果聚合 prompt")
+    coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的专家模板 id")
+    coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明")
+    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="按方案顺序排列的专家模板列表")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 

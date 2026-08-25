@@ -113,13 +113,8 @@ export function CatalogDetailPage(): ReactNode {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";
         changes.expert_template_ids = draft.expert_template_ids ?? [];
-        changes.planner_template_id = draft.planner_template_id ?? "";
-        changes.knowledge_refs = draft.knowledge_refs ?? [];
-        changes.skill_refs = draft.skill_refs ?? [];
-        changes.planner_prompt = draft.planner_prompt ?? "";
-        changes.subtask_prompt = draft.subtask_prompt ?? "";
-        changes.aggregate_prompt = draft.aggregate_prompt ?? "";
-        changes.default_grants = draft.default_grants ?? null;
+        changes.coordinator_template_id = draft.coordinator_template_id ?? "";
+        changes.coordinator_instructions = draft.coordinator_instructions ?? "";
         changes.tags = draft.tags ?? [];
       }
       const updated = await api.updateEntry(catalog_type as CatalogItemType, template_id, changes);

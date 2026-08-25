@@ -41,12 +41,8 @@ export type UpdateSolutionTemplateChanges = {
   icon?: string;
   expert_template_ids?: string[];
   expert_bindings?: { template_id: string; sequence_no: number; enabled: boolean }[];
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  default_grants?: Record<string, unknown> | null;
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
+  coordinator_template_id?: string;
+  coordinator_instructions?: string;
   tags?: string[];
 };
 

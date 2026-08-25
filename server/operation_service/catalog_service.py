@@ -84,9 +84,8 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         initial_memories=payload.get("initial_memories", []),
         sort_order=payload.get("sort_order", 0),
         expert_bindings=payload.get("expert_bindings"),
-        knowledge_refs=payload.get("knowledge_refs", []),
-        skill_refs=payload.get("skill_refs", []),
-        default_grants=payload.get("default_grants"),
+        coordinator_template_id=payload.get("coordinator_template_id", ""),
+        coordinator_instructions=payload.get("coordinator_instructions", ""),
     )
 
 
@@ -106,45 +105,29 @@ def _normalize_expert_bindings(
     ]
 
 
-def _resolve_planner_template_id(
-    planner_template_id: str,
+def _resolve_coordinator_template_id(
+    coordinator_template_id: str,
     bindings: list[ExpertBinding],
 ) -> str:
-    """校验并归一化 planner 指定。
-
-    注册行业方案时必须指定方案内某一专家为 planner 角色（AITEAM-677）。
-    planner_template_id 必须非空且存在于已绑定的专家中，否则拒绝注册。
-    """
+    """校验并归一化方案协调专家指定。"""
     from shared.errors import ValidationProblem
 
-    pid = (planner_template_id or "").strip()
-    if not pid:
+    coordinator_id = (coordinator_template_id or "").strip()
+    if not coordinator_id:
         raise ValidationProblem(
-            "planner_template_id is required: designate one expert as the planner"
+            "coordinator_template_id is required: designate one expert as the coordinator"
         )
     bound = {b.template_id for b in bindings}
-    if pid not in bound:
+    if coordinator_id not in bound:
         raise ValidationProblem(
-            f"planner_template_id {pid!r} is not among the bound experts: {sorted(bound)}"
+            f"coordinator_template_id {coordinator_id!r} is not among the bound experts: {sorted(bound)}"
         )
-    return pid
+    return coordinator_id
 
 
-def _resolve_planner_prompt(planner_prompt: str) -> str:
-    """校验 planner 编排规则提示词必填（AITEAM-677）。
-
-    需求明确"必须指定 planner 角色并为其设置固定编排规则的提示词"。
-    服务端必须强制 planner_prompt 非空，避免直接 API 调用绕过前端校验。
-    """
-    from shared.errors import ValidationProblem
-
-    prompt = (planner_prompt or "").strip()
-    if not prompt:
-        raise ValidationProblem(
-            "planner_prompt is required: the planner orchestration prompt must not be empty"
-        )
-    return prompt
-
+def _normalize_coordinator_instructions(instructions: str) -> str:
+    """Normalize optional natural-language collaboration instructions."""
+    return (instructions or "").strip()
 
 def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
     """Construct a CatalogDetailView from a CatalogEntry, populating all payload fields."""
@@ -169,14 +152,9 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         initial_memories=payload.get("initial_memories", []),
         sort_order=payload.get("sort_order", 0),
         expert_bindings=payload.get("expert_bindings"),
-        knowledge_refs=payload.get("knowledge_refs", []),
-        skill_refs=payload.get("skill_refs", []),
-        default_grants=payload.get("default_grants"),
         expert_template_ids=payload.get("expert_template_ids", []),
-        planner_template_id=payload.get("planner_template_id", ""),
-        planner_prompt=payload.get("planner_prompt", ""),
-        subtask_prompt=payload.get("subtask_prompt", ""),
-        aggregate_prompt=payload.get("aggregate_prompt", ""),
+        coordinator_template_id=payload.get("coordinator_template_id", ""),
+        coordinator_instructions=payload.get("coordinator_instructions", ""),
     )
 
 
@@ -225,8 +203,8 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         def make(candidate: str) -> CatalogEntry:
             bindings = _normalize_expert_bindings(req.expert_bindings, req.expert_template_ids)
-            planner_id = _resolve_planner_template_id(req.planner_template_id, bindings)
-            planner_prompt = _resolve_planner_prompt(req.planner_prompt)
+            coordinator_id = _resolve_coordinator_template_id(req.coordinator_template_id, bindings)
+            coordinator_instructions = _normalize_coordinator_instructions(req.coordinator_instructions)
             return CatalogEntry(
                 catalog_type=CatalogType.SOLUTION_TEMPLATE,
                 template_id=candidate,
@@ -244,13 +222,8 @@ class CatalogService:
                         }
                         for b in bindings
                     ],
-                    "planner_template_id": planner_id,
-                    "knowledge_refs": req.knowledge_refs,
-                    "skill_refs": req.skill_refs,
-                    "default_grants": req.default_grants,
-                    "planner_prompt": planner_prompt,
-                    "subtask_prompt": req.subtask_prompt,
-                    "aggregate_prompt": req.aggregate_prompt,
+                    "coordinator_template_id": coordinator_id,
+                    "coordinator_instructions": coordinator_instructions,
                     "tags": req.tags,
                 },
             )
@@ -353,8 +326,8 @@ class CatalogService:
         """编辑目录项（部分更新）。
 
         将属于 CatalogEntry dataclass 的字段直接更新（如 display_name）；
-        其余字段（persona/recommended_config/expert_template_ids/knowledge_refs/
-        skill_refs/default_grants）合并进 payload，避免 dataclasses.replace 收到
+        其余字段（persona/recommended_config/expert_template_ids/coordinator_template_id/
+        coordinator_instructions）合并进 payload，避免 dataclasses.replace 收到
         未定义字段抛出 TypeError → 500。
 
         body 中 None 值已在 routes 层经 exclude_none 排除，此处 changes 不含 None。
@@ -374,49 +347,30 @@ class CatalogService:
         if payload_updates:
             new_payload = {**(entry.payload or {}), **payload_updates}
             top_updates['payload'] = new_payload
-        # 行业方案编辑后重新校验 planner 完整性（AITEAM-677 评审 blocker）：
-        # planner_template_id 必须非空且属于当前有效绑定专家。
+        # 行业方案编辑后重新校验协调专家完整性。
         if (
             entry.catalog_type == CatalogType.SOLUTION_TEMPLATE
             and top_updates.get("payload") is not None
         ):
-            self._validate_solution_planner_integrity(top_updates["payload"])
+            self._validate_solution_coordinator_integrity(top_updates["payload"])
         updated = self._repo.update(entry, **top_updates)
         return _to_response(updated)
 
     @staticmethod
-    def _validate_solution_planner_integrity(payload: dict) -> None:
-        """编辑行业方案后校验 planner 完整性（AITEAM-677 评审 blocker）。
-
-        三项校验全部强制：
-        1. 有效绑定专家集合必须非空——不允许编辑成无专家的空壳方案。
-        2. planner_template_id 必须非空且属于当前绑定专家。
-        3. planner_prompt 必须非空——不允许编辑清空编排规则提示词。
-        """
+    def _validate_solution_coordinator_integrity(payload: dict) -> None:
+        """编辑行业方案后校验协调专家仍属于当前专家 roster。"""
         from shared.errors import ValidationProblem
 
         bindings = payload.get("expert_bindings") or []
-        if bindings:
-            bound_ids = {b["template_id"] for b in bindings}
-        else:
-            bound_ids = set(payload.get("expert_template_ids", []))
+        bound_ids = {b["template_id"] for b in bindings} if bindings else set(payload.get("expert_template_ids", []))
         if not bound_ids:
+            raise ValidationProblem("a solution template must have at least one bound expert")
+        coordinator_id = (payload.get("coordinator_template_id") or "").strip()
+        if not coordinator_id:
+            raise ValidationProblem("coordinator_template_id must not be empty for a solution template")
+        if coordinator_id not in bound_ids:
             raise ValidationProblem(
-                "a solution template must have at least one bound expert"
-            )
-        planner_id = (payload.get("planner_template_id") or "").strip()
-        if not planner_id:
-            raise ValidationProblem(
-                "planner_template_id must not be empty for a solution template"
-            )
-        if planner_id not in bound_ids:
-            raise ValidationProblem(
-                f"planner_template_id {planner_id!r} is not among the bound experts: {sorted(bound_ids)}"
-            )
-        planner_prompt = (payload.get("planner_prompt") or "").strip()
-        if not planner_prompt:
-            raise ValidationProblem(
-                "planner_prompt must not be empty for a solution template"
+                f"coordinator_template_id {coordinator_id!r} is not among the bound experts: {sorted(bound_ids)}"
             )
 
 
@@ -435,7 +389,7 @@ class CatalogService:
     def _backfill_expert(payload: dict) -> tuple[str | None, dict]:
         """从 PRD-v2 平铺字段回填 Manager 招募路径消费的 persona / recommended_config。
 
-        Manager recruit 读 template.persona 与 template.recommended_config.{model,skills,knowledge_refs,…}。
+        Manager recruit 读 template.persona 与 template.recommended_config 中的模型和专家能力配置。
         注册端已改为 flat 字段后，跨端 pull 时把 system_prompt → persona、
         platform_model_ref → recommended_config 的 provider/model 固定引用，skill refs 同步回去，
         避免联动 manager 侧。
@@ -455,8 +409,6 @@ class CatalogService:
         if refs:
             recommended["platform_skill_refs"] = list(refs)
             recommended["skills"] = [str(ref.get("skill_id")) for ref in refs if isinstance(ref, dict) and ref.get("skill_id")]
-        # 知识引用：行业方案包级 knowledge_refs 叠加由 apply_solution 处理；
-        # 模板级无独立 knowledge_refs 字段，留空。
         return persona, recommended
 
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
@@ -543,14 +495,9 @@ class CatalogService:
             display_name=entry.display_name,
             description=payload.get("description", ""),
             icon=payload.get("icon", ""),
-            planner_template_id=payload.get("planner_template_id", ""),
+            coordinator_template_id=payload.get("coordinator_template_id", ""),
+            coordinator_instructions=payload.get("coordinator_instructions", ""),
             experts=experts,
-            knowledge_refs=payload.get("knowledge_refs", []),
-            skill_refs=payload.get("skill_refs", []),
-            default_grants=payload.get("default_grants"),
-            planner_prompt=payload.get("planner_prompt", ""),
-            subtask_prompt=payload.get("subtask_prompt", ""),
-            aggregate_prompt=payload.get("aggregate_prompt", ""),
             tags=payload.get("tags", []),
         )
 

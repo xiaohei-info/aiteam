@@ -157,64 +157,50 @@ function SolutionDetailSections({ draft, onChange, editing }: {
 }): ReactNode {
   return (
     <>
-      <DetailSection title="配置专家 (expert_template_ids)">
-        {editing ? <TextArea label="expert_template_ids" value={(draft.expert_template_ids ?? []).join("\n")} placeholder="每行一个 template_id (编辑模式)" onChange={(value) => onChange({ ...draft, expert_template_ids: parseList(value) })} rows={6} /> : <ReadonlyJson value={draft.expert_template_ids} />}
-      </DetailSection>
-
-      <DetailSection title="知识 / 技能引用">
+      <DetailSection title="配置专家团队 (expert_template_ids)">
         {editing ? (
-          <FormLayout>
-            <TextArea label="知识引用 (knowledge_refs)" value={(draft.knowledge_refs ?? []).join("\n")} onChange={(value) => onChange({ ...draft, knowledge_refs: parseList(value) })} rows={4} />
-            <TextArea label="技能引用 (skill_refs)" value={(draft.skill_refs ?? []).join("\n")} onChange={(value) => onChange({ ...draft, skill_refs: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="knowledge_refs" value={draft.knowledge_refs} />
-            <ReadonlyJson title="skill_refs" value={draft.skill_refs} />
-          </Grid>
-        )}
+          <TextArea
+            label="expert_template_ids"
+            value={(draft.expert_template_ids ?? []).join("\n")}
+            placeholder="每行一个 template_id (编辑模式)"
+            onChange={(value) => onChange({ ...draft, expert_template_ids: parseList(value) })}
+            rows={6}
+          />
+        ) : <ReadonlyJson value={draft.expert_template_ids} />}
       </DetailSection>
 
-      <DetailSection title="Planner 角色 (planner_template_id)">
-        {editing ? <TextInput label="planner_template_id" value={draft.planner_template_id ?? ""} placeholder="被指定为 Planner 的专家模板 id" onChange={(planner_template_id) => onChange({ ...draft, planner_template_id })} /> : <ReadonlyRow label="planner_template_id" value={draft.planner_template_id} />}
-      </DetailSection>
-
-      <DetailSection title="协作编排规则 (prompts)">
+      <DetailSection title="协调专家">
         {editing ? (
-          <FormLayout>
-            <TextArea label="planner_prompt" value={draft.planner_prompt ?? ""} onChange={(planner_prompt) => onChange({ ...draft, planner_prompt })} rows={4} />
-            <TextArea label="subtask_prompt" value={draft.subtask_prompt ?? ""} onChange={(subtask_prompt) => onChange({ ...draft, subtask_prompt })} rows={4} />
-            <TextArea label="aggregate_prompt" value={draft.aggregate_prompt ?? ""} onChange={(aggregate_prompt) => onChange({ ...draft, aggregate_prompt })} rows={4} />
-          </FormLayout>
-        ) : (
-          <VStack gap={2}>
-            <ReadonlyRow label="planner_prompt" value={draft.planner_prompt} />
-            <ReadonlyRow label="subtask_prompt" value={draft.subtask_prompt} />
-            <ReadonlyRow label="aggregate_prompt" value={draft.aggregate_prompt} />
-          </VStack>
-        )}
+          <TextInput
+            label="coordinator_template_id"
+            value={draft.coordinator_template_id ?? ""}
+            placeholder="方案内负责协调群聊的专家模板 ID"
+            onChange={(coordinator_template_id) => onChange({ ...draft, coordinator_template_id })}
+          />
+        ) : <ReadonlyRow label="coordinator_template_id" value={draft.coordinator_template_id} />}
       </DetailSection>
 
-      <DetailSection title="默认 Grants / 方案标签">
+      <DetailSection title="协作说明 (coordinator_instructions)">
         {editing ? (
-          <FormLayout>
-            <TextArea
-              label="默认 Grants (JSON)"
-              value={safeJson(draft.default_grants ?? {})}
-              onChange={(value) => {
-                const default_grants = parseJsonObject(value);
-                if (default_grants) onChange({ ...draft, default_grants });
-              }}
-              rows={6}
-            />
-            <TextArea label="方案标签 (每行或逗号)" value={(draft.tags ?? []).join("\n")} onChange={(value) => onChange({ ...draft, tags: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="default_grants" value={draft.default_grants} />
-            <ReadonlyJson title="tags" value={draft.tags} />
-          </Grid>
-        )}
+          <TextArea
+            label="coordinator_instructions"
+            value={draft.coordinator_instructions ?? ""}
+            placeholder="可选：团队目标、分工原则和预期交付物。"
+            onChange={(coordinator_instructions) => onChange({ ...draft, coordinator_instructions })}
+            rows={6}
+          />
+        ) : <ReadonlyText value={draft.coordinator_instructions} />}
+      </DetailSection>
+
+      <DetailSection title="方案标签">
+        {editing ? (
+          <TextArea
+            label="tags"
+            value={(draft.tags ?? []).join("\n")}
+            onChange={(value) => onChange({ ...draft, tags: parseList(value) })}
+            rows={4}
+          />
+        ) : <ReadonlyJson title="tags" value={draft.tags} />}
       </DetailSection>
     </>
   );
