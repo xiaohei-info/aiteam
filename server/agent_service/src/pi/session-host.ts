@@ -231,7 +231,7 @@ export class SessionHost {
     const paths = [indexed.sessionFile, indexed.workspace, ...participants.flatMap((participant) => [participant.session_file, participant.workspace])];
     for (const path of paths) {
       if (!path) continue;
-      this.assertManagedPathEither(path, path.includes("/sessions/") ? this.options.sessionDir : this.options.cwdRoot, this.options.cwdRoot);
+      this.assertManagedPathEither(path, this.options.sessionDir, this.options.cwdRoot);
       rmSync(path, { recursive: true, force: true });
     }
     this.listeners.delete(conversationId);
