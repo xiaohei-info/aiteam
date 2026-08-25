@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Card } from "@astryxdesign/core/Card";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
 import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
@@ -12,6 +13,8 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import type { CatalogItem } from "./types";
+import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
+import type { InternalSkill } from "../skill-market/types";
 
 function safeJson(value: unknown): string {
   if (value == null) return "";
@@ -40,17 +43,6 @@ function parseJsonObject(value: string): Record<string, unknown> | undefined {
   }
 }
 
-function parseJsonArray(value: string): Record<string, unknown>[] | undefined {
-  const text = value.trim();
-  if (!text) return undefined;
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed as Record<string, unknown>[] : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 interface TemplateOverviewProps {
   item: CatalogItem;
   draft: CatalogItem;
@@ -59,6 +51,29 @@ interface TemplateOverviewProps {
   visibilityChanging: boolean;
   onChange: (next: CatalogItem) => void;
   onVisibilityChange: (next: "public" | "enterprise" | "hidden") => void;
+}
+
+function SkillNames({ refs, legacyIds = [] }: { refs: CatalogItem["platform_skill_refs"]; legacyIds?: string[] }): ReactNode {
+  const api = useSkillMarketApi();
+  const [skills, setSkills] = useState<InternalSkill[]>([]);
+  const entries = refs?.length ? refs : legacyIds.map((skill_id) => ({ skill_id, version: "", content_hash: "" }));
+  const hasSkills = entries.length > 0;
+  useEffect(() => {
+    if (!hasSkills) return;
+    let active = true;
+    void api.listInternal().then((items) => { if (active) setSkills(items); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [api, hasSkills]);
+  if (!entries.length) return <ReadonlyText value={null} />;
+  return (
+    <HStack gap={2} wrap="wrap">
+      {entries.map((ref) => {
+        const skill = skills.find((item) => item.skill_id === ref.skill_id);
+        const name = skill?.display_name || skill?.slug || "技能名称待同步";
+        return <Badge key={`${ref.skill_id}:${ref.version}`} label={ref.version ? `${name} · v${ref.version}` : name} variant="info" />;
+      })}
+    </HStack>
+  );
 }
 
 function DetailSection({ title, children }: { title: string; children: ReactNode }): ReactNode {
@@ -128,35 +143,9 @@ function ExpertDetailSections({ draft, onChange, editing }: {
         {editing ? <TextArea label="description" value={draft.description ?? ""} onChange={(description) => onChange({ ...draft, description })} rows={4} /> : <ReadonlyText value={draft.description} />}
       </DetailSection>
 
-      <DetailSection title="技能 / 标签">
-        {editing ? (
-          <FormLayout>
-            <TextArea label="skill_ids (每行或逗号)" value={(draft.skill_ids ?? []).join("\n")} onChange={(value) => onChange({ ...draft, skill_ids: parseList(value) })} rows={4} />
-            <TextArea label="tags (每行或逗号)" value={(draft.tags ?? []).join("\n")} onChange={(value) => onChange({ ...draft, tags: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="skill_ids" value={draft.skill_ids} />
-            <ReadonlyJson title="tags" value={draft.tags} />
-          </Grid>
-        )}
+      <DetailSection title="技能">
+        <SkillNames refs={draft.platform_skill_refs} legacyIds={draft.skill_ids} />
       </DetailSection>
-
-      <DetailSection title="预置记忆 (initial_memories)">
-        {editing ? (
-          <TextArea
-            label="initial_memories"
-            value={safeJson(draft.initial_memories ?? [])}
-            onChange={(value) => {
-              const initial_memories = parseJsonArray(value);
-              if (initial_memories) onChange({ ...draft, initial_memories });
-            }}
-            rows={8}
-          />
-        ) : <ReadonlyJson value={draft.initial_memories} />}
-      </DetailSection>
-
-      <DetailSection title="排序 (sort_order)"><ReadonlyText value={draft.sort_order?.toString()} /></DetailSection>
     </>
   );
 }

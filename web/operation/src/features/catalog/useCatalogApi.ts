@@ -31,11 +31,8 @@ export type UpdateExpertTemplateChanges = {
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
-  skill_ids?: string[];
-  tags?: string[];
+  platform_skill_refs?: { skill_id: string; version: string; content_hash: string }[];
   description?: string;
-  initial_memories?: Record<string, unknown>[];
-  sort_order?: number;
 };
 
 export type UpdateSolutionTemplateChanges = {

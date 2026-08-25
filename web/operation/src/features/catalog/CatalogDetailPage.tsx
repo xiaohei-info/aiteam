@@ -108,10 +108,7 @@ export function CatalogDetailPage(): ReactNode {
         changes.category = draft.category ?? "";
         changes.avatar_url = draft.avatar_url ?? "";
         changes.description = draft.description ?? "";
-        changes.skill_ids = draft.skill_ids ?? [];
-        changes.tags = draft.tags ?? [];
-        changes.initial_memories = draft.initial_memories ?? [];
-        changes.sort_order = draft.sort_order ?? 0;
+        changes.platform_skill_refs = draft.platform_skill_refs ?? [];
       } else {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";

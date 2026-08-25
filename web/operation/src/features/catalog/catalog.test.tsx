@@ -1280,40 +1280,43 @@ describe("详情页编辑模式", () => {
 // ---- 8. 详情页多 section 渲染 + 编辑 ----
 
 describe("详情页多 section", () => {
-  it("渲染专家全部能力 section", async () => {
-    mockFetch.mockResolvedValue(
-      singleResponse(
-        makeCatalogItem({
-          catalog_type: "expert_template",
-          template_id: "exp_a",
-          display_name: "AI 客服",
-          system_prompt: "你是客服",
-          category: "support",
-          avatar_url: "https://example.com/a.png",
-          platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
-          skill_ids: ["skill_a"],
-          tags: ["客服"],
-          description: "客服专家",
-          initial_memories: [{ type: "buffer", max_tokens: 4096 }],
-        }),
-      ),
-    );
+  it("专家详情显示技能名称，并移除已废弃的标签/预置记忆/排序字段", async () => {
+    const item = makeCatalogItem({
+      catalog_type: "expert_template",
+      template_id: "exp_a",
+      display_name: "AI 客服",
+      system_prompt: "你是客服",
+      category: "support",
+      avatar_url: "https://example.com/a.png",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
+      platform_skill_refs: [
+        { skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" },
+        { skill_id: "skill_b", version: "2.0.0", content_hash: "hash-b" },
+      ],
+      description: "客服专家",
+    });
+    mockFetch.mockImplementation(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/skill-market/internal")) return listPage([
+        { skill_id: "skill_a", slug: "skill-a", display_name: "客服技能", status: "published", published_version: "1.0.0" },
+        { skill_id: "skill_b", slug: "skill-b", display_name: "工单技能", status: "published", published_version: "2.0.0" },
+      ]);
+      if (value.includes("/skill-market/external")) return singleResponse([]);
+      return singleResponse(item);
+    });
 
     renderCatalogDetail(makeSystemAdminSession(), "exp_a", "expert_template");
 
+    await waitFor(() => expect(screen.getByText("AI 客服")).toBeInTheDocument());
+    expect(screen.getByText("技能")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("AI 客服")).toBeInTheDocument();
+      expect(screen.getByText("客服技能 · v1.0.0")).toBeInTheDocument();
+      expect(screen.getByText("工单技能 · v2.0.0")).toBeInTheDocument();
     });
-    expect(screen.getByText("系统提示词 (system_prompt)")).toBeInTheDocument();
-    expect(screen.getByText("你是客服")).toBeInTheDocument();
-    expect(screen.getByText("大模型服务 / 模型")).toBeInTheDocument();
-    expect(screen.getByText(/provider-1 \/ gpt-4o/)).toBeInTheDocument();
-    expect(screen.getByText("分类 / 头像")).toBeInTheDocument();
-    expect(screen.getByText("岗位描述 (description)")).toBeInTheDocument();
-    expect(screen.getByText("客服专家")).toBeInTheDocument();
-    expect(screen.getByText("技能 / 标签")).toBeInTheDocument();
-    expect(screen.getAllByText((_, el) => !!el && (el.textContent || "").includes("skill_a")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("预置记忆 (initial_memories)")).toBeInTheDocument();
+    expect(screen.queryByText("技能 / 标签")).not.toBeInTheDocument();
+    expect(screen.queryByText(/预置记忆/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/排序/)).not.toBeInTheDocument();
+    expect(screen.queryByText("skill_a")).not.toBeInTheDocument();
   });
 
   it("渲染行业方案的多 section 内容", async () => {
@@ -1416,7 +1419,7 @@ describe("详情页多 section", () => {
     });
   });
 
-  it("编辑专家分类/头像/描述/技能/标签/记忆并提交 PATCH", async () => {
+  it("编辑专家只提交当前字段与平台技能引用", async () => {
     const expertItem = makeCatalogItem({
       catalog_type: "expert_template",
       template_id: "exp-full",
@@ -1428,59 +1431,40 @@ describe("详情页多 section", () => {
       avatar_url: "https://old.png",
       system_prompt: "你是客服",
       platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
+      platform_skill_refs: [{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }],
       description: "旧描述",
-      skill_ids: ["skill_a"],
-      tags: ["旧标签"],
-      initial_memories: [{ role: "user", content: "旧记忆" }],
     });
-    mockFetch
-      .mockResolvedValueOnce(singleResponse(expertItem))
-      .mockResolvedValueOnce(singleResponse(expertItem));
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      const value = String(url);
+      if (value.includes("/skill-market/internal")) return listPage([{ skill_id: "skill_a", slug: "skill-a", display_name: "客服技能", status: "published", published_version: "1.0.0" }]);
+      if (value.includes("/skill-market/external")) return singleResponse([]);
+      if (init?.method === "PATCH") return singleResponse(expertItem);
+      return singleResponse(expertItem);
+    });
 
     renderCatalogDetail(makeSystemAdminSession(), "exp-full", "expert_template");
     await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
     fireEvent.click(screen.getByText("编辑"));
     await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
-
-    // category + avatar_url (Inputs wrapped in Field)
     fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
     fireEvent.change(screen.getByLabelText("avatar_url"), { target: { value: "https://new.png" } });
-    // description textarea (bare textarea inside DetailSection, find by current value)
-    const allTextareas = screen.getAllByRole("textbox").filter(
-      (el) => el.tagName === "TEXTAREA",
-    );
-    const descTa = allTextareas.find((t) => (t as HTMLTextAreaElement).value === "旧描述");
+    const descTa = screen.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && (el as HTMLTextAreaElement).value === "旧描述");
     expect(descTa).toBeTruthy();
     fireEvent.change(descTa!, { target: { value: "新描述" } });
-    // skill_ids + tags (textareas wrapped in Field)
-    fireEvent.change(screen.getByLabelText("skill_ids (每行或逗号)"), { target: { value: "skill_a\nskill_b" } });
-    fireEvent.change(screen.getByLabelText("tags (每行或逗号)"), { target: { value: "财务\n分析" } });
-    // initial_memories (bare textarea inside DetailSection, find by current JSON value)
-    const memTa = screen.getAllByRole("textbox").filter(
-      (el) => el.tagName === "TEXTAREA",
-    ).find((t) => (t as HTMLTextAreaElement).value.includes("旧记忆"));
-    expect(memTa).toBeTruthy();
-    // invalid JSON → parseJsonArray catch branch (returns undefined, no state update)
-    fireEvent.change(memTa!, { target: { value: "{bad-json" } });
-    // valid JSON → parseJsonArray success path
-    fireEvent.change(memTa!, {
-      target: { value: '[{"role":"user","content":"新记忆"}]' },
-    });
-
     fireEvent.click(screen.getByText("保存"));
 
     await waitFor(() => {
-      const patchCall = mockFetch.mock.calls.find(
-        (c: unknown[]) => (c[0] as string).includes("/exp-full") && c[1] && (c[1] as { method?: string }).method === "PATCH",
-      );
+      const patchCall = mockFetch.mock.calls.find((c: unknown[]) => (c[0] as string).includes("/exp-full") && c[1] && (c[1] as { method?: string }).method === "PATCH");
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.category).toBe("finance");
       expect(body.avatar_url).toBe("https://new.png");
       expect(body.description).toBe("新描述");
-      expect(body.skill_ids).toEqual(["skill_a", "skill_b"]);
-      expect(body.tags).toEqual(["财务", "分析"]);
-      expect(body.initial_memories).toEqual([{ role: "user", content: "新记忆" }]);
+      expect(body.platform_skill_refs).toEqual([{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }]);
+      expect(body.skill_ids).toBeUndefined();
+      expect(body.tags).toBeUndefined();
+      expect(body.initial_memories).toBeUndefined();
+      expect(body.sort_order).toBeUndefined();
     });
   });
 
