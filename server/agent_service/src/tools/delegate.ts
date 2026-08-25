@@ -33,10 +33,10 @@ function createMentionTool(name: "mention_employee" | "delegate_employee", conte
     parameters,
     ...(name === "mention_employee" ? {
       prepareArguments(args: unknown) {
-        if (!args || typeof args !== "object") return args;
+        if (!args || typeof args !== "object") return args as { employee_id: string; message: string; context?: string };
         const raw = args as { message?: unknown; task?: unknown };
-        if (typeof raw.message === "string" || typeof raw.task !== "string") return args;
-        return { ...(args as Record<string, unknown>), message: raw.task };
+        if (typeof raw.message === "string" || typeof raw.task !== "string") return args as { employee_id: string; message: string; context?: string };
+        return { ...(args as Record<string, unknown>), message: raw.task } as { employee_id: string; message: string; context?: string };
       },
     } : {}),
     executionMode: "parallel",
