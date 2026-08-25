@@ -82,7 +82,7 @@
 
 ## 6. 价格规则
 
-1. Operator 自动抓取公开定价/Provider 定价接口，结果先作为候选。
+1. Operator 自动抓取公开定价/Provider 定价接口，结果先作为候选；v1 默认公开源为可配置的 `MODEL_PRICING_URL`（默认 `https://models.dev/api.json`）。
 2. 人工覆盖优先于自动价格；自动刷新不得覆盖人工值。
 3. 价格来源顺序：`manual > provider > public_reference > unknown`。
 4. token 模型统一为 `input/output/cache_read/cache_write USD per 1M tokens`；按次模型为 `request_usd`。

@@ -55,7 +55,7 @@ export function ExpertTemplateFields({
         status={systemPromptError ? { type: "error", message: systemPromptError } : undefined}
       />
       <Selector
-        label="平台 Provider / 模型"
+        label="大模型服务 / 模型"
         options={modelOptions}
         value={defaultModel || undefined}
         onChange={onDefaultModelChange}

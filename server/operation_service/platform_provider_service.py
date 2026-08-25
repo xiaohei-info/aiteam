@@ -15,14 +15,16 @@ from shared.errors import Conflict, NotFound
 
 from .newapi_client import NewApiAdminClient, NewApiError
 from .platform_provider_repository import PlatformProviderRepository, ProviderRow, ModelRow, RateRow, AccessRow
+from .public_pricing_client import ModelsDevPricingClient, PublicPricingError
 
 
 class PlatformProviderService:
-    def __init__(self, repo: PlatformProviderRepository, newapi: NewApiAdminClient, crypto: CryptoService, public_relay_url: str):
+    def __init__(self, repo: PlatformProviderRepository, newapi: NewApiAdminClient, crypto: CryptoService, public_relay_url: str, public_pricing: ModelsDevPricingClient | None = None):
         self._repo = repo
         self._newapi = newapi
         self._crypto = crypto
         self._public_relay_url = public_relay_url.rstrip("/")
+        self._public_pricing = public_pricing or ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"))
 
     def create_provider(self, *, provider_code: str, display_name: str, api_protocol: str, newapi_channel_id: int) -> PlatformProvider:
         try:
@@ -67,6 +69,47 @@ class PlatformProviderService:
             rate = self._repo.current_rate(provider_id, row.model_id)
             result.append({"model": _model(row), "rate": _rate(rate) if rate else None})
         return result
+
+    def sync_public_prices(self, provider_id: str) -> dict[str, int | str]:
+        self._require_provider(provider_id)
+        try:
+            prices = self._public_pricing.fetch()
+        except PublicPricingError as exc:
+            raise Conflict(f"公开模型价格同步失败: {exc}") from exc
+        updated = skipped_known = skipped_manual = unmatched = 0
+        for model in self._repo.list_models(provider_id):
+            price = prices.get(model.model_id.strip().lower())
+            if price is None:
+                unmatched += 1
+                continue
+            current = self._repo.current_rate(provider_id, model.model_id)
+            if current and current.pricing_status == "known":
+                skipped_known += 1
+                continue
+            if current and current.manually_overridden:
+                skipped_manual += 1
+                continue
+            self.set_rate(
+                provider_id,
+                model.model_id,
+                pricing_status="known",
+                billing_mode="token",
+                input_usd_per_million=price.input_usd_per_million,
+                output_usd_per_million=price.output_usd_per_million,
+                cache_read_usd_per_million=price.cache_read_usd_per_million,
+                cache_write_usd_per_million=price.cache_write_usd_per_million,
+                source="public_reference",
+                source_version=price.source_version,
+                effective_from=datetime.now(UTC),
+            )
+            updated += 1
+        return {
+            "source": "models.dev",
+            "updated": updated,
+            "skipped_known": skipped_known,
+            "skipped_manual": skipped_manual,
+            "unmatched": unmatched,
+        }
 
     def set_rate(self, provider_id: str, model_id: str, **values) -> PlatformModelRate:
         self._require_model(provider_id, model_id)
@@ -207,6 +250,7 @@ def build_platform_provider_service() -> PlatformProviderService:
         NewApiAdminClient(admin_url, admin_token, admin_user_id, timeout=settings.service_client_timeout_ms / 1000),
         CryptoService(Fernet(encryption_key.encode())),
         public_url,
+        ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"), timeout=settings.service_client_timeout_ms / 1000),
     )
 
 

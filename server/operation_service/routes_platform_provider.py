@@ -61,6 +61,15 @@ class TenantRuntimeAccessOut(BaseModel):
     relay_token: str = Field(repr=False)
 
 
+class PublicPricingSyncOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str
+    updated: int
+    skipped_known: int
+    skipped_manual: int
+    unmatched: int
+
+
 class _ProviderNotConfigured(AppError):
     status, code, title = 503, "platform_provider_unconfigured", "Platform Provider Unconfigured"
 
@@ -109,6 +118,11 @@ def publish_provider(provider_id: str, request: Request, _claims=Depends(_platfo
 @router.get("/providers/{provider_id}/models", operation_id="operation_platform_model_list")
 def list_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[dict]:
     return Envelope(data={"items": _service(request).list_models(provider_id)})
+
+
+@router.post("/providers/{provider_id}/sync-public-prices", operation_id="operation_platform_model_public_price_sync")
+def sync_public_prices(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PublicPricingSyncOut]:
+    return Envelope(data=_service(request).sync_public_prices(provider_id))
 
 
 @router.post("/providers/{provider_id}/rates", status_code=status.HTTP_201_CREATED, operation_id="operation_platform_model_rate_create")

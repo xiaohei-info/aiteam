@@ -1306,7 +1306,7 @@ describe("详情页多 section", () => {
     });
     expect(screen.getByText("系统提示词 (system_prompt)")).toBeInTheDocument();
     expect(screen.getByText("你是客服")).toBeInTheDocument();
-    expect(screen.getByText("平台 Provider / 模型")).toBeInTheDocument();
+    expect(screen.getByText("大模型服务 / 模型")).toBeInTheDocument();
     expect(screen.getByText(/provider-1 \/ gpt-4o/)).toBeInTheDocument();
     expect(screen.getByText("分类 / 头像")).toBeInTheDocument();
     expect(screen.getByText("岗位描述 (description)")).toBeInTheDocument();

@@ -33,6 +33,7 @@ class FakePlatformProviders:
     def publish_provider(self, _provider_id): return self.provider.model_copy(update={"status": "published", "version": 2})
     def list_models(self, _provider_id, **_): return [{"model": self.model, "rate": self.rate}]
     def set_rate(self, _provider_id, _model_id, **_): return self.rate
+    def sync_public_prices(self, _provider_id): return {"source": "models.dev", "updated": 1, "skipped_known": 0, "skipped_manual": 0, "unmatched": 0}
     def publish_model(self, _provider_id, _model_id): return self.model.model_copy(update={"status": "published", "version": 2})
 
 
@@ -61,6 +62,10 @@ def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     synced = client.post("/api/operation/providers/p1/sync-models", headers=auth())
     assert synced.status_code == 200
     assert synced.json()["data"][0]["model_id"] == "minimax-m3"
+
+    public_prices = client.post("/api/operation/providers/p1/sync-public-prices", headers=auth())
+    assert public_prices.status_code == 200
+    assert public_prices.json()["data"]["source"] == "models.dev"
 
     rate = client.post("/api/operation/providers/p1/rates", headers=auth(), json={
         "model_id": "minimax-m3", "input_usd_per_million": "0.30",

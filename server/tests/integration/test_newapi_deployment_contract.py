@@ -63,4 +63,5 @@ def test_newapi_examples_never_contain_real_credentials():
         assert "NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b" in text
         assert "NEWAPI_URL=" in text
         assert "NEWAPI_ADMIN_TOKEN=" in text
+        assert "MODEL_PRICING_URL=" in text
         assert "newapi.xiaohei.tech" not in text

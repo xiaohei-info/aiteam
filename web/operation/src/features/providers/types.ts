@@ -38,3 +38,11 @@ export interface PlatformModelRate {
 }
 
 export interface PlatformModelWithRate { model: PlatformModel; rate: PlatformModelRate | null; }
+
+export interface PublicPricingSyncResult {
+  source: string;
+  updated: number;
+  skipped_known: number;
+  skipped_manual: number;
+  unmatched: number;
+}

@@ -131,6 +131,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `NEWAPI_URL` | NewAPI 基础地址，像 `HINDSIGHT_URL`/`LIGHTRAG_URL` 一样按环境配置 | `http://newapi:3000` |
 | `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址（可覆盖 `NEWAPI_URL`） | `http://newapi:3000` |
 | `NEWAPI_PUBLIC_BASE_URL` | 下发 tenant token 使用的推理地址（可覆盖 `NEWAPI_URL/v1`） | `https://relay.example.com/v1` |
+| `MODEL_PRICING_URL` | Operator 公开模型价格源（仅补齐未知价格） | `https://models.dev/api.json` |
 | `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
 | `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
 | `NEWAPI_DB_PASSWORD` / `NEWAPI_REDIS_PASSWORD` | NewAPI 专属 DB/Redis 密码 | `***` |

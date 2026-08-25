@@ -31,7 +31,7 @@ export function PlatformProvidersPage() {
       setSelected(next ?? null);
       setModels(next ? await api.models(next.provider_id) : []);
       setError(null);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "加载 Provider 失败"); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "加载大模型服务失败"); }
   }, [api, selected?.provider_id]);
 
   useEffect(() => { void load(); }, [load]);
@@ -51,14 +51,14 @@ export function PlatformProvidersPage() {
   return (
     <VStack gap={5}>
       <HStack justify="between" align="center">
-        <VStack gap={1}><Heading level={1}>平台 Provider</Heading><Text color="secondary">Operator 统一维护内部 NewAPI 渠道、发布模型和版本化 USD 价格。</Text></VStack>
-        <Button label="新增 Provider" variant="primary" onClick={() => setCreateOpen(true)} />
+        <VStack gap={1}><Heading level={1}>大模型服务</Heading><Text color="secondary">统一维护 NewAPI 渠道、模型发布和版本化 USD 价格。</Text></VStack>
+        <Button label="新增大模型服务" variant="primary" onClick={() => setCreateOpen(true)} />
       </HStack>
       {error && <Banner status="error" title={error} />}
       <HStack gap={4} align="start" width="100%">
         <Card width={320}><VStack gap={2}>
-          <Heading level={2}>Provider</Heading>
-          {providers.length === 0 ? <EmptyState title="暂无 Provider" isCompact /> : providers.map((provider) => (
+          <Heading level={2}>服务</Heading>
+          {providers.length === 0 ? <EmptyState title="暂无大模型服务" isCompact /> : providers.map((provider) => (
             <Button key={provider.provider_id} label={provider.display_name} variant={selected?.provider_id === provider.provider_id ? "secondary" : "ghost"} onClick={() => void choose(provider)} endContent={<Badge label={`v${provider.version} · ${provider.status}`} />} />
           ))}
         </VStack></Card>
@@ -68,7 +68,8 @@ export function PlatformProvidersPage() {
               <VStack gap={1}><Heading level={2}>{selected.display_name}</Heading><Text type="code">{selected.relay_base_url}</Text></VStack>
               <HStack gap={2}>
                 <Button label="同步模型" variant="secondary" isLoading={busy} onClick={() => void action(() => api.sync(selected.provider_id))} />
-                <Button label="发布 Provider" variant="primary" isDisabled={selected.status === "published" || busy} onClick={() => void action(() => api.publishProvider(selected.provider_id))} />
+                <Button label="同步公开价格" variant="secondary" isLoading={busy} onClick={() => void action(() => api.syncPublicPrices(selected.provider_id))} />
+                <Button label="发布服务" variant="primary" isDisabled={selected.status === "published" || busy} onClick={() => void action(() => api.publishProvider(selected.provider_id))} />
               </HStack>
             </HStack>
             {models.length === 0 ? <EmptyState title="尚未同步模型" description="先确认 NewAPI channel 可用，再点击同步模型。" /> : models.map((item) => (
@@ -77,7 +78,7 @@ export function PlatformProvidersPage() {
                 <HStack gap={1}><Button label="设置价格" size="sm" variant="ghost" onClick={() => setRateModel(item)} /><Button label="发布模型" size="sm" variant="primary" isDisabled={!item.rate || item.model.status === "published" || busy} onClick={() => void action(() => api.publishModel(selected.provider_id, item.model.model_id))} /></HStack>
               </HStack></Card>
             ))}
-          </> : <EmptyState title="选择或新增 Provider" />}
+          </> : <EmptyState title="选择或新增大模型服务" />}
         </VStack></Card>
       </HStack>
       {createOpen && <CreateProviderDialog busy={busy} onClose={() => setCreateOpen(false)} onCreate={(input) => action(async () => { await api.create(input); setCreateOpen(false); })} />}
@@ -89,7 +90,7 @@ export function PlatformProvidersPage() {
 function CreateProviderDialog({ busy, onClose, onCreate }: { busy: boolean; onClose: () => void; onCreate: (input: { provider_code: string; display_name: string; api_protocol: string; newapi_channel_id: number }) => Promise<void> }) {
   const [code, setCode] = useState("newapi"); const [name, setName] = useState("内部 NewAPI"); const [channel, setChannel] = useState("1");
   function submit(event: FormEvent) { event.preventDefault(); void onCreate({ provider_code: code.trim(), display_name: name.trim(), api_protocol: "openai-completions", newapi_channel_id: Number(channel) }); }
-  return <Dialog isOpen purpose="form" width={520} aria-label="新增平台 Provider" onOpenChange={(open) => { if (!open && !busy) onClose(); }}><form onSubmit={submit}><VStack gap={3}><Heading level={2}>新增平台 Provider</Heading><TextInput label="Provider code" value={code} onChange={setCode} isRequired /><TextInput label="显示名称" value={name} onChange={setName} isRequired /><TextInput label="内部 NewAPI channel ID" value={channel} onChange={setChannel} isRequired /><HStack justify="end" gap={2}><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="创建" type="submit" variant="primary" isLoading={busy} /></HStack></VStack></form></Dialog>;
+  return <Dialog isOpen purpose="form" width={520} aria-label="新增大模型服务" onOpenChange={(open) => { if (!open && !busy) onClose(); }}><form onSubmit={submit}><VStack gap={3}><Heading level={2}>新增大模型服务</Heading><TextInput label="服务 code" value={code} onChange={setCode} isRequired /><TextInput label="显示名称" value={name} onChange={setName} isRequired /><TextInput label="内部 NewAPI channel ID" value={channel} onChange={setChannel} isRequired /><HStack justify="end" gap={2}><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="创建" type="submit" variant="primary" isLoading={busy} /></HStack></VStack></form></Dialog>;
 }
 
 function RateDialog({ item, busy, onClose, onSave }: { item: PlatformModelWithRate; busy: boolean; onClose: () => void; onSave: (input: Record<string, unknown>) => Promise<void> }) {
