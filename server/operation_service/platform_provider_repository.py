@@ -168,6 +168,21 @@ class PlatformProviderRepository:
             ).fetchone()
         return self._model(row) if row else None
 
+    def publish_priced_models(self, provider_id: str) -> list[ModelRow]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """UPDATE platform_model AS m SET status='published',version=version+1,updated_at=now()
+                   WHERE m.provider_id=%s::uuid AND m.status <> 'published'
+                     AND EXISTS (
+                       SELECT 1 FROM platform_model_rate AS r
+                       WHERE r.provider_id=m.provider_id AND r.model_id=m.model_id
+                         AND r.effective_to IS NULL AND r.pricing_status='known'
+                     )
+                   RETURNING m.provider_id::text,m.model_id,m.display_name,m.capabilities,m.status,m.source,m.version,m.updated_at""",
+                (provider_id,),
+            ).fetchall()
+        return [self._model(row) for row in rows]
+
     def create_rate(self, provider_id: str, model_id: str, **values) -> RateRow:
         with self._connect() as conn:
             with conn.transaction():

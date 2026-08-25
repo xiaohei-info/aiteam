@@ -137,6 +137,11 @@ def publish_model(provider_id: str, body: ModelPublishRequest, request: Request,
     return Envelope(data=_service(request).publish_model(provider_id, body.model_id))
 
 
+@router.post("/providers/{provider_id}/models/publish-priced", operation_id="operation_platform_models_publish_priced")
+def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[dict[str, int]]:
+    return Envelope(data=_service(request).publish_priced_models(provider_id))
+
+
 @router.get("/catalog/platform-providers", operation_id="operation_platform_provider_pull")
 def pull_platform_catalog(request: Request, _svc=Depends(verify_service_token)) -> Envelope[dict]:
     service = _service(request)

@@ -26,6 +26,7 @@ export function usePlatformProvidersApi() {
       },
       publishProvider(providerId: string) { return client.post<PlatformProvider>(`${BASE}/${providerId}/publish`); },
       publishModel(providerId: string, modelId: string) { return client.post<PlatformModel>(`${BASE}/${providerId}/models/publish`, { body: { model_id: modelId } }); },
+      publishPricedModels(providerId: string) { return client.post<{ published: number }>(`${BASE}/${providerId}/models/publish-priced`); },
       setRate(providerId: string, input: Record<string, unknown>) { return client.post<PlatformModelRate>(`${BASE}/${providerId}/rates`, { body: input }); },
     };
   }, [token]);

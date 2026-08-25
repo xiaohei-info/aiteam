@@ -35,6 +35,7 @@ class FakePlatformProviders:
     def set_rate(self, _provider_id, _model_id, **_): return self.rate
     def sync_public_prices(self, _provider_id): return {"source": "models.dev", "updated": 1, "skipped_known": 0, "skipped_manual": 0, "unmatched": 0}
     def publish_model(self, _provider_id, _model_id): return self.model.model_copy(update={"status": "published", "version": 2})
+    def publish_priced_models(self, _provider_id): return {"published": 26}
 
 
 @pytest.fixture
@@ -77,6 +78,10 @@ def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     published = client.post("/api/operation/providers/p1/models/publish", headers=auth(), json={"model_id": "minimax-m3"})
     assert published.status_code == 200
     assert published.json()["data"]["status"] == "published"
+
+    published_priced = client.post("/api/operation/providers/p1/models/publish-priced", headers=auth())
+    assert published_priced.status_code == 200
+    assert published_priced.json()["data"]["published"] == 26
 
 
 def test_platform_provider_admin_routes_require_platform_auth(client):

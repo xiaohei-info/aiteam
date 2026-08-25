@@ -142,6 +142,13 @@ class PlatformProviderService:
             raise Conflict("model requires a known active price before publishing")
         return _model(self._repo.set_model_status(provider_id, model.model_id, "published"))
 
+    def publish_priced_models(self, provider_id: str) -> dict[str, int]:
+        provider = self._require_provider(provider_id)
+        if provider.status != "published":
+            raise Conflict("publish the large-model service before publishing its models")
+        published = self._repo.publish_priced_models(provider_id)
+        return {"published": len(published)}
+
     def validate_model_ref(self, ref: PlatformModelRef, *, require_published: bool = False) -> PlatformModelRef:
         provider = self._require_provider(ref.provider_id)
         model = self._require_model(ref.provider_id, ref.model_id)

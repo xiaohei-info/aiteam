@@ -69,6 +69,7 @@ export function PlatformProvidersPage() {
               <HStack gap={2}>
                 <Button label="同步模型" variant="secondary" isLoading={busy} onClick={() => void action(() => api.sync(selected.provider_id))} />
                 <Button label="同步公开价格" variant="secondary" isLoading={busy} onClick={() => void action(() => api.syncPublicPrices(selected.provider_id))} />
+                <Button label="发布全部有价格模型" variant="secondary" isLoading={busy} isDisabled={selected.status !== "published" || busy} onClick={() => void action(() => api.publishPricedModels(selected.provider_id))} />
                 <Button label="发布服务" variant="primary" isDisabled={selected.status === "published" || busy} onClick={() => void action(() => api.publishProvider(selected.provider_id))} />
               </HStack>
             </HStack>
