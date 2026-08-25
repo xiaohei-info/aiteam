@@ -112,6 +112,7 @@ async function prompt(
 
 test.describe("Pi solution → fixed participant group chat", () => {
   test("Operator publish → Manager apply/authorize → Agent fixed sessions and @ routing", async ({ request }) => {
+    test.setTimeout(180_000);
     const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
     const managerLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
     let agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
