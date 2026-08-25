@@ -721,7 +721,7 @@ export class AgentHttpServer {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions);
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key });
       this.options.store.markLocalFilesReferenced(attachmentIds, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {

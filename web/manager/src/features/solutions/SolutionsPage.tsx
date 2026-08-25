@@ -211,7 +211,7 @@ function SolutionApplyDialog({
     setWorking(true);
     setError(null);
     try {
-      await api.applySolution({ solution_id: solution.solution_id, member_ids: memberIds, department_ids: departmentIds });
+      await api.applySolution({ solution_id: solution.solution_id, solution_version: solution.version, member_ids: memberIds, department_ids: departmentIds });
       onApplied();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");

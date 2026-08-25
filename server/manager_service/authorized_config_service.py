@@ -103,7 +103,7 @@ class AuthorizedConfigService:
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:
-            if sol_instance.id not in authorized_solution_ids:
+            if sol_instance.id not in authorized_solution_ids or sol_instance.status != "applied":
                 continue
             known_ver = req.known_versions.get(sol_instance.id)
             # Prompt/expert changes are not reflected in solution_version; use config_version so Agent re-syncs.

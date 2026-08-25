@@ -54,6 +54,11 @@ export class InvalidEventCursorError extends Error {
   }
 }
 
+export interface PromptDeliveryOptions {
+  logicalMessageId?: string;
+  idempotencyKey?: string;
+}
+
 export interface SessionAuthorization {
   caller: AuthenticatedCaller;
   employeeId: string;
@@ -168,7 +173,7 @@ export class SessionHost {
     };
   }
 
-  async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[]): Promise<string | undefined> {
+  async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[], deliveryOptions?: PromptDeliveryOptions): Promise<string | undefined> {
     const metadata = this.options.store.getConversationMetadata(conversationId);
     if (!metadata) throw new Error("Conversation does not exist");
     const targetEmployeeIds = this.resolveTargetEmployeeIds(metadata, caller, mentions ?? []);
@@ -185,7 +190,8 @@ export class SessionHost {
       targetEmployeeIds,
       text,
       images,
-      logicalMessageId: `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      idempotencyKey: deliveryOptions?.idempotencyKey,
       caller,
     });
     return result.replies.at(-1)?.entryId;
@@ -273,6 +279,7 @@ export class SessionHost {
     const solution = metadata.solution_instance_id
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
       : undefined;
+    if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
     const roster = solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
@@ -419,6 +426,7 @@ export class SessionHost {
     const solution = metadata.solution_instance_id
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
       : undefined;
+    if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
     const roster = solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
@@ -582,6 +590,7 @@ export class SessionHost {
       const solution = metadata.solution_instance_id
         ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
         : undefined;
+      if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
       const allowedIds = new Set(solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
         : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
@@ -611,6 +620,7 @@ export class SessionHost {
       const session = await record.sessionReady;
       const promptPromise = (async () => {
         await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        this.recordEntrySources(record, command, entriesBefore);
         await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
         return record.sessionManager.getLeafId() ?? undefined;
       })();
@@ -619,6 +629,7 @@ export class SessionHost {
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       return { employeeId, entryId, text };
     } catch (error) {
+      this.recordEntrySources(record, command, entriesBefore);
       await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
       throw error;
     } finally {
@@ -655,6 +666,22 @@ export class SessionHost {
     return result.replies[0]?.text ?? "Employee completed without a textual result.";
   }
 
+  private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number): void {
+    if (!record.employeeId) return;
+    for (const entry of record.sessionManager.getEntries().slice(entriesBefore)) {
+      if (entry.type !== "message" || entry.message.role !== "user" || typeof entry.id !== "string") continue;
+      this.options.store.upsertConversationEntrySource({
+        conversation_id: record.conversationId,
+        employee_id: record.employeeId,
+        pi_entry_id: entry.id,
+        logical_message_id: command.logicalMessageId,
+        source_type: command.source.type,
+        source_id: command.source.id,
+        ...(command.source.displayName ? { source_display_name: command.source.displayName } : {}),
+      });
+    }
+  }
+
   private latestAssistantText(entries: readonly SessionEntry[]): string {
     for (const entry of [...entries].reverse()) {
       if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -666,9 +693,22 @@ export class SessionHost {
 
   private decorateEntry(record: SessionRecord, entry: SessionEntry): SessionEntry {
     if (!record.employeeId || !record.role) return entry;
-    const expert = this.options.store.listLoadedExperts(undefined, undefined, true).find((item) => item.employee_id === record.employeeId);
+    const indexed = this.options.store.getConversation(record.conversationId);
+    const expert = this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId);
+    const base = entry as unknown as Record<string, unknown>;
+    if (entry.type === "message" && entry.message.role === "user" && typeof entry.id === "string") {
+      const source = this.options.store.getConversationEntrySource(record.conversationId, record.employeeId, entry.id);
+      if (source) return {
+        ...base,
+        source_type: source.source_type,
+        source_id: source.source_id,
+        ...(source.source_display_name ? { source_display_name: source.source_display_name } : {}),
+        source_role: source.source_type === "employee" ? "participant" : "human",
+        logical_message_id: source.logical_message_id,
+      } as unknown as SessionEntry;
+    }
     return {
-      ...(entry as unknown as Record<string, unknown>),
+      ...base,
       source_employee_id: record.employeeId,
       source_employee_display_name: expert?.display_name ?? record.employeeId,
       source_role: record.role,
@@ -741,8 +781,9 @@ export class SessionHost {
   }
 
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
+    const indexed = this.options.store.getConversation(record.conversationId);
     const expert = record.employeeId
-      ? this.options.store.listLoadedExperts(undefined, undefined, true).find((item) => item.employee_id === record.employeeId)
+      ? this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId)
       : undefined;
     const metadata = record.employeeId
       ? {

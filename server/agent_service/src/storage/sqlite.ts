@@ -75,6 +75,17 @@ export interface ConversationParticipantSession {
   updated_at: string;
 }
 
+export interface ConversationEntrySource {
+  conversation_id: string;
+  employee_id: string;
+  pi_entry_id: string;
+  logical_message_id: string;
+  source_type: "human" | "employee";
+  source_id: string;
+  source_display_name?: string;
+  created_at: string;
+}
+
 export interface LoadedExpertProjection {
   employee_id: string;
   tenant_id: string;
@@ -254,6 +265,19 @@ export class AgentSqliteStore {
         PRIMARY KEY (conversation_id, employee_id)
       );
       CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
+
+      CREATE TABLE IF NOT EXISTS conversation_entry_source (
+        conversation_id TEXT NOT NULL,
+        employee_id TEXT NOT NULL,
+        pi_entry_id TEXT NOT NULL,
+        logical_message_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('human', 'employee')),
+        source_id TEXT NOT NULL,
+        source_display_name TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, employee_id, pi_entry_id)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_entry_source_logical_idx ON conversation_entry_source(conversation_id, logical_message_id);
 
       CREATE TABLE IF NOT EXISTS idempotency_receipt (
         conversation_id TEXT NOT NULL,
@@ -482,6 +506,7 @@ export class AgentSqliteStore {
     const ownerMember = existing?.memberId ?? memberId;
     if (result.changes > 0 && ownerTenant && ownerMember) this.deleteConversationLocalFiles(id, ownerTenant, ownerMember);
     this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
+    this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
     this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
     return result.changes > 0;
   }
@@ -529,6 +554,27 @@ export class AgentSqliteStore {
 
   deleteConversationParticipants(conversationId: string): void {
     this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(conversationId);
+  }
+
+  upsertConversationEntrySource(input: Omit<ConversationEntrySource, "created_at"> & { created_at?: string }): ConversationEntrySource {
+    const createdAt = input.created_at ?? new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO conversation_entry_source (conversation_id, employee_id, pi_entry_id, logical_message_id, source_type, source_id, source_display_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, employee_id, pi_entry_id) DO UPDATE SET
+        logical_message_id = excluded.logical_message_id,
+        source_type = excluded.source_type,
+        source_id = excluded.source_id,
+        source_display_name = excluded.source_display_name
+    `).run(input.conversation_id, input.employee_id, input.pi_entry_id, input.logical_message_id, input.source_type, input.source_id, input.source_display_name ?? null, createdAt);
+    return this.getConversationEntrySource(input.conversation_id, input.employee_id, input.pi_entry_id)!;
+  }
+
+  getConversationEntrySource(conversationId: string, employeeId: string, piEntryId: string): ConversationEntrySource | undefined {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, pi_entry_id, logical_message_id, source_type, source_id, source_display_name, created_at
+      FROM conversation_entry_source WHERE conversation_id = ? AND employee_id = ? AND pi_entry_id = ?
+    `).get(conversationId, employeeId, piEntryId) as ConversationEntrySource | undefined;
   }
 
   createLocalFile(input: {

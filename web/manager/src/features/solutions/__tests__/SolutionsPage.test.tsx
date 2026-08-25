@@ -98,7 +98,7 @@ describe("SolutionsPage", () => {
     const api = mockApi(); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     await applyDefaultSolution();
-    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", member_ids: ["m-1"], department_ids: [] }));
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: ["m-1"], department_ids: [] }));
   });
 
   it("只读成员不显示应用入口", async () => {
