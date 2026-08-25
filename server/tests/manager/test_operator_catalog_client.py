@@ -171,10 +171,7 @@ def test_pull_solution_package_success(client):
                         "recommended_config": {},
                         "platform_model_ref": {"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1},
                     }
-                ],
-                "knowledge_refs": [],
-                "skill_refs": [],
-                "default_grants": None,
+                ]
             }
         },
     )
@@ -269,9 +266,6 @@ def test_list_solution_packages_success(client):
                     "version": "1",
                     "display_name": "Marketing Solution",
                     "experts": [],
-                    "knowledge_refs": [],
-                    "skill_refs": [],
-                    "default_grants": None,
                 }
             ]
         },
