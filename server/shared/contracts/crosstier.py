@@ -125,10 +125,22 @@ class SolutionPackage(BaseModel):
     display_name: str
     description: str = Field(default="", description="方案描述")
     icon: str = Field(default="", description="方案图标")
-    coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的专家模板 id")
-    coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明")
-    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="按方案顺序排列的专家模板列表")
+<<<<<<< HEAD
+    coordinator_template_id: str = Field(default="", description="方案内固定协调专家模板 id")
+    coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明，不定义执行状态机")
+    workflow_skill_ref: dict | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
+    output_requirements: str = Field(default="", description="可选的方案交付要求")
+    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
+    # Deprecated legacy fields remain parseable during rolling deployment, but Manager never
+    # copies them into employee configuration or authorized runtime projections.
+    planner_template_id: str = Field(default="", description="Deprecated; use coordinator_template_id")
+    knowledge_refs: list[str] = Field(default_factory=list, description="Deprecated; bind tenant knowledge in Manager")
+    skill_refs: list[str] = Field(default_factory=list, description="Deprecated; configure skills on employee templates")
+    default_grants: dict | None = Field(default=None, description="Deprecated; choose grants in Manager apply")
+    planner_prompt: str = Field(default="", description="Deprecated; use coordinator_instructions")
+    subtask_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
+    aggregate_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
 
 
 # ---- Agent → Manager（用户端主动访问）----

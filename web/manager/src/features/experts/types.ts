@@ -35,21 +35,21 @@ export interface SolutionPackageExpertSummary {
 }
 
 /**
- * 可应用行业方案包（对齐 SolutionPackage）。
- * 详情字段（experts / knowledge_refs / skill_refs / prompts / tags）后端已通过 catalog 端口返回，
- * 前端取全量用于「查看方案详情」展示，不再裁剪。
+ * 可应用行业方案包（对齐 Pi-native SolutionPackage）。
+ * 专家能力来自各自模板；方案只描述固定 roster、协调专家和协作说明。
  */
 export interface SolutionPackage {
   solution_id: string;
   version: string;
   display_name: string;
+  description?: string;
+  icon?: string;
+  coordinator_template_id?: string;
+  coordinator_instructions?: string;
+  workflow_skill_ref?: Record<string, unknown> | null;
+  output_requirements?: string;
   experts?: SolutionPackageExpertSummary[];
-  knowledge_refs?: string[];
-  skill_refs?: string[];
   tags?: string[];
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
 }
 
 /** 中立模型策略（对齐 ModelPolicy）。 */
@@ -117,9 +117,11 @@ export interface ApplySolutionInput {
   solution_id: string;
   solution_version?: string | null;
   display_name_override?: string | null;
+  department_ids?: string[];
+  member_ids?: string[];
 }
 
-/** 本 tenant 的方案实例（对齐 SolutionInstanceOut）。 */
+/** 本 tenant 的方案实例（对齐 Pi-native SolutionInstanceOut）。 */
 export interface SolutionInstance {
   id: string;
   solution_id: string;
@@ -127,11 +129,11 @@ export interface SolutionInstance {
   display_name: string;
   status: string;
   expert_employee_ids: string[];
-  knowledge_refs: string[];
-  skill_refs: string[];
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
+  coordinator_employee_id?: string | null;
+  coordinator_instructions?: string;
+  workflow_skill_ref?: Record<string, unknown> | null;
+  output_requirements?: string;
+  config_version?: number;
   created_at: string | null;
   updated_at: string | null;
 }

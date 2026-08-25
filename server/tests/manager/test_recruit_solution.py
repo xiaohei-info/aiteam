@@ -186,6 +186,10 @@ class _FakeRecruitRepo:
             solution_version=kw["solution_version"], display_name=kw["display_name"],
             status=kw.get("status", "applied"),
             expert_employee_ids=list(kw["expert_employee_ids"]),
+            coordinator_employee_id=kw.get("coordinator_employee_id"),
+            coordinator_instructions=kw.get("coordinator_instructions", ""),
+            workflow_skill_ref=kw.get("workflow_skill_ref"),
+            output_requirements=kw.get("output_requirements", ""),
             knowledge_refs=list(kw["knowledge_refs"]), skill_refs=list(kw["skill_refs"]),
             planner_prompt=kw.get("planner_prompt", ""),
             subtask_prompt=kw.get("subtask_prompt", ""),
@@ -461,6 +465,8 @@ def test_recruit_expert_member_forbidden():
 def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
     return SolutionPackage(
         solution_id=solution_id, version=version, display_name="行业方案A",
+        coordinator_template_id="tpl-b",
+        coordinator_instructions="先让相关专家分析，再汇总结论。",
         experts=[
             ExpertTemplateDetail(
                 template_id="tpl-a", version="v1", display_name="专家甲", platform_model_ref=_model_ref("m-a"),
@@ -493,13 +499,15 @@ def test_apply_solution_expands_experts_and_instance():
     assert inst.display_name == "行业方案A"
     assert len(inst.expert_employee_ids) == 2
     assert len(result.experts) == 2
-    # 知识/技能引用落到方案实例 + 叠加到每个专家
-    assert inst.knowledge_refs == ["ks-shared"]
-    assert inst.skill_refs == ["skill-shared"]
+    # 方案只固定 roster/coordinator；deprecated package refs never fan out to employees.
+    assert inst.coordinator_employee_id == inst.expert_employee_ids[1]
+    assert inst.coordinator_instructions == "先让相关专家分析，再汇总结论。"
+    assert inst.knowledge_refs == []
+    assert inst.skill_refs == []
     for eid in inst.expert_employee_ids:
         row = emp.get(_ctx("t-a"), employee_id=eid)
-        assert "ks-shared" in row.knowledge_refs
-        assert "skill-shared" in row.skills
+        assert "ks-shared" not in row.knowledge_refs
+        assert "skill-shared" not in row.skills
     # 审计
     events = recruit.list_recruit_events(_ctx("t-a"))
     assert len(events) == 1
@@ -507,21 +515,16 @@ def test_apply_solution_expands_experts_and_instance():
     assert events[0].source_solution_id == "sol-1"
 
 
-def test_apply_solution_applies_default_grants_from_package():
-    """F07：请求未指定授权时，方案与展开专家均继承 default_grants（D12）。"""
+def test_apply_solution_ignores_legacy_package_default_grants():
+    """F07：Operator 方案不再决定 tenant 成员/部门授权。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
     svc, _, grant, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
-    assert result.grants_applied is True
-    grants = grant._bucket(_ctx("t-a"))
-    for eid in result.solution_instance.expert_employee_ids:
-        assert ("expert", eid) in grants
-        assert grants[("expert", eid)].department_ids == ["dept-default"]
-    solution_grant = grants[("solution", result.solution_instance.id)]
-    assert solution_grant.department_ids == ["dept-default"]
+    assert result.grants_applied is False
+    assert grant._bucket(_ctx("t-a")) == {}
 
 
 def test_apply_solution_request_grants_override_package_defaults():
@@ -542,6 +545,14 @@ def test_apply_solution_request_grants_override_package_defaults():
     solution_grant = grants[("solution", result.solution_instance.id)]
     assert solution_grant.department_ids == ["dept-req"]
     assert solution_grant.member_ids == ["mem-req"]
+
+
+def test_apply_solution_rejects_coordinator_outside_roster():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package().model_copy(update={"coordinator_template_id": "tpl-missing", "planner_template_id": ""}))
+    svc, _, _, _, _ = _build_service(catalog)
+    with pytest.raises(Conflict, match="coordinator"):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
 
 def test_apply_solution_conflict_when_already_applied():
@@ -813,21 +824,27 @@ def test_manager_cannot_edit_solution_instance_after_apply():
     )
 
 
-def test_apply_solution_preserves_collab_prompts_from_package():
-    """F07 应用方案时，方案包携带的协作 prompts 落到方案实例。"""
+def test_apply_solution_persists_pi_native_coordinator_metadata():
+    """F07 持久化 coordinator/instructions，不再持久化旧三段 planner prompts。"""
     catalog = FakeOperatorCatalogClient()
     pkg = SolutionPackage(
         solution_id="sol-prompt", version="v1", display_name="方案",
+        coordinator_template_id="tpl-1",
+        coordinator_instructions="先核对事实，再给出结论。",
+        output_requirements="给出三条可执行建议。",
         experts=[_expert_template()],
-        planner_prompt="plan-p", subtask_prompt="sub-p", aggregate_prompt="agg-p",
+        planner_prompt="legacy-plan", subtask_prompt="legacy-sub", aggregate_prompt="legacy-agg",
     )
     catalog.seed_solution(pkg)
     svc, _, _, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-prompt"))
-    assert result.solution_instance.planner_prompt == "plan-p"
-    assert result.solution_instance.subtask_prompt == "sub-p"
-    assert result.solution_instance.aggregate_prompt == "agg-p"
+    assert result.solution_instance.coordinator_employee_id == result.solution_instance.expert_employee_ids[0]
+    assert result.solution_instance.coordinator_instructions == "先核对事实，再给出结论。"
+    assert result.solution_instance.output_requirements == "给出三条可执行建议。"
+    assert result.solution_instance.planner_prompt == ""
+    assert result.solution_instance.subtask_prompt == ""
+    assert result.solution_instance.aggregate_prompt == ""
 
 
 # ---- 追加测试：F06 未传 employee_slug 时后端自动生成 slug（PRD P03/P04）----

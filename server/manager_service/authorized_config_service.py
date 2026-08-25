@@ -117,12 +117,10 @@ class AuthorizedConfigService:
                     "status": sol_instance.status,
                     "config_version": sol_instance.config_version,
                     "expert_employee_ids": sol_instance.expert_employee_ids,
-                    "knowledge_refs": sol_instance.knowledge_refs,
-                    "skill_refs": sol_instance.skill_refs,
-                    # 方案级固定编排三阶段 prompts（parity Operator solution_template）
-                    "planner_prompt": sol_instance.planner_prompt or "",
-                    "subtask_prompt": sol_instance.subtask_prompt or "",
-                    "aggregate_prompt": sol_instance.aggregate_prompt or "",
+                    "coordinator_employee_id": sol_instance.coordinator_employee_id,
+                    "coordinator_instructions": sol_instance.coordinator_instructions or "",
+                    "workflow_skill_ref": sol_instance.workflow_skill_ref,
+                    "output_requirements": sol_instance.output_requirements or "",
                 })
 
         revoked_ids = [

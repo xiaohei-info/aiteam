@@ -7,10 +7,13 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { SolutionsPage } from "../SolutionsPage";
 import { useExpertsApi } from "../../experts/useExpertsApi";
+import { useGrantsApi } from "../../grants/useGrantsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
+vi.mock("../../grants/useGrantsApi", () => ({ useGrantsApi: vi.fn() }));
 
 import type { ExpertsApi } from "../../experts/useExpertsApi";
+import type { GrantsApi } from "../../grants/useGrantsApi";
 import type { SolutionInstance, SolutionPackage } from "../../experts/types";
 
 function makeI18n() {
@@ -28,12 +31,19 @@ function sessionValue(roles: string[]): SessionContextValue {
 }
 
 function mockApi(): ExpertsApi {
+  const grantsApi: GrantsApi = {
+    listGrants: vi.fn().mockResolvedValue([]), createGrant: vi.fn(), updateGrant: vi.fn(), deleteGrant: vi.fn(),
+    listMembers: vi.fn().mockResolvedValue([{ id: "m-1", display_name: "成员一" }]),
+    listDepartments: vi.fn().mockResolvedValue([{ id: "d-1", display_name: "部门一" }]),
+    listExperts: vi.fn().mockResolvedValue([]), listSolutions: vi.fn().mockResolvedValue([]),
+  };
+  (useGrantsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(grantsApi);
   const api: ExpertsApi = {
     listTemplates: vi.fn().mockResolvedValue([]),
     listSolutions: vi.fn().mockResolvedValue([{
       solution_id: "sol-1", version: "1", display_name: "测试方案",
       experts: [{ template_id: "tpl-1", version: "1", display_name: "架构师", persona: "技术架构专家", category: "tech" }],
-      knowledge_refs: ["ks-shared"], skill_refs: ["skill-a"], tags: ["金融"], planner_prompt: "",
+      coordinator_template_id: "tpl-1", coordinator_instructions: "先分析再汇总", tags: ["金融"],
     } as SolutionPackage]),
     recruitExpert: vi.fn().mockResolvedValue({}),
     applySolution: vi.fn().mockResolvedValue({}),
@@ -57,10 +67,20 @@ function renderPage(roles: string[]) {
   );
 }
 
+async function applyDefaultSolution(): Promise<HTMLElement> {
+  const cardButton = screen.getAllByRole("button", { name: "应用方案" })[0]!;
+  fireEvent.click(cardButton);
+  const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: /授权成员/ }));
+  fireEvent.click(screen.getByRole("option", { name: "成员一", hidden: true }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
+  return dialog;
+}
+
 const solutionInstance: SolutionInstance = {
   id: "si-1", solution_id: "sol-1", solution_version: "v1", display_name: "行业方案A", status: "active",
-  expert_employee_ids: ["emp-1", "emp-2"], knowledge_refs: ["ks-shared"], skill_refs: ["skill-shared"],
-  planner_prompt: "", subtask_prompt: "", aggregate_prompt: "", created_at: null, updated_at: null,
+  expert_employee_ids: ["emp-1", "emp-2"], coordinator_employee_id: "emp-1", config_version: 1,
+  created_at: null, updated_at: null,
 };
 
 describe("SolutionsPage", () => {
@@ -74,11 +94,11 @@ describe("SolutionsPage", () => {
     expect(screen.getByRole("article", { name: "测试方案" })).toBeInTheDocument();
   });
 
-  it("应用方案：applySolution(solution_id)", async () => {
+  it("应用方案：选择授权成员后提交 solution_id + member_ids", async () => {
     const api = mockApi(); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("应用方案"));
-    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1" }));
+    await applyDefaultSolution();
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", member_ids: ["m-1"], department_ids: [] }));
   });
 
   it("只读成员不显示应用入口", async () => {
@@ -87,15 +107,15 @@ describe("SolutionsPage", () => {
     expect(screen.queryByText("应用方案")).not.toBeInTheDocument();
   });
 
-  it("查看方案详情：点击查看详情打开抽屉展示专家/知识/技能", async () => {
+  it("查看方案详情：点击查看详情打开抽屉展示专家/协调说明", async () => {
     mockApi(); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     fireEvent.click(screen.getByText("查看详情"));
     const dialog = await screen.findByRole("dialog", { name: "测试方案" });
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText("架构师")).toBeInTheDocument();
-    expect(screen.getByText("ks-shared")).toBeInTheDocument();
-    expect(screen.getByText("skill-a")).toBeInTheDocument();
+    expect(screen.getByText("协调专家")).toBeInTheDocument();
+    expect(screen.getByText("先分析再汇总")).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
@@ -113,7 +133,7 @@ describe("SolutionsPage", () => {
     const api = mockApi();
     (api.listSolutions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
+    await waitFor(() => expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("加载失败"))).toBe(true));
   });
 
   it("空状态：无方案时显示空提示", async () => {
@@ -128,21 +148,21 @@ describe("SolutionsPage", () => {
     (api.applySolution as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("应用方案"));
-    await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
+    await applyDefaultSolution();
+    await waitFor(() => expect(screen.getByText("nope")).toBeInTheDocument());
   });
 
   it("应用方案成功：显示成功提示", async () => {
     const api = mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("应用方案"));
+    await applyDefaultSolution();
     await waitFor(() => expect(screen.getByText("方案已应用")).toBeInTheDocument());
   });
 
   const inactiveInstance: SolutionInstance = {
     ...solutionInstance, id: "si-2", status: "inactive",
-    expert_employee_ids: [], knowledge_refs: [], skill_refs: [],
+    expert_employee_ids: [],
   };
 
   it("非 active 状态：实例卡显示非高亮状态标签", async () => {
@@ -158,7 +178,7 @@ describe("SolutionsPage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("应用方案"));
+    await applyDefaultSolution();
     await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
     expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
   });

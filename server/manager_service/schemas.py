@@ -491,12 +491,18 @@ class SolutionInstanceOut(BaseModel):
     solution_version: str
     display_name: str
     status: str
-    expert_employee_ids: list[str] = Field(default_factory=list)
-    knowledge_refs: list[str] = Field(default_factory=list)
-    skill_refs: list[str] = Field(default_factory=list)
-    planner_prompt: str = Field(default="", description="方案级协作编排 planner prompt（空=回退运行时默认）")
-    subtask_prompt: str = Field(default="", description="方案级协作编排 subtask prompt")
-    aggregate_prompt: str = Field(default="", description="方案级协作编排 aggregate prompt")
+    expert_employee_ids: list[str] = Field(default_factory=list, description="按方案固定顺序展开的 employee 实例")
+    coordinator_employee_id: str | None = Field(default=None, description="本 tenant 内映射后的协调专家 employee id")
+    coordinator_instructions: str = Field(default="", description="自然语言协作说明")
+    workflow_skill_ref: dict | None = Field(default=None, description="方案工作流 Skill 固定版本引用")
+    output_requirements: str = Field(default="", description="方案交付要求")
+    config_version: int = Field(default=1, ge=1)
+    # Deprecated response fields are retained for rolling clients; new projections leave them empty.
+    knowledge_refs: list[str] = Field(default_factory=list, description="Deprecated; tenant binding lives on employees")
+    skill_refs: list[str] = Field(default_factory=list, description="Deprecated; skills live on employee snapshots")
+    planner_prompt: str = Field(default="", description="Deprecated; use coordinator_instructions")
+    subtask_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
+    aggregate_prompt: str = Field(default="", description="Deprecated; unused by Pi-native execution")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

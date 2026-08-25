@@ -5,7 +5,7 @@
   employee 实例（复用 EmployeeConfigRepository，runtime 中立 D16）→ 可选落 member_grant 授权
   （复用 GrantRepository，D12）→ 追加 recruit_event 审计。
 - F07 应用方案：向 Operator 单向拉方案包（只读）→ 在本 tenant 建 solution_instance → 逐个专家
-  展开 employee 实例 + 绑定知识/技能引用 → 按方案默认授权落 member_grant（D12）→ 追加审计。
+  展开 employee 实例 → 固化 coordinator_employee_id/roster → 按本次请求授权落 member_grant（D12）→ 追加审计。
 
 红线（05 F06/F07）：
 - Operator 不写 Manager 库（本卡 Manager 单向拉；模板/方案真相只在 Operator 侧，Manager 只读用）。
@@ -233,11 +233,21 @@ class RecruitService:
         # 3) 逐个专家展开 employee 实例（slug 用 solution 派生，保证可复入幂等可读）。
         expert_results: list[RecruitExpertResult] = []
         expert_employee_ids: list[str] = []
-        # 按 Operator 声明的 sequence_no 排序展开，并跳过 enabled=False 的专家。
+        # 按 Operator 固定方案包顺序展开；旧 sequence/enabled 仅用于滚动兼容。
         ordered_experts = sorted(
             (t for t in package.experts if t.enabled),
             key=lambda t: (t.sequence_no, t.template_id),
         )
+        if not ordered_experts:
+            raise Conflict("solution package has no enabled experts")
+        coordinator_template_id = (
+            getattr(package, "coordinator_template_id", "")
+            or getattr(package, "planner_template_id", "")
+            or ordered_experts[0].template_id
+        )
+        active_template_ids = {template.template_id for template in ordered_experts}
+        if coordinator_template_id not in active_template_ids:
+            raise Conflict("solution coordinator must be one of the enabled experts")
         for idx, template in enumerate(ordered_experts):
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
             # 展开前确保 slug 未被占用（被占则报冲突，由调用方决策换 version / 换 slug）。
@@ -262,9 +272,10 @@ class RecruitService:
                     thinking_level=recommended.get("thinking_level"),
                         timeout_seconds=recommended.get("timeout_seconds"),
                     tools=list(recommended.get("tools", [])),
-                    skills=skills + list(package.skill_refs),  # 方案级技能引用叠加到每个专家
-                    knowledge_refs=list(recommended.get("knowledge_refs", []))
-                    + list(package.knowledge_refs),  # 方案级知识引用叠加
+                    # Skills and knowledge belong to the employee template/tenant bindings.
+                    # Never copy deprecated solution-level refs into every employee.
+                    skills=skills,
+                    knowledge_refs=list(recommended.get("knowledge_refs", [])),
                     connector_refs=list(recommended.get("connector_refs", [])),
                     memory_policy=recommended.get("memory_policy"),
                     platform_model_ref=recommended["platform_model_ref"],
@@ -300,13 +311,17 @@ class RecruitService:
                 )
             )
 
-        # 4) 计算方案默认授权（D12）：方案包默认授权或请求指定授权。
+        coordinator_index = next(
+            index for index, template in enumerate(ordered_experts)
+            if template.template_id == coordinator_template_id
+        )
+        coordinator_employee_id = expert_employee_ids[coordinator_index]
+
+        # 4) 授权只接受本次 Manager 请求；Operator 不知道目标 tenant 的成员/部门，
+        # 因而 deprecated package.default_grants 永远不参与授权。
         grants_applied = False
         grant_dept_ids = list(req.department_ids)
         grant_member_ids = list(req.member_ids)
-        if not (grant_dept_ids or grant_member_ids) and package.default_grants:
-            grant_dept_ids = list(package.default_grants.get("department_ids", []))
-            grant_member_ids = list(package.default_grants.get("member_ids", []))
         if (grant_dept_ids or grant_member_ids) and expert_employee_ids:
             for employee_id in expert_employee_ids:
                 _upsert_grant(
@@ -322,13 +337,18 @@ class RecruitService:
             solution_version=package.version,
             display_name=req.display_name_override or package.display_name,
             expert_employee_ids=expert_employee_ids,
-            knowledge_refs=list(package.knowledge_refs),
-            skill_refs=list(package.skill_refs),
-            planner_prompt=package.planner_prompt,
-            subtask_prompt=package.subtask_prompt,
-            aggregate_prompt=package.aggregate_prompt,
-            default_grants_meta=package.default_grants,
+            # Legacy solution columns remain empty while rolling deployments drain old clients.
+            knowledge_refs=[],
+            skill_refs=[],
+            planner_prompt="",
+            subtask_prompt="",
+            aggregate_prompt="",
+            default_grants_meta=None,
             template_meta=package.model_dump(mode="json"),
+            coordinator_employee_id=coordinator_employee_id,
+            coordinator_instructions=getattr(package, "coordinator_instructions", ""),
+            workflow_skill_ref=getattr(package, "workflow_skill_ref", None),
+            output_requirements=getattr(package, "output_requirements", ""),
         )
 
         # 方案本身也必须被授权：Agent 的方案投影按 ``resource_type=solution`` 裁剪，
@@ -500,8 +520,14 @@ def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:
         display_name=row.display_name,
         status=row.status,
         expert_employee_ids=row.expert_employee_ids,
-        knowledge_refs=row.knowledge_refs,
-        skill_refs=row.skill_refs,
+        coordinator_employee_id=row.coordinator_employee_id,
+        coordinator_instructions=row.coordinator_instructions,
+        workflow_skill_ref=row.workflow_skill_ref,
+        output_requirements=row.output_requirements,
+        config_version=row.config_version,
+        # Deprecated fields intentionally remain empty for new Pi-native instances.
+        knowledge_refs=row.knowledge_refs or [],
+        skill_refs=row.skill_refs or [],
         planner_prompt=row.planner_prompt,
         subtask_prompt=row.subtask_prompt,
         aggregate_prompt=row.aggregate_prompt,
