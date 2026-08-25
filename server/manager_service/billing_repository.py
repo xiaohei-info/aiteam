@@ -144,7 +144,7 @@ class BillingRepository:
             total = s.execute(
                 "SELECT COALESCE(SUM(token_total), 0), COALESCE(SUM(cost_total), 0), "
                 "COALESCE(SUM(token_total) FILTER (WHERE pricing_status = 'unknown'), 0), "
-                "COALESCE(COUNT(*) FILTER (WHERE pricing_status = 'unknown'), 0) "
+                "COALESCE(SUM(run_count) FILTER (WHERE pricing_status = 'unknown'), 0) "
                 "FROM usage_rollup WHERE (%s::timestamptz IS NULL OR window_start >= %s) "
                 "AND (%s::timestamptz IS NULL OR window_end <= %s)",
                 (ws, ws, we, we),

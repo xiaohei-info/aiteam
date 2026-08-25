@@ -233,7 +233,7 @@ class UsageAuditQuotaRepository:
                     COALESCE(SUM(token_total), 0) AS token_total,
                     COALESCE(SUM(cost_total), 0) AS cost_total,
                     COALESCE(SUM(token_total) FILTER (WHERE pricing_status = 'unknown'), 0) AS unknown_pricing_tokens,
-                    COALESCE(COUNT(*) FILTER (WHERE pricing_status = 'unknown'), 0) AS unknown_pricing_runs,
+                    COALESCE(SUM(run_count) FILTER (WHERE pricing_status = 'unknown'), 0) AS unknown_pricing_runs,
                     COALESCE(SUM(error_count), 0) AS error_count,
                     COALESCE(SUM(duration_seconds_total), 0) AS duration_seconds_total
                 FROM usage_rollup
