@@ -29,10 +29,10 @@ scope: operator-manager-agent-solution-group-chat
 - Agent 固定 participant Pi Session、统一 human/employee delivery、无 @/单 @/多 @ 路由、coordinator mention tool、source metadata、方案撤权 fail-closed；
 - Agent 群聊复用单聊 Composer/Timeline/SSE/abort/附件/幂等、新建对话和历史入口；
 - Python 1504 passed/83 skipped，Agent 全量显式文件 100 passed/1 skipped，Operation web 163 passed，Manager web 242 passed，Agent web 112 passed，相关 typecheck/build 通过；
-- taiyi 已完成真实 Provider-backed solution→group E2E（Operator publish → Manager apply/authorize → Agent sync → group create → no @/single @/multi @/new conversation/abort/revoke），单 spec 1 passed（59.9s）；
+- taiyi 已完成真实 Provider-backed solution→group E2E，并收口完整 cross-tier 回归：55 passed、1 skipped；方案群聊覆盖 Operator publish → Manager apply/authorize → Agent sync → group create → no @/single @/multi @/new conversation/abort/revoke；
 - taiyi Agent 当前已恢复 `AITEAM_PI_FAKE=false`，三端 healthz 200。
 
-仍需独立验收：完整 55 项 cross-tier 回归、方案工作流 Skill 的完整 Operator 配置 UI、生产级知识绑定事务/重试策略，以及 canonical 文档后续评审后的持续同步。
+仍需独立验收：剩余 1 项 cross-tier skip（现有专家私聊用例要求 isolated E2E provider seed）、方案工作流 Skill 的完整 Operator 配置 UI、生产级知识绑定事务/重试策略，以及 canonical 文档后续评审后的持续同步。
 
 ## 2. 关键契约
 
