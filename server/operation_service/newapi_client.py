@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json as jsonlib
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -87,24 +88,54 @@ class NewApiAdminClient:
             raise NewApiError("NewAPI returned an invalid management token")
         return token
 
-    def create_relay_token(self, *, dashboard_token: str, user_id: int, name: str, model_ids: list[str], remain_quota: int, expired_time: int = -1) -> tuple[int, str]:
-        self._request("POST", "/api/token/", token=dashboard_token, user_id=user_id, json={
-            "name": name,
-            "expired_time": expired_time,
-            "remain_quota": remain_quota,
-            "unlimited_quota": False,
-            "model_limits_enabled": True,
-            "model_limits": ",".join(model_ids),
-            "allow_ips": "",
-            "group": "default",
-            "cross_group_retry": False,
-        })
+    def _list_user_tokens(self, *, dashboard_token: str, user_id: int) -> list[dict[str, Any]]:
         payload = self._request("GET", "/api/token/?p=1&size=100", token=dashboard_token, user_id=user_id)
         items = (payload.get("data") or {}).get("items") or []
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise NewApiError("NewAPI returned an invalid token list")
+        return items
+
+    @staticmethod
+    def _matching_token(items: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
         matches = [item for item in items if item.get("name") == name]
-        if len(matches) != 1:
-            raise NewApiError("NewAPI token creation did not resolve uniquely")
-        token_id = int(matches[0]["id"])
+        if len(matches) > 1:
+            ids = sorted(str(item.get("id")) for item in matches)
+            raise NewApiError(f"NewAPI relay token name is ambiguous: {name} ({', '.join(ids)})")
+        return matches[0] if matches else None
+
+    def _resolve_created_token(self, *, dashboard_token: str, user_id: int, name: str) -> dict[str, Any]:
+        # NewAPI persists token creation asynchronously. Poll only after the POST;
+        # never retry the POST, because a retry could create an untracked duplicate.
+        for attempt in range(5):
+            match = self._matching_token(self._list_user_tokens(dashboard_token=dashboard_token, user_id=user_id), name)
+            if match is not None:
+                return match
+            if attempt < 4:
+                time.sleep(0.2 * (attempt + 1))
+        raise NewApiError(f"NewAPI created relay token was not observable: {name}")
+
+    def create_relay_token(self, *, dashboard_token: str, user_id: int, name: str, model_ids: list[str], remain_quota: int, expired_time: int = -1) -> tuple[int, str]:
+        # Resolve an existing deterministic name first. This makes retries after a
+        # successful POST idempotent and prevents another duplicate token.
+        existing = self._matching_token(self._list_user_tokens(dashboard_token=dashboard_token, user_id=user_id), name)
+        if existing is None:
+            self._request("POST", "/api/token/", token=dashboard_token, user_id=user_id, json={
+                "name": name,
+                "expired_time": expired_time,
+                "remain_quota": remain_quota,
+                "unlimited_quota": False,
+                "model_limits_enabled": True,
+                "model_limits": ",".join(model_ids),
+                "allow_ips": "",
+                "group": "default",
+                "cross_group_retry": False,
+            })
+            existing = self._resolve_created_token(dashboard_token=dashboard_token, user_id=user_id, name=name)
+        token_id_raw = existing.get("id")
+        try:
+            token_id = int(token_id_raw)
+        except (TypeError, ValueError) as exc:
+            raise NewApiError("NewAPI returned an invalid relay token id") from exc
         revealed = self._request("POST", f"/api/token/{token_id}/key", token=dashboard_token, user_id=user_id).get("data")
         key = revealed.get("key") if isinstance(revealed, dict) else revealed
         if not isinstance(key, str) or not key:

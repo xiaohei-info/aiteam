@@ -81,6 +81,50 @@ def test_newapi_client_uses_server_management_identity_and_normalizes_models():
     assert seen["headers"]["new-api-user"] == "1"
 
 
+def test_newapi_relay_token_reuses_existing_deterministic_name_without_posting_again():
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request):
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "aiteam-tenant-v1"}]}})
+        assert request.method == "POST" and request.url.path == "/api/token/7/key"
+        return httpx.Response(200, json={"success": True, "data": {"key": "relay-key"}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="aiteam-tenant-v1", model_ids=["m1"], remain_quota=10) == (7, "sk-relay-key")
+    assert ("POST", "/api/token/") not in calls
+
+
+def test_newapi_relay_token_polls_after_create_without_retrying_post():
+    calls: list[tuple[str, str]] = []
+    list_count = 0
+
+    def handler(request: httpx.Request):
+        nonlocal list_count
+        calls.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/api/token/":
+            return httpx.Response(200, json={"success": True})
+        if request.method == "GET":
+            list_count += 1
+            items = [] if list_count < 3 else [{"id": 8, "name": "aiteam-tenant-v1"}]
+            return httpx.Response(200, json={"success": True, "data": {"items": items}})
+        return httpx.Response(200, json={"success": True, "data": {"key": "created-key"}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="aiteam-tenant-v1", model_ids=["m1"], remain_quota=10) == (8, "sk-created-key")
+    assert calls.count(("POST", "/api/token/")) == 1
+
+
+def test_newapi_relay_token_fails_closed_on_preexisting_duplicate_names():
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 1, "name": "duplicate"}, {"id": 2, "name": "duplicate"}]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    with pytest.raises(NewApiError, match=r"ambiguous.*1.*2"):
+        client.create_relay_token(dashboard_token="dashboard", user_id=2, name="duplicate", model_ids=["m1"], remain_quota=10)
+
+
 def test_newapi_client_checks_business_failure_even_on_http_200():
     client = NewApiAdminClient(
         "http://newapi.test", "admin-pat", "1",
