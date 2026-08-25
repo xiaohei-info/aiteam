@@ -238,15 +238,24 @@ function SolutionApplyDialog({
       const failures: string[] = [];
       for (const knowledgeSpaceId of knowledgeSpaceIds) {
         for (const employeeId of employeeIds) {
-          try {
-            await knowledgeApi.bind(knowledgeSpaceId, { resource_type: "expert", resource_id: employeeId });
-          } catch {
-            failures.push(`${knowledgeSpaceId}/${employeeId}`);
+          let failure: unknown;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              await knowledgeApi.bind(knowledgeSpaceId, { resource_type: "expert", resource_id: employeeId });
+              failure = undefined;
+              break;
+            } catch (err) {
+              failure = err;
+              // Binding is an idempotent upsert. Retry network/5xx/timeout failures once,
+              // but surface validation/auth failures immediately instead of hiding them.
+              if (err instanceof ApiError && err.status < 500 && err.status !== 408 && err.status !== 429) break;
+            }
           }
+          if (failure) failures.push(`${knowledgeSpaceId}/${employeeId}`);
         }
       }
       onApplied(failures.length > 0
-        ? `方案已应用，但 ${failures.length} 个知识绑定未完成；可在知识库页面为方案专家重试绑定。`
+        ? `方案已应用，但 ${failures.length} 个知识绑定未完成（${failures.slice(0, 3).join(", ")}）；可在知识库页面重试。`
         : undefined);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");

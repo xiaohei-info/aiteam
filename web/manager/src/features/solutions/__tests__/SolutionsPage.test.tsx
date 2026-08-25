@@ -173,6 +173,21 @@ describe("SolutionsPage", () => {
     expect(lastKnowledgeApi.bind).toHaveBeenNthCalledWith(2, "ks-1", { resource_type: "expert", resource_id: "emp-2" });
   });
 
+  it("知识绑定遇到瞬态错误时只重试一次且不误报失败", async () => {
+    const api = mockApi();
+    (api.applySolution as ReturnType<typeof vi.fn>).mockResolvedValue({
+      solution_instance: { expert_employee_ids: ["emp-1", "emp-2"] },
+    });
+    (lastKnowledgeApi.bind as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("temporary network error"))
+      .mockResolvedValue(null);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    await applyDefaultSolution(true);
+    await waitFor(() => expect(lastKnowledgeApi.bind).toHaveBeenCalledTimes(3));
+    expect(screen.getByText("方案已应用")).toBeInTheDocument();
+  });
+
   it("应用方案失败：applySolution 报错显示操作失败", async () => {
     const api = mockApi();
     (api.applySolution as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));

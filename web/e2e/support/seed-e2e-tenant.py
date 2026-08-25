@@ -11,9 +11,12 @@ Required provider environment:
   MANAGER_CREDENTIAL_KEY Fernet key used by Manager provider credential storage
 
 Optional provider environment:
-  E2E_PROVIDER_REF       default: e2e-usage-provider
-  E2E_PROVIDER_MODEL     default: aiteam-e2e-model (kept separate from gpt-4.1)
+  E2E_PROVIDER_REF       default: e2e-usage-provider; external seeded runs must use a published Operator provider ID
+  E2E_PROVIDER_MODEL     default: aiteam-e2e-model
   E2E_PROVIDER_API_PROTOCOL  default: openai-completions
+
+External seeded runs also validate the Manager → Operator runtime-config boundary and require
+OPERATOR_URL/SERVICE_TOKEN to resolve the published provider access.
 
 The tenant/member values are supplied by globalSetup.  Running the script directly
 uses the same local PostgreSQL defaults as playwright.config.ts.
@@ -116,6 +119,7 @@ def main() -> int:
     from manager_service.provider_credential_repository import ProviderCredentialRepository
     from manager_service.repository import TenantAuthRepository
     from manager_service.provider_credential_service import ProviderCredentialService
+    from manager_service.operator_catalog import OperatorCatalogClient
     from manager_service.repository_member import GrantRepository, MemberDeptRepository
     from manager_service.schemas import EmployeeConfigIn, MemberGrantCreate
     from manager_service.schemas_provider import (
@@ -131,6 +135,19 @@ def main() -> int:
     from shared.db import PgTenantRouter
 
     router = PgTenantRouter(biz_url)
+    external_seed = (
+        os.getenv("E2E_EXTERNAL", "false").lower() == "true"
+        and os.getenv("E2E_EXTERNAL_SEED", "false").lower() == "true"
+    )
+    operator = (
+        OperatorCatalogClient(
+            os.getenv("OPERATOR_URL", "http://127.0.0.1:8000"),
+            service_identity="e2e-seed",
+            service_token=os.getenv("SERVICE_TOKEN", "test-service-token"),
+        )
+        if external_seed
+        else None
+    )
     admin_ctx = TenantContext(
         tenant_id=tenant_id,
         user_id="e2e-seed",
@@ -209,11 +226,31 @@ def main() -> int:
 
     # 4. Employee 配置 + active 生命周期。
     employee_repo = EmployeeConfigRepository(router)
-    employee_service = EmployeeConfigService(employee_repo)
+    platform_model = None
+    platform_provider = None
+    if operator is not None:
+        catalog = operator.list_platform_catalog()
+        platform_provider = next(
+            (item for item in catalog.get("providers", []) if item.get("provider_id") == provider_ref),
+            None,
+        )
+        for item in catalog.get("models", []):
+            candidate = item.get("model") or {}
+            if candidate.get("provider_id") == provider_ref and candidate.get("model_id") == model:
+                platform_model = candidate
+                break
+        if platform_provider is None or platform_model is None:
+            raise RuntimeError(f"platform model is unavailable: {provider_ref}/{model}")
+    employee_service = EmployeeConfigService(employee_repo, operator)
     employee_body = EmployeeConfigIn(
         display_name="E2E Usage Employee",
         persona="You are an E2E usage employee. Respond briefly.",
-        model_policy=ModelPolicy(model=model, provider_ref=provider_ref),
+        model_policy=ModelPolicy(
+            model=model,
+            provider_ref=provider_ref,
+            provider_version=(int(platform_provider["version"]) if platform_provider else None),
+            model_version=(int(platform_model["version"]) if platform_model else None),
+        ),
         execution_policy=ExecutionPolicy(timeout_seconds=120),
     )
     employee = employee_repo.get_by_slug(admin_ctx, employee_slug=employee_slug)
@@ -272,6 +309,7 @@ def main() -> int:
         config_service=employee_service,
         grant_service=grant_service,
         member_service=MemberDeptService(repo=member_repo),
+        platform_catalog=operator,
     )
     snapshot = snapshot_service.generate(
         member_ctx,
@@ -282,16 +320,23 @@ def main() -> int:
     if snapshot.model_policy.model != model or snapshot.model_policy.provider_ref != provider_ref:
         raise RuntimeError("E2E employee snapshot does not match the seeded provider")
 
-    # Verify the runtime-config path can decrypt and authorize the provider without exposing
-    # the secret.  The returned api_key is intentionally discarded immediately.
-    runtime_service = ProviderCredentialService(provider_repo, crypto, snapshot_service)
-    runtime = runtime_service.runtime_config(member_ctx, employee_id=employee_out.employee_id)
-    if (
-        runtime.model != model
-        or runtime.provider_ref != provider_ref
-        or runtime.base_url != endpoint
-    ):
-        raise RuntimeError("E2E runtime provider config does not match the seeded snapshot")
+    # External seeded runs must also verify the real Manager → Operator runtime-config
+    # boundary. Local fake-model runs intentionally skip this because their Operation
+    # catalog has no relay credentials.
+    if external_seed:
+        try:
+            runtime_service = ProviderCredentialService(
+                provider_repo, crypto, snapshot_service, operator
+            )
+            runtime = runtime_service.runtime_config(member_ctx, employee_id=employee_out.employee_id)
+        finally:
+            operator.close()
+        if (
+            runtime.model != model
+            or runtime.provider_ref != provider_ref
+            or runtime.base_url != endpoint
+        ):
+            raise RuntimeError("E2E runtime provider config does not match the seeded snapshot")
 
     print(
         json.dumps(

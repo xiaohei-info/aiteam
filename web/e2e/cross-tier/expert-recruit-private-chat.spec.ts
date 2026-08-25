@@ -1,20 +1,19 @@
 /**
  * AITEAM-685 跨端全链路 E2E：专家注册 → 招募 → 私聊会话创建。
  *
- * 业务闭环：Operator 发布专家模板 → Manager 创建 provider 并招募（按 model 自动匹配 provider）
+ * 业务闭环：Operator 发布专家模板 → Manager 按 platform_model_ref 招募
  * → Manager 授权 member → Agent sync 拉取 → Agent 私聊 roster 出现该专家 → 创建私聊会话。
  *
- * Provider 匹配隔离：产品允许 model-only 在多个 provider 命中时返回 ambiguous；本用例只在
- * E2E_EXTERNAL_SEED 提供的独立 tenant 上运行，并在写入前确认该 tenant 没有其它 enabled gpt-4.1 provider，
- * 因而验证的是 single-match，不会把共享环境污染误判成 deterministic match。
+ * Provider 匹配隔离：本用例只在 E2E_EXTERNAL_SEED 提供的独立 tenant 上运行，并使用
+ * 该 seed 的已发布 provider/model，验证完整 platform model → recruit → runtime 链路。
  *
  * 验证命令：
  *   npx playwright test e2e/cross-tier/expert-recruit-private-chat.spec.ts --project=cross-tier
  *
  * 验收锚点：
- * - Operation 端注册专家模板（default_model="gpt-4.1"）并发布。
- * - Manager 端 provider 凭据创建 → 招募专家（template_id 引用 Operator 模板）→ 落库 employee
- *   的 model_policy.model == "gpt-4.1" 且 model_policy.provider_ref == "newapi-main"（按模型自动匹配）。
+ * - Operation 端注册专家模板（platform_model_ref 指向已发布 provider/model）并发布。
+ * - Manager 端招募专家（template_id 引用 Operator 模板）→ 落库 employee
+ *   的 model_policy 与 platform_model_ref 一致，并可完成 runtime provider access。
  * - Manager 端 member_grant 授权 → Agent 端 sync 成功 → roster 可见该 employee。
  * - Agent 端创建私聊会话，entry_employee_id == 招募的 employee_id。
  * - /api/manager/grants/authorized-config 主体不一致 → 403，且不得被误判为通过。
@@ -52,9 +51,8 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
   test("Operator 发布专家模板 → Manager 招募并匹配 provider → Agent sync → roster → 私聊会话", async ({
     request,
   }) => {
-    // Model-only matching is deterministic only for an isolated tenant.  A reused
-    // external tenant must not be forced through the single-match assertion because
-    // provider ambiguity is a supported product result, not a test failure.
+    // Platform model selection is deterministic only for an isolated tenant. A reused
+    // external tenant must not be forced through the single-match/provider assertion.
     const isolatedTenant = process.env.E2E_EXTERNAL !== "true"
       ? process.env.E2E_REUSE_SEED !== "true"
       : process.env.E2E_EXTERNAL_SEED === "true";
@@ -65,9 +63,45 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
 
     // ── 0. 登录三端（任一失败则 skip，不误报）──
     const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
+    const opHeaders = { Authorization: `Bearer ${opLogin.token}` };
 
     const uniqueTag = randomUUID().replace(/-/g, "").slice(0, 8);
     const templateDisplayName = `E2E Expert ${uniqueTag}`;
+
+    const providersResp = await request.get(`${TIER_API_ORIGIN.operation}/api/operation/providers`, {
+      headers: opHeaders,
+      failOnStatusCode: false,
+    });
+    stageExpect(providersResp.ok(), "match", `Operator provider 列表应可达：status=${providersResp.status()}`);
+    const providersBody = (await providersResp.json()) as { data?: Array<{ provider_id?: string; version?: number; status?: string }> };
+    const preferredProviderId = process.env.E2E_PROVIDER_REF?.trim();
+    const provider = (providersBody.data ?? []).find((item) => item.provider_id === preferredProviderId)
+      ?? (providersBody.data ?? []).find((item) => item.status === "published");
+    if (!provider?.provider_id || typeof provider.version !== "number") {
+      test.skip(true, "[match] no published Operator provider is available for isolated E2E");
+      return;
+    }
+    const modelsResp = await request.get(`${TIER_API_ORIGIN.operation}/api/operation/providers/${provider.provider_id}/models`, {
+      headers: opHeaders,
+      failOnStatusCode: false,
+    });
+    stageExpect(modelsResp.ok(), "match", `Operator model 列表应可达：status=${modelsResp.status()}`);
+    const modelsBody = (await modelsResp.json()) as { data?: { items?: Array<{ model?: { model_id?: string; version?: number; status?: string }; rate?: { pricing_status?: string } }> } };
+    const preferredModelId = process.env.E2E_PROVIDER_MODEL?.trim();
+    const modelItem = (modelsBody.data?.items ?? []).find((item) => {
+      const model = item.model;
+      return model?.model_id === preferredModelId && model.status === "published" && item.rate?.pricing_status === "known";
+    }) ?? (modelsBody.data?.items ?? []).find((item) => item.model?.status === "published" && item.rate?.pricing_status === "known");
+    if (!modelItem?.model?.model_id || typeof modelItem.model.version !== "number") {
+      test.skip(true, "[match] no published priced Operator model is available for isolated E2E");
+      return;
+    }
+    const platformModelRef = {
+      provider_id: provider.provider_id,
+      provider_version: provider.version,
+      model_id: modelItem.model.model_id,
+      model_version: modelItem.model.version,
+    };
 
     // ── 1. Operator 注册专家模板（draft）──
     const uniqueSlug = `e2e-exp-${uniqueTag}`;
@@ -78,16 +112,12 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
           template_id: uniqueSlug,
           display_name: templateDisplayName,
           category: "通用咨询",
-          avatar_url: "https://example.com/avatar.png",
           system_prompt: "你是一个专业的 E2E 测试专家。",
-          default_model: "gpt-4.1",
-          skill_ids: ["skill-general"],
-          tags: ["e2e", "cross-tier"],
+          platform_model_ref: platformModelRef,
+          platform_skill_refs: [],
           description: "E2E 全链路测试专家模板",
-          initial_memories: [],
-          sort_order: 0,
         },
-        headers: { Authorization: `Bearer ${opLogin.token}` },
+        headers: { ...opHeaders, "Content-Type": "application/json" },
         failOnStatusCode: false,
       },
     );
@@ -147,90 +177,12 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       `发布后状态应为 published：实际=${publishBody.data?.status}`,
     );
 
-    // ── 3. Manager 创建 provider 凭据（model=gpt-4.1）──
+    // ── 3. Manager 人才市场可见并招募专家 ──
     const mgrLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
     const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
     const mgrToken = mgrLogin.token;
     const agentToken = agentLogin.token;
-    const providerRef = `newapi-main-${uniqueTag}`;
-
-    // This test intentionally exercises the resolver's single-match branch.  Do not
-    // silently pick one provider if a reused/shared tenant already has another match.
-    const existingProvidersResp = await request.get(
-      `${TIER_API_ORIGIN.manager}/api/manager/provider-credentials`,
-      {
-        headers: { Authorization: `Bearer ${mgrToken}` },
-        failOnStatusCode: false,
-      },
-    );
-    stageExpect(
-      existingProvidersResp.ok(),
-      "match",
-      `E2E_EXTERNAL_SEED tenant provider 列表应可达：status=${existingProvidersResp.status()}`,
-    );
-    const existingProvidersBody = (await existingProvidersResp.json()) as {
-      data?: Array<{ provider_ref?: string; supported_models?: Array<{ model?: string; enabled?: boolean }> }>;
-    };
-    const existingModelMatches = (existingProvidersBody.data ?? []).filter((provider) =>
-      (provider.supported_models ?? []).some((model) => model.model === "gpt-4.1" && model.enabled !== false),
-    );
-    if (existingModelMatches.length > 0) {
-      test.skip(
-        true,
-        `[match] provider ambiguity is valid; deterministic matching requires an isolated tenant, found=${existingModelMatches.map((p) => p.provider_ref).join(",")}`,
-      );
-      return;
-    }
-
-    const providerResp = await request.post(
-      `${TIER_API_ORIGIN.manager}/api/manager/provider-credentials`,
-      {
-        data: {
-          provider_ref: providerRef,
-          display_name: `E2E Provider ${uniqueTag}`,
-          endpoint: "https://api.example.com/v1",
-          secret: `sk-e2e-${uniqueTag}`,
-          visibility: "tenant",
-          supported_models: [{ model: "gpt-4.1", enabled: true }],
-        },
-        headers: {
-          Authorization: `Bearer ${mgrToken}`,
-          "Content-Type": "application/json",
-        },
-        failOnStatusCode: false,
-      },
-    );
-    if (!providerResp.ok()) {
-      const status = providerResp.status();
-      const text = await providerResp.text();
-      if (status === 503) {
-        test.skip(true, `[match] Manager 业务 DB 未配置（503）：${text.slice(0, 200)}`);
-        return;
-      }
-      const ct = providerResp.headers()["content-type"] ?? "";
-      stageExpect(
-        ct.includes("application/problem+json") && !ct.includes("text/html"),
-        "match",
-        `provider 创建错误响应需为 problem+json：status=${status} ct=${ct}`,
-      );
-      throw new Error(`[match] Manager 创建 provider 凭据失败: status=${status} body=${text.slice(0, 500)}`);
-    }
-    const providerBody = (await providerResp.json()) as {
-      data?: { credential_id?: string; provider_ref?: string; supported_models?: Array<{ model?: string }> };
-    };
-    const credentialId = providerBody.data?.credential_id;
-    stageExpect(Boolean(credentialId), "match", "provider 凭据创建响应须含 credential_id");
-    stageExpect(
-      providerBody.data?.provider_ref === providerRef,
-      "match",
-      `provider_ref 应保持租户内唯一引用：期望=${providerRef} 实际=${providerBody.data?.provider_ref}`,
-    );
-    const supportedModels = providerBody.data?.supported_models ?? [];
-    stageExpect(
-      supportedModels.some((m) => m.model === "gpt-4.1"),
-      "match",
-      "provider 能力目录须含 gpt-4.1",
-    );
+    const providerRef = platformModelRef.provider_id;
 
     // ── 4. Manager 人才市场可见并招募专家 ──
     // 招募端点经 Operator 目录拉取端口拿模板（服务间调用，带 X-Service-Token）。
@@ -308,14 +260,14 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     };
     const modelPolicy = employeeBody.data?.model_policy ?? {};
     stageExpect(
-      modelPolicy.model === "gpt-4.1",
+      modelPolicy.model === platformModelRef.model_id,
       "match",
-      `employee.model_policy.model 应自动匹配为模板 default_model="gpt-4.1"：实际=${modelPolicy.model}`,
+      `employee.model_policy.model 应与 platform_model_ref 一致：期望=${platformModelRef.model_id} 实际=${modelPolicy.model}`,
     );
     stageExpect(
       modelPolicy.provider_ref === providerRef,
       "match",
-      `employee.model_policy.provider_ref 应自动匹配为已有 provider：期望=${providerRef} 实际=${modelPolicy.provider_ref}`,
+      `employee.model_policy.provider_ref 应与 platform_model_ref 一致：期望=${providerRef} 实际=${modelPolicy.provider_ref}`,
     );
 
     // ── 6. Manager 授权当前 member 使用该 employee（member_grant）──
