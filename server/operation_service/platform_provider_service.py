@@ -194,10 +194,13 @@ class PlatformProviderService:
             management_token = self._newapi.generate_management_token(dashboard_token, user_id)
         expires_at = datetime.now(UTC) + timedelta(days=90)
         token_name = f"aiteam-{tenant_id[:8]}-{provider.provider_code}-v{(existing.version + 1) if existing else 1}"[:30]
-        token_id, relay_token = self._newapi.create_relay_token(
-            dashboard_token=management_token, user_id=user_id, name=token_name, model_ids=allowed,
-            remain_quota=100_000_000, expired_time=int(expires_at.timestamp()),
-        )
+        try:
+            token_id, relay_token = self._newapi.create_relay_token(
+                dashboard_token=management_token, user_id=user_id, name=token_name, model_ids=allowed,
+                remain_quota=100_000_000, expired_time=int(expires_at.timestamp()),
+            )
+        except NewApiError as exc:
+            raise Conflict(f"NewAPI tenant relay token provisioning failed: {exc}") from exc
         access = self._repo.upsert_access(
             tenant_id=tenant_id, provider_id=provider_id,
             encrypted_token=self._crypto.encrypt(relay_token), encrypted_management_token=self._crypto.encrypt(management_token),

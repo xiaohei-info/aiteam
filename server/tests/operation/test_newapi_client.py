@@ -6,8 +6,9 @@ import httpx
 import pytest
 
 from operation_service.newapi_client import NewApiAdminClient, NewApiError
-from operation_service.platform_provider_repository import ModelRow, ProviderRow
+from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
 from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
+from shared.errors import Conflict
 from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice
 
 
@@ -123,6 +124,31 @@ def test_newapi_relay_token_fails_closed_on_preexisting_duplicate_names():
     client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
     with pytest.raises(NewApiError, match=r"ambiguous.*1.*2"):
         client.create_relay_token(dashboard_token="dashboard", user_id=2, name="duplicate", model_ids=["m1"], remain_quota=10)
+
+
+def test_platform_provider_service_maps_relay_token_ambiguity_to_conflict():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "internal-newapi", "NewAPI", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "minimax-m3", "MiniMax M3", {}, "published", "discovery", 1, now)
+    rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "manual", None, now, None, True)
+    access = AccessRow("a1", "tenant-1", "p1", b"token", b"management", ["minimax-m3"], "at-tenant", 7, 8, "expired", 1, None)
+
+    class Repo:
+        def get_provider(self, _provider_id): return provider
+        def get_model(self, _provider_id, _model_id): return model
+        def current_rate(self, _provider_id, _model_id): return rate
+        def list_models(self, _provider_id, **_kwargs): return [model]
+        def get_access(self, _tenant_id, _provider_id): return access
+
+    class Crypto:
+        def decrypt(self, value): return value.decode()
+
+    class NewApi:
+        def create_relay_token(self, **_kwargs): raise NewApiError("relay token name is ambiguous: aiteam-tenant (3, 4)")
+
+    service = PlatformProviderService(Repo(), NewApi(), Crypto(), "http://relay/v1")
+    with pytest.raises(Conflict, match="provisioning failed.*ambiguous"):
+        service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["minimax-m3"])
 
 
 def test_newapi_client_checks_business_failure_even_on_http_200():
