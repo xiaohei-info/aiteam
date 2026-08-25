@@ -1,6 +1,6 @@
 ---
 created: 2026-08-25
-status: active
+status: completed
 scope: mandatory-production-closure
 ---
 
@@ -23,22 +23,22 @@ scope: mandatory-production-closure
 
 ## 实施步骤
 
-1. **隔离 E2E**
-   - 复核 `web/e2e/support/globalSetup.ts` 与 `seed-e2e-tenant.py` 的独立 seed 能力；
-   - 为 taiyi/CI 提供不落库的 provider secret 注入方式；
-   - 运行专家发布→provider 单匹配→招募→授权→sync→私聊 prompt 全链路；
-   - 若仍失败，修复根因并补最小回归测试。
+1. **隔离 E2E**（已完成）
+   - `seed-e2e-tenant.py` 在 external seed 下读取已发布 Operator provider/model，生成版本化快照，并校验真实 Manager runtime-config；
+   - 专家 E2E 更新为当前 `platform_model_ref` 契约，不再创建旧式 Manager provider；
+   - taiyi external clean seed 专家私聊 2/2 通过，完整 cross-tier `56 passed / 0 skipped`；provider secret 未写入仓库。
 
-2. **知识绑定可靠性**
-   - 以当前 `SolutionsPage` 的批量绑定流程为入口，定义一次应用的绑定 operation 结果；
-   - 重试只调用现有幂等 binding API，不复制方案级知识配置；
-   - 失败必须保留成功项、明确失败项，并能从 Manager 页面或受控接口恢复；
-   - 补前端与 Manager API/服务测试，覆盖重复重试、撤权和跨租户拒绝。
+2. **知识绑定可靠性**（已完成最小生产闭环）
+   - 批量绑定继续调用现有幂等 binding API，不复制方案级知识配置；
+   - 网络/5xx/408/429 失败自动最多重试一次，4xx/授权/校验错误立即暴露；
+   - 成功项保留，失败项明确列出，并可从 Manager Knowledge 页面重试；
+   - 新增瞬态失败回归测试，Manager 前端全量 244 项测试通过。
 
-3. **生产发布闸门**
-   - 运行 `scripts/check-deploy.sh`、sandbox dry-run、LightRAG/NewAPI 运维 dry-run；
-   - 在 taiyi 执行真实 health/readiness、前端 HTML、备份/恢复/回滚 smoke 所需证据；
-   - 对仍未满足的闸门只做最小修复，不新增平台能力。
+3. **生产发布闸门**（基础闸门已完成）
+   - `scripts/check-deploy.sh`、Agent sandbox dry-run、LightRAG/NewAPI 运维 dry-run 通过；
+   - taiyi 三端 healthz 200，Linux bwrap/Landlock native matrix 12/12 通过；
+   - fixed images、secret boundary、stale PID/process-group、launch guards 和 release smoke 均有验证；
+   - 完整生产切换、真实灾备演练和轮换自动化仍属于部署窗口/后续运维，不伪称已完成。
 
 4. **独立验证与交付**
    - Python、Agent、web typecheck/unit/build；
