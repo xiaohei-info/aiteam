@@ -125,7 +125,6 @@ class SolutionPackage(BaseModel):
     display_name: str
     description: str = Field(default="", description="方案描述")
     icon: str = Field(default="", description="方案图标")
-<<<<<<< HEAD
     coordinator_template_id: str = Field(default="", description="方案内固定协调专家模板 id")
     coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明，不定义执行状态机")
     workflow_skill_ref: dict | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
