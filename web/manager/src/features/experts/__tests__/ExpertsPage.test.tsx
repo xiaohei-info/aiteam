@@ -150,6 +150,15 @@ describe("ExpertsPage", () => {
     expect(screen.getByRole("table", { name: "已招募专家实例" })).toBeInTheDocument();
   });
 
+  it("模型没有显示名时回退显示 model_id", async () => {
+    const unnamedProvider = { ...provider, supported_models: [{ model: "minimax-m3", display_name: "", enabled: true }] };
+    mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, model: "minimax-m3" } }], [unnamedProvider]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("employee-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("edit-config"));
+    await waitFor(() => expect(screen.getByTestId("model-select")).toHaveTextContent("minimax-m3"));
+  });
+
   it("配置状态：已配置显示「已配置」，未配置显示「待配置」", async () => {
     mockApis([employeeConfigured, employeeUnconfigured]);
     renderPage();

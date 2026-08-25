@@ -191,7 +191,7 @@ export function EmployeeConfigDrawer({
   const modelOptions = useMemo(
     () => availableModels.map((item) => ({
       value: item.model.model_id,
-      label: `${item.model.display_name || "未命名模型"} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
+      label: `${item.model.display_name || item.model.model_id || "未命名模型"} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
     })),
     [availableModels],
   );
