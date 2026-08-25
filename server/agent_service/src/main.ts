@@ -141,7 +141,8 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const mentionHint = authorization.employeeId && authorization.rosterEmployeeIds
     ? "In this group, direct employee mentions are routed by the host to the addressed participant session. Use mention_employee only when you need to consult another authorized participant."
     : "";
-  return [persona, "Use only the tools authorized by the current employee snapshot.", source, mentionHint, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const groupContext = authorization.groupContext ? `Bounded recent group context (reference only):\n${authorization.groupContext}` : "";
+  return [persona, "Use only the tools authorized by the current employee snapshot.", source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function loadJwtOptions() {

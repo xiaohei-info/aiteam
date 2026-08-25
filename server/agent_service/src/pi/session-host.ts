@@ -69,6 +69,7 @@ export interface SessionAuthorization {
   runtimeProviderId?: string;
   runtimeScope?: string;
   groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
+  groupContext?: string;
 }
 
 export interface SessionHostOptions {
@@ -623,6 +624,7 @@ export class SessionHost {
     const record = this.ensureRecord(command.conversationId, employeeId);
     const authorization = this.resolveAuthorization(record, caller);
     authorization!.groupMessageSource = command.source;
+    if (metadata.kind === "group") authorization!.groupContext = this.buildGroupContext(command.conversationId, employeeId);
     if (command.source.type === "employee" && command.source.id === employeeId) throw new SessionAuthorizationError("An employee cannot mention itself");
     return this.promptParticipant(record, command, authorization);
   }
@@ -688,6 +690,31 @@ export class SessionHost {
       caller: authorization.caller,
     });
     return result.replies[0]?.text ?? "Employee completed without a textual result.";
+  }
+
+  private buildGroupContext(conversationId: string, targetEmployeeId: string): string {
+    const rows = this.options.store.listConversationParticipants(conversationId);
+    const sections: string[] = [];
+    for (const participant of rows) {
+      if (participant.employee_id === targetEmployeeId) continue;
+      const record = this.ensureRecord(conversationId, participant.employee_id);
+      const messages = record.sessionManager.getEntries()
+        .filter((entry) => entry.type === "message")
+        .slice(-4)
+        .map((entry) => {
+          if (entry.message.role !== "user" && entry.message.role !== "assistant") return "";
+          const content = entry.message.content;
+          const text = typeof content === "string"
+            ? content
+            : content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join(" ");
+          const normalized = text.replace(/\s+/gu, " ").trim();
+          return normalized ? `${entry.message.role === "user" ? "用户" : "Agent"}: ${normalized.slice(0, 600)}` : "";
+        })
+        .filter(Boolean);
+      if (messages.length > 0) sections.push(`参与者 ${participant.employee_id}:\n${messages.join("\n")}`);
+    }
+    const context = sections.join("\n\n");
+    return context.length > 4_000 ? `${context.slice(-3_999)}…` : context;
   }
 
   private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number): void {
