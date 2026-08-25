@@ -114,10 +114,10 @@ test.describe("Pi solution → fixed participant group chat", () => {
   test("Operator publish → Manager apply/authorize → Agent fixed sessions and @ routing", async ({ request }) => {
     const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
     const managerLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
-    const agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
+    let agentLogin = await apiLogin(request, "agent", defaultCredentials("agent"));
     const opHeaders = bearer(opLogin.token);
     const managerHeaders = bearer(managerLogin.token);
-    const agentHeaders = bearer(agentLogin.token);
+    let agentHeaders = bearer(agentLogin.token);
     const tag = randomUUID().replace(/-/g, "").slice(0, 12);
 
     // 1. Choose an Operator-published provider/model rather than hard-coding a runtime.
@@ -218,9 +218,30 @@ test.describe("Pi solution → fixed participant group chat", () => {
     });
     const managerWhoami = (await requireOk(managerWhoamiResponse, "manager-whoami")).data as JsonRecord;
     const tenantId = managerWhoami.tenant_id;
-    const memberId = managerWhoami.user_id;
+    let memberId = managerWhoami.user_id as string;
     expect(typeof tenantId).toBe("string");
     expect(typeof memberId).toBe("string");
+    const managerRoles = Array.isArray(managerWhoami.roles) ? managerWhoami.roles : [];
+    if (managerRoles.includes("owner") || managerRoles.includes("enterprise_admin")) {
+      // Apply as the owner, but run Agent assertions as an ordinary member so
+      // solution-grant revoke is observable (admin roles intentionally bypass grants).
+      const memberAccount = `139${Date.now().toString().slice(-8)}`;
+      const memberPassword = `E2e-Pass-${tag}`;
+      const createMemberResponse = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/members`, {
+        data: { account: memberAccount, initial_password: memberPassword, display_name: `E2E Group Member ${tag}`, roles: ["member"], department_ids: [], must_reset: false },
+        headers: { ...managerHeaders, "Content-Type": "application/json" },
+        failOnStatusCode: false,
+      });
+      const memberPayload = await requireOk(createMemberResponse, "manager-create-group-member");
+      memberId = String((memberPayload.data as JsonRecord).id);
+      const memberLoginResponse = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/login`, {
+        data: { account: memberAccount, password: memberPassword, tenant_id: tenantId },
+        failOnStatusCode: false,
+      });
+      const memberLogin = await requireOk(memberLoginResponse, "agent-group-member-login");
+      agentLogin = { token: String((memberLogin.data as JsonRecord).token) };
+      agentHeaders = bearer(agentLogin.token);
+    }
     const applyResponse = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/recruit/solutions`, {
       data: { solution_id: solutionId, solution_version: "1", member_ids: [memberId], department_ids: [] },
       headers: { ...managerHeaders, "Content-Type": "application/json", "Idempotency-Key": `e2e-apply-${tag}` },
