@@ -140,7 +140,12 @@ test.describe("Pi solution → fixed participant group chat", () => {
     if (await skipUnavailable(modelsResponse, "operator-model")) return;
     const modelsPayload = await requireOk(modelsResponse, "operator-model");
     const modelItems = ((modelsPayload.data as JsonRecord | undefined)?.items ?? []) as JsonRecord[];
+    const preferredModelId = process.env.E2E_PROVIDER_MODEL?.trim();
     const priced = modelItems.find((item) => {
+      const model = item.model as JsonRecord | undefined;
+      const rate = item.rate as JsonRecord | undefined;
+      return model?.status === "published" && rate?.pricing_status === "known" && (!preferredModelId || model.model_id === preferredModelId);
+    }) ?? modelItems.find((item) => {
       const model = item.model as JsonRecord | undefined;
       const rate = item.rate as JsonRecord | undefined;
       return model?.status === "published" && rate?.pricing_status === "known";
