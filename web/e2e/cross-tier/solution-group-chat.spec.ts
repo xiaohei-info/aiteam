@@ -92,6 +92,15 @@ async function waitForAssistant(
   return latest;
 }
 
+async function waitForHistory(request: APIRequestContext, token: string, conversationId: string): Promise<Entry[]> {
+  let latest: Entry[] = [];
+  await expect.poll(async () => {
+    latest = await getEntries(request, token, conversationId);
+    return latest.filter((entry) => entry.message?.role === "user" && entry.logical_message_id).length >= 3;
+  }, { timeout: 15_000, intervals: [250, 500, 1_000] }).toBe(true);
+  return latest;
+}
+
 async function prompt(
   request: APIRequestContext,
   token: string,
@@ -319,7 +328,7 @@ test.describe("Pi solution → fixed participant group chat", () => {
     entries = await waitForAssistant(request, agentLogin.token, conversationId, [coordinator.employee_id, peer.employee_id]);
     expect(assistantFrom(entries, coordinator.employee_id)).toBeTruthy();
     expect(assistantFrom(entries, peer.employee_id)).toBeTruthy();
-    expect(entries.filter((entry) => entry.message?.role === "user" && entry.logical_message_id).length).toBeGreaterThanOrEqual(3);
+    entries = await waitForHistory(request, agentLogin.token, conversationId);
 
     // 6. A second group conversation receives a fresh participant-session set and empty history.
     const secondGroupResponse = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {

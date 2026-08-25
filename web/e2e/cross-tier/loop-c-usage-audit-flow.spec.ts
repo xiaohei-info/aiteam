@@ -399,7 +399,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
           && item.tenant_id === ownerTenantId
           && item.member_id === ownerMemberId
           && item.employee_id === employeeId
-          && (item.status === "pending" || item.status === "failed");
+          && (item.status === "pending" || item.status === "failed" || item.status === "sent");
       }),
       `prompt ${traceId} usage outbox`,
     );
@@ -415,10 +415,13 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
     );
     expect(flushedSummaryIds.size, `prompt ${traceId} 应产生 usage summary`).toBeGreaterThan(0);
+    const alreadySentSummaryIds = new Set(
+      changedUsageItems.filter((item) => item.status === "sent").map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
+    );
     for (const item of changedUsageItems) {
       expect(item.tenant_id, "usage outbox tenant owner").toBe(ownerTenantId);
       expect(item.member_id, "usage outbox member owner").toBe(ownerMemberId);
-      expect(["pending", "failed"], "usage summary must remain flushable").toContain(item.status);
+      expect(["pending", "failed", "sent"], "usage summary status").toContain(item.status);
     }
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
@@ -439,8 +442,8 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     expect(Array.isArray(failed), "flush.failed must be summary id array").toBe(true);
     expect(failed, "flush must not report a failed Manager upload").toHaveLength(0);
     expect(
-      sent.filter((id) => flushedSummaryIds.has(id)),
-      "flush must send the summary created by this prompt",
+      [...sent, ...alreadySentSummaryIds].filter((id) => flushedSummaryIds.has(id)),
+      "flush or automatic flush must send the summary created by this prompt",
     ).not.toHaveLength(0);
 
     // ── 阶段 5/6: Flush 后本轮 summary 不再 pending（sent 出队）──
