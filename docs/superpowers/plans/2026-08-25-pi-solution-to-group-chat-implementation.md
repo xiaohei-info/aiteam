@@ -28,9 +28,11 @@ scope: operator-manager-agent-solution-group-chat
 - Manager 应用映射 coordinator employee、方案状态/版本投影、成员/部门授权选择、预检与失败补偿；
 - Agent 固定 participant Pi Session、统一 human/employee delivery、无 @/单 @/多 @ 路由、coordinator mention tool、source metadata、方案撤权 fail-closed；
 - Agent 群聊复用单聊 Composer/Timeline/SSE/abort/附件/幂等、新建对话和历史入口；
-- Python 1504 passed/83 skipped，Agent 75 passed/1 skipped，Operation web 163 passed，Manager web 242 passed，Agent web 112 passed，相关 typecheck 通过。
+- Python 1504 passed/83 skipped，Agent 全量显式文件 100 passed/1 skipped，Operation web 163 passed，Manager web 242 passed，Agent web 112 passed，相关 typecheck/build 通过；
+- taiyi 已完成真实 Provider-backed solution→group E2E（Operator publish → Manager apply/authorize → Agent sync → group create → no @/single @/multi @/new conversation/abort/revoke），单 spec 1 passed（59.9s）；
+- taiyi Agent 当前已恢复 `AITEAM_PI_FAKE=false`，三端 healthz 200。
 
-仍需独立验收：taiyi 三端真实 Operator publish → Manager apply/authorize → Agent sync → group create → multi-session @/history/restart/abort/revoke E2E；方案知识绑定 UI、完整方案工作流 Skill 配置和 canonical v1 文档原子更新。
+仍需独立验收：完整 55 项 cross-tier 回归、方案工作流 Skill 的完整 Operator 配置 UI、生产级知识绑定事务/重试策略，以及 canonical 文档后续评审后的持续同步。
 
 ## 2. 关键契约
 
