@@ -1,148 +1,189 @@
 ---
 created: 2026-06-15
-updated: 2026-06-18
-status: frozen-baseline
+updated: 2026-08-25
+status: frozen-baseline-amended
 canonical: true
 part_of: v1 概要设计（拆分集）
-tags: [project, aiteam, technical-design, gateway, runtime, executor, driver, runspec]
+tags: [project, aiteam, technical-design, pi-coding-agent, agent-session, solution, group-chat]
 ---
 
-# AI Team v1 概要设计 · 06 Agent Gateway 与运行时接入
+# AI Team v1 概要设计 · Pi Agent Session 与解决方案协作
 
-> **本篇定位**：用户端通用运行时接入网关——运行请求/事件模型、Executor 协议族分层、Driver runtime 差异收口、Runtime Worker 形态、中立 RunSpec + 能力 MCP 注入 + 每 runtime 映射、本地编排与 Loop。
-> **对应落点**：`server/agent_gateway`（Executor + Driver），随 `agent_service` 部署在用户端；编排/Loop 在 `server/agent_service`。
-> **关联裁决**：D7（Worker 形态）、D16（能力适配/RunSpec）、D17（记忆 mem0）、D18（provider 凭据）、D19（编排/Loop 归属）。
-> **配套阅读**：[00 总纲](00-架构总纲与裁决索引.md)、[07 事件流](07-事件流与对话页.md)（AgentRuntimeEvent→Timeline 映射）、[04 §6.6/§6.7](04-数据架构与多租户隔离.md)（外部能力 / provider 凭据）、仓库根 `CLAUDE.md`/`AGENTS.md` §13（Worker 安全隔离）。
-> 本篇为 v1 地基级裁决口径，与其它篇冲突时以 [00 §20 裁决表](00-架构总纲与裁决索引.md) 为最终仲裁。
+> **本篇正式修订**：2026-08-25 Pi-native 补充裁决已并入本篇。历史版本中的多 runtime Gateway、Executor、Driver、RunSpec 和临时 child Run 仅作为设计演进 provenance，不再是 v1 Agent 的生产执行链。配套 provenance 见 [`docs/superpowers/specs/2026-08-25-pi-solution-group-chat-addendum.md`](../../../superpowers/specs/2026-08-25-pi-solution-group-chat-addendum.md)。
+>
+> **当前落点**：`server/agent_service`（Node.js/TypeScript + 进程内 Pi SDK）、`web/agent`；Operator/Manager 仍为 Python/FastAPI。用户端不再部署独立 `server/agent_gateway`，不接入多 runtime。
+>
+> **关联裁决**：D5（员工快照）、D7（本地执行）、D16（Pi Session/Skill/Tool 能力适配）、D17（Hindsight 记忆）、D18（Provider）、D19（Conversation 与多 Agent 协作）。
 
----
+## 7. Pi Agent Session 宿主设计
 
-## 7. Agent Gateway 通用运行时设计
+### 7.1 唯一运行时
 
-> **部署位置**：Agent Gateway 与本地 runtime 都运行在**用户端**进程内/同机，与本地 Agent Service 共址。运行请求与运行事件**全程不跨端**；下文抽象（Executor/Driver/事件归一）与部署边界变更无关，沿用。
-
-### 7.1 运行请求与运行事件
-
-Agent Gateway 接收标准运行请求：
+AI Team Agent 的唯一执行内核是固定版本的 `@earendil-works/pi-coding-agent` SDK。Agent Service 在同一 Node.js 进程内装配 Pi：
 
 ```text
-AgentRunRequest
-  run_id / tenant_id / enterprise_id
-  conversation_id / task_id / loop_id
-  employee_snapshot / runtime_selection
-  input_messages / attachments / workspace_policy
-  tools / mcp / skills / knowledge refs
-  resume_session_id / timeout / cancellation policy
+Agent HTTP/SSE
+  -> SessionHost
+      -> controlled ResourceLoader
+      -> ModelRuntime / authorized provider config
+      -> AgentSession / SessionManager
+      -> product-owned custom tools and inline extensions
 ```
 
-输出统一运行事件：
+不再存在以下生产路径：
+
+- `Agent Gateway -> Executor -> Driver -> RunSpec`；
+- Hermes/Codex/Claude/OpenCode/OpenClaw 多 runtime adapter；
+- Python↔Node sidecar/RPC；
+- Agent Service 自建 Run/Task/Loop/DAG 执行状态机；
+- 旧 `app/`、`HERMES_WEBUI_*` 或 WebUI loopback。
+
+Operator/Manager 不执行 Pi。Manager 只持配置、授权、快照和企业管理面；Agent 本地持 Pi Session 内容事实源。
+
+### 7.2 数字员工与 EmployeeExecutionSnapshot
+
+数字员工不是 runtime 进程，而是一份 Manager 授权并由 Agent 冻结的 Pi 会话配置：
 
 ```text
-AgentRuntimeEvent
-  event_id / run_id / seq / type / source / timestamp / payload
+EmployeeExecutionSnapshot
+  employee_id / version / snapshot_version / display_name
+  persona
+  model_policy(provider_ref/model/thinking/pricing version)
+  tools / signed skill refs
+  employee knowledge bindings / connector refs
+  memory policy / workspace and approval policy
 ```
 
-事件类型最小集合：`status` / `text_delta` / `reasoning_delta` / `tool_call_started` / `tool_call_completed` / `command_started` / `command_output` / `file_operation` / `usage` / `artifact` / `error` / `completed` / `cancelled`。
+一次 Pi prompt 使用一个固定 snapshot。snapshot 不含 runtime brand、CLI 参数、任意 custom args、secret 或 tenant 外部存储路径；Provider secret 仅在本地进程内按本次 Session 作用域注入。
 
-Gateway 职责是把不同 runtime 原始事件归一到该集合，**不负责渲染前端 UI**。
+### 7.3 受控 ResourceLoader 与安全边界
 
-### 7.2 Executor 分层（按协议族）
+每个 Agent Session 显式使用：
 
-| Executor | 协议形态 | 适用 runtime |
-|---|---|---|
-| `AcpExecutor` | ACP / JSON-RPC over stdio | Hermes，及任何兼容 ACP 的 agent |
-| `JsonRpcStdioExecutor` | 自定义 JSON-RPC over stdio | Codex app-server，及未来类似 runtime |
-| `JsonStreamCliExecutor` | JSONL / stream-json stdout | Claude Code、OpenCode、OpenClaw JSON 模式，及兼容 JSON stream 的 CLI |
-| `PlainCliExecutor` | 普通 stdout/stderr（非首批重点） | 仅降级能力，不作生产首选 |
+- 产品专属 `agentDir`、Session 根目录和 workspace；
+- `SettingsManager.inMemory()`；
+- 禁止 ambient `~/.pi`、项目 `.pi`、未审核 package/extension/context 自动发现；
+- 仅加载 Manager 授权、签名、固定 hash/version 的 Skill；
+- 仅注册当前 snapshot/tool policy 允许的 custom tools；
+- Hindsight、Manager RAG、审批和 sandbox 为产品自有受控扩展/工具。
 
-Executor 负责通用机制：进程启动/退出；stdin/stdout/stderr 管理；超时、取消、idle watchdog；session resume 生命周期；原始日志采集；原始事件读取；backpressure 与批量 flush；脱敏前置钩子。
+Pi Project Trust、tool allowlist 和 prompt 不是 sandbox。coding tools 必须全部经过 Agent 的外部非特权 sandbox boundary；sandbox 不可用时 fail-closed。
 
-### 7.3 Driver 分层（按 runtime 差异）
+### 7.4 Conversation 与 Pi Session
 
-Driver 负责：CLI 路径与默认参数；runtime capability 声明；初始化握手；prompt/message/tool/MCP 配置注入方式；原始事件 schema 解析；session_id/thread_id 提取；usage 提取；错误归类。
+Conversation 直接映射 Pi Session 内容事实：
 
-> **runtime 启动配置的唯一归属**：runtime（含 Hermes）的可执行路径、参数、运行环境一律由对应 Driver 在用户端自身配置中声明，是 v1 runtime 接入配置的唯一来源。`HermesAcpDriver` 经 ACP 启动/连接 Hermes，**取代旧 WebUI loopback 执行链**；旧 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 与 `app/.env` 在 v1 一概不再使用。
+```text
+private Conversation
+  -> 1 个固定 participant employee Pi Session JSONL
 
-首批 driver：
+group Conversation
+  -> N 个固定 participant employee Pi Session JSONL
+```
 
-| Driver | Executor |
+Agent SQLite 只保存 Conversation 索引、participant Session 索引、授权 snapshot、approval、附件/制品、schedule、幂等收据、消息来源索引和治理 outbox；不复制 Message/Run/Task/Timeline 正文。
+
+创建新的 Conversation 才创建新的 Pi Session 文件。一个群聊 Conversation 创建时，为当前授权 solution roster 创建一组 participant Session；同一群聊后续消息始终复用同一组 Session。群聊不创建临时 `SessionManager.inMemory()` child 作为生产主链。
+
+### 7.5 Pi 原生能力适配（替代历史 RunSpec/MCP/Driver）
+
+**D16 修订**：业务层不再生成 `RunSpec`，也不把所有能力强制打包为 `mcp_config`。业务层提供 snapshot 和受控资源，SessionHost 直接组装 Pi Session：
+
+```text
+EmployeeSnapshot
+  -> controlled ResourceLoader + selected Skill
+  -> authorized custom tools / approved Extensions
+  -> ModelRuntime + provider/model
+  -> createAgentSession()
+  -> session.prompt()
+```
+
+能力映射：
+
+| 业务能力 | Pi 原生接入 |
 |---|---|
-| `HermesAcpDriver` | `AcpExecutor` |
-| `CodexJsonRpcDriver` | `JsonRpcStdioExecutor` |
-| `ClaudeCodeJsonStreamDriver` | `JsonStreamCliExecutor` |
-| `OpenCodeJsonStreamDriver` | `JsonStreamCliExecutor` |
-| `OpenClawJsonStreamDriver` | `JsonStreamCliExecutor` |
+| persona/协作说明 | Session system prompt/context 注入 |
+| 专业流程 | Pi Skill（固定版本、签名/hash 校验） |
+| 知识 | Agent custom tool → Manager RAG facade/受控 RAG MCP |
+| 长期记忆 | 受控 Hindsight Extension/Manager lease |
+| 连接器 | snapshot 授权的 custom tool/approved MCP adapter |
+| 人工审批 | `tool_call` gate + ApprovalRecord |
+| 文件/bash/edit | Pi built-in tools，经外部 sandbox operations 路由 |
+| Agent 协作 | `mention_employee` custom tool + 固定 peer Session |
 
-该结构避免"每个 runtime 一整套 executor"的重复，也避免把 JSON stream / JSON-RPC / ACP 混成一个模糊抽象。
+Pi Extension 只提供机制，不取得业务授权；最终工具集合必须是 Manager grant、EmployeeSnapshot tool policy 和本地安全策略的交集。
 
-### 7.4 Runtime Worker 与部署形态
+### 7.6 私聊、本地群聊与统一消息投递
 
-1. **Local Worker**：用户端本机直接运行 runtime CLI。**这是本架构的默认与主形态**——会话/执行本地化、内容不上传，天然落在 Local Worker。
-2. **Daemon Worker**：用户本机运行 runtime daemon，向同机 Gateway 上报可用 CLI、版本、模型能力与心跳；适合一机多 runtime 的管理，仍是本地范畴。
-3. **Cloud Worker**：平台托管 runtime worker（隔离容器、弹性调度）。**与"本地优先/不上传"取向相悖，仅作为企业显式选择的可选项**，非默认。
-
-**裁决（D7）**：首期实现 **Local Worker + 清晰 Worker 接口**，Daemon Worker **接口同步设计、实现后置**，Cloud Worker 列入后续且默认关闭。不一开始把调度系统做复杂。
-
-### 7.5 能力适配：中立 RunSpec + 能力 MCP 注入 + 每 runtime 映射（借鉴 multica）
-
-> **设计借鉴**：本节抽象参考开源项目 **multica**（`github.com/multica-ai/multica`，`server/pkg/agent/`）的运行时适配机制——单一 `Backend.Execute(ctx, prompt, opts)` 接口 + runtime 中立入参 + 归一事件流 + 每 runtime 一个适配文件。我们以 Python 重实现其**设计**（非拷贝代码），落为 Executor/Driver 契约。
-
-**核心裁决（D16）**：员工的 persona / 模型 / 技能 / 知识 / 记忆 / 连接器配置，**不再像旧架构那样写进 runtime 原生 profile 文件**（旧 `SOUL.md` / `MEMORY.md` / `skills/` 目录 / `config.yaml` 直写一律废弃）。改为：业务层只产出**中立 `RunSpec`**，由 Driver 翻译注入，**优先级 协议/flag > 文件**，文件 materialize 仅作个别 runtime 的最后兜底（run 作用域临时产物，不碰共享 profile）。
-
-#### 7.5.1 中立 RunSpec（runtime 无关，由 EmployeeExecutionSnapshot 派生）
+私聊和群聊共用：
 
 ```text
-RunSpec
-  system_prompt        # ← persona（中立文本，不写 SOUL.md）
-  model                # ← Operator 发布的中立 model id；Manager 只能从 tenant 可见平台目录选择
-  provider_ref         # ← Operator 平台 Provider 引用（内部 NewAPI Relay，见 04 §6.7；不内联明文凭据）
-  provider_version / model_version / pricing_version
-  pricing_snapshot     # ← 非敏感 Decimal rate card；一次 Run 冻结，用于 Agent 本地计费
-  thinking_level       # ← 中立 reasoning/effort 档位
-  mcp_config           # ← 能力统一注入通道（见 7.5.2）
-  resume_session_id    # ← 续接上次 session
-  custom_args          # ← 透传参数（必须过 Driver 的 denylist 安全过滤）
-  timeout / cancellation
+POST /api/agent/conversations/{id}/prompt
+GET  /api/agent/conversations/{id}/events
+GET  /api/agent/conversations/{id}/entries
+POST /api/agent/conversations/{id}/abort
 ```
 
-#### 7.5.2 A 类能力：统一经 `mcp_config` 注入（runtime 无关）
+群聊通过同一个 `GroupMessageDeliveryService` 处理用户消息和 Agent 消息：
 
-知识 / 记忆 / 连接器 / 技能（无原生机制时）本质都是"运行时按需访问的工具"，**一律打包进 `RunSpec.mcp_config`**，对任何支持 MCP 的 runtime 同构注入：
+```text
+GroupMessageCommand
+  conversation_id
+  source: human | employee
+  target_employee_ids[]
+  text/images
+  logical_message_id/idempotency_key
+```
 
-| 能力 | 本地 MCP 提供者 | 说明 |
-|---|---|---|
-| 知识 | LightRAG 本地检索 MCP | 已授权知识集索引产物，本地检索 |
-| 记忆 | **mem0 / OpenMemory** 本地 MCP | 本机记忆库读写，跨 runtime 可移植 |
-| 连接器 | 连接器 MCP/tool | 调用时最小权限注入凭据 |
-| 技能（降级） | 技能包装为 MCP tool | 仅当 runtime 无原生技能机制 |
+路由规则是普通群聊语义：
 
-#### 7.5.3 B 类能力：中立字段 → Driver 按 runtime 翻译（优先 flag/协议）
+- 无 `@`：直接投递 coordinator participant Session；
+- `@` 一个成员：直接投递该成员在当前群聊的固定 Session，不经 coordinator 转发；
+- `@` 多个成员：并行投递多个固定 Session；
+- 非 roster、撤权、方案 projection 缺失或非 `applied`：fail-closed；
+- coordinator 可调用 `mention_employee(employee_id, message, context)` 咨询固定 peer Session；
+- 普通 employee 首期不启用该工具，避免递归协作；
+- Agent 回复正文里的 `@` 不自动触发，只有正式 custom tool 调用触发。
 
-| 中立字段 | Claude Code | Hermes(ACP) | Codex/其它 | 兜底 |
-|---|---|---|---|---|
-| `system_prompt` | `--append-system-prompt` | ACP session 参数 | 各自 inline/flag | 仅个别 runtime 需文件时临时生成 |
-| `model` | `--model <id>` | ACP `session/set_model` RPC | flag / `--agent` by id / 空则 CLI 默认 | —— |
-| `thinking_level` | `--effort` | 协议字段 | 各自 | —— |
-| `mcp_config` | 写临时文件 → `--mcp-config` | 经 ACP 注入 | 各自 MCP 入口 | —— |
-| `resume_session_id` | `--resume <sid>` | ACP session | 各自 | 落地校验失败则清空回退 |
-| 技能（原生） | 原生 skill 机制 | profile skills（Driver 内封装） | 各自 | 降级见 7.5.2 |
+用户 HTTP prompt 与 coordinator custom tool 使用相同 delivery seam，只是用户入口返回 `202` 并由 SSE 接收结果，Pi tool 入口等待目标 Session 的结果后作为 tool result 返回协调者。
 
-模型目录：Operator 统一维护**发布目录 + 动态发现 + 人工价格覆盖**；Manager/Agent 只消费 tenant 可见投影。Driver 可报告 runtime capability，但不得建立绕过 Operator 的第二套业务模型目录。
+### 7.7 方案模板、应用与群聊
 
-#### 7.5.4 规则与兼容
+Operator 的行业方案模板只描述固定版本团队蓝图：
 
-1. **配置真相 runtime 中立、存企业端 Manager**；snapshot/RunSpec 不含任何 runtime 原生格式。
-2. **Driver 是唯一翻译点**；网关核心与业务层不碰 runtime 原生文件/参数。
-3. **能力声明 + 优雅降级**：Driver 声明支持的 materialization（原生技能?原生记忆?persona 注入方式?）；不支持的回落到 7.5.2 的 MCP 投影或明确标 unsupported，**绝不静默丢弃**。
-4. **安全**：`custom_args` 必须过 Driver 的参数 denylist（防止破坏协议/越权 flag）。
-5. **向后兼容 Hermes**：旧 `profile_capability.py` 的 SOUL/MEMORY/skills/config 写入逻辑**不再需要**（persona 走协议、记忆/知识走 MCP）；如个别能力仍需 Hermes profile 文件，封装在 `HermesAcpDriver` 内、run 作用域临时生成，**不手改 `.hermes/hermes-agent/`**。
+```text
+SolutionTemplate
+  solution_id/version/display_name/description/tags
+  ordered expert template refs
+  coordinator template ref
+  optional coordinator instructions
+  optional workflow skill/output requirements
+```
 
-### 7.6 本地编排、Loop 与 runtime 选择（用户端 Agent Service 侧）
+不包含租户知识 ID、普通专家 Skill、成员/部门 grants 或 planner/subtask/aggregate prompt。
 
-run 的**触发与编排**是用户端 Agent Service 的职责，统一收敛为"构造 `RunSpec` → 提交 Agent Gateway"，runtime 无关：
+Manager 应用方案：
 
-- **runtime 选择**：每个 employee 实例在配置中声明默认 runtime（`runtime_binding`）；Agent Service 提交 run 时按 `runtime_selection` 选 Driver，能力不匹配（如所选 runtime 无某协议）则按 §7.5.4 的能力声明降级或明确报错，**不静默切换**。用户可否手动切 runtime 留详设。
-- **本地多专家协作编排（群聊 @提及）**：群聊只是**单用户本机多专家协作**（[00 §19 非目标](00-架构总纲与裁决索引.md) 已排除跨机器会话同步）。@提及路由由 Agent Service 解析，被提及的每个专家**各自以其快照构造独立 RunSpec、各起一个 run**，多 run 事件并入**同一会话时间线**（按 run_id 区分来源）；编排为串行/并行的调度策略与防回环（避免互相 @ 触发死循环）留详设。
-- **Loop/周期任务**：由用户端**本地调度器**（runtime 无关，**不依赖 `hermes cron`**）持有 cron/触发配置，到点构造 RunSpec 经 Gateway 执行；**仅在用户端运行期执行**（`CLAUDE.md`/`AGENTS.md` §8 风险边界·工程取舍），关机即不跑，不做服务端常驻代跑。调度器实现与持久化留详设。
+1. 拉取并校验固定版本专家模板；
+2. 在 tenant 创建 employee 实例；
+3. 映射 `coordinator_template_id -> coordinator_employee_id`；
+4. 接受企业管理员选择的 member/department grants；
+5. 通过 tenant-scoped employee knowledge bindings 管理企业知识；
+6. 创建 `solution_instance` 与 solution grant；
+7. Agent sync 当前成员可见的 solution projection 和 employee snapshots。
 
-> 以上三者都不引入新的 runtime 耦合：编排/Loop 只负责"何时、以哪个专家快照"发起 run，真正的 runtime 差异仍只活在 Driver（§7.5）。
+Agent 创建方案群聊时只提交 `solution_instance_id`。Agent 根据本地授权 projection 固定 coordinator 与 participant roster，并创建一组 Pi Session 文件；浏览器不得提交 coordinator、roster、knowledge 或 tool policy。
+
+### 7.8 审批、幂等与取消
+
+- 同一 participant Session 单写者；
+- 用户 root prompt 的幂等收据绑定 Conversation、caller、fingerprint 和目标集合；
+- 多目标执行任一结果不确定时不自动重放；
+- `abort` 取消本次涉及的全部 participant Session；
+- 工具副作用仍由 `tool_call` gate、规范化参数 hash、ApprovalRecord 和下游幂等键控制；
+- `mention_employee` 受 roster、snapshot、并发、调用次数、输出预算和 parent abort 约束；
+- child Session 不作为群聊持久历史，peer Session 的真实回复保存在目标员工固定 Pi Session 中。
+
+### 7.9 历史内容说明
+
+此前本篇的 ACP/JSON-RPC/JSONL CLI Executor、Driver、RunSpec、MCP 全量适配和多 runtime Worker 章节属于早期 v1 Gateway baseline，保留在 Git 历史及 2026-08-17 提案中作为 provenance；它们不再是当前 canonical 生产实现。当前实现以本篇 §7.1–§7.8 和 2026-08-25 补充裁决为准。
