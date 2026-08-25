@@ -18,7 +18,7 @@ from operation_service.catalog_schemas import (
 from operation_service.catalog_service import CatalogService
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.enums import CatalogStatus, CatalogType
-from shared.errors import Conflict, NotFound
+from shared.errors import Conflict, NotFound, ValidationProblem
 
 
 class FakeCatalogGateway(CatalogManagerGateway):
@@ -490,6 +490,18 @@ def test_expert_binding_sequence_no_must_be_positive():
 def test_solution_coordinator_must_be_enabled(service):
     with pytest.raises(Exception, match="enabled experts"):
         service.register_solution_template(_multi_solution(coordinator_template_id="tpl-cmo"))
+
+
+def test_publish_missing_platform_model_ref_is_a_business_validation_error(service):
+    service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE,
+        template_id="legacy-no-model-publish",
+        version="1",
+        display_name="旧专家",
+        payload={"system_prompt": "legacy"},
+    ))
+    with pytest.raises(ValidationProblem, match="valid published platform model"):
+        service.publish_template(CatalogType.EXPERT_TEMPLATE, "legacy-no-model-publish", PublishTemplateRequest())
 
 
 def test_pull_solution_fails_closed_when_bound_expert_is_missing(service):

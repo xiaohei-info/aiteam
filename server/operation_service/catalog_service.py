@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.enums import CatalogStatus, CatalogType
-from shared.errors import Conflict, NotFound
+from shared.errors import Conflict, NotFound, ValidationProblem
 
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
@@ -30,6 +30,13 @@ from .catalog_schemas import (
 _INITIAL_VERSION = "1"
 _ID_RANDOM_LENGTH = 4
 _ID_MAX_ATTEMPTS = 8
+
+
+def _parse_platform_model_ref(value) -> PlatformModelRef:
+    try:
+        return PlatformModelRef.model_validate(value)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise ValidationProblem("expert template must reference a valid published platform model") from exc
 
 
 def _slugify_id(display_name: str, *, random_suffix: str) -> str:
@@ -276,7 +283,7 @@ class CatalogService:
             payload = entry.payload or {}
             refs = [PlatformSkillRef.model_validate(ref) for ref in payload.get("platform_skill_refs", [])]
             self._validate_platform_skill_refs(refs)
-            self._validate_platform_model_ref(PlatformModelRef.model_validate(payload.get("platform_model_ref")))
+            self._validate_platform_model_ref(_parse_platform_model_ref(payload.get("platform_model_ref")))
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
@@ -348,7 +355,7 @@ class CatalogService:
             self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_model_ref" in changes:
             from shared.contracts.platform_provider import PlatformModelRef
-            self._validate_platform_model_ref(PlatformModelRef.model_validate(changes["platform_model_ref"]))
+            self._validate_platform_model_ref(_parse_platform_model_ref(changes["platform_model_ref"]))
         # 分离 payload 字段与 dataclass 顶层字段
         _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
                        'status', 'visible_scope', 'payload'}

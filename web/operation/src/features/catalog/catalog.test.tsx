@@ -187,6 +187,8 @@ function makeCatalogItem(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   mockFetch.mockReset();
   mockFetch.mockResolvedValue(envOk());
+  platformProvidersMock.models.mockReset();
+  platformProvidersMock.models.mockResolvedValue([{ model: { provider_id: "provider-1", model_id: "gpt-5", display_name: "GPT-5", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } }]);
   (globalThis as unknown as { fetch: typeof fetch }).fetch = mockFetch;
 });
 
@@ -1179,7 +1181,7 @@ describe("详情页多 section", () => {
     expect(screen.getByText("方案标签")).toBeInTheDocument();
   });
 
-  it("管理员编辑 system_prompt 时平台模型保持只读且 PATCH 不改模型", async () => {
+  it("管理员编辑 system_prompt 和平台模型，并通过 PATCH 保存模型引用", async () => {
     mockFetch
       .mockResolvedValueOnce(
         singleResponse(
@@ -1204,6 +1206,10 @@ describe("详情页多 section", () => {
         ),
       );
 
+    platformProvidersMock.models.mockResolvedValue([
+      { model: { provider_id: "provider-1", model_id: "gpt-5", display_name: "GPT-5", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
+      { model: { provider_id: "provider-1", model_id: "gpt-4o", display_name: "GPT-4o", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
+    ]);
     renderCatalogDetail(makeSystemAdminSession(), "exp_a", "expert_template");
 
     await waitFor(() => {
@@ -1226,7 +1232,9 @@ describe("详情页多 section", () => {
     );
     expect(textareas[0]).toHaveValue("旧 system_prompt");
     fireEvent.change(textareas[0]!, { target: { value: "新 system_prompt" } });
-    expect(screen.getByText(/provider-1 \/ gpt-4o/)).toBeInTheDocument();
+    const modelSelect = await screen.findByTestId("edit-platform-model-select");
+    fireEvent.click(modelSelect);
+    fireEvent.click(await screen.findByRole("option", { name: /GPT-5/ }));
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -1238,7 +1246,7 @@ describe("详情页多 section", () => {
       expect(patchCall).toBeTruthy();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新 system_prompt");
-      expect(body.platform_model_ref).toBeUndefined();
+      expect(body.platform_model_ref).toEqual({ provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 });
     });
   });
 

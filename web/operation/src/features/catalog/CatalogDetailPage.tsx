@@ -109,6 +109,7 @@ export function CatalogDetailPage(): ReactNode {
         changes.avatar_url = draft.avatar_url ?? "";
         changes.description = draft.description ?? "";
         changes.platform_skill_refs = draft.platform_skill_refs ?? [];
+        changes.platform_model_ref = draft.platform_model_ref ?? null;
       } else {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";

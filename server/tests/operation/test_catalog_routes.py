@@ -9,13 +9,13 @@ from fastapi.testclient import TestClient
 
 from operation_service.catalog_dependencies import get_catalog_service
 from operation_service.catalog_gateway import CatalogManagerGateway
-from operation_service.catalog_repository import CatalogRepository
+from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
 from shared.auth import DevTokenService
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import CatalogReleaseNotify
-from shared.contracts.enums import EnterpriseRole, PlatformRole
+from shared.contracts.enums import CatalogStatus, CatalogType, EnterpriseRole, PlatformRole
 
 
 class FakeCatalogGateway(CatalogManagerGateway):
@@ -37,7 +37,9 @@ def client(manager):
     providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
     service = CatalogService(CatalogRepository(), manager, platform_providers=providers)
     app.dependency_overrides[get_catalog_service] = lambda: service
-    yield TestClient(app)
+    client = TestClient(app)
+    client.catalog_service = service
+    yield client
     app.dependency_overrides.clear()
 
 
@@ -163,6 +165,25 @@ def test_set_visibility_flow(client, manager):
     assert r.status_code == 200
     assert r.json()["data"]["visible_scope"] == scope
     assert manager.notifications[-1].action == "visibility_changed"
+
+
+def test_publish_missing_platform_model_ref_returns_validation_problem(client):
+    client.catalog_service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE,
+        template_id="legacy-no-model",
+        version="1",
+        display_name="旧专家",
+        status=CatalogStatus.UNPUBLISHED,
+        payload={"system_prompt": "legacy"},
+    ))
+    response = client.post(
+        "/api/operation/catalog/expert_template/legacy-no-model/publish",
+        json={},
+        headers=_auth(),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert "valid published platform model" in response.json()["detail"]
 
 
 def test_publish_unknown_404(client):
