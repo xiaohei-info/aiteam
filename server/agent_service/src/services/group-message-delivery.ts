@@ -46,7 +46,7 @@ export class GroupMessageDeliveryService {
   async deliver(command: GroupMessageCommand): Promise<GroupMessageDeliveryResult> {
     const targets = [...new Set(command.targetEmployeeIds)];
     if (targets.length === 0) throw new Error("At least one group message target is required");
-    if (targets.includes(command.source.id)) throw new Error("An employee cannot mention itself");
+    if (command.source.type === "employee" && targets.includes(command.source.id)) throw new Error("An employee cannot mention itself");
     const replies = await Promise.all(targets.map((employeeId) => this.deliverTarget(command, employeeId)));
     return {
       deliveryId: command.idempotencyKey ?? command.logicalMessageId,
