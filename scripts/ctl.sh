@@ -605,7 +605,7 @@ start_service_local() {
         AITEAM_AGENT_JWT_AUDIENCE="${AITEAM_AGENT_JWT_AUDIENCE:-}" \
         AITEAM_AGENT_SANDBOX_READY="${AITEAM_AGENT_SANDBOX_READY:-false}" \
         AITEAM_AGENT_SPA_ROOT="${AITEAM_AGENT_SPA_ROOT:-${REPO_ROOT}/web/agent/dist}" \
-        pnpm --dir "${REPO_ROOT}/server/agent_service" start \
+        corepack pnpm@11.4.0 --dir "${REPO_ROOT}/server/agent_service" start \
         >> "${LOG_FILE}" 2>&1 &
       disown
       echo $! > "${PID_FILE}"
