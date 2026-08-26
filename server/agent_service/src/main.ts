@@ -53,7 +53,8 @@ const sessionHost = new SessionHost({
   useFauxModel,
   managerClient,
   sandbox,
-  usageRecorder: (capture, caller) => {
+  // Faux responses are test artifacts, never billable usage.
+  usageRecorder: useFauxModel ? undefined : (capture, caller) => {
     store.upsertUsageSummary(aggregateUsage(capture));
     void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
   },
