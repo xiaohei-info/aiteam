@@ -197,7 +197,7 @@ describe("KnowledgePage Astryx contract", () => {
     const pending = deferred<{ items: typeof SPACES; page: typeof PAGE }>();
     makeClient({ listGet: (url) => url === "/api/manager/knowledge-spaces" ? pending.promise : defaultListGet(url) });
     const view = renderPage();
-    expect(screen.getByRole("status", { name: "正在加载知识空间" })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "正在加载企业知识库" })).toBeTruthy();
 
     await act(async () => pending.resolve({ items: [], page: PAGE }));
     expect(await screen.findByText("企业知识库尚未初始化")).toBeTruthy();
@@ -208,7 +208,7 @@ describe("KnowledgePage Astryx contract", () => {
       return defaultListGet(url);
     } });
     renderPage();
-    expect(await screen.findByRole("alert")).toHaveTextContent("加载失败");
+    expect(await screen.findByRole("alert")).toHaveTextContent("加载企业知识库失败");
   });
 
   it("renders unauthorized API failures", async () => {

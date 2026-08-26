@@ -336,7 +336,7 @@ class RagAccessService:
         # legacy snapshot binding list remains accepted for old projections, but
         # a new snapshot need not carry a per-space grant just to query it.
         default_space_id = getattr(self._rag, "default_space_id", None)
-        if isinstance(default_space_id, str) and default_space_id and getattr(self._rag, "is_enterprise_scope", False):
+        if not refs and isinstance(default_space_id, str) and default_space_id:
             refs = [default_space_id]
         if not refs:
             raise Forbidden("employee knowledge binding is unavailable")
