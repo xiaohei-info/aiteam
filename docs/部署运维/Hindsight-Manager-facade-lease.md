@@ -4,6 +4,8 @@
 
 **架构修订（2026-08-26）**：一个 Manager 部署服务一个企业；Hindsight bank 按企业内 employee-private scope 派生，member 只参与当前请求/lease 鉴权，不参与 bank 身份。历史租约/银行迁移按部署 runbook 处理。
 
+> 旧版本 member-private bank 不会被新 scope 自动读取。v1 全新部署不迁移旧会话/记忆；已有环境切换前必须先用 Hindsight 导出/重新 retain 完成一次性 bank migration，并在切换后验证 employee memory recall。
+
 `@luxusai/pi-hindsight@0.12.0` 只支持把一个 API key 放进
 `Authorization: Bearer ...`，当前 Hindsight API 没有真正的 bank-scoped token、租约或
 revoke API。AI Team 因此**不伪造 native scoped token**：Manager 保留
