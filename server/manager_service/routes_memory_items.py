@@ -42,6 +42,19 @@ class MemoryUpdateIn(BaseModel):
     state: str | None = Field(default=None, pattern="^(valid|invalidated)$")
 
 
+class MemoryItemOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    memory_id: str
+    employee_id: str
+    content: str
+    category: str
+    importance: float | None = None
+    source: str
+    created_at: str | None = None
+    last_used_at: str | None = None
+    state: str = "valid"
+
+
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
@@ -87,13 +100,13 @@ def build_memory_items_router(verifier) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
         claims: TokenClaims = Depends(require),
-    ) -> ListEnvelope[dict]:
+    ) -> ListEnvelope[MemoryItemOut]:
         result = _service(request).list(
             tenant_context_from(claims), employee_id=employee_id,
             query=keyword, limit=limit, offset=offset,
         )
-        return ListEnvelope[dict](
-            data=result["items"],
+        return ListEnvelope[MemoryItemOut](
+            data=[MemoryItemOut(**item) for item in result["items"]],
             meta={"total": result["total"], "limit": result["limit"], "offset": result["offset"]},
         )
 
