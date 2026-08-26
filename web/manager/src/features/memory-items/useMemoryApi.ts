@@ -6,8 +6,8 @@ import type { MemoryItem, MemoryCreate } from "./types";
 export interface MemoryApi {
   list: (params?: { employee_id?: string; keyword?: string }) => Promise<MemoryItem[]>;
   create: (body: MemoryCreate) => Promise<MemoryItem | null>;
-  update: (id: string, body: Partial<MemoryItem>) => Promise<unknown>;
-  delete: (id: string) => Promise<unknown>;
+  update: (id: string, body: Partial<MemoryItem>, employee_id?: string) => Promise<unknown>;
+  delete: (id: string, employee_id?: string) => Promise<unknown>;
   bulkDelete: (ids: string[]) => Promise<unknown>;
 }
 
@@ -25,8 +25,14 @@ export function useMemoryApi(): MemoryApi {
         return r.items ?? [];
       },
       create(body) { return client.post<MemoryItem>("/api/manager/memories", { body }); },
-      update(memory_id, body) { return client.patch(`/api/manager/memories/${memory_id}`, { body }); },
-      delete(memory_id) { return client.del(`/api/manager/memories/${memory_id}`); },
+      update(memory_id, body, employee_id) {
+        const suffix = employee_id ? `?employee_id=${encodeURIComponent(employee_id)}` : "";
+        return client.patch(`/api/manager/memories/${memory_id}${suffix}`, { body });
+      },
+      delete(memory_id, employee_id) {
+        const suffix = employee_id ? `?employee_id=${encodeURIComponent(employee_id)}` : "";
+        return client.del(`/api/manager/memories/${memory_id}${suffix}`);
+      },
       bulkDelete(memory_ids) { return client.post("/api/manager/memories/bulk-delete", { body: { memory_ids } }); },
     };
   }, [token, onUnauthorized]);

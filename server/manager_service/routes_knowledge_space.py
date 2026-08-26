@@ -23,6 +23,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .knowledge_space_service import KnowledgeSpaceService, build_knowledge_space_service
+from .rag_instances import RagInstanceRegistry
 from .schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceBindingOut,
@@ -43,7 +44,7 @@ def _service(request: Request) -> KnowledgeSpaceService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_knowledge_space_service", None)
     if cache is None:
-        cache = build_knowledge_space_service(PgTenantRouter(dsn))
+        cache = build_knowledge_space_service(PgTenantRouter(dsn), RagInstanceRegistry.from_env())
         request.app.state._knowledge_space_service = cache
     return cache
 

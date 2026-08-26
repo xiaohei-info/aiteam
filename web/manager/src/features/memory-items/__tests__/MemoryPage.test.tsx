@@ -91,11 +91,25 @@ describe("MemoryPage 记忆管理", () => {
 
     fireEvent.click(screen.getByText("+ 新增记忆"));
     fireEvent.click(screen.getByRole("combobox", { name: /专家/ }));
-    fireEvent.click(screen.getByRole("option", { name: "专家B", hidden: true }));
+    const expertOptions = screen.getAllByRole("option", { name: "专家B", hidden: true });
+    fireEvent.click(expertOptions[expertOptions.length - 1]!);
     fireEvent.change(screen.getByLabelText("记忆内容"), { target: { value: "新记忆内容" } });
     fireEvent.click(screen.getByText("保存"));
 
     await waitFor(() => expect(api.create).toHaveBeenCalledWith({ employee_id: "emp-2", content: "新记忆内容" }));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+  });
+
+  it("编辑记忆后刷新列表并带员工授权范围", async () => {
+    const api = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("编辑"));
+    fireEvent.change(screen.getByLabelText("记忆内容"), { target: { value: "已更新记忆" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith("m1", { content: "已更新记忆" }, "emp-1"));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });
 
@@ -105,7 +119,7 @@ describe("MemoryPage 记忆管理", () => {
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("删除"));
-    await waitFor(() => expect(api.delete).toHaveBeenCalledWith("m1"));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith("m1", "emp-1"));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });
 });

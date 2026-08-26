@@ -19,6 +19,14 @@ class MemoryBackend(Protocol):
 
     def retain(self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict) -> dict: ...
 
+    def list(
+        self, ctx: TenantContext, *, employee_id: str, query: str | None, limit: int, offset: int
+    ) -> dict: ...
+
+    def update(
+        self, ctx: TenantContext, *, employee_id: str, memory_id: str, payload: dict
+    ) -> dict: ...
+
     def delete(self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str) -> dict: ...
 
 
@@ -44,6 +52,34 @@ class MemoryService:
             employee_id=employee_id,
             content=content,
             metadata=sanitize_metadata(metadata),
+        ))
+
+    def list(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict:
+        self._authorize(ctx, employee_id=employee_id, operation="list")
+        raw = sanitize_metadata(self._backend.list(
+            ctx, employee_id=employee_id, query=query, limit=limit, offset=offset,
+        ))
+        return normalize_memory_list(raw, employee_id=employee_id, limit=limit, offset=offset)
+
+    def update(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        memory_id: str,
+        payload: dict,
+    ) -> dict:
+        self._authorize(ctx, employee_id=employee_id, operation="update")
+        return sanitize_metadata(self._backend.update(
+            ctx, employee_id=employee_id, memory_id=memory_id, payload=sanitize_metadata(payload),
         ))
 
     def delete(
@@ -82,6 +118,35 @@ class MemoryService:
 
 def build_memory_service(*, snapshot, backend: MemoryBackend) -> MemoryService:
     return MemoryService(snapshot=snapshot, backend=backend)
+
+
+def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int) -> dict:
+    """Expose only stable, non-sensitive fields from Hindsight memory units."""
+    items = raw.get("items", []) if isinstance(raw, dict) else []
+    if not isinstance(items, list):
+        items = []
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        memory_id = item.get("id") or item.get("memory_id")
+        content = item.get("text") or item.get("content")
+        if not isinstance(memory_id, str) or not isinstance(content, str):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        normalized.append({
+            "memory_id": memory_id,
+            "employee_id": employee_id,
+            "content": content,
+            "category": item.get("fact_type") or item.get("category") or "memory",
+            "importance": item.get("importance") if isinstance(item.get("importance"), (int, float)) else None,
+            "source": item.get("source") or metadata.get("retainSource") or "hindsight",
+            "created_at": item.get("date") or item.get("created_at") or item.get("mentioned_at"),
+            "last_used_at": item.get("last_used_at"),
+            "state": item.get("state") or "valid",
+        })
+    total = raw.get("total") if isinstance(raw, dict) and isinstance(raw.get("total"), int) else len(normalized)
+    return {"items": normalized, "total": total, "limit": limit, "offset": offset}
 
 
 def sanitize_metadata(value: Any, key: str | None = None) -> Any:

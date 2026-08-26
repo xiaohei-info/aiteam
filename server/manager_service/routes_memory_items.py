@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
-from shared.contracts.envelope import Envelope
+from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
@@ -33,6 +33,13 @@ class MemoryRetainIn(BaseModel):
     employee_id: str = Field(min_length=1)
     content: str = Field(min_length=1)
     metadata: dict = Field(default_factory=dict)
+
+
+class MemoryUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str | None = Field(default=None, min_length=1)
+    content: str | None = Field(default=None, min_length=1)
+    state: str | None = Field(default=None, pattern="^(valid|invalidated)$")
 
 
 class _ManagerNotConfigured(AppError):
@@ -72,6 +79,24 @@ def build_memory_items_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/manager/memories", tags=["manager", "hindsight"])
     require = require_claims(verifier)
 
+    @router.get("", summary="列出指定专家的 Hindsight 记忆", operation_id="manager_memory_list")
+    async def list_memories(
+        request: Request,
+        employee_id: str = Query(min_length=1),
+        keyword: str | None = Query(default=None, max_length=500),
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[dict]:
+        result = _service(request).list(
+            tenant_context_from(claims), employee_id=employee_id,
+            query=keyword, limit=limit, offset=offset,
+        )
+        return ListEnvelope[dict](
+            data=result["items"],
+            meta={"total": result["total"], "limit": result["limit"], "offset": result["offset"]},
+        )
+
     @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall")
     async def recall(
         request: Request,
@@ -85,6 +110,8 @@ def build_memory_items_router(verifier) -> APIRouter:
         )
         return Envelope(data=data)
 
+    @router.post("", summary="写入 Hindsight 记忆", operation_id="manager_memory_create",
+                 status_code=status.HTTP_201_CREATED)
     @router.post("/retain", summary="写入 Hindsight 记忆", operation_id="manager_memory_retain",
                  status_code=status.HTTP_201_CREATED)
     async def retain(
@@ -97,6 +124,28 @@ def build_memory_items_router(verifier) -> APIRouter:
             content=body.content, metadata=body.metadata,
         )
         return Envelope(data=data)
+
+    @router.patch("/{memory_id}", summary="编辑 Hindsight 记忆", operation_id="manager_memory_update")
+    async def update_memory(
+        memory_id: str,
+        body: MemoryUpdateIn,
+        request: Request,
+        employee_id: str = Query(min_length=1),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[dict]:
+        if body.text is None and body.content is None and body.state is None:
+            from shared.errors import ValidationProblem
+            raise ValidationProblem(detail="memory update requires text or state", errors=None)
+        payload = body.model_dump(exclude_none=True)
+        if "text" not in payload and "content" in payload:
+            payload["text"] = payload.pop("content")
+        else:
+            payload.pop("content", None)
+        data = _service(request).update(
+            tenant_context_from(claims), employee_id=employee_id, memory_id=memory_id,
+            payload=payload,
+        )
+        return Envelope[dict](data=data)
 
     @router.delete("/{memory_id}", summary="删除 Hindsight 记忆", operation_id="manager_memory_delete",
                    status_code=status.HTTP_204_NO_CONTENT)

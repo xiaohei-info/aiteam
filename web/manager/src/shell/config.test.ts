@@ -65,6 +65,7 @@ const ALL_NAV_IDS = [
   "experts",
   "grants",
   "memory",
+  "knowledge",
   "connectors",
   "billing",
   "recharge",
@@ -138,13 +139,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（12 项）", () => {
+  it("导航覆盖企业管理入口（13 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(12);
+    expect(navIds).toHaveLength(13);
   });
 
-  it("owner 可见全部 12 项导航", () => {
+  it("owner 可见全部 13 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -170,6 +171,7 @@ describe("manager shell config", () => {
       "experts",
       "grants",
       "memory",
+      "knowledge",
       "connectors",
       "settings",
     ]);
@@ -185,6 +187,7 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "memory",
+      "knowledge",
       "billing",
       "recharge",
       "settings",
@@ -202,6 +205,7 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "memory",
+      "knowledge",
       "settings",
     ]);
   });

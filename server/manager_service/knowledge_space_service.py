@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from shared.db import PgTenantRouter
+from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
 from .knowledge_space_repository import (
@@ -25,6 +25,7 @@ from .knowledge_space_repository import (
     KnowledgeSpaceBindingRepository,
     KnowledgeSpaceRepository,
 )
+from .rag_instances import RagInstanceRegistry
 from .schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceBindingOut,
@@ -49,16 +50,24 @@ class KnowledgeSpaceService:
         repo: KnowledgeSpaceRepository,
         binding_repo: KnowledgeSpaceBindingRepository,
         expert_binding: ExpertKnowledgeBinding,
+        instance_registry: RagInstanceRegistry | None = None,
     ):
         self._repo = repo
         self._binding_repo = binding_repo
         self._expert_binding = expert_binding
+        self._instance_registry = instance_registry
 
     # ---- 知识空间 CRUD ----
     def create(self, ctx: TenantContext, body: KnowledgeSpaceCreate) -> KnowledgeSpaceOut:
         _ensure_can_write(ctx)
         if self._repo.get(ctx, knowledge_space_id=body.knowledge_space_id) is not None:
             raise Conflict("knowledge space already exists in this tenant")
+        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, body.knowledge_space_id)
+        if self._instance_registry is not None:
+            try:
+                self._instance_registry.resolve(workspace)
+            except ValueError as exc:
+                raise Conflict("knowledge space has no configured LightRAG instance") from exc
         row = self._repo.create(
             ctx,
             knowledge_space_id=body.knowledge_space_id,
@@ -232,12 +241,15 @@ def _to_binding_out(row, *, tenant_id: str) -> KnowledgeSpaceBindingOut:
     )
 
 
-def build_knowledge_space_service(router: PgTenantRouter) -> KnowledgeSpaceService:
+def build_knowledge_space_service(
+    router: PgTenantRouter, instance_registry: RagInstanceRegistry | None = None,
+) -> KnowledgeSpaceService:
     """组装知识空间服务（业务连接 app_rw，#60）。三个 repository 共享同一 router。"""
     return KnowledgeSpaceService(
         repo=KnowledgeSpaceRepository(router),
         binding_repo=KnowledgeSpaceBindingRepository(router),
         expert_binding=ExpertKnowledgeBinding(router),
+        instance_registry=instance_registry,
     )
 
 
