@@ -45,7 +45,6 @@ function mockApi(overrides: Partial<apiModule.MemoryApi> = {}) {
     create: vi.fn().mockResolvedValue(memItem),
     update: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined),
-    bulkDelete: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   vi.spyOn(apiModule, "useMemoryApi").mockReturnValue(api);

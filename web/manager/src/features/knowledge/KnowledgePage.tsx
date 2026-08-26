@@ -282,7 +282,9 @@ export function KnowledgePage(): ReactNode {
     result.push({
       key: "actions",
       header: "操作",
-      width: pixel(canWrite ? 330 : 220),
+      // Keep the action cell wider than its labels; Astryx Table does not shrink
+      // overflowing flex children, which otherwise renders buttons outside the cell.
+      width: pixel(canWrite ? 620 : 430),
       align: "end",
       resizable: false,
       renderCell: (space) => {

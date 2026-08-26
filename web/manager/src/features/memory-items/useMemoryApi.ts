@@ -8,7 +8,6 @@ export interface MemoryApi {
   create: (body: MemoryCreate) => Promise<MemoryItem | null>;
   update: (id: string, body: Partial<MemoryItem>, employee_id?: string) => Promise<unknown>;
   delete: (id: string, employee_id?: string) => Promise<unknown>;
-  bulkDelete: (ids: string[]) => Promise<unknown>;
 }
 
 export function useMemoryApi(): MemoryApi {
@@ -33,7 +32,6 @@ export function useMemoryApi(): MemoryApi {
         const suffix = employee_id ? `?employee_id=${encodeURIComponent(employee_id)}` : "";
         return client.del(`/api/manager/memories/${memory_id}${suffix}`);
       },
-      bulkDelete(memory_ids) { return client.post("/api/manager/memories/bulk-delete", { body: { memory_ids } }); },
     };
   }, [token, onUnauthorized]);
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from shared.contracts.enums import EnterpriseRole
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden
@@ -63,7 +64,7 @@ class MemoryService:
         limit: int,
         offset: int,
     ) -> dict:
-        self._authorize(ctx, employee_id=employee_id, operation="list")
+        self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
         raw = sanitize_metadata(self._backend.list(
             ctx, employee_id=employee_id, query=query, limit=limit, offset=offset,
         ))
@@ -77,7 +78,7 @@ class MemoryService:
         memory_id: str,
         payload: dict,
     ) -> dict:
-        self._authorize(ctx, employee_id=employee_id, operation="update")
+        self._authorize(ctx, employee_id=employee_id, operation="update", management=True)
         return sanitize_metadata(self._backend.update(
             ctx, employee_id=employee_id, memory_id=memory_id, payload=sanitize_metadata(payload),
         ))
@@ -85,7 +86,7 @@ class MemoryService:
     def delete(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str
     ) -> dict:
-        self._authorize(ctx, employee_id=employee_id, operation="delete")
+        self._authorize(ctx, employee_id=employee_id, operation="delete", management=True)
         # employee_id is deliberately part of the upstream delete contract.  A memory id
         # alone is not an authorization boundary and could select another employee's data.
         return sanitize_metadata(self._backend.delete(
@@ -95,13 +96,20 @@ class MemoryService:
             idempotency_key=idempotency_key,
         ))
 
-    def _authorize(self, ctx: TenantContext, *, employee_id: str, operation: str) -> EmployeeExecutionSnapshot:
+    def _authorize(
+        self, ctx: TenantContext, *, employee_id: str, operation: str, management: bool = False,
+    ) -> EmployeeExecutionSnapshot:
         snapshot = self._snapshot.generate(
             ctx, member_id=ctx.user_id, employee_id=employee_id
         )
         if snapshot.employee_id != employee_id:
             raise Forbidden("employee snapshot does not match requested employee")
         policy = snapshot.memory_policy
+        is_manager = bool(set(ctx.roles) & {
+            EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value,
+        })
+        if management and is_manager:
+            return snapshot
         if not isinstance(policy, dict) or not policy or policy.get("enabled") is False:
             raise Forbidden("memory policy does not authorize this operation")
 
