@@ -276,10 +276,9 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
     expect(screen.getByText("已就绪")).toBeTruthy();
     expect(screen.getByText("失败")).toBeTruthy();
-    expect(screen.getByText("文档已就绪")).toBeTruthy();
-    expect(screen.getByLabelText(/引用状态：文档已就绪/)).toBeTruthy();
+    expect(screen.getByText(/企业知识库已就绪/)).toBeTruthy();
+    expect(screen.getByLabelText(/引用状态：引用可用/)).toBeTruthy();
     expect(screen.getByText("引用不可用")).toBeTruthy();
-    expect(screen.getByText("citation:ks-sales:doc-ready")).toBeTruthy();
     expect(screen.getAllByText(/通过 Agent Pi knowledge_get 获取/).length).toBeGreaterThan(0);
     expect(client.get).not.toHaveBeenCalled();
 
@@ -404,8 +403,6 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getAllByText("删除处理中").length).toBeGreaterThan(0);
     expect(screen.getAllByText("已删除").length).toBeGreaterThan(0);
     expect(screen.getByText("重建索引中")).toBeTruthy();
-    expect(screen.queryByText("citation:ks-sales:doc-deleting")).toBeNull();
-    expect(screen.queryByText("citation:ks-sales:doc-deleted")).toBeNull();
     expect(screen.getByRole("button", { name: "检查删除状态删除中.md" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "删除删除中.md" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除已删除.md" })).toBeNull();

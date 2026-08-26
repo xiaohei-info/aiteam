@@ -4,15 +4,6 @@ export interface KnowledgeSpace {
   display_name: string;
   created_at?: string | null;
 }
-export interface KnowledgeSpaceCreate { knowledge_space_id: string; display_name?: string; }
-export interface KnowledgeBinding {
-  id: string; tenant_id: string; knowledge_space_id: string;
-  resource_type: string; resource_id: string; created_at?: string | null;
-}
-export interface BindingCreate {
-  resource_type: "expert" | "department" | "member"; resource_id: string;
-}
-
 // ---- 文档 intake（issue #416）----
 export interface KnowledgeDocument {
   id: string; tenant_id: string; knowledge_space_id: string;
@@ -27,11 +18,6 @@ export interface KnowledgeIngestionJob {
   error_code?: string | null; error_message?: string | null;
   chunk_count?: number | null; started_at?: string | null; completed_at?: string | null;
   created_at?: string | null;
-}
-export interface KnowledgeDocumentBinding {
-  id: string; tenant_id: string; knowledge_space_id: string; document_id: string;
-  employee_id: string; rag_document_id?: string | null;
-  status: "pending" | "ready" | "stale" | "revoked"; last_synced_at?: string | null; created_at?: string | null;
 }
 export interface KnowledgeImportUrl { url: string; display_name?: string | null; }
 export const KNOWLEDGE_DOCUMENT_STATUSES = [

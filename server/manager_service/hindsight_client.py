@@ -115,7 +115,9 @@ class HindsightClient:
             # module without an import cycle during Manager startup.
             from .hindsight_credentials import derive_hindsight_bank_id
 
-            bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id)
+            bank_id = derive_hindsight_bank_id(
+                ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
+            )
         else:
             bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
         native = "/v1/default/" in path and "{bank_id}" in path

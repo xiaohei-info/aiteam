@@ -287,7 +287,9 @@ class HindsightRuntimeService:
         self._require_upstream()
         # This is the only bank-id derivation in the Manager lease path. The Agent
         # receives the result as immutable session config and never selects a bank.
-        bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id)
+        bank_id = derive_hindsight_bank_id(
+            ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
+        )
         lease = self.leases.issue(
             tenant_id=ctx.tenant_id,
             member_id=ctx.user_id,
@@ -337,7 +339,9 @@ class HindsightRuntimeService:
             )
 
 
-def derive_hindsight_bank_id(tenant_id: str, member_id: str, employee_id: str) -> str:
+def derive_hindsight_bank_id(
+    tenant_id: str, member_id: str, employee_id: str, enterprise_id: str | None = None,
+) -> str:
     """Derive the enterprise-private employee bank an Agent lease may select.
 
     ``member_id`` remains in the call signature for wire/backward compatibility;
@@ -346,8 +350,9 @@ def derive_hindsight_bank_id(tenant_id: str, member_id: str, employee_id: str) -
     lease itself remains member-authenticated.
     """
 
+    enterprise_scope = enterprise_id or tenant_id
     digest = hashlib.sha256(
-        f"{tenant_id}:{employee_id}".encode()
+        f"{enterprise_scope}:{employee_id}".encode()
     ).hexdigest()[:32]
     return f"aiteam-{digest}"
 
