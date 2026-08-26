@@ -1,6 +1,6 @@
-"""Authenticated Manager facade over the external Hindsight memory service.
+"""Authenticated Manager facade over employee-private Hindsight memory.
 
-Manager owns authorization and tenant context; Hindsight owns memory storage.  No
+Manager owns current-enterprise authorization; Hindsight owns memory storage. No
 local memory CRUD repository is constructed here.
 """
 

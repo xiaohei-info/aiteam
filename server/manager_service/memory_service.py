@@ -1,8 +1,8 @@
-"""Authorized facade over the external Hindsight memory service.
+"""Authorized facade over the Manager enterprise's employee-private memory.
 
-Manager does not store memory data.  It resolves the current employee snapshot
+Manager does not store memory data. It resolves the current employee snapshot
 before every upstream operation so grants and memory policy are enforced against
-current tenant state, not caller-supplied scope.
+the current enterprise state, not caller-supplied scope.
 """
 
 from __future__ import annotations
