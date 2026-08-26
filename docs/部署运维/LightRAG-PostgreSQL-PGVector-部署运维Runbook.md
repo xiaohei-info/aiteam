@@ -20,9 +20,9 @@
 # Manager -> LightRAG（生产使用内网 TLS/服务发现地址）
 LIGHTRAG_URL=https://lightrag.manager.internal
 LIGHTRAG_API_KEY=<secret-store>
-LIGHTRAG_WORKSPACE=<manager-derived-fixed-workspace>
-# 可选多实例配置；设置后优先于上面三项 legacy 变量（JSON 仍只由 Manager 进程读取）
-# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag-a.manager.internal","api_key":"<secret-store>","workspace":"<manager-derived-fixed-workspace>"}]
+LIGHTRAG_WORKSPACE=<fixed-enterprise-workspace>
+# 一个 Manager 部署只绑定一个企业；LIGHTRAG_INSTANCES 仅作为未来同企业 HA/分片扩展，不能表达多企业路由。
+# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag.manager.internal","api_key":"<secret-store>","workspace":"<fixed-enterprise-workspace>"}]
 LIGHTRAG_IMAGE=ghcr.io/hkuds/lightrag:1.5.6
 
 # LightRAG 专用 PG；管理员凭据只给 bootstrap，运行时使用 lightrag role
@@ -38,7 +38,7 @@ LIGHTRAG_DB_ADMIN_PASSWORD=<secret-store>
 # 容器内连接参数通常为 LIGHTRAG_CLIENT_DB_HOST=127.0.0.1 / PORT=5432
 ```
 
-legacy 三变量模式下，`LIGHTRAG_WORKSPACE` 必须是 Manager 已推导并固定的实例 namespace（例如 `tenant-hash__ks_default`），不能由前端/Agent 请求覆盖；多实例模式下同一约束适用于 `LIGHTRAG_INSTANCES` 每个条目的 `workspace`。生产校验：
+legacy 三变量模式下，`LIGHTRAG_WORKSPACE` 必须是该 Manager 企业部署固定的实例 namespace，不能由前端/Agent 请求覆盖；多实例配置若启用，只能服务同一企业且每个条目的 workspace 必须属于该部署。生产校验：
 
 ```bash
 # taiyi/生产；只读校验，不调用 LightRAG，不打印 key/password
@@ -49,7 +49,7 @@ legacy 三变量模式下 URL、API key、workspace 任一缺失时 Manager 应�
 
 ### 1.1 Manager `rag_workspace` 映射的边界
 
-Manager 控制库的 `rag_workspace.instance_id` 是 `tenant_id + knowledge_space_id + 派生 workspace` 的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 和实例固定 workspace 仍只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy 三变量）registry；数据库不保存这些值，客户端也不能传入 `workspace`/`instance_id`。
+Manager 控制库的 `rag_workspace.instance_id` 是当前企业固定 workspace 的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 和实例固定 workspace 仍只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy 三变量）registry；数据库不保存这些值，客户端也不能传入 `workspace`/`instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
 
 首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行可以先保持 NULL 并由可信 registry bootstrap；已写入的 instance、tenant 或 derived workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作路由或凭据来源。
 
@@ -84,7 +84,7 @@ bash deploy/lightrag/init-db.sh --dry-run
 export LIGHTRAG_DB_ADMIN_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_DB_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_API_KEY="$(openssl rand -hex 32)"
-export LIGHTRAG_WORKSPACE=tenant_demo__ks_default
+export LIGHTRAG_WORKSPACE=enterprise_demo_shared
 export LIGHTRAG_URL=http://lightrag:9621
 
 # 启动独立 pgvector + LightRAG（Manager-only network）
