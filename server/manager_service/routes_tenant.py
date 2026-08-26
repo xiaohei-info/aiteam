@@ -1,7 +1,8 @@
-"""F01 企业开通收端（POST /api/manager/tenants，Operator→Manager 云侧调用，05 §5.1 D4）。
+"""F01 enterprise deployment binding (POST /api/manager/tenants, Operator→Manager).
 
-控制面写：tenant_registry 无 RLS，走管理连接（admin DSN），不经 app_rw 业务连接。
-幂等：ON CONFLICT (tenant_id) DO NOTHING，重复调用返回 201。
+A Manager deployment accepts only its configured enterprise/tenant pair. The
+control-plane registry remains an internal compatibility record and is written
+with the admin DSN; duplicate binding is idempotent.
 """
 
 from __future__ import annotations

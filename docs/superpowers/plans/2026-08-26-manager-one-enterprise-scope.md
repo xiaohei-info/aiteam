@@ -41,10 +41,14 @@ scope: manager-one-enterprise
 5. **部署**：Manager 只需要一个固定 LightRAG endpoint/workspace；`LIGHTRAG_INSTANCES` 不再表达多企业路由，最多作为单企业高可用扩展；更新 taiyi/Compose/ctl 的变量边界与文档。
 6. **验证**：Server RAG/MCP/Hindsight/knowledge tests、Manager Web tests/typecheck/build、OpenAPI、真实 taiyi 企业文档 ready/citation 与 employee memory 隔离 smoke；保留此前 Agent/其他未提交改动。
 
+## 当前实现进度与剩余项
+
+已完成 Manager 侧固定企业身份/RAG、企业知识库单一 UI、employee-private Hindsight bank、配置与文档口径、以及 taiyi smoke。Operator 仍只有一个静态 `MANAGER_URL` gateway；多企业正式运营前需要独立的企业→Manager deployment registry/route，这不在本轮 Manager 内部收口中伪造完成。
+
 ## 完成标准
 
 - Manager 页面只展示一个“企业知识库”，上传/URL ingestion 不要求管理员填写空间 ID。
 - LightRAG workspace 不随请求中的任意 `tenant_id`/`knowledge_space_id` 变化；Manager 进程只路由固定企业 workspace。
 - 同一企业不同员工的 Hindsight 个人记忆不能互读；不同成员对同一 employee 的 scope 行为符合 employee-private 裁决。
-- 旧已存在的 `knowledge_space_id`/citation/binding 数据不因本轮发布直接失效，或有明确一次性兼容映射。
+- 旧已存在的 `knowledge_space_id`/citation/binding 数据不因本轮发布直接失效，或有明确一次性兼容映射；旧 member-derived Hindsight bank 在现有环境切换前必须按 Hindsight runbook 显式迁移。
 - 不出现 Agent/浏览器直连 LightRAG、跨企业 RAG、或把 employee-private memory 混入 enterprise KB 的路径。
