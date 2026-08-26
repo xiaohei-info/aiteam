@@ -278,7 +278,7 @@ class AuthorizedRagRequest:
 
 
 class RagAccessService:
-    """Resolve all currently bound knowledge spaces, then query them."""
+    """Authorize the current employee, then query the enterprise knowledge workspace."""
 
     def __init__(
         self,
@@ -591,26 +591,28 @@ class RagAccessService:
         ambiguous: set[str] = set()
         if self._documents is None:
             return allowed, ambiguous
+        enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id)
         rows: list[Any] = list(auth.bindings)
-        if not rows and self._is_enterprise_scope(handle.knowledge_space_id):
+        if enterprise_scope:
+            # Enterprise documents are shared once; legacy employee binding rows
+            # are not required and may be stale after the scope migration.
             rows = list(self._documents.list_by_space(
                 auth.ctx, knowledge_space_id=handle.knowledge_space_id,
             ))
         for binding in rows:
-            if self._is_enterprise_scope(handle.knowledge_space_id):
-                if hasattr(binding, "storage_key"):
-                    document_id = str(getattr(binding, "id", ""))
-                    doc = binding
-                else:
-                    document_id = str(getattr(binding, "document_id", ""))
-                    doc = self._documents.get(auth.ctx, document_id=document_id)
+            if enterprise_scope and hasattr(binding, "storage_key"):
+                document_id = str(getattr(binding, "id", ""))
+                doc = binding
             else:
-                if not self._valid_binding(
-                    binding, ctx=auth.ctx, employee_id=auth.employee_id,
-                    space_id=handle.knowledge_space_id,
-                ):
-                    continue
-                document_id = str(getattr(binding, "document_id", ""))
+                if enterprise_scope:
+                    document_id = str(getattr(binding, "document_id", ""))
+                else:
+                    if not self._valid_binding(
+                        binding, ctx=auth.ctx, employee_id=auth.employee_id,
+                        space_id=handle.knowledge_space_id,
+                    ):
+                        continue
+                    document_id = str(getattr(binding, "document_id", ""))
                 doc = self._documents.get(auth.ctx, document_id=document_id)
             if (
                 not document_id

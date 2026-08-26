@@ -1,6 +1,8 @@
-"""知识空间/绑定北向路由（M3，02 §10.1/§10.3 + 04 §6.1.2/§6.6 + 05 F08；D21）。
+"""Enterprise knowledge compatibility routes (M3, 02 §10.1/§10.3 + 04 §6.1.2/6.6 + 05 F08; D21).
 
-路径：/api/manager/knowledge-spaces/*。受保护端点（require_claims）；写操作需 owner/enterprise_admin。
+The `/knowledge-spaces/*` path is retained for existing Agent/document/citation
+keys; the Manager UI exposes only the one enterprise knowledge base. Protected
+writes require owner/enterprise_admin.
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22）。
 
 红线（D21）：
