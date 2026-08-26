@@ -1,18 +1,12 @@
-"""知识空间/绑定租户作用域数据访问（M3，04 §6.1.2/§6.6；05 F08；D21）。
+"""Enterprise knowledge compatibility mapping data access (M3, 04 §6.1.2/6.6; 05 F08; D21).
 
-铁律（同 EmployeeConfigRepository）：所有方法以 TenantContext 为隔离边界，tenant_id 只从
-ctx 读，SQL 不接受调用方手写 tenant 过滤字符串（D22）；RLS 强制跨租户隔离（04 §6.1.1）。
-
-设计口径（D21）：
-- workspace 只由 ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id) 派生，
-  禁前端/Agent 直传；本 repository 不暴露 workspace 写入接口。
-- 专家授权真相态走 employee_knowledge_binding，本表的 knowledge_space_binding 只落
-  部门/成员绑定元数据（不做检索执行）。
+The `rag_workspace` row remains an internal mapping for the one enterprise
+knowledge base.  Existing TenantContext/RLS access is retained for compatibility;
+callers cannot provide a raw LightRAG workspace or create another one.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -75,8 +69,9 @@ def _row_to_binding(row: Any) -> KnowledgeSpaceBindingRow:
 class KnowledgeSpaceRepository:
     """知识空间管理面 CRUD（复用 rag_workspace 表）。tenant_id 取自 ctx（D22）。"""
 
-    def __init__(self, router: PgTenantRouter):
+    def __init__(self, router: PgTenantRouter, *, enterprise_workspace: str | None = None):
         self._router = router
+        self._enterprise_workspace = enterprise_workspace
 
     def create(
         self,
@@ -86,7 +81,7 @@ class KnowledgeSpaceRepository:
         display_name: str,
     ) -> KnowledgeSpaceRow:
         """建知识空间：workspace 由 ManagerRagService 派生（D21，禁止外部直传）。"""
-        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        workspace = self._enterprise_workspace or ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
@@ -95,6 +90,22 @@ class KnowledgeSpaceRepository:
                 (ctx.tenant_id, knowledge_space_id, workspace, display_name),
             ).fetchone()
         assert row is not None  # INSERT RETURNING 必有行
+        return _row_to_space(row)
+
+    def ensure(
+        self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str, workspace: str,
+    ) -> KnowledgeSpaceRow:
+        """Idempotently materialize the single enterprise KB mapping for this deployment."""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                "workspace = rag_workspace.workspace, display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
+                "RETURNING " + _SPACE_COLUMNS,
+                (ctx.tenant_id, knowledge_space_id, workspace, display_name),
+            ).fetchone()
+        assert row is not None
         return _row_to_space(row)
 
     def get(self, ctx: TenantContext, *, knowledge_space_id: str) -> KnowledgeSpaceRow | None:

@@ -275,42 +275,32 @@ export function KnowledgePage(): ReactNode {
     return result;
   }, [canWrite, resolveResourceLabel, working]);
 
-  const spaceColumns = useMemo<TableColumn<KnowledgeSpaceRow>[]>(() => {
-    const result: TableColumn<KnowledgeSpaceRow>[] = [
-      { key: "display_name", header: "名称", width: proportional(2), renderCell: (space) => <Text weight="bold">{space.display_name || "未命名知识空间"}</Text> },
-    ];
-    result.push({
+  const spaceColumns = useMemo<TableColumn<KnowledgeSpaceRow>[]>(() => [
+    { key: "display_name", header: "知识库", width: proportional(2), renderCell: () => <Text weight="bold">企业知识库</Text> },
+    {
       key: "actions",
       header: "操作",
-      // Keep the action cell wider than its labels; Astryx Table does not shrink
-      // overflowing flex children, which otherwise renders buttons outside the cell.
-      width: pixel(canWrite ? 620 : 430),
+      width: pixel(240),
       align: "end",
       resizable: false,
-      renderCell: (space) => {
-        const name = space.display_name || "未命名知识空间";
-        return (
-          <HStack gap={2} justify="end">
-            <Button label={`管理${name}文档`} variant="ghost" size="sm" onClick={() => setDocSpaceId(space.knowledge_space_id)} />
-            <Button label={`管理${name}绑定`} variant="ghost" size="sm" onClick={() => void openBindings(space.knowledge_space_id)} />
-            {canWrite && <Button label={`删除${name}`} variant="destructive" size="sm" isDisabled={working} onClick={() => setPendingDelete(space)} />}
-          </HStack>
-        );
-      },
-    });
-    return result;
-  }, [canWrite, openBindings, working]);
+      renderCell: (space) => (
+        <Button label="管理企业知识库文档" variant="ghost" size="sm" onClick={() => setDocSpaceId(space.knowledge_space_id)} />
+      ),
+    },
+  ], []);
 
-  const documentSpace = items.find((space) => space.knowledge_space_id === docSpaceId) ?? null;
+  const enterpriseSpace = items[0] ?? null;
+  const documentSpace = docSpaceId === null
+    ? null
+    : enterpriseSpace && docSpaceId === enterpriseSpace.knowledge_space_id ? enterpriseSpace : null;
 
   return (
     <VStack as="section" gap={6}>
       <HStack justify="between" align="center">
         <VStack gap={1}>
-          <Heading level={1}>企业 RAG 知识库</Heading>
-          <Text type="supporting">此页面管理文档来源、就绪状态和授权绑定；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
+          <Heading level={1}>企业知识库</Heading>
+          <Text type="supporting">此页面管理企业文档及 LightRAG 索引状态；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
         </VStack>
-        {canWrite && <Button label="新建知识空间" variant="primary" onClick={() => setShowCreate(true)} />}
       </HStack>
 
       {actionError && <Banner status="error" title={actionError} />}
@@ -323,13 +313,13 @@ export function KnowledgePage(): ReactNode {
       ) : (
         <Card padding={0}>
           <Table
-            aria-label="知识空间"
-            tableProps={{ "aria-label": "知识空间" }}
-            data={items as KnowledgeSpaceRow[]}
+            aria-label="企业知识库"
+            tableProps={{ "aria-label": "企业知识库" }}
+            data={items.slice(0, 1) as KnowledgeSpaceRow[]}
             columns={spaceColumns}
             idKey="knowledge_space_id"
             hasHover
-            emptyState={<EmptyState title="暂无知识空间" description="创建一个知识空间后即可管理绑定和文档。" isCompact />}
+            emptyState={<EmptyState title="企业知识库尚未初始化" description="当前 Manager 尚未配置企业 LightRAG workspace。" isCompact />}
           />
         </Card>
       )}
@@ -472,7 +462,7 @@ export function KnowledgePage(): ReactNode {
       {documentSpace && (
         <DocumentsPanel
           spaceId={documentSpace.knowledge_space_id}
-          spaceName={documentSpace.display_name || "未命名知识空间"}
+          spaceName="企业知识库"
           canWrite={canWrite}
           onClose={() => setDocSpaceId(null)}
         />

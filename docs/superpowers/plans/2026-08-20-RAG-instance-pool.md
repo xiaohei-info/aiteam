@@ -6,6 +6,8 @@ scope: manager-rag-instance-pool
 
 # Manager RAG 安全多 workspace 实例池（P0.2 最小切片）
 
+> **2026-08-26 架构修订**：本计划的多企业/多 workspace 产品语义已被 `docs/superpowers/plans/2026-08-26-manager-one-enterprise-scope.md` 覆盖。Manager 当前目标是一企业一部署、一个企业共享 workspace；本文件仅保留为同一企业未来高可用/分片的技术参考，不得据此向普通管理员暴露多知识空间。
+
 Manager 在启动时从 `LIGHTRAG_INSTANCES` 读取一个受边界限制的 JSON 数组。每项固定为：
 
 ```json

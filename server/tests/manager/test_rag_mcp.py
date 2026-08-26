@@ -110,6 +110,39 @@ class FakeRag:
         return Handle(ctx.tenant_id, knowledge_space_id, f"t{ctx.tenant_id}__{knowledge_space_id}")
 
 
+class EnterpriseRag(FakeRag):
+    default_space_id = "enterprise_shared"
+    is_enterprise_scope = True
+
+    def get(self, ctx: TenantContext, knowledge_space_id: str):
+        assert knowledge_space_id == self.default_space_id
+        return Handle(ctx.tenant_id, knowledge_space_id, "enterprise-fixed-workspace")
+
+
+class EmptySnapshot(FakeSnapshots):
+    def generate(self, ctx: TenantContext, *, member_id: str, employee_id: str, employee_version=None):
+        return Snapshot(employee_id, [])
+
+
+class EmptyBindings:
+    def list_by_employee(self, ctx: TenantContext, *, employee_id: str, status=None):
+        return []
+
+
+class EnterpriseDocs(FakeDocs):
+    def __init__(self, root):
+        self._document = Document(
+            "doc-1", "enterprise_shared", "Policy", storage_key="knowledge/tenant-a/enterprise_shared/policy.txt", file_name="policy.txt",
+        )
+        self._root = root
+
+    def list_by_space(self, ctx: TenantContext, *, knowledge_space_id: str):
+        return [self._document]
+
+    def get(self, ctx: TenantContext, *, document_id: str):
+        return self._document if document_id == self._document.id else None
+
+
 def test_lightrag_client_uses_manager_headers_and_bounded_query():
     seen = {}
     request_body = {}
@@ -180,6 +213,36 @@ def test_access_denies_non_runnable_employee_lifecycle(status):
     )
     with pytest.raises(Forbidden):
         access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
+
+
+def test_enterprise_scope_allows_ready_documents_without_employee_bindings(tmp_path):
+    (tmp_path / "knowledge/tenant-a/enterprise_shared").mkdir(parents=True)
+    (tmp_path / "knowledge/tenant-a/enterprise_shared/policy.txt").write_text("enterprise policy", encoding="utf-8")
+
+    async def handler(request: httpx.Request):
+        return httpx.Response(200, json={"status": "success", "data": {"references": [
+            {"reference_id": "policy.txt", "file_path": "policy.txt", "content": "enterprise policy", "score": 0.8},
+        ]}})
+
+    light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
+    access = RagAccessService(
+        snapshot_service=EmptySnapshot(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
+        binding_repository=EmptyBindings(), rag_service=EnterpriseRag(), light_rag=light,
+        document_repository=EnterpriseDocs(tmp_path), storage_root=tmp_path,
+    )
+    claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
+
+    async def run():
+        try:
+            auth = access.authorize(claims, "employee-a")
+            result = await access.search(auth, "policy", 5)
+        finally:
+            await light.aclose()
+        return auth, result
+
+    auth, result = asyncio.run(run())
+    assert auth.handle.workspace == "enterprise-fixed-workspace"
+    assert result["items"][0]["document_id"] == "doc-1"
 
 
 def test_access_derives_workspace_and_filters_unowned_citations():

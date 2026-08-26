@@ -19,7 +19,7 @@ LIGHTRAG_GRAPH_STORAGE=PGTableGraphStorage
 LIGHTRAG_VECTOR_STORAGE=PGVectorStorage
 ```
 
-LightRAG 使用独立 PostgreSQL database/schema/role 命名空间，避免直接写 Manager 业务表；workspace 继续由 Manager 从 tenant + knowledge_space 派生。Graph 使用 `PGTableGraphStorage`，不引入 Apache AGE。
+LightRAG 使用独立 PostgreSQL database/schema/role 命名空间，避免直接写 Manager 业务表；当前 Manager 部署固定一个企业共享 workspace（既有 `knowledge_space` 仅作内部兼容键）。Graph 使用 `PGTableGraphStorage`，不引入 Apache AGE。
 
 ## 实施顺序
 

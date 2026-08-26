@@ -61,7 +61,11 @@ def _auth_service(request: Request) -> AuthService:
         raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
     cache = getattr(request.app.state, "_auth_service", None)
     if cache is None:
-        cache = build_auth_service(dsn, admin_dsn=admin_dsn)
+        cache = build_auth_service(
+            dsn, admin_dsn=admin_dsn,
+            manager_tenant_id=getattr(settings, "manager_tenant_id", None),
+            manager_enterprise_id=getattr(settings, "manager_enterprise_id", None),
+        )
         request.app.state._auth_service = cache
     return cache
 

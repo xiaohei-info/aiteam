@@ -44,7 +44,14 @@ def _service(request: Request) -> KnowledgeSpaceService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_knowledge_space_service", None)
     if cache is None:
-        cache = build_knowledge_space_service(PgTenantRouter(dsn), RagInstanceRegistry.from_env())
+        registry = RagInstanceRegistry.from_env()
+        bound_tenant_id = getattr(request.app.state.settings, "manager_tenant_id", None)
+        enterprise_workspace = (
+            registry.instances[0].workspace if registry is not None else "enterprise_shared"
+        ) if bound_tenant_id else None
+        cache = build_knowledge_space_service(
+            PgTenantRouter(dsn), registry, enterprise_workspace,
+        )
         request.app.state._knowledge_space_service = cache
     return cache
 

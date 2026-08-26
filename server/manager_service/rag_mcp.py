@@ -332,19 +332,26 @@ class RagAccessService:
             ref for ref in getattr(snapshot, "knowledge_refs", [])
             if isinstance(ref, str) and ref
         ))
+        # A Manager deployment owns one enterprise-shared knowledge base.  The
+        # legacy snapshot binding list remains accepted for old projections, but
+        # a new snapshot need not carry a per-space grant just to query it.
+        default_space_id = getattr(self._rag, "default_space_id", None)
+        if isinstance(default_space_id, str) and default_space_id and getattr(self._rag, "is_enterprise_scope", False):
+            refs = [default_space_id]
         if not refs:
             raise Forbidden("employee knowledge binding is unavailable")
         all_bindings = tuple(self._bindings.list_by_employee(ctx, employee_id=employee_id))
         handles: list[RagHandle] = []
         valid_bindings: list[Any] = []
         for space_id in refs:
+            enterprise_scope = self._is_enterprise_scope(space_id)
             space_bindings = tuple(
                 row for row in all_bindings
                 if self._valid_binding(row, ctx=ctx, employee_id=employee_id, space_id=space_id)
             )
-            if not space_bindings:
+            if not space_bindings and not enterprise_scope:
                 raise Forbidden("employee knowledge binding is unavailable")
-            if self._spaces is not None:
+            if self._spaces is not None and not enterprise_scope:
                 space = self._spaces.get(ctx, knowledge_space_id=space_id)
                 if (
                     space is None
@@ -424,7 +431,7 @@ class RagAccessService:
              )),
             None,
         )
-        if binding is None:
+        if binding is None and not self._is_enterprise_scope(parsed.knowledge_space_id):
             raise RagUnavailable("knowledge service unavailable")
         document = self._documents.get(current.ctx, document_id=parsed.document_id)
         if (
@@ -525,6 +532,12 @@ class RagAccessService:
             "display_name": display_name,
         }
 
+    def _is_enterprise_scope(self, space_id: str) -> bool:
+        # PgManagerRagService validates canonical and known legacy keys before
+        # returning a fixed enterprise handle; the key itself is not a second
+        # LightRAG workspace.
+        return bool(getattr(self._rag, "is_enterprise_scope", False) and space_id)
+
     @staticmethod
     def _valid_binding(row: Any, *, ctx: TenantContext, employee_id: str, space_id: str) -> bool:
         # The repository is tenant-scoped, but keep these checks here as a second
@@ -578,14 +591,27 @@ class RagAccessService:
         ambiguous: set[str] = set()
         if self._documents is None:
             return allowed, ambiguous
-        for binding in auth.bindings:
-            if not self._valid_binding(
-                binding, ctx=auth.ctx, employee_id=auth.employee_id,
-                space_id=handle.knowledge_space_id,
-            ):
-                continue
-            document_id = str(getattr(binding, "document_id", ""))
-            doc = self._documents.get(auth.ctx, document_id=document_id)
+        rows: list[Any] = list(auth.bindings)
+        if not rows and self._is_enterprise_scope(handle.knowledge_space_id):
+            rows = list(self._documents.list_by_space(
+                auth.ctx, knowledge_space_id=handle.knowledge_space_id,
+            ))
+        for binding in rows:
+            if self._is_enterprise_scope(handle.knowledge_space_id):
+                if hasattr(binding, "storage_key"):
+                    document_id = str(getattr(binding, "id", ""))
+                    doc = binding
+                else:
+                    document_id = str(getattr(binding, "document_id", ""))
+                    doc = self._documents.get(auth.ctx, document_id=document_id)
+            else:
+                if not self._valid_binding(
+                    binding, ctx=auth.ctx, employee_id=auth.employee_id,
+                    space_id=handle.knowledge_space_id,
+                ):
+                    continue
+                document_id = str(getattr(binding, "document_id", ""))
+                doc = self._documents.get(auth.ctx, document_id=document_id)
             if (
                 not document_id
                 or doc is None

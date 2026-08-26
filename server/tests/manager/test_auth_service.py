@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from shared.errors import Unauthorized, ValidationProblem
+from shared.errors import Forbidden, Unauthorized, ValidationProblem
 from manager_service.auth_service import AuthService, LoginInput, OwnerResetInput
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 
@@ -63,6 +63,19 @@ def test_owner_reset_rejects_non_uuid_tenant_id_before_db(tenant_id):
     svc._repo.find_identity.assert_not_called()
     svc._repo.update_secret.assert_not_called()
     assert "invalid tenant_id format" in str(exc.value.detail)
+
+
+def test_bound_manager_rejects_a_different_tenant_before_db():
+    svc = AuthService(
+        dsn="postgresql://fake", repo=MagicMock(), keys=MagicMock(),
+        manager_tenant_id="550e8400-e29b-41d4-a716-446655440000",
+    )
+    with pytest.raises(Forbidden):
+        svc.login(LoginInput(
+            tenant_id="550e8400-e29b-41d4-a716-446655440001",
+            account="13800138000", password="Pw1!",
+        ))
+    svc._repo.find_identity.assert_not_called()
 
 
 def test_login_accepts_valid_uuid_tenant_id():

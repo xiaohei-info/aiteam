@@ -2,6 +2,8 @@
 
 ## 边界
 
+**架构修订（2026-08-26）**：一个 Manager 部署服务一个企业；Hindsight bank 按企业内 employee-private scope 派生，member 只参与当前请求/lease 鉴权，不参与 bank 身份。历史租约/银行迁移按部署 runbook 处理。
+
 `@luxusai/pi-hindsight@0.12.0` 只支持把一个 API key 放进
 `Authorization: Bearer ...`，当前 Hindsight API 没有真正的 bank-scoped token、租约或
 revoke API。AI Team 因此**不伪造 native scoped token**：Manager 保留
@@ -10,8 +12,8 @@ revoke API。AI Team 因此**不伪造 native scoped token**：Manager 保留
 
 facade 在每个请求校验 lease 的 tenant/member/employee/bank/expiry/revoke，再用 Manager
 私有 service token 转发到固定 Hindsight upstream。Agent 不能直连 upstream，也不能把
-`bank` 或 `bank_id` 作为模型工具参数；bank identity 只由 Manager 根据当前 tenant、member、
-employee 和已授权 memory policy 派生。
+`bank` 或 `bank_id` 作为模型工具参数；bank identity 只由 Manager 根据当前企业绑定的
+`tenant_id`、employee 和已授权 memory policy 派生，member 仅用于请求/lease 鉴权。
 
 ## 配置
 

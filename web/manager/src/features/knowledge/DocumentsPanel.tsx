@@ -42,7 +42,7 @@ const STATUS_DESCRIPTION: Record<KnowledgeDocumentStatus, string> = {
   uploaded: "等待开始解析",
   parsing: "正在提取文档内容",
   indexing: "正在建立索引",
-  ready: "处理完成；绑定就绪后可由 Agent 引用",
+  ready: "处理完成；授权员工可由 Agent 引用",
   failed: "摄入失败，请先重试",
   reindex_requested: "已请求重建索引，旧引用暂不可用",
   deleting: "删除请求已接受，文档和引用暂不可用",
@@ -85,7 +85,7 @@ function citationStatus(document: KnowledgeDocument): {
   if (document.status === "ready") {
     return {
       label: "文档已就绪",
-      description: "需要至少一个已就绪绑定后，Agent 才能获取引用",
+      description: "企业知识库已就绪；授权员工可通过 Agent Pi knowledge_get 获取引用",
       variant: "success",
     };
   }
@@ -416,20 +416,6 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
           );
         },
       },
-      {
-        key: "bindings",
-        header: "索引绑定",
-        width: pixel(140),
-        renderCell: (doc) => (
-          <Button
-            label={`查看${doc.display_name}绑定状态`}
-            variant="ghost"
-            size="sm"
-            isDisabled={busy}
-            onClick={() => void openDocumentBindings(doc)}
-          />
-        ),
-      },
     ];
     if (canWrite) {
       result.push({
@@ -497,7 +483,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
               {actionNotice && <Banner status={actionNoticeStatus} title={actionNotice} />}
               <Banner
                 status="info"
-                title="引用正文不通过 Manager HTTP 页面加载：文档已就绪且绑定同步后，请通过 Agent Pi knowledge_get 获取；本页不直连 MCP 或 LightRAG。"
+                title="引用正文不通过 Manager HTTP 页面加载：文档已就绪后，请通过 Agent Pi knowledge_get 获取；本页不直连 MCP 或 LightRAG。"
               />
               {loading ? (
                 <Card role="status" aria-label="正在加载文档">

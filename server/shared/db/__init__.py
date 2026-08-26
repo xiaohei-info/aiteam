@@ -46,11 +46,16 @@ class TenantRouter(ABC):
 
 
 class ManagerRagService(ABC):
-    """RAG 租户隔离封装（04 §6.1.2，D21）。workspace 只能由本服务从 TenantContext 推导。"""
+    """Manager-owned RAG routing boundary (04 §6.1.2, D21).
+
+    A deployment owns one enterprise workspace; the legacy signature remains so
+    existing citation/binding callers can be migrated without accepting a raw
+    LightRAG workspace from them.
+    """
 
     @staticmethod
     def derive_workspace(tenant_id: str, knowledge_space_id: str) -> str:
-        """workspace = tenant_id + knowledge_space_id（04 §6.1.2）。禁止前端/Agent 直传 workspace。"""
+        """Legacy deterministic key for compatibility-only callers."""
         return f"t{tenant_id.replace('-', '')}__{knowledge_space_id}"
 
     @abstractmethod

@@ -13,7 +13,7 @@ import { KnowledgePage } from "../KnowledgePage";
 
 const PAGE = { next_cursor: null, has_more: false };
 const SPACES = [
-  { knowledge_space_id: "ks-sales", workspace: "ws1", display_name: "销售知识库" },
+  { knowledge_space_id: "enterprise_shared", workspace: "ws1", display_name: "企业知识库" },
 ];
 const EMPLOYEES = { items: [{ employee_id: "e1", display_name: "张三" }], page: PAGE };
 const DEPARTMENTS = { items: [{ id: "d1", display_name: "销售部" }], page: PAGE };
@@ -200,7 +200,7 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByRole("status", { name: "正在加载知识空间" })).toBeTruthy();
 
     await act(async () => pending.resolve({ items: [], page: PAGE }));
-    expect(await screen.findByText("暂无知识空间")).toBeTruthy();
+    expect(await screen.findByText("企业知识库尚未初始化")).toBeTruthy();
     view.unmount();
 
     makeClient({ listGet: (url) => {
@@ -226,96 +226,29 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("登录已过期");
   });
 
-  it("creates a knowledge space and confirms deletion before calling the API", async () => {
-    const client = makeClient();
+  it("只展示企业知识库，不暴露空间 CRUD", async () => {
+    makeClient();
     renderPage();
-    await screen.findByRole("table", { name: "知识空间" });
-
-    fireEvent.click(screen.getByRole("button", { name: "新建知识空间" }));
-    const createDialog = screen.getByRole("dialog", { name: "新建知识空间" });
-    fireEvent.change(screen.getByRole("textbox", { name: /知识空间 ID/ }), { target: { value: "ks-ops" } });
-    fireEvent.change(screen.getByRole("textbox", { name: /显示名称/ }), { target: { value: "运营知识库" } });
-    fireEvent.submit(createDialog.querySelector("form")!);
-    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
-      "/api/manager/knowledge-spaces",
-      { body: { knowledge_space_id: "ks-ops", display_name: "运营知识库" } },
-    ));
-    await waitFor(() => expect(screen.getByRole("button", { name: "删除销售知识库" })).toBeEnabled());
-
-    fireEvent.click(screen.getByRole("button", { name: "删除销售知识库" }));
-    expect(screen.getByRole("alertdialog", { name: "删除知识空间" })).toBeTruthy();
-    expect(client.del).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(client.del).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales"));
+    await screen.findByRole("table", { name: "企业知识库" });
+    expect(screen.getAllByText("企业知识库").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除企业知识库" })).toBeNull();
   });
 
-  it("uses named binding UI, preserves payloads, and confirms unbinding", async () => {
+  it("loads the enterprise document dialog and supports URL import, upload, and retry", async () => {
     const client = makeClient();
     renderPage();
-    await screen.findByRole("table", { name: "知识空间" });
-    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库绑定" }));
+    await screen.findByRole("table", { name: "企业知识库" });
+    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
 
-    expect(await screen.findByRole("dialog", { name: "绑定管理 · 销售知识库" })).toBeTruthy();
-    expect(await screen.findByRole("table", { name: "当前绑定" })).toBeTruthy();
-    const form = screen.getByRole("form", { name: "新增绑定" });
-    fireEvent.click(screen.getByRole("combobox", { name: /绑定对象/ }));
-    fireEvent.click(await screen.findByRole("option", { name: "张三" }));
-    fireEvent.submit(form);
-    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
-      "/api/manager/knowledge-spaces/ks-sales/bindings",
-      { body: { knowledge_space_id: "ks-sales", resource_type: "expert", resource_id: "e1" } },
-    ));
-
-    fireEvent.click(screen.getByRole("button", { name: "解绑张三" }));
-    expect(screen.getByRole("alertdialog", { name: "解除知识绑定" })).toBeTruthy();
-    expect(client.del).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认解绑" }));
-    await waitFor(() => expect(client.del).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/bindings/expert/e1"));
-  });
-
-  it("does not let an older binding request overwrite the newly selected space", async () => {
-    const first = deferred<{ items: typeof BINDINGS; page: typeof PAGE }>();
-    const secondBindings = [{ ...BINDINGS[0]!, id: "member:m1:ks-support", knowledge_space_id: "ks-support", resource_type: "member", resource_id: "m1" }];
-    const second = deferred<{ items: typeof secondBindings; page: typeof PAGE }>();
-    makeClient({ listGet: (url) => {
-      if (url === "/api/manager/knowledge-spaces") {
-        return { items: [...SPACES, { knowledge_space_id: "ks-support", workspace: "ws2", display_name: "客服知识库" }], page: PAGE };
-      }
-      if (url.includes("ks-sales/bindings")) return first.promise;
-      if (url.includes("ks-support/bindings")) return second.promise;
-      return defaultListGet(url);
-    } });
-    renderPage();
-    await screen.findByRole("table", { name: "知识空间" });
-
-    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库绑定" }));
-    await waitFor(() => expect(screen.getByRole("dialog", { name: "绑定管理 · 销售知识库" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    fireEvent.click(screen.getByRole("button", { name: "管理客服知识库绑定" }));
-    await act(async () => second.resolve({ items: secondBindings, page: PAGE }));
-    expect(await screen.findByText("李四")).toBeTruthy();
-    await act(async () => first.resolve({ items: BINDINGS, page: PAGE }));
-
-    expect(screen.getByRole("dialog", { name: "绑定管理 · 客服知识库" })).toBeTruthy();
-    const currentBindings = screen.getByRole("table", { name: "当前绑定" });
-    expect(within(currentBindings).queryByText("张三")).toBeNull();
-    expect(within(currentBindings).getByText("李四")).toBeTruthy();
-  });
-
-  it("loads a named document dialog and supports URL import, upload, and retry", async () => {
-    const client = makeClient();
-    renderPage();
-    await screen.findByRole("table", { name: "知识空间" });
-    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库文档" }));
-
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
     expect(await screen.findByRole("table", { name: "文档列表" })).toBeTruthy();
     expect(screen.getByText("销售手册.pdf")).toBeTruthy();
 
     fireEvent.change(screen.getByRole("textbox", { name: /URL/ }), { target: { value: "https://example.com/guide" } });
     fireEvent.submit(screen.getByRole("form", { name: "从 URL 导入" }));
     await waitFor(() => expect(client.post).toHaveBeenCalledWith(
-      "/api/manager/knowledge-spaces/ks-sales/documents/url",
+      "/api/manager/knowledge-spaces/enterprise_shared/documents/url",
       { body: { url: "https://example.com/guide" } },
     ));
 
@@ -326,18 +259,18 @@ describe("KnowledgePage Astryx contract", () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
     fireEvent.submit(uploadForm);
     await waitFor(() => expect(client.post).toHaveBeenCalledWith(
-      "/api/manager/knowledge-spaces/ks-sales/documents",
+      "/api/manager/knowledge-spaces/enterprise_shared/documents",
       expect.objectContaining({ body: expect.any(FormData) }),
     ));
 
     fireEvent.click(screen.getByRole("button", { name: "重试销售手册.pdf" }));
     await waitFor(() => expect(client.post).toHaveBeenCalledWith(
-      "/api/manager/knowledge-spaces/ks-sales/documents/doc-failed/reindex",
+      "/api/manager/knowledge-spaces/enterprise_shared/documents/doc-failed/reindex",
       { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
     ));
   });
 
-  it("shows ready and failed status, rebuilds ready indexes, and projects binding status", async () => {
+  it("shows ready and failed status and rebuilds ready indexes", async () => {
     const client = makeClient();
     render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
     expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
@@ -347,7 +280,7 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByLabelText(/引用状态：文档已就绪/)).toBeTruthy();
     expect(screen.getByText("引用不可用")).toBeTruthy();
     expect(screen.getByText("citation:ks-sales:doc-ready")).toBeTruthy();
-    expect(screen.getByText(/通过 Agent Pi knowledge_get 获取/)).toBeTruthy();
+    expect(screen.getAllByText(/通过 Agent Pi knowledge_get 获取/).length).toBeGreaterThan(0);
     expect(client.get).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "重建索引销售 FAQ.md" }));
@@ -358,11 +291,6 @@ describe("KnowledgePage Astryx contract", () => {
 
     expect(screen.getByRole("button", { name: "删除销售 FAQ.md" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
-    const bindingDialog = await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" });
-    expect(within(bindingDialog).getByText("已就绪")).toBeTruthy();
-    expect(within(bindingDialog).getByText(/引用可用/)).toBeTruthy();
-    expect(within(bindingDialog).getByText("rag-1")).toBeTruthy();
   });
 
   it("confirms document deletion, sends the lifecycle request, and shows pending acceptance", async () => {
@@ -465,10 +393,9 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByLabelText("文档状态：删除处理中")).toBeTruthy();
   });
 
-  it("renders lifecycle statuses, hides deleted citations, and excludes revoked bindings", async () => {
+  it("renders lifecycle statuses and hides deleted citations", async () => {
     makeClient({ listGet: (url) => {
       if (url.endsWith("/documents")) return { items: LIFECYCLE_DOCUMENTS, page: PAGE };
-      if (url.includes("/documents/") && url.endsWith("/bindings")) return { items: REVOKED_DOCUMENT_BINDINGS, page: PAGE };
       return defaultListGet(url);
     } });
     render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
@@ -483,11 +410,6 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.queryByRole("button", { name: "删除删除中.md" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除已删除.md" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
-    const bindingDialog = await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" });
-    expect(within(bindingDialog).getByText("已撤销")).toBeTruthy();
-    expect(within(bindingDialog).getByText("已撤销，不能参与引用")).toBeTruthy();
-    expect(within(bindingDialog).queryByText(/引用可用/)).toBeNull();
   });
 
   it("keeps enterprise admins writable while citation content stays out of Manager HTTP", async () => {
@@ -499,28 +421,14 @@ describe("KnowledgePage Astryx contract", () => {
         </SessionContext.Provider>
       </I18nContext.Provider>
     ) });
-    await screen.findByRole("table", { name: "知识空间" });
-    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库文档" }));
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
+    await screen.findByRole("table", { name: "企业知识库" });
+    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
+    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "上传文件" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "从 URL 导入" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "删除销售手册.pdf" })).toBeTruthy();
     expect(client.get).not.toHaveBeenCalled();
     expect(client.listGet.mock.calls.flat().some((url) => String(url).includes("citation") || String(url).includes("/rag"))).toBe(false);
-  });
-
-  it("explains unavailable citation when a ready document has no binding", async () => {
-    makeClient({ listGet: (url) => {
-      if (url.includes("/documents/") && url.endsWith("/bindings")) return { items: [], page: PAGE };
-      return defaultListGet(url);
-    } });
-    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite={false} onClose={() => {}} />, { wrapper: Providers });
-    expect(await screen.findByText("销售 FAQ.md")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "查看销售 FAQ.md绑定状态" }));
-    expect(await screen.findByRole("dialog", { name: "索引绑定 · 销售 FAQ.md" })).toBeTruthy();
-    expect(await screen.findByText(/暂无可用绑定/)).toBeTruthy();
-    expect(screen.getByText("暂无索引绑定")).toBeTruthy();
-    expect(screen.getByText(/knowledge_get 获取引用/)).toBeTruthy();
   });
 
   it("shows explicit document loading, empty, and error states", async () => {
@@ -549,10 +457,10 @@ describe("KnowledgePage Astryx contract", () => {
         </SessionContext.Provider>
       </I18nContext.Provider>
     ) });
-    await screen.findByRole("table", { name: "知识空间" });
+    await screen.findByRole("table", { name: "企业知识库" });
     expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "管理销售知识库文档" }));
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 销售知识库" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
+    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
     expect(screen.queryByRole("form", { name: "上传文件" })).toBeNull();
     expect(screen.queryByRole("form", { name: "从 URL 导入" })).toBeNull();
     expect(screen.queryByRole("button", { name: /重试|重建索引/ })).toBeNull();
@@ -560,21 +468,4 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByText(/引用正文不通过 Manager HTTP 页面加载/)).toBeTruthy();
   });
 
-  it("does not let an older document request overwrite a new space", async () => {
-    const first = deferred<{ items: typeof DOCUMENTS; page: typeof PAGE }>();
-    const supportDocs = [{ ...DOCUMENTS[0]!, id: "doc-support", knowledge_space_id: "ks-support", display_name: "客服手册.md", status: "ready" as const }];
-    const second = deferred<{ items: typeof supportDocs; page: typeof PAGE }>();
-    makeClient({ listGet: (url) => {
-      if (url.includes("ks-sales/documents")) return first.promise;
-      if (url.includes("ks-support/documents")) return second.promise;
-      return defaultListGet(url);
-    } });
-    const view = render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
-    view.rerender(<DocumentsPanel spaceId="ks-support" spaceName="客服知识库" canWrite onClose={() => {}} />);
-    await act(async () => second.resolve({ items: supportDocs, page: PAGE }));
-    expect(await screen.findByText("客服手册.md")).toBeTruthy();
-    await act(async () => first.resolve({ items: DOCUMENTS, page: PAGE }));
-    expect(screen.queryByText("销售手册.pdf")).toBeNull();
-    expect(screen.getByText("客服手册.md")).toBeTruthy();
-  });
 });

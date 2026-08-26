@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
+from shared.errors import Unauthorized
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
@@ -86,6 +87,23 @@ def _build_operator_catalog():
     )
 
 
+class _BoundTenantVerifier:
+    """Reject valid tokens issued for another enterprise deployment."""
+
+    def __init__(self, verifier, tenant_id: str, enterprise_id: str | None = None):
+        self._verifier = verifier
+        self._tenant_id = tenant_id
+        self._enterprise_id = enterprise_id
+
+    def verify(self, token: str):
+        claims = self._verifier.verify(token)
+        if str(claims.tenant_id) != str(self._tenant_id):
+            raise Unauthorized("token is not bound to this Manager deployment")
+        if self._enterprise_id and str(claims.enterprise_id) != str(self._enterprise_id):
+            raise Unauthorized("token is not bound to this Manager deployment")
+        return claims
+
+
 def _build_verifier():
     """构造受保护端点验签器（D23 RS256）。
 
@@ -96,9 +114,14 @@ def _build_verifier():
     settings = load_settings("manager")
     admin_dsn = settings.admin_db_url
     if not admin_dsn:
-        return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
-    key_store = TenantKeyStore(admin_dsn)
-    return DynamicRS256TokenVerifier(key_store.public_pem_for_kid)
+        verifier = RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
+    else:
+        key_store = TenantKeyStore(admin_dsn)
+        verifier = DynamicRS256TokenVerifier(key_store.public_pem_for_kid)
+    bound_tenant_id = settings.manager_tenant_id
+    return _BoundTenantVerifier(
+        verifier, bound_tenant_id, settings.manager_enterprise_id,
+    ) if bound_tenant_id else verifier
 
 
 _verifier = _build_verifier()
@@ -117,6 +140,8 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 settings = load_settings("manager")
+if settings.is_production and not settings.manager_tenant_id:
+    raise RuntimeError("AITEAM_MANAGER_TENANT_ID is required for a production Manager deployment")
 _skill_signer = SkillPackageSigner.from_env()
 if settings.is_production and (_skill_signer is None or not _skill_signer.has_next):
     raise RuntimeError(
@@ -232,6 +257,8 @@ if settings.db_url:
     _rag_service = PgManagerRagService(
         settings.db_url,
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+        enterprise_workspace=_rag_settings.workspace if _rag_settings is not None else None,
+        enterprise_id=settings.manager_tenant_id,
     )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,

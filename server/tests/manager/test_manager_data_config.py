@@ -48,7 +48,7 @@ def test_ctl_exports_environment_specific_manager_volume(tmp_path):
     env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "CAPTURE": str(capture)}
     for name in ("dev", "test", "prod"):
         (tmp_path / f".env.{name}").write_text(
-            "POSTGRES_USER=aiteam\nPOSTGRES_PASSWORD=test\nPOSTGRES_PORT=5432\nPOSTGRES_DB=aiteam\nAITEAM_AGENT_SANDBOX_READY=true\nAITEAM_MANAGER_URL=https://manager.example.test\nAITEAM_AGENT_JWT_ISSUER=https://agent.example.test\nAITEAM_AGENT_JWT_AUDIENCE=aiteam-agent\nAITEAM_PI_FAKE=false\nAITEAM_AGENT_DEV_AUTH=false\nAITEAM_AGENT_JWKS_JSON='{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"test\",\"n\":\"x\",\"e\":\"AQAB\"}]}'\n",
+            "POSTGRES_USER=aiteam\nPOSTGRES_PASSWORD=test\nPOSTGRES_PORT=5432\nPOSTGRES_DB=aiteam\nAITEAM_AGENT_SANDBOX_READY=true\nAITEAM_MANAGER_URL=https://manager.example.test\nAITEAM_MANAGER_TENANT_ID=00000000-0000-0000-0000-000000000001\nAITEAM_MANAGER_ENTERPRISE_ID=00000000-0000-0000-0000-000000000002\nAITEAM_AGENT_JWT_ISSUER=https://agent.example.test\nAITEAM_AGENT_JWT_AUDIENCE=aiteam-agent\nAITEAM_PI_FAKE=false\nAITEAM_AGENT_DEV_AUTH=false\nAITEAM_AGENT_JWKS_JSON='{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"test\",\"n\":\"x\",\"e\":\"AQAB\"}]}'\n",
             encoding="utf-8",
         )
         subprocess.run(

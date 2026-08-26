@@ -28,7 +28,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 三端（可独立部署的部署单元）：
 
 - **运营端 Operator（平台运营 SaaS，平台方部署）**：企业开通、人才市场/行业方案目录、平台 Provider/模型/价格与内部 NewAPI Relay、负责人初始凭据、跨企业治理汇总。
-- **企业端 Manager（平台托管多租户企业管理 SaaS）**：tenant 管理、成员账号与认证、专家/方案配置、Operator 平台模型只读选择、成员级授权、企业 RAG、企业治理汇总。
+- **企业端 Manager（按企业独立部署/绑定的企业管理服务）**：企业成员账号与认证、专家/方案配置、Operator 平台模型只读选择、成员级授权、企业共享 RAG、员工个人记忆与企业治理汇总。一个 Manager 实例只服务一个企业；跨企业目录与治理由 Operator 负责。
 - **用户端 Agent（每用户本机自部署）**：工作台、私聊、群聊、Run、Task、Loop——**全部本地执行与落库，会话内容绝不上传**。
 
 核心承诺：
@@ -46,7 +46,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 ```
 运营端 Operator ⇄ service call ⇄ 企业端 Manager ◀──active access── 用户端 Agent
- (oper 库)                         (manager_control_db + tenant data space)   (agent 库, 本地)
+ (oper 库，多企业)                 (manager_control_db + 单企业数据空间)         (agent 库, 本地)
                                                     └─ Node Agent ─ Pi Session ─ local runtime
 ```
 
@@ -55,7 +55,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 | 层级 | 职责 | 禁止事项 |
 |------|------|----------|
 | **运营端 Operation Service** | 企业开通 / 负责人凭据·重置 / 人才市场·方案目录 / 平台 Provider·模型·价格 / 内部 NewAPI Relay 与 tenant access / 跨企业治理汇总 | 执行 Agent；持会话；调 runtime；持成员密码；向下端入站；向 Agent 下发全平台共享上游/管理 key |
-| **企业端 Manager Service** | tenant 隔离 / 成员账号·认证 / 专家·方案配置 / Operator 平台模型只读选择 / tenant Relay access 加密投影 / 成员级授权 / 企业 RAG / 企业治理与计量汇总 | 自建 Provider/模型/价格真相；持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收上传内容；向用户机器入站 |
+| **企业端 Manager Service** | 单企业数据空间 / 成员账号·认证 / 专家·方案配置 / Operator 平台模型只读选择 / 企业 Relay access 加密投影 / 成员级授权 / 企业共享 RAG / 员工个人记忆治理 / 企业治理与计量汇总 | 承载多个企业；自建 Provider/模型/价格真相；持会话与 Run/Task；提交执行；消费 runtime 原始事件；接收普通会话内容；向用户机器入站 |
 | **用户端 Agent Service** | 本地会话/群聊/run/task/loop / 事件流 / pull 装载已授权专家·方案 | 改企业端配置主数据；承担运营治理；直调 runtime CLI；暴露 runtime 原始事件；上传会话明细 |
 | **Node Agent（用户端）** | 本地会话、Pi Session、事件流 | 上传会话内容；持控制面业务主数据 |
 | **External Capability（用户端本地接入）** | 知识/技能/连接器/MCP 本地执行 | 内部协作编排语义 |
@@ -69,14 +69,14 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 ### 3.1 复用优先，不自造底层
 
 - **Hermes 为执行底座之一**（经 `AcpExecutor` + `HermesAcpDriver` 接入），不自建任务编排内核
-- **知识库**复用 LightRAG、**记忆**复用 mem0（OpenMemory 本地优先 MCP）、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 复用平台内部 NewAPI；Operator 统一维护 Provider/模型/价格并为每 tenant 签发受限令牌
+- **企业知识库**复用 Manager-owned LightRAG（每个 Manager 部署一个企业共享 workspace）、**员工个人记忆**复用 Manager Hindsight facade/受控 Pi Extension、**技能**复用 Hermes skills runtime + SkillHub、**AI Relay** 复用平台内部 NewAPI；Operator 统一维护 Provider/模型/价格并为每企业部署签发受限令牌
 - **多 runtime**（Codex / Claude Code / OpenCode / Hermes / OpenClaw）经统一 Executor/Driver 抽象接入，不按品牌堆 adapter（设计借鉴 multica `server/pkg/agent`，Python 重实现）
 
 ### 3.2 系统所有权分库，单写者
 
-- 三端按系统所有权分库：Operator 持 oper 库（含 platform_provider/platform_model/platform_model_rate/tenant Relay access 真相）；Manager 持 manager_control_db + tenant data space（含只读平台目录与 tenant access 加密投影，默认 PostgreSQL shared tables + RLS，可演进 schema/db-per-tenant）；Agent 持本机 agent 库。
+- 三端按系统所有权分库：Operator 持 oper 库（含 platform_provider/platform_model/platform_model_rate/tenant Relay access 真相与跨企业治理）；Manager 每个部署持一个企业数据空间（含只读平台目录与企业 access 加密投影，可保留 PostgreSQL/RLS 作为防御层）；Agent 持本机 agent 库。
 - 每张核心表只有一个写端；跨端读取走 pull API 或本地只读投影，**禁止跨端/跨库直写**
-- Manager 内部所有业务数据、RAG workspace、对象存储、缓存、队列/outbox、审计日志都必须绑定 `tenant_id`，并经 TenantContext 访问。
+- Manager 内部所有业务数据、RAG workspace、对象存储、缓存、队列/outbox、审计日志都必须绑定当前企业身份；现有实现继续使用 `tenant_id` + TenantContext 作为兼容与认证边界，但不得据此在同一 Manager 实例承载多个企业。
 
 ### 3.3 本地优先、内容不上传控制面
 
@@ -95,9 +95,9 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 - Executor 按协议族复用、Driver 收口 runtime 差异；事件先归一再映射为业务时间线，前端不消费 runtime-native event
 - 能力适配走**中立 `RunSpec`**：B 类（persona/model/skill）由 Driver 按 runtime 翻译、优先 flag/协议、**不直写 profile 文件**；A 类（知识/记忆/连接器）统一经 MCP 注入。机制详见 v1 概要设计 06 §7.5
 
-### 3.6 多租户认证
+### 3.6 企业认证与部署绑定
 
-- 凭据按端持有：负责人 bootstrap 来源归 Operator；负责人重置后凭据、成员凭据与 tenant 签名私钥归 Manager；Agent 只持本会话 token 与公钥/JWKS。
+- 凭据按端持有：负责人 bootstrap 来源归 Operator；负责人重置后凭据、成员凭据与当前企业绑定的签名私钥归 Manager；Agent 只持本会话 token 与公钥/JWKS。一个 Manager 部署不得接受其他企业的 tenant/enterprise 绑定。
 - 验签/鉴权/签发为共享库 `shared/auth`，本地无状态验签，**无中心 Identity、无中心 Edge**；v1 直接采用非对称签名，禁止向用户端下发 HMAC 对称签名密钥。
 - 登录方式多样性收敛到 `Authenticator` 一层，单一 token 出口（`user` + `auth_identity` 扩展模型）
 
@@ -134,7 +134,7 @@ runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不�
 ## 5. 开发顺序（v1 阶段实施，见 v1 概要设计 10）
 
 1. **Phase 0**：架构冻结（已完成）
-2. **Phase 1**：三端骨架 + Manager 多租户底座 + 部署绑定入户链 + 多租户认证（`shared/auth`）+ `shared` 底座 + Gateway skeleton
+2. **Phase 1**：三端骨架 + Manager 单企业部署绑定底座 + 入户链 + 企业认证（`shared/auth`）+ `shared` 底座 + Gateway skeleton
 3. **Phase 2**：企业端租户配置授权 + 用户端本地主链（私聊/群聊/Loop）+ pull 装载与快照冻结 + streaming parity
 4. **Phase 3**：多 runtime 接入（Executor + Driver）
 5. **Phase 4**：运营端 + 治理摘要逐级上报闭环
@@ -329,9 +329,9 @@ Agent 不得仅以"代码写完"作为完成标准，必须提供可验证证据
 | 关注点 | 选型 |
 |---|---|
 | 后端框架 | **FastAPI**（三端各一服务）：原生 OpenAPI / Swagger / ReDoc、Pydantic 作 API 边界、APIRouter 模块化、异步 SSE/WebSocket 成熟；**弃用手写 router / `_match_prefix`** |
-| 端入口与认证 | 各端自带 `shared/auth` 中间件；Manager 为企业租户身份源；无中心 Edge；Agent 本地验签；`tenant_id` 贯穿鉴权 |
+| 端入口与认证 | 各端自带 `shared/auth` 中间件；Manager 为当前企业身份源并绑定一个 tenant；无中心 Edge；Agent 本地验签；`tenant_id` 作为兼容企业 claim 贯穿鉴权 |
 | 跨系统通信 | Operator↔Manager 云侧服务间调用；Agent→Manager 主动访问；共享 `service_client`（TLS + 服务身份签名） |
-| 数据库 | PostgreSQL；Manager 默认共享表 + RLS（预留 schema/db-per-tenant）；用户端轻量本地库 |
+| 数据库 | PostgreSQL；Manager 每部署一个企业数据空间，现有 RLS 作为纵深防御；用户端轻量本地库 |
 | 治理回流 | Agent→Manager→Operator 脱敏计量/审计摘要上报，替代跨端事件总线 |
 | 可观测 | OpenTelemetry + 结构化日志 + Prometheus |
 | 运行时 | Executor 协议族 + Driver（用户端，详见 v1 概要设计 06） |
