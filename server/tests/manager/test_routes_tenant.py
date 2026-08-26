@@ -15,15 +15,14 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder", manager_tenant_id=None):
+def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder"):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_tenant import router as tenant_router
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, service_token=service_token,
-                              manager_tenant_id=manager_tenant_id),
+                              admin_db_url=admin_db_url, service_token=service_token),
                      manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
@@ -48,13 +47,6 @@ def _mock_psycopg():
 
 
 # ---- service token 守卫：生产模式 fail-closed ----
-
-def test_provision_rejects_a_different_bound_tenant():
-    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin", manager_tenant_id="550e8400-e29b-41d4-a716-446655440000")
-    r = client.post("/api/manager/tenants", json=_body(tenant_id="550e8400-e29b-41d4-a716-446655440001"))
-    assert r.status_code == 409
-    assert "not bound" in r.json()["detail"]
-
 
 def test_provision_no_service_token_in_prod_401():
     client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin",

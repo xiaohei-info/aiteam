@@ -47,10 +47,7 @@ def _service(request: Request) -> KnowledgeSpaceService:
     cache = getattr(request.app.state, "_knowledge_space_service", None)
     if cache is None:
         registry = RagInstanceRegistry.from_env()
-        bound_tenant_id = getattr(request.app.state.settings, "manager_tenant_id", None)
-        enterprise_workspace = (
-            registry.instances[0].workspace if registry is not None else "enterprise_shared"
-        ) if bound_tenant_id else None
+        enterprise_workspace = registry.instances[0].workspace if registry is not None else "enterprise_shared"
         cache = build_knowledge_space_service(
             PgTenantRouter(dsn), registry, enterprise_workspace,
         )

@@ -211,9 +211,6 @@ services:
       DB_URL: postgresql://app_rw:aiteam_test@postgres:5432/aiteam_v1
       # Manager 知识源持久化根（bundle exporter 读取此卷，不上传会话内容）。
       AITEAM_MANAGER_DATA_ROOT: /app/data
-      # One Manager deployment is bound to one enterprise/tenant.
-      AITEAM_MANAGER_TENANT_ID: ${AITEAM_MANAGER_TENANT_ID:-}
-      AITEAM_MANAGER_ENTERPRISE_ID: ${AITEAM_MANAGER_ENTERPRISE_ID:-}
       # 迁移走管理连接（超管/DDL owner，#60）。
       ADMIN_DB_URL: postgresql://aiteam:aiteam_test@postgres:5432/aiteam_v1
       APP_RW_PASSWORD: aiteam_test

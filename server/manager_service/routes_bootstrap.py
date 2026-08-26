@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request, status
 
 from shared.contracts.crosstier import OwnerBootstrapSync
 from shared.contracts.envelope import Envelope
-from shared.errors import Conflict, NotFound
+from shared.errors import NotFound
 from shared.service_token import verify_service_token
 
 from .auth_service import AuthService
@@ -49,9 +49,6 @@ def owner_bootstrap(
     admin_db_url = settings.admin_db_url
     if not db_url or not admin_db_url:
         raise ManagerAdminDbNotConfigured("Manager DB 未配置（设置 DB_URL 与 ADMIN_DB_URL）")
-    if settings.manager_tenant_id and str(body.tenant_id) != str(settings.manager_tenant_id):
-        raise Conflict("tenant is not bound to this Manager deployment")
-
     if not _tenant_exists(admin_db_url, body.tenant_id):
         raise NotFound("tenant not found")
 
@@ -59,11 +56,7 @@ def owner_bootstrap(
 
     cache = getattr(request.app.state, "_auth_service", None)
     if cache is None:
-        cache = build_auth_service(
-            db_url, admin_dsn=admin_db_url,
-            manager_tenant_id=settings.manager_tenant_id,
-            manager_enterprise_id=getattr(settings, "manager_enterprise_id", None),
-        )
+        cache = build_auth_service(db_url, admin_dsn=admin_db_url)
         request.app.state._auth_service = cache
 
     result_method = getattr(cache, "sync_owner_bootstrap_result", None) if isinstance(cache, AuthService) else None

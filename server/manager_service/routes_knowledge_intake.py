@@ -69,10 +69,7 @@ def _service(request: Request) -> KnowledgeIntakeService:
         cache = build_knowledge_intake_service(
             router,
             storage_root=root,
-            rag_service=PgManagerRagService(
-                dsn,
-                enterprise_id=getattr(request.app.state.settings, "manager_tenant_id", None),
-            ),
+            rag_service=PgManagerRagService(dsn),
             ingestion_client=ingestion_client,
         )
         request.app.state._knowledge_intake_service = cache

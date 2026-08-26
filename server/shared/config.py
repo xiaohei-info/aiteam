@@ -38,11 +38,6 @@ class Settings(BaseModel):
     )
     # Manager durable knowledge source. Compose mounts the named managerdata volume here.
     manager_data_root: Path = Field(default_factory=lambda: Path.cwd() / ".data" / "manager")
-    # One Manager deployment is bound to one enterprise.  The value is optional
-    # for isolated unit tests and RAG-disabled development, but required by the
-    # deployment profile when a fixed LightRAG workspace is enabled.
-    manager_tenant_id: str | None = Field(default=None)
-    manager_enterprise_id: str | None = Field(default=None)
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
@@ -81,8 +76,6 @@ def load_settings(tier: Tier | None = None) -> Settings:
         admin_db_url=os.getenv("ADMIN_DB_URL"),
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_data_root=Path(os.getenv("AITEAM_MANAGER_DATA_ROOT") or (Path.cwd() / ".data" / "manager")),
-        manager_tenant_id=os.getenv("AITEAM_MANAGER_TENANT_ID") or None,
-        manager_enterprise_id=os.getenv("AITEAM_MANAGER_ENTERPRISE_ID") or None,
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),

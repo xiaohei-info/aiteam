@@ -52,7 +52,6 @@ class PgManagerRagService(ManagerRagService):
         *,
         instance_registry: RagInstanceRegistry | None = None,
         enterprise_workspace: str | None = None,
-        enterprise_id: str | None = None,
     ):
         self._router = PgTenantRouter(dsn)
         # Startup callers may inject the already-loaded registry.  The default
@@ -61,7 +60,6 @@ class PgManagerRagService(ManagerRagService):
         self._enterprise_workspace = enterprise_workspace or (
             self._instances.instances[0].workspace if self._instances is not None else None
         )
-        self._enterprise_id = enterprise_id or os.getenv("AITEAM_MANAGER_TENANT_ID") or os.getenv("AITEAM_MANAGER_ENTERPRISE_ID") or None
         self._enterprise_space_id = enterprise_knowledge_space_id(self._enterprise_workspace)
 
     @property
@@ -76,10 +74,7 @@ class PgManagerRagService(ManagerRagService):
         # A Manager process serves one enterprise.  Keep the legacy key in the
         # handle for existing citations/bindings, but never route a second space.
         enterprise_workspace = getattr(self, "_enterprise_workspace", None)
-        enterprise_id = getattr(self, "_enterprise_id", None)
         if enterprise_workspace:
-            if enterprise_id and str(ctx.tenant_id) != str(enterprise_id):
-                raise ValueError("knowledge service unavailable")
             if knowledge_space_id != self.default_space_id:
                 # Existing citations/bindings may carry a legacy internal key;
                 # accept it only when the Manager DB already knows that key.

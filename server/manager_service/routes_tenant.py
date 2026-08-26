@@ -1,8 +1,7 @@
-"""F01 enterprise deployment binding (POST /api/manager/tenants, Operator→Manager).
+"""F01 enterprise provisioning (POST /api/manager/tenants, Operator→Manager).
 
-A Manager deployment accepts only its configured enterprise/tenant pair. The
-control-plane registry remains an internal compatibility record and is written
-with the admin DSN; duplicate binding is idempotent.
+The control-plane registry is an internal compatibility record written with the
+admin DSN; repeated provisioning is idempotent.
 """
 
 from __future__ import annotations
@@ -40,13 +39,6 @@ def provision_tenant(
     from shared.errors import Conflict
 
     settings = request.app.state.settings
-    bound_tenant_id = getattr(settings, "manager_tenant_id", None)
-    if bound_tenant_id and str(body.tenant_id) != str(bound_tenant_id):
-        raise Conflict("tenant is not bound to this Manager deployment")
-    bound_enterprise_id = getattr(settings, "manager_enterprise_id", None)
-    if bound_enterprise_id and str(body.enterprise_id) != str(bound_enterprise_id):
-        raise Conflict("enterprise is not bound to this Manager deployment")
-
     dsn = settings.admin_db_url
     if not dsn:
         raise ManagerAdminDbNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
