@@ -479,7 +479,7 @@ describe("TimelineView Pi cards", () => {
     expect(screen.getByRole("article", { name: "待办更新事件" })).toHaveAttribute("data-kind", "todo");
     expect(screen.getByRole("article", { name: "记忆召回事件" })).toHaveTextContent("remember this bounded note");
     expect(screen.getByRole("article", { name: "知识库事件" })).toHaveTextContent("bounded citation preview");
-    expect(screen.getByRole("article", { name: "成员协作事件" })).toHaveTextContent("来源专家：研究专家（子专家）");
+    expect(screen.getByRole("article", { name: "成员协作事件" })).not.toHaveTextContent("来源专家：");
     expect(screen.getByRole("article", { name: "知识库事件" })).toHaveTextContent("citation:1");
   });
 

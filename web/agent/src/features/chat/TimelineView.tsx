@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
 import { Card } from "@astryxdesign/core/Card";
+import { CheckboxList, CheckboxListItem } from "@astryxdesign/core/CheckboxList";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatMessage,
@@ -293,7 +294,6 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
           {toolOutcome(model) === "failure" ? <span data-timeline-tool-outcome="failure" aria-label="执行失败">×</span> : null}
         </summary>
         <div data-timeline-card-content="true">
-          {model.sourceLabel ? <p data-timeline-card-source="true">{model.sourceLabel}</p> : null}
           <p data-timeline-card-summary="true">{model.summary}</p>
           {model.argsSummary ? <BoundedDetail label="参数摘要" value={model.argsSummary} testId="timeline-tool-args" /> : null}
           {model.resultSummary ? <BoundedDetail label="结果摘要" value={model.resultSummary} testId="timeline-tool-result" /> : null}
@@ -303,15 +303,30 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
                 <strong>待办列表</strong>
                 <span data-timeline-todo-count="true">{model.todoItems.length} 项</span>
               </div>
-              <ul data-timeline-todo-list="true">
-                {model.todoItems.map((todo, index) => (
-                  <li key={todo.id || `${todo.text}-${index}`} data-timeline-todo-item="true" data-status={todo.status}>
-                    <span data-timeline-todo-indicator="true" aria-hidden="true">{todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "…" : "○"}</span>
-                    <span data-timeline-todo-text="true">{todo.text}</span>
-                    <span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>
-                  </li>
-                ))}
-              </ul>
+              <div data-timeline-todo-list="true">
+                <CheckboxList
+                  label="待办列表"
+                  isLabelHidden
+                  value={model.todoItems.filter((todo) => todo.status === "completed").map(todoKey)}
+                  isReadOnly
+                  density="compact"
+                >
+                  {model.todoItems.map((todo, index) => {
+                    const key = todoKey(todo, index);
+                    return (
+                      <CheckboxListItem
+                        key={key}
+                        value={key}
+                        data-timeline-todo-item="true"
+                        data-status={todo.status}
+                        label={todo.text}
+                        isLoading={todo.status === "in_progress"}
+                        endContent={<span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>}
+                      />
+                    );
+                  })}
+                </CheckboxList>
+              </div>
             </section>
           ) : null}
           {model.kind === "memory" ? (
@@ -411,6 +426,10 @@ function toolOutcome(model: TimelineCardModel): ToolOutcome | null {
   if (["completed", "success", "succeeded", "settled", "done", "ok"].includes(status)) return "success";
   if (["failed", "failure", "error", "aborted", "cancelled", "canceled", "rejected"].includes(status)) return "failure";
   return "pending";
+}
+
+function todoKey(todo: TimelineTodoItem, index = 0): string {
+  return todo.id ?? `${todo.text}-${index}`;
 }
 
 function todoStatusLabel(status: TimelineTodoStatus): string {
