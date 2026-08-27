@@ -49,10 +49,12 @@ export type TimelineKind =
   | "streaming"
   | "unknown";
 
+export type TimelineTodoStatus = "waiting" | "in_progress" | "completed";
+
 export interface TimelineTodoItem {
   id?: string;
   text: string;
-  status: string;
+  status: TimelineTodoStatus;
 }
 
 export interface TimelineCitation {
@@ -76,6 +78,7 @@ export interface TimelineCardModel {
   summary: string;
   sender: "user" | "assistant";
   toolName?: string;
+  toolCallId?: string;
   argsSummary?: string;
   resultSummary?: string;
   todoItems?: TimelineTodoItem[];
@@ -194,14 +197,14 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     [sourceExperts],
   );
   const timeline = mergeTimeline(entries, events);
-  const visibleTimeline = timeline.flatMap((item, index) => {
+  const visibleTimeline = mergeVisibleTimeline(timeline.flatMap((item, index) => {
     const record = item.kind === "entry" ? item.entry : item.item.event;
     if (NON_CONVERSATION_ENTRY_TYPES.has(normalizeType(record.type))) return [];
     const models = classifyPiRecords(record)
       .filter((model) => model.kind !== "streaming" && model.kind !== "settled");
     const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
     return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
-  });
+  }));
   const hasContent = visibleTimeline.length > 0;
   const visibleError = loadError ?? streamError;
 
@@ -286,7 +289,8 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
       <details key={updating ? "updating" : "completed"} data-timeline-disclosure="true" open={updating || undefined}>
         <summary data-timeline-card-header="true">
           <strong data-timeline-card-label="true">{model.label}</strong>
-          {model.toolName ? <code data-timeline-card-hint="true">{model.toolName}</code> : null}
+          {toolOutcome(model) === "success" ? <span data-timeline-tool-outcome="success" aria-label="执行成功">✓</span> : null}
+          {toolOutcome(model) === "failure" ? <span data-timeline-tool-outcome="failure" aria-label="执行失败">×</span> : null}
         </summary>
         <div data-timeline-card-content="true">
           {model.sourceLabel ? <p data-timeline-card-source="true">{model.sourceLabel}</p> : null}
@@ -295,25 +299,29 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
           {model.resultSummary ? <BoundedDetail label="结果摘要" value={model.resultSummary} testId="timeline-tool-result" /> : null}
           {model.kind === "todo" && model.todoItems?.length ? (
             <section data-timeline-todos="true" aria-label="待办列表">
-              <strong>待办列表</strong>
-              <ul>
+              <div data-timeline-todo-heading="true">
+                <strong>待办列表</strong>
+                <span data-timeline-todo-count="true">{model.todoItems.length} 项</span>
+              </div>
+              <ul data-timeline-todo-list="true">
                 {model.todoItems.map((todo, index) => (
-                  <li key={todo.id || `${todo.text}-${index}`}>
-                    <span>{todo.text}</span>
-                    <code>{todo.status}</code>
+                  <li key={todo.id || `${todo.text}-${index}`} data-timeline-todo-item="true" data-status={todo.status}>
+                    <span data-timeline-todo-indicator="true" aria-hidden="true">{todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "…" : "○"}</span>
+                    <span data-timeline-todo-text="true">{todo.text}</span>
+                    <span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>
                   </li>
                 ))}
               </ul>
             </section>
           ) : null}
           {model.kind === "memory" ? (
-            <section data-timeline-memory="true" aria-label="记忆活动摘要">
+            <section data-timeline-memory="true" aria-label="记忆召回摘要">
               {model.memoryQuery ? <BoundedDetail label="查询/内容摘要" value={model.memoryQuery} /> : null}
               {model.memoryPreview ? <BoundedDetail label="结果预览" value={model.memoryPreview} /> : null}
             </section>
           ) : null}
           {model.kind === "rag" ? (
-            <section data-timeline-rag="true" aria-label="知识活动摘要">
+            <section data-timeline-rag="true" aria-label="知识库摘要">
               {model.ragQuery ? <BoundedDetail label="查询摘要" value={model.ragQuery} /> : null}
               {model.ragCitationId ? <BoundedDetail label="引用标识" value={model.ragCitationId} /> : null}
               {model.ragResultPreview ? <BoundedDetail label="结果预览" value={model.ragResultPreview} /> : null}
@@ -341,6 +349,76 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
   );
 }
 
+type VisibleTimelineItem = { model: TimelineCardModel; key: string };
+type ToolOutcome = "success" | "failure" | "pending";
+
+function mergeVisibleTimeline(items: VisibleTimelineItem[]): VisibleTimelineItem[] {
+  const result: VisibleTimelineItem[] = [];
+  const calls = new Map<string, number>();
+  const results = new Map<string, number>();
+  for (const item of items) {
+    const model = item.model;
+    const identity = toolIdentity(model);
+    if (!identity || (model.kind !== "tool-call" && model.kind !== "tool-result")) {
+      result.push({ ...item, model });
+      continue;
+    }
+    if (model.kind === "tool-call") {
+      const resultIndex = results.get(identity);
+      if (resultIndex !== undefined) {
+        result[resultIndex] = { ...item, model: mergeToolModels(model, result[resultIndex]!.model) };
+        results.delete(identity);
+      } else {
+        calls.set(identity, result.length);
+        result.push({ ...item, model });
+      }
+      continue;
+    }
+    const callIndex = calls.get(identity);
+    if (callIndex !== undefined) {
+      result[callIndex] = { ...result[callIndex]!, model: mergeToolModels(result[callIndex]!.model, model) };
+      calls.delete(identity);
+    } else {
+      results.set(identity, result.length);
+      result.push({ ...item, model });
+    }
+  }
+  return result;
+}
+
+function mergeToolModels(call: TimelineCardModel, result: TimelineCardModel): TimelineCardModel {
+  return {
+    ...call,
+    kind: "tool-call",
+    label: result.label || call.label,
+    status: result.status,
+    toolName: call.toolName ?? result.toolName,
+    toolCallId: call.toolCallId ?? result.toolCallId,
+    argsSummary: call.argsSummary ?? result.argsSummary,
+    resultSummary: result.resultSummary ?? call.resultSummary,
+  };
+}
+
+function toolIdentity(model: TimelineCardModel): string | undefined {
+  if (!model.toolCallId) return undefined;
+  const source = model.sourceEmployeeId ?? model.source?.employeeId ?? "";
+  return `${source}:${model.toolCallId}`;
+}
+
+function toolOutcome(model: TimelineCardModel): ToolOutcome | null {
+  if (model.kind !== "tool-call" && model.kind !== "tool-result") return null;
+  const status = normalizeType(model.status);
+  if (["completed", "success", "succeeded", "settled", "done", "ok"].includes(status)) return "success";
+  if (["failed", "failure", "error", "aborted", "cancelled", "canceled", "rejected"].includes(status)) return "failure";
+  return "pending";
+}
+
+function todoStatusLabel(status: TimelineTodoStatus): string {
+  if (status === "completed") return "已完成";
+  if (status === "in_progress") return "进行中";
+  return "等待中";
+}
+
 function BoundedDetail({ label, value, testId }: { label: string; value: string; testId?: string }): ReactNode {
   return (
     <div data-timeline-detail="true" data-testid={testId}>
@@ -361,7 +439,7 @@ export function classifyPiRecord(record: PiEntry | PiEvent): TimelineCardModel {
   const status = statusFor(kind, normalizedType, value);
   return {
     kind,
-    label: kindLabel(kind),
+    label: activityLabel(kind, details.toolName),
     type,
     status,
     summary: summaryFor(kind, normalizedType, value, details),
@@ -400,7 +478,10 @@ export function classifyPiRecords(record: PiEntry | PiEvent): TimelineCardModel[
         const type = normalizeType(firstString(part, "type") ?? "");
         return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
       });
-      if (tools.length) return tools.map((part) => classifyPiRecord({ ...value, ...part, type: "tool_call", message: undefined } as PiEvent));
+      if (tools.length) return tools.map((part) => {
+        const callId = firstString(part, "id", "toolCallId", "tool_call_id", "callId", "call_id");
+        return classifyPiRecord({ ...value, ...part, ...(callId ? { toolCallId: callId } : {}), type: "tool_call", message: undefined } as PiEvent);
+      });
     }
   }
 
@@ -424,7 +505,8 @@ export function classifyPiRecords(record: PiEntry | PiEvent): TimelineCardModel[
       const thinking = thinkingTextFrom(part);
       if (thinking) models.push(classifyPiRecord({ ...value, type: "thinking", thinking } as PiEvent));
     } else if (type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use") {
-      models.push(classifyPiRecord({ ...value, ...part, type: "tool_call", message: undefined } as PiEvent));
+      const callId = firstString(part, "id", "toolCallId", "tool_call_id", "callId", "call_id");
+      models.push(classifyPiRecord({ ...value, ...part, ...(callId ? { toolCallId: callId } : {}), type: "tool_call", message: undefined } as PiEvent));
     }
   }
   flushText();
@@ -677,11 +759,11 @@ function kindLabel(kind: TimelineKind): string {
     case "message": return "消息";
     case "thinking": return "思考";
     case "tool-call": return "工具调用";
-    case "tool-result": return "工具结果";
+    case "tool-result": return "工具调用";
     case "todo": return "待办更新";
-    case "memory": return "记忆活动";
-    case "rag": return "知识活动";
-    case "approval": return "需要审批";
+    case "memory": return "记忆召回";
+    case "rag": return "知识库";
+    case "approval": return "工具调用";
     case "error": return "错误";
     case "settled": return "已完成";
     case "aborted": return "已中止";
@@ -693,10 +775,14 @@ function kindLabel(kind: TimelineKind): string {
 }
 
 function statusFor(kind: TimelineKind, type: string, value: Record<string, unknown> | null): string {
-  const explicit = firstString(value, "status", "state", "phase");
+  const message = asRecord(value?.message);
+  const explicit = firstString(value, "status", "state", "phase") ?? firstString(message, "status", "state", "phase");
   if (explicit) return safeDisplayText(explicit, MAX_STATUS_LENGTH);
   if (typeof value?.approved === "boolean") return value.approved ? "approved" : "pending";
+  if (typeof message?.approved === "boolean") return message.approved ? "approved" : "pending";
+  if (value?.error !== undefined || value?.failed === true || message?.error !== undefined || message?.failed === true) return "failed";
   if (typeof value?.success === "boolean") return value.success ? "success" : "failed";
+  if (typeof message?.success === "boolean") return message.success ? "success" : "failed";
   if (kind === "thinking") return "completed";
   if (kind === "tool-call") return type.endsWith("_start") || type.endsWith("_started") ? "running" : "pending";
   if (kind === "tool-result") return type.endsWith("_update") ? "running" : "completed";
@@ -717,6 +803,7 @@ function statusFor(kind: TimelineKind, type: string, value: Record<string, unkno
 
 interface ExtractedCardDetails {
   toolName?: string;
+  toolCallId?: string;
   argsSummary?: string;
   resultSummary?: string;
   todoItems?: TimelineTodoItem[];
@@ -748,7 +835,9 @@ function cardDetails(kind: TimelineKind, type: string, value: Record<string, unk
 
   const rawToolName = toolName(value) ?? toolNameFromType(type);
   const candidateName = canonicalToolName(rawToolName);
+  const callId = toolCallId(value) ?? ((isToolCallType(type) || isToolResultType(type)) ? firstString(value, "id") : null);
   if (rawToolName) details.toolName = safeDisplayText(rawToolName, MAX_TOOL_NAME_LENGTH);
+  if (callId) details.toolCallId = safeDisplayText(callId, MAX_TOOL_NAME_LENGTH);
   const extractedArgs = extractToolArguments(value);
   const args = extractedArgs ?? ((kind === "memory" || kind === "rag") ? value : undefined);
   const result = extractToolResult(value);
@@ -789,22 +878,22 @@ function summaryFor(kind: TimelineKind, type: string, value: Record<string, unkn
     case "thinking":
       return thinkingTextFrom(value?.thinking) ?? thinkingTextFrom(value?.reasoning) ?? thinkingTextFrom(value?.content) ?? thinkingTextFrom(value?.message) ?? thinkingTextFrom(value?.delta) ?? thinkingTextFrom(value?.assistantMessageEvent) ?? "正在思考";
     case "tool-call":
-      return toolSummary(details.toolName, "工具调用");
+      return activityLabel(kind, details.toolName);
     case "tool-result":
-      return toolSummary(details.toolName, "工具结果");
+      return activityLabel(kind, details.toolName);
     case "todo":
       return details.todoItems?.length ? `待办更新：${details.todoItems.length} 项` : "待办更新";
     case "memory": {
-      const label = details.memoryOperation === "retain" ? "记忆写入" : "记忆检索";
+      const label = "记忆召回";
       return boundedText(details.memoryQuery ? `${label}：${details.memoryQuery}` : label, MAX_SUMMARY_LENGTH);
     }
     case "rag": {
-      const label = details.ragOperation === "get" ? "知识引用" : "知识检索";
+      const label = "知识库";
       const subject = details.ragQuery ?? details.ragCitationId;
       return boundedText(subject ? `${label}：${subject}` : label, MAX_SUMMARY_LENGTH);
     }
     case "approval":
-      return toolSummary(details.toolName, "等待批准");
+      return "工具调用";
     case "error":
       return boundedText(textFrom(value?.message) ?? textFrom(value?.error) ?? textFrom(value?.detail) ?? "执行失败", MAX_SUMMARY_LENGTH);
     case "settled":
@@ -822,8 +911,22 @@ function summaryFor(kind: TimelineKind, type: string, value: Record<string, unkn
   }
 }
 
-function toolSummary(name: string | undefined, prefix: string): string {
-  return name ? `${prefix}：${boundedText(name, MAX_TOOL_NAME_LENGTH)}` : prefix;
+const COMMAND_TOOL_NAMES = new Set(["bash", "shell", "exec", "execute", "run_command", "run_shell", "command"]);
+
+function activityLabel(kind: TimelineKind, toolName?: string): string {
+  if (kind === "todo") return "待办更新";
+  if (kind === "memory") return "记忆召回";
+  if (kind === "rag") return "知识库";
+  if (kind === "tool-call" || kind === "tool-result" || kind === "approval") {
+    const name = canonicalToolName(toolName);
+    if (name === "todo_update") return "待办更新";
+    if (name === "knowledge_search" || name === "knowledge_get") return "知识库";
+    if (name === "hindsight_recall" || name === "hindsight_retain" || name === "memory_recall" || name === "memory_retain") return "记忆召回";
+    if (name === "mention_employee" || name === "delegate_employee") return "成员协作";
+    if (name && COMMAND_TOOL_NAMES.has(name)) return "命令执行";
+    return "工具调用";
+  }
+  return kindLabel(kind);
 }
 
 function isToolLikeKind(kind: TimelineKind): boolean {
@@ -849,7 +952,7 @@ function ragOperation(name: string | null | undefined): "search" | "get" {
 }
 
 function toolNameFromType(type: string): string | null {
-  const match = normalizeType(type).match(/(?:todo_update|hindsight_(?:recall|retain)|memory_(?:recall|retain)|knowledge_(?:search|get))/);
+  const match = normalizeType(type).match(/(?:todo_update|hindsight_(?:recall|retain)|memory_(?:recall|retain)|knowledge_(?:search|get)|mention_employee|delegate_employee|run_command|run_shell|command|bash|shell|exec|execute)/);
   return match?.[0] ?? null;
 }
 
@@ -857,6 +960,29 @@ function canonicalToolName(name: string | null | undefined): string | null {
   if (!name) return null;
   const normalized = normalizeType(name);
   return normalized || null;
+}
+
+function toolCallId(value: Record<string, unknown> | null, depth = 0): string | null {
+  if (!value || depth > 3) return null;
+  for (const key of ["toolCallId", "tool_call_id", "callId", "call_id"]) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) return safeDisplayText(candidate, MAX_TOOL_NAME_LENGTH);
+  }
+  for (const key of ["tool", "toolCall", "tool_call", "toolRequest", "tool_request", "toolResult", "tool_result", "message"]) {
+    const nested = asRecord(value[key]);
+    const candidate = toolCallId(nested, depth + 1);
+    if (candidate) return candidate;
+  }
+  if (Array.isArray(value.content)) {
+    for (const part of value.content.slice(0, MAX_ARRAY_ITEMS)) {
+      const candidatePart = asRecord(part);
+      const partType = normalizeType(firstString(candidatePart, "type") ?? "");
+      if (!partType.includes("tool")) continue;
+      const candidate = firstString(candidatePart, "id", "toolCallId", "tool_call_id", "callId", "call_id");
+      if (candidate) return safeDisplayText(candidate, MAX_TOOL_NAME_LENGTH);
+    }
+  }
+  return null;
 }
 
 function toolName(value: Record<string, unknown> | null, depth = 0): string | null {
@@ -943,16 +1069,23 @@ function extractTodoItems(value: unknown): TimelineTodoItem[] | undefined {
 function todoItem(value: unknown): TimelineTodoItem | undefined {
   if (typeof value === "string") {
     const text = safeDisplayText(value, MAX_TODO_TEXT_LENGTH);
-    return text ? { text, status: "未标记" } : undefined;
+    return text ? { text, status: "waiting" } : undefined;
   }
   const record = asRecord(value);
   if (!record) return undefined;
   const rawText = firstString(record, "text", "content", "title", "description", "label", "todo");
   const text = rawText ? safeDisplayText(rawText, MAX_TODO_TEXT_LENGTH) : "待办事项";
   const rawStatus = firstString(record, "status", "state", "phase");
-  const status = typeof record.done === "boolean" ? (record.done ? "已完成" : "未完成") : safeDisplayText(rawStatus ?? "未标记", MAX_STATUS_LENGTH);
+  const status = typeof record.done === "boolean" ? (record.done ? "completed" : "waiting") : normalizeTodoStatus(rawStatus);
   const id = firstString(record, "id", "todo_id", "todoId");
   return { ...(id ? { id: safeDisplayText(id, 100) } : {}), text, status };
+}
+
+function normalizeTodoStatus(value: string | null): TimelineTodoStatus {
+  const status = normalizeType(value ?? "");
+  if (["completed", "complete", "done", "success", "succeeded", "finished"].includes(status)) return "completed";
+  if (["in_progress", "inprogress", "running", "active", "doing"].includes(status)) return "in_progress";
+  return "waiting";
 }
 
 function previewFromResult(value: unknown): string | undefined {

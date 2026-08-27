@@ -149,6 +149,10 @@ test("SessionHost orders persisted entries by ISO timestamps and preserves same-
     ].join("\n"));
 
     const entries = await fixture.host.entries("ordered-group");
+    const firstUser = entries.find((entry) => entry.type === "message" && entry.message.role === "user");
+    assert(firstUser);
+    assert.equal((firstUser as unknown as { source_type?: string }).source_type, "human");
+    assert.equal("source_employee_id" in (firstUser as unknown as Record<string, unknown>), false);
     assert.deepEqual(
       entries.filter((entry) => entry.type === "message").map((entry) => {
         const message = entry.message as unknown as { role?: string; content?: unknown };

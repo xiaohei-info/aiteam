@@ -835,6 +835,10 @@ export class SessionHost {
         source_role: source.source_type === "employee" ? "participant" : "human",
         logical_message_id: source.logical_message_id,
       } as unknown as SessionEntry;
+      // A persisted user entry without a source index is a human message. Do
+      // not fall through to the participant fallback below, which would make
+      // the coordinator appear to have authored the user's prompt.
+      return { ...base, source_type: "human", source_role: "human" } as unknown as SessionEntry;
     }
     return {
       ...base,

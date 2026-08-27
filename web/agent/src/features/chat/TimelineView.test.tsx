@@ -56,9 +56,9 @@ describe("TimelineView Pi cards", () => {
     expect(classifyPiRecord(entry("u", "message", { message: { role: "user", content: "hi" } }))).toMatchObject({ kind: "message", sender: "user", status: "recorded" });
     expect(classifyPiRecord(event("thinking", "thinking", { text: "plan" }).event)).toMatchObject({ kind: "thinking", status: "completed" });
     expect(classifyPiRecord(entry("thinking-message", "message", { message: { role: "assistant", content: [{ type: "thinking", thinking: "bounded plan" }] } }))).toMatchObject({ kind: "thinking", summary: "bounded plan" });
-    expect(classifyPiRecord(event("call", "tool_call", { name: "read", input: { content: "not shown" } }).event)).toMatchObject({ kind: "tool-call", summary: "工具调用：read", status: "pending" });
+    expect(classifyPiRecord(event("call", "tool_call", { name: "read", input: { content: "not shown" } }).event)).toMatchObject({ kind: "tool-call", summary: "工具调用", status: "pending" });
     expect(classifyPiRecord(event("result", "tool_result", { name: "read", status: "completed" }).event)).toMatchObject({ kind: "tool-result", status: "completed" });
-    expect(classifyPiRecord(event("approval", "approval_required", { toolName: "write" }).event)).toMatchObject({ kind: "approval", summary: "等待批准：write", status: "pending" });
+    expect(classifyPiRecord(event("approval", "approval_required", { toolName: "write" }).event)).toMatchObject({ kind: "approval", summary: "工具调用", status: "pending" });
     expect(classifyPiRecord(event("error", "error", { message: "failed" }).event)).toMatchObject({ kind: "error", status: "error" });
     expect(classifyPiRecord(event("done", "settled").event)).toMatchObject({ kind: "settled", status: "settled" });
     expect(classifyPiRecord(event("stop", "aborted").event)).toMatchObject({ kind: "aborted", status: "aborted" });
@@ -66,7 +66,7 @@ describe("TimelineView Pi cards", () => {
     expect(classifyPiRecord(event("compact", "compaction_end").event)).toMatchObject({ kind: "compaction", status: "completed" });
     expect(classifyPiRecord(event("wait", "waiting_reply").event)).toMatchObject({ kind: "waiting", status: "waiting" });
     expect(classifyPiRecord(event("stream", "streaming").event)).toMatchObject({ kind: "streaming", status: "streaming" });
-    expect(classifyPiRecord(entry("tool-message", "message", { message: { role: "assistant", content: [{ type: "toolCall", name: "read" }] } }))).toMatchObject({ kind: "tool-call", summary: "工具调用：read" });
+    expect(classifyPiRecord(entry("tool-message", "message", { message: { role: "assistant", content: [{ type: "toolCall", name: "read" }] } }))).toMatchObject({ kind: "tool-call", summary: "工具调用" });
     expect(classifyPiRecord(entry("tool-result-message", "message", { message: { role: "toolResult", content: "done" } }))).toMatchObject({ kind: "tool-result" });
   });
 
@@ -121,7 +121,7 @@ describe("TimelineView Pi cards", () => {
     }).event)).toMatchObject({
       kind: "todo",
       toolName: "todo_update",
-      todoItems: [{ id: "t1", text: "Review bounded output", status: "pending" }],
+      todoItems: [{ id: "t1", text: "Review bounded output", status: "waiting" }],
     });
     expect(classifyPiRecord(entry("todo-result", "message", {
       message: {
@@ -194,7 +194,7 @@ describe("TimelineView Pi cards", () => {
     const durable = classifyPiRecords(entry("bash-message", "message", {
       message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "printf 'hello'" } }] },
     }));
-    expect(durable[0]).toMatchObject({ kind: "tool-call", toolName: "bash", argsSummary: expect.stringContaining("printf 'hello'" ) });
+    expect(durable[0]).toMatchObject({ kind: "tool-call", label: "命令执行", toolName: "bash", argsSummary: expect.stringContaining("printf 'hello'" ) });
   });
 
   it("keeps unknown output bounded and removes sensitive fields", () => {
@@ -396,9 +396,9 @@ describe("TimelineView Pi cards", () => {
     expect(models.map((model) => model.kind)).toEqual(["thinking", "tool-call", "thinking", "tool-call", "thinking", "message"]);
     expect(models.map((model) => model.summary)).toEqual([
       "思考1",
-      "工具调用：bash",
+      "命令执行",
       "思考2",
-      "工具调用：read",
+      "工具调用",
       "思考3",
       "最终回复",
     ]);
@@ -427,8 +427,9 @@ describe("TimelineView Pi cards", () => {
     expect(disclosure).toHaveAttribute("open");
     expect(screen.queryByText(/类型：/)).not.toBeInTheDocument();
     expect(screen.queryByText(/状态：/)).not.toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("read");
-    expect(screen.getByRole("article", { name: "需要审批事件" })).toHaveTextContent("write");
+    expect(screen.getAllByRole("article", { name: "工具调用事件" })).toHaveLength(2);
+    expect(screen.queryByText("read")).not.toBeInTheDocument();
+    expect(screen.queryByText("write")).not.toBeInTheDocument();
     expect(screen.getByRole("alert", { name: "错误事件" })).toHaveTextContent("failed");
     expect(screen.queryByRole("article", { name: "已完成事件" })).not.toBeInTheDocument();
     expect(screen.queryByRole("article", { name: "执行中事件" })).not.toBeInTheDocument();
@@ -476,10 +477,57 @@ describe("TimelineView Pi cards", () => {
 
     expect(await screen.findByRole("article", { name: "待办更新事件" })).toHaveTextContent("Review output");
     expect(screen.getByRole("article", { name: "待办更新事件" })).toHaveAttribute("data-kind", "todo");
-    expect(screen.getByRole("article", { name: "记忆活动事件" })).toHaveTextContent("remember this bounded note");
-    expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("bounded citation preview");
-    expect(screen.getByRole("article", { name: "工具调用事件" })).toHaveTextContent("来源专家：研究专家（子专家）");
-    expect(screen.getByRole("article", { name: "知识活动事件" })).toHaveTextContent("citation:1");
+    expect(screen.getByRole("article", { name: "记忆召回事件" })).toHaveTextContent("remember this bounded note");
+    expect(screen.getByRole("article", { name: "知识库事件" })).toHaveTextContent("bounded citation preview");
+    expect(screen.getByRole("article", { name: "成员协作事件" })).toHaveTextContent("来源专家：研究专家（子专家）");
+    expect(screen.getByRole("article", { name: "知识库事件" })).toHaveTextContent("citation:1");
+  });
+
+  it("renders todo statuses as a visual list", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("todo", "todo_update", {
+        todos: [
+          { id: "todo-1", title: "调研资料", status: "in_progress" },
+          { id: "todo-2", title: "等待确认", status: "pending" },
+          { id: "todo-3", title: "整理结论", status: "completed" },
+        ],
+      }),
+    ]);
+
+    render(<TimelineView client={client} conversationId="todo-statuses" />);
+
+    const card = await screen.findByRole("article", { name: "待办更新事件" });
+    expect(card.querySelectorAll('[data-timeline-todo-item="true"]')).toHaveLength(3);
+    expect(card).toHaveTextContent("进行中");
+    expect(card).toHaveTextContent("等待中");
+    expect(card).toHaveTextContent("已完成");
+    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="completed"]')).toHaveTextContent("整理结论");
+  });
+
+  it("merges a tool result into its call card and shows the outcome without raw tool names", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("call", "message", {
+        message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/visible.txt" } }] },
+      }),
+      entry("result", "message", {
+        message: { role: "toolResult", toolCallId: "call-1", toolName: "read", status: "completed", content: "读取成功" },
+      }),
+      entry("failed", "tool_execution_end", { toolCallId: "call-2", toolName: "bash", error: "命令失败" }),
+    ]);
+
+    render(<TimelineView client={client} conversationId="tool-outcome" />);
+
+    const cards = await screen.findAllByRole("article", { name: /工具调用事件|命令执行事件/ });
+    expect(cards).toHaveLength(2);
+    const toolCard = cards.find((card) => card.getAttribute("aria-label") === "工具调用事件");
+    expect(toolCard).toBeTruthy();
+    expect(toolCard).toHaveTextContent("结果摘要");
+    expect(toolCard).toHaveTextContent("读取成功");
+    expect(toolCard).toHaveAttribute("aria-label", "工具调用事件");
+    expect(toolCard?.querySelector('[data-timeline-tool-outcome="success"]')).toHaveTextContent("✓");
+    expect(screen.queryByText("read")).not.toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "命令执行事件" }).querySelector('[data-timeline-tool-outcome="failure"]')).toHaveTextContent("×");
+    expect(screen.queryByText("bash")).not.toBeInTheDocument();
   });
 
   it("keeps an updating thought expanded, collapses it on completion, streams one answer bubble, and reports runtime state outside the timeline", async () => {
@@ -549,7 +597,7 @@ describe("TimelineView Pi cards", () => {
 
     expect(screen.getAllByText("persisted")).toHaveLength(1);
     expect(screen.queryByText("duplicate")).not.toBeInTheDocument();
-    expect(screen.getByText("工具调用：read")).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "工具调用事件" })).toBeInTheDocument();
   });
 
   it("preserves loading and offline semantics", async () => {
