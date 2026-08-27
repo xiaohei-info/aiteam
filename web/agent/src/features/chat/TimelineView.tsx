@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
 import { Card } from "@astryxdesign/core/Card";
-import { CheckboxList, CheckboxListItem } from "@astryxdesign/core/CheckboxList";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatMessage,
@@ -303,30 +302,15 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
                 <strong>待办列表</strong>
                 <span data-timeline-todo-count="true">{model.todoItems.length} 项</span>
               </div>
-              <div data-timeline-todo-list="true">
-                <CheckboxList
-                  label="待办列表"
-                  isLabelHidden
-                  value={model.todoItems.filter((todo) => todo.status === "completed").map(todoKey)}
-                  isReadOnly
-                  density="compact"
-                >
-                  {model.todoItems.map((todo, index) => {
-                    const key = todoKey(todo, index);
-                    return (
-                      <CheckboxListItem
-                        key={key}
-                        value={key}
-                        data-timeline-todo-item="true"
-                        data-status={todo.status}
-                        label={todo.text}
-                        isLoading={todo.status === "in_progress"}
-                        endContent={<span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>}
-                      />
-                    );
-                  })}
-                </CheckboxList>
-              </div>
+              <ul data-timeline-todo-list="true">
+                {model.todoItems.map((todo, index) => (
+                  <li key={todoKey(todo, index)} data-timeline-todo-item="true" data-status={todo.status}>
+                    <span data-timeline-todo-indicator="true" aria-hidden="true" />
+                    <span data-timeline-todo-text="true">{todo.text}</span>
+                    <span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>
+                  </li>
+                ))}
+              </ul>
             </section>
           ) : null}
           {model.kind === "memory" ? (
