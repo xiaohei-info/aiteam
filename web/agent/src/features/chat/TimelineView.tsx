@@ -289,8 +289,8 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
       <details key={updating ? "updating" : "completed"} data-timeline-disclosure="true" open={updating || undefined}>
         <summary data-timeline-card-header="true">
           <strong data-timeline-card-label="true">{model.label}</strong>
-          {toolOutcome(model) === "success" ? <span data-timeline-tool-outcome="success" aria-label="执行成功">✓</span> : null}
-          {toolOutcome(model) === "failure" ? <span data-timeline-tool-outcome="failure" aria-label="执行失败">×</span> : null}
+          {toolOutcome(model) === "success" ? <span data-timeline-tool-outcome="success" aria-label="执行成功"><TimelineStatusIcon kind="success" /></span> : null}
+          {toolOutcome(model) === "failure" ? <span data-timeline-tool-outcome="failure" aria-label="执行失败"><TimelineStatusIcon kind="failure" /></span> : null}
         </summary>
         <div data-timeline-card-content="true">
           <p data-timeline-card-summary="true">{model.summary}</p>
@@ -305,7 +305,7 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
               <ul data-timeline-todo-list="true">
                 {model.todoItems.map((todo, index) => (
                   <li key={todoKey(todo, index)} data-timeline-todo-item="true" data-status={todo.status}>
-                    <span data-timeline-todo-indicator="true" aria-hidden="true">{todoStatusIcon(todo.status)}</span>
+                    <span data-timeline-todo-indicator="true" aria-hidden="true"><TimelineStatusIcon kind={todo.status} /></span>
                     <span data-timeline-todo-text="true">{todo.text}</span>
                     <span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>
                   </li>
@@ -416,10 +416,25 @@ function todoKey(todo: TimelineTodoItem, index = 0): string {
   return todo.id ?? `${todo.text}-${index}`;
 }
 
-function todoStatusIcon(status: TimelineTodoStatus): string {
-  if (status === "completed") return "✓";
-  if (status === "in_progress") return "⌛︎";
-  return "◷";
+type TimelineStatusIconKind = "success" | "failure" | TimelineTodoStatus;
+
+function TimelineStatusIcon({ kind }: { kind: TimelineStatusIconKind }): ReactNode {
+  const palette = kind === "success" || kind === "completed"
+    ? "#16a34a"
+    : kind === "failure"
+      ? "#dc2626"
+      : kind === "in_progress"
+        ? "#f59e0b"
+        : "#64748b";
+  return (
+    <svg data-timeline-status-icon={kind} width="24" height="24" viewBox="0 0 24 24" role="presentation" aria-hidden="true">
+      <rect x="1" y="1" width="22" height="22" rx="5" fill={palette} />
+      {kind === "success" || kind === "completed" ? <path d="m6 12 4 4 8-8" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /> : null}
+      {kind === "failure" ? <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" /> : null}
+      {kind === "in_progress" ? <path d="M8 5h8M8 19h8M9 5c0 3.5 3 4 3 7s-3 3.5-3 7m6-14c0 3.5-3 4-3 7s3 3.5 3 7" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" /> : null}
+      {kind === "waiting" ? <><circle cx="12" cy="12" r="6.5" fill="none" stroke="#fff" strokeWidth="1.8" /><path d="M12 8v4l2.5 2" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></> : null}
+    </svg>
+  );
 }
 
 function todoStatusLabel(status: TimelineTodoStatus): string {

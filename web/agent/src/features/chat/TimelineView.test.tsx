@@ -501,9 +501,9 @@ describe("TimelineView Pi cards", () => {
     expect(card).toHaveTextContent("进行中");
     expect(card).toHaveTextContent("等待中");
     expect(card).toHaveTextContent("已完成");
-    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="in_progress"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("⌛");
-    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="waiting"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("◷");
-    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="completed"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("✓");
+    expect(card.querySelector('[data-timeline-status-icon="in_progress"]')).toBeInTheDocument();
+    expect(card.querySelector('[data-timeline-status-icon="waiting"]')).toBeInTheDocument();
+    expect(card.querySelector('[data-timeline-status-icon="completed"]')).toBeInTheDocument();
     expect(card.querySelector('[data-timeline-todo-item="true"][data-status="completed"]')).toHaveTextContent("整理结论");
   });
 
@@ -527,9 +527,9 @@ describe("TimelineView Pi cards", () => {
     expect(toolCard).toHaveTextContent("结果摘要");
     expect(toolCard).toHaveTextContent("读取成功");
     expect(toolCard).toHaveAttribute("aria-label", "工具调用事件");
-    expect(toolCard?.querySelector('[data-timeline-tool-outcome="success"]')).toHaveTextContent("✓");
+    expect(toolCard?.querySelector('[data-timeline-status-icon="success"]')).toBeInTheDocument();
     expect(screen.queryByText("read")).not.toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "命令执行事件" }).querySelector('[data-timeline-tool-outcome="failure"]')).toHaveTextContent("×");
+    expect(screen.getByRole("article", { name: "命令执行事件" }).querySelector('[data-timeline-status-icon="failure"]')).toBeInTheDocument();
     expect(screen.queryByText("bash")).not.toBeInTheDocument();
   });
 
