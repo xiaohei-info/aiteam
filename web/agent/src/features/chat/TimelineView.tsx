@@ -419,22 +419,14 @@ function todoKey(todo: TimelineTodoItem, index = 0): string {
 type TimelineStatusIconKind = "success" | "failure" | TimelineTodoStatus;
 
 function TimelineStatusIcon({ kind }: { kind: TimelineStatusIconKind }): ReactNode {
-  const palette = kind === "success" || kind === "completed"
-    ? "#16a34a"
+  const symbol = kind === "success" || kind === "completed"
+    ? "✅"
     : kind === "failure"
-      ? "#dc2626"
+      ? "❌"
       : kind === "in_progress"
-        ? "#f59e0b"
-        : "#64748b";
-  return (
-    <svg data-timeline-status-icon={kind} width="24" height="24" viewBox="0 0 24 24" role="presentation" aria-hidden="true">
-      <rect x="1" y="1" width="22" height="22" rx="5" fill={palette} />
-      {kind === "success" || kind === "completed" ? <path d="m6 12 4 4 8-8" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /> : null}
-      {kind === "failure" ? <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" /> : null}
-      {kind === "in_progress" ? <path d="M8 5h8M8 19h8M9 5c0 3.5 3 4 3 7s-3 3.5-3 7m6-14c0 3.5-3 4-3 7s3 3.5 3 7" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" /> : null}
-      {kind === "waiting" ? <><circle cx="12" cy="12" r="6.5" fill="none" stroke="#fff" strokeWidth="1.8" /><path d="M12 8v4l2.5 2" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></> : null}
-    </svg>
-  );
+        ? "⏳"
+        : "⏸️";
+  return <span data-timeline-status-icon={kind}>{symbol}</span>;
 }
 
 function todoStatusLabel(status: TimelineTodoStatus): string {
