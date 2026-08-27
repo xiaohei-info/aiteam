@@ -227,6 +227,35 @@ describe("TimelineView Pi cards", () => {
     expect(merged.map((item) => item.kind === "entry" ? item.entry.id : item.item.id)).toEqual(["e1", "e2", "7", "8"]);
   });
 
+  it("renders source employee names and StaffDeck-inspired avatars for private and group messages", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("user", "message", { message: { role: "user", content: "请帮我查一下" } }),
+      entry("assistant", "message", {
+        source_employee_id: "employee-1",
+        message: { role: "assistant", content: "已为你整理好。" },
+      }),
+      entry("unknown-source", "message", {
+        source_employee_id: "employee-missing",
+        message: { role: "assistant", content: "未知来源也应安全显示。" },
+      }),
+    ]);
+
+    const { container } = render(
+      <TimelineView
+        client={client}
+        conversationId="avatar"
+        sourceExperts={[{ employee_id: "employee-1", display_name: "研究专家", avatar_url: "/avatars/research.png" }]}
+      />,
+    );
+
+    expect(await screen.findByText("研究专家")).toBeInTheDocument();
+    expect(screen.getAllByText("我").length).toBeGreaterThan(0);
+    expect(screen.getByText("数字员工")).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-chat-avatar="true"]')).toHaveLength(3);
+    expect(container.querySelector('[data-chat-avatar="true"] img')).toHaveAttribute("src", "/avatars/research.png");
+    expect(container.textContent).not.toContain("employee-missing");
+  });
+
   it("renders accessible cards, error alerts, and safe tool summaries", async () => {
     mockedGetEntries.mockResolvedValue([
       entry("u", "message", { message: { role: "user", content: "hello" } }),

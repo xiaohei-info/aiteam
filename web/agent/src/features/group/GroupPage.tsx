@@ -321,6 +321,7 @@ export function GroupPage() {
               conversationId={selected.id}
               refreshSignal={dispatchSignal}
               onPromptingChange={setPrompting}
+              sourceExperts={participantExperts}
             />
             <MessageComposer
               conversationId={selected.id}

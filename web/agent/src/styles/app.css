@@ -150,3 +150,157 @@ body,
   display: block;
   padding: 0.5rem 0;
 }
+
+/* StaffDeck-inspired employee identity treatment for Pi chat messages. */
+[data-chat-message-name="true"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.25rem;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+[data-chat-avatar="true"] {
+  position: relative;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid var(--color-background-card);
+  border-radius: 14px;
+  background: var(--color-background-teal);
+  box-shadow: var(--shadow-low);
+  isolation: isolate;
+}
+
+[data-chat-avatar="true"]::before {
+  position: absolute;
+  inset: 3px;
+  border: 1px solid color-mix(in srgb, var(--color-on-accent) 24%, transparent);
+  border-radius: 11px;
+  content: "";
+  pointer-events: none;
+  z-index: 3;
+}
+
+[data-chat-avatar="true"][data-chat-avatar-tone="teal"] {
+  background: linear-gradient(145deg, #11998e, #0f766e 58%, #075e59);
+}
+
+[data-chat-avatar="true"][data-chat-avatar-tone="copper"] {
+  background: linear-gradient(145deg, #c77b43, #a85d32 58%, #734023);
+}
+
+[data-chat-avatar="true"][data-chat-avatar-tone="olive"] {
+  background: linear-gradient(145deg, #8a9a5b, #65743a 58%, #465125);
+}
+
+[data-chat-avatar="true"][data-chat-avatar-tone="blue"] {
+  background: linear-gradient(145deg, #5b8def, #3562b8 58%, #1f3f84);
+}
+
+[data-chat-avatar="true"][data-chat-avatar-tone="ink"] {
+  background: linear-gradient(145deg, #43505a, #29323a 58%, #141b22);
+}
+
+[data-chat-avatar-body="true"] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+[data-chat-avatar-body="true"]::after {
+  position: absolute;
+  right: 2px;
+  bottom: -8px;
+  left: 2px;
+  height: 24px;
+  border-radius: 55% 55% 0 0;
+  background: color-mix(in srgb, var(--color-background-surface) 88%, var(--color-background-teal));
+  content: "";
+}
+
+[data-chat-avatar-head="true"] {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(65, 44, 35, 0.22);
+  border-radius: 50%;
+  background: #f2c7aa;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+[data-chat-avatar-hair="true"] {
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  width: 25px;
+  height: 12px;
+  border-radius: 52% 52% 42% 38%;
+  background: #2e271f;
+}
+
+[data-chat-avatar-eyes="true"] {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  color: #483a32;
+  font-size: 7px;
+  letter-spacing: 3px;
+  line-height: 1;
+  transform: translateX(-42%);
+  white-space: nowrap;
+}
+
+[data-chat-avatar-initials="true"] {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 4;
+  max-width: calc(100% - 6px);
+  overflow: hidden;
+  padding: 1px 3px;
+  border: 1px solid color-mix(in srgb, var(--color-on-accent) 24%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, #111015 48%, transparent);
+  color: #ffffff;
+  font-size: 7px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-chat-avatar="true"] img {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-timeline-card-header="true"]::before {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  [data-chat-avatar="true"] {
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+  }
+
+  [data-chat-message-name="true"] {
+    font-size: 0.6875rem;
+  }
+}

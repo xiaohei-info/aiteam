@@ -1,5 +1,5 @@
 /** 本地私聊工作区：保持会话、Pi prompt/event 行为，视图直接使用 Astryx。 */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
@@ -24,7 +24,7 @@ import { MessageComposer } from "./MessageComposer";
 import { RosterPicker } from "./RosterPicker";
 import type { Conversation } from "./useChatApi";
 import { createConversation } from "./useChatApi";
-import type { LoadedExpertProjection } from "../group/useGroupApi";
+import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
 const isPrivateConversation = (conversation: Conversation) => conversation.kind !== "group" && conversation.entry_employee_id !== null;
 const formatConversationTime = (value: string) => {
@@ -44,6 +44,15 @@ export function ChatPage(): React.ReactNode {
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    listLoadedExperts(client)
+      .then((loaded) => { if (alive) setExperts(loaded); })
+      .catch(() => { if (alive) setExperts([]); });
+    return () => { alive = false; };
+  }, [client]);
 
   const handleSelect = useCallback((conversation: Conversation) => {
     setPrompting(false);
@@ -99,7 +108,7 @@ export function ChatPage(): React.ReactNode {
       : [],
     [conversations, selected?.entry_employee_id],
   );
-  const employeeName = history[0]?.title ?? selected?.title ?? selected?.entry_employee_id ?? "数字员工";
+  const employeeName = history[0]?.title ?? selected?.title ?? "数字员工";
 
   const handleCreateForSelected = useCallback(() => {
     if (!selected?.entry_employee_id) return;
@@ -165,7 +174,7 @@ export function ChatPage(): React.ReactNode {
                 composer={<MessageComposer conversationId={selected.id} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} />}
                 emptyState={<Text>选择一个会话开始对话</Text>}
               >
-                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} />
+                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} sourceExperts={experts} />
               </ChatLayout>
             </VStack>
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}

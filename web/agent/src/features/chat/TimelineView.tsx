@@ -1,5 +1,5 @@
 /** Conversation view backed by persisted Pi entries and the live Pi SSE stream. */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { PiEntry, PiEvent } from "@aiteam/shared/contracts";
 import { Card } from "@astryxdesign/core/Card";
 import {
@@ -102,14 +102,22 @@ export type TimelineItem =
   | { kind: "entry"; entry: PiEntry }
   | { kind: "event"; item: TimelineEventItem };
 
+export interface TimelineExpertSource {
+  employee_id: string;
+  display_name: string;
+  avatar_url?: string | null;
+}
+
 export interface TimelineViewProps {
   client: AgentApiClient;
   conversationId: string;
   refreshSignal?: number;
   onPromptingChange?: (prompting: boolean) => void;
+  /** Current local employee projections used to decorate source messages. */
+  sourceExperts?: TimelineExpertSource[];
 }
 
-export function TimelineView({ client, conversationId, refreshSignal = 0, onPromptingChange }: TimelineViewProps) {
+export function TimelineView({ client, conversationId, refreshSignal = 0, onPromptingChange, sourceExperts = [] }: TimelineViewProps) {
   const [entries, setEntries] = useState<PiEntry[]>([]);
   const [events, setEvents] = useState<TimelineEventItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -179,6 +187,10 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     };
   }, [client, conversationId, refreshSignal]);
 
+  const expertById = useMemo(
+    () => new Map(sourceExperts.map((expert) => [expert.employee_id, expert])),
+    [sourceExperts],
+  );
   const timeline = mergeTimeline(entries, events);
   const visibleTimeline = timeline.flatMap((item, index) => {
     const models = classifyPiRecords(item.kind === "entry" ? item.entry : item.item.event)
@@ -204,17 +216,75 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
           实时事件流离线：{streamError}
         </span>
       ) : null}
-      {visibleTimeline.map(({ model, key }) => (
-        <ChatMessage key={key} sender={model.sender}>
-          <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
-            {model.kind === "message"
-              ? <p data-timeline-message="true">{model.summary}</p>
-              : <TimelineCard model={model} />}
-          </ChatMessageBubble>
-        </ChatMessage>
-      ))}
+      {visibleTimeline.map(({ model, key }) => {
+        const source = model.sender === "assistant"
+          ? resolveMessageSource(model, expertById)
+          : { name: "我", avatarUrl: undefined };
+        return (
+          <ChatMessage
+            key={key}
+            sender={model.sender}
+            avatar={<EmployeeChatAvatar name={source.name} avatarUrl={source.avatarUrl} sender={model.sender} />}
+            name={<span data-chat-message-name="true">{source.name}</span>}
+          >
+            <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
+              {model.kind === "message"
+                ? <p data-timeline-message="true">{model.summary}</p>
+                : <TimelineCard model={model} />}
+            </ChatMessageBubble>
+          </ChatMessage>
+        );
+      })}
       {!loading && !hasContent && loadError && !streamError ? <span role="alert">{loadError}</span> : null}
     </ChatMessageList>
+  );
+}
+
+type ResolvedMessageSource = {
+  name: string;
+  avatarUrl?: string;
+};
+
+function resolveMessageSource(model: TimelineCardModel, experts: Map<string, TimelineExpertSource>): ResolvedMessageSource {
+  const employeeId = model.sourceEmployeeId ?? model.source?.employeeId;
+  const expert = employeeId ? experts.get(employeeId) : undefined;
+  const explicitName = model.sourceEmployeeName ?? model.source?.displayName;
+  const name = expert?.display_name?.trim()
+    || (explicitName && explicitName !== employeeId ? explicitName : "数字员工");
+  const candidate = expert?.avatar_url?.trim();
+  return {
+    name,
+    ...(candidate?.startsWith("/") && !candidate.startsWith("//") ? { avatarUrl: candidate } : {}),
+  };
+}
+
+function initials(value: string): string {
+  const parts = value.trim().split(/\s+/u).filter(Boolean);
+  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  return (value.trim().slice(0, 2) || "AI").toUpperCase();
+}
+
+function avatarTone(value: string): "teal" | "copper" | "olive" | "blue" | "ink" {
+  let hash = 0;
+  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return (["teal", "copper", "olive", "blue", "ink"] as const)[hash % 5]!;
+}
+
+function EmployeeChatAvatar({ name, avatarUrl, sender }: ResolvedMessageSource & { sender: "user" | "assistant" }): ReactNode {
+  const [imageFailed, setImageFailed] = useState(false);
+  return (
+    <span data-chat-avatar="true" data-chat-avatar-tone={sender === "user" ? "ink" : avatarTone(name)} aria-hidden="true">
+      {avatarUrl && !imageFailed ? (
+        <img src={avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />
+      ) : (
+        <>
+          <span data-chat-avatar-body="true">
+            <span data-chat-avatar-head="true"><span data-chat-avatar-hair="true" /><span data-chat-avatar-eyes="true">••</span></span>
+          </span>
+          <span data-chat-avatar-initials="true">{initials(name)}</span>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -998,7 +1068,7 @@ function sourceMetadata(value: Record<string, unknown> | null): TimelineSource |
   }
   if (!employeeId && !displayName) return undefined;
   const safeId = employeeId ? safeDisplayText(employeeId, MAX_TOOL_NAME_LENGTH) : undefined;
-  const safeName = safeDisplayText(displayName ?? employeeId ?? "未知专家", MAX_TOOL_NAME_LENGTH);
+  const safeName = safeDisplayText(displayName ?? "数字员工", MAX_TOOL_NAME_LENGTH);
   const safeRole = role ? safeSourceRole(role) : undefined;
   return { ...(safeId ? { employeeId: safeId } : {}), displayName: safeName, ...(safeRole ? { role: safeRole } : {}) };
 }

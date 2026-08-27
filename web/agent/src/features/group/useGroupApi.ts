@@ -22,6 +22,7 @@ export interface LoadedExpertProjection {
   version: string;
   handle: string;
   display_name: string;
+  avatar_url?: string | null;
   synced_at?: string | null;
   revoked: boolean;
   model_policy?: ModelPolicy | null;
