@@ -74,7 +74,9 @@ describe("MemoryPage 记忆管理", () => {
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
     expect(screen.getByText("用户偏好中文回答")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "记忆管理" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "打开 Hindsight 控制台" })).toHaveAttribute("href", "/memory-console");
+    expect(screen.getByRole("link", { name: "打开 Hindsight 控制台" })).toHaveAttribute("href", "http://localhost:9999/dashboard");
+    expect(screen.getByRole("link", { name: "打开 Hindsight 控制台" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "打开 Hindsight 控制台" })).toHaveAttribute("title", expect.stringContaining("HINDSIGHT_CP_ACCESS_KEY"));
     expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 

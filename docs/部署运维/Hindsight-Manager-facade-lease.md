@@ -22,13 +22,25 @@ facade 在每个请求校验 lease 的 tenant/member/employee/bank/expiry/revoke
 Manager：
 
 ```dotenv
-# API 用于 facade/lease；原生控制台（若启用）使用单独 UI 地址
+# API 用于 facade/lease；Manager-only
 HINDSIGHT_URL=https://hindsight.example.com:9290
-HINDSIGHT_CONSOLE_URL=https://hindsight.example.com:9999
 HINDSIGHT_SERVICE_TOKEN=<manager-only-secret>
 HINDSIGHT_FACADE_URL=/api/manager/hindsight
 HINDSIGHT_LEASE_TTL_SECONDS=300
 ```
+
+Hindsight Control Plane 原生 UI 使用独立的访问密钥；该变量只配置给 Hindsight
+服务，不配置给 Manager 或 Agent：
+
+```dotenv
+HINDSIGHT_ENABLE_CP=true
+HINDSIGHT_CP_ACCESS_KEY=<secret-store>
+# UI 默认端口 9999；需要远程浏览器访问时，将 UI 绑定在受保护的 host:9999。
+# Manager「记忆管理」页会打开当前 Manager host:9999/dashboard。
+```
+
+原生 UI 登录密钥不放入超链接、前端 bundle 或页面文案；管理员应从部署 secret
+store 获取并在 Hindsight 登录页输入。
 
 `HINDSIGHT_RECALL_PATH`、`HINDSIGHT_RETAIN_PATH`、`HINDSIGHT_DELETE_PATH` 仍只供
 Manager 管理面 facade/client 使用。Agent 不设置 `AITEAM_HINDSIGHT_URL`、

@@ -1,6 +1,6 @@
 /** B07 记忆管理页 — 记忆条目列表 + CRUD + 搜索。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { ApiError, EnterpriseRole, hasRole, serviceUrl } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -13,7 +13,6 @@ import { Text } from "@astryxdesign/core/Text";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { Link } from "react-router-dom";
 import { useSession } from "../../auth/session";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useMemoryApi } from "./useMemoryApi";
@@ -99,7 +98,19 @@ export function MemoryPage(): ReactNode {
       <HStack justify="between" align="center">
         <Heading level={1}>记忆管理</Heading>
         <HStack gap={2}>
-          {canManage && <Link to="/memory-console">打开 Hindsight 控制台</Link>}
+          {canManage && (
+            <VStack gap={0} align="end">
+              <a
+                href={serviceUrl(9999, "/dashboard")}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Hindsight 需要使用 HINDSIGHT_CP_ACCESS_KEY 配置的访问密钥登录；密钥不显示在页面中。"
+              >
+                打开 Hindsight 控制台
+              </a>
+              <Text type="supporting">访问密钥由 HINDSIGHT_CP_ACCESS_KEY 配置</Text>
+            </VStack>
+          )}
           <Button label="+ 新增记忆" variant="primary" size="sm" onClick={() => setShowForm(!showForm)} />
         </HStack>
       </HStack>

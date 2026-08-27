@@ -66,6 +66,11 @@ services:
       # These are Manager-side only; do not copy them into the Agent service.
       API_KEY: ${LIGHTRAG_API_KEY:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      # LightRAG native UI/API account authentication; leave empty only for
+      # explicitly isolated local development, never for production.
+      AUTH_ACCOUNTS: ${LIGHTRAG_AUTH_ACCOUNTS:-}
+      TOKEN_SECRET: ${LIGHTRAG_TOKEN_SECRET:-}
+      JWT_ALGORITHM: ${LIGHTRAG_JWT_ALGORITHM:-HS256}
       POSTGRES_HOST: lightrag-postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${LIGHTRAG_DB_USER:-lightrag}
@@ -78,6 +83,10 @@ services:
       LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
       EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-1024}
       LOG_LEVEL: ${LIGHTRAG_LOG_LEVEL:-INFO}
+    ports:
+      # Native LightRAG UI/API link target; keep loopback by default and open it
+      # only on a protected Manager host when direct browser access is required.
+      - "${LIGHTRAG_BIND_HOST:-127.0.0.1}:${LIGHTRAG_PORT:-9621}:9621"
     expose:
       - "9621"
     healthcheck:
@@ -86,9 +95,10 @@ services:
       timeout: 5s
       retries: 12
 
-  # Platform-managed AI Relay. It is a first-class AI Team component but remains
-  # behind the Operator control plane: only the loopback HTTP port is published;
-  # its PostgreSQL/Redis and all management/upstream credentials stay private.
+  # Platform-managed AI Relay. It is a first-class AI Team component; its
+  # PostgreSQL/Redis and all management/upstream credentials stay private. The
+  # UI/API host binding remains loopback by default; set *_BIND_HOST behind a
+  # firewall/TLS boundary when the native UI is opened from a browser.
   newapi-postgres:
     profiles: [newapi]
     image: ${NEWAPI_POSTGRES_IMAGE:-postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229}
@@ -132,7 +142,9 @@ services:
       newapi-redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${NEWAPI_PORT:-9300}:3000"
+      # Native NewAPI UI link target; keep loopback by default and open it only
+      # behind the Operator host firewall/TLS boundary when direct access is required.
+      - "${NEWAPI_BIND_HOST:-127.0.0.1}:${NEWAPI_PORT:-9300}:3000"
     environment:
       SQL_DSN: postgresql://${NEWAPI_DB_USER:-newapi}:${NEWAPI_DB_PASSWORD:-newapi_test}@newapi-postgres:5432/${NEWAPI_DB_NAME:-newapi}
       REDIS_CONN_STRING: redis://:${NEWAPI_REDIS_PASSWORD:-newapi_test}@newapi-redis:6379
@@ -216,7 +228,6 @@ services:
       APP_RW_PASSWORD: aiteam_test
       MANAGER_CREDENTIAL_KEY: ${MANAGER_CREDENTIAL_KEY:-}
       HINDSIGHT_URL: ${HINDSIGHT_URL:-}
-      HINDSIGHT_CONSOLE_URL: ${HINDSIGHT_CONSOLE_URL:-}
       HINDSIGHT_SERVICE_TOKEN: ${HINDSIGHT_SERVICE_TOKEN:-}
       HINDSIGHT_RECALL_PATH: ${HINDSIGHT_RECALL_PATH:-}
       HINDSIGHT_RETAIN_PATH: ${HINDSIGHT_RETAIN_PATH:-}
@@ -228,7 +239,6 @@ services:
       # The LightRAG service is opt-in (profile lightrag); configure an
       # explicitly reachable Manager-side URL or leave unset (fail closed).
       LIGHTRAG_URL: ${LIGHTRAG_URL:-}
-      LIGHTRAG_CONSOLE_URL: ${LIGHTRAG_CONSOLE_URL:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
       LIGHTRAG_WORKSPACE: ${LIGHTRAG_WORKSPACE:-}
       LIGHTRAG_TIMEOUT_MS: ${LIGHTRAG_TIMEOUT_MS:-5000}

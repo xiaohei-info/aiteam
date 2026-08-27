@@ -7,7 +7,7 @@
 - Operator 配置上游 channel、发布模型/价格、签发 tenant 受限 token。
 - Manager/Agent 永远不获得 NewAPI 管理 token 或上游 channel key。
 - Agent 只使用 tenant 独立、可撤销、可限模型/限额的推理 token。
-- NewAPI DB/Redis 不发布公网；HTTP 默认绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。原生管理 UI 仅经 Operation 的 `/api/operation/newapi-console/` 代理访问。
+- NewAPI DB/Redis 不发布公网；HTTP 默认绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。Operator「大模型服务」页直接打开当前 host 的 NewAPI UI 端口；远程访问必须将端口放在防火墙/TLS 保护之后。
 
 ## 2. 配置
 
@@ -16,6 +16,7 @@
 ```dotenv
 NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b
 NEWAPI_PORT=9300
+NEWAPI_BIND_HOST=0.0.0.0  # 仅在防火墙/TLS 已保护、需要浏览器直连时设置
 NEWAPI_DB_USER=newapi
 NEWAPI_DB_PASSWORD=<strong-random>
 NEWAPI_DB_NAME=newapi
@@ -27,7 +28,8 @@ NEWAPI_URL=http://127.0.0.1:9300
 # 可选：管理面/推理面分离时分别覆盖；否则自动使用 NEWAPI_URL 和 NEWAPI_URL/v1。
 NEWAPI_ADMIN_BASE_URL=
 NEWAPI_PUBLIC_BASE_URL=
-# Operation 原生控制台代理默认使用 NEWAPI_ADMIN_BASE_URL，无需向浏览器暴露此地址。
+# Operator 页面直接打开当前访问 host:${NEWAPI_PORT}；NewAPI 自己负责账号密码登录。
+# NEWAPI_ADMIN_TOKEN 仅用于 Operator 的服务端 relay 管理调用，不放进超链接或前端。
 ```
 
 环境文件必须 `chmod 600 .env.<env>`。生产还必须在首次 setup 后设置 Operator-only：

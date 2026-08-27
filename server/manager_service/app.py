@@ -32,7 +32,6 @@ from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_billing import build_billing_router
 from .routes_memory_items import build_memory_items_router
 from .routes_hindsight import build_hindsight_router
-from .routes_native_console import build_native_console_router
 from .hindsight_client import HindsightSettings
 from .routes_connector_ops import build_connector_ops_router
 from .routes_org import build_org_router
@@ -196,8 +195,6 @@ app.include_router(build_memory_items_router(_verifier))
 # P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
 # Manager-only because Hindsight 0.12.0 has no native bank-scoped token API.
 app.include_router(build_hindsight_router(_verifier))
-# Manager-owned native consoles for the deployment-local Hindsight/LightRAG UI.
-app.include_router(build_native_console_router(_verifier))
 # ---- 功能补全：P07 组织树/部门分配 ----
 app.include_router(build_org_router(_verifier))
 # ---- 功能补全：B08 企业设置/子管理员邀请 ----

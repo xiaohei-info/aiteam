@@ -17,7 +17,6 @@ from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
-from .routes_native_console import build_newapi_console_router
 from .routes_admin import build_admin_router
 
 # 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
@@ -66,7 +65,5 @@ app.include_router(rollup_router)
 app.include_router(skill_market_router)
 # ---- 功能补全：S01 账号管理 + S03 方案统计 + S04 财务管理 + 系统健康 ----
 app.include_router(build_admin_router(_verifier))
-# Operator-only NewAPI native console; the service injects the management token.
-app.include_router(build_newapi_console_router(_verifier))
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
 mount_frontend(app, settings.tier)

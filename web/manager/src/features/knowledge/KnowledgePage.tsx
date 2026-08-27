@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { ApiError, EnterpriseRole, hasRole, serviceUrl } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -10,7 +10,6 @@ import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
-import { Link } from "react-router-dom";
 import { useSession } from "../../auth/session";
 import { DocumentsPanel } from "./DocumentsPanel";
 import type { KnowledgeSpace } from "./types";
@@ -70,7 +69,19 @@ export function KnowledgePage(): ReactNode {
           <Heading level={1}>企业知识库</Heading>
           <Text type="supporting">此页面管理企业文档及 LightRAG 索引状态；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
         </VStack>
-        {canWrite && <Link to="/knowledge-console">打开 LightRAG 控制台</Link>}
+        {canWrite && (
+          <VStack gap={0} align="end">
+            <a
+              href={serviceUrl(9621, "/webui/")}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="LightRAG 需要使用 LIGHTRAG_AUTH_ACCOUNTS 中配置的账号密码登录；密码不显示在页面中。"
+            >
+              打开 LightRAG 控制台
+            </a>
+            <Text type="supporting">账号由 LIGHTRAG_AUTH_ACCOUNTS 配置</Text>
+          </VStack>
+        )}
       </HStack>
 
       {error && <Banner status="error" title={error} />}

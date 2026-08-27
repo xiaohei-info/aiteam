@@ -10,7 +10,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { Link } from "react-router-dom";
+import { serviceUrl } from "@aiteam/shared";
 import type { PlatformModelWithRate, PlatformProvider } from "./types";
 import { usePlatformProvidersApi } from "./usePlatformProvidersApi";
 
@@ -54,7 +54,17 @@ export function PlatformProvidersPage() {
       <HStack justify="between" align="center">
         <VStack gap={1}><Heading level={1}>大模型服务</Heading><Text color="secondary">统一维护 NewAPI 渠道、模型发布和版本化 USD 价格。</Text></VStack>
         <HStack gap={2}>
-          <Link to="/gateway">打开大模型网关</Link>
+          <VStack gap={0} align="end">
+            <a
+              href={serviceUrl(9300)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="NewAPI 需要使用组件账号登录；管理 Token 仅由部署配置保存，不随链接传递。"
+            >
+              打开大模型网关
+            </a>
+            <Text type="supporting">需使用 NewAPI 组件账号登录</Text>
+          </VStack>
           <Button label="新增大模型服务" variant="primary" onClick={() => setCreateOpen(true)} />
         </HStack>
       </HStack>
