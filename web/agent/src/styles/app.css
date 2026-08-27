@@ -202,49 +202,24 @@ body,
 }
 
 [data-timeline-todo-indicator="true"] {
-  position: relative;
-  display: inline-grid;
-  width: 1.125rem;
-  height: 1.125rem;
-  place-items: center;
-  border: 2px solid var(--color-border-emphasized);
-  border-radius: 999px;
+  display: inline-flex;
+  width: 1.375rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-secondary);
-}
-
-[data-timeline-todo-item][data-status="waiting"] [data-timeline-todo-indicator="true"]::before {
-  width: 0.5rem;
-  height: 0.5rem;
-  border: 2px solid currentColor;
-  border-radius: 999px;
-  content: "";
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols 2", sans-serif;
+  font-size: 1.125rem;
+  line-height: 1;
 }
 
 [data-timeline-todo-item][data-status="in_progress"] [data-timeline-todo-indicator="true"] {
-  border-color: var(--color-icon-blue);
-  color: var(--color-icon-blue);
-}
-
-[data-timeline-todo-item][data-status="in_progress"] [data-timeline-todo-indicator="true"]::before {
-  width: 0.25rem;
-  height: 0.25rem;
-  border-radius: 999px;
-  background: currentColor;
-  box-shadow: -0.34rem 0 currentColor, 0.34rem 0 currentColor;
-  content: "";
+  color: var(--color-text-blue);
 }
 
 [data-timeline-todo-item][data-status="completed"] [data-timeline-todo-indicator="true"] {
-  border-color: var(--color-icon-teal);
-  background: var(--color-icon-teal);
-  color: #fff;
-}
-
-[data-timeline-todo-item][data-status="completed"] [data-timeline-todo-indicator="true"]::before {
-  content: "✓";
-  font-size: 0.75rem;
+  color: var(--color-text-teal);
   font-weight: 800;
-  line-height: 1;
 }
 
 [data-timeline-todo-text="true"] {

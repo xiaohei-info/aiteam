@@ -305,7 +305,7 @@ function TimelineCard({ model }: { model: TimelineCardModel }): ReactNode {
               <ul data-timeline-todo-list="true">
                 {model.todoItems.map((todo, index) => (
                   <li key={todoKey(todo, index)} data-timeline-todo-item="true" data-status={todo.status}>
-                    <span data-timeline-todo-indicator="true" aria-hidden="true" />
+                    <span data-timeline-todo-indicator="true" aria-hidden="true">{todoStatusIcon(todo.status)}</span>
                     <span data-timeline-todo-text="true">{todo.text}</span>
                     <span data-timeline-todo-status="true">{todoStatusLabel(todo.status)}</span>
                   </li>
@@ -414,6 +414,12 @@ function toolOutcome(model: TimelineCardModel): ToolOutcome | null {
 
 function todoKey(todo: TimelineTodoItem, index = 0): string {
   return todo.id ?? `${todo.text}-${index}`;
+}
+
+function todoStatusIcon(status: TimelineTodoStatus): string {
+  if (status === "completed") return "✓";
+  if (status === "in_progress") return "⌛︎";
+  return "◷";
 }
 
 function todoStatusLabel(status: TimelineTodoStatus): string {

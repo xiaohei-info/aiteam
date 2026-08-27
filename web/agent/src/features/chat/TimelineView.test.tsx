@@ -501,6 +501,9 @@ describe("TimelineView Pi cards", () => {
     expect(card).toHaveTextContent("进行中");
     expect(card).toHaveTextContent("等待中");
     expect(card).toHaveTextContent("已完成");
+    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="in_progress"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("⌛");
+    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="waiting"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("◷");
+    expect(card.querySelector('[data-timeline-todo-item="true"][data-status="completed"] [data-timeline-todo-indicator="true"]')).toHaveTextContent("✓");
     expect(card.querySelector('[data-timeline-todo-item="true"][data-status="completed"]')).toHaveTextContent("整理结论");
   });
 
