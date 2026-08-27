@@ -21,6 +21,7 @@ type HairStyle = "swoop" | "bob" | "crop" | "bun" | "side" | "waves";
 type GlassesStyle = "none" | "round" | "square" | "reading";
 type OutfitStyle = "collar" | "crew" | "jacket" | "turtleneck";
 type Accessory = "none" | "earring" | "badge" | "headset";
+type Expression = "smile" | "open" | "soft";
 
 type AvatarPalette = {
   key: string;
@@ -40,6 +41,7 @@ type AvatarTraits = {
   glasses: GlassesStyle;
   outfit: OutfitStyle;
   accessory: Accessory;
+  expression: Expression;
   styleId: string;
 };
 
@@ -49,6 +51,7 @@ const HAIR = ["swoop", "bob", "crop", "bun", "side", "waves"] as const;
 const GLASSES = ["none", "round", "square", "reading"] as const;
 const OUTFITS = ["collar", "crew", "jacket", "turtleneck"] as const;
 const ACCESSORIES = ["none", "earring", "badge", "headset"] as const;
+const EXPRESSIONS = ["smile", "open", "soft"] as const;
 
 // Original palette inspired by StaffDeck's friendly, colorful employee identity treatment.
 const PALETTES: readonly AvatarPalette[] = [
@@ -85,6 +88,7 @@ export function DigitalEmployeeAvatar({
       data-aiteam-avatar="true"
       data-aiteam-avatar-palette={traits.palette.key}
       data-aiteam-avatar-preset={traits.preset}
+      data-aiteam-avatar-expression={traits.expression}
       data-aiteam-avatar-style={traits.styleId}
       data-aiteam-avatar-variant={variant}
       aria-hidden="true"
@@ -129,8 +133,9 @@ function avatarTraitsFor(seed: string, variant: DigitalEmployeeAvatarVariant): A
   const glasses = choose(GLASSES);
   const outfit = choose(OUTFITS);
   const accessory = choose(ACCESSORIES);
-  const styleId = [palette.key, preset, face, hair, glasses, outfit, accessory].join("-");
-  return { palette, preset, face, hair, glasses, outfit, accessory, styleId };
+  const expression = choose(EXPRESSIONS);
+  const styleId = [palette.key, preset, face, hair, glasses, outfit, accessory, expression].join("-");
+  return { palette, preset, face, hair, glasses, outfit, accessory, expression, styleId };
 }
 
 function hashSeed(value: string): number {
@@ -195,7 +200,7 @@ function renderFace(traits: AvatarTraits): ReactNode {
     : traits.face === "square"
       ? "M40 48c0-15 9-25 20-25s20 10 20 25v20c0 14-8 23-20 23S40 82 40 68V48Z"
       : "M43 45c0-15 7-24 17-24s17 9 17 24v24c0 14-7 22-17 22s-17-8-17-22V45Z";
-  return <><path d={face} fill={skin} stroke="#171717" strokeWidth="3" strokeLinejoin="round" /><circle cx="47" cy="70" r="3" fill={skinShadow} opacity="0.35" /><circle cx="73" cy="70" r="3" fill={skinShadow} opacity="0.35" /></>;
+  return <><path d={face} fill={skin} stroke="#2d2622" strokeWidth="2.5" strokeLinejoin="round" /><circle cx="47" cy="70" r="3" fill={skinShadow} opacity="0.35" /><circle cx="73" cy="70" r="3" fill={skinShadow} opacity="0.35" /></>;
 }
 
 function renderHair(traits: AvatarTraits): ReactNode {
@@ -218,10 +223,14 @@ function renderHair(traits: AvatarTraits): ReactNode {
 }
 
 function renderEyesAndMouth(traits: AvatarTraits): ReactNode {
-  const eyes = traits.glasses === "none"
-    ? <><circle cx="52" cy="59" r="2.3" fill="#171717" /><circle cx="68" cy="59" r="2.3" fill="#171717" /></>
-    : <><path d="M48 59h8M64 59h8" stroke="#171717" strokeWidth="2.2" strokeLinecap="round" /></>;
-  return <>{eyes}<path d="M58 60c-1 5-2 8-4 10m-3 4c5 4 13 4 18 0" fill="none" stroke="#171717" strokeWidth="2.2" strokeLinecap="round" /></>;
+  const eyes = <><circle cx="52" cy="59" r="3.2" fill="#171717" /><circle cx="68" cy="59" r="3.2" fill="#171717" /><circle cx="53" cy="58" r="1.1" fill="#fff" /><circle cx="69" cy="58" r="1.1" fill="#fff" /></>;
+  const nose = <path d="M60 61c0 4-1 7-3 9l3 1" fill="none" stroke="#2d2622" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />;
+  const mouth = traits.expression === "open"
+    ? <><path d="M52 73c5 5 11 5 16 0-1 8-15 8-16 0Z" fill={traits.palette.shirtEdge} stroke="#2d2622" strokeWidth="1.8" /><path d="M55 77h10" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" /></>
+    : traits.expression === "soft"
+      ? <path d="M55 75c3 2 7 2 10 0" fill="none" stroke="#2d2622" strokeWidth="1.8" strokeLinecap="round" />
+      : <path d="M52 73c5 5 11 5 16 0" fill="none" stroke="#2d2622" strokeWidth="1.8" strokeLinecap="round" />;
+  return <>{eyes}{nose}{mouth}</>;
 }
 
 function renderGlasses(style: GlassesStyle): ReactNode {
