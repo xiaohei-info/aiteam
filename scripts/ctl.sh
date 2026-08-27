@@ -164,7 +164,9 @@ validate_agent_production_env() {
 
 validate_lightrag_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|manager)$ ]] || return 0
-  # LightRAG is a Manager-side component; its native UI must not run in guest mode.
+  # LightRAG may be disabled for deployments that do not install the optional
+  # component; when configured, its native UI must not run in guest mode.
+  [[ -n "${LIGHTRAG_URL:-}" ]] || return 0
   for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_WORKSPACE; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
   done

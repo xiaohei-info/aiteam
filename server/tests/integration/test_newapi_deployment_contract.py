@@ -17,7 +17,7 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     assert "profiles: [newapi]" in relay
     assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}" in relay
     assert "latest" not in relay
-    assert '"127.0.0.1:${NEWAPI_PORT:-9300}:3000"' in relay
+    assert '"${NEWAPI_BIND_HOST:-127.0.0.1}:${NEWAPI_PORT:-9300}:3000"' in relay
     assert "newapi-postgres:" in relay and "newapi-redis:" in relay
     assert "ports:" not in postgres
     assert "ports:" not in redis
