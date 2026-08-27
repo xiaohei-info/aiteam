@@ -97,9 +97,7 @@ export function ChatPage(): React.ReactNode {
         entry_employee_id: employeeId,
       });
       if (!created) throw new Error("建会话返回为空");
-      setSelected(created);
-      setScheduleOpen(false);
-      setHistoryOpen(false);
+      handleSelect(created);
       setSentSignal((signal) => signal + 1);
       return created;
     } catch (err) {
@@ -108,7 +106,7 @@ export function ChatPage(): React.ReactNode {
     } finally {
       setCreating(false);
     }
-  }, [client, creating, toMessage]);
+  }, [client, creating, handleSelect, toMessage]);
 
   const handlePick = useCallback(async (expert: LoadedExpertProjection) => {
     const created = await createPrivateConversation(expert.employee_id, expert.display_name);

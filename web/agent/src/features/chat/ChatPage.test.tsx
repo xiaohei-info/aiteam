@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useSearchParams } from "react-router-dom";
 import { AppProvider } from "../../lib/app-context";
 import type { Conversation } from "./useChatApi";
 import { ChatPage } from "./ChatPage";
@@ -15,6 +15,11 @@ afterEach(() => {
 function login(): void {
   localStorage.setItem("aiteam.agent.token", "test-token");
   localStorage.setItem("aiteam.agent.claims", JSON.stringify({ user_id: "u1", tenant_id: "t1", roles: ["member"], exp: 9999999999 }));
+}
+
+function ConversationLocation() {
+  const [params] = useSearchParams();
+  return <output data-testid="conversation-location">{params.get("conversation_id") ?? ""}</output>;
 }
 
 function conversation(id: string, employeeId: string, title: string, updatedAt: string): Conversation {
@@ -58,7 +63,12 @@ describe("ChatPage employee navigation", () => {
       return new Response(JSON.stringify({ data: conversations, page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    render(<MemoryRouter><AppProvider><ChatPage /></AppProvider></MemoryRouter>);
+    render(
+      <MemoryRouter initialEntries={["/chat?conversation_id=c2"]}>
+        <ConversationLocation />
+        <AppProvider><ChatPage /></AppProvider>
+      </MemoryRouter>,
+    );
 
     fireEvent.click(await screen.findByTestId("conversation-c2"));
     expect(screen.queryByTestId("conversation-c1")).not.toBeInTheDocument();
@@ -82,6 +92,7 @@ describe("ChatPage employee navigation", () => {
     await waitFor(() => expect(requests.some(({ method, body }) => method === "POST" && body?.includes('"entry_employee_id":"e1"'))).toBe(true));
     expect(await screen.findByTestId("conversation-c3")).toBeInTheDocument();
     expect(screen.getByText("3 个对话")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-location")).toHaveTextContent("c3");
   });
 
   it("opens the conversation requested by a workspace deep link", async () => {

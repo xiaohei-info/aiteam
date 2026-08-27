@@ -339,7 +339,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         value={content}
         onChange={setContent}
         onSubmit={() => undefined}
-        isDisabled={sending}
+        isDisabled={false}
         placeholder="输入消息，@ 召唤智能体，/ 使用技能…"
         status={error ? { type: "error", message: error } : undefined}
         drawer={

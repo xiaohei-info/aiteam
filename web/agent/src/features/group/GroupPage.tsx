@@ -60,6 +60,8 @@ const formatConversationTime = (value: string) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
 };
 
+const isGroupConversation = (conversation: Conversation) => conversation.kind === "group" || (conversation.kind === undefined && conversation.entry_employee_id == null);
+
 function toGroupExpert(p: {
   handle: string;
   display_name: string;
@@ -195,13 +197,13 @@ export function GroupPage() {
       }
       setShowCreateModal(false);
       setDispatchSignal((n) => n + 1);
-      setSelected(conv);
+      handleSelect(conv);
     } catch (err) {
       setSolutionsError("创建群聊失败");
     } finally {
       setCreating(false);
     }
-  }, [selectedSolutionId, solutions, client]);
+  }, [client, handleSelect, selectedSolutionId, solutions]);
 
   const handleCreateFree = useCallback(async () => {
     setFreeCreateError(null);
@@ -223,13 +225,13 @@ export function GroupPage() {
         return;
       }
       setDispatchSignal((n) => n + 1);
-      setSelected(conv);
+      handleSelect(conv);
     } catch (err) {
       setFreeCreateError("创建自由群聊失败");
     } finally {
       setFreeCreating(false);
     }
-  }, [client, experts]);
+  }, [client, experts, handleSelect]);
 
   const handleCreateForSelected = useCallback(async () => {
     if (!selected || creating) return;
@@ -245,15 +247,14 @@ export function GroupPage() {
             : {}),
       });
       if (!created) throw new Error("建会话返回为空");
-      setSelected(created);
-      setHistoryOpen(false);
+      handleSelect(created);
       setDispatchSignal((signal) => signal + 1);
     } catch (err) {
       setSolutionsError(err instanceof Error ? err.message : "创建群聊失败");
     } finally {
       setCreating(false);
     }
-  }, [client, creating, selected]);
+  }, [client, creating, handleSelect, selected]);
 
   const history = useMemo(() => {
     if (!selected) return [];
@@ -275,7 +276,7 @@ export function GroupPage() {
         headerLabel="群聊"
         groupByGroup
         // 群聊页只列 kind=group 会话；私聊也有 entry_employee_id，不能靠员工字段判型。
-        filter={(c) => c.kind === "group" || (c.kind === undefined && c.entry_employee_id == null)}
+        filter={isGroupConversation}
         onItemsLoaded={setConversations}
       />
       <VStack gap={4} width="100%" minHeight={0}>
