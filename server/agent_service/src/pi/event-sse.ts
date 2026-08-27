@@ -85,10 +85,8 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     copyIdentifier(result, raw, "toolCallId");
     copyToolName(result, raw);
     const kind = classifyToolKind(raw.toolName);
-    if (kind) {
-      result.tool_kind = kind;
-      if (Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
-    }
+    if (kind) result.tool_kind = kind;
+    if (Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
   }
   return boundEvent(result);
 }
@@ -112,6 +110,7 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   const raw = asRecord(value);
   if (!raw || (raw.role !== "user" && raw.role !== "assistant" && raw.role !== "toolResult")) return undefined;
   const result: Record<string, unknown> = { role: raw.role };
+  if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) result.timestamp = raw.timestamp;
   const content = serializeContent(raw.content);
   if (content !== undefined) result.content = content;
   if (raw.role === "toolResult") {
@@ -152,10 +151,12 @@ function serializeToolCall(value: Record<string, unknown>): Record<string, unkno
   const name = boundedIdentifier(value.name, MAX_TOOL_NAME_CHARS);
   if (!id && !name) return undefined;
   const result: Record<string, unknown> = {};
+  const type = value.type;
+  if (type === "toolCall" || type === "tool_call" || type === "toolUse" || type === "tool_use") result.type = type;
   if (id) result.id = id;
   if (name) result.name = name;
   const kind = classifyToolKind(value.name);
-  if (kind && Object.prototype.hasOwnProperty.call(value, "arguments")) result.arguments = safeToolValue(value.arguments, kind);
+  if (Object.prototype.hasOwnProperty.call(value, "arguments")) result.arguments = safeToolValue(value.arguments, kind);
   return result;
 }
 

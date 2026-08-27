@@ -28,8 +28,8 @@ function createMentionTool(name: "mention_employee" | "delegate_employee", conte
   return defineTool({
     name,
     label: name === "mention_employee" ? "Mention employee" : "Delegate employee",
-    description: "Send a bounded message to an authorized employee in this group conversation and receive that employee's reply.",
-    promptSnippet: name === "mention_employee" ? "mention_employee(employee_id, message, context)" : "delegate_employee(employee_id, task, context)",
+    description: "Send a bounded message to an authorized employee in this group conversation and receive that employee's reply. employee_id may be the authorized employee ID, handle, or display name. This performs the actual delivery; writing an @ name in the assistant reply does not contact anyone.",
+    promptSnippet: name === "mention_employee" ? "mention_employee(employee_id_or_handle_or_name, message, context)" : "delegate_employee(employee_id_or_handle_or_name, task, context)",
     parameters,
     ...(name === "mention_employee" ? {
       prepareArguments(args: unknown) {

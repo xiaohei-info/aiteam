@@ -19,7 +19,7 @@ import {
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
-import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
+import type { AgentSqliteStore, ConversationPermissionMode, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
@@ -65,6 +65,9 @@ export interface SessionAuthorization {
   snapshot: FrozenSnapshot;
   mentionedEmployeeIds?: ReadonlySet<string>;
   rosterEmployeeIds?: ReadonlySet<string>;
+  /** Platform-owned group coordination tool; never enabled for ordinary participants. */
+  peerMentionAllowed?: boolean;
+  permissionMode?: ConversationPermissionMode;
   managerClient?: ManagerClient;
   runtimeProviderId?: string;
   runtimeScope?: string;
@@ -98,6 +101,7 @@ interface SessionRecord {
   employeeId?: string;
   role?: "coordinator" | "member";
   workspace: string;
+  permissionMode: ConversationPermissionMode;
   sessionManager: SessionManager;
   session?: AgentSession;
   resourceLoader?: ResourceLoader;
@@ -123,6 +127,12 @@ const MAX_DELEGATE_CALLS = 4;
 const MAX_DELEGATE_PROMPT_BUDGET = 32_000;
 const MAX_DELEGATE_RESULT_CHARS = 2_000;
 const MAX_ENTRIES_PROMPT_WAIT_MS = 5_000;
+const MAX_GROUP_CONTEXT_CHARS = 8_000;
+const MAX_GROUP_CONTEXT_FIELD_CHARS = 600;
+const DEFAULT_AGENT_TOOLS = [
+  "bash", "read", "write", "edit", "todo_update",
+  "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain",
+] as const;
 
 export class ConversationBusyError extends Error {
   constructor() {
@@ -279,21 +289,19 @@ export class SessionHost {
         seenLogicalMessages.add(logicalMessageId);
         return true;
       })
-      .sort((left, right) => {
-        const timestampDelta = this.entryTimestamp(left) - this.entryTimestamp(right);
-        if (timestampDelta !== 0) return timestampDelta;
-        return this.entryId(left).localeCompare(this.entryId(right));
-      });
+      // SessionManager timestamps are ISO strings. Stable sort preserves append order
+      // for entries written within the same millisecond.
+      .sort((left, right) => this.entryTimestamp(left) - this.entryTimestamp(right));
   }
 
   private entryTimestamp(entry: SessionEntry): number {
     const value = entry as unknown as { timestamp?: unknown };
-    return typeof value.timestamp === "number" ? value.timestamp : 0;
-  }
-
-  private entryId(entry: SessionEntry): string {
-    const value = entry as unknown as { id?: unknown };
-    return typeof value.id === "string" ? value.id : "";
+    if (typeof value.timestamp === "number" && Number.isFinite(value.timestamp)) return value.timestamp;
+    if (typeof value.timestamp === "string") {
+      const timestamp = Date.parse(value.timestamp);
+      if (Number.isFinite(timestamp)) return timestamp;
+    }
+    return 0;
   }
 
   async initializeConversationParticipants(conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -370,7 +378,10 @@ export class SessionHost {
     const resolvedEmployeeId = employeeId ?? indexed.entryEmployeeId ?? indexed.coordinatorEmployeeId ?? undefined;
     const key = this.recordKey(conversationId, resolvedEmployeeId);
     const existing = this.records.get(key);
-    if (existing) return existing;
+    if (existing) {
+      existing.permissionMode = indexed.permissionMode ?? "read-only";
+      return existing;
+    }
 
     const participant = resolvedEmployeeId
       ? this.options.store.getConversationParticipant(conversationId, resolvedEmployeeId)
@@ -417,6 +428,7 @@ export class SessionHost {
       ...(resolvedEmployeeId ? { employeeId: resolvedEmployeeId } : {}),
       role,
       workspace,
+      permissionMode: indexed.permissionMode ?? "read-only",
       sessionManager,
       prompting: false,
       aborting: false,
@@ -476,9 +488,9 @@ export class SessionHost {
     await resourceLoader.reload();
     if (authorization && this.hasCodingTools(authorization.snapshot)) {
       if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
-      await this.options.sandbox.assertAvailable(record.workspace);
+      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
     }
-    const allowPeerMention = Boolean(authorization && record.employeeId && record.role === "coordinator");
+    const allowPeerMention = Boolean(authorization?.peerMentionAllowed);
     const customTools = this.toolsFor(authorization, allowPeerMention, record, record.workspace);
     if (authorization) {
       authorization.runtimeScope = record.conversationId;
@@ -509,8 +521,9 @@ export class SessionHost {
   private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord, workspace?: string, sessionId?: string): ToolDefinition[] {
     if (!authorization) return (this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME);
     const allowed = this.allowedTools(authorization.snapshot);
+    if (allowDelegation && authorization.peerMentionAllowed) allowed.add("mention_employee");
     const operations = this.options.sandbox && workspace
-      ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId())
+      ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode)
       : undefined;
     const codingTools = operations && workspace
       ? [
@@ -534,9 +547,9 @@ export class SessionHost {
 
   private allowedTools(snapshot: FrozenSnapshot): Set<string> {
     const policy = snapshot.tool_policy;
-    if (!policy || typeof policy !== "object") return new Set();
-    const allowed = (policy as Record<string, unknown>).allowed_tools;
+    const allowed = policy && typeof policy === "object" ? (policy as Record<string, unknown>).allowed_tools : undefined;
     const names = Array.isArray(allowed) ? allowed.filter((name): name is string => typeof name === "string") : [];
+    if (names.length === 0) names.push(...DEFAULT_AGENT_TOOLS);
     if (names.includes("memory_recall")) names.push("hindsight_recall");
     if (names.includes("memory_retain")) names.push("hindsight_retain");
     return new Set(names);
@@ -571,7 +584,11 @@ export class SessionHost {
     const mentionedEmployeeIds = mentions.length
       ? new Set(experts.filter((item) => (!rosterEmployeeIds || rosterEmployeeIds.has(item.employee_id)) && mentions.includes(item.handle)).map((item) => item.employee_id))
       : undefined;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, managerClient: this.options.managerClient };
+    // The coordinator's platform-owned mention tool is available for every
+    // coordinator conversation; target delivery still rechecks the authorized
+    // solution/roster and fails closed for invalid targets.
+    const peerMentionAllowed = record.role === "coordinator" && Boolean(metadata?.coordinator_employee_id);
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -681,7 +698,8 @@ export class SessionHost {
   private async mention(record: SessionRecord, authorization: SessionAuthorization, toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal): Promise<string> {
     if (record.role !== "coordinator" || !record.employeeId) throw new Error("Only a group coordinator can mention another employee");
     if (record.aborting || signal?.aborted) throw new Error("Mention aborted");
-    if (input.employee_id === record.employeeId) throw new Error("An employee cannot mention itself");
+    const targetEmployeeId = this.resolveEmployeeReference(record, authorization, input.employee_id);
+    if (targetEmployeeId === record.employeeId) throw new Error("An employee cannot mention itself");
     const prompt = [input.task, input.context ? `Context:\n${input.context}` : ""].filter(Boolean).join("\n\n");
     if (record.delegateCalls >= MAX_DELEGATE_CALLS) throw new Error(`Mention limit reached (maximum ${MAX_DELEGATE_CALLS})`);
     if (record.delegatePromptChars + prompt.length > MAX_DELEGATE_PROMPT_BUDGET) throw new Error("Mention prompt budget exceeded");
@@ -690,19 +708,72 @@ export class SessionHost {
     const result = await this.delivery.deliver({
       conversationId: record.conversationId,
       source: { type: "employee", id: record.employeeId, displayName: authorization.snapshot.display_name },
-      targetEmployeeIds: [input.employee_id],
+      targetEmployeeIds: [targetEmployeeId],
       text: prompt,
       toolCallId,
       logicalMessageId: `${record.conversationId}:${toolCallId}`,
-      idempotencyKey: `mention:${record.conversationId}:${toolCallId}:${input.employee_id}`,
+      idempotencyKey: `mention:${record.conversationId}:${toolCallId}:${targetEmployeeId}`,
       caller: authorization.caller,
     });
     return result.replies[0]?.text ?? "Employee completed without a textual result.";
   }
 
   private buildGroupContext(conversationId: string, targetEmployeeId: string): string {
+    const metadata = this.options.store.getConversationMetadata(conversationId);
+    const tenantId = metadata?.tenant_id ?? undefined;
+    const memberId = metadata?.member_id ?? undefined;
     const rows = this.options.store.listConversationParticipants(conversationId);
+    const experts = this.options.store.listLoadedExperts(tenantId, memberId, true);
+    const snapshots = this.options.store.listSnapshots(tenantId, memberId);
+    const solution = metadata?.solution_instance_id
+      ? this.options.store.listSolutions(tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
+      : undefined;
+    const participantById = new Map(rows.map((participant) => [participant.employee_id, participant]));
+    const orderedIds = uniqueStrings(
+      Array.isArray(solution?.expert_employee_ids) ? solution.expert_employee_ids : [],
+      rows.map((participant) => participant.employee_id),
+    );
+    const memberLines = orderedIds.map((employeeId) => {
+      const participant = participantById.get(employeeId);
+      const expert = experts.find((item) => item.employee_id === employeeId);
+      const snapshot = snapshots.find((item) => item.employee_id === employeeId);
+      const displayName = groupContextField(snapshot?.display_name) ?? groupContextField(expert?.display_name) ?? employeeId;
+      const handle = groupContextField(expert?.handle) ?? employeeId;
+      const role = participant?.role === "coordinator" ? "协调专家" : "群成员";
+      const intro = groupContextField(snapshot?.persona) ?? groupContextField(expert?.persona);
+      const tools = snapshot ? [...this.allowedTools(snapshot)] : uniqueStrings(expert?.tools);
+      const skills = uniqueStrings(snapshot?.skill_refs, snapshot?.skills, expert?.skills);
+      const knowledge = uniqueStrings(snapshot?.knowledge_refs, expert?.knowledge_refs);
+      const connectors = uniqueStrings(snapshot?.connector_refs, expert?.connector_refs);
+      const lines = [`- ${displayName} (@${handle}) · ${role}`];
+      if (intro) lines.push(`  介绍：${intro}`);
+      if (tools.length) lines.push(`  工具能力：${tools.join("、")}`);
+      if (skills.length) lines.push(`  技能能力：${skills.join("、")}`);
+      if (knowledge.length) lines.push(`  知识范围：${knowledge.join("、")}`);
+      if (connectors.length) lines.push(`  连接器能力：${connectors.join("、")}`);
+      return lines.join("\n");
+    });
     const sections: string[] = [];
+    if (solution) {
+      const name = groupContextField(solution.display_name) ?? solution.solution_instance_id;
+      const version = groupContextField(solution.version);
+      const sourceId = groupContextField(solution.solution_id);
+      const description = groupContextField(solution.description);
+      const tags = uniqueStrings(solution.tags);
+      const workflow = groupContextReference(solution.workflow_skill_ref);
+      const instructions = groupContextField(solution.coordinator_instructions);
+      const requirements = groupContextField(solution.output_requirements);
+      sections.push([
+        `当前解决方案：${name}${version ? `（版本 ${version}）` : ""}`,
+        sourceId ? `方案来源：${sourceId}` : "",
+        description ? `方案介绍：${description}` : "",
+        tags.length ? `方案标签：${tags.join("、")}` : "",
+        workflow ? `方案工作流技能：${workflow}` : "",
+        instructions ? `方案协作说明：${instructions}` : "",
+        requirements ? `方案交付要求：${requirements}` : "",
+      ].filter(Boolean).join("\n"));
+    }
+    if (memberLines.length) sections.push(`群聊成员信息（仅作协作参考，实际权限以当前员工快照为准）：\n${memberLines.join("\n")}`);
     for (const participant of rows) {
       if (participant.employee_id === targetEmployeeId) continue;
       const record = this.ensureRecord(conversationId, participant.employee_id);
@@ -719,10 +790,9 @@ export class SessionHost {
           return normalized ? `${entry.message.role === "user" ? "用户" : "Agent"}: ${normalized.slice(0, 600)}` : "";
         })
         .filter(Boolean);
-      if (messages.length > 0) sections.push(`参与者 ${participant.employee_id}:\n${messages.join("\n")}`);
+      if (messages.length > 0) sections.push(`参与者 ${participant.employee_id} 的近期消息：\n${messages.join("\n")}`);
     }
-    const context = sections.join("\n\n");
-    return context.length > 4_000 ? `${context.slice(-3_999)}…` : context;
+    return boundGroupContext(sections.join("\n\n"));
   }
 
   private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number): void {
@@ -774,6 +844,28 @@ export class SessionHost {
     } as unknown as SessionEntry;
   }
 
+  private resolveEmployeeReference(record: SessionRecord, authorization: SessionAuthorization, reference: string): string {
+    const metadata = this.options.store.getConversationMetadata(record.conversationId);
+    const memberId = authorization.caller.userId ?? authorization.caller.callerId;
+    const participants = this.options.store.listConversationParticipants(record.conversationId);
+    const solution = metadata?.solution_instance_id
+      ? this.options.store.listSolutions(authorization.caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
+      : undefined;
+    const roster = new Set(
+      metadata?.kind === "group" && participants.length > 0
+        ? participants.map((participant) => participant.employee_id)
+        : solution && Array.isArray(solution.expert_employee_ids)
+          ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+          : this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id),
+    );
+    const matches = this.options.store.listLoadedExperts(authorization.caller.tenantId, memberId).filter((expert) =>
+      !expert.revoked && roster.has(expert.employee_id)
+      && (expert.employee_id === reference || expert.handle === reference || expert.display_name === reference),
+    );
+    if (matches.length !== 1) throw new SessionAuthorizationError("Mentioned employee is not in the authorized local roster or solution roster");
+    return matches[0]!.employee_id;
+  }
+
   private async resolveHindsightRuntimeConfig(authorization?: SessionAuthorization): Promise<HindsightRuntimeConfig | undefined> {
     if (!authorization || !isMemoryPolicyEnabled(authorization.snapshot)) return undefined;
     if (authorization.managerClient?.pullHindsightRuntimeConfig) {
@@ -781,6 +873,10 @@ export class SessionHost {
       if (!config) throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
       return config;
     }
+    // Managerless fixtures/development sessions cannot obtain the default
+    // memory lease; keep them local and avoid turning the platform default into
+    // an unexpected production dependency.
+    if (authorization.snapshot.memory_policy === undefined || authorization.snapshot.memory_policy === null) return undefined;
     if (process.env.AITEAM_ENV === "production") {
       throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
     }
@@ -891,6 +987,7 @@ export class SessionHost {
   }
 
   private hasCodingTools(snapshot: FrozenSnapshot): boolean {
+    if (!this.options.sandbox) return false;
     const allowed = this.allowedTools(snapshot);
     return ["bash", "read", "write", "edit", "grep", "find", "ls"].some((name) => allowed.has(name));
   }
@@ -917,4 +1014,38 @@ export class SessionHost {
   private safeDirectoryName(conversationId: string): string {
     return `conversation-${createHash("sha256").update(conversationId).digest("hex").slice(0, 24)}`;
   }
+}
+
+function uniqueStrings(...values: unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (typeof item !== "string" || !item.trim()) continue;
+      seen.add(item.trim());
+    }
+  }
+  return [...seen];
+}
+
+function groupContextField(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/gu, " ").trim();
+  return text ? text.slice(0, MAX_GROUP_CONTEXT_FIELD_CHARS) : undefined;
+}
+
+function groupContextReference(value: unknown): string | undefined {
+  if (typeof value === "string") return groupContextField(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = groupContextField(record.skill_id ?? record.skill_ref ?? record.id);
+  const version = groupContextField(record.version);
+  return id ? `${id}${version ? `@${version}` : ""}` : undefined;
+}
+
+function boundGroupContext(value: string): string {
+  if (value.length <= MAX_GROUP_CONTEXT_CHARS) return value;
+  const head = Math.floor(MAX_GROUP_CONTEXT_CHARS / 2);
+  const tail = MAX_GROUP_CONTEXT_CHARS - head - 1;
+  return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }

@@ -27,6 +27,40 @@ test("Pi tool classification covers memory, RAG, and todo tools", () => {
   assert.equal(classifyToolKind("bash"), undefined);
 });
 
+test("Pi SSE serializer preserves message timestamps for durable/live deduplication", () => {
+  const event = serializePiEvent({
+    type: "message_update",
+    message: { role: "assistant", timestamp: 42, content: [{ type: "thinking", thinking: "working" }] },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "working" },
+  } as never);
+  assert.equal((event?.message as { timestamp?: number } | undefined)?.timestamp, 42);
+});
+
+test("Pi SSE serializer keeps redacted arguments for ordinary persisted tool calls", () => {
+  const event = serializePiEvent({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        id: "call-bash",
+        name: "bash",
+        arguments: { command: "printf 'visible' && cat /private/secret.txt", token: "hidden-token" },
+      }],
+    },
+  } as never);
+  assert.deepEqual(event?.message, {
+    role: "assistant",
+    content: [{
+      type: "toolCall",
+      id: "call-bash",
+      name: "bash",
+      arguments: { command: "printf 'visible' && cat [路径已隐藏]", },
+    }],
+  });
+  assert(!JSON.stringify(event).includes("hidden-token"));
+});
+
 test("Pi SSE serializer classifies bounded tool metadata without forwarding raw runtime data", () => {
   const event = serializePiEvent({
     type: "tool_execution_end",
