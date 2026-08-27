@@ -1391,6 +1391,9 @@ describe("AstryX 目录工作台", () => {
     await waitFor(() => {
       expect(screen.getByText("客服专家")).toBeInTheDocument();
     });
+    expect(screen.getByTestId("catalog-expert-grid")).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "客服专家" })).toBeInTheDocument();
+    expect(screen.queryByText("expert-published")).not.toBeInTheDocument();
     expect(screen.queryByText("不应泄漏的方案")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "搜索目录" }), {

@@ -9,21 +9,33 @@
  *
  * 招募成功后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
-import { Card } from "@astryxdesign/core/Card";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { Grid } from "@astryxdesign/core/Grid";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import type { ExpertTemplate } from "../experts/types";
+import "../experts/experts.css";
+
+type MarketplaceFilter = "all" | "available" | "recruited";
+
+function initials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  return (value.trim().slice(0, 2) || "AI").toUpperCase();
+}
+
+function modelLabel(template: ExpertTemplate): string {
+  return template.platform_model_ref?.model_id || "模型待配置";
+}
 
 export function MarketplacePage(): ReactNode {
   const { session } = useSession();
@@ -36,6 +48,8 @@ export function MarketplacePage(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<MarketplaceFilter>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,6 +64,26 @@ export function MarketplacePage(): ReactNode {
   }, [api, i18n]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const filteredTemplates = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return templates.filter((template) => {
+      const matchesFilter = filter === "all"
+        || (filter === "available" && !template.is_recruited)
+        || (filter === "recruited" && template.is_recruited);
+      const searchable = [template.display_name, template.persona, modelLabel(template)]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase();
+      return matchesFilter && (!normalized || searchable.includes(normalized));
+    });
+  }, [filter, query, templates]);
+
+  const summaryStats = [
+    { key: "all" as const, label: "全部专家", value: templates.length },
+    { key: "available" as const, label: "可招募", value: templates.filter((template) => !template.is_recruited).length },
+    { key: "recruited" as const, label: "已招募", value: templates.filter((template) => template.is_recruited).length },
+  ];
 
   const runAction = useCallback(
     async (fn: () => Promise<unknown>, successKey: string) => {
@@ -67,8 +101,55 @@ export function MarketplacePage(): ReactNode {
   );
 
   return (
-    <VStack as="section" gap={6}>
-      <Heading level={1}>{i18n.t("manager.nav.marketplace")}</Heading>
+    <VStack as="section" gap={6} data-ui="expert-page">
+      <div data-ui="expert-page-header">
+        <VStack gap={1}>
+          <Heading level={1}>{i18n.t("manager.nav.marketplace")}</Heading>
+          <Text color="secondary">从平台人才库挑选成熟能力，快速加入企业团队。</Text>
+        </VStack>
+      </div>
+
+      <div data-ui="expert-summary" aria-label="人才市场概览">
+        {summaryStats.map((stat) => (
+          <button
+            key={stat.key}
+            type="button"
+            data-ui="expert-summary-item"
+            data-active={filter === stat.key ? "true" : "false"}
+            aria-pressed={filter === stat.key}
+            onClick={() => setFilter(stat.key)}
+          >
+            <strong>{stat.value}</strong>
+            <span>{stat.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div data-ui="expert-toolbar">
+        <TextInput
+          label="搜索专家"
+          isLabelHidden
+          value={query}
+          onChange={setQuery}
+          placeholder="搜索专家名称、岗位或模型"
+          startIcon="search"
+          width="100%"
+        />
+        <div data-ui="expert-filter-tabs" role="group" aria-label="人才市场筛选">
+          {summaryStats.map((stat) => (
+            <button
+              key={stat.key}
+              type="button"
+              data-active={filter === stat.key ? "true" : "false"}
+              aria-pressed={filter === stat.key}
+              onClick={() => setFilter(stat.key)}
+            >
+              {stat.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {notice && (
         <Banner
           status="success"
@@ -102,22 +183,37 @@ export function MarketplacePage(): ReactNode {
             title={i18n.t("manager.experts.templates_empty")}
           />
         ) : (
-          <Grid columns={{ minWidth: 280, repeat: "fit" }} gap={3} data-testid="template-list">
-            {templates.map((t) => (
-              <Card
+          <div data-ui="expert-grid" data-testid="template-list">
+            {filteredTemplates.map((t) => (
+              <article
                 key={`${t.template_id}@${t.version}`}
+                data-ui="expert-card"
                 role="article"
                 aria-label={t.display_name}
                 data-testid="template-row"
-                padding={4}
               >
-                <VStack gap={3}>
-                  <VStack gap={1}>
+                <div data-ui="expert-card-hero">
+                  <div data-ui="expert-card-avatar" aria-hidden="true">{initials(t.display_name)}</div>
+                  <div data-ui="expert-card-identity">
                     <Heading level={3}>{t.display_name}</Heading>
-                    <Text type="supporting">版本 v{t.version}</Text>
-                  </VStack>
-                  {t.persona && <Text color="secondary">{t.persona}</Text>}
-                {canWrite && (
+                    <Text type="supporting">数字员工 · v{t.version}</Text>
+                  </div>
+                  <span data-ui="expert-card-status" data-recruited={t.is_recruited ? "true" : "false"}>
+                    {t.is_recruited ? "已招募" : "可招募"}
+                  </span>
+                </div>
+
+                <p data-ui="expert-card-description">
+                  {t.persona || "将成熟经验封装为可复用的企业数字员工。"}
+                </p>
+
+                <div data-ui="expert-card-meta">
+                  <span><strong>模型</strong>{modelLabel(t)}</span>
+                  <span><strong>版本</strong>v{t.version}</span>
+                </div>
+
+                <div data-ui="expert-card-footer">
+                  {canWrite && (
                     t.is_recruited ? (
                       <Button
                         label={i18n.t("manager.experts.recruited")}
@@ -126,21 +222,26 @@ export function MarketplacePage(): ReactNode {
                         isDisabled
                       />
                     ) : (
-                    <Button
-                      label={i18n.t("manager.experts.recruit")}
-                      size="sm"
-                      variant="primary"
-                      clickAction={() => runAction(
-                      () => api.recruitExpert({ template_id: t.template_id }),
-                      "manager.experts.recruit_ok",
-                      )}
-                    />
+                      <Button
+                        label={i18n.t("manager.experts.recruit")}
+                        size="sm"
+                        variant="primary"
+                        clickAction={() => runAction(
+                          () => api.recruitExpert({ template_id: t.template_id }),
+                          "manager.experts.recruit_ok",
+                        )}
+                      />
                     )
-                )}
-                </VStack>
-              </Card>
+                  )}
+                </div>
+              </article>
             ))}
-          </Grid>
+            {!filteredTemplates.length && (
+              <div data-ui="expert-grid-empty">
+                <EmptyState headingLevel={3} title="没有匹配的专家" description="换个关键词或切换筛选条件再试试。" isCompact />
+              </div>
+            )}
+          </div>
         )}
       </VStack>
     </VStack>

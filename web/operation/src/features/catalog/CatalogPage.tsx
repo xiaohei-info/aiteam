@@ -12,6 +12,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
+import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
@@ -21,6 +22,7 @@ import { TemplateLifecycleActions, type TemplateLifecycleAction } from "./Templa
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";
 import { labelToVisibleScope, visibilityLabel } from "./types";
+import "./catalog.css";
 
 type CatalogRow = CatalogItem & Record<string, unknown>;
 
@@ -41,6 +43,69 @@ function visibilityText(label: VisibilityLabel): string {
   if (label === "public") return "公开";
   if (label === "enterprise") return "企业可见";
   return "隐藏";
+}
+
+function initials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  return (value.trim().slice(0, 2) || "AI").toUpperCase();
+}
+
+function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageSrc = src?.trim();
+  return (
+    <div data-ui="catalog-avatar" aria-hidden="true">
+      {imageSrc && !imageFailed ? (
+        <img src={imageSrc} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />
+      ) : initials(name)}
+    </div>
+  );
+}
+
+function ExpertCatalogCard({ item, canWrite, onAction }: {
+  item: CatalogItem;
+  canWrite: boolean;
+  onAction: (action: TemplateLifecycleAction) => Promise<void>;
+}): ReactNode {
+  const status = statusPresentation(item.status);
+  const model = item.platform_model_ref?.model_id || "待配置";
+  const skillCount = item.platform_skill_refs?.length || item.skill_ids?.length || 0;
+  const tags = [item.category, ...(item.tags ?? [])].filter(Boolean).slice(0, 3) as string[];
+  const displayName = item.display_name || "未命名专家";
+  return (
+    <article data-ui="catalog-expert-card" aria-label={displayName}>
+      <div data-ui="catalog-expert-card-hero">
+        <CatalogAvatar name={displayName} src={item.avatar_url} />
+        <div data-ui="catalog-expert-card-identity">
+          <Link data-ui="catalog-expert-card-name" to={`/catalog/${item.catalog_type}/${item.template_id}`}>
+            {displayName}
+          </Link>
+          <span data-ui="catalog-expert-card-role">{item.category || "数字员工"}</span>
+        </div>
+        <Badge label={status.label} variant={status.variant} />
+      </div>
+
+      <p data-ui="catalog-expert-card-description">
+        {item.description || "把专业经验沉淀为可复用的数字员工能力。"}
+      </p>
+
+      <div data-ui="catalog-tags" aria-label="专家能力标签">
+        {tags.length ? tags.map((tag) => <span key={tag}>{tag}</span>) : <span>通用能力</span>}
+      </div>
+
+      <dl data-ui="catalog-expert-card-stats">
+        <div><dt>模型</dt><dd title={model}>{model}</dd></div>
+        <div><dt>技能</dt><dd>{skillCount} 项</dd></div>
+        <div><dt>可见范围</dt><dd>{visibilityText(visibilityLabel(item.visible_scope))}</dd></div>
+      </dl>
+
+      <div data-ui="catalog-expert-card-footer">
+        <span data-ui="catalog-version">v{item.version}</span>
+        {canWrite && <TemplateLifecycleActions item={item} onAction={onAction} />}
+      </div>
+    </article>
+  );
 }
 
 export interface CatalogPageProps {
@@ -120,9 +185,15 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return items.filter((item) => {
       const matchesStatus = status === "all" || item.status === status;
-      const matchesQuery = !normalizedQuery
-        || item.display_name.toLocaleLowerCase().includes(normalizedQuery)
-        || item.template_id.toLocaleLowerCase().includes(normalizedQuery);
+      const searchable = [
+        item.display_name,
+        item.template_id,
+        item.category,
+        item.description,
+        ...(item.tags ?? []),
+        ...(item.platform_skill_refs ?? []).map((ref) => ref.skill_id),
+      ].filter(Boolean).join(" ").toLocaleLowerCase();
+      const matchesQuery = !normalizedQuery || searchable.includes(normalizedQuery);
       return matchesStatus && matchesQuery;
     });
   }, [items, query, status]);
@@ -182,12 +253,41 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
     );
   }
 
+  const isExpertCatalog = catalogType === "expert_template";
+  const summaryStats = [
+    { key: "all", label: "全部专家", value: items.length },
+    { key: "published", label: "已发布", value: items.filter((item) => item.status === "published").length },
+    { key: "draft", label: "草稿", value: items.filter((item) => item.status === "draft").length },
+    { key: "unpublished", label: "已下架", value: items.filter((item) => item.status === "unpublished").length },
+  ];
+
   return (
-    <VStack as="section" gap={6}>
-      <HStack justify="between" align="center" wrap="wrap">
-        <Heading level={1}>{i18n.t(titleKey)}</Heading>
+    <VStack as="section" gap={6} data-ui={isExpertCatalog ? "catalog-page" : undefined}>
+      <HStack justify="between" align="center" wrap="wrap" data-ui="catalog-page-header">
+        <VStack gap={1}>
+          <Heading level={1}>{i18n.t(titleKey)}</Heading>
+          {isExpertCatalog && <Text color="secondary">把平台能力整理成可被企业直接使用的数字员工。</Text>}
+        </VStack>
         <Button label={i18n.t(registerKey)} variant="primary" onClick={() => setShowRegister(true)} />
       </HStack>
+
+      {isExpertCatalog && (
+        <div data-ui="catalog-summary" aria-label="专家目录概览">
+          {summaryStats.map((stat) => (
+            <button
+              key={stat.key}
+              type="button"
+              data-ui="catalog-summary-item"
+              data-active={status === stat.key ? "true" : "false"}
+              aria-pressed={status === stat.key}
+              onClick={() => setStatus(stat.key)}
+            >
+              <strong>{stat.value}</strong>
+              <span>{stat.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {showRegister && (
         <RegisterForm
@@ -198,15 +298,16 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
         />
       )}
 
-      <Card>
+      <Card data-ui={isExpertCatalog ? "catalog-filter-card" : undefined}>
         <HStack gap={3} align="end" wrap="wrap">
           <TextInput
             label="搜索目录"
+            isLabelHidden={isExpertCatalog}
             value={query}
             onChange={setQuery}
-            placeholder="名称或模板 ID"
+            placeholder={isExpertCatalog ? "搜索专家名称、分类或能力" : "名称或模板 ID"}
             startIcon="search"
-            width={280}
+            width={isExpertCatalog ? "100%" : 280}
           />
           <Selector
             label="目录状态"
@@ -229,17 +330,35 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
           </VStack>
         </Card>
       ) : !error ? (
-        <Card padding={0}>
-          <Table
-            aria-label="目录列表"
-            tableProps={{ "aria-label": "目录列表" }}
-            data={filteredItems as CatalogRow[]}
-            columns={columns}
-            idKey="template_id"
-            hasHover
-            emptyState={<EmptyState title={i18n.t("operation.catalog.none")} description="调整筛选条件后重试。" isCompact />}
-          />
-        </Card>
+        isExpertCatalog ? (
+          <div data-ui="catalog-expert-grid" data-testid="catalog-expert-grid">
+            {filteredItems.map((item) => (
+              <ExpertCatalogCard
+                key={`${item.template_id}@${item.version}`}
+                item={item}
+                canWrite={canWrite}
+                onAction={(action) => runLifecycle(item, action)}
+              />
+            ))}
+            {!filteredItems.length && (
+              <div data-ui="catalog-grid-empty">
+                <EmptyState title={i18n.t("operation.catalog.none")} description="调整筛选条件后重试。" isCompact />
+              </div>
+            )}
+          </div>
+        ) : (
+          <Card padding={0}>
+            <Table
+              aria-label="目录列表"
+              tableProps={{ "aria-label": "目录列表" }}
+              data={filteredItems as CatalogRow[]}
+              columns={columns}
+              idKey="template_id"
+              hasHover
+              emptyState={<EmptyState title={i18n.t("operation.catalog.none")} description="调整筛选条件后重试。" isCompact />}
+            />
+          </Card>
+        )
       ) : null}
 
       {hasMore && (

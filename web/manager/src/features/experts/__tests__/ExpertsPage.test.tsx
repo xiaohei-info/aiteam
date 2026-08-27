@@ -147,7 +147,23 @@ describe("ExpertsPage", () => {
     expect(screen.queryByText("architect")).not.toBeInTheDocument();
     expect(screen.queryByText("openai-main")).not.toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "已招募专家实例" })).toBeInTheDocument();
+    expect(screen.getByTestId("employee-list")).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
+
+  it("搜索与待处理筛选只展示匹配的专家卡片", async () => {
+    mockApis([employeeConfigured, employeeUnconfigured]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(2));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索专家" }), { target: { value: "研究" } });
+    expect(screen.getAllByTestId("employee-row")).toHaveLength(1);
+    expect(screen.getByRole("article", { name: "研究员" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索专家" }), { target: { value: "" } });
+    fireEvent.click(within(screen.getByRole("group", { name: "专家实例筛选" })).getByRole("button", { name: "待处理" }));
+    expect(screen.queryByRole("article", { name: "架构师" })).not.toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "研究员" })).toBeInTheDocument();
   });
 
   it("模型没有显示名时回退显示 model_id", async () => {
