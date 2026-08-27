@@ -21,7 +21,7 @@
 LIGHTRAG_URL=https://lightrag.manager.internal
 LIGHTRAG_API_KEY=<secret-store>
 # 原生 UI/API 账号由 LightRAG 自己校验；使用 bcrypt 密码值，不能写进超链接。
-LIGHTRAG_AUTH_ACCOUNTS=aiteam-admin:<bcrypt-hash>
+LIGHTRAG_AUTH_ACCOUNTS=aiteam-admin:{bcrypt}<bcrypt-hash>
 LIGHTRAG_TOKEN_SECRET=<secret-store>
 LIGHTRAG_JWT_ALGORITHM=HS256
 LIGHTRAG_BIND_HOST=0.0.0.0
