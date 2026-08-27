@@ -22,17 +22,24 @@ type GlassesStyle = "none" | "round" | "square" | "reading";
 type OutfitStyle = "collar" | "crew" | "jacket" | "turtleneck";
 type Accessory = "none" | "earring" | "badge" | "headset";
 
+type AvatarPalette = {
+  key: string;
+  background: string;
+  shirt: string;
+  shirtEdge: string;
+  skin: string;
+  skinShadow: string;
+  hair: string;
+};
+
 type AvatarTraits = {
+  palette: AvatarPalette;
   preset: AvatarPreset;
   face: FaceShape;
   hair: HairStyle;
   glasses: GlassesStyle;
   outfit: OutfitStyle;
   accessory: Accessory;
-  background: string;
-  faceFill: string;
-  shirtFill: string;
-  hairFill: string;
   styleId: string;
 };
 
@@ -42,13 +49,21 @@ const HAIR = ["swoop", "bob", "crop", "bun", "side", "waves"] as const;
 const GLASSES = ["none", "round", "square", "reading"] as const;
 const OUTFITS = ["collar", "crew", "jacket", "turtleneck"] as const;
 const ACCESSORIES = ["none", "earring", "badge", "headset"] as const;
-const BACKGROUNDS = ["#f4f4f2", "#eceeec", "#f7f6f3", "#e9ecef", "#f0efed"] as const;
-const FACE_FILLS = ["#ffffff", "#f8f8f6", "#efefed"] as const;
-const SHIRT_FILLS = ["#ffffff", "#f0f1ef", "#e5e8e8", "#e9e7e3"] as const;
-const HAIR_FILLS = ["#171717", "#242424", "#303030"] as const;
+
+// Original palette inspired by StaffDeck's friendly, colorful employee identity treatment.
+const PALETTES: readonly AvatarPalette[] = [
+  { key: "teal", background: "#2bbbd4", shirt: "#d8f1f4", shirtEdge: "#087f8c", skin: "#f6c7b2", skinShadow: "#df9b8a", hair: "#2a221e" },
+  { key: "coral", background: "#ff6a64", shirt: "#ffd7d1", shirtEdge: "#c94745", skin: "#f2c1ad", skinShadow: "#d78b7e", hair: "#2c211e" },
+  { key: "gold", background: "#f2c65c", shirt: "#fff0bd", shirtEdge: "#a4771f", skin: "#edbd9f", skinShadow: "#d18d79", hair: "#30251f" },
+  { key: "olive", background: "#8ca65d", shirt: "#e4edc8", shirtEdge: "#4f6938", skin: "#dba181", skinShadow: "#bd735e", hair: "#2d2923" },
+  { key: "blue", background: "#628ee8", shirt: "#dfeaff", shirtEdge: "#345ca7", skin: "#f3c8ae", skinShadow: "#da9a85", hair: "#252834" },
+  { key: "purple", background: "#9b7bc8", shirt: "#eadff5", shirtEdge: "#604682", skin: "#edc1ab", skinShadow: "#d59583", hair: "#2c2431" },
+  { key: "copper", background: "#d07f4e", shirt: "#ffe1ca", shirtEdge: "#8e4f2d", skin: "#eab492", skinShadow: "#c97e68", hair: "#342822" },
+  { key: "mint", background: "#53b692", shirt: "#d5f0e1", shirtEdge: "#28785f", skin: "#efc0a6", skinShadow: "#d58e7c", hair: "#262a25" },
+];
 
 /**
- * Small, original line-art avatar used across all three AI Team frontends.
+ * Small, original colored upper-body avatar used across all three AI Team frontends.
  * It borrows StaffDeck's visual language without copying its AGPL assets/code.
  */
 export function DigitalEmployeeAvatar({
@@ -68,6 +83,7 @@ export function DigitalEmployeeAvatar({
   return (
     <span
       data-aiteam-avatar="true"
+      data-aiteam-avatar-palette={traits.palette.key}
       data-aiteam-avatar-preset={traits.preset}
       data-aiteam-avatar-style={traits.styleId}
       data-aiteam-avatar-variant={variant}
@@ -82,8 +98,8 @@ export function DigitalEmployeeAvatar({
         alignItems: "flex-end",
         justifyContent: "center",
         border: "2px solid var(--color-background-card, #fff)",
-        borderRadius: Math.max(10, Math.round(size * 0.28)),
-        background: "var(--color-background-gray, #f0f0ef)",
+        borderRadius: "999px",
+        background: traits.palette.background,
         boxShadow: "var(--shadow-low, 0 5px 14px rgba(37, 32, 24, 0.12))",
       }}
     >
@@ -106,18 +122,15 @@ export function DigitalEmployeeAvatar({
 function avatarTraitsFor(seed: string, variant: DigitalEmployeeAvatarVariant): AvatarTraits {
   const random = seededRandom(hashSeed(seed));
   const choose = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+  const palette = choose(PALETTES);
   const preset = variant === "human" ? "operations" : choose(PRESETS);
   const face = choose(FACES);
   const hair = choose(HAIR);
   const glasses = choose(GLASSES);
   const outfit = choose(OUTFITS);
   const accessory = choose(ACCESSORIES);
-  const background = choose(BACKGROUNDS);
-  const faceFill = choose(FACE_FILLS);
-  const shirtFill = variant === "human" ? "#dfe4e8" : choose(SHIRT_FILLS);
-  const hairFill = choose(HAIR_FILLS);
-  const styleId = [preset, face, hair, glasses, outfit, accessory].join("-");
-  return { preset, face, hair, glasses, outfit, accessory, background, faceFill, shirtFill, hairFill, styleId };
+  const styleId = [palette.key, preset, face, hair, glasses, outfit, accessory].join("-");
+  return { palette, preset, face, hair, glasses, outfit, accessory, styleId };
 }
 
 function hashSeed(value: string): number {
@@ -140,50 +153,53 @@ function seededRandom(seed: number): () => number {
 function AvatarIllustration({ traits, variant }: { traits: AvatarTraits; variant: DigitalEmployeeAvatarVariant }): ReactNode {
   return (
     <svg width="100%" height="100%" viewBox="0 0 120 120" role="presentation" xmlns="http://www.w3.org/2000/svg">
-      <rect width="120" height="120" fill={traits.background} />
+      <rect width="120" height="120" fill={traits.palette.background} />
+      <circle cx="93" cy="18" r="30" fill="#fff" opacity="0.18" />
+      <circle cx="19" cy="105" r="36" fill="#171717" opacity="0.07" />
       {renderOutfit(traits)}
-      <path d="M50 77v15l10 9 10-9V77" fill={traits.faceFill} stroke="#171717" strokeWidth="2.5" />
-      <path d="M44 90 60 106 76 90" fill="none" stroke="#171717" strokeWidth="2.5" />
-      <circle cx="39" cy="61" r="6" fill={traits.faceFill} stroke="#171717" strokeWidth="2.5" />
-      <circle cx="81" cy="61" r="6" fill={traits.faceFill} stroke="#171717" strokeWidth="2.5" />
+      <path d="M50 77v15l10 9 10-9V77" fill={traits.palette.skin} stroke="#171717" strokeWidth="2.5" />
+      <path d="M44 90 60 106 76 90" fill="none" stroke={traits.palette.shirtEdge} strokeWidth="2.5" strokeLinejoin="round" />
+      <circle cx="39" cy="61" r="6" fill={traits.palette.skin} stroke="#171717" strokeWidth="2.5" />
+      <circle cx="81" cy="61" r="6" fill={traits.palette.skin} stroke="#171717" strokeWidth="2.5" />
       {renderFace(traits)}
       {renderHair(traits)}
       {renderEyesAndMouth(traits)}
       {renderGlasses(traits.glasses)}
       {renderPresetDetail(traits)}
-      {renderAccessory(traits.accessory)}
-      {variant === "human" ? <path d="M47 96h26" fill="none" stroke="#171717" strokeWidth="2.5" strokeLinecap="round" /> : null}
+      {renderAccessory(traits)}
+      {variant === "human" ? <path d="M47 96h26" fill="none" stroke={traits.palette.shirtEdge} strokeWidth="2.5" strokeLinecap="round" /> : null}
     </svg>
   );
 }
 
 function renderOutfit(traits: AvatarTraits): ReactNode {
-  const base = <path d="M15 121c4-23 18-36 45-36s41 13 45 36H15Z" fill={traits.shirtFill} stroke="#171717" strokeWidth="3" strokeLinejoin="round" />;
+  const { palette } = traits;
+  const base = <path d="M12 121c5-24 20-37 48-37s43 13 48 37H12Z" fill={palette.shirt} stroke="#171717" strokeWidth="3" strokeLinejoin="round" />;
   switch (traits.outfit) {
     case "crew":
-      return <>{base}<path d="M48 88c3 7 21 7 24 0" fill="none" stroke="#171717" strokeWidth="2.5" strokeLinecap="round" /></>;
+      return <>{base}<path d="M48 88c3 7 21 7 24 0" fill="none" stroke={palette.shirtEdge} strokeWidth="3" strokeLinecap="round" /></>;
     case "jacket":
-      return <>{base}<path d="M60 87v34M44 91l16 15 16-15" fill="none" stroke="#171717" strokeWidth="2.5" strokeLinejoin="round" /></>;
+      return <>{base}<path d="M60 86v35M43 90l17 16 17-16" fill="none" stroke={palette.shirtEdge} strokeWidth="3" strokeLinejoin="round" /><path d="M28 102c7-6 13-9 19-11M92 102c-7-6-13-9-19-11" fill="none" stroke="#171717" strokeWidth="2" strokeLinecap="round" /></>;
     case "turtleneck":
-      return <>{base}<path d="M48 86c1 8 23 8 24 0v8c-3 6-21 6-24 0Z" fill={traits.faceFill} stroke="#171717" strokeWidth="2.5" /></>;
+      return <>{base}<path d="M48 86c1 8 23 8 24 0v8c-3 6-21 6-24 0Z" fill={palette.shirtEdge} stroke="#171717" strokeWidth="2.5" /></>;
     case "collar":
     default:
-      return <>{base}<path d="M50 87 60 101 70 87" fill={traits.faceFill} stroke="#171717" strokeWidth="2.5" strokeLinejoin="round" /></>;
+      return <>{base}<path d="M50 87 60 101 70 87" fill={palette.shirtEdge} stroke="#171717" strokeWidth="2.5" strokeLinejoin="round" /></>;
   }
 }
 
 function renderFace(traits: AvatarTraits): ReactNode {
-  if (traits.face === "round") {
-    return <path d="M40 47c0-15 9-26 20-26s20 11 20 26v20c0 14-9 24-20 24S40 81 40 67V47Z" fill={traits.faceFill} stroke="#171717" strokeWidth="3" />;
-  }
-  if (traits.face === "square") {
-    return <path d="M40 48c0-15 9-25 20-25s20 10 20 25v20c0 14-8 23-20 23S40 82 40 68V48Z" fill={traits.faceFill} stroke="#171717" strokeWidth="3" strokeLinejoin="round" />;
-  }
-  return <path d="M43 45c0-15 7-24 17-24s17 9 17 24v24c0 14-7 22-17 22s-17-8-17-22V45Z" fill={traits.faceFill} stroke="#171717" strokeWidth="3" />;
+  const { skin, skinShadow } = traits.palette;
+  const face = traits.face === "round"
+    ? "M40 47c0-15 9-26 20-26s20 11 20 26v20c0 14-9 24-20 24S40 81 40 67V47Z"
+    : traits.face === "square"
+      ? "M40 48c0-15 9-25 20-25s20 10 20 25v20c0 14-8 23-20 23S40 82 40 68V48Z"
+      : "M43 45c0-15 7-24 17-24s17 9 17 24v24c0 14-7 22-17 22s-17-8-17-22V45Z";
+  return <><path d={face} fill={skin} stroke="#171717" strokeWidth="3" strokeLinejoin="round" /><circle cx="47" cy="70" r="3" fill={skinShadow} opacity="0.35" /><circle cx="73" cy="70" r="3" fill={skinShadow} opacity="0.35" /></>;
 }
 
 function renderHair(traits: AvatarTraits): ReactNode {
-  const fill = traits.hairFill;
+  const fill = traits.palette.hair;
   switch (traits.hair) {
     case "bob":
       return <path d="M31 58c-3-25 9-41 29-41 20 0 32 16 29 42-4-5-8-12-10-22-11 9-25 14-47 21Zm4 4c-2 12-1 20 3 28l8-6-3-22Zm50 0c2 12 1 20-3 28l-8-6 3-22Z" fill={fill} />;
@@ -238,14 +254,15 @@ function renderPresetDetail(traits: AvatarTraits): ReactNode {
   }
 }
 
-function renderAccessory(accessory: Accessory): ReactNode {
-  switch (accessory) {
+function renderAccessory(traits: AvatarTraits): ReactNode {
+  const { shirtEdge } = traits.palette;
+  switch (traits.accessory) {
     case "earring":
-      return <><circle cx="39" cy="72" r="2.5" fill="none" stroke="#171717" strokeWidth="2" /><circle cx="81" cy="72" r="2.5" fill="none" stroke="#171717" strokeWidth="2" /></>;
+      return <><circle cx="39" cy="72" r="2.5" fill={shirtEdge} stroke="#171717" strokeWidth="1.5" /><circle cx="81" cy="72" r="2.5" fill={shirtEdge} stroke="#171717" strokeWidth="1.5" /></>;
     case "badge":
-      return <><rect x="84" y="98" width="8" height="10" rx="1.5" fill="#fff" stroke="#171717" strokeWidth="1.8" /><path d="M86 101h4M86 104h3" stroke="#171717" strokeWidth="1.2" strokeLinecap="round" /></>;
+      return <><rect x="84" y="98" width="8" height="10" rx="1.5" fill="#fff" stroke={shirtEdge} strokeWidth="1.8" /><path d="M86 101h4M86 104h3" stroke={shirtEdge} strokeWidth="1.2" strokeLinecap="round" /></>;
     case "headset":
-      return <><path d="M35 60c0-17 10-27 25-27s25 10 25 27" fill="none" stroke="#171717" strokeWidth="2" /><path d="M33 59v10M87 59v10" stroke="#171717" strokeWidth="3" strokeLinecap="round" /></>;
+      return <><path d="M35 60c0-17 10-27 25-27s25 10 25 27" fill="none" stroke={shirtEdge} strokeWidth="2.5" /><path d="M33 59v10M87 59v10" stroke={shirtEdge} strokeWidth="3" strokeLinecap="round" /></>;
     case "none":
     default:
       return null;
