@@ -10,7 +10,7 @@
  * 招募成功后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { ApiError, DigitalEmployeeAvatar, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
@@ -27,24 +27,12 @@ import "../experts/experts.css";
 
 type MarketplaceFilter = "all" | "available" | "recruited";
 
-function initials(value: string): string {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  return (value.trim().slice(0, 2) || "AI").toUpperCase();
-}
-
 function modelLabel(template: ExpertTemplate): string {
   return template.platform_model_ref?.model_id || "模型待配置";
 }
 
 function MarketplaceAvatar({ name, src }: { name: string; src?: string | null }): ReactNode {
-  const candidate = src?.trim();
-  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : undefined;
-  return (
-    <div data-ui="expert-card-avatar" aria-hidden="true">
-      {imageSrc ? <img src={imageSrc} alt="" loading="lazy" referrerPolicy="no-referrer" /> : initials(name)}
-    </div>
-  );
+  return <DigitalEmployeeAvatar name={name} src={src} size={54} />;
 }
 
 export function MarketplacePage(): ReactNode {

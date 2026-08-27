@@ -106,29 +106,6 @@
   background: var(--catalog-surface-muted);
 }
 
-[data-ui="catalog-avatar"] {
-  display: grid;
-  width: 54px;
-  height: 54px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 3px solid var(--catalog-surface);
-  border-radius: 16px;
-  background: linear-gradient(145deg, #11998e, var(--catalog-accent) 56%, #075e59);
-  color: #ffffff;
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  box-shadow: var(--shadow-low, 0 8px 16px rgba(15, 118, 110, 0.18));
-}
-
-[data-ui="catalog-avatar"] img {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  object-fit: cover;
-}
-
 [data-ui="catalog-expert-card-identity"] {
   display: flex;
   min-width: 0;

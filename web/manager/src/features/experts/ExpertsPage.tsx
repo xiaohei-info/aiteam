@@ -8,7 +8,7 @@
  * /marketplace + /solutions；本卡恢复实例列表 + 详情配置能力）。
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, DigitalEmployeeAvatar } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -27,12 +27,6 @@ import type { EmployeeConfig } from "./types";
 import "./experts.css";
 
 type ExpertFilter = "all" | "active" | "attention";
-
-function initials(value: string): string {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  return (value.trim().slice(0, 2) || "AI").toUpperCase();
-}
 
 function statusPresentation(status: string): { label: string; tone: string } {
   if (status === "active") return { label: "运行中", tone: "is-active" };
@@ -194,7 +188,7 @@ export function ExpertsPage(): ReactNode {
             return (
               <article key={employee.employee_id} data-ui="expert-card" role="article" aria-label={displayName}>
                 <div data-ui="expert-card-hero">
-                  <div data-ui="expert-card-avatar" aria-hidden="true">{initials(displayName)}</div>
+                  <DigitalEmployeeAvatar name={displayName} size={54} />
                   <div data-ui="expert-card-identity">
                     <Heading level={3}><span data-testid="employee-row">{displayName}</span></Heading>
                     <Text type="supporting">{employee.persona || "企业数字员工"}</Text>

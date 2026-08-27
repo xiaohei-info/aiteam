@@ -1,6 +1,6 @@
 /** Conversation view backed by persisted Pi entries and the live Pi SSE stream. */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { PiEntry, PiEvent } from "@aiteam/shared/contracts";
+import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
 import { Card } from "@astryxdesign/core/Card";
 import {
   ChatMessage,
@@ -258,32 +258,15 @@ function resolveMessageSource(model: TimelineCardModel, experts: Map<string, Tim
   };
 }
 
-function initials(value: string): string {
-  const parts = value.trim().split(/\s+/u).filter(Boolean);
-  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  return (value.trim().slice(0, 2) || "AI").toUpperCase();
-}
-
-function avatarTone(value: string): "teal" | "copper" | "olive" | "blue" | "ink" {
-  let hash = 0;
-  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return (["teal", "copper", "olive", "blue", "ink"] as const)[hash % 5]!;
-}
-
 function EmployeeChatAvatar({ name, avatarUrl, sender }: ResolvedMessageSource & { sender: "user" | "assistant" }): ReactNode {
-  const [imageFailed, setImageFailed] = useState(false);
   return (
-    <span data-chat-avatar="true" data-chat-avatar-tone={sender === "user" ? "ink" : avatarTone(name)} aria-hidden="true">
-      {avatarUrl && !imageFailed ? (
-        <img src={avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />
-      ) : (
-        <>
-          <span data-chat-avatar-body="true">
-            <span data-chat-avatar-head="true"><span data-chat-avatar-hair="true" /><span data-chat-avatar-eyes="true">••</span></span>
-          </span>
-          <span data-chat-avatar-initials="true">{initials(name)}</span>
-        </>
-      )}
+    <span data-chat-avatar="true" aria-hidden="true">
+      <DigitalEmployeeAvatar
+        name={name}
+        src={avatarUrl}
+        size={42}
+        variant={sender === "user" ? "human" : "employee"}
+      />
     </span>
   );
 }

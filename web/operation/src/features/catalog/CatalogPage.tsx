@@ -1,7 +1,7 @@
 /** 运营端目录治理列表。 */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ApiError, PlatformRole, hasRole } from "@aiteam/shared";
+import { ApiError, DigitalEmployeeAvatar, PlatformRole, hasRole } from "@aiteam/shared";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -45,25 +45,8 @@ function visibilityText(label: VisibilityLabel): string {
   return "隐藏";
 }
 
-function initials(value: string): string {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length > 1) return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  return (value.trim().slice(0, 2) || "AI").toUpperCase();
-}
-
 function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
-  const [imageFailed, setImageFailed] = useState(false);
-  const candidate = src?.trim();
-  // Only render same-origin paths; a broken third-party avatar should not add a
-  // failed network request to the catalog page or leak page referrers.
-  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : undefined;
-  return (
-    <div data-ui="catalog-avatar" aria-hidden="true">
-      {imageSrc && !imageFailed ? (
-        <img src={imageSrc} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />
-      ) : initials(name)}
-    </div>
-  );
+  return <DigitalEmployeeAvatar name={name} src={src} size={54} />;
 }
 
 function ExpertCatalogCard({ item, canWrite, onAction }: {
