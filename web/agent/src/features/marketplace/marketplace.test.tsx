@@ -26,6 +26,7 @@ describe("MarketplacePage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
     expect(screen.getByText("请在 Manager 端配置")).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-aiteam-avatar="true"]')).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "招募" })).toBeNull();
     expect(screen.queryByRole("button", { name: "发布需求" })).toBeNull();
     expect(screen.queryByRole("button", { name: /上架/ })).toBeNull();

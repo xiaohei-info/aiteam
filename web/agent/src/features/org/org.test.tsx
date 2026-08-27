@@ -61,6 +61,10 @@ describe("OrgPage 组织架构", () => {
     loginStorage();
     fetchMock = mockFetch((url) => {
       if (url.includes("/api/agent/org/tree")) return envelope(tree);
+      if (url.includes("/api/agent/grants/experts")) return envelope([
+        { employee_id: "e1", tenant_id: "t1", version: "1", handle: "luna", display_name: "Luna", avatar_url: "/avatars/luna.png", revoked: false },
+        { employee_id: "e2", tenant_id: "t1", version: "1", handle: "rex", display_name: "Rex", avatar_url: null, revoked: false },
+      ]);
       return envelope(null);
     });
     globalThis.fetch = fetchMock as typeof fetch;
@@ -93,6 +97,8 @@ describe("OrgPage 组织架构", () => {
     expect(screen.getByText("Rex")).toBeInTheDocument();
     const rootNode = nodes.find((n) => n.getAttribute("data-node-id") === "root");
     expect(rootNode?.getAttribute("data-node-type")).toBe("department");
+    expect(document.querySelectorAll('[data-aiteam-avatar="true"]')).toHaveLength(2);
+    expect(document.querySelector('[data-aiteam-avatar="true"] img')).toHaveAttribute("src", "/avatars/luna.png");
     const urls = fetchMock.mock.calls.map((c) => (typeof c[0] === "string" ? c[0] : c[0]?.toString() ?? ""));
     expect(urls.some((u) => u.includes("/api/agent/org/tree"))).toBe(true);
   });

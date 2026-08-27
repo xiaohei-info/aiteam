@@ -1,5 +1,6 @@
 /** P09 办公室动态页 — 工位视图 + 状态摘要 + 定时任务 Feed。 */
 import { useCallback, useEffect, useState } from "react";
+import { DigitalEmployeeAvatar } from "@aiteam/shared";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -60,7 +61,19 @@ export function OfficePage() {
 
       <HStack gap={3} wrap="wrap" data-testid="office-employees">
         {scene.employees.map((emp) => (
-          <Card key={emp.employee_id} data-testid="office-employee" padding={3} width={180}><VStack gap={1}><Text>{STATUS_ICONS[emp.status] ?? "●"}</Text><Text weight="semibold">{emp.display_name}</Text><Text type="supporting">{emp.status}</Text><Text type="supporting">{emp.task ?? "当前无任务"}</Text></VStack></Card>
+          <Card key={emp.employee_id} data-testid="office-employee" padding={3} width={220}>
+            <HStack gap={2} align="center">
+              <DigitalEmployeeAvatar name={emp.display_name} seed={emp.employee_id} src={emp.avatar_url} size={52} />
+              <VStack gap={1}>
+                <Text weight="semibold">{emp.display_name}</Text>
+                <HStack gap={1} align="center">
+                  <Text>{STATUS_ICONS[emp.status] ?? "●"}</Text>
+                  <Text type="supporting">{emp.status}</Text>
+                </HStack>
+              </VStack>
+            </HStack>
+            <Text type="supporting">{emp.task ?? "当前无任务"}</Text>
+          </Card>
         ))}
       </HStack>
 

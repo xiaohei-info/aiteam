@@ -6,5 +6,6 @@ export interface OrgTreeNode {
   parent_id?: string | null;
   status?: string | null;
   role?: string | null;
+  avatar_url?: string | null;
   children?: OrgTreeNode[];
 }

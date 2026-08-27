@@ -11,6 +11,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { DigitalEmployeeAvatar } from "@aiteam/shared";
 import { useApp } from "../../lib/app-context";
 import { listTemplates } from "./useMarketplaceApi";
 import type { MarketTemplate } from "./types";
@@ -73,8 +74,14 @@ export function MarketplacePage() {
           {templates.map((t) => (
             <Card key={t.template_id} padding={3} width={280}>
               <VStack gap={2}>
-                <Text weight="semibold">{t.display_name}</Text>
-                <Text type="supporting">{t.category} · {t.model_name} · {t.skills_count} Skills</Text>
+                <HStack gap={2} align="center">
+                  <DigitalEmployeeAvatar name={t.display_name} seed={t.template_id} src={t.avatar_url} size={52} />
+                  <VStack gap={0}>
+                    <Text weight="semibold">{t.display_name}</Text>
+                    <Text type="supporting">{t.category}</Text>
+                  </VStack>
+                </HStack>
+                <Text type="supporting">{t.model_name} · {t.skills_count} Skills</Text>
                 {t.tags.length > 0 && <HStack gap={1} wrap="wrap">{t.tags.slice(0, 3).map((tag) => <Badge key={tag} label={tag} />)}</HStack>}
                 <Text type="supporting">已有 {t.recruit_count} 家企业招募</Text>
                 {t.is_recruited ? <Badge variant="success" label="✓ 已招募" /> :

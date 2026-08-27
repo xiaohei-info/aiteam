@@ -83,4 +83,22 @@ describe("ChatPage employee navigation", () => {
     expect(await screen.findByTestId("conversation-c3")).toBeInTheDocument();
     expect(screen.getByText("3 个对话")).toBeInTheDocument();
   });
+
+  it("opens the conversation requested by a workspace deep link", async () => {
+    login();
+    const selected = conversation("deep-link", "e1", "系统测试员", "2026-08-24T12:00:00Z");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/events")) return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
+      if (url.includes("/entries")) return new Response(JSON.stringify({ data: { conversation_id: selected.id, entries: [] } }), { headers: { "content-type": "application/json" } });
+      if (url.endsWith("/state")) return new Response(JSON.stringify({ data: { conversation_id: selected.id, state: "active", prompting: false } }), { headers: { "content-type": "application/json" } });
+      if (url.includes("/grants/experts")) return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ data: [selected], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    render(<MemoryRouter initialEntries={["/chat?conversation_id=deep-link"]}><AppProvider><ChatPage /></AppProvider></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "系统测试员" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "会话工作区" })).toBeInTheDocument();
+  });
 });

@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { useApp } from "../../lib/app-context";
 import { Badge } from "@astryxdesign/core/Badge";
@@ -63,16 +64,20 @@ function toGroupExpert(p: {
   handle: string;
   display_name: string;
   employee_id?: string | null;
+  avatar_url?: string | null;
 }): GroupExpert {
   return {
     handle: p.handle,
     display_name: p.display_name,
     ...(p.employee_id ? { employee_id: p.employee_id } : {}),
+    ...(p.avatar_url ? { avatar_url: p.avatar_url } : {}),
   };
 }
 
 export function GroupPage() {
   const { client } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedConversationId = searchParams.get("conversation_id");
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [prompting, setPrompting] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -111,10 +116,21 @@ export function GroupPage() {
     setPrompting(false);
     setHistoryOpen(false);
     setSelected(conv);
-  }, []);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("conversation_id", conv.id);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   // Filter only when the read-only solution projection explicitly supplies member IDs;
   // otherwise keep the full locally authorized roster instead of inventing a scope.
+  useEffect(() => {
+    if (!requestedConversationId || selected?.id === requestedConversationId) return;
+    const target = conversations.find((conversation) => conversation.id === requestedConversationId);
+    if (target) handleSelect(target);
+  }, [conversations, handleSelect, requestedConversationId, selected?.id]);
+
   const participantExperts = useMemo(() => {
     const solutionId = selected?.solution_instance_id;
     const solution = solutionId ? solutions?.find((item) => item.solution_instance_id === solutionId) : undefined;
@@ -257,6 +273,7 @@ export function GroupPage() {
         onSelect={handleSelect}
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
+        groupByGroup
         // 群聊页只列 kind=group 会话；私聊也有 entry_employee_id，不能靠员工字段判型。
         filter={(c) => c.kind === "group" || (c.kind === undefined && c.entry_employee_id == null)}
         onItemsLoaded={setConversations}
@@ -325,6 +342,8 @@ export function GroupPage() {
             />
             <MessageComposer
               conversationId={selected.id}
+              conversation={selected}
+              onConversationChanged={handleSelect}
               isPrompting={prompting}
               onPromptingChange={setPrompting}
               onSent={handleDispatched}

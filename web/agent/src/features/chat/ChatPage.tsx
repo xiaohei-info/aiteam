@@ -1,5 +1,6 @@
 /** 本地私聊工作区：保持会话、Pi prompt/event 行为，视图直接使用 Astryx。 */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
@@ -35,6 +36,8 @@ const formatConversationTime = (value: string) => {
 export function ChatPage(): React.ReactNode {
   const { client } = useApp();
   const toMessage = useApiError();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedConversationId = searchParams.get("conversation_id");
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [prompting, setPrompting] = useState(false);
   const [sentSignal, setSentSignal] = useState(0);
@@ -60,13 +63,23 @@ export function ChatPage(): React.ReactNode {
     setHistoryOpen(false);
     setCreateError(null);
     setSelected(conversation);
-  }, []);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("conversation_id", conversation.id);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   const handleStateChanged = useCallback((conversation: Conversation) => setSelected(conversation), []);
   const handleScheduleChanged = useCallback((conversation: Conversation) => {
     setSelected(conversation);
     setSentSignal((signal) => signal + 1);
   }, []);
   const handleSent = useCallback(() => setSentSignal((signal) => signal + 1), []);
+  useEffect(() => {
+    if (!requestedConversationId || selected?.id === requestedConversationId) return;
+    const target = conversations.find((conversation) => conversation.id === requestedConversationId);
+    if (target) handleSelect(target);
+  }, [conversations, handleSelect, requestedConversationId, selected?.id]);
   const handleCancelCreate = useCallback(() => {
     if (creating) return;
     setCreateOpen(false);
@@ -171,7 +184,7 @@ export function ChatPage(): React.ReactNode {
               {createError && !createOpen ? <Banner status="error" title={createError} /> : null}
               <ChatLayout
                 density="balanced"
-                composer={<MessageComposer conversationId={selected.id} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} />}
+                composer={<MessageComposer conversationId={selected.id} conversation={selected} onConversationChanged={handleStateChanged} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} />}
                 emptyState={<Text>选择一个会话开始对话</Text>}
               >
                 <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} sourceExperts={experts} />

@@ -3,8 +3,17 @@ import { createConversation, type Conversation } from "../chat/useChatApi";
 
 export interface SolutionProjection {
   solution_instance_id: string;
+  solution_id?: string;
   display_name: string;
+  description?: string;
+  icon?: string;
+  tags?: string[];
   version: string;
+  status?: string;
+  coordinator_instructions?: string;
+  workflow_skill_ref?: Record<string, unknown> | null;
+  output_requirements?: string;
+  config_version?: number;
   /** New Manager projection; optional while older deployments are rolling forward. */
   coordinator_employee_id?: string | null;
   expert_employee_ids?: string[];
@@ -32,6 +41,7 @@ export interface GroupExpert {
   handle: string;
   employee_id?: string;
   display_name?: string;
+  avatar_url?: string | null;
   system_prompt?: string | null;
   model?: string | null;
 }

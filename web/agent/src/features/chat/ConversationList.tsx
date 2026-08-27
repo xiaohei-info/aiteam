@@ -1,6 +1,6 @@
 /** 私聊员工/群聊共用的本地导航列表。 */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Avatar } from "@astryxdesign/core/Avatar";
+import { DigitalEmployeeAvatar } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -24,6 +24,7 @@ export interface ConversationListProps {
   headerLabel?: string;
   filter?: (conversation: Conversation) => boolean;
   groupByEmployee?: boolean;
+  groupByGroup?: boolean;
   onItemsLoaded?: (conversations: Conversation[]) => void;
   onCreate?: () => void;
   createLabel?: string;
@@ -35,6 +36,11 @@ interface NavigationItem {
   count: number;
 }
 
+function conversationGroupKey(conversation: Conversation, mode: "employee" | "group"): string {
+  if (mode === "employee") return conversation.entry_employee_id ?? conversation.id;
+  return conversation.solution_instance_id ?? conversation.coordinator_employee_id ?? conversation.title ?? conversation.id;
+}
+
 export function ConversationList({
   client,
   selectedId,
@@ -43,6 +49,7 @@ export function ConversationList({
   headerLabel = "私聊",
   filter,
   groupByEmployee = false,
+  groupByGroup = false,
   onItemsLoaded,
   onCreate,
   createLabel = `新建${headerLabel}`,
@@ -80,19 +87,23 @@ export function ConversationList({
   }, [load, refreshSignal]);
 
   const navigationItems = useMemo<NavigationItem[]>(() => {
-    if (!groupByEmployee) return items.map((conversation) => ({ key: conversation.id, conversation, count: 1 }));
+    const groupMode = groupByEmployee ? "employee" : groupByGroup ? "group" : null;
+    if (!groupMode) return items.map((conversation) => ({ key: conversation.id, conversation, count: 1 }));
     const grouped = new Map<string, NavigationItem>();
     for (const conversation of items) {
-      const key = conversation.entry_employee_id ?? conversation.id;
+      const key = conversationGroupKey(conversation, groupMode);
       const current = grouped.get(key);
       if (current) current.count += 1;
       else grouped.set(key, { key, conversation, count: 1 });
     }
     return [...grouped.values()];
-  }, [groupByEmployee, items]);
+  }, [groupByEmployee, groupByGroup, items]);
 
-  const selectedEmployeeId = groupByEmployee
-    ? items.find((conversation) => conversation.id === selectedId)?.entry_employee_id
+  const selectedGroupKey = (groupByEmployee || groupByGroup)
+    ? (() => {
+        const selected = items.find((conversation) => conversation.id === selectedId);
+        return selected ? conversationGroupKey(selected, groupByEmployee ? "employee" : "group") : null;
+      })()
     : null;
 
   return (
@@ -118,17 +129,19 @@ export function ConversationList({
         {navigationItems.length > 0 ? (
           <List aria-label={`${headerLabel}列表`} density="balanced">
             {navigationItems.map(({ key, conversation, count }) => {
-              const selected = groupByEmployee
-                ? conversation.entry_employee_id === selectedEmployeeId
+              const selected = groupByEmployee || groupByGroup
+                ? key === selectedGroupKey
                 : conversation.id === selectedId;
               const title = conversation.title ?? conversation.id;
+              const grouped = groupByEmployee || groupByGroup;
+              const avatarSeed = conversation.entry_employee_id ?? conversation.coordinator_employee_id ?? key;
               return (
                 <ListItem
                   key={key}
                   label={title}
                   description={groupByEmployee ? "数字员工" : "群聊"}
-                  startContent={<Avatar name={title} size="small" />}
-                  endContent={groupByEmployee
+                  startContent={<DigitalEmployeeAvatar name={title} seed={avatarSeed} size={32} />}
+                  endContent={grouped
                     ? (count > 1 ? <Badge label={`${count} 个对话`} variant="neutral" /> : undefined)
                     : <Badge label={conversation.state} variant={selected ? "info" : "neutral"} />}
                   isSelected={selected}

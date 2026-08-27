@@ -5,7 +5,8 @@
  * "导出"按钮将当前树结构序列化为 SVG，经 Canvas 转 PNG 下载。
  * 红线：只读本地投影，不写后端；展示态为组件局部运行态。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DigitalEmployeeAvatar } from "@aiteam/shared";
 import { ApiError } from "@aiteam/shared/api-client";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -18,6 +19,7 @@ import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApp } from "../../lib/app-context";
 import { getOrgTree } from "./useOrgApi";
+import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 import type { OrgTreeNode } from "./types";
 
 const FONT =
@@ -144,23 +146,27 @@ function downloadSvgAsPng(svg: string, filename: string) {
   img.src = url;
 }
 
-function OrgNode({ node }: { node: OrgTreeNode }) {
+function OrgNode({ node, experts }: { node: OrgTreeNode; experts: Map<string, LoadedExpertProjection> }) {
   const isRoot = node.type === "department";
+  const expert = !isRoot ? experts.get(node.id) : undefined;
   const kids = node.children ?? [];
   return (
     <VStack align="center" gap={2} data-testid="org-node" data-node-id={node.id} data-node-type={node.type}>
-      <Card padding={2} variant={isRoot ? "yellow" : "muted"} minHeight={64} width={150}>
-        <VStack align="center" gap={1}>
-          <Text weight="semibold" data-testid="org-node-name">{node.name}</Text>
-          <Text type="supporting">{isRoot ? "部门" : "员工"}</Text>
-        </VStack>
+      <Card padding={2} variant={isRoot ? "yellow" : "muted"} minHeight={64} width={170}>
+        <HStack gap={2} align="center">
+          {!isRoot ? <DigitalEmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
+          <VStack align={isRoot ? "center" : "start"} gap={1}>
+            <Text weight="semibold" data-testid="org-node-name">{node.name}</Text>
+            <Text type="supporting">{isRoot ? "部门" : "员工"}</Text>
+          </VStack>
+        </HStack>
       </Card>
       {kids.length > 0 && (
-          <HStack gap={4} align="start" wrap="wrap">
-            {kids.map((c) => (
-              <OrgNode key={c.id} node={c} />
-            ))}
-          </HStack>
+        <HStack gap={4} align="start" wrap="wrap">
+          {kids.map((c) => (
+            <OrgNode key={c.id} node={c} experts={experts} />
+          ))}
+        </HStack>
       )}
     </VStack>
   );
@@ -169,6 +175,7 @@ function OrgNode({ node }: { node: OrgTreeNode }) {
 export function OrgPage() {
   const { client, i18n } = useApp();
   const [tree, setTree] = useState<OrgTreeNode | null>(null);
+  const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -177,8 +184,12 @@ export function OrgPage() {
     setLoading(true);
     setError(null);
     try {
-      const t = await getOrgTree(client);
+      const [t, loaded] = await Promise.all([
+        getOrgTree(client),
+        listLoadedExperts(client).catch(() => []),
+      ]);
       setTree(t);
+      setExperts(loaded);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("agent.org.load_error"));
     } finally {
@@ -190,6 +201,10 @@ export function OrgPage() {
     void load();
   }, [load]);
 
+  const expertById = useMemo(
+    () => new Map(experts.map((expert) => [expert.employee_id, expert] as const)),
+    [experts],
+  );
   const handleExport = useCallback(() => {
     if (!tree) return;
     downloadSvgAsPng(buildSvg(tree), "org-tree.png");
@@ -206,7 +221,7 @@ export function OrgPage() {
         <Button label={i18n.t("agent.org.export")} variant="secondary" onClick={handleExport} data-testid="org-export" />
       </HStack>
       <Card ref={treeRef} data-testid="org-tree" padding={4}>
-        <OrgNode node={tree} />
+        <OrgNode node={tree} experts={expertById} />
       </Card>
     </VStack>
   );
