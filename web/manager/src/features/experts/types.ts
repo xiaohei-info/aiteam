@@ -14,6 +14,12 @@ export interface ExpertTemplate {
   version: string;
   display_name: string;
   persona?: string | null;
+  category?: string | null;
+  avatar_url?: string | null;
+  description?: string | null;
+  tags?: string[];
+  skill_ids?: string[];
+  platform_skill_refs?: Array<{ skill_id: string; version: string; content_hash: string }>;
   platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   is_recruited?: boolean;
 }

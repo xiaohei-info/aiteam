@@ -37,6 +37,16 @@ function modelLabel(template: ExpertTemplate): string {
   return template.platform_model_ref?.model_id || "模型待配置";
 }
 
+function MarketplaceAvatar({ name, src }: { name: string; src?: string | null }): ReactNode {
+  const candidate = src?.trim();
+  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : undefined;
+  return (
+    <div data-ui="expert-card-avatar" aria-hidden="true">
+      {imageSrc ? <img src={imageSrc} alt="" loading="lazy" referrerPolicy="no-referrer" /> : initials(name)}
+    </div>
+  );
+}
+
 export function MarketplacePage(): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
@@ -71,7 +81,7 @@ export function MarketplacePage(): ReactNode {
       const matchesFilter = filter === "all"
         || (filter === "available" && !template.is_recruited)
         || (filter === "recruited" && template.is_recruited);
-      const searchable = [template.display_name, template.persona, modelLabel(template)]
+      const searchable = [template.display_name, template.category, template.description, template.persona, modelLabel(template), ...(template.tags ?? [])]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase();
@@ -193,10 +203,10 @@ export function MarketplacePage(): ReactNode {
                 data-testid="template-row"
               >
                 <div data-ui="expert-card-hero">
-                  <div data-ui="expert-card-avatar" aria-hidden="true">{initials(t.display_name)}</div>
+                  <MarketplaceAvatar name={t.display_name} src={t.avatar_url} />
                   <div data-ui="expert-card-identity">
                     <Heading level={3}>{t.display_name}</Heading>
-                    <Text type="supporting">数字员工 · v{t.version}</Text>
+                    <Text type="supporting">{t.category || "数字员工"} · v{t.version}</Text>
                   </div>
                   <span data-ui="expert-card-status" data-recruited={t.is_recruited ? "true" : "false"}>
                     {t.is_recruited ? "已招募" : "可招募"}
@@ -204,11 +214,12 @@ export function MarketplacePage(): ReactNode {
                 </div>
 
                 <p data-ui="expert-card-description">
-                  {t.persona || "将成熟经验封装为可复用的企业数字员工。"}
+                  {t.description || t.persona || "将成熟经验封装为可复用的企业数字员工。"}
                 </p>
 
                 <div data-ui="expert-card-meta">
                   <span><strong>模型</strong>{modelLabel(t)}</span>
+                  <span><strong>技能</strong>{t.platform_skill_refs?.length || t.skill_ids?.length || 0} 项</span>
                   <span><strong>版本</strong>v{t.version}</span>
                 </div>
 
