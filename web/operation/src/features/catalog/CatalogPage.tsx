@@ -53,7 +53,10 @@ function initials(value: string): string {
 
 function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
   const [imageFailed, setImageFailed] = useState(false);
-  const imageSrc = src?.trim();
+  const candidate = src?.trim();
+  // Only render same-origin paths; a broken third-party avatar should not add a
+  // failed network request to the catalog page or leak page referrers.
+  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : undefined;
   return (
     <div data-ui="catalog-avatar" aria-hidden="true">
       {imageSrc && !imageFailed ? (
