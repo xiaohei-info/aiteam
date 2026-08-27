@@ -14,7 +14,6 @@ export const operationShellConfig: PageShellConfig = {
     { id: "experts", labelKey: "operation.nav.experts", path: "/experts", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "skill-market", labelKey: "operation.nav.skillMarket", path: "/skill-market", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "providers", labelKey: "operation.nav.providers", path: "/providers", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
-    { id: "gateway", labelKey: "operation.nav.gateway", path: "/gateway", icon: "board", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "industry-solutions", labelKey: "operation.nav.industrySolutions", path: "/industry-solutions", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "solutions", labelKey: "operation.nav.solutions", path: "/solutions", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "finance", labelKey: "operation.nav.finance", path: "/finance", icon: "board", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },

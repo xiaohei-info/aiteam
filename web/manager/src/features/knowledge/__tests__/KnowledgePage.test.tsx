@@ -233,6 +233,7 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getAllByText("企业知识库").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除企业知识库" })).toBeNull();
+    expect(screen.getByRole("link", { name: "打开 LightRAG 控制台" })).toHaveAttribute("href", "/knowledge-console");
   });
 
   it("loads the enterprise document dialog and supports URL import, upload, and retry", async () => {
@@ -456,6 +457,7 @@ describe("KnowledgePage Astryx contract", () => {
     ) });
     await screen.findByRole("table", { name: "企业知识库" });
     expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "打开 LightRAG 控制台" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
     expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
     expect(screen.queryByRole("form", { name: "上传文件" })).toBeNull();

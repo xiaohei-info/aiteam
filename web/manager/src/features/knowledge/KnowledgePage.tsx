@@ -10,6 +10,7 @@ import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
+import { Link } from "react-router-dom";
 import { useSession } from "../../auth/session";
 import { DocumentsPanel } from "./DocumentsPanel";
 import type { KnowledgeSpace } from "./types";
@@ -64,10 +65,13 @@ export function KnowledgePage(): ReactNode {
 
   return (
     <VStack as="section" gap={6}>
-      <VStack gap={1}>
-        <Heading level={1}>企业知识库</Heading>
-        <Text type="supporting">此页面管理企业文档及 LightRAG 索引状态；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
-      </VStack>
+      <HStack justify="between" align="center">
+        <VStack gap={1}>
+          <Heading level={1}>企业知识库</Heading>
+          <Text type="supporting">此页面管理企业文档及 LightRAG 索引状态；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
+        </VStack>
+        {canWrite && <Link to="/knowledge-console">打开 LightRAG 控制台</Link>}
+      </HStack>
 
       {error && <Banner status="error" title={error} />}
       {loading ? (

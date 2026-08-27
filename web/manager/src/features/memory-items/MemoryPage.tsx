@@ -1,6 +1,6 @@
 /** B07 记忆管理页 — 记忆条目列表 + CRUD + 搜索。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -13,11 +13,15 @@ import { Text } from "@astryxdesign/core/Text";
 import { Selector } from "@astryxdesign/core/Selector";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { Link } from "react-router-dom";
+import { useSession } from "../../auth/session";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useMemoryApi } from "./useMemoryApi";
 import type { MemoryItem } from "./types";
 
 export function MemoryPage(): ReactNode {
+  const { session } = useSession();
+  const canManage = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useMemoryApi();
   const expertsApi = useExpertsApi();
   const [items, setItems] = useState<MemoryItem[]>([]);
@@ -92,7 +96,13 @@ export function MemoryPage(): ReactNode {
 
   return (
     <VStack gap={4}>
-      <HStack justify="between" align="center"><Heading level={1}>记忆管理</Heading><Button label="+ 新增记忆" variant="primary" size="sm" onClick={() => setShowForm(!showForm)} /></HStack>
+      <HStack justify="between" align="center">
+        <Heading level={1}>记忆管理</Heading>
+        <HStack gap={2}>
+          {canManage && <Link to="/memory-console">打开 Hindsight 控制台</Link>}
+          <Button label="+ 新增记忆" variant="primary" size="sm" onClick={() => setShowForm(!showForm)} />
+        </HStack>
+      </HStack>
       <HStack gap={2} align="end">
         <Selector
           label="员工"

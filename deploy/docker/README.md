@@ -154,7 +154,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 >
 > LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；Manager 原生控制台也经 Manager 代理加载，浏览器不会拿到 API key。测试和目标生产统一使用独立 PostgreSQL + pgvector 数据库/role（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。默认 Compose 不启动 LightRAG；目标联调显式使用 `--profile lightrag`。镜像固定为 `ghcr.io/hkuds/lightrag:1.5.6`（生产可替换为已验证 sha256 digest），禁止 `latest`。Manager-only 的 URL/key/workspace/PG secrets 绝不进入 Agent。bootstrap、校验、备份/恢复/升级/rollback 见 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md)；变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
 >
-> 原生控制台入口：Operator 的 `/gateway` 代理 NewAPI；Manager 的 `/knowledge-console` 和 `/memory-console` 分别代理本部署的 LightRAG/Hindsight。控制台路由只接受本端登录态，服务凭据由对应后端注入。
+> 原生控制台入口：Operator「大模型服务」页提供 `/gateway` NewAPI 超链接；Manager「知识库」和「记忆管理」页分别提供 `/knowledge-console`、`/memory-console` 超链接。控制台路由只接受本端登录态，服务凭据由对应后端注入。
 
 ---
 

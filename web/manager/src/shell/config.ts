@@ -2,7 +2,7 @@
  * Manager 企业端导航与壳配置（page-shell）。
  *
  * 企业后台菜单入口：成员 / 部门 / 方案 / 技能 / 人才市场 / 专家实例 / 授权 /
- * 记忆 / Hindsight 控制台 / 知识库 / LightRAG 控制台 / 连接器 / 费用 / 充值 / 设置。
+ * 记忆 / 知识库 / 连接器 / 费用 / 充值 / 设置。
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  * 角色门控映射旧架构 permission_service 的 manage_employees / manage_connectors / view_billing。
  */
@@ -27,9 +27,7 @@ export const managerShellConfig: PageShellConfig = {
     { id: "grants", labelKey: "manager.nav.grants", path: "/grants", icon: "key", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控
     { id: "memory", labelKey: "manager.nav.memory", path: "/memory", icon: "dashboard" },
-    { id: "memory-console", labelKey: "manager.nav.memoryConsole", path: "/memory-console", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "knowledge", labelKey: "manager.nav.knowledge", path: "/knowledge", icon: "catalog" },
-    { id: "knowledge-console", labelKey: "manager.nav.knowledgeConsole", path: "/knowledge-console", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // manage_connectors 门控
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控

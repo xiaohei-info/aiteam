@@ -3,7 +3,7 @@
  * 壳装配逻辑本身在 @aiteam/shared buildShellViewModel（已覆盖），此处只验企业端配置正确。
  * 红线：只用 EnterpriseRole（owner / enterprise_admin / finance_admin / member），禁旧 admin/manager/viewer。
  *
- * 导航覆盖企业后台入口与 Hindsight/LightRAG 原生控制台，Provider/模型仅使用 Operator 平台目录。
+ * 导航覆盖企业后台入口，Provider/模型仅使用 Operator 平台目录；外部组件控制台从对应业务页进入。
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  */
 import { describe, expect, it } from "vitest";
@@ -65,9 +65,7 @@ const ALL_NAV_IDS = [
   "experts",
   "grants",
   "memory",
-  "memory-console",
   "knowledge",
-  "knowledge-console",
   "connectors",
   "billing",
   "recharge",
@@ -141,13 +139,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（15 项）", () => {
+  it("导航覆盖企业管理入口（13 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(15);
+    expect(navIds).toHaveLength(13);
   });
 
-  it("owner 可见全部 15 项导航", () => {
+  it("owner 可见全部 13 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -173,9 +171,7 @@ describe("manager shell config", () => {
       "experts",
       "grants",
       "memory",
-      "memory-console",
       "knowledge",
-      "knowledge-console",
       "connectors",
       "settings",
     ]);
