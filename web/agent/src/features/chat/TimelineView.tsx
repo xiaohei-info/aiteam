@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
 import { Card } from "@astryxdesign/core/Card";
+import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   ChatMessage,
   ChatMessageBubble,
@@ -25,6 +26,7 @@ const MAX_OBJECT_KEYS = 16;
 const MAX_ARRAY_ITEMS = 12;
 const MAX_JSON_DEPTH = 3;
 const MAX_RESULT_PARSE_LENGTH = 12_000;
+const NON_CONVERSATION_ENTRY_TYPES = new Set(["model_change", "thinking_level_change", "session_info", "label"]);
 
 const SENSITIVE_KEY = /(?:authorization|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key|(?:^|[_-])key$)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
@@ -193,7 +195,9 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
   );
   const timeline = mergeTimeline(entries, events);
   const visibleTimeline = timeline.flatMap((item, index) => {
-    const models = classifyPiRecords(item.kind === "entry" ? item.entry : item.item.event)
+    const record = item.kind === "entry" ? item.entry : item.item.event;
+    if (NON_CONVERSATION_ENTRY_TYPES.has(normalizeType(record.type))) return [];
+    const models = classifyPiRecords(record)
       .filter((model) => model.kind !== "streaming" && model.kind !== "settled");
     const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
     return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
@@ -221,18 +225,15 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
           ? resolveMessageSource(model, expertById)
           : { name: "我", avatarUrl: undefined };
         return (
-          <ChatMessage
-            key={key}
-            sender={model.sender}
-            avatar={<EmployeeChatAvatar name={source.name} avatarUrl={source.avatarUrl} sender={model.sender} />}
-            name={<span data-chat-message-name="true">{source.name}</span>}
-          >
-            <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
-              {model.kind === "message"
-                ? <p data-timeline-message="true">{model.summary}</p>
-                : <TimelineCard model={model} />}
-            </ChatMessageBubble>
-          </ChatMessage>
+        <ChatMessage key={key} sender={model.sender} avatar={<EmployeeChatAvatar name={source.name} avatarUrl={source.avatarUrl} sender={model.sender} />} name={<span data-chat-message-name="true">{source.name}</span>}>
+          <ChatMessageBubble variant={model.kind === "message" ? "filled" : "ghost"}>
+            {model.kind === "message"
+              ? model.sender === "assistant"
+                ? <div data-timeline-message="true"><Markdown>{model.summary}</Markdown></div>
+                : <p data-timeline-message="true">{model.summary}</p>
+              : <TimelineCard model={model} />}
+          </ChatMessageBubble>
+        </ChatMessage>
         );
       })}
       {!loading && !hasContent && loadError && !streamError ? <span role="alert">{loadError}</span> : null}
@@ -364,45 +365,69 @@ export function classifyPiRecord(record: PiEntry | PiEvent): TimelineCardModel {
     type,
     status,
     summary: summaryFor(kind, normalizedType, value, details),
-    sender: kind === "message" && (normalizedType === "user" || messageRole(value) === "user") ? "user" : "assistant",
+    sender: kind === "message" && messageRole(value) === "user" && !isEmployeeSourcedMessage(value) ? "user" : "assistant",
     ...details,
   };
 }
 
-/** Split a persisted assistant message into one thinking card and one answer bubble. */
+/** Split assistant content into ordered thinking, tool, and answer cards. */
 export function classifyPiRecords(record: PiEntry | PiEvent): TimelineCardModel[] {
   const value = asRecord(record);
   const message = asRecord(value?.message);
   if (!value || !message || lower(firstString(message, "role")) !== "assistant" || !Array.isArray(message.content)) return [classifyPiRecord(record)];
 
-  const thinking = message.content.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "thinking");
-  const text = message.content.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "text");
-  const tools = message.content.filter((part) => {
-    const type = normalizeType(firstString(asRecord(part), "type") ?? "");
-    return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
-  });
+  const parts = message.content;
   const recordType = normalizeType(firstString(value, "type") ?? "");
-  const updateType = normalizeType(firstString(asRecord(value.assistantMessageEvent), "type") ?? "");
-  if (recordType === "message_update") {
+  const update = asRecord(value.assistantMessageEvent);
+  const updateType = normalizeType(firstString(update, "type") ?? "");
+  if (recordType === "message_update" && updateType) {
+    const contentIndex = typeof update?.contentIndex === "number" && Number.isInteger(update.contentIndex)
+      ? update.contentIndex
+      : -1;
+    const indexedPart = contentIndex >= 0 ? asRecord(parts[contentIndex]) : undefined;
+    const candidates = indexedPart ? [indexedPart] : parts.map(asRecord).filter((part): part is Record<string, unknown> => part !== undefined);
     if (updateType.startsWith("thinking_") || updateType.startsWith("reasoning_")) {
-      const thinkingText = textFrom(thinking) ?? textFrom(value.assistantMessageEvent);
+      const thinkingParts = candidates.filter((part) => normalizeType(firstString(part, "type") ?? "") === "thinking");
+      const thinkingText = thinkingTextFrom(thinkingParts.length ? thinkingParts : update);
       return thinkingText ? [classifyPiRecord({ ...value, type: "thinking", status: updateType.endsWith("_end") ? "completed" : "streaming", thinking: thinkingText } as PiEvent)] : [classifyPiRecord(record)];
     }
-    if (updateType.startsWith("text_") && text.length) return [classifyPiRecord({ ...value, type: "message", message: { ...message, content: text } } as PiEvent)];
-    if ((updateType.startsWith("toolcall_") || updateType.startsWith("tool_call_")) && tools.length) {
-      return tools.map((part) => classifyPiRecord({ ...value, ...(asRecord(part) ?? {}), type: "tool_call", message: undefined } as PiEvent));
+    if (updateType.startsWith("text_") && candidates.some((part) => normalizeType(firstString(part, "type") ?? "") === "text")) {
+      const text = candidates.filter((part) => normalizeType(firstString(part, "type") ?? "") === "text");
+      return [classifyPiRecord({ ...value, type: "message", message: { ...message, content: text } } as PiEvent)];
+    }
+    if (updateType.startsWith("toolcall_") || updateType.startsWith("tool_call_")) {
+      const tools = candidates.filter((part) => {
+        const type = normalizeType(firstString(part, "type") ?? "");
+        return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
+      });
+      if (tools.length) return tools.map((part) => classifyPiRecord({ ...value, ...part, type: "tool_call", message: undefined } as PiEvent));
     }
   }
-  if (!thinking.length && !tools.length) return [classifyPiRecord(record)];
 
   const models: TimelineCardModel[] = [];
-  const thinkingText = textFrom(thinking);
-  if (thinkingText) models.push(classifyPiRecord({ ...value, type: "thinking", thinking: thinkingText } as PiEvent));
-  for (const part of tools) {
-    const tool = asRecord(part) ?? {};
-    models.push(classifyPiRecord({ ...value, ...tool, type: "tool_call", message: undefined } as PiEvent));
+  let textParts: Record<string, unknown>[] = [];
+  const flushText = () => {
+    if (!textParts.length) return;
+    models.push(classifyPiRecord({ ...value, type: "message", message: { ...message, content: textParts } } as PiEvent));
+    textParts = [];
+  };
+  for (const rawPart of parts) {
+    const part = asRecord(rawPart);
+    if (!part) continue;
+    const type = normalizeType(firstString(part, "type") ?? "");
+    if (type === "text") {
+      textParts.push(part);
+      continue;
+    }
+    flushText();
+    if (type === "thinking") {
+      const thinking = thinkingTextFrom(part);
+      if (thinking) models.push(classifyPiRecord({ ...value, type: "thinking", thinking } as PiEvent));
+    } else if (type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use") {
+      models.push(classifyPiRecord({ ...value, ...part, type: "tool_call", message: undefined } as PiEvent));
+    }
   }
-  if (text.length) models.push(classifyPiRecord({ ...value, type: "message", message: { ...message, content: text } } as PiEvent));
+  flushText();
   return models.length ? models : [classifyPiRecord(record)];
 }
 
@@ -411,6 +436,7 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
   const result: TimelineItem[] = [];
   const durableIds = new Set<string>();
   const durableMessages = new Set<string>();
+  const durableMessageIdentities = new Set<string>();
   const seenEntryIds = new Set<string>();
 
   for (const entry of entries) {
@@ -423,6 +449,8 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
     if (payloadId) durableIds.add(payloadId);
     const signature = messageSignature(entry);
     if (signature) durableMessages.add(signature);
+    const messageIdentity = messageActivityIdentity(entry);
+    if (messageIdentity) durableMessageIdentities.add(messageIdentity);
     result.push({ kind: "entry", entry });
   }
 
@@ -435,6 +463,8 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
     if (eventId && durableIds.has(eventId)) continue;
     const payloadId = payloadIdentity(item?.event);
     if (payloadId && durableIds.has(payloadId)) continue;
+    const messageIdentity = messageActivityIdentity(item?.event);
+    if (messageIdentity && durableMessageIdentities.has(messageIdentity)) continue;
     const signature = messageSignature(item?.event);
     if (signature && durableMessages.has(signature)) continue;
     result.push({ kind: "event", item });
@@ -456,18 +486,19 @@ function uniqueEntries(entries: PiEntry[]): PiEntry[] {
 export function upsertEvent(current: TimelineEventItem[], next: TimelineEventItem): TimelineEventItem[] {
   const nextEvent = asRecord(next.event);
   const nextType = normalizeType(firstString(nextEvent, "type") ?? "");
+  const nextScope = eventScope(next);
   if (nextType === "agent_end" || nextType === "agent_settled") {
     for (let index = current.length - 1; index >= 0; index -= 1) {
       const currentType = normalizeType(firstString(asRecord(current[index]?.event), "type") ?? "");
-      if (!isAgentLifecycleType(currentType)) continue;
+      if (!isAgentLifecycleType(currentType) || eventScope(current[index]!) !== nextScope) continue;
       const updated = current.slice();
       updated[index] = { ...next, id: current[index]!.id };
       return updated;
     }
   }
-  const boundary = lastRunBoundary(current);
+  const boundary = lastRunBoundary(current, nextScope);
   if (normalizeType(firstString(nextEvent, "type") ?? "") === "message_end" && messageRole(nextEvent) === "assistant") {
-    current = current.filter((item, index) => index <= boundary || normalizeType(firstString(asRecord(item.event), "type") ?? "") !== "message_update");
+    current = current.filter((item, index) => index <= boundary || eventScope(item) !== nextScope || normalizeType(firstString(asRecord(item.event), "type") ?? "") !== "message_update");
   }
 
   const streamKey = streamingEventKey(next);
@@ -493,19 +524,26 @@ function isAgentLifecycleType(type: string): boolean {
   return type === "agent_start" || type === "agent_end" || type === "agent_settled";
 }
 
-function lastRunBoundary(events: TimelineEventItem[]): number {
+function lastRunBoundary(events: TimelineEventItem[], scope = ""): number {
   for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (eventScope(events[index]!) !== scope) continue;
     if (normalizeType(firstString(asRecord(events[index]?.event), "type") ?? "") === "agent_start") return index;
   }
   return -1;
 }
 
+function eventScope(item: TimelineEventItem): string {
+  const event = asRecord(item.event);
+  return firstString(event, "source_employee_id", "sourceEmployeeId", "source_ref", "sourceRef") ?? "";
+}
+
 function streamingEventKey(item: TimelineEventItem): string | null {
   const event = asRecord(item.event);
+  const scope = eventScope(item);
   const type = normalizeType(firstString(event, "type") ?? "");
   if (type.startsWith("tool_execution_")) {
     const callId = firstString(event, "toolCallId", "tool_call_id");
-    return callId ? `tool:${callId}` : null;
+    return callId ? `${scope}:tool:${callId}` : null;
   }
   if (type !== "message_update") return null;
   const update = asRecord(event?.assistantMessageEvent);
@@ -516,7 +554,7 @@ function streamingEventKey(item: TimelineEventItem): string | null {
         : null;
   if (!phase) return null;
   const contentIndex = typeof update?.contentIndex === "number" ? update.contentIndex : -1;
-  return `message:${phase}:${contentIndex}`;
+  return `${scope}:message:${phase}:${contentIndex}`;
 }
 
 function mergeStreamingEvent(previous: TimelineEventItem, next: TimelineEventItem): TimelineEventItem {
@@ -525,7 +563,13 @@ function mergeStreamingEvent(previous: TimelineEventItem, next: TimelineEventIte
   const previousUpdate = asRecord(previousEvent.assistantMessageEvent);
   const nextUpdate = asRecord(nextEvent.assistantMessageEvent);
   if (nextEvent.message === undefined && previousUpdate && nextUpdate && typeof previousUpdate.delta === "string" && typeof nextUpdate.delta === "string") {
-    return { ...next, id: previous.id, event: { ...nextEvent, assistantMessageEvent: { ...nextUpdate, delta: boundedText(previousUpdate.delta + nextUpdate.delta, MAX_SUMMARY_LENGTH) } } as unknown as PiEvent };
+    const updateType = normalizeType(firstString(nextUpdate, "type") ?? "");
+    const isThinkingUpdate = updateType.startsWith("thinking_") || updateType.startsWith("reasoning_");
+    const delta = isThinkingUpdate ? previousUpdate.delta + nextUpdate.delta : boundedText(previousUpdate.delta + nextUpdate.delta, MAX_SUMMARY_LENGTH);
+    return { ...next, id: previous.id, event: { ...nextEvent, assistantMessageEvent: { ...nextUpdate, delta } } as unknown as PiEvent };
+  }
+  if (nextEvent.args === undefined && previousEvent.args !== undefined) {
+    return { ...next, id: previous.id, event: { ...nextEvent, args: previousEvent.args } as unknown as PiEvent };
   }
   return { ...next, id: previous.id };
 }
@@ -708,7 +752,7 @@ function cardDetails(kind: TimelineKind, type: string, value: Record<string, unk
   const extractedArgs = extractToolArguments(value);
   const args = extractedArgs ?? ((kind === "memory" || kind === "rag") ? value : undefined);
   const result = extractToolResult(value);
-  if ((kind === "tool-call" || kind === "approval") && args !== undefined && !looksLikeToolResult(type, value)) details.argsSummary = boundedDetail(args);
+  if (args !== undefined && ((kind === "tool-call" && !looksLikeToolResult(type, value)) || kind === "tool-result" || kind === "approval")) details.argsSummary = boundedDetail(args);
   if (kind === "tool-result" && result !== undefined && (looksLikeToolResult(type, value) || args === undefined)) details.resultSummary = boundedDetail(result);
 
   if (kind === "todo") {
@@ -743,7 +787,7 @@ function summaryFor(kind: TimelineKind, type: string, value: Record<string, unkn
       return boundedText(content ?? (type === "message_update" ? "消息正在生成" : "消息"), MAX_SUMMARY_LENGTH);
     }
     case "thinking":
-      return boundedText(textFrom(value?.thinking) ?? textFrom(value?.reasoning) ?? textFrom(value?.content) ?? textFrom(value?.message) ?? textFrom(value?.delta) ?? textFrom(value?.assistantMessageEvent) ?? "正在思考", MAX_SUMMARY_LENGTH);
+      return thinkingTextFrom(value?.thinking) ?? thinkingTextFrom(value?.reasoning) ?? thinkingTextFrom(value?.content) ?? thinkingTextFrom(value?.message) ?? thinkingTextFrom(value?.delta) ?? thinkingTextFrom(value?.assistantMessageEvent) ?? "正在思考";
     case "tool-call":
       return toolSummary(details.toolName, "工具调用");
     case "tool-result":
@@ -1024,9 +1068,10 @@ function findArrayByKeys(value: unknown, keys: string[], depth = 0, seen = new W
 
 function sourceMetadata(value: Record<string, unknown> | null): TimelineSource | undefined {
   if (!value) return undefined;
-  const directId = firstString(value, "source_employee_id", "sourceEmployeeId", "source_expert_id", "sourceExpertId");
+  const directId = firstString(value, "source_employee_id", "sourceEmployeeId", "source_expert_id", "sourceExpertId", "source_id", "sourceId");
   const directName = firstString(value, "source_employee_name", "sourceEmployeeName", "source_employee_display_name", "sourceEmployeeDisplayName", "source_display_name", "sourceDisplayName", "source_name", "sourceName", "source_expert_name", "sourceExpertName");
-  const marker = directId || directName || firstValue(value, ["source", "source_ref", "sourceRef", "source_employee", "sourceEmployee", "source_expert", "sourceExpert", "child", "delegation"]) !== undefined;
+  const sourceType = normalizeType(firstString(value, "source_type", "sourceType") ?? "");
+  const marker = directId || directName || sourceType || firstValue(value, ["source", "source_ref", "sourceRef", "source_employee", "sourceEmployee", "source_expert", "sourceExpert", "child", "delegation"]) !== undefined;
   const directFallbackId = marker ? firstString(value, "employee_id", "employeeId") : null;
   const directFallbackName = marker ? firstString(value, "display_name", "displayName", "employee_name", "employeeName") : null;
   const candidates = [
@@ -1069,6 +1114,13 @@ function messageRole(value: Record<string, unknown> | null): "user" | "assistant
   return role.toLowerCase() === "user" ? "user" : "assistant";
 }
 
+function isEmployeeSourcedMessage(value: Record<string, unknown> | null): boolean {
+  const sourceType = normalizeType(firstString(value, "source_type", "sourceType") ?? "");
+  if (sourceType === "employee" || sourceType === "agent") return true;
+  const sourceRole = normalizeType(firstString(value, "source_role", "sourceRole") ?? "");
+  return sourceRole === "participant" || sourceRole === "child" || sourceRole === "coordinator";
+}
+
 function payloadIdentity(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -1077,6 +1129,16 @@ function payloadIdentity(value: unknown): string | null {
   const message = asRecord(record.message);
   if (typeof message?.id === "string" && message.id) return message.id;
   return null;
+}
+
+function messageActivityIdentity(value: unknown): string | null {
+  const record = asRecord(value);
+  const message = asRecord(record?.message);
+  const role = lower(firstString(message, "role"));
+  const timestamp = message?.timestamp;
+  if (!role || (typeof timestamp !== "string" && (typeof timestamp !== "number" || !Number.isFinite(timestamp)))) return null;
+  const source = firstString(record, "source_employee_id", "sourceEmployeeId") ?? "";
+  return `${role}:${timestamp}:${source}`;
 }
 
 function messageSignature(value: unknown): string | null {
@@ -1108,6 +1170,30 @@ function firstValue(value: Record<string, unknown> | null, keys: string[]): unkn
     if (value[key] !== undefined && value[key] !== null) return value[key];
   }
   return undefined;
+}
+
+function thinkingTextFrom(value: unknown, depth = 0, seen = new WeakSet<object>()): string | null {
+  if (typeof value === "string") return fullDisplayText(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (!value || depth > MAX_JSON_DEPTH || typeof value !== "object") return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      let text = "";
+      for (const part of value) text += thinkingTextFrom(part, depth + 1, seen) ?? "";
+      return text || null;
+    }
+    const record = asRecord(value);
+    if (!record) return null;
+    for (const key of ["thinking", "reasoning", "delta", "text", "content", "message", "assistantMessageEvent"]) {
+      const text = thinkingTextFrom(record[key], depth + 1, seen);
+      if (text) return text;
+    }
+    return null;
+  } finally {
+    seen.delete(value);
+  }
 }
 
 function textFrom(value: unknown, depth = 0, seen = new WeakSet<object>()): string | null {
@@ -1157,7 +1243,11 @@ function detailSummary(value: unknown): string | undefined {
 }
 
 function safeDisplayText(value: string, maxLength: number): string {
-  return boundedText(value.replace(INLINE_SECRET, "[已隐藏]").replace(INLINE_PATH, "[路径已隐藏]"), maxLength);
+  return boundedText(fullDisplayText(value), maxLength);
+}
+
+function fullDisplayText(value: string): string {
+  return value.replace(INLINE_SECRET, "[已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
 }
 
 function boundedText(value: string, maxLength: number): string {

@@ -98,6 +98,22 @@ describe("TimelineView Pi cards", () => {
     expect(liveAnswer[0]).toMatchObject({ kind: "message", summary: "实时回答" });
   });
 
+  it("keeps long thinking content complete in durable and live cards", () => {
+    const durableThinking = "思考步骤。".repeat(900);
+    expect(classifyPiRecords(entry("long-thinking", "message", {
+      message: { role: "assistant", content: [{ type: "thinking", thinking: durableThinking }] },
+    }))[0]?.summary).toBe(durableThinking);
+
+    let events: TimelineEventItem[] = [];
+    events = upsertEvent(events, event("thinking-1", "message_update", {
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "a".repeat(1_500) },
+    }));
+    events = upsertEvent(events, event("thinking-2", "message_update", {
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "b".repeat(1_500) },
+    }));
+    expect(classifyPiRecords(events[0]!.event)[0]?.summary).toBe("a".repeat(1_500) + "b".repeat(1_500));
+  });
+
   it("classifies bounded tool, todo, memory, and RAG card details", () => {
     expect(classifyPiRecord(event("todo", "tool_execution_start", {
       toolName: "todo_update",
@@ -152,6 +168,33 @@ describe("TimelineView Pi cards", () => {
     expect(call.argsSummary).not.toContain("/private/workspace");
     expect(result.resultSummary).toContain("visible result");
     expect(result.resultSummary).not.toContain("leaked-secret");
+  });
+
+  it("keeps the bash command visible when the live result replaces its start event", () => {
+    let events: TimelineEventItem[] = [];
+    events = upsertEvent(events, event("bash-start", "tool_execution_start", {
+      toolCallId: "bash-call",
+      toolName: "bash",
+      args: { command: "printf 'hello'" },
+    }));
+    events = upsertEvent(events, event("bash-end", "tool_execution_end", {
+      toolCallId: "bash-call",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "hello" }] },
+    }));
+
+    expect(events).toHaveLength(1);
+    expect(classifyPiRecord(events[0]!.event)).toMatchObject({
+      kind: "tool-result",
+      toolName: "bash",
+      argsSummary: expect.stringContaining("printf 'hello'"),
+      resultSummary: expect.stringContaining("hello"),
+    });
+
+    const durable = classifyPiRecords(entry("bash-message", "message", {
+      message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "printf 'hello'" } }] },
+    }));
+    expect(durable[0]).toMatchObject({ kind: "tool-call", toolName: "bash", argsSummary: expect.stringContaining("printf 'hello'" ) });
   });
 
   it("keeps unknown output bounded and removes sensitive fields", () => {
@@ -210,12 +253,52 @@ describe("TimelineView Pi cards", () => {
     expect(lifecycle[0]!.event.type).toBe("agent_settled");
   });
 
+  it("keeps interleaved participant event streams isolated", () => {
+    let events: TimelineEventItem[] = [];
+    events = upsertEvent(events, event("coord-start", "agent_start", { source_employee_id: "coordinator" }));
+    events = upsertEvent(events, event("worker-start", "agent_start", { source_employee_id: "worker" }));
+    events = upsertEvent(events, event("coord-thinking", "message_update", {
+      source_employee_id: "coordinator",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "协调" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "协调" },
+    }));
+    events = upsertEvent(events, event("worker-thinking", "message_update", {
+      source_employee_id: "worker",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "执行" }] },
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "执行" },
+    }));
+    expect(events.filter((item) => item.event.type === "message_update").map((item) => item.id)).toEqual(["coord-thinking", "worker-thinking"]);
+
+    events = upsertEvent(events, event("coord-end", "message_end", {
+      source_employee_id: "coordinator",
+      message: { role: "assistant", content: [{ type: "text", text: "协调完成" }] },
+    }));
+    expect(events.some((item) => item.id === "worker-thinking")).toBe(true);
+
+    events = upsertEvent(events, event("coord-agent-end", "agent_end", { source_employee_id: "coordinator" }));
+    expect(events.find((item) => item.id === "coord-start")?.event.type).toBe("agent_end");
+    expect(events.find((item) => item.id === "worker-start")?.event.type).toBe("agent_start");
+  });
+
   it("deduplicates a final SSE answer against its durable entry using visible text", () => {
     const durable = entry("assistant", "message", { message: { role: "assistant", content: [{ type: "thinking", thinking: "full private reasoning" }, { type: "text", text: "唯一回答" }] } });
     const live = event("different-id", "message_end", { message: { role: "assistant", content: [{ type: "thinking", thinking: "[内容已隐藏]" }, { type: "text", text: "唯一回答" }] } });
     const merged = mergeTimeline([durable], [live]);
     expect(merged).toHaveLength(1);
     expect(merged[0]!.kind).toBe("entry");
+  });
+
+  it("deduplicates an empty live thinking placeholder against its durable message", () => {
+    const durable = entry("assistant", "message", {
+      source_employee_id: "employee-1",
+      message: { role: "assistant", timestamp: 42, content: [{ type: "thinking", thinking: "完整思考" }, { type: "text", text: "答案" }] },
+    });
+    const live = event("live-thinking", "message_update", {
+      source_employee_id: "employee-1",
+      message: { role: "assistant", timestamp: 42, content: [{ type: "thinking", thinking: "" }] },
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    });
+    expect(mergeTimeline([durable], [live])).toEqual([{ kind: "entry", entry: durable }]);
   });
 
   it("keeps persisted order and removes duplicate SSE identities", () => {
@@ -256,6 +339,71 @@ describe("TimelineView Pi cards", () => {
     expect(container.textContent).not.toContain("employee-missing");
   });
 
+  it("renders assistant Markdown while keeping user messages as text", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("user", "message", { message: { role: "user", content: "普通 **文本**" } }),
+      entry("assistant", "message", { message: { role: "assistant", content: "## 结果\n\n**已完成**\n\n- 第一项\n- 第二项" } }),
+    ]);
+
+    render(<TimelineView client={client} conversationId="markdown" />);
+
+    expect(await screen.findByText("普通 **文本**")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "结果" })).toBeInTheDocument();
+    expect(screen.getByText("已完成").tagName).toBe("STRONG");
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("attributes delegated user messages to the coordinating employee", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("human", "message", { message: { role: "user", content: "用户请求" } }),
+      entry("delegated", "message", {
+        source_type: "employee",
+        source_id: "coordinator",
+        source_display_name: "系统测试员",
+        source_role: "participant",
+        message: { role: "user", content: "请查看今天的股市情况" },
+      }),
+    ]);
+
+    render(
+      <TimelineView
+        client={client}
+        conversationId="delegated-source"
+        sourceExperts={[{ employee_id: "coordinator", display_name: "系统测试员" }]}
+      />,
+    );
+
+    expect(await screen.findByText("请查看今天的股市情况")).toBeInTheDocument();
+    expect(screen.getAllByText("我")).toHaveLength(1);
+    expect(screen.getByText("系统测试员")).toBeInTheDocument();
+  });
+
+  it("keeps multi-turn thinking and tool blocks in their persisted order", () => {
+    const models = classifyPiRecords(entry("multi-turn", "message", {
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "思考1" },
+          { type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "one" } },
+          { type: "thinking", thinking: "思考2" },
+          { type: "toolCall", id: "tool-2", name: "read", arguments: { path: "file.txt" } },
+          { type: "thinking", thinking: "思考3" },
+          { type: "text", text: "最终回复" },
+        ],
+      },
+    }));
+
+    expect(models.map((model) => model.kind)).toEqual(["thinking", "tool-call", "thinking", "tool-call", "thinking", "message"]);
+    expect(models.map((model) => model.summary)).toEqual([
+      "思考1",
+      "工具调用：bash",
+      "思考2",
+      "工具调用：read",
+      "思考3",
+      "最终回复",
+    ]);
+  });
+
   it("renders accessible cards, error alerts, and safe tool summaries", async () => {
     mockedGetEntries.mockResolvedValue([
       entry("u", "message", { message: { role: "user", content: "hello" } }),
@@ -287,6 +435,24 @@ describe("TimelineView Pi cards", () => {
     expect(screen.queryByText("do-not-render")).not.toBeInTheDocument();
     expect(screen.queryByText("/private/file")).not.toBeInTheDocument();
     expect(screen.getByTestId("conversation-events")).toHaveAttribute("aria-label", "对话事件流");
+  });
+
+  it("does not render Pi session control entries as unknown chat events", async () => {
+    mockedGetEntries.mockResolvedValue([
+      entry("model", "model_change", { provider: "provider", modelId: "model" }),
+      entry("thinking-level", "thinking_level_change", { thinkingLevel: "off" }),
+      entry("session-info", "session_info", { name: "internal" }),
+      entry("user", "message", { message: { role: "user", content: "hello" } }),
+    ]);
+
+    render(<TimelineView client={client} conversationId="group-1" />);
+
+    expect(await screen.findByText("hello")).toBeInTheDocument();
+    await act(async () => {
+      onEvent?.(event("live-model", "model_change", { source_employee_id: "employee-1", provider: "provider", modelId: "model" }));
+    });
+    expect(screen.queryByRole("article", { name: "未识别事件" })).not.toBeInTheDocument();
+    expect(screen.queryByText("未识别事件")).not.toBeInTheDocument();
   });
 
   it("renders structured activity cards and delegation source labels", async () => {
