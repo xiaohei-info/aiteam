@@ -138,16 +138,23 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `NEWAPI_SESSION_SECRET` / `NEWAPI_CRYPTO_SECRET` | NewAPI 会话/数据库敏感字段加密材料 | `***` |
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
-| `HINDSIGHT_URL` | Manager-only Hindsight upstream URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
+| `HINDSIGHT_URL` | Manager-only Hindsight API URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
+| `HINDSIGHT_CONSOLE_URL` | Manager-only Hindsight native UI URL（原生控制台代理目标） | `http://hindsight-ui:9999` |
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |
 | `HINDSIGHT_FACADE_URL` | Manager 对 Agent 暴露的 facade URL（仅 URL，不含 secret） | `/api/manager/hindsight` |
 | `HINDSIGHT_LEASE_TTL_SECONDS` | Manager opaque bank lease TTL（30–3600 秒） | `300` |
+| `LIGHTRAG_URL` | Manager-only LightRAG API/UI URL（未配置时 Agent lease fail-closed） | `http://lightrag:9621` |
+| `LIGHTRAG_CONSOLE_URL` | Manager-only LightRAG native UI URL（默认使用 `LIGHTRAG_URL`） | `http://lightrag:9621` |
+| `LIGHTRAG_API_KEY` | Manager-only LightRAG upstream key；绝不注入 Agent | `***` |
+| `LIGHTRAG_WORKSPACE` | Manager-only 固定企业 workspace | `enterprise_shared` |
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
 > NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布主机端口，HTTP 默认仅绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
 >
-> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；测试和目标生产统一使用独立 PostgreSQL + pgvector 数据库/role（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。默认 Compose 不启动 LightRAG；目标联调显式使用 `--profile lightrag`。镜像固定为 `ghcr.io/hkuds/lightrag:1.5.6`（生产可替换为已验证 sha256 digest），禁止 `latest`。Manager-only 的 URL/key/workspace/PG secrets 绝不进入 Agent。bootstrap、校验、备份/恢复/升级/rollback 见 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md)；变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
+> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；Manager 原生控制台也经 Manager 代理加载，浏览器不会拿到 API key。测试和目标生产统一使用独立 PostgreSQL + pgvector 数据库/role（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。默认 Compose 不启动 LightRAG；目标联调显式使用 `--profile lightrag`。镜像固定为 `ghcr.io/hkuds/lightrag:1.5.6`（生产可替换为已验证 sha256 digest），禁止 `latest`。Manager-only 的 URL/key/workspace/PG secrets 绝不进入 Agent。bootstrap、校验、备份/恢复/升级/rollback 见 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md)；变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
+>
+> 原生控制台入口：Operator 的 `/gateway` 代理 NewAPI；Manager 的 `/knowledge-console` 和 `/memory-console` 分别代理本部署的 LightRAG/Hindsight。控制台路由只接受本端登录态，服务凭据由对应后端注入。
 
 ---
 

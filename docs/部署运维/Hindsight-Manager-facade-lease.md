@@ -22,7 +22,9 @@ facade 在每个请求校验 lease 的 tenant/member/employee/bank/expiry/revoke
 Manager：
 
 ```dotenv
-HINDSIGHT_URL=https://hindsight.example.com
+# API 用于 facade/lease；原生控制台（若启用）使用单独 UI 地址
+HINDSIGHT_URL=https://hindsight.example.com:9290
+HINDSIGHT_CONSOLE_URL=https://hindsight.example.com:9999
 HINDSIGHT_SERVICE_TOKEN=<manager-only-secret>
 HINDSIGHT_FACADE_URL=/api/manager/hindsight
 HINDSIGHT_LEASE_TTL_SECONDS=300

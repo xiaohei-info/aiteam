@@ -7,7 +7,7 @@
 - Operator 配置上游 channel、发布模型/价格、签发 tenant 受限 token。
 - Manager/Agent 永远不获得 NewAPI 管理 token 或上游 channel key。
 - Agent 只使用 tenant 独立、可撤销、可限模型/限额的推理 token。
-- NewAPI DB/Redis 不发布公网；HTTP 默认绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。
+- NewAPI DB/Redis 不发布公网；HTTP 默认绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。原生管理 UI 仅经 Operation 的 `/api/operation/newapi-console/` 代理访问。
 
 ## 2. 配置
 
@@ -27,6 +27,7 @@ NEWAPI_URL=http://127.0.0.1:9300
 # 可选：管理面/推理面分离时分别覆盖；否则自动使用 NEWAPI_URL 和 NEWAPI_URL/v1。
 NEWAPI_ADMIN_BASE_URL=
 NEWAPI_PUBLIC_BASE_URL=
+# Operation 原生控制台代理默认使用 NEWAPI_ADMIN_BASE_URL，无需向浏览器暴露此地址。
 ```
 
 环境文件必须 `chmod 600 .env.<env>`。生产还必须在首次 setup 后设置 Operator-only：

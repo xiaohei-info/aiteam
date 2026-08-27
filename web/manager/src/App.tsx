@@ -20,6 +20,7 @@ import { AuditPage } from "./features/audit";
 import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
 import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
+import { NativeConsolePage } from "./features/native-console";
 
 export function App(): React.ReactNode {
   return (
@@ -40,6 +41,8 @@ export function App(): React.ReactNode {
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/recharge" element={<RechargePage />} />
         <Route path="/memory" element={<MemoryPage />} />
+        <Route path="/memory-console" element={<NativeConsolePage component="hindsight" />} />
+        <Route path="/knowledge-console" element={<NativeConsolePage component="lightrag" />} />
         <Route path="/connectors" element={<ConnectorsPage />} />
         <Route path="/org" element={<OrgPage />} />
         <Route path="/audit" element={<AuditPage />} />

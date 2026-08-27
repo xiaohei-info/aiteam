@@ -7,7 +7,7 @@
 - 适用：taiyi / 生产 Manager 部署，以及可选的本地 Compose 联调。
 - LightRAG 只被 Manager 服务访问；不向 Agent 镜像、Agent 环境或用户端下发 API key。
 - LightRAG 使用独立 PostgreSQL/pgvector 数据库、独立 role 和固定 workspace；不复用 AI Team 控制面数据库/role。
-- LightRAG 服务不暴露主机公网端口。Manager 通过内网 URL 调用，Agent 仍只调用 Manager MCP facade。
+- LightRAG 服务不暴露主机公网端口。Manager 通过内网 URL 调用，Agent 仍只调用 Manager MCP facade；原生 UI 仅经 Manager 控制台代理并由服务端注入 key。
 - 本文命令中的 `--dry-run` 不连接数据库、不拉镜像、不停止服务、不写备份；没有标注的 bootstrap/恢复/升级命令只在 taiyi/生产执行。
 
 当前验证基线为 LightRAG `1.5.6`，Compose 默认使用 `ghcr.io/hkuds/lightrag:1.5.6`，禁止 `latest`。生产可替换为已经验证的同版本 `@sha256:<64位摘要>`；更换 LightRAG、embedding dimension 或 storage adapter 前必须先在隔离 PG 数据库完成 clean-install smoke，并把镜像引用写入受控环境文件。`pgvector/pgvector:pg16` 同样固定 PG major，不要漂移到 `latest`。
@@ -19,6 +19,8 @@
 ```dotenv
 # Manager -> LightRAG（生产使用内网 TLS/服务发现地址）
 LIGHTRAG_URL=https://lightrag.manager.internal
+# 原生 UI 由 Manager 控制台代理加载；未配置时仅启用 API/MCP 管理面
+LIGHTRAG_CONSOLE_URL=https://lightrag.manager.internal
 LIGHTRAG_API_KEY=<secret-store>
 LIGHTRAG_WORKSPACE=<fixed-enterprise-workspace>
 # 一个 Manager 部署只绑定一个企业；LIGHTRAG_INSTANCES 仅作为未来同企业 HA/分片扩展，不能表达多企业路由。
