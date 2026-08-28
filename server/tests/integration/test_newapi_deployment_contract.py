@@ -57,6 +57,22 @@ def test_release_gate_and_deployer_cover_newapi_backup_and_health():
         assert container in deploy
 
 
+def test_console_credentials_bootstrap_is_local_and_reused():
+    script = (ROOT / "scripts/bootstrap-console-credentials.sh").read_text(encoding="utf-8")
+    ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
+    docs = (ROOT / "docs/部署运维/组件管理员凭据初始化.md").read_text(encoding="utf-8")
+
+    assert "umask 077" in script
+    assert "first run generates; later runs reuse existing values" in script
+    assert "mode-600" in script
+    assert "NEWAPI_ADMIN_PASSWORD" in script
+    assert "LIGHTRAG_AUTH_ACCOUNTS" in script
+    assert "HINDSIGHT_CP_ACCESS_KEY" in script
+    assert 'source "${AITEAM_CONSOLE_CREDENTIALS_FILE}"' in ctl
+    assert "scripts/bootstrap-console-credentials.sh" in docs
+    assert "不要提交 Git" in docs
+
+
 def test_newapi_examples_never_contain_real_credentials():
     for name in (".env.example", ".env.test.example"):
         text = (ROOT / name).read_text(encoding="utf-8")

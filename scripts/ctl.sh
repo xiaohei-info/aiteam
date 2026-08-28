@@ -86,6 +86,20 @@ load_env() {
   source "${ENV_FILE}"
   set +a
 
+  # 每台部署的原生控制台凭据由一次性 bootstrap 文件持久化；只加载本机
+  # mode-600 文件，避免把明文账号/密码写进仓库环境样例。
+  if [[ -n "${AITEAM_CONSOLE_CREDENTIALS_FILE:-}" ]]; then
+    [[ -f "${AITEAM_CONSOLE_CREDENTIALS_FILE}" && -r "${AITEAM_CONSOLE_CREDENTIALS_FILE}" ]] || {
+      echo "[ctl] ERROR: AITEAM_CONSOLE_CREDENTIALS_FILE is not readable" >&2
+      exit 1
+    }
+    chmod 600 "${AITEAM_CONSOLE_CREDENTIALS_FILE}"
+    set -a
+    # shellcheck source=/dev/null
+    source "${AITEAM_CONSOLE_CREDENTIALS_FILE}"
+    set +a
+  fi
+
   # 控制面环境名必须由 ctl 的 --env 选择器决定，不能让 .env.prod 缺省值回落为 dev。
   case "${ENV_CONFIG}" in
     prod) export AITEAM_ENV="production" ;;
