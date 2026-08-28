@@ -14,6 +14,7 @@ def test_taiyi_deploy_uses_persistent_root_without_workspace_checkout():
     assert "Validate persistent deployment root" in workflow
     assert 'git config --global --add safe.directory "${DEPLOY_ROOT}"' in workflow
     assert "HOME: /root" in workflow
+    assert "latest local backup" in workflow
     assert "actions/checkout@v4" not in workflow
     assert 'bash "${{ env.DEPLOY_ROOT }}/deploy/ci/run.sh"' in workflow
     assert "concurrency:" in workflow

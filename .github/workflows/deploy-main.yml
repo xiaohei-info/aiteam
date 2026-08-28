@@ -102,14 +102,35 @@ jobs:
           if [[ -z "${{ env.DEPLOY_BRANCH }}" ]]; then
             echo "::error::DEPLOY_BRANCH empty; abort."; exit 2
           fi
-          cat > ".env.${{ env.DEPLOY_ENV }}" << 'ENVEOF'
+          env_file=".env.${DEPLOY_ENV}"
+          cat > "${env_file}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
-          if ! grep -q '[^[:space:]]' ".env.${{ env.DEPLOY_ENV }}"; then
-            echo "::error::.env.${{ env.DEPLOY_ENV }} is empty -- check GitHub secret ENV_CONTENTS_${{ env.DEPLOY_ENV }}"
+          # Keep host-generated component credentials when the repository secret
+          # predates a component rollout. Values from the secret always win;
+          # only absent keys are recovered from the latest local backup.
+          fallback="$(find . -maxdepth 1 -type f -name ".env.${DEPLOY_ENV}.bak.*" -print | sort | tail -1 || true)"
+          if [[ -n "${fallback}" ]]; then
+            for key in \
+              AITEAM_SKILL_SIGNING_PRIVATE_KEY AITEAM_SKILL_SIGNING_KEY_ID \
+              AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY AITEAM_SKILL_SIGNING_CURRENT_KEY_ID \
+              AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY AITEAM_SKILL_SIGNING_NEXT_KEY_ID \
+              AITEAM_SKILL_SIGNING_CURRENT_NOT_BEFORE AITEAM_SKILL_SIGNING_CURRENT_EXPIRES_AT \
+              AITEAM_SKILL_SIGNING_NEXT_NOT_BEFORE AITEAM_SKILL_SIGNING_NEXT_EXPIRES_AT \
+              AITEAM_SKILL_SIGNING_REVOKED_KEY_IDS AITEAM_SKILL_SIGNING_REVOKED_KEYS_JSON \
+              MANAGER_CREDENTIAL_KEY LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_WORKSPACE \
+              HINDSIGHT_URL HINDSIGHT_SERVICE_TOKEN; do
+              if ! grep -Eq "^${key}=.+" "${env_file}"; then
+                line="$(grep -E "^${key}=" "${fallback}" | tail -1 || true)"
+                [[ -n "${line}" ]] && printf '%s\n' "${line}" >> "${env_file}"
+              fi
+            done
+          fi
+          if ! grep -q '[^[:space:]]' "${env_file}"; then
+            echo "::error::${env_file} is empty -- check GitHub secret ENV_CONTENTS_${DEPLOY_ENV}"
             exit 1
           fi
-          echo "wrote .env.${{ env.DEPLOY_ENV }} ($(wc -l < ".env.${{ env.DEPLOY_ENV }}") lines)"
+          echo "wrote ${env_file} ($(wc -l < "${env_file}") lines)"
 
       # 部署编排：在部署根跑 run.sh，它会完成 git pull + 前端 build + 装 unit +
       #   systemctl restart + /healthz smoke。
