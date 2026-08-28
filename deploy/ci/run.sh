@@ -100,7 +100,56 @@ set -a
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 set +a
+
+persist_env_value() {
+  local name="$1" value="$2"
+  [[ -n "$value" ]] || return 0
+  # The GitHub secret is the normal source of truth. Only recover a missing
+  # component value from an already-running container, then persist it locally
+  # so a later reboot does not silently fall back to a different default.
+  if ! grep -Eq "^${name}=.+" "${ENV_FILE}"; then
+    printf '%s=%q\n' "$name" "$value" >>"${ENV_FILE}"
+  fi
+  export "${name}=${value}"
+}
+
+hydrate_existing_newapi_env() {
+  local pg_env app_env line name value redis_url
+  pg_env="$(docker inspect aiteam-newapi-pg --format '{{range .Config.Env}}{{println .}}{{end}}')" \
+    || fail "cannot inspect running NewAPI PostgreSQL container"
+  while IFS= read -r line; do
+    name="${line%%=*}"
+    value="${line#*=}"
+    case "$name" in
+      POSTGRES_USER) persist_env_value NEWAPI_DB_USER "$value" ;;
+      POSTGRES_PASSWORD) persist_env_value NEWAPI_DB_PASSWORD "$value" ;;
+      POSTGRES_DB) persist_env_value NEWAPI_DB_NAME "$value" ;;
+    esac
+  done <<<"${pg_env}"
+
+  app_env="$(docker inspect aiteam-newapi --format '{{range .Config.Env}}{{println .}}{{end}}')" \
+    || fail "cannot inspect running NewAPI container"
+  while IFS= read -r line; do
+    name="${line%%=*}"
+    value="${line#*=}"
+    case "$name" in
+      SESSION_SECRET) persist_env_value NEWAPI_SESSION_SECRET "$value" ;;
+      CRYPTO_SECRET) persist_env_value NEWAPI_CRYPTO_SECRET "$value" ;;
+      REDIS_CONN_STRING)
+        redis_url="$value"
+        if [[ "$redis_url" == redis://:*@* ]]; then
+          redis_url="${redis_url#redis://:}"
+          redis_url="${redis_url%@*}"
+          persist_env_value NEWAPI_REDIS_PASSWORD "$redis_url"
+        fi
+        ;;
+    esac
+  done <<<"${app_env}"
+  persist_env_value NEWAPI_IMAGE "$(docker inspect aiteam-newapi --format '{{.Config.Image}}')"
+}
+
 if docker ps --format '{{.Names}}' | grep -qx 'aiteam-newapi-pg'; then
+  hydrate_existing_newapi_env
   log "backing up internal NewAPI before restart"
   scripts/newapi-ops.sh --env-file "${ENV_FILE}" backup || fail "NewAPI backup failed"
 else
