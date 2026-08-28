@@ -33,7 +33,7 @@ export interface PiEventMetadata {
   tool_call_id?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
-  source_role?: "child" | "coordinator";
+  source_role?: "human" | "child" | "participant" | "coordinator";
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */
@@ -85,10 +85,8 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     copyIdentifier(result, raw, "toolCallId");
     copyToolName(result, raw);
     const kind = classifyToolKind(raw.toolName);
-    if (kind) {
-      result.tool_kind = kind;
-      if (Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
-    }
+    if (kind) result.tool_kind = kind;
+    if (Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
   }
   return boundEvent(result);
 }
@@ -112,6 +110,7 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   const raw = asRecord(value);
   if (!raw || (raw.role !== "user" && raw.role !== "assistant" && raw.role !== "toolResult")) return undefined;
   const result: Record<string, unknown> = { role: raw.role };
+  if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) result.timestamp = raw.timestamp;
   const content = serializeContent(raw.content);
   if (content !== undefined) result.content = content;
   if (raw.role === "toolResult") {
@@ -152,10 +151,12 @@ function serializeToolCall(value: Record<string, unknown>): Record<string, unkno
   const name = boundedIdentifier(value.name, MAX_TOOL_NAME_CHARS);
   if (!id && !name) return undefined;
   const result: Record<string, unknown> = {};
+  const type = value.type;
+  if (type === "toolCall" || type === "tool_call" || type === "toolUse" || type === "tool_use") result.type = type;
   if (id) result.id = id;
   if (name) result.name = name;
   const kind = classifyToolKind(value.name);
-  if (kind && Object.prototype.hasOwnProperty.call(value, "arguments")) result.arguments = safeToolValue(value.arguments, kind);
+  if (Object.prototype.hasOwnProperty.call(value, "arguments")) result.arguments = safeToolValue(value.arguments, kind);
   return result;
 }
 
@@ -233,7 +234,7 @@ function serializeMetadata(extra: PiEventMetadata): Record<string, unknown> {
     const clean = key === "source_employee_display_name" ? boundedIdentifier(value, MAX_SOURCE_NAME_CHARS) : boundedIdentifier(value, MAX_IDENTIFIER_CHARS);
     if (clean) result[key] = clean;
   }
-  if (extra.source_role === "child" || extra.source_role === "coordinator") result.source_role = extra.source_role;
+  if (extra.source_role === "human" || extra.source_role === "child" || extra.source_role === "participant" || extra.source_role === "coordinator") result.source_role = extra.source_role;
   return result;
 }
 
@@ -269,7 +270,7 @@ function boundedIdentifier(value: unknown, max: number): string | undefined {
 }
 
 function safeText(value: string, max: number): string {
-  const redacted = SECRET_KEY.test(value) ? "[内容已隐藏]" : value.replace(INLINE_SECRET, "[内容已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
+  const redacted = value.replace(INLINE_SECRET, "[内容已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
   return redacted.length <= max ? redacted : `${redacted.slice(0, Math.max(0, max - 1))}…`;
 }
 

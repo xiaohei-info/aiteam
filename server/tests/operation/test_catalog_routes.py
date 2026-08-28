@@ -9,13 +9,13 @@ from fastapi.testclient import TestClient
 
 from operation_service.catalog_dependencies import get_catalog_service
 from operation_service.catalog_gateway import CatalogManagerGateway
-from operation_service.catalog_repository import CatalogRepository
+from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
 from shared.auth import DevTokenService
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import CatalogReleaseNotify
-from shared.contracts.enums import EnterpriseRole, PlatformRole
+from shared.contracts.enums import CatalogStatus, CatalogType, EnterpriseRole, PlatformRole
 
 
 class FakeCatalogGateway(CatalogManagerGateway):
@@ -34,9 +34,12 @@ def manager():
 @pytest.fixture
 def client(manager):
     app = get_app("operation")
-    service = CatalogService(CatalogRepository(), manager)
+    providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
+    service = CatalogService(CatalogRepository(), manager, platform_providers=providers)
     app.dependency_overrides[get_catalog_service] = lambda: service
-    yield TestClient(app)
+    client = TestClient(app)
+    client.catalog_service = service
+    yield client
     app.dependency_overrides.clear()
 
 
@@ -51,7 +54,7 @@ def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
     return {"Authorization": f"Bearer {_token(role)}"}
 
 
-_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "lead", "default_model": "gpt-5", "skill_ids": ["seo"], "description": "CMO"}
+_EXPERT = {"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "lead", "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-5", "model_version": 1}, "skill_ids": ["seo"], "description": "CMO"}
 
 
 def _register_expert(client, body=None):
@@ -89,7 +92,7 @@ def test_register_expert_envelope(client, manager):
 
 
 def test_register_solution_envelope(client):
-    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
+    body = {"solution_id": "sol-x", "display_name": "X", "description": "d", "expert_template_ids": ["tpl-cmo"], "coordinator_template_id": "tpl-cmo", "coordinator_instructions": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201
     assert r.json()["data"]["catalog_type"] == "solution_template"
@@ -103,6 +106,32 @@ def test_register_validation_error_422(client):
     assert r.json()["code"] == "validation_error"
 
 
+def test_register_solution_rejects_removed_runtime_fields(client):
+    body = {
+        "display_name": "旧字段方案",
+        "description": "d",
+        "expert_template_ids": ["tpl-cmo"],
+        "coordinator_template_id": "tpl-cmo",
+        "knowledge_refs": ["tenant-knowledge"],
+        "planner_prompt": "legacy",
+    }
+    response = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
+    assert response.status_code == 422
+
+
+def test_register_allows_empty_avatar_and_skills(client):
+    body = {
+        "display_name": "草稿专家",
+        "category": "市场营销",
+        "system_prompt": "你是客服",
+        "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-4.1", "model_version": 1},
+        "description": "客服专家",
+    }
+    r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["avatar_url"] == ""
+    assert data["skill_ids"] == []
 # ---- 发布/下架/可见范围 ----
 
 def test_publish_notifies_manager(client, manager):
@@ -136,6 +165,25 @@ def test_set_visibility_flow(client, manager):
     assert r.status_code == 200
     assert r.json()["data"]["visible_scope"] == scope
     assert manager.notifications[-1].action == "visibility_changed"
+
+
+def test_publish_missing_platform_model_ref_returns_validation_problem(client):
+    client.catalog_service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE,
+        template_id="legacy-no-model",
+        version="1",
+        display_name="旧专家",
+        status=CatalogStatus.UNPUBLISHED,
+        payload={"system_prompt": "legacy"},
+    ))
+    response = client.post(
+        "/api/operation/catalog/expert_template/legacy-no-model/publish",
+        json={},
+        headers=_auth(),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert "valid published platform model" in response.json()["detail"]
 
 
 def test_publish_unknown_404(client):
@@ -189,7 +237,7 @@ def _assert_url_safe(template_id: str) -> None:
 
 def test_route_register_expert_without_id_returns_201_with_generated_id(client, manager):
     """POST /expert-templates 不传 template_id：201 + 响应含自动生成的 ID + 草稿不通知 Manager。"""
-    body = {"display_name": "路由注册-无ID专家", "category": "m", "avatar_url": "h", "system_prompt": "s", "default_model": "g", "skill_ids": ["sk"], "description": "d"}
+    body = {"display_name": "路由注册-无ID专家", "category": "m", "avatar_url": "h", "system_prompt": "s", "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "g", "model_version": 1}, "skill_ids": ["sk"], "description": "d"}
     r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]
@@ -201,7 +249,7 @@ def test_route_register_expert_without_id_returns_201_with_generated_id(client, 
 
 
 def test_route_register_solution_without_id_returns_201_with_generated_id(client):
-    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "planner_template_id": "tpl-cmo", "planner_prompt": "Plan the work"}
+    body = {"display_name": "路由注册-无ID方案", "description": "d", "expert_template_ids": ["tpl-cmo"], "coordinator_template_id": "tpl-cmo", "coordinator_instructions": "Plan the work"}
     r = client.post("/api/operation/catalog/solution-templates", json=body, headers=_auth())
     assert r.status_code == 201, r.text
     data = r.json()["data"]
@@ -218,6 +266,6 @@ def test_route_register_omitting_name_still_422(client):
 
 def test_route_register_empty_string_id_rejected_with_422(client, manager):
     """template_id 为空字符串 → schema min_length=1 拒绝（422），不入库空串 ID。"""
-    body = {"display_name": "EmptyIdExpert", "template_id": "", "category": "m", "avatar_url": "h", "system_prompt": "s", "default_model": "g", "skill_ids": ["sk"], "description": "d"}
+    body = {"display_name": "EmptyIdExpert", "template_id": "", "category": "m", "avatar_url": "h", "system_prompt": "s", "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "g", "model_version": 1}, "skill_ids": ["sk"], "description": "d"}
     r = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
     assert r.status_code == 422, r.text

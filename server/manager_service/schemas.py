@@ -491,12 +491,12 @@ class SolutionInstanceOut(BaseModel):
     solution_version: str
     display_name: str
     status: str
-    expert_employee_ids: list[str] = Field(default_factory=list)
-    knowledge_refs: list[str] = Field(default_factory=list)
-    skill_refs: list[str] = Field(default_factory=list)
-    planner_prompt: str = Field(default="", description="方案级协作编排 planner prompt（空=回退运行时默认）")
-    subtask_prompt: str = Field(default="", description="方案级协作编排 subtask prompt")
-    aggregate_prompt: str = Field(default="", description="方案级协作编排 aggregate prompt")
+    expert_employee_ids: list[str] = Field(default_factory=list, description="按方案固定顺序展开的 employee 实例")
+    coordinator_employee_id: str | None = Field(default=None, description="本 tenant 内映射后的协调专家 employee id")
+    coordinator_instructions: str = Field(default="", description="自然语言协作说明")
+    workflow_skill_ref: dict | None = Field(default=None, description="方案工作流 Skill 固定版本引用")
+    output_requirements: str = Field(default="", description="方案交付要求")
+    config_version: int = Field(default=1, ge=1)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -602,6 +602,9 @@ class UsageRollupOut(BaseModel):
     run_count: int = 0
     token_total: int = 0
     cost_total: Decimal = Decimal("0")
+    pricing_version: int | None = None
+    pricing_status: Literal["known", "unknown"] = "unknown"
+    currency: Literal["USD"] = "USD"
     error_count: int = 0
     duration_seconds_total: int = 0
 
@@ -615,6 +618,8 @@ class UsageAggregateOut(BaseModel):
     run_count: int
     token_total: int
     cost_total: Decimal
+    unknown_pricing_tokens: int = 0
+    unknown_pricing_runs: int = 0
     error_count: int
     duration_seconds_total: int
 

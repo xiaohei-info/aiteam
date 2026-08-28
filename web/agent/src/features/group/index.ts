@@ -1,6 +1,6 @@
 export { GroupPage } from "./GroupPage";
 export { GroupExpertRoster } from "./GroupExpertRoster";
-export { MentionComposer, parseMentions } from "./MentionComposer";
+export { parseMentions } from "./mention";
 export {
   createGroupConversation,
   listLoadedExperts,

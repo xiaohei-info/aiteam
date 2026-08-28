@@ -8,8 +8,8 @@
  * AITEAM-688：runtime/model 是部署级配置，前端不再提供模型选择入口。
  *
  * 复用工种：
- *   - 群聊 MentionComposer.parseMentions 解析已输入 @提及（口径与后端一致）。
- *   - listLoadedExperts（GET /api/agent/grants/experts）提供 @提及 roster 真实数据源。
+ *   - 统一解析群聊 @提及（口径与后端一致）。
+ *   - 私聊自行读取授权 roster；群聊由父级传入方案裁剪后的 roster。
  */
 
 import {
@@ -36,8 +36,8 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, deleteAttachment, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
-import { parseMentions } from "../group/MentionComposer";
+import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
+import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
 const SKILL_OPTIONS = [
@@ -56,19 +56,24 @@ export function isIdempotencyUnknownError(error: unknown): boolean {
 }
 
 export function resetPendingSubmissionKey(pending: PendingSubmission): PendingSubmission {
-  return { ...pending, key: crypto.randomUUID(), promptAttempted: false };
+  return { ...pending, key: makeIdempotencyKey(), promptAttempted: false };
 }
 
 export interface MessageComposerProps {
   conversationId: string;
+  isPrompting: boolean;
+  onPromptingChange: (prompting: boolean) => void;
   onSent: () => void;
+  /** Group conversations pass their authorized solution roster; private chat keeps the local roster lookup. */
+  mentionRoster?: LoadedExpertProjection[];
 }
 
-export function MessageComposer({ conversationId, onSent }: MessageComposerProps) {
+export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, mentionRoster }: MessageComposerProps) {
   const { client } = useApp();
   const toMessage = useApiError();
   const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
+  const [submitting, setSending] = useState(false);
+  const sending = submitting || isPrompting;
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [roster, setRoster] = useState<LoadedExpertProjection[]>([]);
@@ -80,8 +85,10 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSubmission = useRef<PendingSubmission | null>(null);
 
-  // roster 真实数据源（grants/experts：本地已装载/已授权专家投影）。
+  // Private chat reads the full local roster. Group chat supplies the solution-scoped roster
+  // so the composer never offers an employee outside the current conversation.
   useEffect(() => {
+    if (mentionRoster !== undefined) return;
     let cancelled = false;
     listLoadedExperts(client)
       .then((items) => {
@@ -93,7 +100,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, mentionRoster]);
 
   useEffect(() => {
     if (!toast) return;
@@ -104,7 +111,8 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     };
   }, [toast]);
 
-  const visibleHandles = useMemo(() => new Set(footerHandles(roster)), [roster]);
+  const activeRoster = mentionRoster ?? roster;
+  const visibleHandles = useMemo(() => new Set(footerHandles(activeRoster)), [activeRoster]);
   const mentioned = useMemo(() => parseMentions(content, visibleHandles), [content, visibleHandles]);
 
   function showToast(message: string) {
@@ -136,6 +144,18 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     setContent(input.getValue());
   }
 
+  // GroupExpertRoster uses the same composer as private chat and only emits a
+  // local insertion event; prompt submission remains in this shared component.
+  useEffect(() => {
+    const onAppendMention = (event: Event) => {
+      if (mentionRoster === undefined) return;
+      const handle = (event as CustomEvent<string>).detail;
+      if (typeof handle === "string" && visibleHandles.has(handle)) insertAtCursor(`@${handle} `);
+    };
+    window.addEventListener("group:append-mention", onAppendMention);
+    return () => window.removeEventListener("group:append-mention", onAppendMention);
+  }, [mentionRoster, visibleHandles]);
+
   function pickHandle(handle: string) {
     insertAtCursor(`@${handle} `);
     setMentionOpen(false);
@@ -159,7 +179,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
     if ((!text && attachments.length === 0) || sending) return;
     setSending(true);
     setError(null);
-    const pending = pendingSubmission.current ?? { key: crypto.randomUUID(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
+    const pending = pendingSubmission.current ?? { key: makeIdempotencyKey(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
     pendingSubmission.current = pending;
     try {
       // Upload bytes to Agent storage first; Manager never sees attachment content.
@@ -169,12 +189,18 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       }
       // Keep the key and local IDs stable: a lost response may mean the Agent accepted the prompt.
       pending.promptAttempted = true;
-      await submitPrompt(client, conversationId, { text: pending.text, attachment_ids: pending.uploaded.map((file) => file.id) }, pending.key);
+      onPromptingChange(true);
+      await submitPrompt(client, conversationId, {
+        text: pending.text,
+        attachment_ids: pending.uploaded.map((file) => file.id),
+        ...(mentionRoster !== undefined && mentioned.length > 0 ? { mentions: mentioned } : {}),
+      }, pending.key);
       pendingSubmission.current = null;
       setContent("");
       setAttachments([]);
       onSent();
     } catch (err) {
+      onPromptingChange(false);
       if (!pending.promptAttempted) {
         // Upload failed before any prompt attempt; these IDs are definitely orphaned.
         await Promise.all(pending.uploaded.map((file) => deleteAttachment(client, conversationId, file.id).catch(() => undefined)));
@@ -197,6 +223,7 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
       setError(toMessage(err));
     } finally {
       setSending(false);
+      onPromptingChange(false);
     }
   }
 
@@ -232,11 +259,11 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
         width={240}
         hasAutoFocus={false}
         content={
-          roster.length === 0 ? (
+          activeRoster.length === 0 ? (
             <Text type="supporting">暂无可召唤的智能体</Text>
           ) : (
             <VStack gap={1}>
-              {roster.map((p) => (
+              {activeRoster.map((p) => (
                 <Button
                   key={p.employee_id}
                   label={`@${p.display_name || p.handle}（点击召唤）`}
@@ -307,11 +334,12 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
   return (
     <VStack gap={1} padding={4}>
       {toast && <Banner status="info" title={toast} />}
+      {isPrompting ? <Text type="supporting" role="status" aria-live="polite">执行中</Text> : null}
       <ChatComposer
         value={content}
         onChange={setContent}
         onSubmit={() => undefined}
-        isDisabled={sending}
+        isDisabled={false}
         placeholder="输入消息，@ 召唤智能体，/ 使用技能…"
         status={error ? { type: "error", message: error } : undefined}
         drawer={
@@ -362,13 +390,14 @@ export function MessageComposer({ conversationId, onSent }: MessageComposerProps
           />
         }
         sendButton={
-          sending ? (
-            <Button label="停止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
+          isPrompting ? (
+            <Button label="终止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
           ) : (
             <Button
               label="发送"
               variant="primary"
-              isDisabled={!content.trim() && attachments.length === 0}
+              isLoading={submitting}
+              isDisabled={submitting || !content.trim() && attachments.length === 0}
               onClick={() => void submitCurrentContent()}
             />
           )

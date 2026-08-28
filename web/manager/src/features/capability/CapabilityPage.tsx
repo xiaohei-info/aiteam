@@ -6,7 +6,6 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Dialog as AstryxDialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
@@ -302,36 +301,33 @@ export function CapabilityPage(): ReactNode {
 
   const skillColumns = useMemo<TableColumn<SkillRow>[]>(() => {
     const columns: TableColumn<SkillRow>[] = [
-      { key: "skill_id", header: i18n.t("manager.capability.id"), width: proportional(1), renderCell: (row) => <Code>{row.skill_id}</Code> },
-      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "—" },
+      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
       { key: "version", header: i18n.t("manager.capability.version"), width: pixel(80) },
       { key: "install_policy", header: i18n.t("manager.capability.install_policy"), width: pixel(130), renderCell: (row) => <Badge label={row.install_policy} /> },
       { key: "binding_policy", header: i18n.t("manager.capability.binding_policy"), width: pixel(120), renderCell: (row) => <Badge label={row.binding_policy} /> },
       { key: "visibility", header: i18n.t("manager.capability.visibility"), width: pixel(100), renderCell: (row) => <Badge label={row.visibility} /> },
     ];
-    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("skill", row, row.display_name || row.skill_id) });
+    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("skill", row, row.display_name || "未命名技能") });
     return columns;
   }, [actionCell, canWrite, i18n]);
 
   const connectorColumns = useMemo<TableColumn<ConnectorRow>[]>(() => {
     const columns: TableColumn<ConnectorRow>[] = [
-      { key: "connector_id", header: i18n.t("manager.capability.id"), width: proportional(1), renderCell: (row) => <Code>{row.connector_id}</Code> },
-      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "—" },
+      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名连接器" },
       { key: "grant_scope", header: i18n.t("manager.capability.grant_scope"), width: pixel(150), renderCell: (row) => <Badge label={row.grant_scope} /> },
       { key: "visibility", header: i18n.t("manager.capability.visibility"), width: pixel(100), renderCell: (row) => <Badge label={row.visibility} /> },
     ];
-    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("connector", row, row.display_name || row.connector_id) });
+    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("connector", row, row.display_name || "未命名连接器") });
     return columns;
   }, [actionCell, canWrite, i18n]);
 
   const memoryColumns = useMemo<TableColumn<MemoryRow>[]>(() => {
     const columns: TableColumn<MemoryRow>[] = [
-      { key: "policy_id", header: i18n.t("manager.capability.id"), width: proportional(1), renderCell: (row) => <Code>{row.policy_id}</Code> },
-      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "—" },
+      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名记忆策略" },
       { key: "retention_days", header: i18n.t("manager.capability.retention_days"), width: pixel(130), renderCell: (row) => row.retention_days == null ? i18n.t("manager.capability.retention_days_unlimited") : row.retention_days },
       { key: "visibility", header: i18n.t("manager.capability.visibility"), width: pixel(100), renderCell: (row) => <Badge label={row.visibility} /> },
     ];
-    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("memory", row, row.display_name || row.policy_id) });
+    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("memory", row, row.display_name || "未命名记忆策略") });
     return columns;
   }, [actionCell, canWrite, i18n]);
 

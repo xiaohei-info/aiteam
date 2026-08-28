@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentApiClient } from "../../lib/api-client";
 import { listLoadedExperts, listSolutionInstances, createGroupConversation } from "./useGroupApi";
-import { parseMentions } from "./MentionComposer";
+import { parseMentions } from "./mention";
 import { footerHandles } from "../chat/MessageComposer";
 
 describe("useGroupApi read-only projections", () => {
@@ -26,7 +26,7 @@ describe("useGroupApi read-only projections", () => {
     expect(parseMentions("请 @Alice 处理", new Set(["alice"]))).toEqual([]);
   });
 
-  it("creates a server-owned group metadata record with coordinator authorization", async () => {
+  it("lets the server resolve the coordinator for solution groups", async () => {
     const client = { post: vi.fn(async (_path: string, options: { body: unknown }) => ({
       id: "c1",
       title: "Group",
@@ -41,10 +41,20 @@ describe("useGroupApi read-only projections", () => {
       updated_at: "2026-01-01T00:00:00Z",
       options,
     })) } as unknown as AgentApiClient;
-    await createGroupConversation(client, { title: "Group", solution_instance_id: "s1", coordinator_employee_id: "e1" });
+    await createGroupConversation(client, { title: "Group", solution_instance_id: "s1" });
     expect(client.post).toHaveBeenCalledWith("/api/agent/conversations", {
-      body: expect.objectContaining({ kind: "group", coordinator_employee_id: "e1", solution_instance_id: "s1" }),
+      body: expect.objectContaining({ kind: "group", solution_instance_id: "s1" }),
     });
+    const body = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("coordinator_employee_id");
     expect(localStorage.getItem("aiteam.agent.conversations")).toBeNull();
+  });
+
+  it("keeps coordinator selection for free groups", async () => {
+    const client = { post: vi.fn(async () => ({ id: "c2" })) } as unknown as AgentApiClient;
+    await createGroupConversation(client, { title: "Free", coordinator_employee_id: "e1" });
+    expect(client.post).toHaveBeenCalledWith("/api/agent/conversations", {
+      body: expect.objectContaining({ kind: "group", coordinator_employee_id: "e1" }),
+    });
   });
 });

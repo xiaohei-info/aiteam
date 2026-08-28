@@ -2,8 +2,7 @@
  * 专家实例详情 / LLM 配置抽屉（AITEAM-683）。
  *
  * 列表行点击后打开：展示并修改 display_name / persona / model_policy / execution_policy；
- * provider 与 model 先从本 tenant 的 provider-credentials 目录中选 provider，
- * 再从该 provider 的 enabled supported_models 中选 model（V1 不提供手输）。
+ * provider 与 model 只能从 Operator 对本 tenant 发布的平台模型目录选择（V1 不提供手输）。
  *
  * 保存复用 PUT /api/manager/employees/{employee_id}，回传完整载入配置，
  * 仅覆盖被编辑字段，保全 tools/skills/knowledge_refs 等未触达配置。
@@ -20,6 +19,7 @@ import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
@@ -27,9 +27,11 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "./useExpertsApi";
-import { useProvidersApi } from "../providers/useProvidersApi";
+import { usePlatformModelsApi } from "../platform-models/usePlatformModelsApi";
+import { useCapabilityApi } from "../capability/useCapabilityApi";
 import type { EmployeeConfig, EmployeeConfigIn } from "./types";
-import type { ProviderCredential } from "../providers/types";
+import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
+import type { SkillCatalog } from "../capability/types";
 
 export interface EmployeeConfigDrawerProps {
   employeeId: string | null;
@@ -45,9 +47,12 @@ type Draft = {
   display_name: string;
   persona: string;
   provider_ref: string;
+  provider_version: number | null;
   model: string;
+  model_version: number | null;
   thinking_level: (typeof THINKING_LEVELS)[number] | "";
   timeout_seconds: string;
+  skills: string[];
 };
 
 function toDraft(e: EmployeeConfig): Draft {
@@ -56,12 +61,15 @@ function toDraft(e: EmployeeConfig): Draft {
     display_name: e.display_name,
     persona: e.persona ?? "",
     provider_ref: e.model_policy.provider_ref ?? "",
+    provider_version: e.model_policy.provider_version ?? null,
     model: e.model_policy.model,
+    model_version: e.model_policy.model_version ?? null,
     thinking_level: (THINKING_LEVELS as readonly string[]).includes(tl)
       ? (tl as (typeof THINKING_LEVELS)[number])
       : "",
     timeout_seconds:
       e.execution_policy.timeout_seconds != null ? String(e.execution_policy.timeout_seconds) : "",
+    skills: e.skills,
   };
 }
 
@@ -93,10 +101,12 @@ export function EmployeeConfigDrawer({
 }: EmployeeConfigDrawerProps): ReactNode {
   const i18n = useI18n();
   const experts = useExpertsApi();
-  const providersApi = useProvidersApi();
+  const platformModelsApi = usePlatformModelsApi();
+  const capabilityApi = useCapabilityApi();
 
   const [employee, setEmployee] = useState<EmployeeConfig | null>(null);
-  const [providers, setProviders] = useState<ProviderCredential[]>([]);
+  const [catalog, setCatalog] = useState<PlatformCatalog>({ providers: [], models: [] });
+  const [skills, setSkills] = useState<SkillCatalog[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [providersLoading, setProvidersLoading] = useState(true);
@@ -140,10 +150,10 @@ export function EmployeeConfigDrawer({
   useEffect(() => {
     let alive = true;
     setProvidersLoading(true);
-    providersApi
+    platformModelsApi
       .list()
       .then((items) => {
-        if (alive) setProviders(items);
+        if (alive) setCatalog(items);
       })
       .finally(() => {
         if (alive) setProvidersLoading(false);
@@ -151,31 +161,37 @@ export function EmployeeConfigDrawer({
     return () => {
       alive = false;
     };
-  }, [providersApi]);
+  }, [platformModelsApi]);
+
+  useEffect(() => {
+    let alive = true;
+    capabilityApi.listSkills().then((items) => { if (alive) setSkills(items); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [capabilityApi]);
 
   const selectedProvider = useMemo(
-    () => providers.find((p) => p.provider_ref === draft?.provider_ref) ?? null,
-    [providers, draft],
+    () => catalog.providers.find((provider) => provider.provider_id === draft?.provider_ref) ?? null,
+    [catalog.providers, draft?.provider_ref],
   );
 
-  /** V1：仅允许选择 provider 声明为 enabled 的 supported_models。 */
+  /** D18：仅允许选择 Operator 发布且有生效价格的模型。 */
   const availableModels = useMemo(
-    () => (selectedProvider?.supported_models ?? []).filter((m) => m.enabled !== false),
-    [selectedProvider],
+    () => catalog.models.filter((item) => item.model.provider_id === selectedProvider?.provider_id && item.model.status === "published" && item.rate),
+    [catalog.models, selectedProvider?.provider_id],
   );
 
   const providerOptions = useMemo(
-    () => providers.map((provider) => ({
-      value: provider.provider_ref,
-      label: provider.display_name || provider.provider_ref,
+    () => catalog.providers.map((provider) => ({
+      value: provider.provider_id,
+      label: provider.display_name || "未命名 Provider",
     })),
-    [providers],
+    [catalog.providers],
   );
 
   const modelOptions = useMemo(
-    () => availableModels.map((model) => ({
-      value: model.model,
-      label: model.display_name || model.model,
+    () => availableModels.map((item) => ({
+      value: item.model.model_id,
+      label: `${item.model.display_name || item.model.model_id || "未命名模型"} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
     })),
     [availableModels],
   );
@@ -218,12 +234,16 @@ export function EmployeeConfigDrawer({
       model_policy: {
         model: draft.model,
         provider_ref: draft.provider_ref.trim() === "" ? null : draft.provider_ref,
+        provider_version: draft.provider_version,
+        model_version: draft.model_version,
+        pricing: null,
         thinking_level:
           draft.thinking_level === "" ? null : (draft.thinking_level as NonNullable<EmployeeConfig["model_policy"]["thinking_level"]>),
       },
       execution_policy: {
         timeout_seconds: timeout,
       },
+      skills: draft.skills,
     };
 
     try {
@@ -303,14 +323,15 @@ export function EmployeeConfigDrawer({
                           onChange={(next) => {
                             setDraft((current) => {
                               if (!current) return current;
-                              const provider = providers.find((item) => item.provider_ref === next) ?? null;
-                              const models = (provider?.supported_models ?? []).filter((model) => model.enabled !== false);
+                              const provider = catalog.providers.find((item) => item.provider_id === next) ?? null;
+                              const models = catalog.models.filter((item) => item.model.provider_id === next && item.model.status === "published" && item.rate);
+                              const currentModel = models.find((item) => item.model.model_id === current.model);
                               return {
                                 ...current,
                                 provider_ref: next,
-                                model: models.some((model) => model.model === current.model)
-                                  ? current.model
-                                  : "",
+                                provider_version: provider?.version ?? null,
+                                model: currentModel?.model.model_id ?? "",
+                                model_version: currentModel?.model.version ?? null,
                               };
                             });
                           }}
@@ -331,7 +352,10 @@ export function EmployeeConfigDrawer({
                             : i18n.t("manager.experts.provider_first")}
                           isDisabled={submitting || !draft.provider_ref}
                           data-testid="model-select"
-                          onChange={(value) => update("model", value)}
+                          onChange={(value) => {
+                            const selected = availableModels.find((item) => item.model.model_id === value);
+                            setDraft((current) => current ? { ...current, model: value, model_version: selected?.model.version ?? null } : current);
+                          }}
                         />
 
                         <Selector
@@ -346,6 +370,20 @@ export function EmployeeConfigDrawer({
                           onChange={(value) => update("thinking_level", value as Draft["thinking_level"])}
                         />
                       </FormLayout>
+                    </VStack>
+
+                    <VStack gap={3}>
+                      <Heading level={3}>技能</Heading>
+                      <MultiSelector
+                        label="企业已安装技能"
+                        description={skills.length ? "选择此专家可使用的技能" : "暂无已安装技能，请先前往技能市场安装"}
+                        options={skills.map((skill) => ({ value: skill.skill_id, label: `${skill.display_name || "未命名技能"} · v${skill.version}` }))}
+                        value={draft.skills}
+                        onChange={(value) => update("skills", value)}
+                        placeholder="选择技能"
+                        triggerDisplay="labels"
+                        isDisabled={submitting || skills.length === 0}
+                      />
                     </VStack>
 
                     <VStack gap={3}>

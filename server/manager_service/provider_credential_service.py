@@ -61,10 +61,11 @@ def _capability_from_dict(raw: dict[str, Any]) -> ProviderModelCapability:
 class ProviderCredentialService:
     """provider 凭据 CRUD 编排 + 加密 + 明文不下发。"""
 
-    def __init__(self, repo: ProviderCredentialRepository, crypto: CryptoService, snapshot_service=None):
+    def __init__(self, repo: ProviderCredentialRepository, crypto: CryptoService, snapshot_service=None, operator=None):
         self._repo = repo
         self._crypto = crypto
         self._snapshot_service = snapshot_service
+        self._operator = operator
 
     def create(self, ctx: TenantContext, body: ProviderCredentialCreate) -> ProviderCredentialOut:
         _ensure_can_write(ctx)
@@ -147,25 +148,30 @@ class ProviderCredentialService:
         policy = snapshot.model_policy
         provider_ref = policy.provider_ref
         model = policy.model
-        if not provider_ref or not model:
+        if not provider_ref or not model or not policy.provider_version or not policy.model_version or policy.pricing is None or self._operator is None:
             raise NotFound("runtime provider config is unavailable")
-        row = self._repo.get_by_ref(ctx, provider_ref=provider_ref)
-        if row is None or not _is_visible(ctx, row) or not row.endpoint or not row.encrypted_secret:
-            raise NotFound("runtime provider config is unavailable")
-        if not any(cap.get("model") == model and cap.get("enabled", True) for cap in row.supported_models):
-            raise NotFound("runtime provider model is unavailable")
         try:
-            api_key = self._crypto.decrypt(row.encrypted_secret)
-        except Exception as exc:  # noqa: BLE001 - fail closed without exposing crypto details
+            resolved = self._operator.resolve_tenant_access(
+                tenant_id=ctx.tenant_id, provider_id=provider_ref, model_ids=[model]
+            )
+            access = resolved["access"]
+            if model not in access.get("allowed_model_ids", []):
+                raise NotFound("runtime provider model is unavailable")
+            return RuntimeProviderConfigOut(
+                base_url=resolved["relay_base_url"],
+                api_protocol=resolved["api_protocol"],
+                api_key=resolved["relay_token"],
+                model=model,
+                provider_ref=provider_ref,
+                provider_version=policy.provider_version,
+                model_version=policy.model_version,
+                pricing=policy.pricing,
+                version=int(access["version"]),
+            )
+        except NotFound:
+            raise
+        except Exception as exc:  # noqa: BLE001 - fail closed without exposing upstream details
             raise NotFound("runtime provider config is unavailable") from exc
-        return RuntimeProviderConfigOut(
-            base_url=row.endpoint,
-            api_protocol=row.api_protocol,
-            api_key=api_key,
-            model=model,
-            provider_ref=row.provider_ref,
-            version=row.version,
-        )
 
     def _require(self, ctx: TenantContext, credential_id: str) -> ProviderCredentialRow:
         row = self._repo.get(ctx, credential_id=credential_id)
@@ -225,5 +231,5 @@ def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:
     )
 
 
-def build_provider_credential_service(router: PgTenantRouter, crypto: CryptoService, snapshot_service=None) -> ProviderCredentialService:
-    return ProviderCredentialService(ProviderCredentialRepository(router), crypto, snapshot_service)
+def build_provider_credential_service(router: PgTenantRouter, crypto: CryptoService, snapshot_service=None, operator=None) -> ProviderCredentialService:
+    return ProviderCredentialService(ProviderCredentialRepository(router), crypto, snapshot_service, operator)

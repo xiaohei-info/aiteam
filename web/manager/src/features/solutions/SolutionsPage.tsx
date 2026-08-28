@@ -13,9 +13,9 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { MultiSelector } from "@astryxdesign/core/MultiSelector";
 import { Grid } from "@astryxdesign/core/Grid";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -28,29 +28,38 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useExpertsApi } from "../experts/useExpertsApi";
-import type { SolutionInstance, SolutionPackage } from "../experts/types";
+import { useGrantsApi } from "../grants/useGrantsApi";
+import type { Department, Member } from "../grants/types";
+import type { EmployeeConfig, SolutionInstance, SolutionPackage } from "../experts/types";
 
 export function SolutionsPage(): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useExpertsApi();
+  const grantsApi = useGrantsApi();
 
   const [solutions, setSolutions] = useState<SolutionPackage[]>([]);
   const [solutionInstances, setSolutionInstances] = useState<SolutionInstance[]>([]);
+  const [employees, setEmployees] = useState<EmployeeConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailFor, setDetailFor] = useState<SolutionPackage | null>(null);
+  const [applyFor, setApplyFor] = useState<SolutionPackage | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [s, si] = await Promise.all([api.listSolutions(), api.listSolutionInstances()]);
+      const [s, si, employeeItems] = await Promise.all([
+        api.listSolutions(),
+        api.listSolutionInstances(),
+        api.listEmployees(),
+      ]);
       setSolutions(s);
       setSolutionInstances(si);
+      setEmployees(employeeItems);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.load_error"));
     } finally {
@@ -59,21 +68,6 @@ export function SolutionsPage(): ReactNode {
   }, [api, i18n]);
 
   useEffect(() => { void load(); }, [load]);
-
-  const runAction = useCallback(
-    async (fn: () => Promise<unknown>, successKey: string) => {
-      setActionError(null);
-      setNotice(null);
-      try {
-        await fn();
-        setNotice(i18n.t(successKey));
-        await load();
-      } catch (err) {
-        setActionError(err instanceof ApiError ? err.message : i18n.t("manager.experts.action_error"));
-      }
-    },
-    [i18n, load],
-  );
 
   return (
     <VStack as="section" gap={6}>
@@ -93,7 +87,6 @@ export function SolutionsPage(): ReactNode {
           }
         />
       )}
-      {actionError && <Banner status="error" title={actionError} />}
       {error && <Banner status="error" title={error} />}
 
       <VStack gap={3}>
@@ -117,7 +110,7 @@ export function SolutionsPage(): ReactNode {
                 <VStack gap={3}>
                   <VStack gap={1}>
                     <Heading level={3}>{s.display_name}</Heading>
-                    <Code>{s.solution_id}@{s.version}</Code>
+                    <Text type="supporting">版本 v{s.version}</Text>
                   </VStack>
                   {s.tags && s.tags.length > 0 && (
                     <HStack gap={1} wrap="wrap">
@@ -136,10 +129,7 @@ export function SolutionsPage(): ReactNode {
                         label={i18n.t("manager.experts.apply")}
                         variant="primary"
                         size="sm"
-                        clickAction={() => runAction(
-                          () => api.applySolution({ solution_id: s.solution_id }),
-                          "manager.experts.apply_ok",
-                        )}
+                        onClick={() => setApplyFor(s)}
                       />
                   )}
                   </HStack>
@@ -159,7 +149,11 @@ export function SolutionsPage(): ReactNode {
         ) : (
           <Grid columns={{ minWidth: 300, repeat: "fit" }} gap={3}>
             {solutionInstances.map((si) => (
-              <SolutionInstanceCard key={si.id} instance={si} />
+              <SolutionInstanceCard
+                key={si.id}
+                instance={si}
+                employeeNames={new Map(employees.map((employee) => [employee.employee_id, employee.display_name]))}
+              />
             ))}
           </Grid>
         )}
@@ -171,15 +165,111 @@ export function SolutionsPage(): ReactNode {
           onClose={() => setDetailFor(null)}
         />
       )}
+      {applyFor && (
+        <SolutionApplyDialog
+          solution={applyFor}
+          api={api}
+          grantsApi={grantsApi}
+          onClose={() => setApplyFor(null)}
+          onApplied={(warning) => {
+            setApplyFor(null);
+            if (warning) {
+              setNotice(null);
+              setError(warning);
+            } else {
+              setError(null);
+              setNotice(i18n.t("manager.experts.apply_ok"));
+            }
+            void load();
+          }}
+        />
+      )}
     </VStack>
   );
 }
 
+function SolutionApplyDialog({
+  solution,
+  api,
+  grantsApi,
+  onClose,
+  onApplied,
+}: {
+  solution: SolutionPackage;
+  api: ReturnType<typeof useExpertsApi>;
+  grantsApi: ReturnType<typeof useGrantsApi>;
+  onClose: () => void;
+  onApplied: (warning?: string) => void;
+}): ReactNode {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([grantsApi.listMembers(), grantsApi.listDepartments()])
+      .then(([loadedMembers, loadedDepartments]) => {
+        if (!active) return;
+        setMembers(loadedMembers);
+        setDepartments(loadedDepartments);
+      })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : "加载授权目标失败"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [grantsApi]);
+
+  async function apply(): Promise<void> {
+    setWorking(true);
+    setError(null);
+    try {
+      await api.applySolution({
+        solution_id: solution.solution_id,
+        solution_version: solution.version,
+        member_ids: memberIds,
+        department_ids: departmentIds,
+      });
+      onApplied();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Dialog isOpen purpose="form" width={640} maxHeight="85vh" aria-label={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
+      <VStack gap={4}>
+        <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
+        <Text color="secondary">应用后会在当前企业创建方案专家，并只给下方选中的成员/部门授权。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
+        {error && <Banner status="error" title={error} />}
+        {loading ? <Text role="status">加载成员和部门…</Text> : (
+          <VStack gap={3}>
+            <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name || "未命名成员" }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
+            <MultiSelector label="授权部门" options={departments.map((department) => ({ value: department.id, label: department.display_name || "未命名部门" }))} value={departmentIds} onChange={setDepartmentIds} triggerDisplay="labels" isOptional isDisabled={working} />
+          </VStack>
+        )}
+        <HStack justify="end" gap={2}>
+          <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
+          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working || (!memberIds.length && !departmentIds.length)} />
+        </HStack>
+      </VStack>
+    </Dialog>
+  );
+}
+
 function SolutionDetailOverlay({ solution, onClose }: {
-  solution: SolutionPackage; onClose: () => void;
+  solution: SolutionPackage;
+  onClose: () => void;
 }): ReactNode {
   const i18n = useI18n();
   const experts = solution.experts ?? [];
+  const coordinator = solution.coordinator_template_id
+    ? experts.find((expert) => expert.template_id === solution.coordinator_template_id)
+    : undefined;
   return (
     <Dialog
       isOpen
@@ -194,7 +284,7 @@ function SolutionDetailOverlay({ solution, onClose }: {
         header={
           <DialogHeader
             title={solution.display_name}
-            subtitle={`${solution.solution_id}@${solution.version}`}
+            subtitle={`版本 v${solution.version}`}
             onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
           />
         }
@@ -206,11 +296,10 @@ function SolutionDetailOverlay({ solution, onClose }: {
                   {solution.tags.map((tag) => <Token key={tag} label={tag} size="sm" />)}
                 </HStack>
               )}
-
               <VStack gap={2}>
-                <Heading level={3}>{i18n.t("manager.experts.detail_experts")}</Heading>
+                <Heading level={3}>方案团队</Heading>
                 {experts.length === 0 ? (
-                  <EmptyState isCompact headingLevel={4} title={i18n.t("manager.experts.detail_no_experts")} />
+                  <EmptyState isCompact headingLevel={4} title="暂无方案专家" />
                 ) : (
                   <Grid columns={{ minWidth: 240, repeat: "fit" }} gap={2}>
                     {experts.map((expert) => (
@@ -218,6 +307,7 @@ function SolutionDetailOverlay({ solution, onClose }: {
                         <VStack gap={1}>
                           <HStack gap={2} align="center" wrap="wrap">
                             <Text weight="bold">{expert.display_name}</Text>
+                            {coordinator?.template_id === expert.template_id && <Badge label="协调专家" variant="info" />}
                             {expert.category && <Badge label={expert.category} />}
                           </HStack>
                           {expert.persona && <Text color="secondary">{expert.persona}</Text>}
@@ -227,30 +317,18 @@ function SolutionDetailOverlay({ solution, onClose }: {
                   </Grid>
                 )}
               </VStack>
-
-              <MetadataList columns="single">
-                <MetadataListItem label={i18n.t("manager.experts.detail_knowledge_refs")}>
-                  <HStack gap={1} wrap="wrap">
-                    {(solution.knowledge_refs ?? []).length > 0
-                      ? solution.knowledge_refs!.map((ref) => <Code key={ref}>{ref}</Code>)
-                      : <Text color="secondary">-</Text>}
-                  </HStack>
-                </MetadataListItem>
-                <MetadataListItem label={i18n.t("manager.experts.detail_skill_refs")}>
-                  <HStack gap={1} wrap="wrap">
-                    {(solution.skill_refs ?? []).length > 0
-                      ? solution.skill_refs!.map((ref) => <Code key={ref}>{ref}</Code>)
-                      : <Text color="secondary">-</Text>}
-                  </HStack>
-                </MetadataListItem>
-              </MetadataList>
-
-              {(solution.planner_prompt || solution.subtask_prompt || solution.aggregate_prompt) && (
-                <VStack gap={3}>
-                  <PromptCard label={i18n.t("manager.experts.planner_prompt")} value={solution.planner_prompt} />
-                  <PromptCard label={i18n.t("manager.experts.subtask_prompt")} value={solution.subtask_prompt} />
-                  <PromptCard label={i18n.t("manager.experts.aggregate_prompt")} value={solution.aggregate_prompt} />
-                </VStack>
+              {(solution.coordinator_instructions || solution.output_requirements || solution.workflow_skill_ref) && (
+                <MetadataList columns="single">
+                  {solution.coordinator_instructions && (
+                    <MetadataListItem label="协作说明"><Text color="secondary">{solution.coordinator_instructions}</Text></MetadataListItem>
+                  )}
+                  {solution.output_requirements && (
+                    <MetadataListItem label="预期交付物"><Text color="secondary">{solution.output_requirements}</Text></MetadataListItem>
+                  )}
+                  {solution.workflow_skill_ref && (
+                    <MetadataListItem label="方案工作流 Skill">已配置</MetadataListItem>
+                  )}
+                </MetadataList>
               )}
             </VStack>
           </LayoutContent>
@@ -267,57 +345,26 @@ function SolutionDetailOverlay({ solution, onClose }: {
   );
 }
 
-function PromptCard({ label, value }: { label: string; value?: string | null }): ReactNode {
-  if (!value) return null;
+function SolutionInstanceCard({
+  instance,
+  employeeNames,
+}: {
+  instance: SolutionInstance;
+  employeeNames: Map<string, string>;
+}): ReactNode {
   return (
-    <Card variant="muted" padding={3}>
-      <VStack gap={1}>
-        <Text weight="bold">{label}</Text>
-        <Text color="secondary" as="p">{value}</Text>
-      </VStack>
-    </Card>
-  );
-}
-
-function SolutionInstanceCard({ instance }: { instance: SolutionInstance }): ReactNode {
-  const i18n = useI18n();
-  return (
-    <Card
-      role="article"
-      aria-label={instance.display_name}
-      data-testid="solution-instance-card"
-    >
+    <Card role="article" aria-label={instance.display_name} data-testid="solution-instance-card">
       <VStack gap={3}>
         <HStack gap={2} align="center" wrap="wrap">
           <Heading level={3}>{instance.display_name}</Heading>
-          <Badge
-            label={instance.status}
-            variant={instance.status === "active" ? "success" : "neutral"}
-          />
+          <Badge label={instance.status} variant={instance.status === "applied" ? "success" : "neutral"} />
         </HStack>
-        <Code>{instance.solution_id}@{instance.solution_version}</Code>
+        <Text type="supporting">版本 v{instance.solution_version}</Text>
         <MetadataList columns="single">
-          <MetadataListItem label={i18n.t("manager.experts.expert_count")}>
-            <VStack gap={1}>
-              <Text>{instance.expert_employee_ids.length}</Text>
-              {instance.expert_employee_ids.length > 0 && (
-                <HStack gap={1} wrap="wrap">
-                  {instance.expert_employee_ids.map((id) => <Code key={id}>{id}</Code>)}
-                </HStack>
-              )}
-            </VStack>
-          </MetadataListItem>
-          <MetadataListItem label={i18n.t("manager.experts.solution_knowledge_refs")}>
-            <Text color="secondary">{instance.knowledge_refs.join(", ") || "-"}</Text>
-          </MetadataListItem>
-          <MetadataListItem label={i18n.t("manager.experts.solution_skill_refs")}>
-            <Text color="secondary">{instance.skill_refs.join(", ") || "-"}</Text>
-          </MetadataListItem>
-          {(instance.planner_prompt || instance.subtask_prompt || instance.aggregate_prompt) && (
-            <MetadataListItem label={i18n.t("manager.experts.planner_prompt")}>
-              <Text color="secondary">{instance.planner_prompt?.slice(0, 40) || "-"}…</Text>
-            </MetadataListItem>
-          )}
+          <MetadataListItem label="专家数量"><Text>{instance.expert_employee_ids.length}</Text></MetadataListItem>
+          <MetadataListItem label="协调专家"><Text>{instance.coordinator_employee_id ? employeeNames.get(instance.coordinator_employee_id) ?? "已删除专家" : "—"}</Text></MetadataListItem>
+          {instance.coordinator_instructions && <MetadataListItem label="协作说明"><Text color="secondary">{instance.coordinator_instructions}</Text></MetadataListItem>}
+          {instance.output_requirements && <MetadataListItem label="预期交付物"><Text color="secondary">{instance.output_requirements}</Text></MetadataListItem>}
         </MetadataList>
       </VStack>
     </Card>

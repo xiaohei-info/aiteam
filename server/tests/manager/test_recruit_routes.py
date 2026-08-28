@@ -7,6 +7,7 @@ integration（真 PG）的端到端 CRUD 留 reviewer 环境（与本卡 mock Op
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock, patch
 
 from shared.config import Settings
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
@@ -103,19 +104,23 @@ def test_browse_solutions_without_token_returns_401():
 
 
 def test_browse_experts_returns_seeded_templates():
-    """seed Operator 目录 → GET 列出可招募专家模板（不依赖 DB）。"""
+    """seed Operator 目录 → GET 合并本租户招募状态。"""
     from shared.contracts.crosstier import ExpertTemplateDetail
 
-    client = _client(None)  # browse 不碰租户 DB，无需配置 DB
-    client.app.state._operator_catalog.seed_expert(
-        ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家")
-    )
-    resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    service = MagicMock()
+    service.recruited_template_ids.return_value = {"tpl-1"}
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
+        client = _client("postgresql://fake/fake")
+        client.app.state._operator_catalog.seed_expert(
+            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家", platform_model_ref={"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1})
+        )
+        resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
     assert resp.status_code == 200, resp.text
     items = resp.json()["data"]
     assert len(items) == 1
     assert items[0]["template_id"] == "tpl-1"
     assert items[0]["display_name"] == "测试专家"
+    assert items[0]["is_recruited"] is True
 
 
 def test_browse_solutions_returns_seeded_packages():
@@ -134,7 +139,17 @@ def test_browse_solutions_returns_seeded_packages():
 
 def test_browse_experts_empty_when_unseeded():
     """未 seed → 空列表（不报错）。"""
-    client = _client(None)
-    resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    service = MagicMock()
+    service.recruited_template_ids.return_value = set()
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
+        client = _client("postgresql://fake/fake")
+        resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
     assert resp.status_code == 200
     assert resp.json()["data"] == []
+
+
+def test_browse_experts_unconfigured_db_returns_503():
+    client = _client(None)
+    resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    assert resp.status_code == 503
+    assert resp.json()["code"] == "manager_db_unconfigured"

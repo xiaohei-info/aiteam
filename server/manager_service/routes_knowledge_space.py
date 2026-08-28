@@ -1,6 +1,8 @@
-"""知识空间/绑定北向路由（M3，02 §10.1/§10.3 + 04 §6.1.2/§6.6 + 05 F08；D21）。
+"""Enterprise knowledge compatibility routes (M3, 02 §10.1/§10.3 + 04 §6.1.2/6.6 + 05 F08; D21).
 
-路径：/api/manager/knowledge-spaces/*。受保护端点（require_claims）；写操作需 owner/enterprise_admin。
+The `/knowledge-spaces/*` path is retained for existing Agent/document/citation
+keys; the Manager UI exposes only the one enterprise knowledge base. Protected
+writes require owner/enterprise_admin.
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22）。
 
 红线（D21）：
@@ -23,6 +25,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .knowledge_space_service import KnowledgeSpaceService, build_knowledge_space_service
+from .rag_instances import RagInstanceRegistry
 from .schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceBindingOut,
@@ -43,7 +46,11 @@ def _service(request: Request) -> KnowledgeSpaceService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_knowledge_space_service", None)
     if cache is None:
-        cache = build_knowledge_space_service(PgTenantRouter(dsn))
+        registry = RagInstanceRegistry.from_env()
+        enterprise_workspace = registry.instances[0].workspace if registry is not None else "enterprise_shared"
+        cache = build_knowledge_space_service(
+            PgTenantRouter(dsn), registry, enterprise_workspace,
+        )
         request.app.state._knowledge_space_service = cache
     return cache
 

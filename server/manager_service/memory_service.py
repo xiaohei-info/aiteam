@@ -1,14 +1,15 @@
-"""Authorized facade over the external Hindsight memory service.
+"""Authorized facade over the Manager enterprise's employee-private memory.
 
-Manager does not store memory data.  It resolves the current employee snapshot
+Manager does not store memory data. It resolves the current employee snapshot
 before every upstream operation so grants and memory policy are enforced against
-current tenant state, not caller-supplied scope.
+the current enterprise state, not caller-supplied scope.
 """
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
+from shared.contracts.enums import EnterpriseRole
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden
@@ -18,6 +19,14 @@ class MemoryBackend(Protocol):
     def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict: ...
 
     def retain(self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict) -> dict: ...
+
+    def list(
+        self, ctx: TenantContext, *, employee_id: str, query: str | None, limit: int, offset: int
+    ) -> dict: ...
+
+    def update(
+        self, ctx: TenantContext, *, employee_id: str, memory_id: str, payload: dict
+    ) -> dict: ...
 
     def delete(self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str) -> dict: ...
 
@@ -46,10 +55,38 @@ class MemoryService:
             metadata=sanitize_metadata(metadata),
         ))
 
+    def list(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict:
+        self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
+        raw = sanitize_metadata(self._backend.list(
+            ctx, employee_id=employee_id, query=query, limit=limit, offset=offset,
+        ))
+        return normalize_memory_list(raw, employee_id=employee_id, limit=limit, offset=offset)
+
+    def update(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        memory_id: str,
+        payload: dict,
+    ) -> dict:
+        self._authorize(ctx, employee_id=employee_id, operation="update", management=True)
+        return sanitize_metadata(self._backend.update(
+            ctx, employee_id=employee_id, memory_id=memory_id, payload=sanitize_metadata(payload),
+        ))
+
     def delete(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str
     ) -> dict:
-        self._authorize(ctx, employee_id=employee_id, operation="delete")
+        self._authorize(ctx, employee_id=employee_id, operation="delete", management=True)
         # employee_id is deliberately part of the upstream delete contract.  A memory id
         # alone is not an authorization boundary and could select another employee's data.
         return sanitize_metadata(self._backend.delete(
@@ -59,13 +96,20 @@ class MemoryService:
             idempotency_key=idempotency_key,
         ))
 
-    def _authorize(self, ctx: TenantContext, *, employee_id: str, operation: str) -> EmployeeExecutionSnapshot:
+    def _authorize(
+        self, ctx: TenantContext, *, employee_id: str, operation: str, management: bool = False,
+    ) -> EmployeeExecutionSnapshot:
         snapshot = self._snapshot.generate(
             ctx, member_id=ctx.user_id, employee_id=employee_id
         )
         if snapshot.employee_id != employee_id:
             raise Forbidden("employee snapshot does not match requested employee")
         policy = snapshot.memory_policy
+        is_manager = bool(set(ctx.roles) & {
+            EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value,
+        })
+        if management and is_manager:
+            return snapshot
         if not isinstance(policy, dict) or not policy or policy.get("enabled") is False:
             raise Forbidden("memory policy does not authorize this operation")
 
@@ -82,6 +126,35 @@ class MemoryService:
 
 def build_memory_service(*, snapshot, backend: MemoryBackend) -> MemoryService:
     return MemoryService(snapshot=snapshot, backend=backend)
+
+
+def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int) -> dict:
+    """Expose only stable, non-sensitive fields from Hindsight memory units."""
+    items = raw.get("items", []) if isinstance(raw, dict) else []
+    if not isinstance(items, list):
+        items = []
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        memory_id = item.get("id") or item.get("memory_id")
+        content = item.get("text") or item.get("content")
+        if not isinstance(memory_id, str) or not isinstance(content, str):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        normalized.append({
+            "memory_id": memory_id,
+            "employee_id": employee_id,
+            "content": content,
+            "category": item.get("fact_type") or item.get("category") or "memory",
+            "importance": item.get("importance") if isinstance(item.get("importance"), (int, float)) else None,
+            "source": item.get("source") or metadata.get("retainSource") or "hindsight",
+            "created_at": item.get("date") or item.get("created_at") or item.get("mentioned_at"),
+            "last_used_at": item.get("last_used_at"),
+            "state": item.get("state") or "valid",
+        })
+    total = raw.get("total") if isinstance(raw, dict) and isinstance(raw.get("total"), int) else len(normalized)
+    return {"items": normalized, "total": total, "limit": limit, "offset": offset}
 
 
 def sanitize_metadata(value: Any, key: str | None = None) -> Any:

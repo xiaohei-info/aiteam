@@ -5,7 +5,7 @@
   employee 实例（复用 EmployeeConfigRepository，runtime 中立 D16）→ 可选落 member_grant 授权
   （复用 GrantRepository，D12）→ 追加 recruit_event 审计。
 - F07 应用方案：向 Operator 单向拉方案包（只读）→ 在本 tenant 建 solution_instance → 逐个专家
-  展开 employee 实例 + 绑定知识/技能引用 → 按方案默认授权落 member_grant（D12）→ 追加审计。
+  展开 employee 实例 → 固化 coordinator_employee_id/roster → 按本次请求授权落 member_grant（D12）→ 追加审计。
 
 红线（05 F06/F07）：
 - Operator 不写 Manager 库（本卡 Manager 单向拉；模板/方案真相只在 Operator 侧，Manager 只读用）。
@@ -26,7 +26,7 @@ from shared.errors import Conflict, Forbidden, NotFound
 
 from .employee_config_repository import EmployeeConfigRepository
 from .operator_catalog import OperatorCatalogPort
-from .provider_credential_repository import ProviderCredentialRepository
+from .platform_skill_service import PlatformSkillService
 from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
 from .recruit_repository import RecruitRepository, SolutionInstanceRow
 from .repository_member import GrantRepository
@@ -51,11 +51,7 @@ _RECRUIT_WRITE_ROLES = [
 class ProviderMatchResult:
     """provider 自动匹配结果（AITEAM-682）。resolver 输出；service 据此写 employee + 审计。
 
-    status 取值：
-    - explicit  ：recommended.provider_ref 有值且在本 tenant 校验通过；provider_ref 即该显式引用。
-    - matched   ：recommended 只有 model → 本 tenant 恰好 1 个 provider 支持该 model 且 enabled。
-    - ambiguous：recommended 只有 model → 本 tenant 多个 provider 支持该 model 且 enabled；需前端让用户选择。
-    - none      ：无 provider_ref 且无 model，或有 model 但本 tenant 无 provider 支持；provider_ref=None。
+    新 D18 只允许 status=platform：模板固定 Operator Provider/model，tenant access 在创建 employee 前解析成功。
     """
 
     provider_ref: str | None
@@ -64,68 +60,23 @@ class ProviderMatchResult:
     reason: str
 
 
-class ProviderResolver:
-    """recruit/apply 共用的小型 resolver：根据本 tenant provider 能力目录解析 recommended_config → provider_ref。
-
-    输入：TenantContext + recommended_config(dict)。
-    语义（AITEAM-682）：
-      - recommended.provider_ref 有值 → 校验存在；存在则 explicit；不存在则 V1 抛 Conflict(409)，避免落错误引用。
-      - 无 provider_ref 且无 model → none。
-      - 有 model → 查本租户 provider supported_models[].model==model && enabled；
-          1 个=matched；0 个=none(仍创建 employee，前端提示待配置)；多个=ambiguous(保留 candidates)。
-    两条路径（recruit_expert / apply_solution）必须走同一个 resolver，避免匹配口径不一致。
-    """
-
-    def __init__(self, providers: ProviderCredentialRepository):
-        self._providers = providers
-
-    def resolve(self, ctx: TenantContext, recommended: dict) -> ProviderMatchResult:
-        explicit_ref = recommended.get("provider_ref") or None
-        if explicit_ref:
-            row = self._providers.get_by_ref(ctx, provider_ref=explicit_ref)
-            if row is not None:
-                return ProviderMatchResult(
-                    provider_ref=explicit_ref,
-                    status="explicit",
-                    candidates=[explicit_ref],
-                    reason=f"explicit provider_ref '{explicit_ref}' exists in tenant",
-                )
-            # V1：避免落错误引用 → 409（不静默写入悬空 provider_ref）。
-            raise Conflict(
-                f"recommended provider_ref '{explicit_ref}' does not exist in this tenant"
-            )
-
-        model = recommended.get("model") or None
-        if not model:
-            return ProviderMatchResult(
-                provider_ref=None,
-                status="none",
-                candidates=[],
-                reason="no provider_ref and no model in recommended config",
-            )
-
-        matches = self._providers.list_providers_supporting_model(ctx, model=model)
-        refs = [r.provider_ref for r in matches]
-        if len(refs) == 1:
-            return ProviderMatchResult(
-                provider_ref=refs[0],
-                status="matched",
-                candidates=refs,
-                reason=f"single provider supports model '{model}'",
-            )
-        if not refs:
-            return ProviderMatchResult(
-                provider_ref=None,
-                status="none",
-                candidates=[],
-                reason=f"no enabled provider supports model '{model}' in tenant",
-            )
-        return ProviderMatchResult(
-            provider_ref=None,
-            status="ambiguous",
-            candidates=refs,
-            reason=f"multiple providers ({len(refs)}) support model '{model}'",
-        )
+def _resolve_platform_model(catalog: OperatorCatalogPort, ctx: TenantContext, template) -> tuple[dict, ProviderMatchResult]:
+    ref = template.platform_model_ref
+    catalog.resolve_tenant_access(tenant_id=ctx.tenant_id, provider_id=ref.provider_id, model_ids=[ref.model_id])
+    recommended = dict(template.recommended_config or {})
+    recommended.update({
+        "provider_ref": ref.provider_id,
+        "provider_version": ref.provider_version,
+        "model": ref.model_id,
+        "model_version": ref.model_version,
+        "platform_model_ref": ref.model_dump(mode="json"),
+    })
+    return recommended, ProviderMatchResult(
+        provider_ref=ref.provider_id,
+        status="platform",
+        candidates=[ref.provider_id],
+        reason="Operator platform model and tenant Relay access resolved",
+    )
 
 
 def _match_detail(recommended: dict, match: ProviderMatchResult) -> dict:
@@ -149,15 +100,15 @@ class RecruitService:
         grants: GrantRepository,
         recruit: RecruitRepository,
         orders: RecruitOrderRepository,
-        providers: ProviderCredentialRepository,
+        providers=None,
+        platform_skills: PlatformSkillService | None = None,
     ):
         self._catalog = catalog
         self._employees = employees
         self._grants = grants
         self._recruit = recruit
         self._orders = orders
-        self._providers = providers
-        self._resolver = ProviderResolver(providers)
+        self._platform_skills = platform_skills
 
     # ---- F06 招募专家 ----
     def recruit_expert(
@@ -170,6 +121,10 @@ class RecruitService:
         template = self._catalog.pull_expert_template(
             template_id=req.template_id, version=req.template_version
         )
+        if self._employees.get_by_source_template(
+            ctx, source_template_id=template.template_id
+        ) is not None:
+            raise Conflict("expert template already recruited in this tenant")
 
         # slug 由前端显式传入或后端按模板 display_name 自动生成（+ 去重后缀）；空=自动生成。
         slug = req.employee_slug
@@ -183,8 +138,8 @@ class RecruitService:
         idem = _idempotency_key(template.template_id, slug)
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
-        recommended = template.recommended_config or {}
-        match = self._resolver.resolve(ctx, recommended)
+        recommended, match = _resolve_platform_model(self._catalog, ctx, template)
+        skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
         try:
             row = self._employees.create(
                 ctx,
@@ -196,11 +151,17 @@ class RecruitService:
                 thinking_level=recommended.get("thinking_level"),
                 timeout_seconds=recommended.get("timeout_seconds"),
                 tools=list(recommended.get("tools", [])),
-                skills=list(recommended.get("skills", [])),
+                skills=skills,
                 knowledge_refs=list(recommended.get("knowledge_refs", [])),
                 connector_refs=list(recommended.get("connector_refs", [])),
                 memory_policy=recommended.get("memory_policy"),
+                source_template_id=template.template_id,
+                source_template_version=template.version,
+                platform_model_ref=recommended["platform_model_ref"],
             )
+            row = self._employees.transition_status(
+                ctx, employee_id=row.employee_id, from_status="draft", to_status="active"
+            ) or row
 
             # 3) 可选招募即绑定授权（D12：部门/成员级授权）。无 subject 则跳过（grants_applied=False）。
             grants_applied = False
@@ -269,27 +230,46 @@ class RecruitService:
         orders: list[RecruitmentOrderOut] = []
         _match_audits: list[dict] = []
 
-        # 3) 逐个专家展开 employee 实例（slug 用 solution 派生，保证可复入幂等可读）。
-        expert_results: list[RecruitExpertResult] = []
-        expert_employee_ids: list[str] = []
-        # 按 Operator 声明的 sequence_no 排序展开，并跳过 enabled=False 的专家。
+        # 3) 先预检完整方案，任何 provider/skill/slug/coordinator 错误都必须发生在写 employee 之前。
         ordered_experts = sorted(
             (t for t in package.experts if t.enabled),
             key=lambda t: (t.sequence_no, t.template_id),
         )
+        if not ordered_experts:
+            raise Conflict("solution package has no enabled experts")
+        coordinator_template_id = (
+            getattr(package, "coordinator_template_id", "")
+            or getattr(package, "planner_template_id", "")
+            or ordered_experts[0].template_id
+        )
+        active_template_ids = {template.template_id for template in ordered_experts}
+        if coordinator_template_id not in active_template_ids:
+            raise Conflict("solution coordinator must be one of the enabled experts")
+        prepared: list[tuple[object, str, dict, ProviderMatchResult, list[str]]] = []
+        seen_slugs: set[str] = set()
         for idx, template in enumerate(ordered_experts):
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
-            # 展开前确保 slug 未被占用（被占则报冲突，由调用方决策换 version / 换 slug）。
-            if self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
+            if slug in seen_slugs or self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
                 raise Conflict(f"employee slug collision during solution expansion: {slug}")
-            order = _track_provision(
-                self._orders, ctx,
-                idem=_idempotency_key(template.template_id, slug),
-                template_id=template.template_id,
-                solution_id=package.solution_id,
-            )
-            recommended = (template.recommended_config or {})
-            match = self._resolver.resolve(ctx, recommended)
+            seen_slugs.add(slug)
+            recommended, match = _resolve_platform_model(self._catalog, ctx, template)
+            skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
+            prepared.append((template, slug, recommended, match, skills))
+
+        expert_results: list[RecruitExpertResult] = []
+        expert_employee_ids: list[str] = []
+        for template, slug, recommended, match, skills in prepared:
+            try:
+                order = _track_provision(
+                    self._orders, ctx,
+                    idem=_idempotency_key(template.template_id, slug),
+                    template_id=template.template_id,
+                    solution_id=package.solution_id,
+                )
+            except Exception:
+                self._rollback_solution_resources(ctx, expert_employee_ids)
+                raise
+            created_employee_id: str | None = None
             try:
                 row = self._employees.create(
                     ctx,
@@ -299,28 +279,31 @@ class RecruitService:
                     model=recommended.get("model"),
                     provider_ref=match.provider_ref,
                     thinking_level=recommended.get("thinking_level"),
-                        timeout_seconds=recommended.get("timeout_seconds"),
+                    timeout_seconds=recommended.get("timeout_seconds"),
                     tools=list(recommended.get("tools", [])),
-                    skills=list(recommended.get("skills", []))
-                    + list(package.skill_refs),  # 方案级技能引用叠加到每个专家
-                    knowledge_refs=list(recommended.get("knowledge_refs", []))
-                    + list(package.knowledge_refs),  # 方案级知识引用叠加
+                    # Skills and knowledge belong to the employee template/tenant bindings.
+                    # Never copy deprecated solution-level refs into every employee.
+                    skills=skills,
+                    knowledge_refs=list(recommended.get("knowledge_refs", [])),
                     connector_refs=list(recommended.get("connector_refs", [])),
                     memory_policy=recommended.get("memory_policy"),
+                    platform_model_ref=recommended["platform_model_ref"],
                 )
+                created_employee_id = row.employee_id
+                row = self._employees.transition_status(
+                    ctx, employee_id=row.employee_id, from_status="draft", to_status="active"
+                ) or row
             except Exception as exc:
                 failed = order.mark_failed(_error_code(exc), str(exc)[:1000])
                 self._orders.update(ctx, failed)
+                self._rollback_solution_resources(ctx, [*expert_employee_ids, *([created_employee_id] if created_employee_id else [])])
                 raise
             expert_employee_ids.append(row.employee_id)
-            # 订单落 succeeded（携带 created_employee_id）。
             done = order.mark_succeeded(row.employee_id)
             self._orders.update(ctx, done)
             fin = _order_out(done)
             orders.append(fin)
-            # AITEAM-682：逐专家记录匹配审计，供方案级 audit 还原。
             _match_audits.append(_match_detail(recommended, match))
-
             expert_results.append(
                 RecruitExpertResult(
                     employee_id=row.employee_id,
@@ -336,76 +319,165 @@ class RecruitService:
                 )
             )
 
-        # 4) 计算方案默认授权（D12）：方案包默认授权或请求指定授权。
-        grants_applied = False
+        coordinator_index = next(
+            index for index, template in enumerate(ordered_experts)
+            if template.template_id == coordinator_template_id
+        )
+        coordinator_employee_id = expert_employee_ids[coordinator_index]
+
+        # 4) 授权只接受本次 Manager 请求；Operator 不知道目标 tenant 的成员/部门，
+        # 因而 deprecated package.default_grants 永远不参与授权。
         grant_dept_ids = list(req.department_ids)
         grant_member_ids = list(req.member_ids)
-        if not (grant_dept_ids or grant_member_ids) and package.default_grants:
-            grant_dept_ids = list(package.default_grants.get("department_ids", []))
-            grant_member_ids = list(package.default_grants.get("member_ids", []))
-        if (grant_dept_ids or grant_member_ids) and expert_employee_ids:
-            for employee_id in expert_employee_ids:
-                _upsert_grant(
-                    self._grants, ctx,
-                    resource_type="expert", resource_id=employee_id,
-                    department_ids=grant_dept_ids, member_ids=grant_member_ids,
-                )
+        try:
+            grants_applied = self._apply_solution_grants(
+                ctx, expert_employee_ids, grant_dept_ids, grant_member_ids,
+            )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids)
+            raise
 
         # 5) 建 solution_instance（本 tenant 展开后的真相）。
-        instance = self._recruit.create_solution_instance(
-            ctx,
-            solution_id=package.solution_id,
-            solution_version=package.version,
-            display_name=req.display_name_override or package.display_name,
-            expert_employee_ids=expert_employee_ids,
-            knowledge_refs=list(package.knowledge_refs),
-            skill_refs=list(package.skill_refs),
-            planner_prompt=package.planner_prompt,
-            subtask_prompt=package.subtask_prompt,
-            aggregate_prompt=package.aggregate_prompt,
-            default_grants_meta=package.default_grants,
-            template_meta=package.model_dump(mode="json"),
-        )
+        try:
+            instance = self._recruit.create_solution_instance(
+                ctx,
+                solution_id=package.solution_id,
+                solution_version=package.version,
+                display_name=req.display_name_override or package.display_name,
+                expert_employee_ids=expert_employee_ids,
+                # Legacy solution columns remain empty while rolling deployments drain old clients.
+                knowledge_refs=[],
+                skill_refs=[],
+                planner_prompt="",
+                subtask_prompt="",
+                aggregate_prompt="",
+                default_grants_meta=None,
+                template_meta=package.model_dump(mode="json"),
+                coordinator_employee_id=coordinator_employee_id,
+                coordinator_instructions=getattr(package, "coordinator_instructions", ""),
+                workflow_skill_ref=getattr(package, "workflow_skill_ref", None),
+                output_requirements=getattr(package, "output_requirements", ""),
+            )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids)
+            raise
 
         # 方案本身也必须被授权：Agent 的方案投影按 ``resource_type=solution`` 裁剪，
         # 仅授权展开后的 expert 会让成员能私聊专家、却无法从该方案创建群聊。
         if grant_dept_ids or grant_member_ids:
-            _upsert_grant(
-                self._grants, ctx,
-                resource_type="solution", resource_id=instance.id,
-                department_ids=grant_dept_ids, member_ids=grant_member_ids,
+            try:
+                _upsert_grant(
+                    self._grants, ctx,
+                    resource_type="solution", resource_id=instance.id,
+                    department_ids=grant_dept_ids, member_ids=grant_member_ids,
+                )
+                grants_applied = True
+            except Exception:
+                self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+                raise
+
+        try:
+            self._record_solution_apply(
+                ctx,
+                package=package,
+                instance=instance,
+                employee_ids=expert_employee_ids,
+                match_audits=_match_audits,
             )
-            grants_applied = True
-
-        # 6) 审计。
-        self._recruit.append_recruit_event(
-            ctx,
-            action="apply_solution",
-            actor_user_id=ctx.user_id,
-            source_solution_id=package.solution_id,
-            source_solution_version=package.version,
-            target_employee_ids=expert_employee_ids,
-            target_solution_instance_id=instance.id,
-            detail={"expert_count": len(expert_employee_ids), "match_audits": _match_audits},
-        )
-
-        # 7) 方案应用记录（AITEAM-242，issue #286）：applied_by / applied_at /
-        # solution_version / status / expert_instances_created。
-        self._recruit.create_solution_apply_record(
-            ctx,
-            solution_id=package.solution_id,
-            solution_version=package.version,
-            applied_by=ctx.user_id,
-            expert_instance_ids=expert_employee_ids,
-            detail={"solution_instance_id": instance.id, "expert_count": len(expert_employee_ids)},
-            status="applied",
-        )
+        except Exception:
+            self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+            raise
 
         return ApplySolutionResult(
             solution_instance=_solution_out(instance),
             experts=expert_results,
             grants_applied=grants_applied,
         )
+
+    def recruited_template_ids(self, ctx: TenantContext) -> set[str]:
+        return self._employees.list_live_source_template_ids(ctx)
+
+    def _record_solution_apply(
+        self,
+        ctx: TenantContext,
+        *,
+        package,
+        instance: SolutionInstanceRow,
+        employee_ids: list[str],
+        match_audits: list[dict],
+    ) -> None:
+        self._recruit.append_recruit_event(
+            ctx,
+            action="apply_solution",
+            actor_user_id=ctx.user_id,
+            source_solution_id=package.solution_id,
+            source_solution_version=package.version,
+            target_employee_ids=employee_ids,
+            target_solution_instance_id=instance.id,
+            detail={"expert_count": len(employee_ids), "match_audits": match_audits},
+        )
+        self._recruit.create_solution_apply_record(
+            ctx,
+            solution_id=package.solution_id,
+            solution_version=package.version,
+            applied_by=ctx.user_id,
+            expert_instance_ids=employee_ids,
+            detail={"solution_instance_id": instance.id, "expert_count": len(employee_ids)},
+            status="applied",
+        )
+
+    def _apply_solution_grants(
+        self,
+        ctx: TenantContext,
+        employee_ids: list[str],
+        department_ids: list[str],
+        member_ids: list[str],
+    ) -> bool:
+        if not (department_ids or member_ids) or not employee_ids:
+            return False
+        for employee_id in employee_ids:
+            _upsert_grant(
+                self._grants, ctx,
+                resource_type="expert", resource_id=employee_id,
+                department_ids=department_ids, member_ids=member_ids,
+            )
+        return True
+
+    def _rollback_solution_resources(self, ctx: TenantContext, employee_ids: list[str], solution_instance_id: str | None = None) -> None:
+        """Best-effort compensation for a failed solution apply.
+
+        Employee creation and grants use separate repository transactions today; delete grants
+        before employees so FK constraints cannot preserve a half-applied roster. The original
+        exception remains authoritative if compensation itself encounters an unavailable row.
+        """
+        if solution_instance_id:
+            try:
+                for grant in self._grants.list_by_resource(ctx, resource_type="solution", resource_id=solution_instance_id):
+                    self._grants.delete(ctx, grant_id=grant.id)
+            except Exception:  # noqa: BLE001 - compensation is best effort
+                pass
+            try:
+                self._recruit.delete_solution_instance(ctx, instance_id=solution_instance_id)
+            except Exception:  # noqa: BLE001 - preserve original apply failure
+                pass
+        for employee_id in reversed(list(dict.fromkeys(employee_ids))):
+            try:
+                for grant in self._grants.list_by_resource(ctx, resource_type="expert", resource_id=employee_id):
+                    self._grants.delete(ctx, grant_id=grant.id)
+            except Exception:  # noqa: BLE001 - continue cleaning remaining employees
+                pass
+            try:
+                self._employees.delete(ctx, employee_id=employee_id)
+            except Exception:  # noqa: BLE001 - preserve original apply failure
+                pass
+
+    def _resolve_skills(self, ctx: TenantContext, refs, recommended: dict) -> list[str]:
+        platform_refs = list(refs or recommended.get("platform_skill_refs") or [])
+        if platform_refs:
+            if self._platform_skills is None:
+                raise Conflict("platform skill installer is not configured")
+            return self._platform_skills.install_all(ctx, platform_refs)
+        return list(recommended.get("skills", []))
 
     # ---- slug 自动生成（F06 招募时 employee_slug 未传，由后端派生唯一 slug）----
     _SLUGIFY_RE = None
@@ -525,11 +597,11 @@ def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:
         display_name=row.display_name,
         status=row.status,
         expert_employee_ids=row.expert_employee_ids,
-        knowledge_refs=row.knowledge_refs,
-        skill_refs=row.skill_refs,
-        planner_prompt=row.planner_prompt,
-        subtask_prompt=row.subtask_prompt,
-        aggregate_prompt=row.aggregate_prompt,
+        coordinator_employee_id=row.coordinator_employee_id,
+        coordinator_instructions=row.coordinator_instructions,
+        workflow_skill_ref=row.workflow_skill_ref,
+        output_requirements=row.output_requirements,
+        config_version=row.config_version,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -602,13 +674,15 @@ def build_recruit_service(
 
     catalog 由编排层注入（OPERATOR_URL 缺失时 _build_operator_catalog fail-closed；测试显式注入 FakeOperatorCatalogClient）。
     """
+    from .capability_catalog_repository import CapabilityCatalogRepository
+
     return RecruitService(
         catalog=catalog,
         employees=EmployeeConfigRepository(router),
         grants=GrantRepository(router),
         recruit=RecruitRepository(router),
         orders=RecruitOrderRepository(router),
-        providers=ProviderCredentialRepository(router),
+        platform_skills=PlatformSkillService(operator=catalog, catalog=CapabilityCatalogRepository(router)),
     )
 
 

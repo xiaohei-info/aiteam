@@ -2,6 +2,10 @@
 
 ## 边界
 
+**架构修订（2026-08-26）**：一个 Manager 部署服务一个企业；Hindsight bank 按企业内 employee-private scope 派生，member 只参与当前请求/lease 鉴权，不参与 bank 身份。历史租约/银行迁移按部署 runbook 处理。
+
+> 旧版本 member-private bank 不会被新 scope 自动读取。v1 全新部署不迁移旧会话/记忆；已有环境切换前必须先用 Hindsight 导出/重新 retain 完成一次性 bank migration，并在切换后验证 employee memory recall。
+
 `@luxusai/pi-hindsight@0.12.0` 只支持把一个 API key 放进
 `Authorization: Bearer ...`，当前 Hindsight API 没有真正的 bank-scoped token、租约或
 revoke API。AI Team 因此**不伪造 native scoped token**：Manager 保留
@@ -10,19 +14,33 @@ revoke API。AI Team 因此**不伪造 native scoped token**：Manager 保留
 
 facade 在每个请求校验 lease 的 tenant/member/employee/bank/expiry/revoke，再用 Manager
 私有 service token 转发到固定 Hindsight upstream。Agent 不能直连 upstream，也不能把
-`bank` 或 `bank_id` 作为模型工具参数；bank identity 只由 Manager 根据当前 tenant、member、
-employee 和已授权 memory policy 派生。
+`bank` 或 `bank_id` 作为模型工具参数；bank identity 只由 Manager 根据当前企业绑定的
+`tenant_id`、employee 和已授权 memory policy 派生，member 仅用于请求/lease 鉴权。
 
 ## 配置
 
 Manager：
 
 ```dotenv
-HINDSIGHT_URL=https://hindsight.example.com
+# API 用于 facade/lease；Manager-only
+HINDSIGHT_URL=https://hindsight.example.com:9290
 HINDSIGHT_SERVICE_TOKEN=<manager-only-secret>
 HINDSIGHT_FACADE_URL=/api/manager/hindsight
 HINDSIGHT_LEASE_TTL_SECONDS=300
 ```
+
+Hindsight Control Plane 原生 UI 使用独立的访问密钥；该变量只配置给 Hindsight
+服务，不配置给 Manager 或 Agent：
+
+```dotenv
+HINDSIGHT_ENABLE_CP=true
+HINDSIGHT_CP_ACCESS_KEY=<secret-store>
+# UI 默认端口 9999；需要远程浏览器访问时，将 UI 绑定在受保护的 host:9999。
+# Manager「记忆管理」页会打开当前 Manager host:9999/dashboard。
+```
+
+原生 UI 登录密钥不放入超链接、前端 bundle 或页面文案；管理员应从部署 secret
+store 获取并在 Hindsight 登录页输入。
 
 `HINDSIGHT_RECALL_PATH`、`HINDSIGHT_RETAIN_PATH`、`HINDSIGHT_DELETE_PATH` 仍只供
 Manager 管理面 facade/client 使用。Agent 不设置 `AITEAM_HINDSIGHT_URL`、

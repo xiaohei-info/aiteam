@@ -52,6 +52,35 @@ def test_env_backed_hindsight_client_uses_manager_derived_bank_scope(monkeypatch
     assert seen["path"] == f"/v1/default/banks/{derive_hindsight_bank_id('tenant-a', 'u', 'employee-a')}/memories/recall"
 
 
+def test_hindsight_client_lists_memory_units_with_pagination():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(200, json={"items": [], "total": 0})
+
+    client = HindsightClient(
+        HindsightSettings(
+            "http://hindsight", "secret", "/recall", "/retain", "/delete",
+            list_path="/v1/default/banks/{bank_id}/memories/list",
+        ),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    result = client.list(
+        TenantContext(tenant_id="tenant-a", user_id="u", roles=[]),
+        employee_id="employee-a", query="hello", limit=10, offset=20,
+    )
+
+    assert result == {"items": [], "total": 0}
+    assert seen == {
+        "method": "GET",
+        "path": "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/memories/list",
+        "query": {"q": "hello", "limit": "10", "offset": "20"},
+    }
+
+
 def test_hindsight_unconfigured_fails_closed():
     client = HindsightClient(HindsightSettings(None, None, None, None, None))
     with pytest.raises(HindsightUnavailable):

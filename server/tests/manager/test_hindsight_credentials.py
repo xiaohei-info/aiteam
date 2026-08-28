@@ -50,6 +50,12 @@ def _ctx(member_id: str = "member-1") -> TenantContext:
     return TenantContext(tenant_id="tenant-1", user_id=member_id, roles=["member"])
 
 
+def test_employee_bank_scope_ignores_member_but_separates_employees():
+    assert derive_hindsight_bank_id("tenant-1", "member-1", "employee-1") == derive_hindsight_bank_id("tenant-1", "member-2", "employee-1")
+    assert derive_hindsight_bank_id("tenant-1", "member-1", "employee-1") != derive_hindsight_bank_id("tenant-1", "member-1", "employee-2")
+    assert derive_hindsight_bank_id("tenant-1", "member-1", "employee-1", "enterprise-1") != derive_hindsight_bank_id("tenant-1", "member-2", "employee-1", "enterprise-2")
+
+
 def test_runtime_config_is_authorized_and_bank_scoped_without_snapshot_secret():
     snapshot = _Snapshot({"enabled": True, "allowed_operations": ["recall", "retain"]})
     service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings())

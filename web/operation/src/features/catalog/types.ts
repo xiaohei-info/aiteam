@@ -12,8 +12,7 @@
  *   - 专家: display_name / category / avatar_url / system_prompt /
  *     default_model / skill_ids / tags / description / initial_memories / sort_order
  *   - 行业方案: display_name / description / icon / expert_template_ids /
- *     expert_bindings / knowledge_refs / skill_refs / planner_prompt /
- *     subtask_prompt / aggregate_prompt / default_grants / tags
+ *     expert_bindings / coordinator_template_id / coordinator_instructions / tags
  */
 
 /** 模板/方案类型（对齐 CatalogType enum）。 */
@@ -24,6 +23,19 @@ export type CatalogStatus = "draft" | "published" | "unpublished";
 
 /** 前端可见范围简化表示（visible_scope dict 的前端投影）。 */
 export type VisibilityLabel = "public" | "enterprise" | "hidden";
+
+export interface PlatformModelRef {
+  provider_id: string;
+  provider_version: number;
+  model_id: string;
+  model_version: number;
+}
+
+export interface PlatformSkillRef {
+  skill_id: string;
+  version: string;
+  content_hash: string;
+}
 
 /** 方案内专家绑定（对齐后端 ExpertBinding schema）。 */
 export interface ExpertBinding {
@@ -41,12 +53,13 @@ export interface CatalogItem {
   status: CatalogStatus;
   visible_scope: Record<string, unknown> | null;
 
-  // ---- 专家模板 PRD-v2 扁平字段 ----
+  // ---- 专家模板字段 ----
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
+  platform_model_ref?: PlatformModelRef;
   skill_ids?: string[];
+  platform_skill_refs?: PlatformSkillRef[];
   tags?: string[];
   description?: string;
   initial_memories?: Record<string, unknown>[];
@@ -56,13 +69,8 @@ export interface CatalogItem {
   icon?: string;
   expert_bindings?: ExpertBinding[];
   expert_template_ids?: string[];
-  planner_template_id?: string;
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  default_grants?: Record<string, unknown> | null;
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
+  coordinator_template_id?: string;
+  coordinator_instructions?: string;
 }
 
 /** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest, PRD-v2 S02）。 */
@@ -73,12 +81,9 @@ export interface RegisterExpertTemplate {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
-  skill_ids?: string[];
-  tags?: string[];
+  platform_model_ref: PlatformModelRef;
+  platform_skill_refs?: PlatformSkillRef[];
   description?: string;
-  initial_memories?: Record<string, unknown>[];
-  sort_order?: number;
 }
 
 /** 注册行业方案请求体（对齐 RegisterSolutionTemplateRequest）。 */
@@ -90,13 +95,8 @@ export interface RegisterSolutionTemplate {
   icon?: string;
   expert_template_ids?: string[];
   expert_bindings?: ExpertBinding[];
-  planner_template_id?: string;
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  default_grants?: Record<string, unknown> | null;
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
+  coordinator_template_id?: string;
+  coordinator_instructions?: string;
   tags?: string[];
 }
 

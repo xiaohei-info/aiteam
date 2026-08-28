@@ -26,13 +26,15 @@ _CONFIG_WRITE_ROLES = [
 class EmployeeConfigService:
     """employee 配置 CRUD 编排。tenant_id 全程经 TenantContext，不手写过滤（D22）。"""
 
-    def __init__(self, repo: EmployeeConfigRepository):
+    def __init__(self, repo: EmployeeConfigRepository, operator=None):
         self._repo = repo
+        self._operator = operator
 
     def create(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_slug: str) -> EmployeeConfigOut:
         _ensure_can_write(ctx)
         if self._repo.get_by_slug(ctx, employee_slug=employee_slug) is not None:
             raise Conflict("employee slug already exists in this tenant")
+        self._validate_platform_model(body.model_policy)
         row = self._repo.create(
             ctx,
             employee_slug=employee_slug,
@@ -48,6 +50,7 @@ class EmployeeConfigService:
             knowledge_refs=[],
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
+            platform_model_ref=_platform_model_ref(body.model_policy),
         )
         return _to_out(row)
 
@@ -59,6 +62,7 @@ class EmployeeConfigService:
         _ensure_can_write(ctx)
         if self._require(ctx, employee_id) is None:
             raise NotFound("employee not found in this tenant")
+        self._validate_platform_model(body.model_policy)
         row = self._repo.update(
             ctx,
             employee_id=employee_id,
@@ -74,10 +78,28 @@ class EmployeeConfigService:
             knowledge_refs=[],
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
+            platform_model_ref=_platform_model_ref(body.model_policy),
         )
         if row is None:  # 双保险：RLS 下跨 tenant 删除/不可见
             raise NotFound("employee not found in this tenant")
         return _to_out(row)
+
+    def _validate_platform_model(self, policy: ModelPolicy) -> None:
+        if self._operator is None:  # isolated domain tests/read-only services; production write routes inject Operator client
+            return
+        if not policy.model and not policy.provider_ref:
+            return
+        if not all((policy.model, policy.provider_ref, policy.provider_version, policy.model_version)):
+            raise Conflict("employee model must reference an Operator-published platform model")
+        catalog = self._operator.list_platform_catalog()
+        for item in catalog.get("models", []):
+            model = item.get("model") or {}
+            rate = item.get("rate") or {}
+            if model.get("provider_id") == policy.provider_ref and model.get("model_id") == policy.model:
+                if model.get("status") == "published" and model.get("version") == policy.model_version and rate.get("pricing_status") == "known":
+                    return
+                break
+        raise Conflict("selected model is not published for this tenant")
 
     def delete(self, ctx: TenantContext, *, employee_id: str) -> None:
         _ensure_can_write(ctx)
@@ -133,13 +155,29 @@ def _ensure_can_write(ctx: TenantContext) -> None:
         raise Forbidden("config write requires owner or enterprise_admin")
 
 
+def _platform_model_ref(policy: ModelPolicy) -> dict | None:
+    if not all((policy.provider_ref, policy.model, policy.provider_version, policy.model_version)):
+        return None
+    return {
+        "provider_id": policy.provider_ref,
+        "provider_version": policy.provider_version,
+        "model_id": policy.model,
+        "model_version": policy.model_version,
+    }
+
+
 def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
+    ref = row.platform_model_ref or {}
     return EmployeeConfigOut(
         employee_id=row.employee_id,
         employee_slug=row.employee_slug,
         display_name=row.display_name,
         persona=row.persona,
-        model_policy=ModelPolicy(model=row.model, provider_ref=row.provider_ref, thinking_level=row.thinking_level),
+        model_policy=ModelPolicy(
+            model=row.model, provider_ref=row.provider_ref,
+            provider_version=ref.get("provider_version"), model_version=ref.get("model_version"),
+            thinking_level=row.thinking_level,
+        ),
         execution_policy=ExecutionPolicy(timeout_seconds=row.timeout_seconds),
         tools=row.tools,
         skills=row.skills,
@@ -153,8 +191,8 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
     )
 
 
-def build_employee_config_service(router: PgTenantRouter) -> EmployeeConfigService:
-    return EmployeeConfigService(EmployeeConfigRepository(router))
+def build_employee_config_service(router: PgTenantRouter, operator=None) -> EmployeeConfigService:
+    return EmployeeConfigService(EmployeeConfigRepository(router), operator)
 
 
 # ---- 生命周期便捷查询（供前端/Agent 运行前检查）----

@@ -7,13 +7,12 @@ import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { ExpertsPage } from "../ExpertsPage";
 import { useExpertsApi } from "../useExpertsApi";
-import { useProvidersApi } from "../../providers/useProvidersApi";
+import { usePlatformModelsApi } from "../../platform-models/usePlatformModelsApi";
 
 vi.mock("../useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
-vi.mock("../../providers/useProvidersApi", () => ({ useProvidersApi: vi.fn() }));
+vi.mock("../../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: vi.fn() }));
 
 import type { ExpertsApi } from "../useExpertsApi";
-import type { ProvidersApi } from "../../providers/useProvidersApi";
 import type { EmployeeConfig } from "../types";
 import type { ProviderCredential } from "../../providers/types";
 import { toEmployeeConfigIn } from "../EmployeeConfigDrawer";
@@ -67,7 +66,7 @@ const employeeConfigured: EmployeeConfig = {
   version: 1,
   display_name: "架构师",
   persona: "技术架构专家",
-  model_policy: { model: "gpt-4o", provider_ref: "openai-main", thinking_level: "basic" },
+  model_policy: { model: "gpt-4o", provider_ref: "openai-main", provider_version: 1, model_version: 1, thinking_level: "basic" },
   execution_policy: { timeout_seconds: 60 },
   tools: ["t1"],
   skills: ["s1"],
@@ -93,16 +92,6 @@ const employeeUnconfigured: EmployeeConfig = {
   status: "draft",
 };
 
-function mockProviders(list: ProviderCredential[]): ProvidersApi {
-  return {
-    list: vi.fn().mockResolvedValue(list),
-    get: vi.fn().mockResolvedValue(list[0] ?? null),
-    create: vi.fn().mockResolvedValue(list[0] ?? null),
-    update: vi.fn().mockResolvedValue(list[0] ?? null),
-    del: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
 function mockApis(
   employees: EmployeeConfig[],
   providers: ProviderCredential[] = [provider],
@@ -123,7 +112,15 @@ function mockApis(
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
   };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
-  (useProvidersApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockProviders(providers));
+  (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+    list: vi.fn().mockResolvedValue({
+      providers: providers.map((item) => ({ provider_id: item.provider_ref, provider_code: item.provider_ref, display_name: item.display_name, status: "published", version: item.version })),
+      models: providers.flatMap((item) => (item.supported_models ?? []).map((model) => ({
+        model: { provider_id: item.provider_ref, model_id: model.model, display_name: model.display_name, status: "published", version: 1 },
+        rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, currency: "USD" },
+      }))),
+    }),
+  });
   return { api, updateEmployee };
 }
 
@@ -141,16 +138,41 @@ describe("ExpertsPage", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-  it("列表：展示本 tenant 已招募专家（名称 / slug / 状态 / provider / model / 配置状态）", async () => {
+  it("列表：展示本 tenant 已招募专家名称 / 状态 / model / 配置状态", async () => {
     mockApis([employeeConfigured, employeeUnconfigured]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")[0]!).toBeInTheDocument());
     expect(screen.getAllByTestId("employee-row")).toHaveLength(2);
     expect(screen.getByText("架构师")).toBeInTheDocument();
-    expect(screen.getByText("architect")).toBeInTheDocument();
-    expect(screen.getByText("openai-main")).toBeInTheDocument();
+    expect(screen.queryByText("architect")).not.toBeInTheDocument();
+    expect(screen.queryByText("openai-main")).not.toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "已招募专家实例" })).toBeInTheDocument();
+    expect(screen.getByTestId("employee-list")).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
+
+  it("搜索与待处理筛选只展示匹配的专家卡片", async () => {
+    mockApis([employeeConfigured, employeeUnconfigured]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(2));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索专家" }), { target: { value: "研究" } });
+    expect(screen.getAllByTestId("employee-row")).toHaveLength(1);
+    expect(screen.getByRole("article", { name: "研究员" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索专家" }), { target: { value: "" } });
+    fireEvent.click(within(screen.getByRole("group", { name: "专家实例筛选" })).getByRole("button", { name: "待处理" }));
+    expect(screen.queryByRole("article", { name: "架构师" })).not.toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "研究员" })).toBeInTheDocument();
+  });
+
+  it("模型没有显示名时回退显示 model_id", async () => {
+    const unnamedProvider = { ...provider, supported_models: [{ model: "minimax-m3", display_name: "", enabled: true }] };
+    mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, model: "minimax-m3" } }], [unnamedProvider]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("employee-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("edit-config"));
+    await waitFor(() => expect(screen.getByTestId("model-select")).toHaveTextContent("minimax-m3"));
   });
 
   it("配置状态：已配置显示「已配置」，未配置显示「待配置」", async () => {
@@ -160,6 +182,18 @@ describe("ExpertsPage", () => {
     const statuses = screen.getAllByTestId("config-status");
     expect(statuses[0]).toHaveTextContent("已配置");
     expect(statuses[1]).toHaveTextContent("待配置");
+  });
+
+  it("生命周期：已配置草稿可激活，未配置草稿保持禁用", async () => {
+    const draftConfigured = { ...employeeConfigured, status: "draft" };
+    const { api } = mockApis([draftConfigured, employeeUnconfigured]);
+    (api.transitionEmployee as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...draftConfigured, status: "active" });
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: "激活" });
+    expect(buttons[0]).toBeEnabled();
+    expect(buttons[1]).toBeDisabled();
+    fireEvent.click(buttons[0]!);
+    await waitFor(() => expect(api.transitionEmployee).toHaveBeenCalledWith("emp-1", "activate"));
   });
 
   it("编辑：点击编辑配置打开抽屉，修改 provider/model 后保存调用 updateEmployee 并保留未编辑字段", async () => {
@@ -173,7 +207,7 @@ describe("ExpertsPage", () => {
     expect(within(providerSelect).getByRole("combobox")).toHaveTextContent("OpenAI");
     const modelSelect = screen.getByTestId("model-select");
     fireEvent.click(within(modelSelect).getByRole("combobox"));
-    fireEvent.click(screen.getByRole("option", { name: "GPT-4o mini", hidden: true }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-4o mini/, hidden: true }));
 
     fireEvent.click(screen.getByText("保存"));
 

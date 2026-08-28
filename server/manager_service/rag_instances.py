@@ -1,8 +1,9 @@
 """Manager-startup LightRAG instance registry.
 
-The registry is deliberately static: Manager loads it once from a trusted
-process environment and routes only to the configured fixed workspace of an
-instance.  It is not a northbound/API configuration surface.
+The registry is deliberately static: one Manager deployment serves one
+enterprise and routes to its fixed workspace. Multiple entries, when enabled,
+are an internal same-enterprise HA/sharding extension—not a multi-enterprise
+routing surface.
 """
 
 from __future__ import annotations

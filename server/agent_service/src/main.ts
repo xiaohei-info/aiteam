@@ -42,6 +42,7 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
+const usageFlush = new UsageFlushService(store, managerClient);
 const sessionHost = new SessionHost({
   cwdRoot,
   agentDir,
@@ -52,7 +53,11 @@ const sessionHost = new SessionHost({
   useFauxModel,
   managerClient,
   sandbox,
-  usageRecorder: (capture) => store.upsertUsageSummary(aggregateUsage(capture)),
+  // Faux responses are test artifacts, never billable usage.
+  usageRecorder: useFauxModel ? undefined : (capture, caller) => {
+    store.upsertUsageSummary(aggregateUsage(capture));
+    void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
+  },
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl, hindsightRuntimeConfig),
 });
 
@@ -60,7 +65,6 @@ const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
   : createJwtAuthenticator(loadJwtOptions());
 
-const usageFlush = new UsageFlushService(store, managerClient);
 const schedule = new ScheduleService(store, sessionHost);
 const http = new AgentHttpServer({
   logger: console,
@@ -74,7 +78,7 @@ const http = new AgentHttpServer({
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
     return sandbox.isAvailable(cwdRoot);
   },
-  runtimeReady: () => configured.runtime.getAvailableSnapshot().length > 0,
+  runtimeReady: () => managerClient !== undefined || configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
 
@@ -132,7 +136,14 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const todoHint = Array.isArray(allowedTools) && allowedTools.includes("todo_update")
     ? "For multi-step work, keep the user-visible checklist current with todo_update."
     : "";
-  return [persona, "Use only the tools authorized by the current employee snapshot.", todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const source = authorization.groupMessageSource
+    ? `You are replying inside a group conversation. Message source: ${authorization.groupMessageSource.type === "employee" ? "employee" : "human"} ${authorization.groupMessageSource.displayName ?? authorization.groupMessageSource.id}. Reply as this employee; do not impersonate another employee.`
+    : "";
+  const mentionHint = authorization.employeeId && authorization.rosterEmployeeIds
+    ? "In this group, direct employee mentions are routed by the host to the addressed participant session. Use mention_employee only when you need to consult another authorized participant."
+    : "";
+  const groupContext = authorization.groupContext ? `Bounded recent group context (reference only):\n${authorization.groupContext}` : "";
+  return [persona, "Use only the tools authorized by the current employee snapshot.", source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function loadJwtOptions() {

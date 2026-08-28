@@ -15,6 +15,8 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from .skill import SignedSkillPackage, SkillSigningKeyMetadata
+from .platform_provider import PlatformModelRef
+from .platform_skill import PlatformSkillRef
 from .snapshot import EmployeeExecutionSnapshot
 from .summary import AuditSummaryEvent, UsageSummary
 
@@ -94,13 +96,14 @@ class ExpertTemplateDetail(BaseModel):
     persona: str | None = Field(default=None, description="内部人设/系统提示词影子（backfill from system_prompt）")
     recommended_config: dict = Field(
         default_factory=dict,
-        description="推荐配置（Manager 招募时预填充 model/skills/knowledge_refs 等）；backfill from flat 字段",
+        description="推荐配置（Manager 招募时预填充模型和专家能力配置）；backfill from flat 字段",
     )
     category: str = Field(default="", description="分类（市场营销/财务分析/…）")
     avatar_url: str = Field(default="", description="头像图片 URL")
     system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）")
-    default_model: str = Field(default="", description="默认使用的大模型")
-    skill_ids: list[str] = Field(default_factory=list, description="预配置技能列表")
+    platform_model_ref: PlatformModelRef = Field(description="Operator 固定平台 Provider/模型引用")
+    skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
+    platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator platform skill fixed references")
     description: str = Field(default="", description="用户可见职位描述（≤200字）")
     initial_memories: list[dict] = Field(default_factory=list, description="预置记忆条目")
     sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）")
@@ -122,14 +125,11 @@ class SolutionPackage(BaseModel):
     display_name: str
     description: str = Field(default="", description="方案描述")
     icon: str = Field(default="", description="方案图标")
-    planner_template_id: str = Field(default="", description="方案内被指定为 planner 的专家模板 id；空=运行时自动选择")
-    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表")
-    knowledge_refs: list[str] = Field(default_factory=list, description="知识集引用列表")
-    skill_refs: list[str] = Field(default_factory=list, description="技能引用列表")
-    default_grants: dict | None = Field(default=None, description="默认授权配置（可选）")
-    planner_prompt: str = Field(default="", description="方案级协作编排规则：planner prompt；空=回退运行时默认")
-    subtask_prompt: str = Field(default="", description="方案级协作编排规则：子任务拆解 prompt")
-    aggregate_prompt: str = Field(default="", description="方案级协作编排规则：多专家结果聚合 prompt")
+    coordinator_template_id: str = Field(default="", description="方案内固定协调专家模板 id")
+    coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明，不定义执行状态机")
+    workflow_skill_ref: dict | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
+    output_requirements: str = Field(default="", description="可选的方案交付要求")
+    experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 
@@ -186,6 +186,16 @@ class SnapshotPullResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     snapshot: EmployeeExecutionSnapshot
+
+
+class EnterpriseRollupUpload(BaseModel):
+    """Manager → Operator enterprise-level sanitized usage batch (F13)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str
+    tenant_id: str
+    summaries: list[UsageSummary] = Field(default_factory=list)
 
 
 class UsageSummaryUpload(BaseModel):

@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Card } from "@astryxdesign/core/Card";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Grid } from "@astryxdesign/core/Grid";
+import { HStack } from "@astryxdesign/core/HStack";
 import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
@@ -12,6 +13,9 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import type { CatalogItem } from "./types";
+import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
+import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
+import type { InternalSkill } from "../skill-market/types";
 
 function safeJson(value: unknown): string {
   if (value == null) return "";
@@ -40,17 +44,6 @@ function parseJsonObject(value: string): Record<string, unknown> | undefined {
   }
 }
 
-function parseJsonArray(value: string): Record<string, unknown>[] | undefined {
-  const text = value.trim();
-  if (!text) return undefined;
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed as Record<string, unknown>[] : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 interface TemplateOverviewProps {
   item: CatalogItem;
   draft: CatalogItem;
@@ -59,6 +52,29 @@ interface TemplateOverviewProps {
   visibilityChanging: boolean;
   onChange: (next: CatalogItem) => void;
   onVisibilityChange: (next: "public" | "enterprise" | "hidden") => void;
+}
+
+function SkillNames({ refs, legacyIds = [] }: { refs: CatalogItem["platform_skill_refs"]; legacyIds?: string[] }): ReactNode {
+  const api = useSkillMarketApi();
+  const [skills, setSkills] = useState<InternalSkill[]>([]);
+  const entries = refs?.length ? refs : legacyIds.map((skill_id) => ({ skill_id, version: "", content_hash: "" }));
+  const hasSkills = entries.length > 0;
+  useEffect(() => {
+    if (!hasSkills) return;
+    let active = true;
+    void api.listInternal().then((items) => { if (active) setSkills(items); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [api, hasSkills]);
+  if (!entries.length) return <ReadonlyText value={null} />;
+  return (
+    <HStack gap={2} wrap="wrap">
+      {entries.map((ref) => {
+        const skill = skills.find((item) => item.skill_id === ref.skill_id);
+        const name = skill?.display_name || skill?.slug || "技能名称待同步";
+        return <Badge key={`${ref.skill_id}:${ref.version}`} label={ref.version ? `${name} · v${ref.version}` : name} variant="info" />;
+      })}
+    </HStack>
+  );
 }
 
 function DetailSection({ title, children }: { title: string; children: ReactNode }): ReactNode {
@@ -95,10 +111,24 @@ function ReadonlyJson({ title, value }: { title?: string; value?: unknown }): Re
   );
 }
 
-function ExpertDetailSections({ draft, onChange, editing }: {
+type ModelOption = {
+  value: string;
+  label: string;
+  ref: NonNullable<CatalogItem["platform_model_ref"]>;
+};
+
+function ExpertDetailSections({
+  draft,
+  onChange,
+  editing,
+  modelOptions,
+  modelLoading,
+}: {
   draft: CatalogItem;
   onChange: (next: CatalogItem) => void;
   editing: boolean;
+  modelOptions: ModelOption[];
+  modelLoading: boolean;
 }): ReactNode {
   return (
     <>
@@ -120,43 +150,33 @@ function ExpertDetailSections({ draft, onChange, editing }: {
         {editing ? <TextArea label="system_prompt" placeholder="岗位描述系统提示词（纯文本）" value={draft.system_prompt ?? ""} onChange={(system_prompt) => onChange({ ...draft, system_prompt })} rows={6} /> : <ReadonlyText value={draft.system_prompt} />}
       </DetailSection>
 
-      <DetailSection title="默认模型 (default_model)">
-        {editing ? <TextInput label="default_model" value={draft.default_model ?? ""} onChange={(default_model) => onChange({ ...draft, default_model })} /> : <ReadonlyText value={draft.default_model} />}
+      <DetailSection title="大模型服务 / 模型">
+        {editing ? (
+          <Selector
+            label="大模型服务 / 模型"
+            options={modelOptions}
+            value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id}::${draft.platform_model_ref.model_id}` : undefined}
+            onChange={(value) => onChange({
+              ...draft,
+              platform_model_ref: modelOptions.find((option) => option.value === value)?.ref,
+            })}
+            placeholder={modelLoading ? "加载可用模型…" : "选择 Operator 已发布模型"}
+            data-testid="edit-platform-model-select"
+            isRequired
+            isDisabled={modelLoading || modelOptions.length === 0}
+          />
+        ) : (
+          <ReadonlyText value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id} / ${draft.platform_model_ref.model_id} · v${draft.platform_model_ref.model_version}` : "未配置"} />
+        )}
       </DetailSection>
 
       <DetailSection title="岗位描述 (description)">
         {editing ? <TextArea label="description" value={draft.description ?? ""} onChange={(description) => onChange({ ...draft, description })} rows={4} /> : <ReadonlyText value={draft.description} />}
       </DetailSection>
 
-      <DetailSection title="技能 / 标签">
-        {editing ? (
-          <FormLayout>
-            <TextArea label="skill_ids (每行或逗号)" value={(draft.skill_ids ?? []).join("\n")} onChange={(value) => onChange({ ...draft, skill_ids: parseList(value) })} rows={4} />
-            <TextArea label="tags (每行或逗号)" value={(draft.tags ?? []).join("\n")} onChange={(value) => onChange({ ...draft, tags: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="skill_ids" value={draft.skill_ids} />
-            <ReadonlyJson title="tags" value={draft.tags} />
-          </Grid>
-        )}
+      <DetailSection title="技能">
+        <SkillNames refs={draft.platform_skill_refs} legacyIds={draft.skill_ids} />
       </DetailSection>
-
-      <DetailSection title="预置记忆 (initial_memories)">
-        {editing ? (
-          <TextArea
-            label="initial_memories"
-            value={safeJson(draft.initial_memories ?? [])}
-            onChange={(value) => {
-              const initial_memories = parseJsonArray(value);
-              if (initial_memories) onChange({ ...draft, initial_memories });
-            }}
-            rows={8}
-          />
-        ) : <ReadonlyJson value={draft.initial_memories} />}
-      </DetailSection>
-
-      <DetailSection title="排序 (sort_order)"><ReadonlyText value={draft.sort_order?.toString()} /></DetailSection>
     </>
   );
 }
@@ -168,64 +188,50 @@ function SolutionDetailSections({ draft, onChange, editing }: {
 }): ReactNode {
   return (
     <>
-      <DetailSection title="配置专家 (expert_template_ids)">
-        {editing ? <TextArea label="expert_template_ids" value={(draft.expert_template_ids ?? []).join("\n")} placeholder="每行一个 template_id (编辑模式)" onChange={(value) => onChange({ ...draft, expert_template_ids: parseList(value) })} rows={6} /> : <ReadonlyJson value={draft.expert_template_ids} />}
-      </DetailSection>
-
-      <DetailSection title="知识 / 技能引用">
+      <DetailSection title="配置专家团队 (expert_template_ids)">
         {editing ? (
-          <FormLayout>
-            <TextArea label="知识引用 (knowledge_refs)" value={(draft.knowledge_refs ?? []).join("\n")} onChange={(value) => onChange({ ...draft, knowledge_refs: parseList(value) })} rows={4} />
-            <TextArea label="技能引用 (skill_refs)" value={(draft.skill_refs ?? []).join("\n")} onChange={(value) => onChange({ ...draft, skill_refs: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="knowledge_refs" value={draft.knowledge_refs} />
-            <ReadonlyJson title="skill_refs" value={draft.skill_refs} />
-          </Grid>
-        )}
+          <TextArea
+            label="expert_template_ids"
+            value={(draft.expert_template_ids ?? []).join("\n")}
+            placeholder="每行一个 template_id (编辑模式)"
+            onChange={(value) => onChange({ ...draft, expert_template_ids: parseList(value) })}
+            rows={6}
+          />
+        ) : <ReadonlyJson value={draft.expert_template_ids} />}
       </DetailSection>
 
-      <DetailSection title="Planner 角色 (planner_template_id)">
-        {editing ? <TextInput label="planner_template_id" value={draft.planner_template_id ?? ""} placeholder="被指定为 Planner 的专家模板 id" onChange={(planner_template_id) => onChange({ ...draft, planner_template_id })} /> : <ReadonlyRow label="planner_template_id" value={draft.planner_template_id} />}
-      </DetailSection>
-
-      <DetailSection title="协作编排规则 (prompts)">
+      <DetailSection title="协调专家">
         {editing ? (
-          <FormLayout>
-            <TextArea label="planner_prompt" value={draft.planner_prompt ?? ""} onChange={(planner_prompt) => onChange({ ...draft, planner_prompt })} rows={4} />
-            <TextArea label="subtask_prompt" value={draft.subtask_prompt ?? ""} onChange={(subtask_prompt) => onChange({ ...draft, subtask_prompt })} rows={4} />
-            <TextArea label="aggregate_prompt" value={draft.aggregate_prompt ?? ""} onChange={(aggregate_prompt) => onChange({ ...draft, aggregate_prompt })} rows={4} />
-          </FormLayout>
-        ) : (
-          <VStack gap={2}>
-            <ReadonlyRow label="planner_prompt" value={draft.planner_prompt} />
-            <ReadonlyRow label="subtask_prompt" value={draft.subtask_prompt} />
-            <ReadonlyRow label="aggregate_prompt" value={draft.aggregate_prompt} />
-          </VStack>
-        )}
+          <TextInput
+            label="coordinator_template_id"
+            value={draft.coordinator_template_id ?? ""}
+            placeholder="方案内负责协调群聊的专家模板 ID"
+            onChange={(coordinator_template_id) => onChange({ ...draft, coordinator_template_id })}
+          />
+        ) : <ReadonlyRow label="coordinator_template_id" value={draft.coordinator_template_id} />}
       </DetailSection>
 
-      <DetailSection title="默认 Grants / 方案标签">
+      <DetailSection title="协作说明 (coordinator_instructions)">
         {editing ? (
-          <FormLayout>
-            <TextArea
-              label="默认 Grants (JSON)"
-              value={safeJson(draft.default_grants ?? {})}
-              onChange={(value) => {
-                const default_grants = parseJsonObject(value);
-                if (default_grants) onChange({ ...draft, default_grants });
-              }}
-              rows={6}
-            />
-            <TextArea label="方案标签 (每行或逗号)" value={(draft.tags ?? []).join("\n")} onChange={(value) => onChange({ ...draft, tags: parseList(value) })} rows={4} />
-          </FormLayout>
-        ) : (
-          <Grid columns={{ minWidth: 260, max: 2 }} gap={4}>
-            <ReadonlyJson title="default_grants" value={draft.default_grants} />
-            <ReadonlyJson title="tags" value={draft.tags} />
-          </Grid>
-        )}
+          <TextArea
+            label="coordinator_instructions"
+            value={draft.coordinator_instructions ?? ""}
+            placeholder="可选：团队目标、分工原则和预期交付物。"
+            onChange={(coordinator_instructions) => onChange({ ...draft, coordinator_instructions })}
+            rows={6}
+          />
+        ) : <ReadonlyText value={draft.coordinator_instructions} />}
+      </DetailSection>
+
+      <DetailSection title="方案标签">
+        {editing ? (
+          <TextArea
+            label="tags"
+            value={(draft.tags ?? []).join("\n")}
+            onChange={(value) => onChange({ ...draft, tags: parseList(value) })}
+            rows={4}
+          />
+        ) : <ReadonlyJson title="tags" value={draft.tags} />}
       </DetailSection>
     </>
   );
@@ -233,7 +239,38 @@ function SolutionDetailSections({ draft, onChange, editing }: {
 
 export function TemplateOverview({ item, draft, editing, canWrite, visibilityChanging, onChange, onVisibilityChange }: TemplateOverviewProps): ReactNode {
   const isExpert = item.catalog_type === "expert_template";
+  const providerApi = usePlatformProvidersApi();
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelLoading, setModelLoading] = useState(false);
   const visible = visibilityLabel(item.visible_scope);
+
+  useEffect(() => {
+    if (!isExpert || !editing) return;
+    let active = true;
+    setModelLoading(true);
+    void providerApi.list().then(async (providers) => {
+      const published = providers.filter((provider) => provider.status === "published");
+      const groups = await Promise.all(published.map(async (provider) => ({ provider, models: await providerApi.models(provider.provider_id) })));
+      const options: ModelOption[] = [];
+      for (const { provider, models } of groups) {
+        for (const item of models) {
+          if (item.model.status !== "published" || !item.rate) continue;
+          options.push({
+            value: `${provider.provider_id}::${item.model.model_id}`,
+            label: `${provider.display_name} / ${item.model.display_name || item.model.model_id} · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}`,
+            ref: {
+              provider_id: provider.provider_id,
+              provider_version: provider.version,
+              model_id: item.model.model_id,
+              model_version: item.model.version,
+            },
+          });
+        }
+      }
+      if (active) setModelOptions(options);
+    }).catch(() => { if (active) setModelOptions([]); }).finally(() => { if (active) setModelLoading(false); });
+    return () => { active = false; };
+  }, [editing, isExpert, providerApi]);
   const visibilityText = visible === "public" ? "公开" : visible === "enterprise" ? "企业可见" : "隐藏";
 
   return (
@@ -264,7 +301,7 @@ export function TemplateOverview({ item, draft, editing, canWrite, visibilityCha
       </Card>
 
       {isExpert
-        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} />
+        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} modelOptions={modelOptions} modelLoading={modelLoading} />
         : <SolutionDetailSections draft={draft} onChange={onChange} editing={editing} />}
     </VStack>
   );

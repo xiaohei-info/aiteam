@@ -6,7 +6,7 @@ set -euo pipefail
 usage() {
   printf '%s\n' \
     'Usage: scripts/validate-lightrag-env.sh [--production] [--env-file FILE]' \
-    'Required in production: LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_WORKSPACE LIGHTRAG_IMAGE' \
+    'Required in production: LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_WORKSPACE LIGHTRAG_IMAGE' \
     'Required for bootstrap: LIGHTRAG_DB_* values are checked by deploy/lightrag/init-db.sh.'
 }
 
@@ -43,6 +43,8 @@ required() {
 if (( PRODUCTION )); then
   required LIGHTRAG_URL
   required LIGHTRAG_API_KEY
+  required LIGHTRAG_AUTH_ACCOUNTS
+  required LIGHTRAG_TOKEN_SECRET
   required LIGHTRAG_WORKSPACE
   required LIGHTRAG_IMAGE
 fi
@@ -54,6 +56,17 @@ if [[ -n "${url}" && ! "${url}" =~ ^https?://[^[:space:]]+$ ]]; then
 fi
 if (( PRODUCTION )) && [[ "${url}" =~ ^http://(127\.0\.0\.1|localhost)(:|/) ]]; then
   echo "[lightrag-env][ERR] production LIGHTRAG_URL cannot point at loopback" >&2
+  ((error_count += 1))
+fi
+
+auth_accounts="${LIGHTRAG_AUTH_ACCOUNTS:-}"
+if [[ -n "${auth_accounts}" && ! "${auth_accounts}" =~ ^[^:,[:space:]]+:.+([,][^:,[:space:]]+:.+)*$ ]]; then
+  echo "[lightrag-env][ERR] LIGHTRAG_AUTH_ACCOUNTS must use comma-separated user:password entries" >&2
+  ((error_count += 1))
+fi
+token_secret="${LIGHTRAG_TOKEN_SECRET:-}"
+if (( PRODUCTION )) && (( ${#token_secret} < 32 )); then
+  echo "[lightrag-env][ERR] LIGHTRAG_TOKEN_SECRET must be at least 32 characters" >&2
   ((error_count += 1))
 fi
 

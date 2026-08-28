@@ -6,7 +6,6 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Code } from "@astryxdesign/core/CodeBlock";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Grid } from "@astryxdesign/core/Grid";
@@ -43,6 +42,8 @@ export function GrantsPage(): ReactNode {
 
   const memberNames = useMemo(() => new Map(members.map((member) => [member.id, member.display_name])), [members]);
   const departmentNames = useMemo(() => new Map(departments.map((department) => [department.id, department.display_name])), [departments]);
+  const expertNames = useMemo(() => new Map(experts.map((expert) => [expert.employee_id, expert.display_name])), [experts]);
+  const solutionNames = useMemo(() => new Map(solutions.map((solution) => [solution.id, solution.display_name])), [solutions]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,7 +100,9 @@ export function GrantsPage(): ReactNode {
         renderCell: (grant) => (
           <HStack gap={2} align="center" data-testid="grant-row">
             <Badge label={grant.resource_type === "expert" ? i18n.t("manager.grants.type_expert") : i18n.t("manager.grants.type_solution")} variant="info" />
-            <Code>{grant.resource_id}</Code>
+            <Text>{grant.resource_type === "expert"
+              ? expertNames.get(grant.resource_id) ?? "已删除专家"
+              : solutionNames.get(grant.resource_id) ?? "已删除方案"}</Text>
           </HStack>
         ),
       },
@@ -107,13 +110,13 @@ export function GrantsPage(): ReactNode {
         key: "member_ids",
         header: i18n.t("manager.grants.col_members"),
         width: proportional(1),
-        renderCell: (grant) => grant.member_ids.map((id) => memberNames.get(id) ?? id).join(", ") || "—",
+        renderCell: (grant) => grant.member_ids.map((id) => memberNames.get(id) ?? "已删除成员").join(", ") || "—",
       },
       {
         key: "department_ids",
         header: i18n.t("manager.grants.col_departments"),
         width: proportional(1),
-        renderCell: (grant) => grant.department_ids.map((id) => departmentNames.get(id) ?? id).join(", ") || "—",
+        renderCell: (grant) => grant.department_ids.map((id) => departmentNames.get(id) ?? "已删除部门").join(", ") || "—",
       },
     ];
     if (canWrite) {
@@ -129,7 +132,7 @@ export function GrantsPage(): ReactNode {
       });
     }
     return base;
-  }, [canWrite, departmentNames, i18n, memberNames, working]);
+  }, [canWrite, departmentNames, expertNames, i18n, memberNames, solutionNames, working]);
 
   return (
     <VStack as="section" gap={6}>
@@ -194,8 +197,8 @@ function GrantForm({ experts, solutions, members, departments, working, onCreate
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
 
   const resourceOptions = resourceType === "expert"
-    ? experts.map((expert) => ({ value: expert.employee_id, label: expert.display_name }))
-    : solutions.map((solution) => ({ value: solution.id, label: solution.display_name }));
+    ? experts.map((expert) => ({ value: expert.employee_id, label: expert.display_name || "未命名专家" }))
+    : solutions.map((solution) => ({ value: solution.id, label: solution.display_name || "未命名方案" }));
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -237,7 +240,7 @@ function GrantForm({ experts, solutions, members, departments, working, onCreate
               />
               <MultiSelector
                 label={i18n.t("manager.grants.col_members")}
-                options={members.map((member) => ({ value: member.id, label: member.display_name }))}
+                options={members.map((member) => ({ value: member.id, label: member.display_name || "未命名成员" }))}
                 value={memberIds}
                 onChange={setMemberIds}
                 triggerDisplay="labels"
@@ -247,7 +250,7 @@ function GrantForm({ experts, solutions, members, departments, working, onCreate
               />
               <MultiSelector
                 label={i18n.t("manager.grants.col_departments")}
-                options={departments.map((department) => ({ value: department.id, label: department.display_name }))}
+                options={departments.map((department) => ({ value: department.id, label: department.display_name || "未命名部门" }))}
                 value={departmentIds}
                 onChange={setDepartmentIds}
                 triggerDisplay="labels"

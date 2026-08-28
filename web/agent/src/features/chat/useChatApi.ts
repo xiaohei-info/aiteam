@@ -21,9 +21,10 @@ export interface Conversation {
 export async function listConversations(
   client: AgentApiClient,
   cursor?: string | null,
+  limit = 50,
 ): Promise<{ items: Conversation[]; nextCursor: string | null; hasMore: boolean }> {
   const result = await client.listGet<Conversation>("/api/agent/conversations", {
-    query: { limit: 50, cursor },
+    query: { limit, cursor },
   });
   if (!Array.isArray(result.items) || !result.page || typeof result.page.has_more !== "boolean") {
     throw new Error("conversation list: invalid response");
@@ -174,6 +175,13 @@ export async function updateConversation(
   );
 }
 
+export async function getConversationRuntimeState(
+  client: AgentApiClient,
+  conversationId: string,
+): Promise<{ conversation_id: string; state: string; prompting: boolean } | null> {
+  return client.get(`/api/agent/conversations/${encodeURIComponent(conversationId)}/state`);
+}
+
 export async function setConversationState(
   client: AgentApiClient,
   conversationId: string,
@@ -223,8 +231,8 @@ function eventId(event: PiEvent): string {
   return typeof event.id === "string" ? event.id : `${event.type}-${Date.now()}`;
 }
 
-function makeIdempotencyKey(): string {
-  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+export function makeIdempotencyKey(): string {
+  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
 export type { PiEntry };

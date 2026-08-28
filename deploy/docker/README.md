@@ -15,6 +15,7 @@ AI Team v1 是「云侧双控制面 + 用户本地数据面」架构，三端是
 | 运营端 Operation | 平台方部署 | `Dockerfile.operation` | 8001 | `server/operation_service` + `shared` | `web/operation` |
 | 企业端 Manager | 平台托管多租户 SaaS | `Dockerfile.manager` | 8002 | `server/manager_service` + `shared` | `web/manager` |
 | 用户端 Agent | 每用户本机自部署 | `Dockerfile.agent` | 8003 | Node `server/agent_service` | `web/agent` |
+| 内部 NewAPI Relay | 平台方部署、Operator 管理 | `calciumion/new-api:v1.0.0-rc.25` + 固定 sha256 digest | 9300（可配置绑定地址） | 独立组件 | 自带认证管理 UI |
 
 通信面（05 §5.5 窄通信面）：
 - Operator ↔ Manager：云侧服务间调用（`MANAGER_URL` / `OPERATOR_URL`）。
@@ -50,6 +51,9 @@ AI Team v1 是「云侧双控制面 + 用户本地数据面」架构，三端是
 `docker-compose.yml` 单机起三端 + postgres，模拟完整三端拓扑：
 
 ```
+internal NewAPI (:9300) ◀── Operator「大模型服务」页链接 / Agent 受限推理 token
+LightRAG (:9621) + Hindsight UI (:9999) ◀── Manager「知识库/记忆管理」页链接
+             │
 operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
                           │
                        postgres (:5433)
@@ -75,6 +79,7 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 ./scripts/ctl.sh start --env dev --deploy docker   # 启动三端 + postgres
 ./scripts/ctl.sh status --env dev                   # 查看服务状态
 ./scripts/ctl.sh logs --server agent --follow       # 跟随 agent 日志
+./scripts/ctl.sh logs --server newapi --follow      # 跟随内部 Relay 日志
 ./scripts/ctl.sh stop --env dev                     # 停止服务
 ```
 
@@ -87,7 +92,7 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 
 **直接使用 docker compose**（高级用户）：
 ```bash
-docker compose -f deploy/docker/docker-compose.yml up -d --build   # 构建并启动
+docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build   # 构建三端并启动内部 Relay
 docker compose -f deploy/docker/docker-compose.yml ps              # 查看状态
 docker compose -f deploy/docker/docker-compose.yml logs -f agent   # 查看日志
 docker compose -f deploy/docker/docker-compose.yml down            # 停止（保留数据）
@@ -124,17 +129,36 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
+| `NEWAPI_URL` | NewAPI 基础地址，像 `HINDSIGHT_URL`/`LIGHTRAG_URL` 一样按环境配置 | `http://newapi:3000` |
+| `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址（可覆盖 `NEWAPI_URL`） | `http://newapi:3000` |
+| `NEWAPI_PUBLIC_BASE_URL` | 下发 tenant token 使用的推理地址（可覆盖 `NEWAPI_URL/v1`） | `https://relay.example.com/v1` |
+| `MODEL_PRICING_URL` | Operator 公开模型价格源（仅补齐未知价格） | `https://models.dev/api.json` |
+| `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
+| `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
+| `NEWAPI_DB_PASSWORD` / `NEWAPI_REDIS_PASSWORD` | NewAPI 专属 DB/Redis 密码 | `***` |
+| `NEWAPI_SESSION_SECRET` / `NEWAPI_CRYPTO_SECRET` | NewAPI 会话/数据库敏感字段加密材料 | `***` |
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
-| `HINDSIGHT_URL` | Manager-only Hindsight upstream URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
+| `HINDSIGHT_URL` | Manager-only Hindsight API URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |
+| `HINDSIGHT_CP_ACCESS_KEY` | Hindsight 原生控制台访问密钥（仅 Hindsight 服务） | `***` |
 | `HINDSIGHT_FACADE_URL` | Manager 对 Agent 暴露的 facade URL（仅 URL，不含 secret） | `/api/manager/hindsight` |
 | `HINDSIGHT_LEASE_TTL_SECONDS` | Manager opaque bank lease TTL（30–3600 秒） | `300` |
+| `LIGHTRAG_URL` | Manager-only LightRAG API/UI URL（未配置时 Agent lease fail-closed） | `http://lightrag:9621` |
+| `LIGHTRAG_API_KEY` | Manager-only LightRAG API key | `***` |
+| `LIGHTRAG_AUTH_ACCOUNTS` | LightRAG 原生 UI/API 登录账号（映射为组件 `AUTH_ACCOUNTS`） | `***` |
+| `LIGHTRAG_TOKEN_SECRET` | LightRAG JWT 签名密钥（映射为组件 `TOKEN_SECRET`） | `***` |
+| `LIGHTRAG_WORKSPACE` | Manager-only 固定企业 workspace | `enterprise_shared` |
+| `NEWAPI_BIND_HOST` | NewAPI 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
+| `LIGHTRAG_BIND_HOST` | LightRAG 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
-> LightRAG 是独立的 Manager-side 组件，Manager 通过受认证 facade 调用；测试和目标生产统一使用独立 PostgreSQL + pgvector 数据库/role（PGKV/PGDocStatus/PGTableGraph/PGVector），每个实例固定一个派生 workspace。默认 Compose 不启动 LightRAG；目标联调显式使用 `--profile lightrag`。镜像固定为 `ghcr.io/hkuds/lightrag:1.5.6`（生产可替换为已验证 sha256 digest），禁止 `latest`。Manager-only 的 URL/key/workspace/PG secrets 绝不进入 Agent。bootstrap、校验、备份/恢复/升级/rollback 见 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md)；变量名以 `server/shared/config.py` 为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`**）。
-
+> NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布主机端口。NewAPI 原生 UI 由 Operator「大模型服务」页以当前访问 host + `NEWAPI_PORT` 打开；默认绑定 loopback，若需从浏览器访问必须将 `NEWAPI_BIND_HOST` 配置为受防火墙/TLS 保护的地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
+>
+> LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role 和固定企业 workspace；Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
+>
+> 原生控制台入口：Operator「大模型服务」页直接打开当前访问 host 的 `NEWAPI_PORT`（默认 9300）；Manager「知识库」和「记忆管理」页分别直接打开当前访问 host 的 `LIGHTRAG_PORT`（默认 9621）与 Hindsight UI（默认 9999）。三个服务均由组件自身登录页认证，超链接不会携带 token/密码。
 ---
 
 ## 5. 目录约定
@@ -145,7 +169,7 @@ deploy/
 │   ├── Dockerfile.operation   # 运营端产物（只含 operation_service + shared + web/operation）
 │   ├── Dockerfile.manager     # 企业端产物（只含 manager_service + shared + web/manager）
 │   ├── Dockerfile.agent       # 用户端 Node 产物（只含 agent_service + web/agent）
-│   ├── docker-compose.yml     # 单机模拟三端 + postgres
+│   ├── docker-compose.yml     # 单机模拟三端 + postgres + newapi profile
 │   ├── docker-utils.sh        # Docker 构建与清理工具（build/clean）
 │   └── README.md              # 本文件
 └── ci/                         # CI / 自动部署脚本

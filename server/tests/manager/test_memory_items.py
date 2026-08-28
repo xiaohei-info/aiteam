@@ -63,6 +63,27 @@ def test_memory_route_denies_same_tenant_employee_before_hindsight():
     service.recall.assert_called_once()
 
 
+def test_memory_route_lists_scoped_hindsight_items():
+    service = Mock()
+    service.list.return_value = {
+        "items": [{"memory_id": "memory-a", "employee_id": "employee-a", "content": "remember", "category": "world", "importance": None, "source": "hindsight", "created_at": None, "last_used_at": None}],
+        "total": 1, "limit": 100, "offset": 0,
+    }
+    client, headers = _route_client(service)
+
+    response = client.get(
+        "/api/manager/memories",
+        params={"employee_id": "employee-a"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["memory_id"] == "memory-a"
+    service.list.assert_called_once_with(
+        _ctx(), employee_id="employee-a", query=None, limit=100, offset=0,
+    )
+
+
 def test_memory_route_requires_employee_scope_for_delete():
     service = Mock()
     service.delete.return_value = {"status": "pending"}
@@ -72,6 +93,24 @@ def test_memory_route_requires_employee_scope_for_delete():
 
     assert response.status_code == 422
     service.delete.assert_not_called()
+
+
+def test_memory_route_updates_hindsight_item_with_employee_scope():
+    service = Mock()
+    service.update.return_value = {"status": "updated"}
+    client, headers = _route_client(service)
+
+    response = client.patch(
+        "/api/manager/memories/memory-a",
+        params={"employee_id": "employee-a"},
+        json={"content": "updated"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    service.update.assert_called_once_with(
+        _ctx(), employee_id="employee-a", memory_id="memory-a", payload={"text": "updated"},
+    )
 
 
 def test_memory_service_denies_same_tenant_employee_without_current_grant():
@@ -87,6 +126,30 @@ def test_memory_service_denies_same_tenant_employee_without_current_grant():
     snapshot.generate.assert_called_once_with(
         _ctx(), member_id="member-a", employee_id="employee-b"
     )
+
+
+def test_memory_service_normalizes_hindsight_list_without_metadata_leaks():
+    snapshot = Mock()
+    snapshot.generate.return_value = _snapshot()
+    backend = Mock()
+    backend.list.return_value = {
+        "items": [{
+            "id": "memory-a", "text": "remember", "fact_type": "world",
+            "date": "2026-08-26T00:00:00Z", "metadata": {"cwd": "/private/workspace", "retainSource": "tool"},
+        }],
+        "total": 1,
+    }
+
+    result = MemoryService(snapshot=snapshot, backend=backend).list(
+        _ctx(), employee_id="employee-a", query=None, limit=10, offset=0,
+    )
+
+    assert result["items"] == [{
+        "memory_id": "memory-a", "employee_id": "employee-a", "content": "remember",
+        "category": "world", "importance": None, "source": "tool",
+        "created_at": "2026-08-26T00:00:00Z", "last_used_at": None, "state": "valid",
+    }]
+    assert "cwd" not in result["items"][0]
 
 
 def test_memory_delete_binds_memory_id_to_authorized_employee():

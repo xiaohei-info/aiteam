@@ -1,6 +1,8 @@
-"""知识文档 intake 北向路由（issue #416；02 §10.1/§10.3 + 04 §6.1.2/§6.6；D21/D22）。
+"""Enterprise document intake compatibility routes (issue #416; 02 §10.1/§10.3 + 04 §6.1.2/6.6; D21/D22).
 
-路径：/api/manager/knowledge-spaces/{knowledge_space_id}/documents/* 与 /ingestions/*。
+The existing `/knowledge-spaces/{knowledge_space_id}/documents/*` path remains
+for internal/citation compatibility; the Manager UI supplies only its fixed
+enterprise key and never exposes a workspace.
 受保护端点（require_claims）；写操作需 owner/enterprise_admin（service 层强校验）。
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22）。
 

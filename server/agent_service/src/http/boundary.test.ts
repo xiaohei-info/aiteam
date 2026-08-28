@@ -51,6 +51,8 @@ test("Agent exposes standard docs and readiness boundaries", async () => {
     assert.equal(redocBundle.status, 200);
     assert.match(redocBundle.headers.get("content-type") ?? "", /javascript/u);
     await redocBundle.arrayBuffer();
+    const emptyJsonCommand = await fetch(`${base}/api/agent/usage/flush`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test" } });
+    assert.equal(emptyJsonCommand.status, 503);
     const missing = await fetch(`${base}/api/missing`);
     assert.equal(missing.status, 404);
     assert.equal(missing.headers.get("content-type"), "application/problem+json; charset=utf-8");

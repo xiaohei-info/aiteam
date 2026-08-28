@@ -4,10 +4,8 @@ verify_service_token 守卫 + psycopg mock + initial_quota_policy / visible_cata
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
@@ -204,7 +202,7 @@ def test_provision_enterprise_code_slug():
         # 用 code 做为 slug
         # 检查 slug 取值（验证 _service 路径行为）
         first_call_args = mc.return_value.execute.call_args_list[0]
-        assert first_call_args.args[1] == ("t1", "acme-corp", "acme-corp")
+        assert first_call_args.args[1] == ("t1", "ent-1", "acme-corp", "acme-corp")
 
 
 def test_provision_idempotent_no_policies():

@@ -44,19 +44,33 @@ class HindsightSettings:
     # Positional test/legacy settings retain the old bank shape; env-backed
     # production clients use the same deterministic bank id as Agent leases.
     bank_id_mode: str = "legacy"
+    # Native Hindsight uses a trailing slash for the list route.  Keep these
+    # optional so existing positional test/legacy settings remain valid.
+    list_path: str | None = None
+    update_path: str | None = None
 
     @classmethod
     def from_env(cls) -> "HindsightSettings":
+        recall_path = os.getenv("HINDSIGHT_RECALL_PATH")
+        delete_path = os.getenv("HINDSIGHT_DELETE_PATH")
         return cls(
             base_url=os.getenv("HINDSIGHT_URL"),
             token=os.getenv("HINDSIGHT_SERVICE_TOKEN"),
-            recall_path=os.getenv("HINDSIGHT_RECALL_PATH"),
+            recall_path=recall_path,
             retain_path=os.getenv("HINDSIGHT_RETAIN_PATH"),
-            delete_path=os.getenv("HINDSIGHT_DELETE_PATH"),
+            delete_path=delete_path,
+            list_path=os.getenv("HINDSIGHT_LIST_PATH") or _derive_list_path(recall_path),
+            update_path=os.getenv("HINDSIGHT_UPDATE_PATH") or delete_path,
             facade_url=os.getenv("HINDSIGHT_FACADE_URL") or "/api/manager/hindsight",
             lease_ttl_seconds=_lease_ttl_seconds(os.getenv("HINDSIGHT_LEASE_TTL_SECONDS")),
             bank_id_mode="scoped",
         )
+
+
+def _derive_list_path(recall_path: str | None) -> str:
+    if isinstance(recall_path, str) and recall_path.rstrip("/").endswith("/memories/recall"):
+        return recall_path.rsplit("/", 1)[0] + "/list"
+    return "/v1/default/banks/{bank_id}/memories/list"
 
 
 class HindsightClient:
@@ -76,6 +90,7 @@ class HindsightClient:
         method: str = "POST",
         memory_id: str | None = None,
         idempotency_key: str | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict:
         settings = self._settings
         # Validate the complete service contract before constructing a transport or
@@ -100,7 +115,9 @@ class HindsightClient:
             # module without an import cycle during Manager startup.
             from .hindsight_credentials import derive_hindsight_bank_id
 
-            bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id)
+            bank_id = derive_hindsight_bank_id(
+                ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
+            )
         else:
             bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
         native = "/v1/default/" in path and "{bank_id}" in path
@@ -133,6 +150,7 @@ class HindsightClient:
                 method,
                 f"{self._settings.base_url.rstrip('/')}/{target.lstrip('/')}",
                 json=payload,
+                params=params,
                 headers=headers,
             )
             if response.status_code >= 400:
@@ -169,6 +187,47 @@ class HindsightClient:
         return self._request(ctx, self._settings.retain_path, {
             "items": [item], "async": True, "operation_id": operation_id,
         }, employee_id=employee_id)
+
+    def list(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict:
+        return self._request(
+            ctx,
+            self._settings.list_path,
+            None,
+            employee_id=employee_id,
+            method="GET",
+            params={
+                key: value for key, value in {
+                    "q": query.strip() if isinstance(query, str) and query.strip() else None,
+                    "limit": limit,
+                    "offset": offset,
+                }.items() if value is not None
+            },
+        )
+
+    def update(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        memory_id: str,
+        payload: dict[str, Any],
+    ) -> dict:
+        return self._request(
+            ctx,
+            self._settings.update_path or self._settings.delete_path,
+            payload,
+            employee_id=employee_id,
+            memory_id=memory_id,
+            method="PATCH",
+        )
 
     def delete(
         self,

@@ -100,7 +100,7 @@ class MemorySettingIn(BaseModel):
     policy: dict = Field(default_factory=dict, description="记忆策略（04 §6.6，mem0）")
     seed_memories: list = Field(default_factory=list, description="种子记忆")
     retention_days: int | None = Field(default=None, description="保留天数")
-    scope: str = Field(default="tenant", description="可见性作用域（tenant/department/employee）")
+    scope: str = Field(default="employee", description="可见性作用域（employee 为默认个人级；兼容 tenant/department）")
 
 
 class MemorySettingOut(BaseModel):
@@ -110,7 +110,7 @@ class MemorySettingOut(BaseModel):
     policy: dict
     seed_memories: list
     retention_days: int | None = None
-    scope: str = "tenant"
+    scope: str = "employee"
     updated_at: datetime
 
 

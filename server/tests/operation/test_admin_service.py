@@ -4,6 +4,7 @@
 方案统计、系统健康、未知企业 404、充值金额校验、操作审计轨迹。
 """
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,6 +15,7 @@ from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
 from shared.contracts.crosstier import EnterpriseNotifyRequest
+from shared.contracts.summary import UsageSummary
 from operation_service.rollup_repository import CrossEnterpriseRollupRepository
 from operation_service.solution_repository import SolutionRepository
 from operation_service.schemas import ProvisionEnterpriseRequest
@@ -183,13 +185,39 @@ def test_export_returns_rows(service, enterprise_repo):
 
 # ---- 财务 ----
 
-def test_finance_overview_aggregates(service, enterprise_repo):
+def test_finance_overview_keeps_revenue_and_api_cost_separate(service, enterprise_repo):
     eid = _provision(enterprise_repo, "FinCo")
     service.execute_action(eid, "recharge", Decimal("500"), None)
     overview = service.get_finance_overview("month")
     assert overview["period"] == "month"
     assert overview["total_recharged"] == Decimal("500")
-    assert overview["top5_consumers"][0]["total_recharged"] == "500"
+    assert overview["revenue_currency"] == "CNY"
+    assert overview["cost_currency"] == "USD"
+    assert overview["gross_profit"] is None
+    assert overview["top5_consumers"] == []
+
+
+def test_finance_overview_ranks_usage_cost_and_tracks_unknown_tokens(service, enterprise_repo, rollup_repo):
+    eid = _provision(enterprise_repo, "UsageCo")
+    start = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    rollup_repo.apply_summary(eid, "tenant-1", UsageSummary(
+        summary_id="known", tenant_id="tenant-1", employee_id="emp-1",
+        window_start=start, window_end=start + timedelta(hours=1),
+        run_count=1, token_total=100, cost_total=Decimal("0.000084"),
+        pricing_version=1, pricing_status="known",
+    ))
+    rollup_repo.apply_summary(eid, "tenant-1", UsageSummary(
+        summary_id="unknown", tenant_id="tenant-1", employee_id="emp-1",
+        window_start=start, window_end=start + timedelta(hours=1),
+        run_count=1, token_total=50, cost_total=Decimal("0"),
+        pricing_status="unknown",
+    ))
+    overview = service.get_finance_overview("month")
+    assert overview["total_tokens_billed"] == 150
+    assert overview["total_api_cost"] == Decimal("0.000084")
+    assert overview["unknown_pricing_tokens"] == 50
+    assert overview["top5_consumers"][0]["cost_total"] == "0.000084"
+    assert overview["top5_consumers"][0]["pricing_status"] == "partial"
 
 
 def test_finance_reports_has_details(service, enterprise_repo):
@@ -203,7 +231,7 @@ def test_finance_reports_has_details(service, enterprise_repo):
 def test_finance_empty_returns_zeroed(service):
     overview = service.get_finance_overview("all")
     assert overview["total_recharged"] == Decimal("0")
-    assert overview["profit_margin"] == 0.0
+    assert overview["profit_margin"] is None
 
 
 # ---- 行业方案统计 ----

@@ -7,7 +7,9 @@ scope: aiteam-rag
 
 # AI Team RAG 详细设计
 
-> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片、多 workspace fan-out，以及 taiyi/目标部署统一的 PostgreSQL + pgvector 存储切换；完整前端仍按本文后续章节推进。
+> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片，以及 taiyi/目标部署统一的 PostgreSQL + pgvector 存储切换。
+>
+> **架构形态修订（2026-08-26）**：一个 Manager 部署只服务一个企业。RAG 产品面只有一个企业共享知识库；`knowledge_space`/workspace 仅作为现有文档、citation、binding 的内部兼容键。员工个人级先由 Hindsight employee-private memory 承担，不在本篇的企业共享 LightRAG 中复制个人文档。下文旧的多企业、多 workspace fan-out 方案均降为未来同一企业的高可用/分片扩展，不是跨企业隔离模型。
 >
 > 本文不修改冻结的 `app/`、`./.hermes/hermes-agent/`，也不迁移旧库/旧知识数据。
 
@@ -223,9 +225,9 @@ FAILED
 
 LightRAG 原生表/文件不是 AI Team 的业务表。Manager 需要维护以下业务模型。
 
-### 4.1 `knowledge_space`
+### 4.1 `knowledge_space`（内部兼容键）
 
-知识空间是授权和 workspace 路由的业务对象。
+在当前一企业一 Manager 部署中，企业知识库只有一个产品对象。`knowledge_space` 只保留为既有文档、citation、binding 和数据库迁移的内部兼容键；它不再表示普通管理员可创建的多套知识库。
 
 ```text
 id                  knowledge_space_id
@@ -324,7 +326,7 @@ status                   active | revoked
 version
 ```
 
-企业共享知识库通常绑定到 `enterprise` 或多个 `employee/member`，而不是复制文档。
+企业共享知识库默认属于当前 Manager 所绑定企业，文档只索引一次。成员/专家/方案授权是访问控制，不复制文档；员工个人长期记忆由 Hindsight employee-private bank 承担。
 
 ---
 

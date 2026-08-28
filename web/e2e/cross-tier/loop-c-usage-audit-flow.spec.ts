@@ -15,7 +15,6 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { createHash } from "node:crypto";
 import {
   apiLogin,
   defaultCredentials,
@@ -31,6 +30,8 @@ type UsageOutboxItem = {
   kind?: string;
   member_id?: string;
   tenant_id?: string;
+  employee_id?: string;
+  payload?: { employee_id?: string };
   status?: string;
   attempts?: number;
   last_error?: string | null;
@@ -49,13 +50,8 @@ function summaryId(item: UsageOutboxItem): string | undefined {
   return typeof item.summary_id === "string" ? item.summary_id : undefined;
 }
 
-/** Usage summaries are aggregated by UTC hour; derive the ID without reading private payloads. */
-function usageSummaryId(tenantId: string, memberId: string, employeeId: string, at: number): string {
-  const windowStart = new Date(at);
-  windowStart.setUTCMinutes(0, 0, 0);
-  return createHash("sha256")
-    .update(`${tenantId}:${memberId}:${employeeId}:${windowStart.toISOString()}`)
-    .digest("hex");
+function outboxEmployeeId(item: UsageOutboxItem): string | undefined {
+  return typeof item.employee_id === "string" ? item.employee_id : item.payload?.employee_id;
 }
 
 async function waitFor<T>(read: () => Promise<T>, ready: (value: T) => boolean, message: string): Promise<T> {
@@ -235,6 +231,7 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
   test("Agent Conversation prompt → 捕获 outbox summary_id → flush sent>0 → Manager rollup 按 summary_id 可见", async ({
     request,
   }) => {
+    test.setTimeout(180_000);
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
     // Agent Conversation prompt → outbox summary 写入/更新 → flush sent>0 →
     // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。
@@ -362,13 +359,8 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     expect(createBody.data?.tenant_id).toBe(ownerTenantId);
     expect(createBody.data?.member_id).toBe(ownerMemberId);
     expect(createBody.data?.entry_employee_id).toBe(employeeId);
-    // The Agent outbox intentionally exposes only aggregate metadata.  Derive the
-    // deterministic hourly summary ID instead of comparing a private payload/fingerprint.
-    const promptStartedAt = Date.now();
-    const candidateSummaryIds = new Set([
-      usageSummaryId(ownerTenantId, ownerMemberId, employeeId, promptStartedAt),
-      usageSummaryId(ownerTenantId, ownerMemberId, employeeId, promptStartedAt + 60 * 60 * 1000),
-    ]);
+    // The Agent outbox exposes the public aggregate summary_id. Capture the
+    // summary produced by this prompt instead of duplicating its pricing-aware hash.
     const promptResp = await request.post(`${agentOrigin}/api/agent/conversations/${convId}/prompt`, {
       data: { text: `E2E usage cross-tier: ${traceId}` },
       headers: {
@@ -409,10 +401,10 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
       (body) => usageOutboxItems(body.data).some((item) => {
         const id = summaryId(item);
         return id !== undefined
-          && candidateSummaryIds.has(id)
           && item.tenant_id === ownerTenantId
           && item.member_id === ownerMemberId
-          && (item.status === "pending" || item.status === "failed");
+          && outboxEmployeeId(item) === employeeId
+          && (item.status === "pending" || item.status === "failed" || item.status === "sent");
       }),
       `prompt ${traceId} usage outbox`,
     );
@@ -420,18 +412,21 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     const changedUsageItems = usageOutboxItems(afterPromptBody.data).filter((item) => {
       const id = summaryId(item);
       return id !== undefined
-        && candidateSummaryIds.has(id)
         && item.tenant_id === ownerTenantId
-        && item.member_id === ownerMemberId;
+        && item.member_id === ownerMemberId
+        && outboxEmployeeId(item) === employeeId;
     });
     const flushedSummaryIds = new Set(
       changedUsageItems.map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
     );
     expect(flushedSummaryIds.size, `prompt ${traceId} 应产生 usage summary`).toBeGreaterThan(0);
+    const alreadySentSummaryIds = new Set(
+      changedUsageItems.filter((item) => item.status === "sent").map((item) => summaryId(item)).filter((id): id is string => Boolean(id)),
+    );
     for (const item of changedUsageItems) {
       expect(item.tenant_id, "usage outbox tenant owner").toBe(ownerTenantId);
       expect(item.member_id, "usage outbox member owner").toBe(ownerMemberId);
-      expect(["pending", "failed"], "usage summary must remain flushable").toContain(item.status);
+      expect(["pending", "failed", "sending", "sent"], "usage summary status").toContain(item.status);
     }
 
     // ── 阶段 4/6: Flush → 断言 sent > 0（实际有数据发送到 Manager，非空 flush）──
@@ -452,17 +447,26 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     expect(Array.isArray(failed), "flush.failed must be summary id array").toBe(true);
     expect(failed, "flush must not report a failed Manager upload").toHaveLength(0);
     expect(
-      sent.filter((id) => flushedSummaryIds.has(id)),
-      "flush must send the summary created by this prompt",
+      [...sent, ...alreadySentSummaryIds].filter((id) => flushedSummaryIds.has(id)),
+      "flush or automatic flush must send the summary created by this prompt",
     ).not.toHaveLength(0);
 
     // ── 阶段 5/6: Flush 后本轮 summary 不再 pending（sent 出队）──
-    const afterFlushResp = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
-      headers: { Authorization: `Bearer ${agentLogin.token}` },
-      failOnStatusCode: false,
-    });
-    expect(afterFlushResp.ok(), `outbox read after flush: ${afterFlushResp.status()}`).toBe(true);
-    const afterFlushBody = (await afterFlushResp.json()) as { data: unknown[] };
+    const afterFlushBody = await waitFor(
+      async () => {
+        const response = await request.get(`${agentOrigin}/api/agent/usage/outbox`, {
+          headers: { Authorization: `Bearer ${agentLogin.token}` },
+          failOnStatusCode: false,
+        });
+        expect(response.ok(), `outbox read after flush: ${response.status()}`).toBe(true);
+        return await response.json() as { data: unknown[] };
+      },
+      (body) => !usageOutboxItems(body.data).some((item) => {
+        const id = summaryId(item);
+        return id !== undefined && flushedSummaryIds.has(id) && item.status !== "sent";
+      }),
+      `flush ${traceId} outbox settle`,
+    );
     const pendingAfterFlush = Array.isArray(afterFlushBody.data) ? afterFlushBody.data.length : -1;
     expect(
       pendingAfterFlush <= pendingAfterPrompt,

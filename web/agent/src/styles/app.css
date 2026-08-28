@@ -28,12 +28,47 @@ body,
 [data-timeline-card-header="true"] {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
-  margin-block-end: 0.5rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
 
-[data-timeline-card-meta="true"],
+[data-timeline-card-header="true"]::-webkit-details-marker {
+  display: none;
+}
+
+[data-timeline-card-header="true"]::before {
+  content: "›";
+  color: var(--color-text-secondary);
+  font-size: 1.125rem;
+  line-height: 1;
+  transition: transform var(--duration-fast);
+}
+
+[data-timeline-disclosure="true"][open] > [data-timeline-card-header="true"] {
+  border-block-end: 1px solid var(--color-border);
+}
+
+[data-timeline-disclosure="true"][open] > [data-timeline-card-header="true"]::before {
+  transform: rotate(90deg);
+}
+
+[data-timeline-card-header="true"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+[data-timeline-card-hint="true"] {
+  color: var(--color-text-secondary);
+}
+
+[data-timeline-card-content="true"] {
+  padding: 0.75rem;
+}
+
 [data-timeline-card-note="true"],
 [data-timeline-status] {
   overflow-wrap: anywhere;
@@ -41,12 +76,63 @@ body,
   font-size: 0.875rem;
 }
 
-[data-timeline-event-card="true"][data-kind="error"] {
-  border-inline-start: 0.25rem solid var(--color-error);
+[data-timeline-message="true"] {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-[data-timeline-event-card="true"][data-kind="aborted"] {
+[data-timeline-event-card="true"][data-kind="thinking"] {
+  border-inline-start: 0.25rem solid var(--color-icon-purple);
+  background-color: var(--color-background-purple);
+}
+
+[data-timeline-event-card="true"][data-kind="tool-call"] {
+  border-inline-start: 0.25rem solid var(--color-icon-blue);
+  background-color: var(--color-background-blue);
+}
+
+[data-timeline-event-card="true"][data-kind="tool-result"] {
+  border-inline-start: 0.25rem solid var(--color-icon-teal);
+  background-color: var(--color-background-teal);
+}
+
+[data-timeline-event-card="true"][data-kind="todo"] {
+  border-inline-start: 0.25rem solid var(--color-icon-yellow);
+  background-color: var(--color-background-yellow);
+}
+
+[data-timeline-event-card="true"][data-kind="memory"] {
+  border-inline-start: 0.25rem solid var(--color-icon-pink);
+  background-color: var(--color-background-pink);
+}
+
+[data-timeline-event-card="true"][data-kind="rag"] {
+  border-inline-start: 0.25rem solid var(--color-icon-cyan);
+  background-color: var(--color-background-cyan);
+}
+
+[data-timeline-event-card="true"][data-kind="approval"] {
+  border-inline-start: 0.25rem solid var(--color-icon-orange);
+  background-color: var(--color-background-orange);
+}
+
+[data-timeline-event-card="true"][data-kind="error"] {
+  border-inline-start: 0.25rem solid var(--color-error);
+  background-color: var(--color-background-red);
+}
+
+[data-timeline-event-card="true"][data-kind="aborted"],
+[data-timeline-event-card="true"][data-kind="waiting"] {
   border-inline-start: 0.25rem solid var(--color-warning);
+  background-color: var(--color-background-yellow);
+}
+
+[data-timeline-event-card="true"][data-kind="streaming"],
+[data-timeline-event-card="true"][data-kind="settled"],
+[data-timeline-event-card="true"][data-kind="compaction"] {
+  border-inline-start: 0.25rem solid var(--color-border-emphasized);
+  background-color: var(--color-background-gray);
 }
 
 [data-timeline-card-summary="true"] {
@@ -56,6 +142,101 @@ body,
   overflow-wrap: anywhere;
 }
 
+[data-timeline-tool-outcome="success"],
+[data-timeline-tool-outcome="failure"] {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+[data-timeline-todos="true"] {
+  display: grid;
+  gap: 0.625rem;
+  margin-top: 0.75rem;
+}
+
+[data-timeline-todo-heading="true"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+[data-timeline-todo-count="true"] {
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}
+
+[data-timeline-todo-list="true"] {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-timeline-todo-item="true"] {
+  display: grid;
+  grid-template-columns: 1.375rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  border-radius: var(--radius-element);
+  background: color-mix(in srgb, var(--color-background-card) 78%, transparent);
+}
+
+[data-timeline-todo-indicator="true"] {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+[data-timeline-status-icon="success"],
+[data-timeline-status-icon="failure"],
+[data-timeline-status-icon="completed"],
+[data-timeline-status-icon="in_progress"],
+[data-timeline-status-icon="waiting"] {
+  display: inline-block;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 1.25rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+[data-timeline-todo-text="true"] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-timeline-todo-item][data-status="completed"] [data-timeline-todo-text="true"] {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
+[data-timeline-todo-status="true"] {
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+[data-timeline-todo-item][data-status="in_progress"] [data-timeline-todo-status="true"] {
+  color: var(--color-text-blue);
+  font-weight: 700;
+}
+
+[data-timeline-todo-item][data-status="completed"] [data-timeline-todo-status="true"] {
+  color: var(--color-text-teal);
+  font-weight: 700;
+}
+
 [data-timeline-card-note="true"] {
   margin: 0.5rem 0 0;
 }
@@ -63,4 +244,45 @@ body,
 [data-timeline-status] {
   display: block;
   padding: 0.5rem 0;
+}
+
+/* StaffDeck-inspired employee identity treatment for Pi chat messages. */
+[data-chat-message-name="true"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.25rem;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+[data-chat-avatar="true"] {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+}
+
+[data-chat-avatar="true"] [data-aiteam-avatar="true"] {
+  width: 42px !important;
+  height: 42px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-timeline-card-header="true"]::before {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  [data-chat-avatar="true"],
+  [data-chat-avatar="true"] [data-aiteam-avatar="true"] {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  [data-chat-message-name="true"] {
+    font-size: 0.6875rem;
+  }
 }

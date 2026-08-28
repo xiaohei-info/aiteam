@@ -18,6 +18,8 @@ export interface EnterpriseRollup {
   run_count: number;
   token_total: number;
   cost_total: number | string;
+  unknown_pricing_tokens?: number;
+  unknown_pricing_runs?: number;
   error_count: number;
   duration_seconds_total: number;
   summary_count: number;
@@ -31,6 +33,8 @@ export interface RollupBoard {
   run_count: number;
   token_total: number;
   cost_total: number | string;
+  unknown_pricing_tokens?: number;
+  unknown_pricing_runs?: number;
   error_count: number;
   duration_seconds_total: number;
   enterprises: EnterpriseRollup[];

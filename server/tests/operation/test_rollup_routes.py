@@ -37,7 +37,11 @@ def _token(role: str) -> str:
 
 
 def _auth(role: str) -> dict:
-    return {"Authorization": f"Bearer {_token(role)}"}
+    headers = {"Authorization": f"Bearer {_token(role)}"}
+    if role in {PlatformRole.SYSTEM_OPERATOR.value, PlatformRole.SYSTEM_ADMIN.value}:
+        from operation_service.app import settings
+        headers["X-Service-Token"] = settings.service_token or "dev-service-token-placeholder"
+    return headers
 
 
 def _upload_body(ent: str, tenant: str, summary_id: str, **kw) -> dict:
@@ -67,14 +71,14 @@ def test_ingest_requires_auth(client):
     assert r.json()["code"] == "unauthorized"
 
 
-def test_ingest_forbidden_for_non_platform_role(client):
+def test_ingest_rejects_user_jwt_without_service_identity(client):
     r = client.post(
         "/api/operation/rollups",
         json=_upload_body("e1", "t1", "s1"),
         headers=_auth(EnterpriseRole.MEMBER.value),
     )
-    assert r.status_code == 403
-    assert r.json()["code"] == "forbidden"
+    assert r.status_code == 401
+    assert r.json()["code"] == "unauthorized"
 
 
 def test_ingest_and_board_cross_enterprise(client):
@@ -143,7 +147,7 @@ def test_board_response_has_no_session_or_drilldown_fields(client):
     board = client.get("/api/operation/rollups/board", headers=_auth(_OP)).json()["data"]
     allowed_row = {
         "enterprise_id", "tenant_id", "run_count", "token_total", "cost_total",
-        "error_count", "duration_seconds_total", "summary_count",
+        "unknown_pricing_tokens", "unknown_pricing_runs", "error_count", "duration_seconds_total", "summary_count",
         "window_start", "window_end",
     }
     for row in board["enterprises"]:

@@ -1,13 +1,15 @@
-"""知识文档 intake 编排（issue #416；04 §6.1.2/§6.6；D21/D22）。
+"""Enterprise document intake orchestration (issue #416; 04 §6.1.2/6.6; D21/D22).
 
-编排 intake repository + 文档解析器，驱动状态机：uploaded → parsing → indexing → ready | failed；
-重建经 reindex_requested，删除经 deleting（LightRAG 仅异步确认，不能伪造 deleted）。
-完成时向 knowledge_space 已绑员工传播索引绑定（knowledge_document_binding）。
+The existing internal space key is retained for document/citation compatibility,
+while one Manager deployment routes all new enterprise documents to its fixed
+LightRAG workspace. The state machine is uploaded → parsing → indexing → ready | failed;
+reindex uses reindex_requested and delete uses deleting (LightRAG acknowledgement
+never masquerades as deleted).
 
-红线（D21）：
-- 真实 LightRAG 写入只经 Manager-owned ingestion client；API key 不进入 Agent 或业务状态。
-- workspace 只由 ManagerRagService 推导，本服务不接受外部 workspace。
-- tenant_id 全程经 TenantContext（D22），不手写过滤。
+Red lines (D21):
+- Real LightRAG writes use only the Manager-owned ingestion client; API keys never enter Agent/business state.
+- The workspace is fixed by Manager deployment configuration; this service accepts no raw workspace.
+- Existing TenantContext/RLS remains the database compatibility boundary.
 """
 
 from __future__ import annotations

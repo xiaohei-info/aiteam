@@ -3,7 +3,7 @@
 Hindsight 0.12.0 only understands the service API key; it does not expose a
 bank-scoped token or token-revocation API. Until that upstream capability exists,
 the Manager keeps the service key private and enforces an opaque, short-lived
-bank lease at its own facade boundary. ``HindsightLeaseStore`` remains the
+member lease pointing at an enterprise/employee-private bank. ``HindsightLeaseStore`` remains the
 process-local test double; production wires the PostgreSQL implementation from
 ``hindsight_lease_repository``.
 """
@@ -287,7 +287,9 @@ class HindsightRuntimeService:
         self._require_upstream()
         # This is the only bank-id derivation in the Manager lease path. The Agent
         # receives the result as immutable session config and never selects a bank.
-        bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id)
+        bank_id = derive_hindsight_bank_id(
+            ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
+        )
         lease = self.leases.issue(
             tenant_id=ctx.tenant_id,
             member_id=ctx.user_id,
@@ -337,11 +339,20 @@ class HindsightRuntimeService:
             )
 
 
-def derive_hindsight_bank_id(tenant_id: str, member_id: str, employee_id: str) -> str:
-    """Derive the only bank id an Agent lease may ever select."""
+def derive_hindsight_bank_id(
+    tenant_id: str, member_id: str, employee_id: str, enterprise_id: str | None = None,
+) -> str:
+    """Derive the enterprise-private employee bank an Agent lease may select.
 
+    ``member_id`` remains in the call signature for wire/backward compatibility;
+    it is intentionally not part of the storage scope.  Members authorized to
+    the same digital employee share that employee's long-term memory, while the
+    lease itself remains member-authenticated.
+    """
+
+    enterprise_scope = enterprise_id or tenant_id
     digest = hashlib.sha256(
-        f"{tenant_id}:{member_id}:{employee_id}".encode()
+        f"{enterprise_scope}:{employee_id}".encode()
     ).hexdigest()[:32]
     return f"aiteam-{digest}"
 

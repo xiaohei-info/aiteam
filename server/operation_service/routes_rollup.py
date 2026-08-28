@@ -21,6 +21,7 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope
 from shared.errors import ValidationProblem
+from shared.service_token import verify_service_token
 
 from .dependencies import get_rollup_service
 from .rollup_schemas import (
@@ -54,7 +55,7 @@ def _require_platform_operator(request: Request) -> TokenClaims:
 )
 async def ingest_rollup(
     body: EnterpriseRollupUpload,
-    _claims: TokenClaims = Depends(_require_platform_operator),
+    _service_identity=Depends(verify_service_token),
     service: RollupService = Depends(get_rollup_service),
 ) -> Envelope[None]:
     service.ingest(body)

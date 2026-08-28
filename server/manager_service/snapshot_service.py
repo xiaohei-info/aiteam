@@ -21,7 +21,8 @@ import logging
 from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
-from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy
+from shared.contracts.platform_provider import PricingSnapshot
+from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
 
@@ -37,6 +38,10 @@ _SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
 
 class KnowledgeBindingReader(Protocol):
     def list_all(self, ctx: TenantContext, *, employee_id: str): ...
+
+
+class PlatformCatalogReader(Protocol):
+    def list_platform_catalog(self) -> dict: ...
 
 
 class AuditRecorder(Protocol):
@@ -71,6 +76,7 @@ class SnapshotService:
         member_service: MemberDeptService,
         audit_recorder: AuditRecorder | None = None,
         knowledge_binding: KnowledgeBindingReader | None = None,
+        platform_catalog: PlatformCatalogReader | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
@@ -78,6 +84,7 @@ class SnapshotService:
         # 可选：None → 不写审计（骨架/单测降级）；真实路由注入 EnterpriseAuditRepository。
         self._audit = audit_recorder
         self._knowledge_binding = knowledge_binding
+        self._platform_catalog = platform_catalog
 
     def _ensure_runnable(self, ctx: TenantContext, *, employee_id: str) -> None:
         """Reject non-active employees for execution-only callers.
@@ -123,7 +130,32 @@ class SnapshotService:
                 for row in self._knowledge_binding.list_all(ctx, employee_id=employee_id)
                 if row.enabled
             ]
-        return _to_snapshot(config, version=current_version, knowledge_refs=knowledge_refs)
+        return _to_snapshot(
+            config, version=current_version, knowledge_refs=knowledge_refs,
+            pricing=self._resolve_pricing(config),
+        )
+
+    def _resolve_pricing(self, config: EmployeeConfigOut) -> PricingSnapshot | None:
+        policy = config.model_policy
+        if not all((policy.provider_ref, policy.model, policy.provider_version, policy.model_version)):
+            return None
+        if self._platform_catalog is None:
+            raise NotFound("platform model catalog is unavailable")
+        catalog = self._platform_catalog.list_platform_catalog()
+        provider = next((item for item in catalog.get("providers", []) if item.get("provider_id") == policy.provider_ref), None)
+        if not provider or provider.get("status") != "published" or provider.get("version") != policy.provider_version:
+            raise NotFound("platform provider version is no longer available")
+        for item in catalog.get("models", []):
+            model = item.get("model") or {}
+            rate = item.get("rate") or {}
+            if model.get("provider_id") != policy.provider_ref or model.get("model_id") != policy.model:
+                continue
+            if model.get("status") != "published" or model.get("version") != policy.model_version:
+                raise NotFound("platform model version is no longer available")
+            if rate.get("pricing_status") != "known":
+                raise NotFound("platform model price is unknown")
+            return PricingSnapshot(**{key: rate.get(key) for key in PricingSnapshot.model_fields})
+        raise NotFound("platform model is unavailable")
 
     def _authorize(self, ctx: TenantContext, *, member_id: str, employee_id: str) -> None:
         """成员级授权 enforcement（04 §6.2 / 05 F16）。
@@ -180,7 +212,7 @@ class SnapshotService:
 
 
 def _to_snapshot(
-    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str]
+    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str], pricing: PricingSnapshot | None = None
 ) -> EmployeeExecutionSnapshot:
     """EmployeeConfigOut（中立配置真相）→ EmployeeExecutionSnapshot（只读执行投影）。
 
@@ -194,7 +226,7 @@ def _to_snapshot(
         snapshot_version=snapshot_version,
         display_name=config.display_name,
         persona=config.persona,
-        model_policy=config.model_policy,
+        model_policy=config.model_policy.model_copy(update={"pricing": pricing}),
         execution_policy=ExecutionPolicy(timeout_seconds=config.execution_policy.timeout_seconds),
         tools=list(config.tools),
         skills=list(config.skills),
@@ -229,6 +261,7 @@ def build_snapshot_service(
     member_service: MemberDeptService,
     audit_recorder: AuditRecorder | None = None,
     knowledge_binding: KnowledgeBindingReader | None = None,
+    platform_catalog: PlatformCatalogReader | None = None,
 ) -> SnapshotService:
     return SnapshotService(
         config_service=config_service,
@@ -236,4 +269,5 @@ def build_snapshot_service(
         member_service=member_service,
         audit_recorder=audit_recorder,
         knowledge_binding=knowledge_binding,
+        platform_catalog=platform_catalog,
     )

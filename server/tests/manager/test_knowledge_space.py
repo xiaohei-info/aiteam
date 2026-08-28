@@ -22,6 +22,7 @@ from manager_service.knowledge_space_repository import (
     KnowledgeSpaceRow,
 )
 from manager_service.knowledge_space_service import KnowledgeSpaceService
+from manager_service.rag_instances import RagInstance, RagInstanceRegistry
 from manager_service.schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceCreate,
@@ -165,11 +166,13 @@ def _ctx(tid: str, roles=None) -> TenantContext:
     return TenantContext(tenant_id=tid, user_id="u", roles=roles or ["owner"])
 
 
-def _svc(space=None, binding=None, expert=None) -> KnowledgeSpaceService:
+def _svc(space=None, binding=None, expert=None, *, enterprise_workspace=None, instance_registry=None) -> KnowledgeSpaceService:
     return KnowledgeSpaceService(
         repo=space or _FakeSpaceRepo(),
         binding_repo=binding or _FakeBindingRepo(),
         expert_binding=expert or _FakeExpertBinding(),
+        enterprise_workspace=enterprise_workspace,
+        instance_registry=instance_registry,
     )
 
 
@@ -196,6 +199,16 @@ def test_knowledge_space_crud_roundtrip():
     svc.delete(ctx, knowledge_space_id="ks_default")
     with pytest.raises(NotFound):
         svc.get(ctx, knowledge_space_id="ks_default")
+
+
+def test_bound_manager_exposes_only_the_enterprise_knowledge_key():
+    workspace = "enterprise-workspace"
+    registry = RagInstanceRegistry((RagInstance("rag", "http://rag", "secret", workspace),))
+    svc = _svc(enterprise_workspace=workspace, instance_registry=registry)
+    created = svc.create(_ctx("t-a"), KnowledgeSpaceCreate(knowledge_space_id="enterprise_shared"))
+    assert created.knowledge_space_id == "enterprise_shared"
+    with pytest.raises(Conflict, match="one enterprise knowledge base"):
+        svc.create(_ctx("t-a"), KnowledgeSpaceCreate(knowledge_space_id="ks-other"))
 
 
 def test_knowledge_space_conflict_within_tenant():

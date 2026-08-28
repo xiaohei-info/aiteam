@@ -88,7 +88,7 @@ def test_cross_enterprise_rollup_sums_all_tenants():
     for row in dumped["enterprises"]:
         assert set(row).issubset({
             "enterprise_id", "tenant_id", "run_count", "token_total", "cost_total",
-            "error_count", "duration_seconds_total", "summary_count",
+            "unknown_pricing_tokens", "unknown_pricing_runs", "error_count", "duration_seconds_total", "summary_count",
             "window_start", "window_end",
         })
 

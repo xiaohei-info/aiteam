@@ -7,34 +7,39 @@ describe("validateRegistration", () => {
       validateRegistration({
         catalogType: "solution_template",
         displayName: "  ",
+        category: "",
+        avatarUrl: "",
+        systemPrompt: "",
+        defaultModel: "",
+        description: "",
         expertTemplateIds: [],
-        plannerTemplateId: "",
-        plannerPrompt: "",
-        initialMemoriesText: "",
-        defaultGrantsText: "not-json",
+        coordinatorTemplateId: "",
       }),
     ).toEqual({
       displayName: "名称不能为空",
       expertTemplateIds: "请至少选择一个专家模板",
-      plannerTemplateId: "请指定一个专家为 Planner 角色（编排者）",
-      plannerPrompt: "请填写 Planner 编排规则提示词",
-      defaultGrantsText: "默认 Grants 必须是 JSON 对象",
+      coordinatorTemplateId: "请选择一个协调专家",
     });
   });
 
-  it("仅对专家模板校验 JSON 数组，并允许空的可选配置", () => {
+  it("专家模板校验必填字段与 JSON 数组", () => {
     expect(
       validateRegistration({
         catalogType: "expert_template",
         displayName: "客服专家",
+        category: "",
+        avatarUrl: "",
+        systemPrompt: "",
+        defaultModel: "",
+        description: "",
         expertTemplateIds: [],
-        plannerTemplateId: "",
-        plannerPrompt: "",
-        initialMemoriesText: '{"role":"user"}',
-        defaultGrantsText: "",
+        coordinatorTemplateId: "",
       }),
     ).toEqual({
-      initialMemoriesText: "预置记忆必须是 JSON 数组",
+      category: "请选择分类",
+      systemPrompt: "请填写系统提示词",
+      defaultModel: "请填写默认模型",
+      description: "请填写岗位描述",
     });
   });
 });

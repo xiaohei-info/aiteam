@@ -1,19 +1,36 @@
-"""Manager RAG 租户隔离服务（04 §6.1.2，D21）。
+"""Manager-owned enterprise RAG routing (04 §6.1.2, D21).
 
-workspace = derive(tenant_id, knowledge_space_id)，只能从 TenantContext 推导；前端/Agent/业务 API
-都不得直传 workspace。PG workspace/tenant 映射表加 RLS 作第二防线（§6.1.2 第 6 条）。
-
-本服务负责 Manager-owned workspace 派生与可审计映射表 + RLS；LightRAG 写入/读取均在此隔离边界外以受控客户端执行。
+A Manager deployment serves one enterprise and routes every enterprise document
+through one startup-fixed LightRAG workspace.  Existing tenant/space keys remain
+only as database/citation compatibility metadata; callers never choose a raw
+workspace or a second enterprise.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import re
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 
 from .rag_instances import RagInstance, RagInstanceConfigurationError, RagInstanceRegistry
+
+DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID = "enterprise_shared"
+_SAFE_SPACE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def enterprise_knowledge_space_id(workspace: str | None = None) -> str:
+    """Return the deployment-local internal key for the single enterprise KB."""
+    configured = os.getenv("AITEAM_ENTERPRISE_KNOWLEDGE_SPACE_ID", "").strip()
+    if configured and _SAFE_SPACE_ID.fullmatch(configured):
+        return configured
+    if isinstance(workspace, str) and "__" in workspace:
+        suffix = workspace.rsplit("__", 1)[1].strip()
+        if _SAFE_SPACE_ID.fullmatch(suffix):
+            return suffix
+    return DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
 
 
 @dataclass(frozen=True)
@@ -27,18 +44,51 @@ class RagHandle:
 
 
 class PgManagerRagService(ManagerRagService):
-    """从 TenantContext 推导 workspace，并把映射落到加 RLS 的 PG 表（第二防线）。"""
+    """Route one enterprise workspace and retain legacy internal key mappings."""
 
-    def __init__(self, dsn: str, *, instance_registry: RagInstanceRegistry | None = None):
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        instance_registry: RagInstanceRegistry | None = None,
+        enterprise_workspace: str | None = None,
+    ):
         self._router = PgTenantRouter(dsn)
         # Startup callers may inject the already-loaded registry.  The default
         # path loads the same static Manager configuration used by the clients.
         self._instances = instance_registry if instance_registry is not None else RagInstanceRegistry.from_env()
+        self._enterprise_workspace = enterprise_workspace or (
+            self._instances.instances[0].workspace if self._instances is not None else None
+        )
+        self._enterprise_space_id = enterprise_knowledge_space_id(self._enterprise_workspace)
+
+    @property
+    def default_space_id(self) -> str:
+        return getattr(self, "_enterprise_space_id", DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID)
+
+    @property
+    def is_enterprise_scope(self) -> bool:
+        return bool(getattr(self, "_enterprise_workspace", None))
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
-        # 唯一派生入口：禁止外部直传 workspace（D21）。先解析可信 startup
-        # registry，未知 workspace 不得在审计表留下半成品映射。
-        workspace = self.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        # A Manager process serves one enterprise.  Keep the legacy key in the
+        # handle for existing citations/bindings, but never route a second space.
+        enterprise_workspace = getattr(self, "_enterprise_workspace", None)
+        if enterprise_workspace:
+            if knowledge_space_id != self.default_space_id:
+                # Existing citations/bindings may carry a legacy internal key;
+                # accept it only when the Manager DB already knows that key.
+                with self._router.session(ctx) as s:
+                    legacy = s.execute(
+                        "SELECT 1 FROM rag_workspace WHERE knowledge_space_id = %s",
+                        (knowledge_space_id,),
+                    ).fetchone()
+                if legacy is None:
+                    raise ValueError("knowledge service unavailable")
+            workspace = enterprise_workspace
+        else:
+            # Compatibility for isolated unit tests and unconfigured development.
+            workspace = self.derive_workspace(ctx.tenant_id, knowledge_space_id)
         instance = self._resolve_instance(workspace)
         instance_id = instance.instance_id if instance is not None else "legacy"
         with self._router.session(ctx) as s:

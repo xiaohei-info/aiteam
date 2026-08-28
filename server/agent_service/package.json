@@ -9,7 +9,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 src/**/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 src/*.test.ts src/**/*.test.ts",
     "start": "tsx src/main.ts"
   },
   "dependencies": {

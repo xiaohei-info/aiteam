@@ -23,9 +23,9 @@ from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
 def _usage_row(rid="11111111-1111-1111-1111-111111111111", tid="22222222-2222-2222-2222-222222222222", sid="s1", emp=None, ws=None, we=None,
-               rc=5, tt=1000, cost=Decimal("1.5"), ec=1, dur=600, recv=None):
+               rc=5, tt=1000, cost=Decimal("1.5"), pv=1, ps="known", currency="USD", ec=1, dur=600, recv=None):
     return (rid, tid, sid, emp, ws or datetime(2026, 1, 10), we or datetime(2026, 1, 11),
-            rc, tt, cost, ec, dur, recv or datetime(2026, 1, 12))
+            rc, tt, cost, pv, ps, currency, ec, dur, recv or datetime(2026, 1, 12))
 
 
 def _audit_row(eid="11111111-1111-1111-1111-111111111111", tid="22222222-2222-2222-2222-222222222222", sid="a1", actor="m", action="act",
@@ -73,12 +73,13 @@ def test_list_usage_empty():
 
 def test_aggregate_usage_returns_dict():
     router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(2, 8, 2000, Decimal("3.0"), 0, 1200)))
+    router.queue(FakeCursor(fetchone=(2, 8, 2000, Decimal("3.0"), 500, 1, 0, 1200)))
     agg = UsageAuditQuotaRepository(router).aggregate_usage(
         ctx(), window_start=datetime(2026, 1, 1), window_end=datetime(2026, 2, 1)
     )
     assert agg == {"rollup_count": 2, "run_count": 8, "token_total": 2000,
-                   "cost_total": Decimal("3.0"), "error_count": 0, "duration_seconds_total": 1200}
+                   "cost_total": Decimal("3.0"), "unknown_pricing_tokens": 500,
+                   "unknown_pricing_runs": 1, "error_count": 0, "duration_seconds_total": 1200}
 
 
 def test_upsert_audit_returns_row():

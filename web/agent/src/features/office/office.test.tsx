@@ -84,6 +84,7 @@ describe("OfficePage", () => {
     expect(screen.getByText("⚡")).toBeInTheDocument();
     expect(screen.getByText("●")).toBeInTheDocument();
     expect(screen.getByText("○")).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-aiteam-avatar="true"]')).toHaveLength(3);
   });
 
   it("渲染员工当前任务", async () => {

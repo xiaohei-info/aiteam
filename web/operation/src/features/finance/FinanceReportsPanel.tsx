@@ -18,9 +18,20 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 const COLUMN_HEADERS: Record<string, string> = {
   recharge_id: "充值单号", enterprise_id: "企业", amount: "金额", created_at: "时间",
-  token_total: "Token 用量", cost_total: "费用", run_count: "运行次数",
-  total_revenue: "总收入", total_cost: "总成本", gross_profit: "毛利润", period: "账期",
+  token_total: "Token 用量", cost_total: "API 成本（USD）", run_count: "运行次数",
+  total_revenue: "总收入（CNY）", total_cost: "API 成本（USD）", gross_profit: "毛利润", period: "账期",
 };
+
+function fmtUsd(value: unknown): string {
+  const usd = asNumber(value);
+  return Number.isFinite(usd) ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` : "—";
+}
+
+function formatCell(key: string, value: unknown): string {
+  if (key === "cost_total" || key === "total_cost") return fmtUsd(value);
+  if (key === "gross_profit") return value == null ? "—" : `¥${String(value)}`;
+  return String(value ?? "");
+}
 
 function asNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -42,7 +53,7 @@ export function FinanceReportsPanel({ reports }: FinanceReportsPanelProps): Reac
     return {
       rechargeCount: recharge.length,
       rechargeTotal: recharge.reduce((total, row) => total + (asNumber(row.amount) || 0), 0),
-      grossProfit: profit.length ? (asNumber(profit[0]?.gross_profit) || 0) : 0,
+      grossProfit: profit.length ? profit[0]?.gross_profit : null,
     };
   }, [reports]);
   const rawRows = tab === "recharge"
@@ -60,7 +71,7 @@ export function FinanceReportsPanel({ reports }: FinanceReportsPanelProps): Reac
     key,
     header: COLUMN_HEADERS[key] ?? key,
     width: proportional(1),
-    renderCell: (row) => String(row[key] ?? ""),
+    renderCell: (row) => formatCell(key, row[key]),
   })), [keys]);
   const activeLabel = TABS.find((item) => item.key === tab)?.label ?? "财务明细";
 
@@ -69,8 +80,8 @@ export function FinanceReportsPanel({ reports }: FinanceReportsPanelProps): Reac
       <Heading level={2}>财务报表明细</Heading>
       <Grid columns={{ minWidth: 180, max: 3 }} gap={3}>
         <Metric label="充值笔数" value={String(summary.rechargeCount)} />
-        <Metric label="充值金额" value={`¥${summary.rechargeTotal.toFixed(2)}`} />
-        <Metric label="毛利润" value={`¥${summary.grossProfit.toFixed(2)}`} />
+        <Metric label="充值金额（CNY）" value={`¥${summary.rechargeTotal.toFixed(2)}`} />
+        <Metric label="毛利润" value={summary.grossProfit === null ? "—" : `¥${summary.grossProfit}`} />
       </Grid>
       <TabList aria-label="财务报表类型" value={tab} onChange={(value) => setTab(value as TabKey)} hasDivider>
         {TABS.map((item) => <Tab key={item.key} value={item.key} label={item.label} />)}

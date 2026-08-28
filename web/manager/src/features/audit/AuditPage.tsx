@@ -1,5 +1,5 @@
 /** 审计事件页 — 事件列表。 */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
@@ -11,18 +11,23 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { ApiError } from "@aiteam/shared";
 import { useAuditApi } from "./useAuditApi";
+import { useExpertsApi } from "../experts/useExpertsApi";
+import { useMembersApi } from "../members/useMembersApi";
 import type { AuditEvent } from "./types";
 
-const columns: TableColumn<AuditEvent>[] = [
-  { key: "event_type", header: "事件类型", width: proportional(1) },
-  { key: "actor_id", header: "操作者", width: proportional(1), renderCell: (event) => event.actor_id ?? "—" },
-  { key: "target", header: "目标", width: proportional(1), renderCell: (event) => `${event.target_type ?? "—"}/${event.target_id ?? "—"}` },
-  { key: "created_at", header: "时间", width: pixel(190), renderCell: (event) => event.created_at.slice(0, 19) },
-];
+type AuditRow = AuditEvent & { actor_name: string; target_name: string };
+
+function targetLabel(type: string | null): string {
+  return ({ member: "成员", employee: "专家", expert: "专家", solution: "方案", department: "部门" } as Record<string, string>)[type ?? ""] ?? "对象";
+}
 
 export function AuditPage(): ReactNode {
   const api = useAuditApi();
+  const expertsApi = useExpertsApi();
+  const membersApi = useMembersApi();
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [memberNames, setMemberNames] = useState<Map<string, string>>(new Map());
+  const [employeeNames, setEmployeeNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -36,8 +41,16 @@ export function AuditPage(): ReactNode {
       setLoading(true);
       setError(null);
       try {
-        const items = await api.list({ event_type: eventType || undefined, page });
-        if (!cancelled) setEvents(items);
+        const [items, members, employees] = await Promise.all([
+          api.list({ event_type: eventType || undefined, page }),
+          membersApi.listMembers().catch(() => []),
+          expertsApi.listEmployees().catch(() => []),
+        ]);
+        if (!cancelled) {
+          setEvents(items);
+          setMemberNames(new Map(members.map((member) => [member.id, member.display_name])));
+          setEmployeeNames(new Map(employees.map((employee) => [employee.employee_id, employee.display_name])));
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof ApiError ? err.message : "审计事件加载失败");
       } finally {
@@ -47,12 +60,29 @@ export function AuditPage(): ReactNode {
 
     void load();
     return () => { cancelled = true; };
-  }, [api, eventType, page]);
+  }, [api, eventType, expertsApi, membersApi, page]);
 
   const queryEvents = () => {
     setEventType(query);
     setPage(1);
   };
+
+  const rows = useMemo<AuditRow[]>(() => events.map((event) => ({
+    ...event,
+    actor_name: event.actor_id
+      ? memberNames.get(event.actor_id) ?? employeeNames.get(event.actor_id) ?? "企业成员"
+      : "—",
+    target_name: event.target_id
+      ? memberNames.get(event.target_id) ?? employeeNames.get(event.target_id) ?? `已删除${targetLabel(event.target_type)}`
+      : "—",
+  })), [employeeNames, events, memberNames]);
+
+  const columns = useMemo<TableColumn<AuditRow>[]>(() => [
+    { key: "event_type", header: "事件类型", width: proportional(1) },
+    { key: "actor_name", header: "操作者", width: proportional(1) },
+    { key: "target_name", header: "目标", width: proportional(1), renderCell: (event) => event.target_type ? `${targetLabel(event.target_type)}：${event.target_name}` : "—" },
+    { key: "created_at", header: "时间", width: pixel(190), renderCell: (event) => event.created_at.slice(0, 19) },
+  ], []);
 
   return (
     <VStack gap={4}>
@@ -83,7 +113,7 @@ export function AuditPage(): ReactNode {
             <Table
               aria-label="审计事件"
               tableProps={{ "aria-label": "审计事件" }}
-              data={events}
+              data={rows}
               columns={columns}
               idKey="event_id"
               density="compact"

@@ -128,6 +128,19 @@ authTest.describe("Operation Astryx rollout", () => {
     await expect(authedPage.getByRole("button", { name: "确认隐藏" })).toBeVisible();
   });
 
+  authTest("语义状态和破坏性操作按钮的文字与底色保持对比度", async ({ authedPage }) => {
+    await mockOperationReadModels(authedPage);
+    await authedPage.emulateMedia({ colorScheme: "light" });
+    await authedPage.goto("/experts");
+    const items = authedPage.locator(".astryx-badge.success, .astryx-button.destructive");
+    await expect(items.first()).toBeVisible();
+    const contrast = await items.evaluateAll((elements) => elements.map((element) => {
+      const styles = getComputedStyle(element);
+      return { text: element.textContent?.trim(), color: styles.color, background: styles.backgroundColor };
+    }));
+    expect(contrast.every((item) => item.text && item.color !== item.background)).toBe(true);
+  });
+
   authTest("仪表盘与目录详情通过 light/dark 截图和浏览器错误门禁", async ({ authedPage }) => {
     const browserErrors = collectBrowserErrors(authedPage);
     await mockOperationReadModels(authedPage);

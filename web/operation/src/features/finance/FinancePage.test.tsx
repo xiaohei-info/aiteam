@@ -48,6 +48,7 @@ function makeOverview(overrides: Record<string, unknown> = {}) {
     total_api_cost: "45000.00",
     gross_profit: "5000.00",
     profit_margin: 10.0,
+    profit_status: "available",
     active_orgs: 8,
     monthly_trend: [],
     top5_consumers: [
@@ -68,7 +69,7 @@ function makeReports(overrides: Record<string, unknown> = {}) {
       { enterprise_id: "ent-A", token_total: 1200000, cost_total: "30000.00", run_count: 150 },
     ],
     profit_details: [
-      { total_revenue: "72000.00", total_cost: "65000.00", gross_profit: "7000.00", period: "month" },
+      { total_revenue: "72000.00", total_cost: "65000.00", gross_profit: null, period: "month" },
     ],
     ...overrides,
   };
@@ -141,10 +142,12 @@ describe("FinancePage", () => {
     );
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("总充值金额")).toBeInTheDocument();
+      expect(screen.getByText("总充值金额（CNY）")).toBeInTheDocument();
       expect(screen.getByText("¥8888.00")).toBeInTheDocument();
-      expect(screen.getByText("实际调用量")).toBeInTheDocument();
-      expect(screen.getByText("2.5B")).toBeInTheDocument();
+      expect(screen.getByText("实际调用量（Token）")).toBeInTheDocument();
+      expect(screen.getByText("2.50B")).toBeInTheDocument();
+      expect(screen.getAllByText("API 成本（USD）").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText("$45,000.00")).toBeInTheDocument();
       expect(screen.getByText("利润")).toBeInTheDocument();
       expect(screen.getByText("¥1200.00")).toBeInTheDocument();
       expect(screen.getByText("利润率")).toBeInTheDocument();
@@ -166,7 +169,7 @@ describe("FinancePage", () => {
     await waitFor(() => {
       expect(screen.getByText("TOP 5 消费企业")).toBeInTheDocument();
       expect(screen.getByText(/Alpha/)).toBeInTheDocument();
-      expect(screen.getByText(/¥30000.00/)).toBeInTheDocument();
+      expect(screen.getByText(/\$30,000\.00/)).toBeInTheDocument();
       expect(screen.getByText(/Beta/)).toBeInTheDocument();
     });
   });
@@ -220,11 +223,10 @@ describe("FinancePage 报表明细面板", () => {
     });
     expect(screen.getByText("充值笔数")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "充值笔数：2" })).toBeInTheDocument();
-    expect(screen.getByText("充值金额")).toBeInTheDocument();
+    expect(screen.getByText("充值金额（CNY）")).toBeInTheDocument();
     expect(screen.getByText("¥15000.00")).toBeInTheDocument();
     expect(screen.getByText("毛利润")).toBeInTheDocument();
-    expect(screen.getByText("¥7000.00")).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "财务报表类型" })).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();    expect(screen.getByRole("navigation", { name: "财务报表类型" })).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "充值明细" })).toBeInTheDocument();
   });
 
@@ -272,8 +274,7 @@ describe("FinancePage 报表明细面板", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "利润明细" }));
     await waitFor(() => {
-      expect(screen.getByText("总收入")).toBeInTheDocument();
-      expect(screen.getByText("72000.00")).toBeInTheDocument();
+      expect(screen.getByText("总收入（CNY）")).toBeInTheDocument();      expect(screen.getByText("72000.00")).toBeInTheDocument();
     });
 
     expect(fetchSpy.mock.calls.length).toBe(before);
@@ -303,7 +304,7 @@ describe("FinancePage 报表明细面板", () => {
     });
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("总充值金额")).toBeInTheDocument();
+      expect(screen.getByText("总充值金额（CNY）")).toBeInTheDocument();
     });
     expect(screen.queryByText("财务报表明细")).not.toBeInTheDocument();
   });
@@ -337,7 +338,7 @@ describe("FinancePage 错误态", () => {
     await waitFor(() => {
       expect(screen.getByText("加载失败")).toBeInTheDocument();
     });
-    expect(screen.queryByText("总充值金额")).not.toBeInTheDocument();
+    expect(screen.queryByText("总充值金额（CNY）")).not.toBeInTheDocument();
     expect(screen.queryByText("利润")).not.toBeInTheDocument();
   });
 
@@ -347,7 +348,7 @@ describe("FinancePage 错误态", () => {
     const retry = await screen.findByRole("button", { name: "重试" });
     mockBothEndpoints(makeOverview(), makeReports());
     fireEvent.click(retry);
-    expect(await screen.findByRole("region", { name: "总充值金额：¥50000.00" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "总充值金额（CNY）：¥50000.00" })).toBeInTheDocument();
   });
 
   it("overview 失败即便 reports 成功也展示错误", async () => {

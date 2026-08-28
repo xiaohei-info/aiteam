@@ -56,12 +56,14 @@ class _FakeConnectorService:
 
 @pytest.fixture()
 def client():
+    from manager_service.routes_capability import build_capability_router
     from manager_service.routes_connector_ops import build_connector_ops_router
 
     app = create_app(Settings(tier="manager", service_name="m", db_url="postgres://x/y"),
                      APIRouter())
-    router = build_connector_ops_router(_VERIFIER)
-    app.include_router(router)
+    app.include_router(build_connector_ops_router(_VERIFIER))
+    # The capability router has /connectors/{catalog_id}; ops must remain first.
+    app.include_router(build_capability_router(_VERIFIER))
     fake = _FakeConnectorService()
 
     def _fake_service(request):
@@ -94,7 +96,7 @@ def test_test_connector_requires_auth(client):
 def test_list_presets_returns_known_presets(client):
     r = client.get("/api/manager/connectors/presets", headers=_AUTH)
     assert r.status_code == 200
-    ids = {p["preset_id"] for p in r.json()}
+    ids = {p["preset_id"] for p in r.json()["data"]}
     assert {"feishu", "jira", "slack", "github", "dingtalk"} <= ids
 
 
@@ -127,14 +129,16 @@ def test_test_connector_accepts_body_and_returns_result(client):
 def test_test_connector_accepts_empty_body(client):
     r = client.post("/api/manager/connectors/feishu/test", json={}, headers=_AUTH)
     assert r.status_code == 200
+    call = [item for item in client.fake.calls if item[0] == "test_connector"][-1]
+    assert call[2]["auth_scheme"] == "oauth2"
 
 
 def test_patch_grants_defaults_when_body_empty(client):
     r = client.patch("/api/manager/connectors/slack/grants", json={}, headers=_AUTH)
     assert r.status_code == 200
     body = r.json()
-    assert body["action"] == "grant"
-    assert body["employee_ids"] == []
+    assert body["data"]["action"] == "grant"
+    assert body["data"]["employee_ids"] == []
 
 
 def test_patch_grants_revoke(client):
@@ -142,4 +146,4 @@ def test_patch_grants_revoke(client):
                      json={"employee_ids": ["emp-a"], "action": "revoke"},
                      headers=_AUTH)
     assert r.status_code == 200
-    assert r.json()["action"] == "revoke"
+    assert r.json()["data"]["action"] == "revoke"

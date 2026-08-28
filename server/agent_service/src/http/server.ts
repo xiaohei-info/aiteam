@@ -67,7 +67,7 @@ const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.
 const MarketplaceTemplate = Type.Object({ template_id: Type.String(), display_name: Type.String(), category: Type.String(), model_name: Type.String(), skills_count: Type.Integer({ minimum: 0 }), recruit_count: Type.Integer({ minimum: 0 }), is_recruited: Type.Boolean(), tags: Type.Array(Type.String()), avatar_url: Type.Union([Type.String(), Type.Null()]) }, { $id: "MarketplaceTemplate" });
 const MarketplaceTemplateEnvelope = Type.Object({ data: Type.Ref("MarketplaceTemplate") }, { $id: "MarketplaceTemplateEnvelope" });
 const MarketplaceTemplateListEnvelope = Type.Object({ data: Type.Array(Type.Ref("MarketplaceTemplate")), page: Type.Ref("Page") }, { $id: "MarketplaceTemplateListEnvelope" });
-const UsageSummary = Type.Object({ schema_version: Type.Literal("1"), summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), employee_id: Type.String(), window_start: Type.String({ format: "date-time" }), window_end: Type.String({ format: "date-time" }), prompt_count: Type.Integer({ minimum: 0 }), settled_count: Type.Integer({ minimum: 0 }), error_count: Type.Integer({ minimum: 0 }), input_tokens: Type.Integer({ minimum: 0 }), output_tokens: Type.Integer({ minimum: 0 }), cache_tokens: Type.Integer({ minimum: 0 }), cost_minor: Type.Integer({ minimum: 0 }), currency: Type.Literal("USD"), duration_ms_total: Type.Integer({ minimum: 0 }) }, { $id: "UsageSummary" });
+const UsageSummary = Type.Object({ schema_version: Type.Literal("1"), summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), employee_id: Type.String(), window_start: Type.String({ format: "date-time" }), window_end: Type.String({ format: "date-time" }), prompt_count: Type.Integer({ minimum: 0 }), settled_count: Type.Integer({ minimum: 0 }), error_count: Type.Integer({ minimum: 0 }), input_tokens: Type.Integer({ minimum: 0 }), output_tokens: Type.Integer({ minimum: 0 }), cache_tokens: Type.Integer({ minimum: 0 }), cost_minor: Type.Integer({ minimum: 0 }), currency: Type.Literal("USD"), duration_ms_total: Type.Integer({ minimum: 0 }), pricing_version: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]), pricing_status: Type.Union([Type.Literal("known"), Type.Literal("unknown")]) }, { $id: "UsageSummary" });
 const UsageOutboxItem = Type.Object({ summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.String(), status: Type.String(), attempts: Type.Integer({ minimum: 0 }), last_error: Type.Union([Type.String(), Type.Null()]), created_at: Type.String({ format: "date-time" }), payload: Type.Optional(Type.Ref("UsageSummary")) }, { $id: "UsageOutboxItem" });
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String(), title: Type.String(), status: Type.Integer(), code: Type.String(), detail: Type.String(), instance: Type.String(), request_id: Type.String(), errors: Type.Optional(Type.Any()) }, { $id: "Problem" });
@@ -111,6 +111,16 @@ export class AgentHttpServer {
       requestIdHeader: "x-request-id",
       genReqId: () => randomUUID(),
       logger: false,
+    });
+    // Fastify rejects an empty JSON body before the handler. Several command-style
+    // Agent endpoints intentionally accept an empty JSON request, so preserve the
+    // previous HTTP contract while still rejecting malformed JSON.
+    this.app.removeContentTypeParser("application/json");
+    this.app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+      const text = typeof body === "string" ? body : body.toString("utf8");
+      if (text.trim() === "") return done(null, {});
+      try { return done(null, JSON.parse(text)); }
+      catch { return done(new HttpProblem(400, "invalid_json", "Request body must be valid JSON")); }
     });
     // Business handlers retain the existing trust-boundary validation. Fastify
     // schemas are the single OpenAPI source, without changing their legacy
@@ -398,7 +408,9 @@ export class AgentHttpServer {
       const solutionRoster = solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
         : [];
-      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
+      const solutionCoordinator = solution && typeof solution.coordinator_employee_id === "string" ? solution.coordinator_employee_id : undefined;
+      if (solutionCoordinator && coordinatorEmployeeId && coordinatorEmployeeId !== solutionCoordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator does not match the authorized solution");
+      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
       if (!coordinatorEmployeeId) throw new HttpProblem(403, "coordinator_not_authorized", "No authorized employee is available as coordinator");
       if (solutionRoster.length > 0 && !solutionRoster.includes(coordinatorEmployeeId)) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator is not in the authorized solution roster");
       this.requireAuthorizedEmployee(coordinatorEmployeeId, caller);
@@ -414,7 +426,41 @@ export class AgentHttpServer {
       tenantId: caller.tenantId,
       memberId,
     });
-    this.writeJson(response, 201, { data: metadata });
+    try {
+      await this.options.host.initializeConversationParticipants(id, caller);
+    } catch (error) {
+      await this.options.host.delete(id, caller.tenantId!, memberId).catch(() => undefined);
+      throw error;
+    }
+    this.writeJson(response, 201, { data: this.options.store.getOwnedConversationMetadata(id, caller.tenantId!, memberId) ?? metadata });
+  }
+
+  private resolvePromptTargets(conversation: ReturnType<AgentSqliteStore["getConversation"]>, caller: AuthenticatedCaller, mentions: string[]): string[] {
+    if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    const coordinator = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
+    if (conversation.kind !== "group") {
+      if (mentions.length > 0) throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
+      if (!coordinator) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      return [coordinator];
+    }
+    if (mentions.length === 0) {
+      if (!coordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Group conversation has no coordinator");
+      return [coordinator];
+    }
+    const memberId = caller.userId ?? caller.callerId;
+    const participants = this.options.store.listConversationParticipants(conversation.id);
+    const solution = conversation.solutionRef
+      ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === conversation.solutionRef)
+      : undefined;
+    const roster = new Set(participants.length > 0
+      ? participants.map((participant) => participant.employee_id)
+      : solution && Array.isArray(solution.expert_employee_ids)
+        ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+        : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
+    const targets = [...new Set(mentions)].map((handle) => experts.find((expert) => expert.handle === handle)?.employee_id);
+    if (targets.some((employeeId) => !employeeId || !roster.has(employeeId))) throw new HttpProblem(403, "employee_not_authorized", "Mentioned employee is not in the authorized group roster");
+    return targets as string[];
   }
 
   private requireAuthorizedEmployee(employeeId: string, caller: AuthenticatedCaller): void {
@@ -453,7 +499,7 @@ export class AgentHttpServer {
   private getConversationState(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
     const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state } });
+    this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state, prompting: this.options.host.isPrompting(conversationId) } });
   }
 
   private async updateConversationState(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -570,8 +616,9 @@ export class AgentHttpServer {
   }
 
   private expertReadinessValue(expert: LoadedExpertProjection, runtime: boolean) {
-    const provider = expert.model_policy && (expert.model_policy.model || expert.model_policy.provider_ref) ? "ready" : "blocked";
-    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready", runtime: runtime ? "ready" : "blocked", provider, skills: [], capabilities: [], reasons: [ ...(runtime ? [] : ["Pi runtime is not ready"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
+    const provider = expert.model_policy?.model && expert.model_policy.provider_ref ? "ready" : "blocked";
+    const lifecycle = typeof expert.status === "string" && expert.status !== "active" ? "blocked" : "ready";
+    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready" && lifecycle === "ready", runtime: runtime ? "ready" : "blocked", provider, skills: [], capabilities: [], reasons: [ ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -644,16 +691,19 @@ export class AgentHttpServer {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
+    const targetEmployeeIds = this.resolvePromptTargets(conversation, caller, mentions);
+    for (const employeeId of targetEmployeeIds) {
+      const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked);
+      const snapshot = expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
+      if (!expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
+    }
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
     try {
-      const employeeId = conversation.entryEmployeeId ?? conversation.coordinatorEmployeeId;
-      const expert = employeeId ? this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked) : undefined;
-      const snapshot = employeeId && expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
-      if (!employeeId || !expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
@@ -681,7 +731,7 @@ export class AgentHttpServer {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions);
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key });
       this.options.store.markLocalFilesReferenced(attachmentIds, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {

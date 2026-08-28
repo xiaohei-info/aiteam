@@ -86,13 +86,14 @@ class AuthorizedConfigService:
 
         all_solution_instances = self._recruit_repo.list_solution_instances(ctx) if self._recruit_repo else []
         all_solution_ids = {s.id for s in all_solution_instances}
+        applied_solution_ids = {s.id for s in all_solution_instances if s.status == "applied"}
 
         if set(ctx.roles) & _GRANT_EXEMPT_ROLES:
             authorized_employee_ids = all_employee_ids
-            authorized_solution_ids = all_solution_ids
+            authorized_solution_ids = applied_solution_ids
         else:
             authorized_employee_ids = self._authorized_employee_ids(ctx, req.member_id)
-            authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id)
+            authorized_solution_ids = self._authorized_solution_ids(ctx, req.member_id) & applied_solution_ids
 
         authorized_configs = [cfg for cfg in all_configs if cfg.employee_id in authorized_employee_ids]
         experts: list[dict] = []
@@ -103,7 +104,7 @@ class AuthorizedConfigService:
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:
-            if sol_instance.id not in authorized_solution_ids:
+            if sol_instance.id not in authorized_solution_ids or sol_instance.status != "applied":
                 continue
             known_ver = req.known_versions.get(sol_instance.id)
             # Prompt/expert changes are not reflected in solution_version; use config_version so Agent re-syncs.
@@ -117,12 +118,10 @@ class AuthorizedConfigService:
                     "status": sol_instance.status,
                     "config_version": sol_instance.config_version,
                     "expert_employee_ids": sol_instance.expert_employee_ids,
-                    "knowledge_refs": sol_instance.knowledge_refs,
-                    "skill_refs": sol_instance.skill_refs,
-                    # 方案级固定编排三阶段 prompts（parity Operator solution_template）
-                    "planner_prompt": sol_instance.planner_prompt or "",
-                    "subtask_prompt": sol_instance.subtask_prompt or "",
-                    "aggregate_prompt": sol_instance.aggregate_prompt or "",
+                    "coordinator_employee_id": sol_instance.coordinator_employee_id,
+                    "coordinator_instructions": sol_instance.coordinator_instructions or "",
+                    "workflow_skill_ref": sol_instance.workflow_skill_ref,
+                    "output_requirements": sol_instance.output_requirements or "",
                 })
 
         revoked_ids = [

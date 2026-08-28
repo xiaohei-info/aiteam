@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
@@ -213,7 +214,13 @@ export function LlmPage(): ReactNode {
 
   return (
     <VStack as="section" gap={6}>
-      <Heading level={1}>LLM 管理</Heading>
+      <Heading level={1}>模型目录</Heading>
+      <Banner
+        status="info"
+        title="这里只管理模型目录，不配置 Agent 运行凭据。"
+        description="请在 Provider 凭据中填写 Secret 和 supported_models，再到已招募专家选择 Provider 与模型。"
+        endContent={<Button label="前往 Provider 凭据" href="/providers" variant="ghost" size="sm" />}
+      />
       {error && <Banner status="error" title={error} />}
       {actionError && <Banner status="error" title={actionError} data-testid="action-error" />}
       {loading ? (

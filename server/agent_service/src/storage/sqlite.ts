@@ -15,7 +15,7 @@ function publicUsageSummary(value: unknown): UsageSummary | undefined {
   const fields = [
     "schema_version", "summary_id", "tenant_id", "member_id", "employee_id", "window_start", "window_end",
     "prompt_count", "settled_count", "error_count", "input_tokens", "output_tokens", "cache_tokens", "cost_minor",
-    "currency", "duration_ms_total", "run_count", "token_total", "cost_total", "duration_seconds_total",
+    "currency", "duration_ms_total", "pricing_version", "pricing_status", "run_count", "token_total", "cost_total", "duration_seconds_total",
   ] as const;
   if (raw.schema_version !== "1" || raw.currency !== "USD" || fields.some((field) => raw[field] === undefined)) return undefined;
   return Object.fromEntries(fields.map((field) => [field, raw[field]])) as unknown as UsageSummary;
@@ -59,6 +59,31 @@ export interface ConversationMetadata {
   last_read_entry_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type ConversationParticipantRole = "coordinator" | "member";
+
+export interface ConversationParticipantSession {
+  conversation_id: string;
+  employee_id: string;
+  role: ConversationParticipantRole;
+  session_file: string;
+  workspace: string;
+  pi_session_id: string | null;
+  employee_version: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationEntrySource {
+  conversation_id: string;
+  employee_id: string;
+  pi_entry_id: string;
+  logical_message_id: string;
+  source_type: "human" | "employee";
+  source_id: string;
+  source_display_name?: string;
+  created_at: string;
 }
 
 export interface LoadedExpertProjection {
@@ -226,6 +251,33 @@ export class AgentSqliteStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS conversation_updated_idx ON conversation(updated_at DESC, id);
+
+      CREATE TABLE IF NOT EXISTS conversation_participant_session (
+        conversation_id TEXT NOT NULL,
+        employee_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('coordinator', 'member')),
+        session_file TEXT NOT NULL,
+        workspace TEXT NOT NULL,
+        pi_session_id TEXT,
+        employee_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, employee_id)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
+
+      CREATE TABLE IF NOT EXISTS conversation_entry_source (
+        conversation_id TEXT NOT NULL,
+        employee_id TEXT NOT NULL,
+        pi_entry_id TEXT NOT NULL,
+        logical_message_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('human', 'employee')),
+        source_id TEXT NOT NULL,
+        source_display_name TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, employee_id, pi_entry_id)
+      );
+      CREATE INDEX IF NOT EXISTS conversation_entry_source_logical_idx ON conversation_entry_source(conversation_id, logical_message_id);
 
       CREATE TABLE IF NOT EXISTS idempotency_receipt (
         conversation_id TEXT NOT NULL,
@@ -453,8 +505,76 @@ export class AgentSqliteStore {
     const ownerTenant = existing?.tenantId ?? tenantId;
     const ownerMember = existing?.memberId ?? memberId;
     if (result.changes > 0 && ownerTenant && ownerMember) this.deleteConversationLocalFiles(id, ownerTenant, ownerMember);
+    this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
+    this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
     this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
     return result.changes > 0;
+  }
+
+  listConversationParticipants(conversationId: string): ConversationParticipantSession[] {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+             employee_version, created_at, updated_at
+      FROM conversation_participant_session
+      WHERE conversation_id = ?
+      ORDER BY CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
+    `).all(conversationId) as unknown as ConversationParticipantSession[];
+  }
+
+  getConversationParticipant(conversationId: string, employeeId: string): ConversationParticipantSession | undefined {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+             employee_version, created_at, updated_at
+      FROM conversation_participant_session
+      WHERE conversation_id = ? AND employee_id = ?
+    `).get(conversationId, employeeId) as ConversationParticipantSession | undefined;
+  }
+
+  upsertConversationParticipant(input: Omit<ConversationParticipantSession, "created_at" | "updated_at"> & { created_at?: string; updated_at?: string }): ConversationParticipantSession {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO conversation_participant_session (
+        conversation_id, employee_id, role, session_file, workspace, pi_session_id,
+        employee_version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, employee_id) DO UPDATE SET
+        role = excluded.role,
+        session_file = excluded.session_file,
+        workspace = excluded.workspace,
+        pi_session_id = excluded.pi_session_id,
+        employee_version = excluded.employee_version,
+        updated_at = excluded.updated_at
+    `).run(
+      input.conversation_id, input.employee_id, input.role, input.session_file, input.workspace,
+      input.pi_session_id ?? null, input.employee_version,
+      input.created_at ?? now, input.updated_at ?? now,
+    );
+    return this.getConversationParticipant(input.conversation_id, input.employee_id)!;
+  }
+
+  deleteConversationParticipants(conversationId: string): void {
+    this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(conversationId);
+  }
+
+  upsertConversationEntrySource(input: Omit<ConversationEntrySource, "created_at"> & { created_at?: string }): ConversationEntrySource {
+    const createdAt = input.created_at ?? new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO conversation_entry_source (conversation_id, employee_id, pi_entry_id, logical_message_id, source_type, source_id, source_display_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, employee_id, pi_entry_id) DO UPDATE SET
+        logical_message_id = excluded.logical_message_id,
+        source_type = excluded.source_type,
+        source_id = excluded.source_id,
+        source_display_name = excluded.source_display_name
+    `).run(input.conversation_id, input.employee_id, input.pi_entry_id, input.logical_message_id, input.source_type, input.source_id, input.source_display_name ?? null, createdAt);
+    return this.getConversationEntrySource(input.conversation_id, input.employee_id, input.pi_entry_id)!;
+  }
+
+  getConversationEntrySource(conversationId: string, employeeId: string, piEntryId: string): ConversationEntrySource | undefined {
+    return this.db.prepare(`
+      SELECT conversation_id, employee_id, pi_entry_id, logical_message_id, source_type, source_id, source_display_name, created_at
+      FROM conversation_entry_source WHERE conversation_id = ? AND employee_id = ? AND pi_entry_id = ?
+    `).get(conversationId, employeeId, piEntryId) as ConversationEntrySource | undefined;
   }
 
   createLocalFile(input: {
@@ -708,6 +828,8 @@ export class AgentSqliteStore {
           'cost_minor', json_extract(usage_summary_outbox.payload_json, '$.cost_minor') + json_extract(excluded.payload_json, '$.cost_minor'),
           'currency', json_extract(usage_summary_outbox.payload_json, '$.currency'),
           'duration_ms_total', json_extract(usage_summary_outbox.payload_json, '$.duration_ms_total') + json_extract(excluded.payload_json, '$.duration_ms_total'),
+          'pricing_version', json_extract(usage_summary_outbox.payload_json, '$.pricing_version'),
+          'pricing_status', json_extract(usage_summary_outbox.payload_json, '$.pricing_status'),
           'run_count', json_extract(usage_summary_outbox.payload_json, '$.run_count') + json_extract(excluded.payload_json, '$.run_count'),
           'token_total', json_extract(usage_summary_outbox.payload_json, '$.token_total') + json_extract(excluded.payload_json, '$.token_total'),
           'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),

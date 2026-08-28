@@ -3,8 +3,19 @@ import { createConversation, type Conversation } from "../chat/useChatApi";
 
 export interface SolutionProjection {
   solution_instance_id: string;
+  solution_id?: string;
   display_name: string;
+  description?: string;
+  icon?: string;
+  tags?: string[];
   version: string;
+  status?: string;
+  coordinator_instructions?: string;
+  workflow_skill_ref?: Record<string, unknown> | null;
+  output_requirements?: string;
+  config_version?: number;
+  /** New Manager projection; optional while older deployments are rolling forward. */
+  coordinator_employee_id?: string | null;
   expert_employee_ids?: string[];
 }
 
@@ -20,6 +31,7 @@ export interface LoadedExpertProjection {
   version: string;
   handle: string;
   display_name: string;
+  avatar_url?: string | null;
   synced_at?: string | null;
   revoked: boolean;
   model_policy?: ModelPolicy | null;
@@ -29,6 +41,7 @@ export interface GroupExpert {
   handle: string;
   employee_id?: string;
   display_name?: string;
+  avatar_url?: string | null;
   system_prompt?: string | null;
   model?: string | null;
 }
@@ -66,14 +79,15 @@ export function createGroupConversation(
   input: {
     title?: string | null;
     solution_instance_id?: string | null;
-    coordinator_employee_id: string;
+    /** Required only for free groups; solution groups are server-owned. */
+    coordinator_employee_id?: string;
   },
 ): Promise<Conversation | null> {
   return createConversation(client, {
     title: input.title,
     kind: "group",
     collaboration_mode: input.solution_instance_id ? "orchestrated" : "free",
-    coordinator_employee_id: input.coordinator_employee_id,
+    ...(input.coordinator_employee_id ? { coordinator_employee_id: input.coordinator_employee_id } : {}),
     solution_instance_id: input.solution_instance_id,
   });
 }

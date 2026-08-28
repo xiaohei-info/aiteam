@@ -30,12 +30,9 @@ export type UpdateExpertTemplateChanges = {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  default_model?: string;
-  skill_ids?: string[];
-  tags?: string[];
+  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
+  platform_skill_refs?: { skill_id: string; version: string; content_hash: string }[];
   description?: string;
-  initial_memories?: Record<string, unknown>[];
-  sort_order?: number;
 };
 
 export type UpdateSolutionTemplateChanges = {
@@ -44,12 +41,8 @@ export type UpdateSolutionTemplateChanges = {
   icon?: string;
   expert_template_ids?: string[];
   expert_bindings?: { template_id: string; sequence_no: number; enabled: boolean }[];
-  knowledge_refs?: string[];
-  skill_refs?: string[];
-  default_grants?: Record<string, unknown> | null;
-  planner_prompt?: string;
-  subtask_prompt?: string;
-  aggregate_prompt?: string;
+  coordinator_template_id?: string;
+  coordinator_instructions?: string;
   tags?: string[];
 };
 

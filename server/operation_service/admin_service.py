@@ -538,70 +538,106 @@ class AdminService:
 
     # ---- S04 finance ----
 
+    @staticmethod
+    def _finance_window(period: str) -> tuple[datetime | None, datetime | None]:
+        now = datetime.now(timezone.utc)
+        if period == "all":
+            return None, None
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if period == "quarter":
+            start = start.replace(month=((start.month - 1) // 3) * 3 + 1)
+        elif period == "year":
+            start = start.replace(month=1)
+        return start, None
+
+    @classmethod
+    def _in_finance_window(cls, value: datetime, period: str) -> bool:
+        start, end = cls._finance_window(period)
+        point = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return (start is None or point >= start) and (end is None or point < end)
+
+    def _usage_for_finance(self, period: str) -> dict[str, dict]:
+        usage: dict[str, dict] = {}
+        for enterprise_id, summary in self._rollup.all_summaries():
+            if not self._in_finance_window(summary.window_start, period):
+                continue
+            row = usage.setdefault(enterprise_id, {
+                "enterprise_id": enterprise_id, "run_count": 0, "token_total": 0,
+                "cost_total": Decimal("0"), "unknown_pricing_tokens": 0,
+                "unknown_pricing_runs": 0,
+            })
+            row["run_count"] += summary.run_count
+            row["token_total"] += summary.token_total
+            row["cost_total"] += summary.cost_total
+            if summary.pricing_status == "unknown":
+                row["unknown_pricing_tokens"] += summary.token_total
+                row["unknown_pricing_runs"] += summary.run_count
+        return usage
+
+    def _recharges_for_finance(self, period: str):
+        return [r for r in self._admin.list_recharges() if self._in_finance_window(r.created_at, period)]
+
     def get_finance_overview(self, period: str) -> dict:
-        total_recharged = self._admin.total_recharged_all()
-        total_tokens = 0
-        total_cost = Decimal("0")
-        for row in self._rollup.list_all():
-            total_tokens += row.token_total
-            total_cost += row.cost_total
-
-        revenue = total_recharged
-        cost = total_cost
-        profit = revenue - cost
-        margin = float(str(profit / revenue)) if revenue > 0 else 0.0
-
-        active_orgs = 0
-        for row in self._rollup.list_all():
-            if row.run_count > 0:
-                active_orgs += 1
-
-        trend = self._admin.recharge_trend(period)
-        top5 = [
-            {"org_id": s.enterprise_id, "enterprise_name": s.enterprise_name,
-             "total_recharged": str(s.total_recharged)}
-            for s in self._admin.top_consumers(5)
-        ]
+        usage = self._usage_for_finance(period)
+        recharges = self._recharges_for_finance(period)
+        total_recharged = sum((r.amount for r in recharges), Decimal("0"))
+        total_tokens = sum(row["token_total"] for row in usage.values())
+        total_cost = sum((row["cost_total"] for row in usage.values()), Decimal("0"))
+        states = {s.enterprise_id: s for s in self._admin.list_enterprises()}
+        top5 = []
+        for row in sorted(usage.values(), key=lambda item: (item["cost_total"], item["token_total"]), reverse=True)[:5]:
+            state = states.get(row["enterprise_id"])
+            top5.append({
+                "org_id": row["enterprise_id"],
+                "enterprise_name": state.enterprise_name if state else row["enterprise_id"],
+                "cost_total": str(row["cost_total"]),
+                "token_total": row["token_total"],
+                "pricing_status": "partial" if row["unknown_pricing_tokens"] else "known",
+                "unknown_pricing_tokens": row["unknown_pricing_tokens"],
+            })
 
         return {
             "period": period,
             "total_recharged": total_recharged,
             "total_tokens_billed": total_tokens,
             "total_api_cost": total_cost,
-            "gross_profit": profit,
-            "profit_margin": margin,
-            "active_orgs": active_orgs,
-            "monthly_trend": trend,
+            "unknown_pricing_tokens": sum(row["unknown_pricing_tokens"] for row in usage.values()),
+            "unknown_pricing_runs": sum(row["unknown_pricing_runs"] for row in usage.values()),
+            # Recharge is currently CNY while model cost is USD; without an FX rate
+            # subtraction would be numerically plausible but economically false.
+            "gross_profit": None,
+            "profit_margin": None,
+            "profit_status": "unavailable_currency_mismatch",
+            "revenue_currency": "CNY",
+            "cost_currency": "USD",
+            "active_orgs": sum(1 for row in usage.values() if row["run_count"] > 0),
+            "monthly_trend": self._admin.recharge_trend(period),
             "top5_consumers": top5,
         }
 
     def get_finance_reports(self, period: str) -> dict:
-        recharges = self._admin.list_recharges()
+        recharges = self._recharges_for_finance(period)
         recharge_details = [
             {"recharge_id": r.recharge_id, "enterprise_id": r.enterprise_id,
-             "amount": str(r.amount), "created_at": r.created_at.isoformat()}
+             "amount": str(r.amount), "created_at": r.created_at.isoformat(), "currency": "CNY"}
             for r in recharges
         ]
 
-        consumption_details: list[dict] = []
-        for row in self._rollup.list_all():
-            consumption_details.append({
-                "enterprise_id": row.enterprise_id,
-                "token_total": row.token_total,
-                "cost_total": str(row.cost_total),
-                "run_count": row.run_count,
-            })
-
-        total_recharged = self._admin.total_recharged_all()
-        total_cost = sum((row.cost_total for row in self._rollup.list_all()), Decimal("0"))
-        profit = total_recharged - total_cost
-        profit_details: list[dict] = [{
-            "total_revenue": str(total_recharged),
-            "total_cost": str(total_cost),
-            "gross_profit": str(profit),
-            "period": period,
+        usage = self._usage_for_finance(period)
+        consumption_details = [
+            {"enterprise_id": row["enterprise_id"], "token_total": row["token_total"],
+             "cost_total": str(row["cost_total"]), "run_count": row["run_count"],
+             "pricing_status": "partial" if row["unknown_pricing_tokens"] else "known",
+             "unknown_pricing_tokens": row["unknown_pricing_tokens"], "currency": "USD"}
+            for row in usage.values()
+        ]
+        total_recharged = sum((r.amount for r in recharges), Decimal("0"))
+        total_cost = sum((row["cost_total"] for row in usage.values()), Decimal("0"))
+        profit_details = [{
+            "total_revenue": str(total_recharged), "revenue_currency": "CNY",
+            "total_cost": str(total_cost), "cost_currency": "USD",
+            "gross_profit": None, "profit_status": "unavailable_currency_mismatch", "period": period,
         }]
-
         return {
             "recharge_details": recharge_details,
             "consumption_details": consumption_details,

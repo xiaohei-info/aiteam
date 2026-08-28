@@ -47,6 +47,8 @@ def test_upsert_settings_insert():
     assert row.enterprise_name == "New"
     assert row.contact_email == "new@test.com"
     assert row.max_employees == 50
+    insert_params = router.executed[1][1]
+    assert insert_params[-1] == "{}"
 
 
 def test_upsert_settings_update_all_fields():
@@ -77,6 +79,8 @@ def test_upsert_settings_update_all_fields():
     assert row.member_approval is False
     assert row.max_employees == 200
     assert row.features == {"sso": True}
+    update_params = router.executed[1][1]
+    assert "{\"sso\": true}" in update_params
 
 
 def test_upsert_settings_update_partial():

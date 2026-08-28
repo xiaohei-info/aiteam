@@ -15,6 +15,7 @@ from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
 from .routes_catalog_notify import router as catalog_notify_router
 from .routes_capability import build_capability_router
+from .routes_skill_market import build_skill_market_router
 from .routes_employee import build_employee_router
 from .routes_employee_bindings import build_employee_bindings_router
 from .routes_employee_prompt import build_employee_prompt_router
@@ -23,12 +24,12 @@ from .routes_knowledge_space import build_knowledge_space_router
 from .routes_knowledge_intake import build_knowledge_intake_router
 from .routes_member import router as member_router
 from .routes_provider import build_provider_credential_router
+from .routes_platform_model import build_platform_model_router
 from .routes_recruit import build_recruit_router
 from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_billing import build_billing_router
-from .routes_llm import build_llm_router
 from .routes_memory_items import build_memory_items_router
 from .routes_hindsight import build_hindsight_router
 from .hindsight_client import HindsightSettings
@@ -151,6 +152,8 @@ app.state._token_verifier = _verifier
 app.state._operator_catalog = _build_operator_catalog()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。
 app.include_router(auth_router)
+# 连接器预设/状态/测试路由必须先于 capability 的 /connectors/{catalog_id}，避免 `presets` 被当成 UUID。
+app.include_router(build_connector_ops_router(_verifier))
 # employee/expert 配置（/api/manager/employees/*，M2）。verifier 由本端持有闭包注入。
 app.include_router(build_employee_router(_verifier))
 # employee_prompt 版本管理（/api/manager/employees/{id}/prompts[|/history|/rollback]，issue #303）。verifier 由本端持有闭包注入。
@@ -168,8 +171,10 @@ app.include_router(build_knowledge_space_router(_verifier))
 app.include_router(build_knowledge_intake_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))
+app.include_router(build_skill_market_router(_verifier))
 # provider 凭据/AI Relay 管理面（/api/manager/provider-credentials/*，M5）。
 app.include_router(build_provider_credential_router(_verifier))
+app.include_router(build_platform_model_router(_verifier))
 # 招募专家/应用方案（/api/manager/recruit/*，M6，F06/F07，D12）。
 app.include_router(build_recruit_router(_verifier))
 # usage/audit rollup + 软配额治理（/api/manager/usage/*、/audits、/quota-policies/*，M8）。
@@ -185,14 +190,11 @@ app.include_router(build_in_app_notification_router(_verifier))
 # ---- 功能补全：B04/B09 账单工资+充值 ----
 app.include_router(build_billing_router(_verifier))
 # ---- 功能补全：B01 LLM Provider/Model 管理 ----
-app.include_router(build_llm_router(_verifier))
 # ---- 功能补全：B07 记忆条目管理 ----
 app.include_router(build_memory_items_router(_verifier))
 # P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
 # Manager-only because Hindsight 0.12.0 has no native bank-scoped token API.
 app.include_router(build_hindsight_router(_verifier))
-# ---- 功能补全：B05 连接器测试/状态/grants/预设 ----
-app.include_router(build_connector_ops_router(_verifier))
 # ---- 功能补全：P07 组织树/部门分配 ----
 app.include_router(build_org_router(_verifier))
 # ---- 功能补全：B08 企业设置/子管理员邀请 ----
@@ -216,6 +218,7 @@ if settings.db_url:
         member_service=MemberDeptService(repo=_rag_member_repo),
         audit_recorder=build_enterprise_audit_repository(_rag_router),
         knowledge_binding=EmployeeKnowledgeBindingRepository(_rag_router),
+        platform_catalog=app.state._operator_catalog,
     )
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
     # Load the static registry once at Manager startup and share that exact
@@ -229,6 +232,7 @@ if settings.db_url:
     _rag_service = PgManagerRagService(
         settings.db_url,
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+        enterprise_workspace=_rag_settings.workspace if _rag_settings is not None else None,
     )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,

@@ -2,7 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { normalizeRuntimeProviderConfig } from "../manager-client.js";
-import { registerRuntimeProvider } from "./model-runtime.js";
+import { registerRuntimeProvider, type RuntimeProviderConfig } from "./model-runtime.js";
+
+const pricing = {
+  pricing_version: 1, pricing_status: "known", billing_mode: "token",
+  input_usd_per_million: "0.30", output_usd_per_million: "1.20",
+  cache_read_usd_per_million: "0.06", cache_write_usd_per_million: null,
+  request_usd: null, currency: "USD", effective_from: "2026-08-24T00:00:00Z",
+} as const;
+const runtimeConfig = (overrides: Partial<RuntimeProviderConfig> = {}): RuntimeProviderConfig => ({
+  base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
+  model: "m", provider_ref: "p", provider_version: 1, model_version: 1, pricing, version: 1,
+  ...overrides,
+});
 
 test("runtime provider config is strict and registers an in-memory model/key", async () => {
   const config = normalizeRuntimeProviderConfig({
@@ -11,6 +23,9 @@ test("runtime provider config is strict and registers an in-memory model/key", a
     api_key: "runtime-secret",
     model: "minimax-m3",
     provider_ref: "newapi-main",
+    provider_version: 2,
+    model_version: 4,
+    pricing,
     version: 3,
   });
   const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
@@ -27,10 +42,7 @@ test("runtime provider registration removes partial state when registration fail
   const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
   runtime.registerProvider = () => { throw new Error("registration failed"); };
   await assert.rejects(
-    registerRuntimeProvider(runtime, {
-      base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
-      model: "m", provider_ref: "p", version: 1,
-    }, "aiteam:failed-registration"),
+    registerRuntimeProvider(runtime, runtimeConfig(), "aiteam:failed-registration"),
   );
   assert.equal(runtime.getProvider("aiteam:failed-registration"), undefined);
 });
@@ -39,10 +51,7 @@ test("runtime provider registration removes partial state when key binding fails
   const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
   runtime.setRuntimeApiKey = async () => { throw new Error("key binding failed"); };
   await assert.rejects(
-    registerRuntimeProvider(runtime, {
-      base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
-      model: "m", provider_ref: "p", version: 1,
-    }, "aiteam:failed-key"),
+    registerRuntimeProvider(runtime, runtimeConfig(), "aiteam:failed-key"),
   );
   assert.equal(runtime.getProvider("aiteam:failed-key"), undefined);
 });
@@ -51,17 +60,11 @@ test("runtime provider registration removes partial state when model lookup fail
   const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
   runtime.getModel = () => undefined;
   await assert.rejects(
-    registerRuntimeProvider(runtime, {
-      base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
-      model: "m", provider_ref: "p", version: 1,
-    }, "aiteam:failed-model"),
+    registerRuntimeProvider(runtime, runtimeConfig(), "aiteam:failed-model"),
   );
   assert.equal(runtime.getProvider("aiteam:failed-model"), undefined);
 });
 
 test("runtime config rejects unknown fields and protocols", () => {
-  assert.throws(() => normalizeRuntimeProviderConfig({
-    base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
-    model: "m", provider_ref: "p", version: 1, credential_id: "arbitrary",
-  }));
+  assert.throws(() => normalizeRuntimeProviderConfig({ ...runtimeConfig(), credential_id: "arbitrary" }));
 });

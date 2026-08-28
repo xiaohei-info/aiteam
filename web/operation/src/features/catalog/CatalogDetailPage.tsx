@@ -105,25 +105,17 @@ export function CatalogDetailPage(): ReactNode {
       const changes: Record<string, unknown> = { display_name: draft.display_name };
       if (draft.catalog_type === "expert_template") {
         changes.system_prompt = draft.system_prompt ?? "";
-        changes.default_model = draft.default_model ?? "";
         changes.category = draft.category ?? "";
         changes.avatar_url = draft.avatar_url ?? "";
         changes.description = draft.description ?? "";
-        changes.skill_ids = draft.skill_ids ?? [];
-        changes.tags = draft.tags ?? [];
-        changes.initial_memories = draft.initial_memories ?? [];
-        changes.sort_order = draft.sort_order ?? 0;
+        changes.platform_skill_refs = draft.platform_skill_refs ?? [];
+        changes.platform_model_ref = draft.platform_model_ref ?? null;
       } else {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";
         changes.expert_template_ids = draft.expert_template_ids ?? [];
-        changes.planner_template_id = draft.planner_template_id ?? "";
-        changes.knowledge_refs = draft.knowledge_refs ?? [];
-        changes.skill_refs = draft.skill_refs ?? [];
-        changes.planner_prompt = draft.planner_prompt ?? "";
-        changes.subtask_prompt = draft.subtask_prompt ?? "";
-        changes.aggregate_prompt = draft.aggregate_prompt ?? "";
-        changes.default_grants = draft.default_grants ?? null;
+        changes.coordinator_template_id = draft.coordinator_template_id ?? "";
+        changes.coordinator_instructions = draft.coordinator_instructions ?? "";
         changes.tags = draft.tags ?? [];
       }
       const updated = await api.updateEntry(catalog_type as CatalogItemType, template_id, changes);

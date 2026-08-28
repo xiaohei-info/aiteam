@@ -99,6 +99,8 @@ class UsageAuditQuotaService:
             run_count=agg["run_count"],
             token_total=agg["token_total"],
             cost_total=_to_decimal(agg["cost_total"]),
+            unknown_pricing_tokens=agg.get("unknown_pricing_tokens", 0),
+            unknown_pricing_runs=agg.get("unknown_pricing_runs", 0),
             error_count=agg["error_count"],
             duration_seconds_total=agg["duration_seconds_total"],
         )
@@ -244,6 +246,9 @@ class UsageAuditQuotaService:
             "run_count": item.get("run_count", 0),
             "token_total": item.get("token_total", 0),
             "cost_total": item.get("cost_total", Decimal("0")),
+            "pricing_version": item.get("pricing_version"),
+            "pricing_status": item.get("pricing_status", "unknown"),
+            "currency": item.get("currency", "USD"),
             "error_count": item.get("error_count", 0),
             "duration_seconds_total": item.get("duration_seconds_total", 0),
         }
@@ -313,6 +318,9 @@ def _to_usage_out(row: UsageRollupRow) -> UsageRollupOut:
         run_count=row.run_count,
         token_total=row.token_total,
         cost_total=row.cost_total,
+        pricing_version=row.pricing_version,
+        pricing_status=row.pricing_status,
+        currency=row.currency,
         error_count=row.error_count,
         duration_seconds_total=row.duration_seconds_total,
     )

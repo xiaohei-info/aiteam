@@ -180,17 +180,14 @@ def test_provider_credential_crud_e2e_and_cross_tenant_rls(
     assert r.status_code == 404
 
 
-def test_provider_credential_endpoints_unauth_503_without_db():
-    """无 DB → 503（不静默）；无 token → 401 problem+json。"""
+def test_manager_provider_truth_routes_are_removed_but_runtime_route_stays_protected():
     client = _client(db_url=None)
+    assert client.get("/api/manager/provider-credentials").status_code == 404
 
-    # 无 token
-    r = client.get("/api/manager/provider-credentials")
+    path = "/api/manager/provider-credentials/runtime-config"
+    r = client.post(path, json={"employee_id": "e1"})
     assert r.status_code == 401
-    assert r.headers["content-type"].startswith("application/problem+json")
-
-    # 有 token 但无 DB（inmem 签，无 admin_url）
     tok = _token("t1", ["owner"])
-    r = client.get("/api/manager/provider-credentials", headers={"Authorization": f"Bearer {tok}"})
+    r = client.post(path, json={"employee_id": "e1"}, headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 503
     assert r.json()["code"] == "manager_db_unconfigured"

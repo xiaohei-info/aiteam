@@ -5,8 +5,13 @@ export interface FinanceOverview {
   total_recharged: number | string;
   total_tokens_billed: number;
   total_api_cost: number | string;
-  gross_profit: number | string;
-  profit_margin: number;
+  unknown_pricing_tokens?: number;
+  unknown_pricing_runs?: number;
+  gross_profit: number | string | null;
+  profit_margin: number | null;
+  profit_status?: string;
+  revenue_currency?: "CNY";
+  cost_currency?: "USD";
   active_orgs: number;
   monthly_trend: Array<Record<string, unknown>>;
   top5_consumers: Array<Record<string, unknown>>;

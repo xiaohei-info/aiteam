@@ -8,7 +8,7 @@ tenant_id 只从 ctx 读，SQL 不接受调用方手写 tenant 过滤字符串�
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -34,12 +34,16 @@ class SolutionInstanceRow:
     display_name: str
     status: str
     expert_employee_ids: list[str]
-    knowledge_refs: list[str]
-    skill_refs: list[str]
-    planner_prompt: str = ""
-    subtask_prompt: str = ""
-    aggregate_prompt: str = ""
-    default_grants_meta: dict | None = None
+    coordinator_employee_id: str | None = None
+    coordinator_instructions: str = ""
+    workflow_skill_ref: dict | None = None
+    output_requirements: str = ""
+    knowledge_refs: list[str] = field(default_factory=list)  # Deprecated compatibility projection.
+    skill_refs: list[str] = field(default_factory=list)  # Deprecated compatibility projection.
+    planner_prompt: str = ""  # Deprecated compatibility projection.
+    subtask_prompt: str = ""  # Deprecated compatibility projection.
+    aggregate_prompt: str = ""  # Deprecated compatibility projection.
+    default_grants_meta: dict | None = None  # Deprecated; grants are request-scoped.
     template_meta: dict | None = None
     config_version: int = 1
     created_at: datetime | None = None
@@ -66,28 +70,40 @@ class RecruitEventRow:
 _SOLUTION_COLUMNS = (
     "id, solution_id, solution_version, display_name, status, expert_employee_ids, "
     "knowledge_refs, skill_refs, planner_prompt, subtask_prompt, aggregate_prompt, "
-    "default_grants_meta, template_meta, config_version, created_at, updated_at"
+    "default_grants_meta, template_meta, config_version, created_at, updated_at, "
+    "coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements"
 )
+
+
+def _row_value(row: Any, index: int, default: Any = None) -> Any:
+    try:
+        return row[index]
+    except (IndexError, KeyError, TypeError):
+        return default
 
 
 def _row_to_solution(row: Any) -> SolutionInstanceRow:
     return SolutionInstanceRow(
-        id=_s(row[0]),
-        solution_id=row[1],
-        solution_version=row[2],
-        display_name=row[3],
-        status=row[4],
-        expert_employee_ids=_sa(row[5]),
-        knowledge_refs=list(row[6] or []),
-        skill_refs=list(row[7] or []),
-        planner_prompt=row[8] or "",
-        subtask_prompt=row[9] or "",
-        aggregate_prompt=row[10] or "",
-        default_grants_meta=row[11],
-        template_meta=row[12],
-        config_version=int(row[13] or 1),
-        created_at=row[14],
-        updated_at=row[15],
+        id=_s(_row_value(row, 0, "")),
+        solution_id=_row_value(row, 1, ""),
+        solution_version=_row_value(row, 2, ""),
+        display_name=_row_value(row, 3, ""),
+        status=_row_value(row, 4, "applied"),
+        expert_employee_ids=_sa(_row_value(row, 5, [])),
+        knowledge_refs=list(_row_value(row, 6, []) or []),
+        skill_refs=list(_row_value(row, 7, []) or []),
+        planner_prompt=_row_value(row, 8, "") or "",
+        subtask_prompt=_row_value(row, 9, "") or "",
+        aggregate_prompt=_row_value(row, 10, "") or "",
+        default_grants_meta=_row_value(row, 11),
+        template_meta=_row_value(row, 12),
+        config_version=int(_row_value(row, 13, 1) or 1),
+        created_at=_row_value(row, 14),
+        updated_at=_row_value(row, 15),
+        coordinator_employee_id=(str(_row_value(row, 16)) if _row_value(row, 16) is not None else None),
+        coordinator_instructions=_row_value(row, 17, "") or "",
+        workflow_skill_ref=_row_value(row, 18),
+        output_requirements=_row_value(row, 19, "") or "",
     )
 
 
@@ -160,13 +176,17 @@ class RecruitRepository:
         solution_version: str,
         display_name: str,
         expert_employee_ids: list[str],
-        knowledge_refs: list[str],
-        skill_refs: list[str],
+        knowledge_refs: list[str] | None = None,
+        skill_refs: list[str] | None = None,
         planner_prompt: str = "",
         subtask_prompt: str = "",
         aggregate_prompt: str = "",
         default_grants_meta: dict | None = None,
         template_meta: dict | None = None,
+        coordinator_employee_id: str | None = None,
+        coordinator_instructions: str = "",
+        workflow_skill_ref: dict | None = None,
+        output_requirements: str = "",
         status: str = "applied",
     ) -> SolutionInstanceRow:
         """在本 tenant 建方案实例（展开后的真相）。tenant_id 取自 ctx（D22）。"""
@@ -177,19 +197,23 @@ class RecruitRepository:
                     tenant_id, solution_id, solution_version, display_name, status,
                     expert_employee_ids, knowledge_refs, skill_refs,
                     planner_prompt, subtask_prompt, aggregate_prompt,
-                    default_grants_meta, template_meta, config_version
+                    default_grants_meta, template_meta, config_version,
+                    coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING """ + _SOLUTION_COLUMNS,
                 (
                     ctx.tenant_id, solution_id, solution_version, display_name, status,
                     [eid for eid in expert_employee_ids],
-                    json.dumps(knowledge_refs), json.dumps(skill_refs),
+                    json.dumps(knowledge_refs or []), json.dumps(skill_refs or []),
                     planner_prompt, subtask_prompt, aggregate_prompt,
                     json.dumps(default_grants_meta) if default_grants_meta is not None else None,
                     json.dumps(template_meta) if template_meta is not None else None,
                     1,
+                    coordinator_employee_id, coordinator_instructions,
+                    json.dumps(workflow_skill_ref) if workflow_skill_ref is not None else None,
+                    output_requirements,
                 ),
             ).fetchone()
         return _row_to_solution(row)
@@ -201,6 +225,11 @@ class RecruitRepository:
                 (instance_id,),
             ).fetchone()
         return _row_to_solution(row) if row is not None else None
+
+    def delete_solution_instance(self, ctx: TenantContext, *, instance_id: str) -> bool:
+        with self._router.session(ctx) as s:
+            cur = s.execute("DELETE FROM solution_instance WHERE id = %s", (instance_id,))
+            return cur.rowcount > 0
 
     def find_solution_instance(
         self, ctx: TenantContext, *, solution_id: str, solution_version: str
@@ -233,6 +262,10 @@ class RecruitRepository:
         planner_prompt: str | None = None,
         subtask_prompt: str | None = None,
         aggregate_prompt: str | None = None,
+        coordinator_employee_id: str | None = None,
+        coordinator_instructions: str | None = None,
+        workflow_skill_ref: dict | None = None,
+        output_requirements: str | None = None,
         status: str | None = None,
     ) -> SolutionInstanceRow | None:
         """局部更新方案实例（仅传字段被写入；tenant_id 取自 ctx，D22）。
@@ -262,6 +295,18 @@ class RecruitRepository:
         if aggregate_prompt is not None:
             sets.append("aggregate_prompt = %s")
             params.append(aggregate_prompt)
+        if coordinator_employee_id is not None:
+            sets.append("coordinator_employee_id = %s")
+            params.append(coordinator_employee_id)
+        if coordinator_instructions is not None:
+            sets.append("coordinator_instructions = %s")
+            params.append(coordinator_instructions)
+        if workflow_skill_ref is not None:
+            sets.append("workflow_skill_ref = %s")
+            params.append(json.dumps(workflow_skill_ref))
+        if output_requirements is not None:
+            sets.append("output_requirements = %s")
+            params.append(output_requirements)
         if status is not None:
             sets.append("status = %s")
             params.append(status)

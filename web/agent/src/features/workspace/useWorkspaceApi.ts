@@ -1,12 +1,7 @@
 import type { AgentApiClient } from "../../lib/api-client";
-import { listConversations as listChatConversations } from "../chat/useChatApi";
+import { listConversations as listChatConversations, type Conversation } from "../chat/useChatApi";
 
-export interface Conversation {
-  id: string;
-  title: string | null;
-  state: string;
-  updated_at: string;
-}
+export type { Conversation };
 
 export async function listConversations(client: AgentApiClient): Promise<Conversation[]> {
   const result = await listChatConversations(client);

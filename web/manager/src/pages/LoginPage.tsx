@@ -167,7 +167,7 @@ export function LoginPage(): React.ReactNode {
           >
             <VStack gap={4}>
               <Heading level={1}>{i18n.t("manager.login.owner_reset.heading")}</Heading>
-              <Text type="supporting">{`${pendingReset.tenantId} · ${pendingReset.account}`}</Text>
+              <Text type="supporting">账号：{pendingReset.account}</Text>
               <FormLayout>
                 <TextInput
                   label={i18n.t("manager.login.new_password")}

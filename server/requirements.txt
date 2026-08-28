@@ -16,3 +16,5 @@ diff-cover>=9.2
 pytest-cov>=5.0
 # agent_service 使用 UploadFile = File(...) 需要 python-multipart
 python-multipart>=0.0.20
+# Manager knowledge intake supports PDF text extraction in the LightRAG pipeline.
+PyPDF2>=3.0,<4

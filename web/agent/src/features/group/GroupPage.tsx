@@ -5,7 +5,7 @@
  *   左：ConversationList（复用，headerLabel="群聊"）
  *   右：TimelineView（复用——消费本地 Pi conversation entries 与 event stream）
  *       + GroupExpertRoster（只读 roster 投影）
- *       + MentionComposer（@提及 -> coordinator prompt）
+ *       + MessageComposer（与私聊共用 prompt/entries/SSE/abort/附件链路）
  *
  * 展示态不入持久化主状态（D6）：selected / roster / lastTriggered / lastIgnored /
  * dispatchSignal 均为本组件局部运行态，不写入 store、不落库。
@@ -14,14 +14,16 @@
  * 本卡直接取用。
  *
  * roster 点击 -> 输入框追加：用 window CustomEvent（"group:append-mention"）解耦，
- * MentionComposer 内部 useEffect 监听，避免组件间 ref/状态提升耦合。
+ * MessageComposer 统一监听并负责真正的 prompt 提交。
  *
- * 建群入口只在本地保存会话索引；方案内容是只读授权投影，不向 Agent 发送 planner payload。
+ * 建群入口只提交 solution_instance_id；coordinator/roster 由授权投影决定，不由浏览器提交。
  */
 
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { useApp } from "../../lib/app-context";
+import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -29,15 +31,17 @@ import { Dialog } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { List, ListItem } from "@astryxdesign/core/List";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Text } from "@astryxdesign/core/Text";
 import { Toolbar } from "@astryxdesign/core/Toolbar";
 import { VStack } from "@astryxdesign/core/VStack";
 import { ConversationList } from "../chat/ConversationList";
+import { MessageComposer } from "../chat/MessageComposer";
 import { TimelineView } from "../chat/TimelineView";
 import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
-import { MentionComposer } from "./MentionComposer";
 import {
   createGroupConversation,
   listLoadedExperts,
@@ -51,22 +55,36 @@ import {
  * 把 LoadedExpertProjection 投影成群聊编排所需的 GroupExpert。
  * handle 用 display_name（@提及入口友好）；模型策略由 Agent 的 Pi 会话快照提供。
  */
+const formatConversationTime = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+};
+
+const isGroupConversation = (conversation: Conversation) => conversation.kind === "group" || (conversation.kind === undefined && conversation.entry_employee_id == null);
+
 function toGroupExpert(p: {
   handle: string;
   display_name: string;
   employee_id?: string | null;
+  avatar_url?: string | null;
 }): GroupExpert {
   return {
     handle: p.handle,
     display_name: p.display_name,
     ...(p.employee_id ? { employee_id: p.employee_id } : {}),
+    ...(p.avatar_url ? { avatar_url: p.avatar_url } : {}),
   };
 }
 
 export function GroupPage() {
   const { client } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedConversationId = searchParams.get("conversation_id");
   const [selected, setSelected] = useState<Conversation | null>(null);
-  // 已装载专家原始投影列表；employee_id 用于选择 coordinator。
+  const [prompting, setPrompting] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  // 已装载专家原始投影列表；方案群聊只允许在本地授权 roster 内提及。
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [rosterError, setRosterError] = useState<string | null>(null);
   // A submitted prompt increments this signal so the conversation list and local Pi entries refresh.
@@ -97,24 +115,37 @@ export function GroupPage() {
   }, [client]);
 
   const handleSelect = useCallback((conv: Conversation) => {
+    setPrompting(false);
+    setHistoryOpen(false);
     setSelected(conv);
-  }, []);
-
-  // 全部已装载专家 -> GroupExpert roster。
-  const roster = useMemo(
-    () => experts.filter((p) => !p.revoked).map(toGroupExpert),
-    [experts],
-  );
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("conversation_id", conv.id);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   // Filter only when the read-only solution projection explicitly supplies member IDs;
   // otherwise keep the full locally authorized roster instead of inventing a scope.
-  const rosterForSelected = useMemo(() => {
+  useEffect(() => {
+    if (!requestedConversationId || selected?.id === requestedConversationId) return;
+    const target = conversations.find((conversation) => conversation.id === requestedConversationId);
+    if (target) handleSelect(target);
+  }, [conversations, handleSelect, requestedConversationId, selected?.id]);
+
+  const participantExperts = useMemo(() => {
     const solutionId = selected?.solution_instance_id;
     const solution = solutionId ? solutions?.find((item) => item.solution_instance_id === solutionId) : undefined;
-    if (!solution || !Array.isArray(solution.expert_employee_ids)) return roster;
+    const authorized = experts.filter((expert) => !expert.revoked);
+    if (!solution || !Array.isArray(solution.expert_employee_ids)) return authorized;
     const allowed = new Set(solution.expert_employee_ids);
-    return roster.filter((expert) => expert.employee_id !== undefined && allowed.has(expert.employee_id));
-  }, [roster, selected?.solution_instance_id, solutions]);
+    return authorized.filter((expert) => allowed.has(expert.employee_id));
+  }, [experts, selected?.solution_instance_id, solutions]);
+
+  const rosterForSelected = useMemo(
+    () => participantExperts.map(toGroupExpert),
+    [participantExperts],
+  );
 
   const handleDispatched = useCallback(() => {
     setDispatchSignal((n) => n + 1);
@@ -156,16 +187,9 @@ export function GroupPage() {
     if (!sol) return;
     setCreating(true);
     try {
-      const coordinator = sol.expert_employee_ids?.map((id) => experts.find((expert) => expert.employee_id === id)).find(Boolean)
-        ?? experts.find((expert) => !expert.revoked);
-      if (!coordinator) {
-        setSolutionsError("暂无可授权的群聊协调专家");
-        return;
-      }
       const conv = await createGroupConversation(client, {
         solution_instance_id: sol.solution_instance_id,
         title: sol.display_name || "方案群聊",
-        coordinator_employee_id: coordinator.employee_id,
       });
       if (!conv) {
         setSolutionsError("创建群聊返回为空");
@@ -173,13 +197,13 @@ export function GroupPage() {
       }
       setShowCreateModal(false);
       setDispatchSignal((n) => n + 1);
-      setSelected(conv);
+      handleSelect(conv);
     } catch (err) {
       setSolutionsError("创建群聊失败");
     } finally {
       setCreating(false);
     }
-  }, [selectedSolutionId, solutions, experts, client]);
+  }, [client, handleSelect, selectedSolutionId, solutions]);
 
   const handleCreateFree = useCallback(async () => {
     setFreeCreateError(null);
@@ -201,13 +225,46 @@ export function GroupPage() {
         return;
       }
       setDispatchSignal((n) => n + 1);
-      setSelected(conv);
+      handleSelect(conv);
     } catch (err) {
       setFreeCreateError("创建自由群聊失败");
     } finally {
       setFreeCreating(false);
     }
-  }, [client, experts]);
+  }, [client, experts, handleSelect]);
+
+  const handleCreateForSelected = useCallback(async () => {
+    if (!selected || creating) return;
+    setCreating(true);
+    setSolutionsError(null);
+    try {
+      const created = await createGroupConversation(client, {
+        title: selected.title ?? "群聊",
+        ...(selected.solution_instance_id
+          ? { solution_instance_id: selected.solution_instance_id }
+          : selected.coordinator_employee_id
+            ? { coordinator_employee_id: selected.coordinator_employee_id }
+            : {}),
+      });
+      if (!created) throw new Error("建会话返回为空");
+      handleSelect(created);
+      setDispatchSignal((signal) => signal + 1);
+    } catch (err) {
+      setSolutionsError(err instanceof Error ? err.message : "创建群聊失败");
+    } finally {
+      setCreating(false);
+    }
+  }, [client, creating, handleSelect, selected]);
+
+  const history = useMemo(() => {
+    if (!selected) return [];
+    if (selected.solution_instance_id) {
+      return conversations.filter((conversation) => conversation.solution_instance_id === selected.solution_instance_id);
+    }
+    return conversations.filter((conversation) => conversation.id === selected.id);
+  }, [conversations, selected]);
+
+  const conversationTitle = selected?.title ?? "群聊";
 
   return (
     <HStack gap={4} height="100%" minHeight={0}>
@@ -217,8 +274,10 @@ export function GroupPage() {
         onSelect={handleSelect}
         refreshSignal={dispatchSignal}
         headerLabel="群聊"
+        groupByGroup
         // 群聊页只列 kind=group 会话；私聊也有 entry_employee_id，不能靠员工字段判型。
-        filter={(c) => c.kind === "group" || (c.kind === undefined && c.entry_employee_id == null)}
+        filter={isGroupConversation}
+        onItemsLoaded={setConversations}
       />
       <VStack gap={4} width="100%" minHeight={0}>
         <Toolbar
@@ -246,26 +305,50 @@ export function GroupPage() {
       <Card role="region" aria-label="群聊协作工作区" width="100%" padding={0}>
         {selected ? (
           <VStack gap={2} padding={4}>
+            <HStack justify="between" align="center" wrap="wrap">
+              <Heading level={2}>{conversationTitle}</Heading>
+              <HStack gap={1} role="group" aria-label="群聊操作">
+                <Button
+                  label={`与${conversationTitle}新建对话`}
+                  icon={<span aria-hidden="true">＋</span>}
+                  isIconOnly
+                  tooltip="新建对话"
+                  variant="ghost"
+                  size="sm"
+                  isLoading={creating}
+                  onClick={() => void handleCreateForSelected()}
+                />
+                <Button
+                  label="历史对话"
+                  icon={<Icon icon="clock" size="sm" />}
+                  isIconOnly
+                  tooltip="历史对话"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setHistoryOpen(true)}
+                />
+              </HStack>
+            </HStack>
             <Toolbar
-              label="群聊专家与编排状态"
+              label="群聊专家 roster"
               startContent={<GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />}
-              endContent={
-                <VStack gap={1} align="end">
-                  <Text type="supporting" as="div" aria-live="polite">
-                    @提及将由 coordinator Conversation 处理
-                  </Text>
-                </VStack>
-              }
+              endContent={<Text type="supporting" as="div" aria-live="polite">不 @ 时由协调专家响应，@ 谁由谁响应</Text>}
             />
             <TimelineView
               client={client}
               conversationId={selected.id}
               refreshSignal={dispatchSignal}
+              onPromptingChange={setPrompting}
+              sourceExperts={participantExperts}
             />
-            <MentionComposer
+            <MessageComposer
               conversationId={selected.id}
-              experts={rosterForSelected}
-              onDispatched={handleDispatched}
+              conversation={selected}
+              onConversationChanged={handleSelect}
+              isPrompting={prompting}
+              onPromptingChange={setPrompting}
+              onSent={handleDispatched}
+              mentionRoster={participantExperts}
             />
           </VStack>
         ) : (
@@ -290,8 +373,8 @@ export function GroupPage() {
         <VStack gap={4}>
             <Heading level={2}>从解决方案创建群聊</Heading>
             <Text as="p">
-              选择一个已授权方案实例创建群聊；消息仍由本地 coordinator 的 Pi
-              conversation/tool/event 语义处理，用户端不提交方案编排 payload。
+              选择一个已授权方案实例创建群聊；服务端会根据方案授权投影确定参与专家和协调专家，
+              用户端只提交方案实例 ID。
             </Text>
             {solutions === null ? (
               <Text type="supporting">加载中…</Text>
@@ -323,6 +406,48 @@ export function GroupPage() {
             </HStack>
         </VStack>
       </Dialog>
+
+      {selected && historyOpen ? (
+        <Dialog
+          isOpen
+          purpose="info"
+          width={560}
+          maxHeight="80vh"
+          aria-label="群聊历史对话"
+          onOpenChange={(open) => setHistoryOpen(open)}
+        >
+          <VStack gap={3}>
+            <HStack justify="between" align="center">
+              <Heading level={2}>历史对话</Heading>
+              <Button
+                label="关闭历史对话"
+                icon={<Icon icon="close" size="sm" />}
+                isIconOnly
+                variant="ghost"
+                size="sm"
+                onClick={() => setHistoryOpen(false)}
+              />
+            </HStack>
+            {history.length === 0 ? (
+              <EmptyState title="暂无历史对话" isCompact />
+            ) : (
+              <List aria-label="群聊历史对话" density="balanced" hasDividers>
+                {history.map((conversation) => (
+                  <ListItem
+                    key={conversation.id}
+                    label={conversation.title ?? conversation.id}
+                    description={formatConversationTime(conversation.updated_at)}
+                    endContent={conversation.id === selected.id ? <Badge label="当前" variant="info" /> : undefined}
+                    isSelected={conversation.id === selected.id}
+                    data-testid={`group-history-${conversation.id}`}
+                    onClick={() => handleSelect(conversation)}
+                  />
+                ))}
+              </List>
+            )}
+          </VStack>
+        </Dialog>
+      ) : null}
     </HStack>
   );
 }

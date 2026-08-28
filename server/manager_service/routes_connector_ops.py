@@ -11,12 +11,13 @@ from fastapi import APIRouter, Depends, Request
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
-from shared.contracts.envelope import Envelope
+from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .connector_ops_repository import ConnectorOpsRepository
 from .connector_ops_service import ConnectorOpsService
+from .connector_probe import known_auth_scheme_for_preset
 from .routes_connector_schemas import (
     ConnectorGrantsPatch,
     ConnectorPreset,
@@ -47,9 +48,9 @@ def build_connector_ops_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get("/presets", summary="列出连接器预设", operation_id="manager_connector_presets")
-    async def list_presets(claims: TokenClaims = Depends(require)) -> list[ConnectorPreset]:
+    async def list_presets(claims: TokenClaims = Depends(require)) -> ListEnvelope[ConnectorPreset]:
         tenant_context_from(claims)
-        return PRESETS
+        return ListEnvelope(data=PRESETS)
 
     @router.get("/{connector_id}/status", summary="连接器健康状态", operation_id="manager_connector_status")
     async def get_status(
@@ -73,9 +74,10 @@ def build_connector_ops_router(verifier) -> APIRouter:
         ctx = tenant_context_from(claims)
         svc = _service(request)
         body = body or ConnectorTestIn()
+        preset = next((item for item in PRESETS if item.preset_id == connector_id), None)
         data = svc.test_connector(
             ctx, connector_id,
-            auth_scheme=body.auth_scheme,
+            auth_scheme=body.auth_scheme or known_auth_scheme_for_preset(preset.type if preset else None),
             config_schema_json=body.config_schema_json,
         )
         return Envelope(data=ConnectorTestResult(**data))
@@ -86,9 +88,9 @@ def build_connector_ops_router(verifier) -> APIRouter:
         body: ConnectorGrantsPatch,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> dict:
+    ) -> Envelope[dict]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
-        return svc.set_grants(ctx, connector_id, body.employee_ids, body.action)
+        return Envelope(data=svc.set_grants(ctx, connector_id, body.employee_ids, body.action))
 
     return router

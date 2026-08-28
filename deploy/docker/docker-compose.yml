@@ -66,6 +66,11 @@ services:
       # These are Manager-side only; do not copy them into the Agent service.
       API_KEY: ${LIGHTRAG_API_KEY:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      # LightRAG native UI/API account authentication; leave empty only for
+      # explicitly isolated local development, never for production.
+      AUTH_ACCOUNTS: ${LIGHTRAG_AUTH_ACCOUNTS:-}
+      TOKEN_SECRET: ${LIGHTRAG_TOKEN_SECRET:-}
+      JWT_ALGORITHM: ${LIGHTRAG_JWT_ALGORITHM:-HS256}
       POSTGRES_HOST: lightrag-postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${LIGHTRAG_DB_USER:-lightrag}
@@ -78,6 +83,10 @@ services:
       LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
       EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-1024}
       LOG_LEVEL: ${LIGHTRAG_LOG_LEVEL:-INFO}
+    ports:
+      # Native LightRAG UI/API link target; keep loopback by default and open it
+      # only on a protected Manager host when direct browser access is required.
+      - "${LIGHTRAG_BIND_HOST:-127.0.0.1}:${LIGHTRAG_PORT:-9621}:9621"
     expose:
       - "9621"
     healthcheck:
@@ -85,6 +94,77 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  # Platform-managed AI Relay. It is a first-class AI Team component; its
+  # PostgreSQL/Redis and all management/upstream credentials stay private. The
+  # UI/API host binding remains loopback by default; set *_BIND_HOST behind a
+  # firewall/TLS boundary when the native UI is opened from a browser.
+  newapi-postgres:
+    profiles: [newapi]
+    image: ${NEWAPI_POSTGRES_IMAGE:-postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229}
+    container_name: aiteam-newapi-pg
+    environment:
+      POSTGRES_USER: ${NEWAPI_DB_USER:-newapi}
+      POSTGRES_PASSWORD: ${NEWAPI_DB_PASSWORD:-newapi_test}
+      POSTGRES_DB: ${NEWAPI_DB_NAME:-newapi}
+    volumes:
+      - newapi_pgdata:/var/lib/postgresql/data
+    networks: [newapi-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  newapi-redis:
+    profiles: [newapi]
+    image: ${NEWAPI_REDIS_IMAGE:-redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf}
+    container_name: aiteam-newapi-redis
+    command: ["redis-server", "--requirepass", "${NEWAPI_REDIS_PASSWORD:-newapi_test}"]
+    volumes:
+      - newapi_redisdata:/data
+    networks: [newapi-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${NEWAPI_REDIS_PASSWORD:-newapi_test}' ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  newapi:
+    profiles: [newapi]
+    image: ${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}
+    container_name: aiteam-newapi
+    restart: unless-stopped
+    command: --log-dir /app/logs
+    depends_on:
+      newapi-postgres:
+        condition: service_healthy
+      newapi-redis:
+        condition: service_healthy
+    ports:
+      # Native NewAPI UI link target; keep loopback by default and open it only
+      # behind the Operator host firewall/TLS boundary when direct access is required.
+      - "${NEWAPI_BIND_HOST:-127.0.0.1}:${NEWAPI_PORT:-9300}:3000"
+    environment:
+      SQL_DSN: postgresql://${NEWAPI_DB_USER:-newapi}:${NEWAPI_DB_PASSWORD:-newapi_test}@newapi-postgres:5432/${NEWAPI_DB_NAME:-newapi}
+      REDIS_CONN_STRING: redis://:${NEWAPI_REDIS_PASSWORD:-newapi_test}@newapi-redis:6379
+      SESSION_SECRET: ${NEWAPI_SESSION_SECRET:-dev-newapi-session-secret-change-me}
+      CRYPTO_SECRET: ${NEWAPI_CRYPTO_SECRET:-dev-newapi-crypto-secret-change-me}
+      TZ: ${NEWAPI_TZ:-UTC}
+      ERROR_LOG_ENABLED: "false"
+      BATCH_UPDATE_ENABLED: "false"
+      SESSION_COOKIE_SECURE: "false"
+      TRUSTED_PROXIES: none
+      NODE_NAME: aiteam-newapi
+    volumes:
+      - newapi_data:/data
+      - newapi_logs:/app/logs
+    networks: [default, newapi-internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   operation:
     build:
@@ -107,6 +187,15 @@ services:
       APP_RW_PASSWORD: aiteam_test
       # 云侧服务间调用：运营端调企业端开通 tenant。
       MANAGER_URL: http://manager:8000
+      # Operator-only internal NewAPI management surface. Never copy admin credentials to Manager/Agent.
+      # NEWAPI_URL is the environment-level base address, like HINDSIGHT_URL/LIGHTRAG_URL.
+      NEWAPI_URL: ${NEWAPI_URL:-http://newapi:3000}
+      NEWAPI_ADMIN_BASE_URL: ${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}}
+      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}/v1}
+      MODEL_PRICING_URL: ${MODEL_PRICING_URL:-https://models.dev/api.json}
+      NEWAPI_ADMIN_USER_ID: ${NEWAPI_ADMIN_USER_ID:-}
+      NEWAPI_ADMIN_TOKEN: ${NEWAPI_ADMIN_TOKEN:-}
+      OPERATION_PROVIDER_CREDENTIAL_KEY: ${OPERATION_PROVIDER_CREDENTIAL_KEY:-}
       # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
       SERVICE_TOKEN: dev-service-token-placeholder
       SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
@@ -216,7 +305,19 @@ services:
       postgres:
         condition: service_healthy
 
+networks:
+  newapi-internal:
+    internal: true
+
 volumes:
+  newapi_pgdata:
+    name: ${NEWAPI_PG_VOLUME:-aiteam_newapi_pg_data_${AITEAM_ENV:-dev}}
+  newapi_redisdata:
+    name: ${NEWAPI_REDIS_VOLUME:-aiteam_newapi_redis_data_${AITEAM_ENV:-dev}}
+  newapi_data:
+    name: ${NEWAPI_DATA_VOLUME:-aiteam_newapi_data_${AITEAM_ENV:-dev}}
+  newapi_logs:
+    name: ${NEWAPI_LOG_VOLUME:-aiteam_newapi_logs_${AITEAM_ENV:-dev}}
   lightrag_pgdata:
     name: ${LIGHTRAG_PG_VOLUME:-aiteam_lightrag_pg_data_${AITEAM_ENV:-dev}}
   # 实际卷名由 ENV 的 MANAGER_DATA_VOLUME 决定（ctl.sh 缺省注入 managerdata_<env>，

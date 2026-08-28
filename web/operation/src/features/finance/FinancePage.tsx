@@ -20,6 +20,17 @@ const PERIODS = [
 ];
 interface ConsumerRow extends Record<string, unknown> { id: string; rank: number; name: string; amount: string }
 
+function fmtTokens(value: number): string {
+  if (value < 1_000_000) return value.toLocaleString("zh-CN");
+  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  return `${(value / 1_000_000_000).toFixed(2)}B`;
+}
+
+function fmtUsd(value: number | string | null): string {
+  const usd = Number(value);
+  return Number.isFinite(usd) ? `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` : "—";
+}
+
 function Metric({ label, value }: { label: string; value: string }): ReactNode {
   return <Card role="region" aria-label={`${label}：${value}`}><VStack gap={2}><Text type="supporting" color="secondary">{label}</Text><Text type="display-2" hasTabularNumbers>{value}</Text></VStack></Card>;
 }
@@ -35,7 +46,7 @@ export function FinancePage(): ReactNode {
   const consumerColumns = useMemo<TableColumn<ConsumerRow>[]>(() => [
     { key: "rank", header: "排名", width: proportional(1) },
     { key: "name", header: "企业", width: proportional(3) },
-    { key: "amount", header: "消费金额", width: proportional(2), renderCell: (row) => <Badge label={`¥${row.amount}`} variant="info" /> },
+    { key: "amount", header: "API 成本（USD）", width: proportional(2), renderCell: (row) => <Badge label={fmtUsd(row.amount)} variant="info" /> },
   ], []);
 
   const load = useCallback(async () => {
@@ -66,7 +77,7 @@ export function FinancePage(): ReactNode {
     id: `${index}`,
     rank: index + 1,
     name: String(consumer.name ?? consumer.enterprise_name ?? ""),
-    amount: String(consumer.amount ?? consumer.cost ?? ""),
+    amount: String(consumer.cost_total ?? consumer.cost ?? consumer.amount ?? "0"),
   }));
 
   return (
@@ -82,11 +93,13 @@ export function FinancePage(): ReactNode {
       ) : overview ? (
         <>
           <Grid columns={{ minWidth: 220, max: 4 }} gap={4}>
-            <Metric label="总充值金额" value={`¥${overview.total_recharged}`} />
-            <Metric label="实际调用量" value={`${(overview.total_tokens_billed / 1e9).toFixed(1)}B`} />
-            <Metric label="利润" value={`¥${overview.gross_profit}`} />
-            <Metric label="利润率" value={`${overview.profit_margin.toFixed(1)}%`} />
+            <Metric label="总充值金额（CNY）" value={`¥${overview.total_recharged}`} />
+            <Metric label="实际调用量（Token）" value={fmtTokens(overview.total_tokens_billed)} />
+            <Metric label="API 成本（USD）" value={fmtUsd(overview.total_api_cost)} />
+            <Metric label="利润" value={overview.profit_status === "available" && overview.gross_profit !== null ? `¥${overview.gross_profit}` : "—"} />
+            <Metric label="利润率" value={overview.profit_status === "available" && overview.profit_margin !== null ? `${overview.profit_margin.toFixed(1)}%` : "—"} />
           </Grid>
+          {(overview.unknown_pricing_tokens ?? 0) > 0 && <Banner status="warning" title={`${fmtTokens(overview.unknown_pricing_tokens ?? 0)} 个 Token 尚无价格快照，API 成本未完整计入`} />}
           {consumers.length > 0 && (
             <VStack as="section" gap={3}>
               <Heading level={2}>TOP 5 消费企业</Heading>

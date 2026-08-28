@@ -49,7 +49,6 @@ def owner_bootstrap(
     admin_db_url = settings.admin_db_url
     if not db_url or not admin_db_url:
         raise ManagerAdminDbNotConfigured("Manager DB 未配置（设置 DB_URL 与 ADMIN_DB_URL）")
-
     if not _tenant_exists(admin_db_url, body.tenant_id):
         raise NotFound("tenant not found")
 

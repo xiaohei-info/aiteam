@@ -10,17 +10,16 @@ import { SolutionsPage } from "./features/solutions";
 import { ExpertsPage } from "./features/experts";
 import { GrantsPage } from "./features/grants";
 import { GovernancePage } from "./features/governance";
-import { ProvidersPage } from "./features/providers";
 import { KnowledgePage } from "./features/knowledge";
 import { CapabilityPage } from "./features/capability";
 import { BillingPage, RechargePage } from "./features/billing";
-import { LlmPage } from "./features/llm";
 import { MemoryPage } from "./features/memory-items";
 import { ConnectorsPage } from "./features/connectors";
 import { OrgPage } from "./features/org";
 import { AuditPage } from "./features/audit";
 import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
+import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
 
 export function App(): React.ReactNode {
   return (
@@ -35,12 +34,11 @@ export function App(): React.ReactNode {
         <Route path="/experts" element={<ExpertsPage />} />
         <Route path="/grants" element={<GrantsPage />} />
         <Route path="/governance" element={<GovernancePage />} />
-        <Route path="/providers" element={<ProvidersPage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
+        <Route path="/skill-market" element={<SkillMarketPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/recharge" element={<RechargePage />} />
-        <Route path="/llm" element={<LlmPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/connectors" element={<ConnectorsPage />} />
         <Route path="/org" element={<OrgPage />} />

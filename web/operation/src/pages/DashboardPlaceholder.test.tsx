@@ -38,7 +38,7 @@ describe("DashboardPlaceholder", () => {
       enterprise_count: 5,
       run_count: 12345,
       token_total: 5000000,
-      cost_total: 987650,
+      cost_total: 9876.5,
       error_count: 20,
       duration_seconds_total: 154312,
       enterprises: [],
@@ -48,7 +48,7 @@ describe("DashboardPlaceholder", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "概览" })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: "企业数：5" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "执行次数：12,345" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "总消耗：¥9,876.50" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "总 API 成本（USD）：$9,876.50" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "总 Token：5,000,000" })).toBeInTheDocument();
   });
 

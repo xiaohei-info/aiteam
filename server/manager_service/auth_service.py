@@ -1,4 +1,4 @@
-"""Manager 多租户认证服务（03 9.3/9.4/9.5，D8/D23）。
+"""Manager current-enterprise authentication service (03 9.3/9.4/9.5, D8/D23).
 
 收敛点（9.3）：登录方式多样性只在 Authenticator 一层；所有方式归一到同一 user，
 再走同一 token 出口（RS256 按 tenant 签发，含 tenant_id）。M0 实现 password provider；MFA
@@ -200,6 +200,7 @@ class AuthService:
 
     def jwks(self, tenant_id):
         """下发用户端的验签材料（公钥/JWKS，9.5）。"""
+        self._validate_tenant_id(tenant_id)
         return self._keys.jwks(tenant_id)
 
     def resolve_tenant(self, enterprise: str) -> str:
@@ -221,12 +222,10 @@ class AuthService:
             return str(row[0])  # psycopg 返回 UUID 对象,转 str
 
     def resolve_tenant_by_account(self, account: str) -> str:
-        """员工账号 → tenant_id 解析（跨租户，无需前端手工填 tenant_id/企业提示，#382）。
+        """Resolve an account inside this Manager's bound enterprise.
 
-        按 auth_identity.external_id 匹配手机号/用户名（provider=phone 优先，再 password），
-        跨全部租户扫描。命中唯一个 tenant → 返回；未命中 → 404；命中多个 → 409（需明确企业）。
-
-        跨租户查询绕过 RLS（需管理连接 / superuser / BYPASSRLS），委托调用方注入 admin_dsn。
+        The admin lookup remains for compatibility with the existing schema, but
+        a bound deployment never returns an account from another enterprise.
         """
         import psycopg
 

@@ -18,6 +18,8 @@ import type {
 export interface GovernanceApi {
   listUsageRollups: () => Promise<UsageRollup[]>;
   listAudits: () => Promise<AuditSummary[]>;
+  listEmployees?: () => Promise<Array<{ employee_id: string; display_name: string }>>;
+  listMembers?: () => Promise<Array<{ id: string; display_name: string }>>;
   listQuotas: () => Promise<QuotaPolicy[]>;
   createQuota: (input: CreateQuotaInput) => Promise<QuotaPolicy | null>;
   deleteQuota: (policyId: string) => Promise<void>;
@@ -39,6 +41,12 @@ export function useGovernanceApi(): GovernanceApi {
       },
       async listAudits() {
         return (await client.listGet<AuditSummary>("/api/manager/audits")).items;
+      },
+      async listEmployees() {
+        return (await client.listGet<{ employee_id: string; display_name: string }>("/api/manager/employees")).items;
+      },
+      async listMembers() {
+        return (await client.listGet<{ id: string; display_name: string }>("/api/manager/members")).items;
       },
       async listQuotas() {
         return (await client.listGet<QuotaPolicy>("/api/manager/quota-policies")).items;

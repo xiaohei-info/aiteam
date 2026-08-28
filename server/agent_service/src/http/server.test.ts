@@ -104,6 +104,33 @@ test("Agent group creation binds an authorized coordinator and rejects cross-ros
   }
 });
 
+test("Agent prompt rejects an explicitly inactive expert before reserving the idempotency key", async () => {
+  const fixture = await createFixture();
+  const projection = { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test", provider_ref: "test-provider" } };
+  const snapshot = { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } };
+  fixture.store.replaceProjections([{ ...projection, status: "draft" }], [], [snapshot]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const request = () => fetch(`${base}/api/agent/conversations/c1/prompt`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json", "Idempotency-Key": "inactive-prompt" }, body: JSON.stringify({ text: "hello" }) });
+  try {
+    const blocked = await request();
+    assert.equal(blocked.status, 409);
+    assert.equal((await blocked.json() as { code: string }).code, "employee_not_runnable");
+
+    fixture.store.replaceProjections([{ ...projection, status: "active" }], [], [snapshot]);
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    assert.equal((await request()).status, 202);
+    assert((await waitForEntries(`${base}/api/agent/conversations/c1/entries`, "Bearer test")).length > 0);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent prompt resolves only owned image attachment IDs into Pi", async () => {
   const fixture = await createFixture();
   fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);

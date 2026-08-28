@@ -7,6 +7,8 @@ scope: pi-agent-completion
 
 # AI Team Pi Agent 重构剩余任务交接 TODO
 
+> **2026-08-26 架构修订**：Manager 按企业一部署；企业共享 RAG 只有一个固定 workspace，employee-private Hindsight memory 是个人隔离边界。本文早期的多租户/多知识空间描述仅作历史交接参考，以最新 Manager 单企业计划为准。
+
 > 本文用于把剩余工作交给其他开发者/Agent。不要重复重写已完成的 Pi Agent 基础切换；先阅读本文件、`AGENTS.md`、Pi 架构设计和当前 HEAD，再按优先级领取任务。
 >
 > 当前仓库遵守：Agent 是 Node.js/TypeScript + 进程内 `@earendil-works/pi-coding-agent`；禁止恢复旧 Python Agent/Gateway、多 runtime、Executor/Driver、Run/Task/Loop/Timeline 执行模型；禁止修改 `app/` 和 `./.hermes/hermes-agent/`。

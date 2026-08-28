@@ -6,6 +6,7 @@ tenant_id 只从 TenantContext 读（D22）。
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -110,7 +111,7 @@ class SettingsRepository:
                     params.append(max_employees)
                 if features is not None:
                     fields.append("features = %s")
-                    params.append(features)
+                    params.append(json.dumps(features))
                 if fields:
                     fields.append("updated_at = now()")
                     params.append(str(existing[0]))
@@ -133,7 +134,7 @@ class SettingsRepository:
                         invite_required if invite_required is not None else True,
                         member_approval if member_approval is not None else True,
                         max_employees if max_employees is not None else 100,
-                        features if features is not None else {},
+                        json.dumps(features if features is not None else {}),
                     ),
                 )
             row = s.execute(

@@ -1,7 +1,7 @@
-"""F01 企业开通收端（POST /api/manager/tenants，Operator→Manager 云侧调用，05 §5.1 D4）。
+"""F01 enterprise provisioning (POST /api/manager/tenants, Operator→Manager).
 
-控制面写：tenant_registry 无 RLS，走管理连接（admin DSN），不经 app_rw 业务连接。
-幂等：ON CONFLICT (tenant_id) DO NOTHING，重复调用返回 201。
+The control-plane registry is an internal compatibility record written with the
+admin DSN; repeated provisioning is idempotent.
 """
 
 from __future__ import annotations
@@ -33,13 +33,13 @@ def provision_tenant(
 
     落地 initial_quota_policy 和 visible_catalog_policy（05 §5.1 D4）。
     """
-    import json
     import psycopg
     from psycopg import errors as pg_errors
 
     from shared.errors import Conflict
 
-    dsn = request.app.state.settings.admin_db_url
+    settings = request.app.state.settings
+    dsn = settings.admin_db_url
     if not dsn:
         raise ManagerAdminDbNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
 
@@ -52,10 +52,10 @@ def provision_tenant(
         with psycopg.connect(dsn, autocommit=True) as conn:
             # 1. 插入 tenant_registry（控制面表，无 RLS，admin 连接）
             conn.execute(
-                "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code)"
-                " VALUES (%s, %s, %s)"
-                " ON CONFLICT (tenant_id) DO NOTHING",
-                (body.tenant_id, slug, body.enterprise_code),
+                "INSERT INTO tenant_registry (tenant_id, enterprise_id, enterprise_slug, enterprise_code)"
+                " VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (tenant_id) DO UPDATE SET enterprise_id = COALESCE(tenant_registry.enterprise_id, EXCLUDED.enterprise_id)",
+                (body.tenant_id, body.enterprise_id, slug, body.enterprise_code),
             )
     except pg_errors.UniqueViolation as e:
         # enterprise_slug 或 enterprise_code 唯一约束冲突 → 409 清晰提示
@@ -89,7 +89,6 @@ def _provision_initial_quota_policy(dsn: str, tenant_id: str, policy: dict) -> N
     """
     import json
     import psycopg
-    from datetime import timedelta
 
     policy_slug = policy.get("policy_slug", "default")
     display_name = policy.get("display_name", "Default Quota Policy")
@@ -134,18 +133,10 @@ def _provision_visible_catalog_policy(dsn: str, tenant_id: str, policy: dict) ->
     本实现将策略存储为 tenant 元数据。如需更细粒度控制，
     可扩展为写入 skill_catalog / connector_catalog 的 visibility 字段。
     """
-    import json
-    import psycopg
-
     # M0 实现：将策略作为 tenant_registry 的扩展字段存储（简化版）
     # 或者可以创建独立的 catalog_policy 表（留待详设扩展）
     # 当前实现：暂时不写入额外表，仅记录到日志供审计
     # 完整实现可在后续 Phase 补充独立 catalog_policy 表
-
-    # 简化实现：验证策略格式并准备后续使用
-    visible_skills = policy.get("visible_skills", [])
-    visible_connectors = policy.get("visible_connectors", [])
-    default_visibility = policy.get("default_visibility", "private")
 
     # 当前 M0：策略已被记录但不强制执行（留待 catalog 模块扩展）
     # 如需立即生效，可在此处批量更新 skill_catalog / connector_catalog 的 visibility

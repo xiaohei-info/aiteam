@@ -1,7 +1,7 @@
 import React from "react";
 /**
  * useMemoryApi 分支覆盖测试：
- * 验证 list/create/update/delete/bulkDelete 调用正确的 client 方法。
+ * 验证 list/create/update/delete 调用正确的 client 方法。
  */
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
@@ -85,10 +85,4 @@ describe("useMemoryApi", () => {
     expect(client.del).toHaveBeenCalledWith("/api/manager/memories/mem-1");
   });
 
-  it("bulkDelete 调用 client.post", async () => {
-    const { client, wrapper } = setup();
-    const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    await result.current.bulkDelete(["mem-1", "mem-2"]);
-    expect(client.post).toHaveBeenCalledWith("/api/manager/memories/bulk-delete", { body: { memory_ids: ["mem-1", "mem-2"] } });
-  });
 });
