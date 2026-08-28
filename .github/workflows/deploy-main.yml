@@ -39,6 +39,9 @@ env:
   # 显式拒绝任何 fallback 语义；漏填即 fail。
   DEPLOY_BRANCH: ${{ github.event.inputs.branch || github.event.pull_request.base.ref }}
   DEPLOY_ENV: "test"
+  # taiyi runs the self-hosted service as root and currently starts the runner
+  # without HOME; Git must see the same global safe-directory config in every step.
+  HOME: /root
   # 持久化部署根：这是个独立的 git 仓库目录；不需要在 runner workspace 上 checkout。
   DEPLOY_ROOT: /root/app/aiteam
   UNIT_NAME: aiteam-v1
