@@ -232,6 +232,10 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     request,
   }) => {
     test.setTimeout(180_000);
+    if (process.env.AITEAM_PI_FAKE === "true") {
+      test.skip(true, "Usage outbox requires a real runtime; fake responses are intentionally non-billable");
+      return;
+    }
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
     // Agent Conversation prompt → outbox summary 写入/更新 → flush sent>0 →
     // 用 outbox/rollup 共享的 summary_id 在 Manager rollup 中验证可见性。

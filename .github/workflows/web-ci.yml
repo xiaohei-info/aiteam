@@ -112,6 +112,10 @@ jobs:
       E2E_PROVIDER_MODEL: aiteam-e2e-model
       # provider credentials need Fernet encryption; this is a CI-only key.
       MANAGER_CREDENTIAL_KEY: vAkjGKeadpMSZuL5h21AanI5tjHmoOh87WNukUbEFhE=
+      # The local CI runtime is deliberately faux; fake responses must not
+      # create billable usage outbox records. The usage propagation spec skips
+      # itself and remains enabled for real/external runtime profiles.
+      AITEAM_PI_FAKE: "true"
     steps:
       - uses: actions/checkout@v4
 
