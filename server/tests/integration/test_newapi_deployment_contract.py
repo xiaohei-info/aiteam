@@ -40,6 +40,8 @@ def test_newapi_admin_secrets_only_enter_operation_process():
 
     ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
     assert "-u NEWAPI_ADMIN_TOKEN" in ctl
+    assert "-u NEWAPI_ADMIN_PASSWORD" in ctl
+    assert "-u LIGHTRAG_ADMIN_PASSWORD" in ctl
     assert 'NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"' in ctl
     assert 'if [[ "${SERVER}" != "newapi" ]]' in ctl
     assert '-u NEWAPI_URL' in ctl
