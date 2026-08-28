@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.platform_provider import PlatformModel, PlatformProvider
 
@@ -66,9 +66,19 @@ class PlatformCatalogOut(BaseModel):
 
 
 class UsageUploadOut(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    ingested: int = Field(ge=0, validation_alias=AliasChoices("ingested", "usage_ingested"), description="已接收的用量摘要条数。")
-    audits: int = Field(ge=0, validation_alias=AliasChoices("audits", "audits_ingested"), description="已接收的审计摘要条数。")
+    """Legacy compact receipt used by compatibility test doubles."""
+
+    model_config = ConfigDict(extra="forbid")
+    ingested: int = Field(ge=0, description="已接收的用量摘要条数。")
+    audits: int = Field(ge=0, description="已接收的审计摘要条数。")
+
+
+class UsageUploadDetailedOut(BaseModel):
+    """Canonical F13 receipt returned by the real usage service."""
+
+    model_config = ConfigDict(extra="forbid")
+    usage_ingested: int = Field(ge=0, description="已接收的用量摘要条数。")
+    audits_ingested: int = Field(ge=0, description="已接收的审计摘要条数。")
 
 
 class UsageRollupItemsOut(BaseModel):

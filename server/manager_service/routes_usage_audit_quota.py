@@ -44,7 +44,7 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
-from .openapi_schemas import UsageRollupItemsOut, UsageUploadOut
+from .openapi_schemas import UsageRollupItemsOut, UsageUploadDetailedOut, UsageUploadOut
 from .rollup_reporter import RollupReporter, ServiceClientRollupClient
 from shared.service_client import ServiceClient
 from .usage_audit_quota_service import (
@@ -119,7 +119,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         body: UsageSummaryUploadIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageUploadOut]:
+    ) -> Envelope[UsageUploadOut | UsageUploadDetailedOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if body.tenant_id != ctx.tenant_id:
@@ -129,7 +129,11 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
             _report_to_operator(request, svc, ctx)
         except Exception:  # best effort; Agent outbox already has durable retry semantics
             logger.warning("usage rollup upload to Operator deferred", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
-        return Envelope[UsageUploadOut](data=UsageUploadOut(**result))
+        if "usage_ingested" in result or "audits_ingested" in result:
+            data = UsageUploadDetailedOut(**result)
+        else:
+            data = UsageUploadOut(**result)
+        return Envelope[UsageUploadOut | UsageUploadDetailedOut](data=data)
 
     # ---- usage 查询 ----
 
